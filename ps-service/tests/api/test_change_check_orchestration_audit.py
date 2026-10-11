@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from api._audit_fakes import InMemoryAuditStore
-from api._fakes import build_fake_change_check_dependencies
+from api._fakes import build_fake_change_check_dependencies, build_fake_pipeline_dependencies
 from ps_service.api.catalog import CatalogEntry
 from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
@@ -35,6 +35,8 @@ from ps_service.change_monitor.models import (
 
 if TYPE_CHECKING:
     from api._fakes import FakeChangeCheckDependencies, MakeEmitter, ReadLines
+    from api._gateway_fakes import ProcessGateway
+    from ps_service.change_monitor.models import PipelineRunner
     from ps_service.config import ServiceConfig
     from ps_service.logging import LogEmitter
 
@@ -453,3 +455,67 @@ def test_terminal_row_failure_is_logged_with_reingest_run_id_and_sweep_result_un
     run_id = fake.trigger_reingestion_calls[0].run_id
     entries = [e for e in read_lines(log_path) if e["action"] == "audit_terminal_failed"]
     assert [e["run_id"] for e in entries] == [run_id]
+
+
+def test_sweep_resume_records_the_sweep_pair_and_one_gateway_row_with_the_same_resource_id(
+    app_config: ServiceConfig, make_emitter: MakeEmitter, process_gateway: ProcessGateway
+) -> None:
+    """A resume that starts at extraction (#209): the sweep's caller-actor submit/complete pair
+    and the single system-actor gateway row carry the re-ingest run id as `resource_id`, and the
+    extraction and derivation stages write under that gateway row's id.
+    """
+    emitter, _ = make_emitter()
+    store = InMemoryAuditStore()
+    pipeline = build_fake_pipeline_dependencies()
+    fake = build_fake_change_check_dependencies(
+        pipeline=pipeline,
+        tracked=(_node("CRA-1"),),
+        poll_report=PollReport(
+            findings=(_finding("CRA-1"),), polled_count=1, failed_ids=(), unconfigured_ids=()
+        ),
+        catalog_entries={"32024R2847": _CRA},
+        reingestion_results=[_outcome()],
+    )
+    inner = fake.dependencies.trigger_reingestion
+
+    def _resume(
+        *args: object, run_id: str | None, run_pipeline: PipelineRunner, **kwargs: object
+    ) -> ReingestionOutcome:
+        """Run the stages a `resume` runs (extraction onward), as `trigger_reingestion` does."""
+        run_pipeline(
+            stages=("extraction", "derivation", "merge"),
+            run_id=run_id or "",
+            on_stage_complete=lambda _stage: None,
+        )
+        return dataclasses.replace(
+            inner(*args, run_id=run_id, run_pipeline=run_pipeline, **kwargs),  # pyright: ignore[reportArgumentType]
+            run_id=run_id,
+        )
+
+    deps = dataclasses.replace(fake.dependencies, trigger_reingestion=_resume)  # pyright: ignore[reportArgumentType]
+    config = dataclasses.replace(
+        app_config,
+        llm_interface_model="azure/gpt-4o",
+        llm_interface_embed_model="azure/text-embedding-3-large",
+        company_merge_similarity_threshold=0.83,
+    )
+
+    result = _sweep(config, fake, store, emitter, dependencies=deps)
+
+    (outcome,) = result.instruments
+    run_id = outcome.reingest_run_id
+    assert run_id is not None
+    assert [(r.action, r.resource_id) for r in store.rows] == [
+        ("ingestion_run.submit", run_id),
+        ("ingestion_run.complete", run_id),
+    ]
+    assert {(r.actor_subject, r.actor_issuer) for r in store.rows} == {_ACTOR}
+    (gateway_row,) = process_gateway.system_audit.rows
+    assert gateway_row["action"] == "ingestion_run.submit"
+    assert gateway_row["resource_id"] == run_id
+    (audit_event_id,) = process_gateway.system_audit.ids
+    assert pipeline.recorder.order == ["extraction", "derivation", "merge"]
+    assert [call.kwargs["audit_event_id"] for call in pipeline.recorder.calls[:2]] == [
+        audit_event_id,
+        audit_event_id,
+    ]

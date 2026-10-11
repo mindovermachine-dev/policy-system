@@ -67,8 +67,8 @@ Standard/Control still use below. Only Capability (and, later,
 internal-SoP-derived Policy) is canonically deduped by Company Merge.
 
 **Edge rewiring (`persist_rewired_edges`, PLAN_REVIEWED.md §10 Increment 12,
-§6.2)**: mirrors `domain_mapper.graph_writer._upsert_bare_edge`'s exact
-`MATCH ... MERGE (s)-[:TYPE]->(t)` shape (no properties) for `HAS`/
+§6.2)**: uses the `MATCH ... MERGE (s)-[:TYPE]->(t)` shape (no properties) the Domain
+Mapper used before it moved onto the Graph Write Gateway (#209) for `HAS`/
 `SATISFIED_BY`/`REQUIRES`. The rewrite rule is endpoint-agnostic, not
 edge-type-specific: for BOTH the source and target of every edge, if that
 endpoint's baseline-local id has an entry in `canonical_id_by_incoming_id`
@@ -247,8 +247,8 @@ def _upsert_provenance_edge(
     """Write a `RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label` edge.
 
     Shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
-    edges -- mirrors
-    `domain_mapper.graph_writer._upsert_regulatory_instrument_edge` exactly.
+    edges -- the same `MATCH ... MERGE` shape the Domain Mapper used for these
+    edges before it moved onto the Graph Write Gateway (#209).
     `relationship_type`/`target_label` are always fixed Python literals;
     `target_id`/`source_ref` flow through `params` only.
     """
@@ -852,9 +852,9 @@ def persist_rewired_edges(
       (see `_validate_rewired_edge_endpoints`/`_dedupe_eligible_endpoint_ids`)
       -- an absent entry is a hard pre-write error, not a pass-through.
 
-    Mirrors `domain_mapper.graph_writer._upsert_bare_edge`'s exact
-    `MATCH ... MERGE (s)-[:TYPE]->(t)` shape -- no properties, since `HAS`/
-    `SATISFIED_BY`/`REQUIRES` never carry any (Edge Catalog).
+    Uses the `MATCH ... MERGE (s)-[:TYPE]->(t)` shape the Domain Mapper used
+    before it moved onto the Graph Write Gateway (#209) -- no properties, since
+    `HAS`/`SATISFIED_BY`/`REQUIRES` never carry any (Edge Catalog).
 
     Raises `CompanyMergePersistenceError` (via `_validate_rewired_edge_endpoints`)
     before any write if a `REQUIRES` edge's Capability target has no entry

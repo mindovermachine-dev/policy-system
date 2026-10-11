@@ -136,9 +136,14 @@ def test_the_background_run_writes_its_native_graph_under_its_own_system_audit_r
     row = gateway.system_audit.rows[0]
     assert (row["action"], row["resource_id"]) == ("ingestion_run.submit", run_id)
     assert cast("dict[str, object]", row["details"])["trigger"] == "async_ingest"
-    [group] = gateway.rig.store.groups
+    # the extract and derive stages' groups follow (#209)
+    [group, baseline_group, derivation_group] = gateway.rig.store.groups
     assert group.graph == "cra_native"
     assert group.audit_event_id == gateway.system_audit.ids[0]
+    assert baseline_group.graph == "cra_baseline"
+    assert baseline_group.audit_event_id == gateway.system_audit.ids[0]
+    assert derivation_group.graph == "cra_baseline"
+    assert derivation_group.audit_event_id == gateway.system_audit.ids[0]
 
 
 def test_without_a_gateway_the_background_run_fails_closed_with_a_graph_unavailable_reason(

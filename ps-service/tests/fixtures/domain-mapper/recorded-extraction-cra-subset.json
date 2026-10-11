@@ -1,0 +1,1213 @@
+{
+  "nodes": [
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.97,
+        "id": "role_a_committee_member_a7241b",
+        "name": "a committee member"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.98,
+        "id": "role_a_conformity_assessment_body_ae3740",
+        "name": "A conformity assessment body"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.98,
+        "id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+        "name": "A conformity assessment body, its top level management and the personnel responsible for carrying out the conformity assessment tasks"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.99,
+        "id": "CRA-1.0_req_art_39.3a",
+        "role_id": "role_a_conformity_assessment_body_ae3740",
+        "text": "A conformity assessment body shall be a third-party body independent of the organisation or the product with digital elements it assesses.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "CRA-1.0_req_art_39.4",
+        "role_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+        "text": "shall not be the designer, developer, manufacturer, supplier, importer, distributor, installer, purchaser, owner, user or maintainer of the products with digital elements which they assess, nor the authorised representative of any of those parties.",
+        "type": "prohibition"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "CRA-1.0_req_art_39.4#2",
+        "role_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+        "text": "shall not be directly involved in the design, development, production, import, distribution, the marketing, installation, use or maintenance of the products with digital elements which they assess, or represent the parties engaged in those activities.",
+        "type": "prohibition"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "CRA-1.0_req_art_39.4#3",
+        "role_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+        "text": "shall not engage in any activity that may conflict with their independence of judgement or integrity in relation to conformity assessment activities for which they are notified.",
+        "type": "prohibition"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.99,
+        "id": "CRA-1.0_req_art_39.4a",
+        "role_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+        "text": "A conformity assessment body, its top level management and the personnel responsible for carrying out the conformity assessment tasks shall not be the designer, developer, manufacturer, supplier, importer, distributor, installer, purchaser, owner, user or maintainer of the products with digital elements which they assess, nor the authorised representative of any of those parties.",
+        "type": "prohibition"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.99,
+        "id": "CRA-1.0_req_art_39.4b",
+        "role_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+        "text": "A conformity assessment body, its top level management and the personnel responsible for carrying out the conformity assessment tasks shall not be directly involved in the design, development, production, import, distribution, the marketing, installation, use or maintenance of the products with digital elements which they assess, or represent the parties engaged in those activities.",
+        "type": "prohibition"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.96,
+        "id": "CRA-1.0_req_art_39.4c",
+        "role_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+        "text": "A conformity assessment body, its top level management and the personnel responsible for carrying out the conformity assessment tasks shall not engage in any activity that may conflict with their independence of judgement or integrity in relation to conformity assessment activities for which they are notified.",
+        "type": "prohibition"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "CRA-1.0_req_art_62.3#2",
+        "role_id": "role_a_committee_member_a7241b",
+        "text": "Where the opinion of the committee is to be obtained by written procedure, that procedure shall be terminated without result when, within the time-limit for delivery of the opinion, a committee member so requests.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.95,
+        "id": "obl_avoid_activities_conflicting_with_independence_or_integrity_in_notified_conformity_assessment_35cdc2",
+        "text": "Avoid Activities Conflicting with Independence or Integrity in Notified Conformity Assessment"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.97,
+        "id": "obl_avoid_conflict_of_interest_in_assessed_products_d8c9b5",
+        "text": "Avoid Conflict of Interest in Assessed Products"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.94,
+        "id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+        "text": "Avoid Conflicting Commercial Roles for Assessed Products"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.98,
+        "id": "obl_avoid_conflicting_commercial_roles_in_assessed_products_2bb934",
+        "text": "Avoid Conflicting Commercial Roles in Assessed Products"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.97,
+        "id": "obl_avoid_conflicting_product_roles_7af683",
+        "text": "Avoid Conflicting Product Roles"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.98,
+        "id": "obl_avoid_conflicting_product_roles_for_assessed_products_752ef1",
+        "text": "Avoid Conflicting Product Roles for Assessed Products"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.97,
+        "id": "obl_avoid_conflicting_product_roles_in_assessed_products_cd03d2",
+        "text": "Avoid Conflicting Product Roles in Assessed Products"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.98,
+        "id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+        "text": "Avoid Conflicting Roles in Assessed Products"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.93,
+        "id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+        "text": "Avoid Conflicts of Interest in Conformity Assessment Activities"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.97,
+        "id": "obl_be_independent_from_assessed_organization_or_product_bd61bf",
+        "text": "Be Independent from Assessed Organization or Product"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.97,
+        "id": "obl_be_independent_of_assessed_organisation_or_product_c614bc",
+        "text": "Be Independent of Assessed Organisation or Product"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.97,
+        "id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+        "text": "Be Independent of Assessed Organization or Product"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.98,
+        "id": "obl_be_independent_third_party_assessment_body_f8d6c9",
+        "text": "Be Independent Third-Party Assessment Body"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.98,
+        "id": "obl_maintain_independence_from_assessed_organizations_and_products_41b0ab",
+        "text": "Maintain Independence from Assessed Organizations and Products"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.98,
+        "id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+        "text": "Not Be Involved in Design, Development, Supply, or Use of Assessed Products"
+      }
+    },
+    {
+      "label": "Obligation",
+      "properties": {
+        "confidence": 0.94,
+        "id": "obl_request_termination_of_written_procedure_7a51fc",
+        "text": "Request Termination of Written Procedure"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.96,
+        "description": "Processes and safeguards to prevent, identify, and manage conflicts of interest in conformity assessment activities.",
+        "id": "cap_conflict_of_interest_control_446c36",
+        "name": "Conflict of Interest Control"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.97,
+        "description": "Processes and controls to identify, prevent, disclose, and mitigate conflicts of interest in product assessment activities.",
+        "id": "cap_conflict_of_interest_management_c331b1",
+        "name": "Conflict of Interest Management"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.95,
+        "description": "Processes and safeguards that keep activities objective, unbiased, and free from improper influence or conflict of interest.",
+        "id": "cap_impartiality_control_232360",
+        "name": "Impartiality Control"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.97,
+        "description": "Procedures and oversight measures to ensure activities are conducted objectively, without undue bias or conflicts of interest.",
+        "id": "cap_impartiality_controls_31fea8",
+        "name": "Impartiality Controls"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.84,
+        "description": "Controls and procedures that prevent joint activities from biasing decisions, assessments, or operations, preserving objectivity and independence.",
+        "id": "cap_impartiality_safeguards_bb0f6c",
+        "name": "Impartiality Safeguards"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.98,
+        "description": "Processes and governance measures ensuring an assessor is independent from the organization or product being assessed.",
+        "id": "cap_independence_control_b42e28",
+        "name": "Independence Control"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.92,
+        "description": "Processes and controls that ensure an assessor remains impartial and free from undue influence by the organizations or products being assessed.",
+        "id": "cap_independence_management_9a17f2",
+        "name": "Independence Management"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.92,
+        "description": "Governance ensuring notification decisions are made independently, without improper influence or dependency on another party's approval.",
+        "id": "cap_notification_decision_independence_7144b5",
+        "name": "Notification Decision Independence"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.94,
+        "description": "Controls the ability to restrict, suspend, or withdraw a notification or its associated status.",
+        "id": "cap_notification_restriction_control_f8eaa3",
+        "name": "Notification Restriction Control"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.92,
+        "description": "Processes for liaising and coordinating with notified bodies on conformity-related matters and participation activities.",
+        "id": "cap_notified_body_coordination_1bbaf7",
+        "name": "Notified Body Coordination"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.91,
+        "description": "Capacity to maintain or arrange an adequate number of designated notified bodies to perform conformity assessments.",
+        "id": "cap_notified_body_oversight_9c9191",
+        "name": "Notified Body Oversight"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.95,
+        "description": "Process for investigating concerns or doubts about a notified body’s competence and ongoing compliance with applicable requirements.",
+        "id": "cap_notified_body_oversight_review_dab035",
+        "name": "Notified Body Oversight Review"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.93,
+        "description": "Handles formally ending a written procedure, including closing it out without reaching a substantive result.",
+        "id": "cap_procedure_termination_workflow_a0eb96",
+        "name": "Procedure Termination Workflow"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.92,
+        "description": "A process for checking that regulatory or administrative requirements are scaled appropriately to the size and capacity of the regulated entity, especially small businesses.",
+        "id": "cap_proportionality_review_23b987",
+        "name": "Proportionality Review"
+      }
+    },
+    {
+      "label": "Capability",
+      "properties": {
+        "confidence": 0.86,
+        "description": "Controls to prevent a product from being assigned or treated under conflicting roles within an assessed-product context.",
+        "id": "cap_role_conflict_management_71eae2",
+        "name": "Role Conflict Management"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "properties": { "source_ref": "Art. 62(3)" },
+      "relationship_type": "DEFINES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_a_committee_member_a7241b",
+      "target_label": "Role"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(3)" },
+      "relationship_type": "DEFINES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_a_conformity_assessment_body_ae3740",
+      "target_label": "Role"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(4)" },
+      "relationship_type": "DEFINES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "target_label": "Role"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(3)" },
+      "relationship_type": "EXPRESSES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "CRA-1.0_req_art_39.3a",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(4)" },
+      "relationship_type": "EXPRESSES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "CRA-1.0_req_art_39.4",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(4)" },
+      "relationship_type": "EXPRESSES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "CRA-1.0_req_art_39.4#2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(4)" },
+      "relationship_type": "EXPRESSES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "CRA-1.0_req_art_39.4#3",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(4)" },
+      "relationship_type": "EXPRESSES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "CRA-1.0_req_art_39.4a",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(4)" },
+      "relationship_type": "EXPRESSES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "CRA-1.0_req_art_39.4b",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": { "source_ref": "Art. 39(4)" },
+      "relationship_type": "EXPRESSES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "CRA-1.0_req_art_39.4c",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": { "source_ref": "Art. 62(3)" },
+      "relationship_type": "EXPRESSES",
+      "source_id": "CRA-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "CRA-1.0_req_art_62.3#2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_committee_member_a7241b",
+      "source_label": "Role",
+      "target_id": "obl_request_termination_of_written_procedure_7a51fc",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_ae3740",
+      "source_label": "Role",
+      "target_id": "obl_be_independent_from_assessed_organization_or_product_bd61bf",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_ae3740",
+      "source_label": "Role",
+      "target_id": "obl_be_independent_of_assessed_organisation_or_product_c614bc",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_ae3740",
+      "source_label": "Role",
+      "target_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_ae3740",
+      "source_label": "Role",
+      "target_id": "obl_be_independent_third_party_assessment_body_f8d6c9",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_ae3740",
+      "source_label": "Role",
+      "target_id": "obl_maintain_independence_from_assessed_organizations_and_products_41b0ab",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_activities_conflicting_with_independence_or_integrity_in_notified_conformity_assessment_35cdc2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_conflict_of_interest_in_assessed_products_d8c9b5",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_conflicting_commercial_roles_in_assessed_products_2bb934",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_conflicting_product_roles_7af683",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_conflicting_product_roles_for_assessed_products_752ef1",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_conflicting_product_roles_in_assessed_products_cd03d2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "role_a_conformity_assessment_body_its_top_level_management_and_the_personnel_responsible_for_carrying_out_the_conformity_assessment_tasks_a0d3b3",
+      "source_label": "Role",
+      "target_id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_activities_conflicting_with_independence_or_integrity_in_notified_conformity_assessment_35cdc2",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflict_of_interest_in_assessed_products_d8c9b5",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+      "source_label": "Obligation",
+      "target_id": "cap_impartiality_control_232360",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_commercial_roles_in_assessed_products_2bb934",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_product_roles_7af683",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_product_roles_7af683",
+      "source_label": "Obligation",
+      "target_id": "cap_impartiality_controls_31fea8",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_product_roles_7af683",
+      "source_label": "Obligation",
+      "target_id": "cap_notification_decision_independence_7144b5",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_product_roles_for_assessed_products_752ef1",
+      "source_label": "Obligation",
+      "target_id": "cap_proportionality_review_23b987",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_product_roles_in_assessed_products_cd03d2",
+      "source_label": "Obligation",
+      "target_id": "cap_role_conflict_management_71eae2",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_control_446c36",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "source_label": "Obligation",
+      "target_id": "cap_independence_control_b42e28",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+      "source_label": "Obligation",
+      "target_id": "cap_independence_control_b42e28",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+      "source_label": "Obligation",
+      "target_id": "cap_independence_management_9a17f2",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+      "source_label": "Obligation",
+      "target_id": "cap_role_conflict_management_71eae2",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_from_assessed_organization_or_product_bd61bf",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_from_assessed_organization_or_product_bd61bf",
+      "source_label": "Obligation",
+      "target_id": "cap_notification_decision_independence_7144b5",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_of_assessed_organisation_or_product_c614bc",
+      "source_label": "Obligation",
+      "target_id": "cap_impartiality_safeguards_bb0f6c",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_control_446c36",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "source_label": "Obligation",
+      "target_id": "cap_impartiality_control_232360",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "source_label": "Obligation",
+      "target_id": "cap_impartiality_controls_31fea8",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "source_label": "Obligation",
+      "target_id": "cap_independence_control_b42e28",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "source_label": "Obligation",
+      "target_id": "cap_notified_body_oversight_9c9191",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "source_label": "Obligation",
+      "target_id": "cap_notified_body_oversight_review_dab035",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_third_party_assessment_body_f8d6c9",
+      "source_label": "Obligation",
+      "target_id": "cap_conflict_of_interest_management_c331b1",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_be_independent_third_party_assessment_body_f8d6c9",
+      "source_label": "Obligation",
+      "target_id": "cap_notified_body_coordination_1bbaf7",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_maintain_independence_from_assessed_organizations_and_products_41b0ab",
+      "source_label": "Obligation",
+      "target_id": "cap_independence_management_9a17f2",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+      "source_label": "Obligation",
+      "target_id": "cap_notification_restriction_control_f8eaa3",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "REQUIRES",
+      "source_id": "obl_request_termination_of_written_procedure_7a51fc",
+      "source_label": "Obligation",
+      "target_id": "cap_procedure_termination_workflow_a0eb96",
+      "target_label": "Capability"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.3a",
+      "source_label": "Requirement",
+      "target_id": "obl_be_independent_from_assessed_organization_or_product_bd61bf",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.3a",
+      "source_label": "Requirement",
+      "target_id": "obl_be_independent_of_assessed_organisation_or_product_c614bc",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.3a",
+      "source_label": "Requirement",
+      "target_id": "obl_be_independent_of_assessed_organization_or_product_bc930e",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.3a",
+      "source_label": "Requirement",
+      "target_id": "obl_be_independent_third_party_assessment_body_f8d6c9",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.3a",
+      "source_label": "Requirement",
+      "target_id": "obl_maintain_independence_from_assessed_organizations_and_products_41b0ab",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflict_of_interest_in_assessed_products_d8c9b5",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_commercial_roles_in_assessed_products_2bb934",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_7af683",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_for_assessed_products_752ef1",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_in_assessed_products_cd03d2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4",
+      "source_label": "Requirement",
+      "target_id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#2",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflict_of_interest_in_assessed_products_d8c9b5",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#2",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#2",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_commercial_roles_in_assessed_products_2bb934",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#2",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_7af683",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#2",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_in_assessed_products_cd03d2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#2",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#2",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#2",
+      "source_label": "Requirement",
+      "target_id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#3",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_activities_conflicting_with_independence_or_integrity_in_notified_conformity_assessment_35cdc2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#3",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#3",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_7af683",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#3",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#3",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4#3",
+      "source_label": "Requirement",
+      "target_id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4a",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflict_of_interest_in_assessed_products_d8c9b5",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4a",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4a",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_7af683",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4a",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_for_assessed_products_752ef1",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4a",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_in_assessed_products_cd03d2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4a",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4a",
+      "source_label": "Requirement",
+      "target_id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4b",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflict_of_interest_in_assessed_products_d8c9b5",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4b",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4b",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_7af683",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4b",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_for_assessed_products_752ef1",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4b",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_in_assessed_products_cd03d2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4b",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4b",
+      "source_label": "Requirement",
+      "target_id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4c",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_commercial_roles_for_assessed_products_4c0ad0",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4c",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_product_roles_7af683",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4c",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicting_roles_in_assessed_products_cbeeb2",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4c",
+      "source_label": "Requirement",
+      "target_id": "obl_avoid_conflicts_of_interest_in_conformity_assessment_activities_3f31f8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_39.4c",
+      "source_label": "Requirement",
+      "target_id": "obl_not_be_involved_in_design_development_supply_or_use_of_assessed_products_ae9dd8",
+      "target_label": "Obligation"
+    },
+    {
+      "properties": {},
+      "relationship_type": "SATISFIED_BY",
+      "source_id": "CRA-1.0_req_art_62.3#2",
+      "source_label": "Requirement",
+      "target_id": "obl_request_termination_of_written_procedure_7a51fc",
+      "target_label": "Obligation"
+    }
+  ]
+}

@@ -61,7 +61,10 @@ from ps_service.change_monitor.models import PIPELINE_STAGES
 from ps_service.company_merge.models import MergeResult, NearMissPair
 from ps_service.config import ServiceConfig
 from ps_service.dependency_health import CELLAR_ELI, is_healthy
-from ps_service.domain_mapper.errors import DomainMapperExtractionError
+from ps_service.domain_mapper.errors import (
+    DomainMapperExtractionError,
+    DomainMapperPersistenceError,
+)
 from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
 from ps_service.ingestion.adapters.errors import CellarFetchError, CellarNotFoundError
 from ps_service.ingestion.falkordb_client import FalkorDBConnectionError
@@ -71,8 +74,10 @@ from ps_service.mcp_interface.errors import McpGraphUnavailableError
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from api._gateway_fakes import ProcessGateway
     from ps_service.api.ingestion_orchestration import GraphHandle
     from ps_service.ingestion.adapters.base import IngestionAdapter
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import CompletionCaller, EmbeddingCaller
     from ps_service.logging import LogEmitter
 
@@ -250,6 +255,33 @@ def test_catalog_pipeline_runs_ingest_extract_derive_merge_in_order(
     ]
 
 
+def test_extract_and_derive_stages_receive_the_gateway_baseline_graph_name_and_run_audit_event(
+    make_emitter: MakeEmitter, process_gateway: ProcessGateway
+) -> None:
+    """AC-BI-007 plumbing (#209): the baseline-writing stages get the same gateway and run audit
+    event the ingest stage got, and the `{short}_baseline` graph name; one audit row per run.
+    """
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
+
+    run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=_complete_config(),
+        run_id="run-1",
+        caller="127.0.0.1",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+
+    ingest, extract, derive = (fake.recorder.calls[index].kwargs for index in range(3))
+    (audit_event_id,) = process_gateway.system_audit.ids
+    assert ingest["audit_event_id"] == audit_event_id
+    for stage_kwargs in (extract, derive):
+        assert stage_kwargs["submitter"] is process_gateway.rig.gateway
+        assert stage_kwargs["baseline_graph_name"] == "cra_baseline"
+        assert stage_kwargs["audit_event_id"] == audit_event_id
+
+
 def test_derivation_stage_summary_reports_unmatched_obligations_count(
     make_emitter: MakeEmitter,
 ) -> None:
@@ -321,6 +353,36 @@ def test_stage_failure_aborts_and_names_failing_stage(make_emitter: MakeEmitter)
 
     assert exc_info.value.stage == "extraction"
     assert "unit 7 produced no candidates" in exc_info.value.reason
+
+
+def test_a_persistence_error_from_the_extract_stage_keeps_its_classification(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #209 (AC-BI-005): the baseline write now fails as a gateway refusal, but the stage
+    error is classified exactly as before: a `PipelineStageError` naming `extraction`, whose
+    caller-visible reason is the generic `extraction failed` (the persistence error is not on
+    the verbatim whitelist, as the old FalkorDB write error was not), and no later stage runs.
+    """
+    emitter, _ = make_emitter()
+    persistence_error = DomainMapperPersistenceError(
+        "FalkorDB write failed: the graph log could not be written"
+    )
+    fake = build_fake_pipeline_dependencies(extract_error=persistence_error)
+
+    with pytest.raises(PipelineStageError) as exc_info:
+        run_catalog_ingestion_pipeline(
+            _ENTRY,
+            config=_complete_config(),
+            run_id="run-3p",
+            caller="127.0.0.1",
+            dependencies=fake.dependencies,
+            emitter=emitter,
+        )
+
+    assert exc_info.value.stage == "extraction"
+    assert exc_info.value.reason == "extraction failed"
+    assert exc_info.value.__cause__ is persistence_error
+    assert fake.recorder.order == ["ingestion", "extraction"]
 
 
 def test_stage_failure_prevents_later_stages_from_running(make_emitter: MakeEmitter) -> None:
@@ -1039,13 +1101,24 @@ class _StageOrderExtract:
         *,
         adapter: object,
         native_graph: GraphHandle,
-        baseline_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        baseline_graph_name: str,
+        audit_event_id: str,
         model: str,
         call_completion: CompletionCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> ExtractionResult:
         """Assert `get_stage` already reads "extraction", then return a canned result."""
-        _ = (adapter, native_graph, baseline_graph, model, call_completion, emitter)
+        _ = (
+            adapter,
+            native_graph,
+            model,
+            call_completion,
+            emitter,
+            submitter,
+            baseline_graph_name,
+            audit_event_id,
+        )
         assert get_stage(self._run_id) == "extraction"
         return ExtractionResult(
             regulatory_instrument_id=regulatory_instrument_id,
@@ -1069,12 +1142,23 @@ class _StageOrderDerive:
         regulatory_instrument_id: str,
         *,
         baseline_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        baseline_graph_name: str,
+        audit_event_id: str,
         model: str,
         call_completion: CompletionCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> DerivationResult:
         """Assert `get_stage` already reads "derivation", then return a canned result."""
-        _ = (baseline_graph, model, call_completion, emitter)
+        _ = (
+            baseline_graph,
+            model,
+            call_completion,
+            emitter,
+            submitter,
+            baseline_graph_name,
+            audit_event_id,
+        )
         assert get_stage(self._run_id) == "derivation"
         return DerivationResult(
             regulatory_instrument_id=regulatory_instrument_id,

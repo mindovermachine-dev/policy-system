@@ -1,107 +1,82 @@
-"""FalkorDB persistence for `ps_service.domain_mapper`'s baseline graph.
+"""Baseline-graph writes of `ps_service.domain_mapper`, through the Graph Write Gateway (#209).
 
-`persist_role_and_requirement_graph` (PLAN_REVIEWED.md §11 Increment 9,
-§5.4) and `persist_obligation_and_capability_graph` (§11 Increment 15,
-§7.6).
+The Domain Mapper issues no write Cypher. Each stage turns its in-memory result into gateway
+primitives and submits them as ONE group on the `{short}_baseline` graph, under the run's audit
+event, through a `GroupSubmitter`:
 
-**B3 fix (a) — validate-then-write, mirroring `ps_service.ingestion.
-graph_writer`'s own B1 fix exactly** (read that module directly for the
-precedent this one follows one component over):
+- `persist_role_and_requirement_graph` (extraction): validates every Requirement's `role_id`
+  against the Role nodes of the same call (`_validate_role_references`, B3 fix (a): a dangling
+  reference raises before anything is built, stamped or submitted), builds the instrument, Role,
+  `DEFINES`, Requirement and `EXPRESSES` primitives (`build_role_and_requirement_primitives`),
+  and submits them. Every edge endpoint is in the group, so nothing is read.
+- `persist_obligation_and_capability_graph` (derivation): builds the Obligation and Capability
+  nodes and the `HAS`, `SATISFIED_BY` and `REQUIRES` edges
+  (`build_obligation_and_capability_primitives`). The `HAS` and `SATISFIED_BY` edges join a Role
+  and a Requirement that a prior extraction wrote, outside this group, so the one read this
+  module makes is the batched existing-node read (`_read_existing_ids`) through the read-only
+  `{short}_baseline` handle; an edge whose endpoint exists nowhere is dropped silently
+  (`_drop_edges_with_missing_endpoints`, AC-BI-004, as the old `MATCH ... MERGE` wrote nothing).
+  Nothing to write submits nothing (a group needs at least one primitive).
 
-- Every Role node, every `DEFINES` edge, every Requirement node (each
-  carrying its `role_id` bookkeeping property, §7.2), every `EXPRESSES`
-  edge is built completely in memory by the caller (`extraction.py`'s
-  `_canonicalize_roles`/`_build_requirement_graph`, Increment 8) BEFORE
-  this function issues any `graph.query()` call.
-- `_validate_role_references` checks every about-to-be-persisted
-  Requirement node's `role_id` property resolves to the `id` of some
-  about-to-be-persisted Role node in this SAME call, raising
-  `DomainMapperPersistenceError` (naming the offending Requirement id and
-  its dangling `role_id`) on the first violation found — zero
-  `graph.query()` calls have been made by the time this raises, the same
-  guarantee `ps_service.ingestion.graph_writer._validate_element_types`
-  gives Ingestion.
-- Only once validation passes does this function loop and write:
-  RegulatoryInstrument MERGE, Role node MERGEs, `DEFINES` edge MERGEs, Requirement
-  node MERGEs (with `role_id` in `properties`), `EXPRESSES` edge MERGEs —
-  all parameterized (`source_ref`/`role_id`/etc. in `params`, never
-  interpolated into the query string).
+Shared sequence (`_submit_baseline_group`): the graph's legacy edges are stamped with their
+identity before the first group, the group is submitted (`submit_or_raise`), and the graph must be
+caught up before the stage returns (`require_caught_up`), because the next stage reads it.
+Derivation additionally requires the graph caught up BEFORE its endpoint read, so a group still
+waiting to be applied cannot make an edge look dangling and be dropped.
 
-**Design note (S2's resolution, PLAN_REVIEWED.md §0.5 Divergence #1 /
-§11 Increment 9) — no query-safety allow-list is needed anywhere in this
-module.** `Role`, `Requirement`, `RegulatoryInstrument`, `DEFINES`, `EXPRESSES` are
-all fixed Python literals in this module's own source, interpolated as
-labels/relationship-type names the same way `ps_service.ingestion.
-graph_writer`'s `_REGULATORY_INSTRUMENT_LABEL` is (no allow-list needed there either)
-— unlike that module's `_upsert_node`/`_upsert_edge`, which interpolate an
-adapter-supplied `element_type` string and therefore DO need
-`_validate_element_types`'s allow-list. Nothing in this module's write path
-ever accepts an externally- or LLM-sourced string into a label/relationship-
-type position (`role_name`/requirement `text`/etc. all flow through
-`params`, never through an f-string into the query), so there is nothing
-pytest-executable to assert here today. If a future change introduces one
-(e.g. a label parameterized by `Role.name` for some reporting feature),
-that change should add its own allow-list and its own test at that time,
-the same way issue #14 did when `element_type` first became a label. This
-is stated here as a design note, not backed by a test.
+Builders de-duplicate before submitting, as the old `MERGE` folded repeats: one node primitive
+per (label, id) with later properties overriding earlier ones, one edge per identity with the
+last occurrence winning. Edge identities are `{type}:{source_id}->{target_id}` (`_edge_identity`),
+the scheme of the internal-seed path and of the edge-identity backfill. Every value (`source_ref`,
+`role_id`, ...) travels as a primitive property; nothing is interpolated into a query. A property
+the gateway cannot store raises `DomainMapperPersistenceError` before anything is submitted.
 
-**`persist_obligation_and_capability_graph` (Increment 15, §7.6) — no
-validate-then-write pass, and why.** Unlike `persist_role_and_requirement_graph`'s
-Requirement `role_id` property (an independently-computed bookkeeping value
-set by a DIFFERENT stage, `extraction.py`'s canonicalization, than the one
-that builds `role_nodes` — the exact decoupling that created B3's dangling-
-reference risk), every `obligation_node_id`/`capability_node_id` referenced
-by `has_edges`/`satisfied_by_edges`/`requires_edges` here is guaranteed
-self-consistent BY CONSTRUCTION within `derivation.py`'s own whole-run
-algorithm: `_process_requirement` appends to `state.has_edges` in the same
-branch, and immediately alongside, it appends to `state.obligation_nodes`
-(never independently); `_derive_capabilities` appends to `requires_edges`
-in the same loop iteration it adds a new id to `capability_nodes`/
-`registry`. There is no code path that produces one of these edge
-collections without also producing the matching node — nothing analogous
-to Increment 9's "a Requirement's `role_id` could point past the
-`role_nodes` this same call happens to be given" gap exists here for
-Obligation/Capability. The `HAS`/`SATISFIED_BY` edges' OTHER endpoint
-(`role_node_id`/`requirement_id`) points outside this call's own node
-collections entirely (Role/Requirement were persisted by a PRIOR
-`persist_role_and_requirement_graph` call) — validating that reference
-in-memory here would be a category error (this function is never given any
-Role/Requirement collection to validate against); the real defense for
-THAT reference is the read-side dangling-`role_id` check
-(`_read_requirements_by_role`, PLAN_REVIEWED.md §7.2's B3 fix (b)),
-performed by the orchestrating `derive_obligations_and_capabilities`
-(Increment 16) before any LLM call is even made — i.e. before any
-`RoleRequirements` (and therefore any Obligation/edge derived from them)
-can exist at all. Given both of those, this function is a plain,
-unconditional writer, matching the style of `_upsert_node`/
-`_upsert_regulatory_instrument_edge` above but with no properties on any of its three
-edge types (Edge Catalog, §0.2) — deliberately NOT copying
-`_upsert_regulatory_instrument_edge`'s `SET e.source_ref = $source_ref` pattern, since
-`HAS`/`SATISFIED_BY`/`REQUIRES` carry no properties at all.
+Failures reach callers as `DomainMapperPersistenceError("FalkorDB write failed: ...")`, whether
+the read failed, the gateway refused the group, or the group was committed but not applied;
+write-side dependency health is the gateway's, read-side health is recorded here.
+
+**Why derivation has no validate-then-write pass.** Unlike a Requirement's `role_id` (set by a
+different stage than the one building `role_nodes`, the decoupling behind B3), the Obligation
+and Capability endpoints of the derivation edges are self-consistent by construction within
+`derivation.py`: an edge collection is only ever appended to alongside its node. The Role and
+Requirement endpoints belong to a prior extraction and are checked on the READ side
+(`derivation._read_requirements_by_role`, B3 fix (b)) before any LLM call, and again against the
+graph by the existing-node read here.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import redis.exceptions
+from pydantic import ValidationError
 
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 from ps_service.domain_mapper.errors import DomainMapperPersistenceError
-from ps_service.domain_mapper.models import (
-    CapabilityNode,
-    CapabilityRequiresEdge,
-    ObligationHasEdge,
-    ObligationNode,
-    RequirementExpressesEdge,
-    RequirementNode,
-    RequirementSatisfiedByEdge,
-    RoleDefinesEdge,
-    RoleNode,
+from ps_service.graph_gateway.models import MutationGroup, NodeRef, UpsertEdge, UpsertNode
+from ps_service.ingestion.graph_submission import (
+    require_caught_up,
+    stamp_legacy_edges_before_first_write,
+    submit_or_raise,
 )
 
 if TYPE_CHECKING:
-    from ps_service.domain_mapper.falkordb_client import GraphHandle, GraphQueryResult
+    from collections.abc import Iterable, Mapping
+
+    from ps_service.domain_mapper.falkordb_client import GraphHandle
+    from ps_service.domain_mapper.models import (
+        CapabilityNode,
+        CapabilityRequiresEdge,
+        ObligationHasEdge,
+        ObligationNode,
+        RequirementExpressesEdge,
+        RequirementNode,
+        RequirementSatisfiedByEdge,
+        RoleDefinesEdge,
+        RoleNode,
+    )
+    from ps_service.graph_gateway.models import Primitive
+    from ps_service.ingestion.graph_submission import GroupSubmitter
 
 _REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
 _ROLE_LABEL = "Role"
@@ -110,42 +85,18 @@ _OBLIGATION_LABEL = "Obligation"
 _CAPABILITY_LABEL = "Capability"
 
 
-def _execute_query(
-    graph: GraphHandle, query: str, params: dict[str, object] | None = None
-) -> GraphQueryResult:
-    """The one call site every `graph.query()` write in this module goes through.
-
-    So FalkorDB connectivity failures get recorded in
-    `ps_service.dependency_health` — mirrors
-    `ps_service.ingestion.graph_writer._execute_query` exactly.
-
-    Wraps `redis.exceptions.RedisError` into `DomainMapperPersistenceError`,
-    distinct from this module's own data-validation
-    `DomainMapperPersistenceError`s (`_validate_role_references`), which are
-    raised directly by this module's own logic and never reach here.
-    """
-    try:
-        result = graph.query(query, params=params)
-    except redis.exceptions.RedisError as exc:
-        mark_unhealthy(FALKORDB, error=exc)
-        raise DomainMapperPersistenceError(f"FalkorDB write failed: {exc}") from exc
-    mark_healthy(FALKORDB)
-    return result
-
-
 def _validate_role_references(
     role_nodes: tuple[RoleNode, ...], requirement_nodes: tuple[RequirementNode, ...]
 ) -> None:
     """B3 fix (a): a whole-collection validation pass, called once before any write.
 
-    Runs before `persist_role_and_requirement_graph` issues a single
-    `graph.query` call for ANY element — not interleaved
-    validate-then-write per element.
+    Runs before `persist_role_and_requirement_graph` builds or submits anything for ANY
+    element — not interleaved validate-then-write per element.
 
     Checks every Requirement node's `role_id` property against the set of
     Role node ids ALSO about to be persisted in this same call. Raises
-    `DomainMapperPersistenceError` on the first violation found, with zero
-    `graph.query` calls having been made by the time this raises.
+    `DomainMapperPersistenceError` on the first violation found, with nothing submitted by
+    the time this raises.
     """
     role_ids = {node.id for node in role_nodes}
     for requirement in requirement_nodes:
@@ -158,8 +109,165 @@ def _validate_role_references(
             )
 
 
-def persist_role_and_requirement_graph(
-    graph: GraphHandle,
+# --- Graph Write Gateway builders (issue #209) ---
+
+
+def _edge_identity(edge_type: str, source_id: str, target_id: str) -> str:
+    """`{type}:{source}->{target}`: the gateway identity of an edge, one per (type, endpoints).
+
+    The scheme of `ingestion.adapters.internal_seed.persist._edge_identity` and of the edge
+    identity backfill, so one instrument yields the same edges whichever path ingested it.
+    Same-type edges between the same two nodes share an identity, as `MERGE (a)-[:T]->(b)`
+    collapsed them.
+    """
+    return f"{edge_type}:{source_id}->{target_id}"
+
+
+def _unstorable(what: str) -> DomainMapperPersistenceError:
+    return DomainMapperPersistenceError(
+        f"{what} has a property the graph cannot store "
+        "(a reserved key, or a value that is not finite or is out of range)"
+    )
+
+
+def _merged_nodes(
+    specs: Iterable[tuple[str, str, Mapping[str, object]]],
+) -> tuple[UpsertNode, ...]:
+    """One node primitive per `(label, id)`, in first-seen order, later properties winning.
+
+    The legacy writer issued `MERGE (n:L {id}) SET n += props` per node, so a repeated id was
+    one node holding the properties of every occurrence, the last overriding the others. The
+    gateway applies a group's primitives in sequence the same way, but its digest and log would
+    show the node twice; folding here keeps one primitive per node.
+
+    Raises:
+        DomainMapperPersistenceError: a node carries a property the gateway cannot store (a
+            reserved key such as `id`, a non-finite number); the legacy `SET n += $properties`
+            accepted them silently.
+    """
+    folded: dict[tuple[str, str], dict[str, object]] = {}
+    for label, node_id, properties in specs:
+        folded.setdefault((label, node_id), {}).update(properties)
+    nodes: list[UpsertNode] = []
+    for (label, node_id), properties in folded.items():
+        try:
+            nodes.append(UpsertNode(label=label, id=node_id, properties=properties))
+        except ValidationError as exc:
+            raise _unstorable(f"{label} {node_id!r}") from exc
+    return tuple(nodes)
+
+
+def _edge(
+    edge_type: str,
+    source: tuple[str, str],
+    target: tuple[str, str],
+    properties: dict[str, object],
+) -> UpsertEdge:
+    try:
+        return UpsertEdge(
+            type=edge_type,
+            identity=_edge_identity(edge_type, source[1], target[1]),
+            source=NodeRef(label=source[0], id=source[1]),
+            target=NodeRef(label=target[0], id=target[1]),
+            properties=properties,
+        )
+    except ValidationError as exc:
+        raise _unstorable(f"{edge_type} edge {source[1]!r} -> {target[1]!r}") from exc
+
+
+def _merged_edges(edges: Iterable[UpsertEdge]) -> tuple[UpsertEdge, ...]:
+    """One edge primitive per identity, in first-seen order, the last occurrence winning.
+
+    As the legacy `MERGE (a)-[e:T]->(b) SET e.source_ref = ...` collapsed a repeated edge to
+    one whose properties came from the later statement.
+    """
+    by_identity: dict[str, UpsertEdge] = {}
+    for edge in edges:
+        by_identity[edge.identity] = edge
+    return tuple(by_identity.values())
+
+
+def build_role_and_requirement_primitives(
+    regulatory_instrument_id: str,
+    regulatory_instrument_properties: dict[str, object],
+    role_nodes: tuple[RoleNode, ...],
+    role_edges: tuple[RoleDefinesEdge, ...],
+    requirement_nodes: tuple[RequirementNode, ...],
+    requirement_edges: tuple[RequirementExpressesEdge, ...],
+) -> tuple[Primitive, ...]:
+    """The extraction group's mutations: instrument, Roles, DEFINES, Requirements, EXPRESSES.
+
+    Pure: nothing is read or submitted. `id` is stripped from the instrument's property bag (a
+    whole-bag copy of the NATIVE node, whose `id` may differ in casing and must never rewrite
+    the match key, BASELINE.md row #2). Every edge carries `source_ref` and the identity
+    `{type}:{instrument}->{target}`; both endpoints of every edge are in the group.
+
+    Raises:
+        DomainMapperPersistenceError: a node or edge carries a property the gateway cannot
+            store; nothing has been submitted by then.
+    """
+    instrument = _merged_nodes(
+        [
+            (
+                _REGULATORY_INSTRUMENT_LABEL,
+                regulatory_instrument_id,
+                {k: v for k, v in regulatory_instrument_properties.items() if k != "id"},
+            )
+        ]
+    )
+    source = (_REGULATORY_INSTRUMENT_LABEL, regulatory_instrument_id)
+    roles = _merged_nodes((_ROLE_LABEL, node.id, node.properties) for node in role_nodes)
+    defines = _merged_edges(
+        _edge("DEFINES", source, (_ROLE_LABEL, edge.role_node_id), {"source_ref": edge.source_ref})
+        for edge in role_edges
+    )
+    requirements = _merged_nodes(
+        (_REQUIREMENT_LABEL, node.id, node.properties) for node in requirement_nodes
+    )
+    expresses = _merged_edges(
+        _edge(
+            "EXPRESSES",
+            source,
+            (_REQUIREMENT_LABEL, edge.requirement_node_id),
+            {"source_ref": edge.source_ref},
+        )
+        for edge in requirement_edges
+    )
+    return (*instrument, *roles, *defines, *requirements, *expresses)
+
+
+def _submit_baseline_group(
+    submitter: GroupSubmitter,
+    baseline_graph_name: str,
+    audit_event_id: str,
+    primitives: tuple[Primitive, ...],
+) -> None:
+    """Stamp the graph's legacy edges, submit `primitives` as one group, require it applied.
+
+    Stamping runs after the caller's pre-flight validation and building (a rejected request
+    writes and logs nothing) and before the first group. `require_caught_up` is mandatory: the
+    next stage reads this graph.
+
+    Raises:
+        DomainMapperPersistenceError: `FalkorDB write failed: <sanitized text>` if the gateway
+            refused the group, could not reach its stores, or the group was committed but not
+            applied.
+    """
+    group = MutationGroup(
+        graph=baseline_graph_name, audit_event_id=audit_event_id, primitives=primitives
+    )
+    stamp_legacy_edges_before_first_write(
+        submitter, baseline_graph_name, audit_event_id, DomainMapperPersistenceError
+    )
+    submit_or_raise(submitter, group, DomainMapperPersistenceError)
+    require_caught_up(submitter, baseline_graph_name, DomainMapperPersistenceError)
+
+
+def persist_role_and_requirement_graph(  # noqa: PLR0913 -- the gateway triple plus the instrument and the four collections
+    submitter: GroupSubmitter,
+    baseline_graph_name: str,
+    audit_event_id: str,
+    *,
     regulatory_instrument_id: str,
     regulatory_instrument_properties: dict[str, object],
     role_nodes: tuple[RoleNode, ...],
@@ -167,121 +275,140 @@ def persist_role_and_requirement_graph(
     requirement_nodes: tuple[RequirementNode, ...],
     requirement_edges: tuple[RequirementExpressesEdge, ...],
 ) -> None:
-    """Persist one extraction run's complete Role/Requirement graph into `graph`.
+    """Submit one extraction run's graph as ONE gateway group on `baseline_graph_name`.
 
-    `graph` is the caller's already-selected `{short}_baseline`
-    `GraphHandle`. `regulatory_instrument_properties` MERGEs the
-    RegulatoryInstrument node itself (PLAN_REVIEWED.md §5.2 step 1) — the
-    `DEFINES`/`EXPRESSES` edges below originate from it.
-    `role_nodes`/`role_edges`/`requirement_nodes`/`requirement_edges` are
-    `extraction.py`'s `_canonicalize_roles`/`_build_requirement_graph`
-    output (Increment 8) — this function does no canonicalization or
-    collision handling of its own, only validation and writing.
+    Sequence: `_validate_role_references` (a dangling `role_id` raises before anything is built),
+    build the primitives (an unstorable property raises before anything is submitted), stamp the
+    graph's legacy edges, submit, require the graph caught up. The group is atomic, so a failure
+    leaves none of this run's content behind. No LLM is called here: every id and property was
+    computed by the caller.
 
-    Raises `DomainMapperPersistenceError` (via `_validate_role_references`)
-    before any write if a Requirement's `role_id` doesn't resolve within
-    this call's own `role_nodes` — see the module docstring's B3 fix (a).
-
-    BASELINE.md row #2 fix: `regulatory_instrument_properties` may itself
-    carry an `id` key — it is `extraction.py`'s `_read_regulatory_
-    instrument_properties`'s `dict(node.properties)`, a whole-bag copy of
-    the NATIVE graph's own RegulatoryInstrument node, whose `id` (e.g.
-    ingestion's own casing, `"cra-1.0"`) can differ from this call's own
-    `regulatory_instrument_id` (e.g. `"CRA-1.0"`). `id` is already fixed by
-    the `MERGE {id: $id}` match clause above and must never be mutated by
-    the following `SET` — `SET n += $properties` including a differing `id`
-    would silently rewrite the just-matched/created node's own match key,
-    breaking every SUBSEQUENT call's `MERGE {id: $id}` from ever re-finding
-    it (each call would then mint a fresh duplicate node instead of
-    upserting one). So `id` is stripped from a local copy before use here,
-    matching this module's own established convention: every OTHER
-    `properties` dict ever passed into a `MERGE ... SET` in this codebase
-    (`_canonicalize_roles`/`_build_requirement_graph`'s Role/Requirement
-    `properties`, and the sibling precedent `ps_service.ingestion.
-    graph_writer.register_regulatory_instrument_version`'s `properties`) is
-    built as an explicit field list that never includes `id` in the first
-    place — this is the one call site that instead forwards a native,
-    unfiltered property bag, so the strip belongs here, at the write
-    boundary, rather than on `_read_regulatory_instrument_properties`'s
-    own documented whole-bag-passthrough contract (AC-BI-010).
+    Raises:
+        DomainMapperPersistenceError: a Requirement's `role_id` is not among `role_nodes`, a
+            property cannot be stored, or the gateway did not take the group.
     """
     _validate_role_references(role_nodes, requirement_nodes)
-
-    regulatory_instrument_properties_without_id = {
-        key: value for key, value in regulatory_instrument_properties.items() if key != "id"
-    }
-    _execute_query(
-        graph,
-        f"MERGE (n:{_REGULATORY_INSTRUMENT_LABEL} {{id: $id}}) SET n += $properties",
-        params={
-            "id": regulatory_instrument_id,
-            "properties": regulatory_instrument_properties_without_id,
-        },
+    primitives = build_role_and_requirement_primitives(
+        regulatory_instrument_id,
+        regulatory_instrument_properties,
+        role_nodes,
+        role_edges,
+        requirement_nodes,
+        requirement_edges,
     )
-    for role in role_nodes:
-        _upsert_node(graph, _ROLE_LABEL, role.id, role.properties)
-    for role_edge in role_edges:
-        _upsert_regulatory_instrument_edge(
-            graph, "DEFINES", _ROLE_LABEL, regulatory_instrument_id, role_edge
-        )
-    for requirement in requirement_nodes:
-        _upsert_node(graph, _REQUIREMENT_LABEL, requirement.id, requirement.properties)
-    for requirement_edge in requirement_edges:
-        _upsert_regulatory_instrument_edge(
-            graph, "EXPRESSES", _REQUIREMENT_LABEL, regulatory_instrument_id, requirement_edge
-        )
+    _submit_baseline_group(submitter, baseline_graph_name, audit_event_id, primitives)
 
 
-def _upsert_node(
-    graph: GraphHandle, label: str, node_id: str, properties: dict[str, str | float]
-) -> None:
-    # label is always one of this module's own fixed literals (_ROLE_LABEL/
-    # _REQUIREMENT_LABEL) — see the module docstring's "no allow-list
-    # needed" design note.
-    _execute_query(
-        graph,
-        f"MERGE (n:{label} {{id: $id}}) SET n += $properties",
-        params={"id": node_id, "properties": properties},
-    )
+def _read_existing_ids(graph: GraphHandle, label: str, node_ids: Iterable[str]) -> set[str]:
+    """Which of `node_ids` are `label` nodes of `graph`: one batched read, ids via `params`.
 
+    `label` is always one of this module's fixed label literals, never adapter- or LLM-sourced,
+    so interpolating it is safe; the ids travel as a parameter. FalkorDB reachability is
+    recorded in `ps_service.dependency_health` as the old direct writes recorded it.
 
-def _upsert_regulatory_instrument_edge(
-    graph: GraphHandle,
-    relationship_type: str,
-    target_label: str,
-    regulatory_instrument_id: str,
-    edge: RoleDefinesEdge | RequirementExpressesEdge,
-) -> None:
-    """`RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label`.
-
-    Shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
-    edges — both originate from the RegulatoryInstrument node and carry the
-    same single `source_ref` property (Edge Catalog, PLAN_REVIEWED.md
-    §0.2).
-
-    `relationship_type`/`target_label` are always this module's own fixed
-    literals (`"DEFINES"`/`"EXPRESSES"`, `_ROLE_LABEL`/`_REQUIREMENT_LABEL`)
-    — never adapter- or LLM-sourced — so no allow-list check applies here
-    either. The target node's id and `source_ref` flow through `params`
-    only, never interpolated into the query string.
+    Raises:
+        DomainMapperPersistenceError: `FalkorDB write failed: <error>` if the read could not be
+            made; nothing has been submitted by then.
     """
-    target_node_id = (
-        edge.role_node_id if isinstance(edge, RoleDefinesEdge) else edge.requirement_node_id
-    )
-    _execute_query(
-        graph,
-        f"MATCH (r:{_REGULATORY_INSTRUMENT_LABEL} {{id: $regulatory_instrument_id}}), "
-        f"(n:{target_label} {{id: $target_id}}) "
-        f"MERGE (r)-[e:{relationship_type}]->(n) SET e.source_ref = $source_ref",
-        params={
-            "regulatory_instrument_id": regulatory_instrument_id,
-            "target_id": target_node_id,
-            "source_ref": edge.source_ref,
-        },
+    try:
+        result = graph.query(
+            f"MATCH (n:{label}) WHERE n.id IN $ids RETURN n.id", params={"ids": sorted(node_ids)}
+        )
+    except redis.exceptions.RedisError as exc:
+        mark_unhealthy(FALKORDB, error=exc)
+        raise DomainMapperPersistenceError(f"FalkorDB write failed: {exc}") from exc
+    mark_healthy(FALKORDB)
+    return {str(row[0]) for row in cast("list[list[object]]", result.result_set)}
+
+
+def _drop_edges_with_missing_endpoints(
+    graph: GraphHandle, nodes: tuple[UpsertNode, ...], edges: tuple[UpsertEdge, ...]
+) -> tuple[UpsertEdge, ...]:
+    """Keep the edges whose both endpoints exist: in `nodes` (this group) or in `graph`.
+
+    The legacy `MATCH ... MERGE` wrote nothing for an edge with a missing endpoint, without error
+    or log entry (AC-BI-004); a group edge with a missing endpoint would instead fail the whole
+    group, so such edges are dropped here, silently. Endpoints outside the group are resolved with
+    one batched read per label (none if every endpoint is in the group).
+    """
+    in_group = {(node.label, node.id) for node in nodes}
+    outside: dict[str, set[str]] = {}
+    for edge in edges:
+        for ref in (edge.source, edge.target):
+            if (ref.label, ref.id) not in in_group:
+                outside.setdefault(ref.label, set()).add(ref.id)
+    present = set(in_group)
+    for label, node_ids in outside.items():
+        present |= {(label, found) for found in _read_existing_ids(graph, label, node_ids)}
+    return tuple(
+        edge
+        for edge in edges
+        if (edge.source.label, edge.source.id) in present
+        and (edge.target.label, edge.target.id) in present
     )
 
 
-def persist_obligation_and_capability_graph(
+def build_obligation_and_capability_primitives(
+    obligation_nodes: tuple[ObligationNode, ...],
+    capability_nodes: tuple[CapabilityNode, ...],
+    has_edges: tuple[ObligationHasEdge, ...],
+    satisfied_by_edges: tuple[RequirementSatisfiedByEdge, ...],
+    requires_edges: tuple[CapabilityRequiresEdge, ...],
+) -> tuple[tuple[UpsertNode, ...], tuple[UpsertEdge, ...]]:
+    """The derivation group's mutations: `(nodes, edges)`, each in write order.
+
+    Nodes: Obligations, then Capabilities. Edges: `HAS` (Role to Obligation), `SATISFIED_BY`
+    (Requirement to Obligation), `REQUIRES` (Obligation to Capability). The three edge types
+    carry no properties (Edge Catalog). Pure: nothing is read or submitted.
+
+    Raises:
+        DomainMapperPersistenceError: a node carries a property the gateway cannot store.
+    """
+    nodes = _merged_nodes(
+        [
+            *((_OBLIGATION_LABEL, node.id, node.properties) for node in obligation_nodes),
+            *((_CAPABILITY_LABEL, node.id, node.properties) for node in capability_nodes),
+        ]
+    )
+    edges = _merged_edges(
+        [
+            *(
+                _edge(
+                    "HAS",
+                    (_ROLE_LABEL, edge.role_node_id),
+                    (_OBLIGATION_LABEL, edge.obligation_node_id),
+                    {},
+                )
+                for edge in has_edges
+            ),
+            *(
+                _edge(
+                    "SATISFIED_BY",
+                    (_REQUIREMENT_LABEL, edge.requirement_id),
+                    (_OBLIGATION_LABEL, edge.obligation_node_id),
+                    {},
+                )
+                for edge in satisfied_by_edges
+            ),
+            *(
+                _edge(
+                    "REQUIRES",
+                    (_OBLIGATION_LABEL, edge.obligation_node_id),
+                    (_CAPABILITY_LABEL, edge.capability_node_id),
+                    {},
+                )
+                for edge in requires_edges
+            ),
+        ]
+    )
+    return nodes, edges
+
+
+def persist_obligation_and_capability_graph(  # noqa: PLR0913 -- the gateway triple, the read handle and the five collections
+    submitter: GroupSubmitter,
+    baseline_graph_name: str,
+    audit_event_id: str,
+    *,
     graph: GraphHandle,
     obligation_nodes: tuple[ObligationNode, ...],
     has_edges: tuple[ObligationHasEdge, ...],
@@ -289,102 +416,26 @@ def persist_obligation_and_capability_graph(
     capability_nodes: tuple[CapabilityNode, ...],
     requires_edges: tuple[CapabilityRequiresEdge, ...],
 ) -> None:
-    """Persist one derivation run's complete Obligation/Capability graph into `graph`.
+    """Submit one derivation run's graph as ONE gateway group on `baseline_graph_name`.
 
-    `graph` is the caller's already-selected `{short}_baseline`
-    `GraphHandle` — the SAME graph a prior
-    `persist_role_and_requirement_graph` call already wrote
-    Role/Requirement nodes into.
+    `graph` is the read-only `{short}_baseline` handle: it is only asked which `Role` and
+    `Requirement` endpoints exist. Sequence: build (an unstorable property raises before
+    anything else happens), require the graph caught up with its log (so an earlier group still
+    waiting to be applied cannot make an edge look dangling and be dropped, AC-BI-004), read the
+    endpoints outside the group, drop edges whose endpoint exists nowhere (no error, no log
+    entry), stamp the graph's legacy edges, submit, require caught up again (the merge stage
+    reads this graph next). Nothing to write (all five collections empty) returns at once, with
+    no stamp, read or group. No LLM is called here: every id was computed by the caller.
 
-    `obligation_nodes`/`has_edges`/`satisfied_by_edges` are `derivation.py`'s
-    `_derive_obligations` output (Increment 12); `capability_nodes`/
-    `requires_edges` are `_derive_capabilities`'s output (Increment 14),
-    called with that same `obligation_nodes` tuple (PLAN_REVIEWED.md §11
-    Increment 16 wires the two together). This function does no
-    mint/match/collision logic of its own, only writing.
-
-    Nodes are written before any edge that references them (`HAS`/
-    `SATISFIED_BY`/`REQUIRES` all `MATCH` their endpoints rather than
-    `MERGE` them — a `MATCH` against a not-yet-written node silently
-    matches zero rows and writes no edge, so write order here is
-    load-bearing, not stylistic).
-
-    Per the Edge Catalog (PLAN_REVIEWED.md §0.2), `HAS`/`SATISFIED_BY`/
-    `REQUIRES` carry NO properties — deliberately distinct from `DEFINES`/
-    `EXPRESSES`, which always carry `source_ref`. No `source_ref`, or any
-    other property, is ever written onto these three edge types by this
-    function; see `_upsert_bare_edge` below.
-
-    No validate-then-write pass, unlike `persist_role_and_requirement_graph`
-    — see this module's own docstring for the reasoning (in short:
-    `has_edges`/`satisfied_by_edges`/`requires_edges`' Obligation/Capability
-    endpoints are self-consistent by construction within `derivation.py`'s
-    own whole-run algorithm, and their Role/Requirement endpoints are
-    validated on the READ side by Increment 16's `_read_requirements_by_role`
-    before any of this data can exist at all).
+    Raises:
+        DomainMapperPersistenceError: a property cannot be stored, the graph is behind its log,
+            the read failed, or the gateway did not take the group.
     """
-    for obligation in obligation_nodes:
-        _upsert_node(graph, _OBLIGATION_LABEL, obligation.id, obligation.properties)
-    for capability in capability_nodes:
-        _upsert_node(graph, _CAPABILITY_LABEL, capability.id, capability.properties)
-    for has_edge in has_edges:
-        _upsert_bare_edge(
-            graph,
-            "HAS",
-            _ROLE_LABEL,
-            has_edge.role_node_id,
-            _OBLIGATION_LABEL,
-            has_edge.obligation_node_id,
-        )
-    for satisfied_by_edge in satisfied_by_edges:
-        _upsert_bare_edge(
-            graph,
-            "SATISFIED_BY",
-            _REQUIREMENT_LABEL,
-            satisfied_by_edge.requirement_id,
-            _OBLIGATION_LABEL,
-            satisfied_by_edge.obligation_node_id,
-        )
-    for requires_edge in requires_edges:
-        _upsert_bare_edge(
-            graph,
-            "REQUIRES",
-            _OBLIGATION_LABEL,
-            requires_edge.obligation_node_id,
-            _CAPABILITY_LABEL,
-            requires_edge.capability_node_id,
-        )
-
-
-def _upsert_bare_edge(
-    graph: GraphHandle,
-    relationship_type: str,
-    source_label: str,
-    source_id: str,
-    target_label: str,
-    target_id: str,
-) -> None:
-    """`source_label -[:relationship_type]-> target_label`, NO properties.
-
-    The shared shape for `HAS`/`SATISFIED_BY`/`REQUIRES` (Edge Catalog,
-    PLAN_REVIEWED.md §0.2), deliberately distinct from
-    `_upsert_regulatory_instrument_edge`'s `DEFINES`/`EXPRESSES` shape,
-    which always sets `source_ref`. There is no `SET` clause here at all —
-    be deliberate about NOT copy-pasting `_upsert_regulatory_instrument_edge`'s
-    pattern onto this function (PLAN_REVIEWED.md §11 Increment 15's explicit
-    warning).
-
-    `relationship_type`/`source_label`/`target_label` are always this
-    module's own fixed literals (`"HAS"`/`"SATISFIED_BY"`/`"REQUIRES"`,
-    `_ROLE_LABEL`/`_REQUIREMENT_LABEL`/`_OBLIGATION_LABEL`/
-    `_CAPABILITY_LABEL`) — never adapter- or LLM-sourced — so no allow-list
-    check applies here either. `source_id`/`target_id` flow through
-    `params` only, never interpolated into the query string.
-    """
-    _execute_query(
-        graph,
-        f"MATCH (s:{source_label} {{id: $source_id}}), "
-        f"(t:{target_label} {{id: $target_id}}) "
-        f"MERGE (s)-[:{relationship_type}]->(t)",
-        params={"source_id": source_id, "target_id": target_id},
+    nodes, edges = build_obligation_and_capability_primitives(
+        obligation_nodes, capability_nodes, has_edges, satisfied_by_edges, requires_edges
     )
+    if not nodes and not edges:
+        return
+    require_caught_up(submitter, baseline_graph_name, DomainMapperPersistenceError)
+    kept_edges = _drop_edges_with_missing_endpoints(graph, nodes, edges)
+    _submit_baseline_group(submitter, baseline_graph_name, audit_event_id, (*nodes, *kept_edges))

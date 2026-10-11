@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import pytest
 
@@ -44,6 +44,8 @@ from ps_service.domain_mapper.falkordb_client import (
     select_graph,
 )
 from ps_service.domain_mapper.models import ExtractionUnit
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.logging import LogEmitter, bind_run_context
 
 if TYPE_CHECKING:
@@ -52,6 +54,7 @@ if TYPE_CHECKING:
     from domain_mapper._fakes import MakeEmitter, ReadLines
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
     from ps_service.domain_mapper.models import DerivationResult
+    from ps_service.ingestion.graph_submission import GroupSubmitter
 
 _LIMIT_PER_REGULATORY_INSTRUMENT = 15
 _LOG_FILENAME = "capstone.jsonl"
@@ -183,6 +186,32 @@ def _native_citation_refs(native_graph: GraphHandle) -> set[str]:
     }
 
 
+def _live_gateway_keywords(short_name: str, run_id: str) -> _LiveGatewayKeywords:
+    """The gateway keywords of an extraction stage, built the way production builds them (#209).
+
+    The real gateway over the PS state Postgres and FalkorDB, and one system audit row for the
+    run (the stage's group is logged under it). Not runnable in the implementation sandbox.
+    """
+    config = load_config()
+    audit_event_id = build_system_audit_recorder(config)(
+        action="ingestion_run.submit",
+        resource_type="ingestion_run",
+        resource_id=run_id,
+        details={"trigger": "live_capstone"},
+    )
+    return {
+        "submitter": build_default_graph_write_gateway(config),
+        "baseline_graph_name": baseline_graph_name(short_name),
+        "audit_event_id": audit_event_id,
+    }
+
+
+class _LiveGatewayKeywords(TypedDict):
+    submitter: GroupSubmitter
+    baseline_graph_name: str
+    audit_event_id: str
+
+
 def _run_pipeline_for_regulatory_instrument(
     db: FalkorDB,
     adapter: DomainMappingAdapter,
@@ -209,7 +238,7 @@ def _run_pipeline_for_regulatory_instrument(
             fixture.regulatory_instrument_id,
             adapter=limited_adapter,
             native_graph=native_graph,
-            baseline_graph=baseline_graph,
+            **_live_gateway_keywords(fixture.short_name, extraction_run_id),
             model=model,
             emitter=emitter,
         )
@@ -219,6 +248,7 @@ def _run_pipeline_for_regulatory_instrument(
         derivation_result = derive_obligations_and_capabilities(
             fixture.regulatory_instrument_id,
             baseline_graph=baseline_graph,
+            **_live_gateway_keywords(fixture.short_name, derivation_run_id),
             model=model,
             emitter=emitter,
         )
@@ -493,7 +523,7 @@ def test_live_cra_annex_i_produces_at_least_one_role_and_requirement(
             fixture.regulatory_instrument_id,
             adapter=adapter,
             native_graph=native_graph,
-            baseline_graph=baseline_graph,
+            **_live_gateway_keywords(fixture.short_name, "capstone-cra-annex-i-extraction"),
             model=model,
             emitter=emitter,
         )
@@ -569,7 +599,7 @@ def test_live_nis2_annex_content_yields_no_hallucinated_duties(
             fixture.regulatory_instrument_id,
             adapter=adapter,
             native_graph=native_graph,
-            baseline_graph=baseline_graph,
+            **_live_gateway_keywords(fixture.short_name, "capstone-nis2-annex-extraction"),
             model=model,
             emitter=emitter,
         )

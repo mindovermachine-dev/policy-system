@@ -63,12 +63,15 @@ class DomainMapperDerivationError(Exception):
 
 
 class DomainMapperPersistenceError(Exception):
-    """A FalkorDB write for the baseline graph could not be completed safely.
+    """A baseline-graph write could not be completed safely.
 
-    E.g. a Requirement node about to be persisted references a Role node
-    not present in the same write call (PLAN_REVIEWED.md §5.4's B3 fix
-    (a)). Raised by `graph_writer.py`, before any `graph.query()` call is
-    made for the offending write.
+    Raised by `graph_writer.py`, before anything is submitted to the Graph Write Gateway, if a
+    Requirement node about to be persisted references a Role node not present in the same call
+    (PLAN_REVIEWED.md §5.4's B3 fix (a)) or a node or edge carries a property the gateway cannot
+    store (a reserved key, a non-finite number). Also raised, with the message
+    `FalkorDB write failed: <sanitized text>` and the gateway error chained, when the gateway
+    refuses a group or cannot reach its stores, when a group is committed but not yet applied,
+    or when the baseline graph could not be read (issue #209).
     """
 
 

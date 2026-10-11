@@ -35,10 +35,10 @@ analogy:
   mirroring how `_upsert_node` never receives a `description` key for a
   Capability minted without one.
 - `DEFINES`/`EXPRESSES` edges carry a `source_ref` property
-  (`_upsert_regulatory_instrument_edge`); `HAS`/`SATISFIED_BY`/`REQUIRES` edges carry
-  no properties at all (`_upsert_bare_edge`) -- each relationship type here
-  is read via its own fixed-literal query, never parsed from a returned
-  type string, mirroring `_upsert_regulatory_instrument_edge`/`_upsert_bare_edge`'s own
+  (Domain Mapper `persist_role_and_requirement_graph`); `HAS`/`SATISFIED_BY`/`REQUIRES`
+  edges carry no properties at all (`persist_obligation_and_capability_graph`) --
+  each relationship type here is read via its own fixed-literal query, never parsed from a returned
+  type string, mirroring the Domain Mapper writers' own
   "always a fixed Python literal, never adapter/DB-sourced" design note.
 
 **Deviation from PLAN_REVIEWED.md's "six/seven queries" phrasing**: this

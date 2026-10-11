@@ -300,15 +300,26 @@ class FakeExtractStage:
         *,
         adapter: object,
         native_graph: GraphHandle,
-        baseline_graph: GraphHandle,
+        submitter: GroupSubmitter | None = None,
+        baseline_graph_name: str | None = None,
+        audit_event_id: str | None = None,
         model: str,
         call_completion: CompletionCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> ExtractionResult:
         """Record the call and return (or raise) a canned :class:`ExtractionResult`."""
-        _ = (adapter, native_graph, baseline_graph, call_completion, emitter)
+        _ = (adapter, native_graph, call_completion, emitter)
         self._recorder.calls.append(
-            StageCall("extraction", regulatory_instrument_id, {"model": model})
+            StageCall(
+                "extraction",
+                regulatory_instrument_id,
+                {
+                    "model": model,
+                    "submitter": submitter,
+                    "baseline_graph_name": baseline_graph_name,
+                    "audit_event_id": audit_event_id,
+                },
+            )
         )
         if self._error is not None:
             error = self._error
@@ -351,6 +362,9 @@ class FakeDeriveStage:
         regulatory_instrument_id: str,
         *,
         baseline_graph: GraphHandle,
+        submitter: GroupSubmitter | None = None,
+        baseline_graph_name: str | None = None,
+        audit_event_id: str | None = None,
         model: str,
         call_completion: CompletionCaller | None = None,
         emitter: LogEmitter | None = None,
@@ -358,7 +372,16 @@ class FakeDeriveStage:
         """Record the call and return (or raise) a canned :class:`DerivationResult`."""
         _ = (baseline_graph, call_completion, emitter)
         self._recorder.calls.append(
-            StageCall("derivation", regulatory_instrument_id, {"model": model})
+            StageCall(
+                "derivation",
+                regulatory_instrument_id,
+                {
+                    "model": model,
+                    "submitter": submitter,
+                    "baseline_graph_name": baseline_graph_name,
+                    "audit_event_id": audit_event_id,
+                },
+            )
         )
         if self._error is not None:
             error = self._error

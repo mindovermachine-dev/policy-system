@@ -168,13 +168,15 @@ class IngestStage(Protocol):
 class ExtractStage(Protocol):
     """Call shape of ``ps_service.domain_mapper.extract_roles_and_requirements``."""
 
-    def __call__(
+    def __call__(  # noqa: PLR0913 -- mirrors extract_roles_and_requirements's call shape exactly
         self,
         regulatory_instrument_id: str,
         *,
         adapter: DomainMappingAdapter,
         native_graph: GraphHandle,
-        baseline_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        baseline_graph_name: str,
+        audit_event_id: str,
         model: str,
         call_completion: CompletionCaller | None = None,
         emitter: LogEmitter | None = None,
@@ -191,6 +193,9 @@ class DeriveStage(Protocol):
         regulatory_instrument_id: str,
         *,
         baseline_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        baseline_graph_name: str,
+        audit_event_id: str,
         model: str,
         call_completion: CompletionCaller | None = None,
         emitter: LogEmitter | None = None,
@@ -1037,6 +1042,44 @@ def _record_catalog_run_audit(
     )
 
 
+class _LazyWriteContext:
+    """The gateway and the one system audit event id of a run, resolved on first use.
+
+    Ingestion, extraction and derivation all write a graph under the same audit event; a
+    merge-only run never calls it, so it neither needs a gateway nor records a row (AC-BI-007).
+    """
+
+    def __init__(
+        self,
+        graph_writes: GraphWriteAccess | None,
+        *,
+        run_id: str,
+        entry: CatalogEntry,
+        trigger: IngestionTrigger | None,
+    ) -> None:
+        """Hold what the first call needs; nothing is resolved or recorded yet."""
+        self._graph_writes = graph_writes
+        self._run_id = run_id
+        self._entry = entry
+        self._trigger: IngestionTrigger | None = trigger
+        self._resolved: tuple[GraphWriteAccess, str] | None = None
+
+    def __call__(self) -> tuple[GraphWriteAccess, str]:
+        """Return the gateway access and the audit event id, recording the run's row once.
+
+        Raises:
+            GraphWriteUnavailableError: The process has no gateway.
+            AuditTrailUnavailableError: The row could not be written.
+        """
+        if self._resolved is None:
+            writes = _require_graph_writes(self._graph_writes)
+            audit_event_id = _record_catalog_run_audit(
+                writes.system_audit, run_id=self._run_id, entry=self._entry, trigger=self._trigger
+            )
+            self._resolved = (writes, audit_event_id)
+        return self._resolved
+
+
 def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus the stage subset/callback; no natural grouping
     entry: CatalogEntry,
     *,
@@ -1080,8 +1123,10 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
             ``<short_name>-<version>``, the id the ingest stage would return.
         on_stage_complete: Called with the stage name after each run stage
             returns (never for a stage that raised), before the next stage starts.
-        graph_writes: The Graph Write Gateway and system audit recorder the ingest stage writes
-            its native graph through (issue #208); required when ``ingestion`` runs.
+        graph_writes: The Graph Write Gateway and system audit recorder the ingest, extract and
+            derive stages write their graphs through (issues #208, #209); required when any of
+            ``ingestion``, ``extraction`` or ``derivation`` runs. One system audit row is recorded
+            per run, before the first of those stages, and its id is shared by all of them.
         trigger: The audited entry point that started the run, recorded on the system audit row
             the ingest stage's group is logged under; ``None`` leaves it off the row.
 
@@ -1090,19 +1135,23 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
         the stages that ran, in pipeline order.
 
     Raises:
-        GraphWriteUnavailableError: ``ingestion`` runs and ``graph_writes`` is ``None``.
-        AuditTrailUnavailableError: The system audit row of the ingest stage's group could not
-            be written; nothing was written to any graph.
+        GraphWriteUnavailableError: A stage that writes a graph runs and ``graph_writes`` is
+            ``None``.
+        AuditTrailUnavailableError: The run's system audit row could not be written; nothing was
+            written to any graph.
     """
     selected = frozenset(_STAGE_ORDER if stages_to_run is None else stages_to_run)
     stages = dependencies.stages
     mapping_adapter = dependencies.adapters.mapping()
     reports: list[StageReport] = []
+    baseline_graph_name = _baseline_graph_name(entry.short_name)
 
     def complete(stage: str, summary: dict[str, int]) -> None:
         reports.append(StageReport(stage, summary))
         if on_stage_complete is not None:
             on_stage_complete(stage)
+
+    write_context = _LazyWriteContext(graph_writes, run_id=run_id, entry=entry, trigger=trigger)
 
     rid = f"{entry.short_name}-{entry.version}"
     if "ingestion" in selected:
@@ -1110,10 +1159,7 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
             dependencies.adapters.ingestion() if ingestion_adapter is None else ingestion_adapter
         )
         set_stage(run_id, "ingestion")
-        writes = _require_graph_writes(graph_writes)
-        audit_event_id = _record_catalog_run_audit(
-            writes.system_audit, run_id=run_id, entry=entry, trigger=trigger
-        )
+        writes, audit_event_id = write_context()
         ingest_result = _run_stage(
             "ingestion",
             lambda: stages.ingest(
@@ -1132,13 +1178,16 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
         complete("ingestion", _ingestion_summary(ingest_result))
     if "extraction" in selected:
         set_stage(run_id, "extraction")
+        writes, audit_event_id = write_context()
         extract_result = _run_stage(
             "extraction",
             lambda: stages.extract(
                 rid,
                 adapter=mapping_adapter,
                 native_graph=graphs.native,
-                baseline_graph=graphs.baseline,
+                submitter=writes.gateway,
+                baseline_graph_name=baseline_graph_name,
+                audit_event_id=audit_event_id,
                 model=resolved.chat_model,
             ),
             emitter=emitter,
@@ -1146,9 +1195,17 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
         complete("extraction", _extraction_summary(extract_result))
     if "derivation" in selected:
         set_stage(run_id, "derivation")
+        writes, audit_event_id = write_context()
         derive_result = _run_stage(
             "derivation",
-            lambda: stages.derive(rid, baseline_graph=graphs.baseline, model=resolved.chat_model),
+            lambda: stages.derive(
+                rid,
+                baseline_graph=graphs.baseline,
+                submitter=writes.gateway,
+                baseline_graph_name=baseline_graph_name,
+                audit_event_id=audit_event_id,
+                model=resolved.chat_model,
+            ),
             emitter=emitter,
         )
         complete("derivation", _derivation_summary(derive_result))

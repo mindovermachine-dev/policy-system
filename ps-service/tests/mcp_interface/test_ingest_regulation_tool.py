@@ -300,6 +300,7 @@ _EMBEDDING_BACKFILL_RE = re.compile(
     r"SET n\.embedding = \$embedding$"
 )
 _OBLIGATIONS_EXIST_QUERY = "MATCH (o:Obligation) WHERE o.id IN $ids RETURN o.id"
+_EXISTING_NODE_READ = re.compile(r"^MATCH \(n:(?P<label>\w+)\) WHERE n\.id IN \$ids RETURN n\.id$")
 _COUNT_RE = re.compile(r"^MATCH \(n:(?P<label>\w+)\) RETURN count\(n\)$")
 _REACHABILITY_RE = re.compile(
     r"^MATCH \(n:(?P<label>\w+)\) WHERE NOT \(:RegulatoryInstrument\)-\[:HAS\*1\.\.\]->\(n\) "
@@ -347,8 +348,16 @@ class _MiniGraph:
     def __init__(self) -> None:
         self._nodes: dict[str, dict[str, dict[str, object]]] = {}
         self._edges: dict[tuple[str, str, str], dict[tuple[str, str], dict[str, object]]] = {}
+        self.issued_queries: list[str] = []
+        """Every query a pipeline stage issued through `query` (test-side `seed` calls excluded)."""
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        """The `GraphHandle` entry point the real stages use; records what they issue."""
+        self.issued_queries.append(q)
+        return self.seed(q, params)
+
+    def seed(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        """Interpret `q` without recording it: the test-side bridge from the gateway's graph."""
         params = params or {}
         if q == _RI_SCOPED_READ_QUERY:
             row = self._nodes.get("RegulatoryInstrument", {}).get(str(params["rid"]))
@@ -358,6 +367,13 @@ class _MiniGraph:
         if "MERGED_INTO" in q or "MergedObligation" in q:
             # issue #190: the tombstone and obligation-marker reads -- no tombstones here.
             return _FakeQueryResult([])
+        existing = _EXISTING_NODE_READ.match(q)
+        if existing is not None:
+            # issue #209: the derivation writer's batched read of the Role/Requirement endpoints.
+            known_nodes = self._nodes.get(existing.group("label"), {})
+            return _FakeQueryResult(
+                [[i] for i in cast("list[str]", params["ids"]) if i in known_nodes]
+            )
         if q == _OBLIGATIONS_EXIST_QUERY:
             # issue #195, Slice 6: the net-new Obligation probe (`count_new_obligations`).
             known = self._nodes.get("Obligation", {})
@@ -543,25 +559,37 @@ _FIXTURE_UNIT = ExtractionUnit(
 )
 
 
-def _project_native_graph(short_name: str, *, into: _MiniGraph) -> None:
-    """Copy what the gateway wrote to ``{short}_native`` into the generic native graph fake.
+def _project_gateway_graph(graph_name: str, *, into: _MiniGraph) -> None:
+    """Copy what the gateway wrote to ``graph_name`` into a generic graph fake.
 
-    The ingest stage writes through the Graph Write Gateway (issue #208) while the later stages
-    read the native graph through ``_MiniGraph``; this is the test-side bridge between the two
-    boundary fakes, expressed in the Cypher shapes ``_MiniGraph`` already interprets.
+    The ingest and extract stages write through the Graph Write Gateway (issues #208, #209) while
+    the later stages read the graphs through ``_MiniGraph``; this is the test-side bridge between
+    the two boundary fakes, expressed in the Cypher shapes ``_MiniGraph`` already interprets. An
+    edge property (``source_ref``) is carried over with the ``SET e.<name>`` form it understands.
     """
-    written = installed_process_gateway().rig.graphs.open(native_graph_name(short_name))
+    written = installed_process_gateway().rig.graphs.open(graph_name)
     for (label, node_id), properties in written.nodes.items():
-        into.query(
+        into.seed(
             f"MERGE (n:{label} {{id: $id}}) SET n += $properties",
             {"id": node_id, "properties": dict(properties)},
         )
-    for edge_type, source_label, source_id, target_label, target_id, _identity in written.edges:
-        into.query(
+    for key, properties in written.edges.items():
+        edge_type, source_label, source_id, target_label, target_id, _identity = key
+        match_clause = (
             f"MATCH (a:{source_label} {{id: $parent_id}}), (b:{target_label} {{id: $child_id}}) "
-            f"MERGE (a)-[:{edge_type}]->(b)",
-            {"parent_id": source_id, "child_id": target_id},
+            f"MERGE (a)-[e:{edge_type}]->(b)"
         )
+        params: dict[str, object] = {"parent_id": source_id, "child_id": target_id}
+        carried = {name: value for name, value in properties.items() if name != "identity"}
+        if not carried:
+            into.seed(match_clause, params)
+        for name, value in carried.items():
+            into.seed(f"{match_clause} SET e.{name} = $value", {**params, "value": value})
+
+
+def _project_native_graph(short_name: str, *, into: _MiniGraph) -> None:
+    """Copy what the gateway wrote to ``{short}_native`` into the generic native graph fake."""
+    _project_gateway_graph(native_graph_name(short_name), into=into)
 
 
 def _structural_fixture(identifier: str) -> FetchedRegulatoryInstrumentStructure:
@@ -829,7 +857,9 @@ def _use_real_pipeline_stages(
         *,
         adapter: object,
         native_graph: object,
-        baseline_graph: object,
+        submitter: GroupSubmitter,
+        baseline_graph_name: str,
+        audit_event_id: str,
         model: str,
         call_completion: CompletionCaller | None = None,
         emitter: object = None,
@@ -839,7 +869,9 @@ def _use_real_pipeline_stages(
             regulatory_instrument_id,
             adapter=adapter,  # pyright: ignore[reportArgumentType] -- structural DomainMappingAdapter
             native_graph=native_graph,  # pyright: ignore[reportArgumentType] -- structural GraphHandle
-            baseline_graph=baseline_graph,  # pyright: ignore[reportArgumentType] -- structural GraphHandle
+            submitter=submitter,
+            baseline_graph_name=baseline_graph_name,
+            audit_event_id=audit_event_id,
             model=model,
             call_completion=fake_call_completion,
             emitter=emitter,  # pyright: ignore[reportArgumentType]
@@ -849,18 +881,28 @@ def _use_real_pipeline_stages(
         regulatory_instrument_id: str,
         *,
         baseline_graph: object,
+        submitter: GroupSubmitter,
+        baseline_graph_name: str,
+        audit_event_id: str,
         model: str,
         call_completion: CompletionCaller | None = None,
         emitter: object = None,
     ) -> DerivationResult:
         _ = call_completion
-        return derive_obligations_and_capabilities(
+        # extraction wrote through the gateway; derivation reads the baseline through `_MiniGraph`
+        _project_gateway_graph(baseline_graph_name, into=cast("_MiniGraph", baseline_graph))
+        result = derive_obligations_and_capabilities(
             regulatory_instrument_id,
             baseline_graph=baseline_graph,  # pyright: ignore[reportArgumentType] -- structural GraphHandle
+            submitter=submitter,
+            baseline_graph_name=baseline_graph_name,
+            audit_event_id=audit_event_id,
             model=model,
             call_completion=fake_call_completion,
             emitter=emitter,  # pyright: ignore[reportArgumentType]
         )
+        _project_gateway_graph(baseline_graph_name, into=cast("_MiniGraph", baseline_graph))
+        return result
 
     def _merge(
         regulatory_instrument_id: str,
@@ -1086,12 +1128,57 @@ def test_the_ingest_stage_commits_its_native_graph_as_one_group_under_a_system_a
     result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
 
     assert result.is_error is False
-    [group] = gateway.rig.store.groups
+    # the extract and derive stages' groups follow (#209)
+    [group, baseline_group, derivation_group] = gateway.rig.store.groups
     assert group.graph == "cra_native"
     assert group.audit_event_id == gateway.system_audit.ids[0]
+    assert baseline_group.graph == "cra_baseline"
+    assert baseline_group.audit_event_id == gateway.system_audit.ids[0]
+    assert derivation_group.graph == "cra_baseline"
+    assert derivation_group.audit_event_id == gateway.system_audit.ids[0]
     row = gateway.system_audit.rows[0]
     assert cast("dict[str, object]", row["details"])["trigger"] == "sync_ingest"
     assert ("RegulatoryInstrument", _RID) in gateway.rig.graphs.open("cra_native").nodes
+
+
+_WRITE_KEYWORD_RE = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE)\b")
+
+
+def test_ingest_regulation_writes_baseline_through_the_gateway_not_the_baseline_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #209 (AC-BI-001): extract and derive write `cra_baseline` only as gateway groups.
+
+    The baseline graph handle the stages are given is read-only: across the whole real pipeline
+    it receives reads (so the assertion is not vacuous) and not one write query, while the
+    gateway's baseline graph holds the extracted and derived content.
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    fixture = _use_real_pipeline_stages(monkeypatch)
+    gateway = installed_process_gateway()
+
+    result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
+
+    assert result.is_error is False
+    assert fixture.baseline.issued_queries, "the stages must have read the baseline graph"
+    assert [q for q in fixture.baseline.issued_queries if _WRITE_KEYWORD_RE.search(q)] == []
+    baseline = gateway.rig.graphs.open("cra_baseline")
+    assert {label for label, _ in baseline.nodes} >= {
+        "RegulatoryInstrument",
+        "Role",
+        "Requirement",
+        "Obligation",
+        "Capability",
+    }
+    assert {edge[0] for edge in baseline.edges} == {
+        "DEFINES",
+        "EXPRESSES",
+        "HAS",
+        "SATISFIED_BY",
+        "REQUIRES",
+    }
 
 
 def test_without_a_gateway_the_tool_fails_closed_before_any_stage_runs(

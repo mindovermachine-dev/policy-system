@@ -9,13 +9,13 @@ this issue's binding testing convention (§0.3/§0.5).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
 
-from ps_service.dependency_health import FALKORDB, is_healthy
+from domain_mapper._gateway_fakes import entry_properties, seed_extraction_output
+from ps_service.dependency_health import FALKORDB, is_healthy, mark_unhealthy
 from ps_service.domain_mapper.errors import DomainMapperPersistenceError
 from ps_service.domain_mapper.graph_writer import (
     persist_obligation_and_capability_graph,
@@ -33,46 +33,9 @@ from ps_service.domain_mapper.models import (
     RoleNode,
 )
 
-
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
-class _FakeQueryResult:
-    """Satisfies `GraphQueryResult` structurally."""
-
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
-
-
-class _FakeGraph:
-    """Satisfies `GraphHandle` structurally, capturing every `(query,
-    params)` call for assertion — this is what lets the B3 fix (a)
-    regression test below assert `graph.calls == []` (zero writes) rather
-    than merely "raised eventually".
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
-
-
-class _FakeGraphThatRaisesConnectionError:
-    """Satisfies `GraphHandle` structurally; every `query()` call raises
-    `redis.exceptions.ConnectionError`.
-    """
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        raise redis.exceptions.ConnectionError("Error 111 connecting to 127.0.0.1:6379")
+if TYPE_CHECKING:
+    from domain_mapper._gateway_fakes import BaselineRig
+    from ps_service.graph_gateway.models import GraphLogEntry
 
 
 def _role_node(role_id: str = "role_manufacturer_abc123", confidence: float = 0.9) -> RoleNode:
@@ -100,11 +63,45 @@ def _regulatory_instrument_properties() -> dict[str, object]:
     return {"title": "Cyber Resilience Act", "jurisdiction": "EU"}
 
 
-# --- Exact Cypher shape, params-only properties -----------------------------
+# --- The extraction group: what is submitted, in what order ------------------
 
 
-def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
-    graph = _FakeGraph()
+def _persist(
+    rig: BaselineRig,
+    *,
+    regulatory_instrument_id: str = "CRA-1.0",
+    regulatory_instrument_properties: dict[str, object] | None = None,
+    role_nodes: tuple[RoleNode, ...] = (),
+    role_edges: tuple[RoleDefinesEdge, ...] = (),
+    requirement_nodes: tuple[RequirementNode, ...] = (),
+    requirement_edges: tuple[RequirementExpressesEdge, ...] = (),
+) -> None:
+    persist_role_and_requirement_graph(
+        rig.submitter,
+        rig.baseline_graph_name,
+        rig.audit_event_id,
+        regulatory_instrument_id=regulatory_instrument_id,
+        regulatory_instrument_properties=(
+            _regulatory_instrument_properties()
+            if regulatory_instrument_properties is None
+            else regulatory_instrument_properties
+        ),
+        role_nodes=role_nodes,
+        role_edges=role_edges,
+        requirement_nodes=requirement_nodes,
+        requirement_edges=requirement_edges,
+    )
+
+
+def _endpoint_id(entry: GraphLogEntry, side: str) -> object:
+    endpoint = entry.content[side]
+    assert isinstance(endpoint, dict)
+    return endpoint["id"]  # pyright: ignore[reportUnknownVariableType]
+
+
+def test_persist_writes_regulation_role_and_requirement_with_edges(
+    baseline_rig: BaselineRig,
+) -> None:
     role = _role_node()
     requirement = _requirement_node()
     role_edge = RoleDefinesEdge(role_node_id=role.id, source_ref="Art. 13(1)")
@@ -112,66 +109,49 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
         requirement_node_id=requirement.id, source_ref="Art. 13(1)"
     )
 
-    persist_role_and_requirement_graph(
-        graph,
-        "CRA-1.0",
-        _regulatory_instrument_properties(),
-        (role,),
-        (role_edge,),
-        (requirement,),
-        (requirement_edge,),
+    _persist(
+        baseline_rig,
+        role_nodes=(role,),
+        role_edges=(role_edge,),
+        requirement_nodes=(requirement,),
+        requirement_edges=(requirement_edge,),
     )
 
-    assert len(graph.calls) == 5
-    regulatory_instrument_call, role_call, defines_call, requirement_call, expresses_call = (
-        graph.calls
-    )
+    assert len(baseline_rig.logged()) == 5
+    regulatory_instrument, role_entry, defines, requirement_entry, expresses = baseline_rig.logged()
 
-    assert (
-        regulatory_instrument_call.query
-        == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    )
-    assert regulatory_instrument_call.params == {
-        "id": "CRA-1.0",
-        "properties": _regulatory_instrument_properties(),
-    }
+    assert regulatory_instrument.name == "RegulatoryInstrument"
+    assert regulatory_instrument.identity == "CRA-1.0"
+    assert entry_properties(regulatory_instrument) == _regulatory_instrument_properties()
 
-    assert role_call.query == "MERGE (n:Role {id: $id}) SET n += $properties"
-    assert role_call.params == {"id": role.id, "properties": role.properties}
+    assert role_entry.name == "Role"
+    assert role_entry.identity == role.id
+    assert entry_properties(role_entry) == role.properties
 
-    assert defines_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Role {id: $target_id}) "
-        "MERGE (r)-[e:DEFINES]->(n) SET e.source_ref = $source_ref"
-    )
-    assert defines_call.params == {
-        "regulatory_instrument_id": "CRA-1.0",
-        "target_id": role.id,
-        "source_ref": "Art. 13(1)",
-    }
+    assert defines.name == "DEFINES"
+    assert _endpoint_id(defines, "source") == "CRA-1.0"
+    assert _endpoint_id(defines, "target") == role.id
+    assert entry_properties(defines) == {"source_ref": "Art. 13(1)"}
 
-    assert requirement_call.query == "MERGE (n:Requirement {id: $id}) SET n += $properties"
-    assert requirement_call.params == {"id": requirement.id, "properties": requirement.properties}
+    assert requirement_entry.name == "Requirement"
+    assert requirement_entry.identity == requirement.id
+    assert entry_properties(requirement_entry) == requirement.properties
 
-    assert expresses_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), "
-        "(n:Requirement {id: $target_id}) "
-        "MERGE (r)-[e:EXPRESSES]->(n) SET e.source_ref = $source_ref"
-    )
-    assert expresses_call.params == {
-        "regulatory_instrument_id": "CRA-1.0",
-        "target_id": requirement.id,
-        "source_ref": "Art. 13(1)",
-    }
+    assert expresses.name == "EXPRESSES"
+    assert _endpoint_id(expresses, "source") == "CRA-1.0"
+    assert _endpoint_id(expresses, "target") == requirement.id
+    assert entry_properties(expresses) == {"source_ref": "Art. 13(1)"}
 
 
-def test_persist_writes_requirement_status_from_real_extraction_output() -> None:
+def test_persist_writes_requirement_status_from_real_extraction_output(
+    baseline_rig: BaselineRig,
+) -> None:
     """AC-BI-001 end-to-end (mint -> persist): a RequirementNode built by
     extraction.py's own _build_requirement_graph (not this file's
     _requirement_node() fixture) carries status="active" all the way into
-    the MERGE call's params, proving graph_writer.py's existing
-    SET n += $properties pass-through (no property allow-list exists here,
-    unlike ps_service.ingestion.graph_writer's element_type allow-list)
-    needs no change of its own for this to work.
+    the logged Requirement entry's properties, proving the property bag passes
+    through the writer unchanged (no property allow-list exists here,
+    unlike ps_service.ingestion.graph_writer's element_type allow-list).
     """
     from ps_service.domain_mapper.extraction import (
         _build_requirement_graph,  # pyright: ignore[reportPrivateUsage]
@@ -193,66 +173,55 @@ def test_persist_writes_requirement_status_from_real_extraction_output() -> None
     requirement_nodes, _edges, _collided = _build_requirement_graph(
         [candidate], "CRA-1.0", {"Manufacturer": "role_manufacturer_abc123"}
     )
-    graph = _FakeGraph()
 
-    persist_role_and_requirement_graph(
-        graph,
-        "CRA-1.0",
-        _regulatory_instrument_properties(),
-        (_role_node(),),
-        (RoleDefinesEdge(role_node_id="role_manufacturer_abc123", source_ref="Art. 13(1)"),),
-        requirement_nodes,
-        (
+    _persist(
+        baseline_rig,
+        role_nodes=(_role_node(),),
+        role_edges=(
+            RoleDefinesEdge(role_node_id="role_manufacturer_abc123", source_ref="Art. 13(1)"),
+        ),
+        requirement_nodes=requirement_nodes,
+        requirement_edges=(
             RequirementExpressesEdge(
                 requirement_node_id=requirement_nodes[0].id, source_ref="Art. 13(1)"
             ),
         ),
     )
 
-    requirement_call = graph.calls[3]
-    assert requirement_call.query == "MERGE (n:Requirement {id: $id}) SET n += $properties"
-    assert requirement_call.params is not None
-    properties = requirement_call.params["properties"]
-    assert isinstance(properties, dict)
-    assert properties["status"] == "active"
+    [requirement_entry] = baseline_rig.entries_named("Requirement")
+    assert entry_properties(requirement_entry)["status"] == "active"
 
 
-def test_persist_writes_instrument_type_verbatim_when_present_in_properties() -> None:
+def test_persist_writes_instrument_type_verbatim_when_present_in_properties(
+    baseline_rig: BaselineRig,
+) -> None:
     """AC-BI-010 (Domain Mapper, write side): `instrument_type` rides
-    through the Regulation MERGE verbatim inside `params["properties"]` —
+    through into the RegulatoryInstrument entry verbatim --
     `regulatory_instrument_properties` is `dict[str, object]` with no key allow-list,
     so the key propagates by construction with NO src change.
     """
-    graph = _FakeGraph()
-
-    persist_role_and_requirement_graph(
-        graph,
-        "NIS2-1.0",
-        {"title": "NIS2 Directive", "jurisdiction": "EU", "instrument_type": "directive"},
-        (),
-        (),
-        (),
-        (),
+    _persist(
+        baseline_rig,
+        regulatory_instrument_id="NIS2-1.0",
+        regulatory_instrument_properties={
+            "title": "NIS2 Directive",
+            "jurisdiction": "EU",
+            "instrument_type": "directive",
+        },
     )
 
-    assert len(graph.calls) == 1
-    regulatory_instrument_call = graph.calls[0]
-    assert (
-        regulatory_instrument_call.query
-        == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    )
-    assert regulatory_instrument_call.params is not None
-    properties = regulatory_instrument_call.params["properties"]
-    assert isinstance(properties, dict)
-    assert properties["instrument_type"] == "directive"
+    [regulatory_instrument] = baseline_rig.logged()
+    assert regulatory_instrument.name == "RegulatoryInstrument"
+    assert entry_properties(regulatory_instrument)["instrument_type"] == "directive"
 
 
-def test_persist_never_interpolates_source_ref_value_into_query_string() -> None:
-    """`source_ref` is present in the DEFINES/EXPRESSES edge params, and its
-    VALUE never appears in the query string itself — only the property key
-    name `source_ref` does (a fixed literal, not the value).
+def test_persist_carries_source_ref_only_as_an_edge_property(
+    baseline_rig: BaselineRig,
+) -> None:
+    """`source_ref` is present in the DEFINES/EXPRESSES edge properties, and its
+    VALUE appears nowhere else in the group -- not in a label, a relationship
+    type or an identity, and not on a node.
     """
-    graph = _FakeGraph()
     role = _role_node()
     requirement = _requirement_node()
     distinctive_source_ref = "Art. 13(1)(zzz-distinctive-value)"
@@ -261,50 +230,47 @@ def test_persist_never_interpolates_source_ref_value_into_query_string() -> None
         requirement_node_id=requirement.id, source_ref=distinctive_source_ref
     )
 
-    persist_role_and_requirement_graph(
-        graph,
-        "CRA-1.0",
-        _regulatory_instrument_properties(),
-        (role,),
-        (role_edge,),
-        (requirement,),
-        (requirement_edge,),
+    _persist(
+        baseline_rig,
+        role_nodes=(role,),
+        role_edges=(role_edge,),
+        requirement_nodes=(requirement,),
+        requirement_edges=(requirement_edge,),
     )
 
-    for call in graph.calls:
-        assert distinctive_source_ref not in call.query
-    defines_call, expresses_call = graph.calls[2], graph.calls[4]
-    assert defines_call.params is not None
-    assert defines_call.params["source_ref"] == distinctive_source_ref
-    assert expresses_call.params is not None
-    assert expresses_call.params["source_ref"] == distinctive_source_ref
+    for entry in baseline_rig.logged():
+        assert distinctive_source_ref not in entry.name
+        assert distinctive_source_ref not in entry.identity
+        if entry.name in {"DEFINES", "EXPRESSES"}:
+            assert entry_properties(entry)["source_ref"] == distinctive_source_ref
+        else:
+            assert distinctive_source_ref not in str(entry.content)
 
 
-def test_persist_writes_zero_role_and_requirement_elements_when_collections_empty() -> None:
-    """Zero-unit extraction: only the Regulation MERGE happens, no
-    exception — mirrors Increment 10's zero-unit-extraction case.
+def test_persist_writes_zero_role_and_requirement_elements_when_collections_empty(
+    baseline_rig: BaselineRig,
+) -> None:
+    """Zero-unit extraction: the group holds only the RegulatoryInstrument, no
+    exception -- mirrors Increment 10's zero-unit-extraction case.
     """
-    graph = _FakeGraph()
+    _persist(baseline_rig)
 
-    persist_role_and_requirement_graph(
-        graph, "CRA-1.0", _regulatory_instrument_properties(), (), (), (), ()
-    )
-
-    assert len(graph.calls) == 1
-    assert graph.calls[0].query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    [group] = baseline_rig.groups
+    assert [entry.name for entry in group.entries] == ["RegulatoryInstrument"]
 
 
-# --- B3 fix (a): validate-then-write, zero writes before raise -------------
+# --- B3 fix (a): validate-then-write, nothing logged before the raise ---------
 
 
-def test_persist_raises_before_any_write_when_requirement_role_id_is_dangling() -> None:
+def test_persist_raises_before_any_write_when_requirement_role_id_is_dangling(
+    baseline_rig: BaselineRig,
+) -> None:
     """THE B3 fix (a) direct test. A Requirement node whose `role_id`
     references a Role NOT present in this same call's `role_nodes`
-    collection -> DomainMapperPersistenceError raised, AND the fake graph's
-    call log is asserted EMPTY at raise time — proving zero writes happened
-    before the raise, not just that a raise happened.
+    collection -> DomainMapperPersistenceError raised, AND the rig's log is
+    asserted EMPTY at raise time -- proving nothing was submitted before the
+    raise, not just that a raise happened.
     """
-    graph = _FakeGraph()
     role = _role_node(role_id="role_manufacturer_abc123")
     dangling_requirement = _requirement_node(role_id="role_importer_does_not_exist")
     role_edge = RoleDefinesEdge(role_node_id=role.id, source_ref="Art. 13(1)")
@@ -313,94 +279,48 @@ def test_persist_raises_before_any_write_when_requirement_role_id_is_dangling() 
     )
 
     with pytest.raises(DomainMapperPersistenceError) as exc_info:
-        persist_role_and_requirement_graph(
-            graph,
-            "CRA-1.0",
-            _regulatory_instrument_properties(),
-            (role,),
-            (role_edge,),
-            (dangling_requirement,),
-            (requirement_edge,),
+        _persist(
+            baseline_rig,
+            role_nodes=(role,),
+            role_edges=(role_edge,),
+            requirement_nodes=(dangling_requirement,),
+            requirement_edges=(requirement_edge,),
         )
 
     assert dangling_requirement.id in str(exc_info.value)
     assert "role_importer_does_not_exist" in str(exc_info.value)
-    assert graph.calls == []
+    assert baseline_rig.groups == []
+    assert baseline_rig.logged() == []
 
 
-def test_persist_raises_when_role_nodes_collection_is_empty_but_requirement_references_role() -> (
-    None
-):
+def test_persist_raises_when_role_nodes_collection_is_empty_but_requirement_references_role(
+    baseline_rig: BaselineRig,
+) -> None:
     """A second shape of the same dangling-reference bug: zero Role nodes
     at all in this call, but a Requirement still carries a role_id.
     """
-    graph = _FakeGraph()
     requirement = _requirement_node(role_id="role_manufacturer_abc123")
     requirement_edge = RequirementExpressesEdge(
         requirement_node_id=requirement.id, source_ref="Art. 13(1)"
     )
 
     with pytest.raises(DomainMapperPersistenceError):
-        persist_role_and_requirement_graph(
-            graph,
-            "CRA-1.0",
-            _regulatory_instrument_properties(),
-            (),
-            (),
-            (requirement,),
-            (requirement_edge,),
+        _persist(
+            baseline_rig,
+            requirement_nodes=(requirement,),
+            requirement_edges=(requirement_edge,),
         )
 
-    assert graph.calls == []
+    assert baseline_rig.groups == []
+    assert baseline_rig.logged() == []
 
 
-# --- BASELINE.md row #2 regression: RegulatoryInstrument MERGE idempotency --
+# --- BASELINE.md row #2 regression: RegulatoryInstrument merge idempotency ---
 
 
-class _InMemoryRegulatoryInstrumentGraph:
-    """Simulates real FalkorDB `MERGE (n:Label {id: $id}) SET n += $properties`
-    semantics for RegulatoryInstrument nodes -- unlike this file's own
-    `_FakeGraph`, which only records `(query, params)` calls without
-    simulating actual node storage, this fake keeps a real list of node
-    dicts and re-derives the MERGE match on every call by SCANNING for a
-    node whose `id` property currently equals `$id` (mirroring FalkorDB's
-    own by-property match, not a Python-dict keyed-by-the-caller's-intended-
-    id shortcut, which would silently hide this exact bug).
-
-    If `$properties` carries its own `id` key, `node.update(properties)`
-    overwrites the just-matched/created node's `id` in place -- exactly
-    like real `SET n += $properties` would -- so a fix that fails to strip
-    `id` from `properties` before this call reproduces the live
-    `cra_baseline` pollution (repeated calls silently re-home onto a new
-    node every time, never re-matching the previous one).
-    """
-
-    def __init__(self) -> None:
-        self._nodes: list[dict[str, object]] = []
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        if q == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties":
-            assert params is not None
-            match_id = params["id"]
-            properties = cast("dict[str, object]", params["properties"])
-            node = next((n for n in self._nodes if n.get("id") == match_id), None)
-            if node is None:
-                node = {"id": match_id}
-                self._nodes.append(node)
-            node.update(properties)
-            return _FakeQueryResult([])
-        return _FakeQueryResult([[0]])
-
-    def regulatory_instrument_node_count(self) -> int:
-        return len(self._nodes)
-
-    def regulatory_instrument_nodes_with_id(self, node_id: str) -> list[dict[str, object]]:
-        return [n for n in self._nodes if n.get("id") == node_id]
-
-
-def test_persist_regulatory_instrument_merge_is_idempotent_across_repeated_calls() -> None:
+def test_persist_regulatory_instrument_merge_is_idempotent_across_repeated_calls(
+    baseline_rig: BaselineRig,
+) -> None:
     """BASELINE.md row #2 regression. Live capstone reconnaissance: the
     native graph's own RegulatoryInstrument node's full property bag
     (`extraction.py`'s `_read_regulatory_instrument_properties`, `dict(node.
@@ -409,82 +329,99 @@ def test_persist_regulatory_instrument_merge_is_idempotent_across_repeated_calls
     extraction's casing) -- and that whole bag, `id` key included, used to
     flow unchanged into `regulatory_instrument_properties` here.
 
-    `SET n += $properties` blindly overwriting the just-matched node's `id`
-    broke the MERGE match key for every SUBSEQUENT call: confirmed live,
-    `cra_baseline` ended up with THREE RegulatoryInstrument nodes all at
-    `id: 'cra-1.0'` and ZERO at `id: 'CRA-1.0'` after ~3 calls.
+    Writing that bag over the matched node blindly overwrote its `id` and broke
+    the match key for every SUBSEQUENT call: confirmed live, `cra_baseline`
+    ended up with THREE RegulatoryInstrument nodes all at `id: 'cra-1.0'` and
+    ZERO at `id: 'CRA-1.0'` after ~3 calls.
 
-    Calling `persist_role_and_requirement_graph` TWICE in a row with the
-    same `regulatory_instrument_id`, given `regulatory_instrument_properties`
-    whose OWN `id` differs from it, must leave exactly ONE RegulatoryInstrument
-    node in the target graph -- with `id == regulatory_instrument_id` -- not
-    two, and not stuck at the native graph's own casing.
+    Persisting TWICE in a row with the same `regulatory_instrument_id`, given
+    `regulatory_instrument_properties` whose OWN `id` differs from it, must
+    leave exactly ONE RegulatoryInstrument node in the baseline graph -- with
+    `id == regulatory_instrument_id` -- not two, and not stuck at the native
+    graph's own casing.
     """
-    graph = _InMemoryRegulatoryInstrumentGraph()
     # The native graph's own RegulatoryInstrument node property bag -- its
     # own `id` ("cra-1.0") differs in casing from the caller's
     # regulatory_instrument_id ("CRA-1.0") below, exactly like the live bug.
     native_properties: dict[str, object] = {"id": "cra-1.0", "title": "Cyber Resilience Act"}
 
-    persist_role_and_requirement_graph(graph, "CRA-1.0", native_properties, (), (), (), ())
-    persist_role_and_requirement_graph(graph, "CRA-1.0", native_properties, (), (), (), ())
+    _persist(baseline_rig, regulatory_instrument_properties=native_properties)
+    _persist(baseline_rig, regulatory_instrument_properties=native_properties)
 
-    assert graph.regulatory_instrument_node_count() == 1
-    matching_nodes = graph.regulatory_instrument_nodes_with_id("CRA-1.0")
-    assert len(matching_nodes) == 1
-    assert matching_nodes[0]["title"] == "Cyber Resilience Act"
+    instruments = {
+        node_id: node
+        for (label, node_id), node in baseline_rig.baseline.nodes.items()
+        if label == "RegulatoryInstrument"
+    }
+    assert list(instruments) == ["CRA-1.0"]
+    assert instruments["CRA-1.0"]["title"] == "Cyber Resilience Act"
+    assert ("RegulatoryInstrument", "cra-1.0") not in baseline_rig.baseline.nodes
 
 
-# --- Dependency health wiring ------------------------------------------------
+# --- Gateway failures reach the caller as the persistence error --------------
+# Write-side dependency health is the gateway's (`graph_gateway.retry`, `gateway`); the
+# writer only turns a refused or unapplied group into `DomainMapperPersistenceError`.
 
 
-def test_persist_marks_falkordb_unhealthy_on_connection_error() -> None:
-    graph = _FakeGraphThatRaisesConnectionError()
+def test_persist_raises_the_persistence_error_when_the_group_cannot_be_logged(
+    baseline_rig: BaselineRig,
+) -> None:
+    baseline_rig.store.fail_appends()
+
+    with pytest.raises(DomainMapperPersistenceError) as exc_info:
+        _persist(baseline_rig)
+
+    assert str(exc_info.value).startswith("FalkorDB write failed: ")
+    assert exc_info.value.__cause__ is not None
+    assert baseline_rig.logged() == []
+
+
+def test_persist_marks_falkordb_unhealthy_on_connection_error(
+    baseline_rig: BaselineRig,
+) -> None:
+    """FalkorDB down: the group is committed (safe in the log) but not applied, which the
+    writer reports as the persistence error, and the gateway records the outage.
+    """
+    baseline_rig.baseline.fail_on_write(redis.exceptions.ConnectionError("Error 111 connecting"))
 
     with pytest.raises(DomainMapperPersistenceError):
-        persist_role_and_requirement_graph(
-            graph, "CRA-1.0", _regulatory_instrument_properties(), (), (), (), ()
-        )
+        _persist(baseline_rig)
 
     assert is_healthy(FALKORDB) is False
+    assert [entry.name for entry in baseline_rig.logged()] == ["RegulatoryInstrument"]
 
 
-def test_persist_marks_falkordb_healthy_on_success() -> None:
-    graph = _FakeGraph()
+def test_persist_marks_falkordb_healthy_on_success(baseline_rig: BaselineRig) -> None:
+    mark_unhealthy(FALKORDB, error=RuntimeError("earlier outage"))
 
-    persist_role_and_requirement_graph(
-        graph, "CRA-1.0", _regulatory_instrument_properties(), (), (), (), ()
-    )
+    _persist(baseline_rig)
 
     assert is_healthy(FALKORDB) is True
 
 
-def test_validation_error_does_not_mark_falkordb_unhealthy() -> None:
-    """A B3-style validation failure (dangling role_id) never reaches
-    `graph.query()` at all — it must not be mistaken for a FalkorDB
-    outage.
+def test_validation_error_does_not_mark_falkordb_unhealthy(baseline_rig: BaselineRig) -> None:
+    """A B3-style validation failure (dangling role_id) never reaches the gateway
+    at all -- it must not be mistaken for a FalkorDB outage.
     """
-    graph = _FakeGraph()
     dangling_requirement = _requirement_node(role_id="role_does_not_exist")
     requirement_edge = RequirementExpressesEdge(
         requirement_node_id=dangling_requirement.id, source_ref="Art. 13(1)"
     )
 
     with pytest.raises(DomainMapperPersistenceError):
-        persist_role_and_requirement_graph(
-            graph,
-            "CRA-1.0",
-            _regulatory_instrument_properties(),
-            (),
-            (),
-            (dangling_requirement,),
-            (requirement_edge,),
+        _persist(
+            baseline_rig,
+            requirement_nodes=(dangling_requirement,),
+            requirement_edges=(requirement_edge,),
         )
 
     assert is_healthy(FALKORDB) is True
 
 
 # --- persist_obligation_and_capability_graph (PLAN_REVIEWED.md §11 Increment 15) --
+
+_ROLE_ID = "role_manufacturer_abc123"
+_REQUIREMENT_ID = "CRA-1.0_req_art_13.1"
 
 
 def _obligation_node(
@@ -507,65 +444,99 @@ def _capability_node(
     return CapabilityNode(id=capability_id, properties=properties)
 
 
-def test_persist_writes_obligation_capability_nodes_and_edges_exact_shape() -> None:
-    graph = _FakeGraph()
+def _seed_endpoints(rig: BaselineRig) -> None:
+    """The Role and Requirement a prior extraction left in the graph for the edges to join."""
+    seed_extraction_output(
+        rig,
+        "CRA-1.0",
+        {_ROLE_ID: "Manufacturer"},
+        [(_REQUIREMENT_ID, "Conduct a cybersecurity risk assessment.", _ROLE_ID)],
+    )
+
+
+def _persist_derivation(
+    rig: BaselineRig,
+    *,
+    obligation_nodes: tuple[ObligationNode, ...] = (),
+    has_edges: tuple[ObligationHasEdge, ...] = (),
+    satisfied_by_edges: tuple[RequirementSatisfiedByEdge, ...] = (),
+    capability_nodes: tuple[CapabilityNode, ...] = (),
+    requires_edges: tuple[CapabilityRequiresEdge, ...] = (),
+) -> None:
+    persist_obligation_and_capability_graph(
+        rig.submitter,
+        rig.baseline_graph_name,
+        rig.audit_event_id,
+        graph=rig.read_graph,
+        obligation_nodes=obligation_nodes,
+        has_edges=has_edges,
+        satisfied_by_edges=satisfied_by_edges,
+        capability_nodes=capability_nodes,
+        requires_edges=requires_edges,
+    )
+
+
+def _derived(rig: BaselineRig) -> list[GraphLogEntry]:
+    """What the derivation group logged: everything after the seeded extraction group."""
+    [_seed_group, group] = rig.groups
+    return list(group.entries)
+
+
+def test_persist_writes_obligation_capability_nodes_and_edges_exact_shape(
+    baseline_rig: BaselineRig,
+) -> None:
+    _seed_endpoints(baseline_rig)
     obligation = _obligation_node()
     capability = _capability_node(description="Process for reporting security incidents.")
-    has_edge = ObligationHasEdge(
-        role_node_id="role_manufacturer_abc123", obligation_node_id=obligation.id
-    )
+    has_edge = ObligationHasEdge(role_node_id=_ROLE_ID, obligation_node_id=obligation.id)
     satisfied_by_edge = RequirementSatisfiedByEdge(
-        requirement_id="CRA-1.0_req_art_13.1", obligation_node_id=obligation.id
+        requirement_id=_REQUIREMENT_ID, obligation_node_id=obligation.id
     )
     requires_edge = CapabilityRequiresEdge(
         obligation_node_id=obligation.id, capability_node_id=capability.id
     )
 
-    persist_obligation_and_capability_graph(
-        graph, (obligation,), (has_edge,), (satisfied_by_edge,), (capability,), (requires_edge,)
+    _persist_derivation(
+        baseline_rig,
+        obligation_nodes=(obligation,),
+        has_edges=(has_edge,),
+        satisfied_by_edges=(satisfied_by_edge,),
+        capability_nodes=(capability,),
+        requires_edges=(requires_edge,),
     )
 
-    assert len(graph.calls) == 5
-    obligation_call, capability_call, has_call, satisfied_by_call, requires_call = graph.calls
+    entries = _derived(baseline_rig)
+    assert len(entries) == 5
+    obligation_entry, capability_entry, has_entry, satisfied_by_entry, requires_entry = entries
 
-    assert obligation_call.query == "MERGE (n:Obligation {id: $id}) SET n += $properties"
-    assert obligation_call.params == {"id": obligation.id, "properties": obligation.properties}
+    assert obligation_entry.name == "Obligation"
+    assert obligation_entry.identity == obligation.id
+    assert entry_properties(obligation_entry) == obligation.properties
 
-    assert capability_call.query == "MERGE (n:Capability {id: $id}) SET n += $properties"
-    assert capability_call.params == {"id": capability.id, "properties": capability.properties}
+    assert capability_entry.name == "Capability"
+    assert capability_entry.identity == capability.id
+    assert entry_properties(capability_entry) == capability.properties
 
-    assert has_call.query == (
-        "MATCH (s:Role {id: $source_id}), (t:Obligation {id: $target_id}) MERGE (s)-[:HAS]->(t)"
-    )
-    assert has_call.params == {
-        "source_id": has_edge.role_node_id,
-        "target_id": has_edge.obligation_node_id,
-    }
+    assert has_entry.name == "HAS"
+    assert _endpoint_id(has_entry, "source") == has_edge.role_node_id
+    assert _endpoint_id(has_entry, "target") == has_edge.obligation_node_id
 
-    assert satisfied_by_call.query == (
-        "MATCH (s:Requirement {id: $source_id}), (t:Obligation {id: $target_id}) "
-        "MERGE (s)-[:SATISFIED_BY]->(t)"
-    )
-    assert satisfied_by_call.params == {
-        "source_id": satisfied_by_edge.requirement_id,
-        "target_id": satisfied_by_edge.obligation_node_id,
-    }
+    assert satisfied_by_entry.name == "SATISFIED_BY"
+    assert _endpoint_id(satisfied_by_entry, "source") == satisfied_by_edge.requirement_id
+    assert _endpoint_id(satisfied_by_entry, "target") == satisfied_by_edge.obligation_node_id
 
-    assert requires_call.query == (
-        "MATCH (s:Obligation {id: $source_id}), (t:Capability {id: $target_id}) "
-        "MERGE (s)-[:REQUIRES]->(t)"
-    )
-    assert requires_call.params == {
-        "source_id": requires_edge.obligation_node_id,
-        "target_id": requires_edge.capability_node_id,
-    }
+    assert requires_entry.name == "REQUIRES"
+    assert _endpoint_id(requires_entry, "source") == requires_edge.obligation_node_id
+    assert _endpoint_id(requires_entry, "target") == requires_edge.capability_node_id
 
 
-def test_persist_writes_capability_status_from_real_derivation_output() -> None:
+def test_persist_writes_capability_status_from_real_derivation_output(
+    baseline_rig: BaselineRig,
+) -> None:
     """AC-BI-002 end-to-end (mint -> persist): a CapabilityNode built by
     derivation.py's own _to_capability_node (not this file's
     _capability_node() fixture) carries status="active" all the way into
-    the MERGE call's params — same pass-through proof as Slice 1's
+    the written node's properties — same pass-through proof as Slice 1's
     requirement-side equivalent; graph_writer.py needs no change.
     """
     from ps_service.domain_mapper.derivation import (
@@ -581,115 +552,118 @@ def test_persist_writes_capability_status_from_real_derivation_output() -> None:
         confidence=0.85,
     )
     capability = _to_capability_node(decision)
-    graph = _FakeGraph()
 
-    persist_obligation_and_capability_graph(graph, (), (), (), (capability,), ())
+    _persist_derivation(baseline_rig, capability_nodes=(capability,))
 
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == "MERGE (n:Capability {id: $id}) SET n += $properties"
-    assert call.params is not None
-    properties = call.params["properties"]
-    assert isinstance(properties, dict)
-    assert properties["status"] == "active"
+    [entry] = baseline_rig.logged()
+    assert entry.name == "Capability"
+    assert entry_properties(entry)["status"] == "active"
 
 
-def test_persist_obligation_and_capability_writes_zero_elements_when_collections_empty() -> None:
-    graph = _FakeGraph()
+def test_persist_obligation_and_capability_submits_nothing_when_collections_empty(
+    baseline_rig: BaselineRig,
+) -> None:
+    """No group at all (a group needs at least one primitive), no stamp and no endpoint read."""
+    _persist_derivation(baseline_rig)
 
-    persist_obligation_and_capability_graph(graph, (), (), (), (), ())
+    assert baseline_rig.groups == []
+    assert baseline_rig.logged() == []
+    assert baseline_rig.read_graph.queries == []
 
-    assert graph.calls == []
 
-
-def test_persist_obligation_and_capability_writes_nodes_before_edges() -> None:
-    """`MATCH`-based edge writes silently no-op against a not-yet-written
-    node — write order is load-bearing, not stylistic. Assert both node
-    MERGEs happen before either edge MATCH/MERGE call.
+def test_persist_obligation_and_capability_writes_nodes_before_edges(
+    baseline_rig: BaselineRig,
+) -> None:
+    """A group edge must follow the nodes it joins, so the write order is load-bearing: both
+    node entries come before either edge entry.
     """
-    graph = _FakeGraph()
+    _seed_endpoints(baseline_rig)
     obligation = _obligation_node()
     capability = _capability_node()
-    has_edge = ObligationHasEdge(
-        role_node_id="role_manufacturer_abc123", obligation_node_id=obligation.id
-    )
+    has_edge = ObligationHasEdge(role_node_id=_ROLE_ID, obligation_node_id=obligation.id)
     requires_edge = CapabilityRequiresEdge(
         obligation_node_id=obligation.id, capability_node_id=capability.id
     )
 
-    persist_obligation_and_capability_graph(
-        graph, (obligation,), (has_edge,), (), (capability,), (requires_edge,)
+    _persist_derivation(
+        baseline_rig,
+        obligation_nodes=(obligation,),
+        has_edges=(has_edge,),
+        capability_nodes=(capability,),
+        requires_edges=(requires_edge,),
     )
 
-    node_queries = [c.query for c in graph.calls if c.query.startswith("MERGE (n:")]
-    edge_queries = [c.query for c in graph.calls if c.query.startswith("MATCH (s:")]
-    assert len(node_queries) == 2
-    assert len(edge_queries) == 2
-    last_node_index = max(i for i, c in enumerate(graph.calls) if c.query.startswith("MERGE (n:"))
-    first_edge_index = min(i for i, c in enumerate(graph.calls) if c.query.startswith("MATCH (s:"))
-    assert last_node_index < first_edge_index
+    names = [entry.name for entry in _derived(baseline_rig)]
+    node_indexes = [i for i, name in enumerate(names) if name in {"Obligation", "Capability"}]
+    edge_indexes = [i for i, name in enumerate(names) if name in {"HAS", "REQUIRES"}]
+    assert len(node_indexes) == 2
+    assert len(edge_indexes) == 2
+    assert max(node_indexes) < min(edge_indexes)
 
 
 # --- Edge Catalog: HAS/SATISFIED_BY/REQUIRES carry NO properties, ever -----
 
 
-def test_has_satisfied_by_requires_edges_never_carry_source_ref_or_any_property() -> None:
-    """Direct test of the Edge Catalog's "no properties" column for these
-    three edge types — an explicit negative assertion that the substring
-    `"source_ref"` never appears in any HAS/SATISFIED_BY/REQUIRES query
-    string or params dict, not just an absence-of-a-positive-check.
+def test_has_satisfied_by_requires_edges_never_carry_source_ref_or_any_property(
+    baseline_rig: BaselineRig,
+) -> None:
+    """Direct test of the Edge Catalog's "no properties" column for these three edge types: an
+    explicit negative assertion that `"source_ref"` never appears in any written
+    HAS/SATISFIED_BY/REQUIRES entry, and that the entries hold no property at all.
     """
-    graph = _FakeGraph()
+    _seed_endpoints(baseline_rig)
     obligation = _obligation_node()
     capability = _capability_node()
-    has_edge = ObligationHasEdge(
-        role_node_id="role_manufacturer_abc123", obligation_node_id=obligation.id
-    )
+    has_edge = ObligationHasEdge(role_node_id=_ROLE_ID, obligation_node_id=obligation.id)
     satisfied_by_edge = RequirementSatisfiedByEdge(
-        requirement_id="CRA-1.0_req_art_13.1", obligation_node_id=obligation.id
+        requirement_id=_REQUIREMENT_ID, obligation_node_id=obligation.id
     )
     requires_edge = CapabilityRequiresEdge(
         obligation_node_id=obligation.id, capability_node_id=capability.id
     )
 
-    persist_obligation_and_capability_graph(
-        graph, (obligation,), (has_edge,), (satisfied_by_edge,), (capability,), (requires_edge,)
+    _persist_derivation(
+        baseline_rig,
+        obligation_nodes=(obligation,),
+        has_edges=(has_edge,),
+        satisfied_by_edges=(satisfied_by_edge,),
+        capability_nodes=(capability,),
+        requires_edges=(requires_edge,),
     )
 
-    edge_calls = [c for c in graph.calls if c.query.startswith("MATCH (s:")]
-    assert len(edge_calls) == 3
-    for call in edge_calls:
-        assert "source_ref" not in call.query
-        assert call.params is not None
-        assert "source_ref" not in call.params
-        assert "source_ref" not in repr(call.params)
-        # No SET clause at all on any of these three edge types.
-        assert "SET" not in call.query
-        # Params carry only the two endpoint ids, nothing else.
-        assert set(call.params.keys()) == {"source_id", "target_id"}
+    edge_entries = [
+        entry
+        for entry in _derived(baseline_rig)
+        if entry.name in {"HAS", "SATISFIED_BY", "REQUIRES"}
+    ]
+    assert len(edge_entries) == 3
+    for entry in edge_entries:
+        assert "source_ref" not in repr(entry.content)
+        assert entry_properties(entry) == {}
+        # The content carries the operation, the two endpoints and the (empty) properties.
+        assert set(entry.content) == {"op", "source", "target", "properties"}
 
 
-# --- Obligation node properties: text, confidence, params-only -------------
+# --- Obligation node properties: text, confidence --------------------------
 
 
-def test_obligation_node_properties_text_and_confidence_present_in_params_only() -> None:
-    graph = _FakeGraph()
+def test_obligation_node_properties_text_and_confidence_are_node_properties_only(
+    baseline_rig: BaselineRig,
+) -> None:
     obligation = _obligation_node(
         obligation_id="obl_report_security_incidents_xyz789",
         text="Report security incidents to the competent authority.",
         confidence=0.73,
     )
 
-    persist_obligation_and_capability_graph(graph, (obligation,), (), (), (), ())
+    _persist_derivation(baseline_rig, obligation_nodes=(obligation,))
 
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
+    [entry] = baseline_rig.logged()
     obligation_text = obligation.properties["text"]
     assert isinstance(obligation_text, str)
-    assert obligation_text not in call.query
-    assert call.params is not None
-    properties = call.params["properties"]
-    assert properties == {
+    assert obligation_text not in entry.name
+    assert obligation_text not in entry.identity
+    assert entry_properties(entry) == {
         "text": "Report security incidents to the competent authority.",
         "confidence": 0.73,
     }
@@ -698,8 +672,9 @@ def test_obligation_node_properties_text_and_confidence_present_in_params_only()
 # --- Capability node properties: name, description?, confidence ------------
 
 
-def test_capability_node_properties_include_description_when_present() -> None:
-    graph = _FakeGraph()
+def test_capability_node_properties_include_description_when_present(
+    baseline_rig: BaselineRig,
+) -> None:
     capability = _capability_node(
         capability_id="cap_incident_reporting_process_def456",
         name="Incident Reporting Process",
@@ -707,21 +682,19 @@ def test_capability_node_properties_include_description_when_present() -> None:
         description="A documented process for reporting security incidents.",
     )
 
-    persist_obligation_and_capability_graph(graph, (), (), (), (capability,), ())
+    _persist_derivation(baseline_rig, capability_nodes=(capability,))
 
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.params is not None
-    properties = call.params["properties"]
-    assert properties == {
+    [entry] = baseline_rig.logged()
+    assert entry_properties(entry) == {
         "name": "Incident Reporting Process",
         "confidence": 0.9,
         "description": "A documented process for reporting security incidents.",
     }
 
 
-def test_capability_node_omits_description_key_when_not_provided() -> None:
-    graph = _FakeGraph()
+def test_capability_node_omits_description_key_when_not_provided(
+    baseline_rig: BaselineRig,
+) -> None:
     capability = _capability_node(
         capability_id="cap_incident_reporting_process_def456",
         name="Incident Reporting Process",
@@ -729,32 +702,79 @@ def test_capability_node_omits_description_key_when_not_provided() -> None:
         description=None,
     )
 
-    persist_obligation_and_capability_graph(graph, (), (), (), (capability,), ())
+    _persist_derivation(baseline_rig, capability_nodes=(capability,))
 
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.params is not None
-    properties = call.params["properties"]
-    assert isinstance(properties, dict)
+    [entry] = baseline_rig.logged()
+    properties = entry_properties(entry)
     assert "description" not in properties
     assert properties == {"name": "Incident Reporting Process", "confidence": 0.9}
 
 
-# --- Dependency health wiring (shared _execute_query, sanity-checked here too) --
+# --- Dependency health ---------------------------------------------------------
+# Write-side health is the gateway's (see the extraction tests above); the endpoint read made
+# here through the baseline handle records FalkorDB reachability as the old writes did.
 
 
-def test_persist_obligation_and_capability_marks_falkordb_unhealthy_on_connection_error() -> None:
-    graph = _FakeGraphThatRaisesConnectionError()
+def test_persist_obligation_and_capability_marks_falkordb_unhealthy_on_connection_error(
+    baseline_rig: BaselineRig,
+) -> None:
+    """FalkorDB down when the group is applied: committed but unapplied is the persistence
+    error, and the gateway records the outage.
+    """
+    baseline_rig.baseline.fail_on_write(redis.exceptions.ConnectionError("Error 111 connecting"))
 
     with pytest.raises(DomainMapperPersistenceError):
-        persist_obligation_and_capability_graph(graph, (_obligation_node(),), (), (), (), ())
+        _persist_derivation(baseline_rig, obligation_nodes=(_obligation_node(),))
 
     assert is_healthy(FALKORDB) is False
+    assert [entry.name for entry in baseline_rig.logged()] == ["Obligation"]
 
 
-def test_persist_obligation_and_capability_marks_falkordb_healthy_on_success() -> None:
-    graph = _FakeGraph()
+def test_persist_obligation_and_capability_marks_falkordb_healthy_on_success(
+    baseline_rig: BaselineRig,
+) -> None:
+    mark_unhealthy(FALKORDB, error=RuntimeError("earlier outage"))
 
-    persist_obligation_and_capability_graph(graph, (_obligation_node(),), (), (), (), ())
+    _persist_derivation(baseline_rig, obligation_nodes=(_obligation_node(),))
 
+    assert is_healthy(FALKORDB) is True
+
+
+def test_a_failed_endpoint_read_marks_falkordb_unhealthy_and_submits_nothing(
+    baseline_rig: BaselineRig,
+) -> None:
+    """The existing-node read hits FalkorDB: its connection error is the persistence error."""
+    obligation = _obligation_node()
+    baseline_rig.read_graph.error = redis.exceptions.ConnectionError("Error 111 connecting")
+
+    with pytest.raises(DomainMapperPersistenceError) as exc_info:
+        _persist_derivation(
+            baseline_rig,
+            obligation_nodes=(obligation,),
+            has_edges=(ObligationHasEdge(role_node_id=_ROLE_ID, obligation_node_id=obligation.id),),
+        )
+
+    assert str(exc_info.value).startswith("FalkorDB write failed: ")
+    assert isinstance(exc_info.value.__cause__, redis.exceptions.ConnectionError)
+    assert is_healthy(FALKORDB) is False
+    assert baseline_rig.groups == []
+
+
+def test_a_successful_endpoint_read_marks_falkordb_healthy(baseline_rig: BaselineRig) -> None:
+    """The read itself records recovery: the group is then refused for a log (Postgres) fault, so
+    nothing after the read can have marked FalkorDB healthy.
+    """
+    _seed_endpoints(baseline_rig)
+    obligation = _obligation_node()
+    mark_unhealthy(FALKORDB, error=RuntimeError("earlier outage"))
+    baseline_rig.store.fail_appends()
+
+    with pytest.raises(DomainMapperPersistenceError):
+        _persist_derivation(
+            baseline_rig,
+            obligation_nodes=(obligation,),
+            has_edges=(ObligationHasEdge(role_node_id=_ROLE_ID, obligation_node_id=obligation.id),),
+        )
+
+    assert baseline_rig.read_graph.queries != []
     assert is_healthy(FALKORDB) is True

@@ -561,9 +561,10 @@ def _build_pipeline_runner(
     handed to it as this callable. The runner checks the pipeline config FIRST, before the
     baseline graph is opened or any stage runs (AC-BI-006), runs exactly the requested
     stage subset for `new_version`'s instrument id, reports each completed stage to
-    `on_stage_complete`, and always clears the `run_status` entry. When the ingestion stage is
-    among the requested ones the process's Graph Write Gateway is resolved up front (issue #208):
-    without one the run fails closed, before the baseline graph is opened. Nothing is caught:
+    `on_stage_complete`, and always clears the `run_status` entry. When any stage that writes a
+    graph (ingestion, extraction or derivation, issues #208 and #209) is among the requested ones,
+    the process's Graph Write Gateway is resolved up front: without one the run fails closed,
+    before the baseline graph is opened. A merge-only run resolves none. Nothing is caught:
     a `PipelineStageError`, `IngestionConfigIncompleteError`, `GraphWriteUnavailableError` or
     `AuditTrailUnavailableError` propagates to the sweep's per-instrument boundary.
     """
@@ -576,7 +577,11 @@ def _build_pipeline_runner(
         *, stages: tuple[str, ...], run_id: str, on_stage_complete: Callable[[str], None]
     ) -> PipelineRunResult:
         resolved = _require_ingestion_config(config)
-        graph_writes = graph_write_access(config) if "ingestion" in stages else None
+        graph_writes = (
+            graph_write_access(config)
+            if {"ingestion", "extraction", "derivation"} & set(stages)
+            else None
+        )
         graphs = _OpenGraphs(
             native=native,
             baseline=dependencies.pipeline.graphs.baseline(config, entry.short_name),

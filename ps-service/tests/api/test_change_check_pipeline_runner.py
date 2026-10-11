@@ -204,12 +204,61 @@ def test_runner_without_a_gateway_fails_closed_before_any_stage_when_it_must_ing
     assert process_gateway.system_audit.rows == []
 
 
-def test_runner_resuming_after_ingestion_needs_no_gateway() -> None:
+def test_resume_from_extraction_resolves_the_gateway_and_records_one_audit_event(
+    process_gateway: ProcessGateway,
+) -> None:
+    pipeline = build_fake_pipeline_dependencies()
+
+    _runner(pipeline, _config())(
+        stages=("extraction", "derivation", "merge"),
+        run_id=_RUN_ID,
+        on_stage_complete=lambda _s: None,
+    )
+
+    assert pipeline.recorder.order == ["extraction", "derivation", "merge"]
+    (audit_event_id,) = process_gateway.system_audit.ids
+    row = process_gateway.system_audit.rows[0]
+    assert row["resource_id"] == _RUN_ID
+    assert row["details"] == {
+        "status": "started",
+        "trigger": "amendment_check",
+        "celex": _ENTRY.celex,
+        "short_name": _ENTRY.short_name,
+    }
+    for call in pipeline.recorder.calls[:2]:
+        assert call.kwargs["submitter"] is process_gateway.rig.gateway
+        assert call.kwargs["baseline_graph_name"] == "cra_baseline"
+        assert call.kwargs["audit_event_id"] == audit_event_id
+
+
+@pytest.mark.parametrize("stages", [("extraction", "derivation", "merge"), ("derivation", "merge")])
+def test_resume_with_no_gateway_installed_fails_closed_before_the_baseline_graph_is_opened(
+    process_gateway: ProcessGateway, stages: tuple[str, ...]
+) -> None:
+    install_graph_write_gateway(None)
+    pipeline = build_fake_pipeline_dependencies()
+    opened: list[str] = []
+
+    with pytest.raises(GraphWriteUnavailableError):
+        _runner(pipeline, _config(), opened=opened)(
+            stages=stages, run_id=_RUN_ID, on_stage_complete=lambda _s: None
+        )
+
+    assert opened == []
+    assert pipeline.recorder.calls == []
+    assert pipeline.baseline.calls == []
+    assert process_gateway.system_audit.rows == []
+
+
+def test_resume_at_merge_only_resolves_no_gateway_and_records_no_audit_row(
+    process_gateway: ProcessGateway,
+) -> None:
     install_graph_write_gateway(None)
     pipeline = build_fake_pipeline_dependencies()
 
     _runner(pipeline, _config())(
-        stages=("derivation", "merge"), run_id=_RUN_ID, on_stage_complete=lambda _s: None
+        stages=("merge",), run_id=_RUN_ID, on_stage_complete=lambda _s: None
     )
 
-    assert pipeline.recorder.order == ["derivation", "merge"]
+    assert pipeline.recorder.order == ["merge"]
+    assert process_gateway.system_audit.rows == []

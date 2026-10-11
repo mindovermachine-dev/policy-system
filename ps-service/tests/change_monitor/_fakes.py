@@ -615,14 +615,17 @@ class StatefulStages:
         *,
         adapter: object = None,
         native_graph: object = None,
-        baseline_graph: object = None,
+        submitter: object = None,
+        baseline_graph_name: str | None = None,
+        audit_event_id: str | None = None,
         model: str = "",
         call_completion: object = None,
         emitter: object = None,
     ) -> ExtractionResult:
         """Write the instrument and one `Requirement` per obligation key into baseline."""
         rid = regulatory_instrument_id
-        _ = (adapter, native_graph, baseline_graph, model, call_completion, emitter)
+        _ = (adapter, native_graph, model, call_completion, emitter)
+        _ = (submitter, baseline_graph_name, audit_event_id)
         baseline = self._graphs.baseline
         writes: list[Callable[[], object]] = [
             lambda: baseline.merge_node(
@@ -653,6 +656,9 @@ class StatefulStages:
         regulatory_instrument_id: str,
         *,
         baseline_graph: object = None,
+        submitter: object = None,
+        baseline_graph_name: str | None = None,
+        audit_event_id: str | None = None,
         model: str = "",
         call_completion: object = None,
         emitter: object = None,
@@ -660,6 +666,7 @@ class StatefulStages:
         """Write version-owned Obligation / Capability nodes for this version's Requirements."""
         rid = regulatory_instrument_id
         _ = (baseline_graph, model, call_completion, emitter)
+        _ = (submitter, baseline_graph_name, audit_event_id)
         baseline = self._graphs.baseline
         req_keys = sorted(
             str(props["key"])

@@ -220,7 +220,7 @@ def test_scan_flags_an_unknown_label_in_a_copied_source_tree(tmp_path: Path) -> 
 _DYNAMIC_SITES: dict[str, int] = {
     "company_merge/dedup.py": 2,
     "company_merge/graph_writer.py": 10,
-    "domain_mapper/graph_writer.py": 6,
+    "domain_mapper/graph_writer.py": 1,  # the existing-node read, fixed labels only (#209)
     "export/embeddings.py": 3,
     "export/serialize.py": 2,
     "graph_gateway/cypher.py": 5,

@@ -10,7 +10,6 @@ satisfying `CompletionCaller`'s Protocol (`llm_interface/client.py`), not
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 import httpx
@@ -18,8 +17,12 @@ import openai
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
 
+from domain_mapper._gateway_fakes import entry_properties
 from ps_service.domain_mapper import identity
-from ps_service.domain_mapper.errors import DomainMapperExtractionError
+from ps_service.domain_mapper.errors import (
+    DomainMapperExtractionError,
+    DomainMapperPersistenceError,
+)
 from ps_service.domain_mapper.extraction import (
     _build_defined_terms_map,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
     _build_requirement_graph,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
@@ -33,15 +36,20 @@ from ps_service.domain_mapper.extraction import (
     _read_regulatory_instrument_properties,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
     extract_roles_and_requirements,
 )
+from ps_service.domain_mapper.graph_writer import persist_role_and_requirement_graph
 from ps_service.domain_mapper.models import (
     DefinedTermCandidate,
     ExtractionUnit,
     RequirementCandidate,
+    RequirementNode,
+    RoleDefinesEdge,
+    RoleNode,
 )
 from ps_service.domain_mapper.prompts import (
     DEFINITIONS_EXTRACTION_SYSTEM_PROMPT,
     EXTRACTION_SYSTEM_PROMPT,
 )
+from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging import bind_run_context
 
@@ -49,7 +57,9 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from domain_mapper._fakes import MakeEmitter, ReadLines
+    from domain_mapper._gateway_fakes import BaselineRig
     from ps_service.domain_mapper.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.models import GraphLogEntry
     from ps_service.llm_interface.client import CompletionCaller
 
 _REGULATION_ID = "CRA-1.0"
@@ -455,12 +465,6 @@ def test_requirement_active_only_filter_returns_newly_minted_but_not_legacy_null
 # binding testing convention (PLAN_REVIEWED.md §0.3/§0.5).
 
 
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
 class _FakeQueryResult:
     """Satisfies `GraphQueryResult` structurally."""
 
@@ -495,20 +499,6 @@ class _FakeNativeGraph:
         return _FakeQueryResult(
             [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
         )
-
-
-class _FakeBaselineGraph:
-    """Satisfies `GraphHandle` structurally, capturing every `(query,
-    params)` call for assertion — mirrors `test_graph_writer.py`'s
-    `_FakeGraph`.
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
 
 
 class _FakeAdapter:
@@ -580,19 +570,21 @@ _UNIT_IMPORTER = ExtractionUnit(
 )
 
 
-def _find_edge_call(graph: _FakeBaselineGraph, relationship_type: str) -> list[_RecordedCall]:
-    return [call for call in graph.calls if f"[e:{relationship_type}]" in call.query]
+def _edge_target_id(entry: GraphLogEntry) -> object:
+    target = entry.content["target"]
+    assert isinstance(target, dict)
+    return target["id"]  # pyright: ignore[reportUnknownVariableType]
 
 
 def test_extract_roles_and_requirements_ac001_produces_role_and_requirement_edges_with_source_ref(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-001: two units, two different roles -> Role/Requirement nodes with
     DEFINES/EXPRESSES edges carrying source_ref == unit.citation_ref.
     """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID, "title": "Cyber Resilience Act"})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_MANUFACTURER, _UNIT_IMPORTER))
     call_completion = _scripted_call_completion(
         {
@@ -609,7 +601,7 @@ def test_extract_roles_and_requirements_ac001_produces_role_and_requirement_edge
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -620,23 +612,23 @@ def test_extract_roles_and_requirements_ac001_produces_role_and_requirement_edge
     assert set(result.role_node_ids) == {"Manufacturer", "Importer"}
     assert len(result.requirement_ids) == 2
 
-    defines_calls = _find_edge_call(baseline_graph, "DEFINES")
-    expresses_calls = _find_edge_call(baseline_graph, "EXPRESSES")
+    defines_calls = baseline_rig.entries_named("DEFINES")
+    expresses_calls = baseline_rig.entries_named("EXPRESSES")
     assert len(defines_calls) == 2
     assert len(expresses_calls) == 2
-    defines_source_refs = {call.params["source_ref"] for call in defines_calls if call.params}
-    expresses_source_refs = {call.params["source_ref"] for call in expresses_calls if call.params}
+    defines_source_refs = {entry_properties(call)["source_ref"] for call in defines_calls}
+    expresses_source_refs = {entry_properties(call)["source_ref"] for call in expresses_calls}
     assert defines_source_refs == {_UNIT_MANUFACTURER.citation_ref, _UNIT_IMPORTER.citation_ref}
     assert expresses_source_refs == {_UNIT_MANUFACTURER.citation_ref, _UNIT_IMPORTER.citation_ref}
 
 
 def test_extract_roles_and_requirements_ac002_persists_low_confidence_candidate(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-002: a candidate with confidence=0.1 is still persisted, not filtered."""
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_MANUFACTURER,))
     call_completion = _scripted_call_completion(
         {
@@ -652,7 +644,7 @@ def test_extract_roles_and_requirements_ac002_persists_low_confidence_candidate(
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -660,15 +652,9 @@ def test_extract_roles_and_requirements_ac002_persists_low_confidence_candidate(
 
     assert result.candidate_count == 1
     assert len(result.requirement_ids) == 1
-    requirement_calls = [
-        call
-        for call in baseline_graph.calls
-        if call.query == "MERGE (n:Requirement {id: $id}) SET n += $properties"
-    ]
+    requirement_calls = baseline_rig.entries_named("Requirement")
     assert len(requirement_calls) == 1
-    assert requirement_calls[0].params is not None
-    properties = requirement_calls[0].params["properties"]
-    assert isinstance(properties, dict)
+    properties = entry_properties(requirement_calls[0])
     assert properties["confidence"] == 0.1
 
 
@@ -685,6 +671,7 @@ _UNIT_ANNEX_I = ExtractionUnit(
 
 def test_extract_roles_and_requirements_persists_from_annex_unit(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """Slice 6 (GH #25): `extract_roles_and_requirements` is annex-agnostic —
     a single annex-derived `ExtractionUnit` (`citation_ref="Annex I"`,
@@ -704,7 +691,6 @@ def test_extract_roles_and_requirements_persists_from_annex_unit(
     """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID, "title": "Cyber Resilience Act"})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_ANNEX_I,))
     call_completion = _scripted_call_completion(
         {
@@ -719,7 +705,7 @@ def test_extract_roles_and_requirements_persists_from_annex_unit(
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -732,27 +718,22 @@ def test_extract_roles_and_requirements_persists_from_annex_unit(
     expected_requirement_id = identity.requirement_id(_REGULATION_ID, "I", "1", None)
     assert result.requirement_ids == (expected_requirement_id,)
 
-    defines_calls = _find_edge_call(baseline_graph, "DEFINES")
-    expresses_calls = _find_edge_call(baseline_graph, "EXPRESSES")
+    defines_calls = baseline_rig.entries_named("DEFINES")
+    expresses_calls = baseline_rig.entries_named("EXPRESSES")
     assert len(defines_calls) == 1
     assert len(expresses_calls) == 1
-    assert defines_calls[0].params is not None
-    assert expresses_calls[0].params is not None
-    assert defines_calls[0].params["source_ref"] == "Annex I"
-    assert expresses_calls[0].params["source_ref"] == "Annex I"
+    assert entry_properties(defines_calls[0])["source_ref"] == "Annex I"
+    assert entry_properties(expresses_calls[0])["source_ref"] == "Annex I"
 
-    requirement_calls = [
-        call
-        for call in baseline_graph.calls
-        if call.query == "MERGE (n:Requirement {id: $id}) SET n += $properties"
-    ]
+    requirement_calls = baseline_rig.entries_named("Requirement")
     assert len(requirement_calls) == 1
-    assert requirement_calls[0].params is not None
-    assert requirement_calls[0].params["id"] == expected_requirement_id
+    assert requirement_calls[0].identity == expected_requirement_id
 
 
 def test_extract_roles_and_requirements_ac006_emits_log_entry_with_bound_run_id(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-006: with a run context bound, the emitted outcome="succeeded"
     entry carries the bound run_id — mirrors
@@ -760,7 +741,6 @@ def test_extract_roles_and_requirements_ac006_emits_log_entry_with_bound_run_id(
     """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_MANUFACTURER,))
     call_completion = _scripted_call_completion(
         {
@@ -775,7 +755,7 @@ def test_extract_roles_and_requirements_ac006_emits_log_entry_with_bound_run_id(
             _REGULATION_ID,
             adapter=adapter,
             native_graph=native_graph,
-            baseline_graph=baseline_graph,
+            **baseline_rig.gateway_keywords(),
             model="fake-model",
             call_completion=call_completion,
             emitter=emitter,
@@ -795,7 +775,9 @@ def test_extract_roles_and_requirements_ac006_emits_log_entry_with_bound_run_id(
 
 
 def test_extract_roles_and_requirements_isolates_per_unit_extraction_failure(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    baseline_rig: BaselineRig,
 ) -> None:
     """One of two units' scripted response is malformed JSON -> the OTHER
     unit's candidates still persist, an outcome="error" entry is emitted
@@ -803,7 +785,6 @@ def test_extract_roles_and_requirements_isolates_per_unit_extraction_failure(
     """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_MANUFACTURER, _UNIT_IMPORTER))
     call_completion = _scripted_call_completion(
         {
@@ -818,7 +799,7 @@ def test_extract_roles_and_requirements_isolates_per_unit_extraction_failure(
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -840,7 +821,9 @@ def test_extract_roles_and_requirements_isolates_per_unit_extraction_failure(
 
 
 def test_malformed_annex_unit_response_is_skipped_and_logged(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    baseline_rig: BaselineRig,
 ) -> None:
     """Slice 7 (GH #25): the same per-unit failure isolation proven for two
     ARTICLE units above (`..._isolates_per_unit_extraction_failure`) also
@@ -852,7 +835,6 @@ def test_malformed_annex_unit_response_is_skipped_and_logged(
     """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_MANUFACTURER, _UNIT_ANNEX_I))
     call_completion = _scripted_call_completion(
         {
@@ -867,7 +849,7 @@ def test_malformed_annex_unit_response_is_skipped_and_logged(
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -890,7 +872,9 @@ def test_malformed_annex_unit_response_is_skipped_and_logged(
 
 
 def test_extract_roles_and_requirements_logs_error_kind_without_raw_payload(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-BI-002: the outcome="error" log entry's `extra` carries `error_kind`
     matching the raised `DomainMapperExtractionError`, and the raw LLM
@@ -901,7 +885,6 @@ def test_extract_roles_and_requirements_logs_error_kind_without_raw_payload(
     marker = "MARKER_SECRET_PAYLOAD_9f3e7c1b2a"
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_IMPORTER,))
     call_completion = _scripted_call_completion(
         {_UNIT_IMPORTER.citation_ref: json.dumps({"requirements": marker})}
@@ -911,7 +894,7 @@ def test_extract_roles_and_requirements_logs_error_kind_without_raw_payload(
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -933,6 +916,7 @@ def test_extract_roles_and_requirements_logs_error_kind_without_raw_payload(
 
 def test_extract_roles_and_requirements_propagates_llm_provider_error_and_aborts(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """An LlmProviderError from one unit's call propagates and aborts the
     whole call — infra failures are not per-unit-isolated (no partial-write
@@ -940,7 +924,6 @@ def test_extract_roles_and_requirements_propagates_llm_provider_error_and_aborts
     """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_MANUFACTURER, _UNIT_IMPORTER))
     call_completion = _scripted_call_completion(
         {
@@ -958,7 +941,7 @@ def test_extract_roles_and_requirements_propagates_llm_provider_error_and_aborts
             _REGULATION_ID,
             adapter=adapter,
             native_graph=native_graph,
-            baseline_graph=baseline_graph,
+            **baseline_rig.gateway_keywords(),
             model="fake-model",
             call_completion=call_completion,
             emitter=emitter,
@@ -967,6 +950,7 @@ def test_extract_roles_and_requirements_propagates_llm_provider_error_and_aborts
 
 def test_extract_roles_and_requirements_zero_units_returns_well_formed_all_zero_result(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """Q2 fix: an adapter returning zero units is not an error — the
     Regulation node is still MERGEd, and a well-formed all-zero
@@ -974,14 +958,13 @@ def test_extract_roles_and_requirements_zero_units_returns_well_formed_all_zero_
     """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter(())
 
     result = extract_roles_and_requirements(
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=_scripted_call_completion({}),
         emitter=emitter,
@@ -992,15 +975,13 @@ def test_extract_roles_and_requirements_zero_units_returns_well_formed_all_zero_
     assert result.role_node_ids == {}
     assert result.requirement_ids == ()
     assert result.requirement_id_collisions == ()
-    assert len(baseline_graph.calls) == 1
-    assert (
-        baseline_graph.calls[0].query
-        == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    )
+    assert [entry.name for entry in baseline_rig.logged()] == ["RegulatoryInstrument"]
 
 
 def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    baseline_rig: BaselineRig,
 ) -> None:
     """B2 fix: two units whose candidates land on the same requirement_id
     with different text -> both Requirement nodes persisted (one
@@ -1010,7 +991,6 @@ def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
     """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     # Two distinct units that happen to resolve to the same (article,
     # paragraph) location, so their candidates collide at requirement_id().
     unit_a = ExtractionUnit(
@@ -1043,7 +1023,7 @@ def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1055,12 +1035,7 @@ def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
     collided_id = result.requirement_id_collisions[0]
     assert collided_id in result.requirement_ids
 
-    requirement_calls = [
-        call
-        for call in baseline_graph.calls
-        if call.query == "MERGE (n:Requirement {id: $id}) SET n += $properties"
-    ]
-    assert len(requirement_calls) == 2
+    assert len(baseline_rig.entries_named("Requirement")) == 2
 
     lines = read_lines(log_path)
     collision_entries = [
@@ -1139,6 +1114,7 @@ def test_read_regulatory_instrument_properties_raises_when_the_requested_version
 
 def test_extract_reads_only_the_requested_versions_instrument_node_and_subtree(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     emitter, _ = make_emitter()
     native_graph = _TwoVersionNativeGraph(
@@ -1147,20 +1123,19 @@ def test_extract_reads_only_the_requested_versions_instrument_node_and_subtree(
             "CRA-2.0": {"id": "CRA-2.0", "version": "2.0"},
         }
     )
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter(())
 
     extract_roles_and_requirements(
         "CRA-2.0",
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="test-model",
         emitter=emitter,
     )
 
     assert adapter.requested_instrument_ids == ["CRA-2.0"]
-    written = repr(baseline_graph.calls)
+    written = repr(baseline_rig.entries_named("RegulatoryInstrument"))
     assert "2.0" in written  # the requested version's properties reached the baseline graph
     assert "1.0" not in written  # and the prior version's did not
 
@@ -1237,6 +1212,7 @@ def _scripted_call_completion_by_prompt_kind(
 
 def test_extract_roles_and_requirements_still_extracts_duties_from_a_definitions_headed_unit(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-BI-002: a definitions-headed unit is not excluded from the
     unchanged duty-extraction traversal — `_is_definitions_unit` is purely
@@ -1264,7 +1240,6 @@ def test_extract_roles_and_requirements_still_extracts_duties_from_a_definitions
     )
     assert _is_definitions_unit(unit) is True
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((unit,))
     call_completion = _scripted_call_completion_by_prompt_kind(
         {
@@ -1279,7 +1254,7 @@ def test_extract_roles_and_requirements_still_extracts_duties_from_a_definitions
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1621,6 +1596,7 @@ def test_build_defined_terms_map_zero_definitions_units_issues_zero_llm_calls(
 
 def test_extract_roles_and_requirements_sets_defines_source_ref_from_definitions_unit(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-BI-004, end-to-end: a dedicated definitions unit defines
     "Manufacturer" -> the persisted DEFINES edge's source_ref is the
@@ -1628,7 +1604,6 @@ def test_extract_roles_and_requirements_sets_defines_source_ref_from_definitions
     """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     definitions_unit = ExtractionUnit(
         citation_ref="Art. 2(1)",
         text="'Manufacturer' means any natural or legal person who develops products.",
@@ -1655,20 +1630,21 @@ def test_extract_roles_and_requirements_sets_defines_source_ref_from_definitions
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
     )
 
-    defines_calls = _find_edge_call(baseline_graph, "DEFINES")
+    defines_calls = baseline_rig.entries_named("DEFINES")
     assert len(defines_calls) == 1
-    assert defines_calls[0].params is not None
-    assert defines_calls[0].params["source_ref"] == definitions_unit.citation_ref
+    assert entry_properties(defines_calls[0])["source_ref"] == definitions_unit.citation_ref
 
 
 def test_extract_roles_and_requirements_falls_back_to_first_duty_occurrence_when_no_definitions_unit_exists(  # noqa: E501 - name mirrors PLAN.md Slice 6 verbatim
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-BI-008, end-to-end: no definitions-headed unit anywhere -> the
     DEFINES edge falls back to the Role's own first duty unit_citation_ref
@@ -1678,7 +1654,6 @@ def test_extract_roles_and_requirements_falls_back_to_first_duty_occurrence_when
     """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_MANUFACTURER,))
     call_completion = _scripted_call_completion(
         {
@@ -1692,17 +1667,16 @@ def test_extract_roles_and_requirements_falls_back_to_first_duty_occurrence_when
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
     )
     emitter.flush()
 
-    defines_calls = _find_edge_call(baseline_graph, "DEFINES")
+    defines_calls = baseline_rig.entries_named("DEFINES")
     assert len(defines_calls) == 1
-    assert defines_calls[0].params is not None
-    assert defines_calls[0].params["source_ref"] == _UNIT_MANUFACTURER.citation_ref
+    assert entry_properties(defines_calls[0])["source_ref"] == _UNIT_MANUFACTURER.citation_ref
 
     lines = read_lines(log_path)
     fallback_entries = [
@@ -1718,7 +1692,9 @@ def test_extract_roles_and_requirements_falls_back_to_first_duty_occurrence_when
 
 
 def test_extract_roles_and_requirements_falls_back_for_unmatched_role_when_definitions_unit_exists(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-BI-009, end-to-end: a definitions unit defines "Manufacturer" only;
     duty units name both "Manufacturer" and "Importer" -> Manufacturer's
@@ -1728,7 +1704,6 @@ def test_extract_roles_and_requirements_falls_back_for_unmatched_role_when_defin
     """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     definitions_unit = ExtractionUnit(
         citation_ref="Art. 2(1)",
         text="'Manufacturer' means any natural or legal person who develops products.",
@@ -1756,18 +1731,16 @@ def test_extract_roles_and_requirements_falls_back_for_unmatched_role_when_defin
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
     )
     emitter.flush()
 
-    defines_calls = _find_edge_call(baseline_graph, "DEFINES")
+    defines_calls = baseline_rig.entries_named("DEFINES")
     source_refs_by_role_id = {
-        call.params["target_id"]: call.params["source_ref"]
-        for call in defines_calls
-        if call.params is not None
+        _edge_target_id(call): entry_properties(call)["source_ref"] for call in defines_calls
     }
     assert (
         source_refs_by_role_id[result.role_node_ids["Manufacturer"]]
@@ -1788,6 +1761,7 @@ def test_extract_roles_and_requirements_falls_back_for_unmatched_role_when_defin
 
 def test_extract_roles_and_requirements_zero_definitions_units_issues_zero_extra_llm_calls(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-BI-007, end-to-end: only duty units present -> the total LLM call
     count equals exactly the duty-unit count (no extra call for an empty
@@ -1795,7 +1769,6 @@ def test_extract_roles_and_requirements_zero_definitions_units_issues_zero_extra
     """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     adapter = _FakeAdapter((_UNIT_MANUFACTURER, _UNIT_IMPORTER))
     call_count = 0
     scripted = _scripted_call_completion(
@@ -1820,7 +1793,7 @@ def test_extract_roles_and_requirements_zero_definitions_units_issues_zero_extra
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=counting_call_completion,
         emitter=emitter,
@@ -1831,6 +1804,7 @@ def test_extract_roles_and_requirements_zero_definitions_units_issues_zero_extra
 
 def test_extract_roles_and_requirements_pools_terms_across_multiple_definitions_units(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
 ) -> None:
     """AC-BI-006, end-to-end: two definitions-headed units (simulating
     one-per-paragraph), one defining "Manufacturer", the other "Importer" ->
@@ -1840,7 +1814,6 @@ def test_extract_roles_and_requirements_pools_terms_across_multiple_definitions_
     """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
-    baseline_graph = _FakeBaselineGraph()
     definitions_unit_manufacturer = ExtractionUnit(
         citation_ref="Art. 2(1)",
         text="'Manufacturer' means any natural or legal person who develops products.",
@@ -1891,17 +1864,15 @@ def test_extract_roles_and_requirements_pools_terms_across_multiple_definitions_
         _REGULATION_ID,
         adapter=adapter,
         native_graph=native_graph,
-        baseline_graph=baseline_graph,
+        **baseline_rig.gateway_keywords(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
     )
 
-    defines_calls = _find_edge_call(baseline_graph, "DEFINES")
+    defines_calls = baseline_rig.entries_named("DEFINES")
     source_refs_by_role_id = {
-        call.params["target_id"]: call.params["source_ref"]
-        for call in defines_calls
-        if call.params is not None
+        _edge_target_id(call): entry_properties(call)["source_ref"] for call in defines_calls
     }
     assert (
         source_refs_by_role_id[result.role_node_ids["Manufacturer"]]
@@ -1911,3 +1882,315 @@ def test_extract_roles_and_requirements_pools_terms_across_multiple_definitions_
         source_refs_by_role_id[result.role_node_ids["Importer"]]
         == definitions_unit_importer.citation_ref
     )
+
+
+def test_extract_roles_and_requirements_accepts_the_gateway_keywords_the_orchestrator_passes(
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    """The stage accepts `submitter`, `baseline_graph_name` and `audit_event_id` the orchestrator
+    hands over (they are required keywords since #209 slice 2a).
+    """
+    emitter, _log_path = make_emitter()
+
+    result = extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=_FakeAdapter(()),
+        native_graph=_FakeNativeGraph({"id": _REGULATION_ID}),
+        **baseline_rig.gateway_keywords(),
+        model="fake-model",
+        call_completion=_scripted_call_completion({}),
+        emitter=emitter,
+    )
+
+    assert result.regulatory_instrument_id == _REGULATION_ID
+
+
+# --- the extraction group through the Graph Write Gateway (issue #209) --------
+
+
+def test_extraction_submits_instrument_roles_requirements_and_edges_as_one_group_under_the_audit_event(  # noqa: E501 -- name fixed by the plan
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    """AC-BI-001/003/007/008: one group on the baseline graph under the supplied audit event.
+
+    Order is instrument, Roles, DEFINES, Requirements, EXPRESSES (the write order of the direct
+    path); edges carry `source_ref` and the identity `{type}:{source}->{target}`; the instrument
+    has no `id` property (the native bag's `id` is stripped); the baseline read handle receives
+    no query, since every edge endpoint is in the group.
+    """
+    emitter, _log_path = make_emitter()
+    call_completion = _scripted_call_completion(
+        {
+            _UNIT_MANUFACTURER.citation_ref: _requirements_json(
+                role_name="Manufacturer", text="Conduct a cybersecurity risk assessment."
+            ),
+            _UNIT_IMPORTER.citation_ref: _requirements_json(
+                role_name="Importer", text="Verify the manufacturer's conformity assessment."
+            ),
+        }
+    )
+
+    result = extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=_FakeAdapter((_UNIT_MANUFACTURER, _UNIT_IMPORTER)),
+        native_graph=_FakeNativeGraph({"id": "cra-1.0", "title": "Cyber Resilience Act"}),
+        **baseline_rig.gateway_keywords(),
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    manufacturer = result.role_node_ids["Manufacturer"]
+    importer = result.role_node_ids["Importer"]
+    requirement_manufacturer, requirement_importer = result.requirement_ids
+    [group] = baseline_rig.groups
+    assert group.graph == "cra_baseline"
+    assert group.audit_event_id == baseline_rig.audit_event_id
+    assert [(entry.name, entry.identity) for entry in group.entries] == [
+        ("RegulatoryInstrument", _REGULATION_ID),
+        ("Role", manufacturer),
+        ("Role", importer),
+        ("DEFINES", f"DEFINES:{_REGULATION_ID}->{manufacturer}"),
+        ("DEFINES", f"DEFINES:{_REGULATION_ID}->{importer}"),
+        ("Requirement", requirement_manufacturer),
+        ("Requirement", requirement_importer),
+        ("EXPRESSES", f"EXPRESSES:{_REGULATION_ID}->{requirement_manufacturer}"),
+        ("EXPRESSES", f"EXPRESSES:{_REGULATION_ID}->{requirement_importer}"),
+    ]
+    by_identity = {entry.identity: entry_properties(entry) for entry in group.entries}
+    assert by_identity[_REGULATION_ID] == {"title": "Cyber Resilience Act"}
+    assert by_identity[f"DEFINES:{_REGULATION_ID}->{importer}"] == {
+        "source_ref": _UNIT_IMPORTER.citation_ref
+    }
+    assert by_identity[f"EXPRESSES:{_REGULATION_ID}->{requirement_manufacturer}"] == {
+        "source_ref": _UNIT_MANUFACTURER.citation_ref
+    }
+    assert by_identity[requirement_manufacturer]["role_id"] == manufacturer
+    assert baseline_rig.read_graph.queries == []
+    assert ("RegulatoryInstrument", _REGULATION_ID) in baseline_rig.baseline.nodes
+    assert result.candidate_count == 2
+    assert result.skipped_unit_count == 0
+    assert result.requirement_id_collisions == ()
+
+
+def test_a_legacy_baseline_graph_has_its_identityless_edges_stamped_before_the_extraction_group(
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    """A baseline graph written before the gateway holds a DEFINES edge without `identity`.
+
+    The stamp group is logged first, under the same audit event, so the extraction group
+    merges into the stamped edge instead of adding a parallel one.
+    """
+    emitter, _log_path = make_emitter()
+    manufacturer = identity.role_id("Manufacturer", _REGULATION_ID)
+    baseline_rig.baseline.seed_node(("RegulatoryInstrument",), _REGULATION_ID, {"title": "Old"})
+    baseline_rig.baseline.seed_node(("Role",), manufacturer, {"name": "Manufacturer"})
+    baseline_rig.baseline.seed_legacy_edge(
+        ("DEFINES", "RegulatoryInstrument", _REGULATION_ID, "Role", manufacturer),
+        {"source_ref": "Art. 13(1)"},
+    )
+
+    extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=_FakeAdapter((_UNIT_MANUFACTURER,)),
+        native_graph=_FakeNativeGraph({"id": _REGULATION_ID}),
+        **baseline_rig.gateway_keywords(),
+        model="fake-model",
+        call_completion=_scripted_call_completion(
+            {
+                _UNIT_MANUFACTURER.citation_ref: _requirements_json(
+                    role_name="Manufacturer", text="X"
+                )
+            }
+        ),
+        emitter=emitter,
+    )
+
+    stamp_group, extraction_group = baseline_rig.groups
+    assert [entry.content["op"] for entry in stamp_group.entries] == ["stamp_edge_identity"]
+    assert stamp_group.audit_event_id == extraction_group.audit_event_id
+    assert stamp_group.audit_event_id == baseline_rig.audit_event_id
+    defines_edges = [key for key in baseline_rig.baseline.edges if key[0] == "DEFINES"]
+    assert [key[5] for key in defines_edges] == [f"DEFINES:{_REGULATION_ID}->{manufacturer}"]
+
+
+def test_an_unstorable_instrument_property_raises_the_persistence_error_with_an_empty_log(
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    """A native property bag with a non-finite number is rejected before anything is submitted.
+
+    The legacy `SET n += $properties` stored it silently. Nothing is logged, not even a stamp.
+    """
+    emitter, _log_path = make_emitter()
+
+    with pytest.raises(DomainMapperPersistenceError, match="has a property the graph cannot store"):
+        extract_roles_and_requirements(
+            _REGULATION_ID,
+            adapter=_FakeAdapter((_UNIT_MANUFACTURER,)),
+            native_graph=_FakeNativeGraph({"id": _REGULATION_ID, "score": float("inf")}),
+            **baseline_rig.gateway_keywords(),
+            model="fake-model",
+            call_completion=_scripted_call_completion(
+                {
+                    _UNIT_MANUFACTURER.citation_ref: _requirements_json(
+                        role_name="Manufacturer", text="X"
+                    )
+                }
+            ),
+            emitter=emitter,
+        )
+
+    assert baseline_rig.store.groups == []
+    assert baseline_rig.logged() == []
+    assert baseline_rig.baseline.nodes == {}
+
+
+def test_a_requirement_id_collision_keeps_its_hash_two_suffix_and_persisting_calls_no_llm(
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    """AC-BI-003: the `#2` id is computed before submission and travels unchanged.
+
+    The LLM is called once per unit and never by the persistence step: the call count equals
+    the number of units.
+    """
+    emitter, _log_path = make_emitter()
+    unit_a = ExtractionUnit(
+        citation_ref="Art. 13(1)-a",
+        text="The manufacturer shall conduct a cybersecurity risk assessment.",
+        article_number="13",
+        paragraph_number="1",
+        article_heading="Obligations of manufacturers",
+    )
+    unit_b = ExtractionUnit(
+        citation_ref="Art. 13(1)-b",
+        text="The manufacturer shall report vulnerabilities.",
+        article_number="13",
+        paragraph_number="1",
+        article_heading="Obligations of manufacturers",
+    )
+    scripted = _scripted_call_completion(
+        {
+            unit_a.citation_ref: _requirements_json(
+                role_name="Manufacturer", text="Conduct a cybersecurity risk assessment."
+            ),
+            unit_b.citation_ref: _requirements_json(
+                role_name="Manufacturer", text="Report vulnerabilities without undue delay."
+            ),
+        }
+    )
+    llm_calls: list[str] = []
+
+    def counting_call_completion(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
+        llm_calls.append(messages[1]["content"])
+        return scripted(model=model, messages=messages, timeout=timeout)
+
+    result = extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=_FakeAdapter((unit_a, unit_b)),
+        native_graph=_FakeNativeGraph({"id": _REGULATION_ID}),
+        **baseline_rig.gateway_keywords(),
+        model="fake-model",
+        call_completion=counting_call_completion,
+        emitter=emitter,
+    )
+
+    base_id = identity.requirement_id(_REGULATION_ID, "13", "1", None)
+    assert result.requirement_ids == (base_id, f"{base_id}#2")
+    assert result.requirement_id_collisions == (f"{base_id}#2",)
+    assert [e.identity for e in baseline_rig.entries_named("Requirement")] == [
+        base_id,
+        f"{base_id}#2",
+    ]
+    assert [e.identity for e in baseline_rig.entries_named("EXPRESSES")] == [
+        f"EXPRESSES:{_REGULATION_ID}->{base_id}",
+        f"EXPRESSES:{_REGULATION_ID}->{base_id}#2",
+    ]
+    assert len(llm_calls) == 2  # one per unit; none from the persistence step
+
+
+def test_a_requirement_whose_role_is_not_in_the_group_raises_with_an_empty_log(
+    baseline_rig: BaselineRig,
+) -> None:
+    """`_validate_role_references` runs before anything is built, stamped or submitted."""
+    dangling = RequirementNode(
+        id="req_x", properties={"text": "X", "role_id": "role_missing", "status": "active"}
+    )
+
+    with pytest.raises(DomainMapperPersistenceError) as raised:
+        persist_role_and_requirement_graph(
+            baseline_rig.submitter,
+            baseline_rig.baseline_graph_name,
+            baseline_rig.audit_event_id,
+            regulatory_instrument_id=_REGULATION_ID,
+            regulatory_instrument_properties={},
+            role_nodes=(RoleNode(id="role_present", properties={"name": "Present"}),),
+            role_edges=(),
+            requirement_nodes=(dangling,),
+            requirement_edges=(),
+        )
+
+    assert str(raised.value) == (
+        "Requirement 'req_x' references role_id 'role_missing', which is not among the Role "
+        "nodes being persisted in this call"
+    )
+    assert baseline_rig.store.groups == []
+    assert baseline_rig.logged() == []
+
+
+def test_a_node_and_an_edge_repeated_in_one_extraction_collapse_like_the_old_merge(
+    baseline_rig: BaselineRig, other_baseline_rig: BaselineRig
+) -> None:
+    """F5: the same Role twice (later properties win) and the same DEFINES edge twice (the
+    later `source_ref` wins) are one primitive each, and the graph equals the one built from
+    the already-folded input.
+    """
+    folded = other_baseline_rig
+    persist_role_and_requirement_graph(
+        folded.submitter,
+        folded.baseline_graph_name,
+        folded.audit_event_id,
+        regulatory_instrument_id=_REGULATION_ID,
+        regulatory_instrument_properties={"title": "T"},
+        role_nodes=(
+            RoleNode(id="role_a", properties={"name": "A", "confidence": 0.8, "extra": "kept"}),
+        ),
+        role_edges=(RoleDefinesEdge(role_node_id="role_a", source_ref="Art. 2"),),
+        requirement_nodes=(),
+        requirement_edges=(),
+    )
+
+    persist_role_and_requirement_graph(
+        baseline_rig.submitter,
+        baseline_rig.baseline_graph_name,
+        baseline_rig.audit_event_id,
+        regulatory_instrument_id=_REGULATION_ID,
+        regulatory_instrument_properties={"title": "T"},
+        role_nodes=(
+            RoleNode(id="role_a", properties={"name": "A", "confidence": 0.5, "extra": "kept"}),
+            RoleNode(id="role_a", properties={"name": "A", "confidence": 0.8}),
+        ),
+        role_edges=(
+            RoleDefinesEdge(role_node_id="role_a", source_ref="Art. 1"),
+            RoleDefinesEdge(role_node_id="role_a", source_ref="Art. 2"),
+        ),
+        requirement_nodes=(),
+        requirement_edges=(),
+    )
+
+    [group] = baseline_rig.groups
+    assert [(entry.name, entry.identity) for entry in group.entries] == [
+        ("RegulatoryInstrument", _REGULATION_ID),
+        ("Role", "role_a"),
+        ("DEFINES", f"DEFINES:{_REGULATION_ID}->role_a"),
+    ]
+    assert entry_properties(group.entries[1]) == {"name": "A", "confidence": 0.8, "extra": "kept"}
+    assert entry_properties(group.entries[2]) == {"source_ref": "Art. 2"}
+    # The legacy fold kept `extra` (SET n += props never removes a key) and the later `Art. 2`.
+    assert baseline_rig.baseline.nodes[("Role", "role_a")] == {
+        "name": "A",
+        "confidence": 0.8,
+        "extra": "kept",
+    }
+    assert canonical_digest(baseline_rig.baseline) == canonical_digest(folded.baseline)

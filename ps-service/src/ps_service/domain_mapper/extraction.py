@@ -37,6 +37,7 @@ from ps_service.logging import LogEmitter, emit_log_entry
 if TYPE_CHECKING:
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
     from ps_service.domain_mapper.falkordb_client import GraphHandle
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import CompletionCaller
 
 _COMPONENT = "domain_mapper"
@@ -58,24 +59,25 @@ class _RegulatoryInstrumentNode(Protocol):
     def properties(self) -> dict[str, object]: ...
 
 
-def extract_roles_and_requirements(
+def extract_roles_and_requirements(  # noqa: PLR0913 -- one stage seam: the native graph, gateway keywords, LLM and log collaborators
     regulatory_instrument_id: str,
     *,
     adapter: DomainMappingAdapter,
     native_graph: GraphHandle,
-    baseline_graph: GraphHandle,
+    submitter: GroupSubmitter,
+    baseline_graph_name: str,
+    audit_event_id: str,
     model: str,
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> ExtractionResult:
     """ExtractRolesAndRequirements — PLAN_REVIEWED.md §5.2's 8-step flow.
 
-    1. Reads the RegulatoryInstrument node's own properties from `native_graph` and
-       MERGEs it into `baseline_graph` first (via
-       `persist_role_and_requirement_graph`, step 6 below) — the
+    1. Reads the RegulatoryInstrument node's own properties from `native_graph`; it is
+       written first in the extraction group (step 6 below) — the
        `DEFINES`/`EXPRESSES` edges originate from it.
     2. `adapter.read_native_units(native_graph, regulatory_instrument_id)`. An empty result is
-       not an error (Q2 fix) — the RegulatoryInstrument node is still MERGEd and a
+       not an error (Q2 fix) — the RegulatoryInstrument node is still submitted to the gateway and a
        well-formed, all-zero `ExtractionResult` is returned.
     3. Calls `_extract_candidates_for_unit` per unit, with per-unit failure
        isolation: a `DomainMapperExtractionError` for one unit is caught,
@@ -91,7 +93,10 @@ def extract_roles_and_requirements(
        defined term exists (AC-BI-004/008/009).
     5. `_build_requirement_graph` — Requirement nodes + collision
        disambiguation (B2 fix), never raising for a collision.
-    6. `persist_role_and_requirement_graph` — validate-then-write.
+    6. `persist_role_and_requirement_graph` — validate, build, then submit the instrument, Roles,
+       `DEFINES`, Requirements and `EXPRESSES` as ONE Graph Write Gateway group on
+       `baseline_graph_name` under `audit_event_id` (issue #209). Every edge endpoint is in the
+       group, so extraction reads nothing from the baseline graph and takes no handle to it.
     7. Emits one `outcome="collision"` entry per disambiguated id, one
        `outcome="definitions_fallback"` entry per Role whose `DEFINES.source_ref`
        fell back to the first duty occurrence (AC-BI-010), then one
@@ -121,13 +126,15 @@ def extract_roles_and_requirements(
     )
 
     persist_role_and_requirement_graph(
-        baseline_graph,
-        regulatory_instrument_id,
-        regulatory_instrument_properties,
-        role_nodes,
-        role_edges,
-        requirement_nodes,
-        requirement_edges,
+        submitter,
+        baseline_graph_name,
+        audit_event_id,
+        regulatory_instrument_id=regulatory_instrument_id,
+        regulatory_instrument_properties=regulatory_instrument_properties,
+        role_nodes=role_nodes,
+        role_edges=role_edges,
+        requirement_nodes=requirement_nodes,
+        requirement_edges=requirement_edges,
     )
 
     for collided_id in collided_ids:
@@ -172,7 +179,7 @@ def _read_regulatory_instrument_properties(
 
     `MATCH (r:RegulatoryInstrument {id: $rid}) RETURN r` (the native graph holds every
     ingested version of a regulation), read back as a plain properties dict for
-    `persist_role_and_requirement_graph` to MERGE into `baseline_graph`.
+    `persist_role_and_requirement_graph` to submit as the instrument node.
 
     Raises `DomainMapperExtractionError` if no RegulatoryInstrument node is found —
     `ExtractRolesAndRequirements`'s own pre-condition

@@ -78,7 +78,7 @@ class DefinedTermCandidate(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class RoleNode:
-    """A canonicalized Role for `graph_writer.persist_role_and_requirement_graph` to `MERGE`.
+    """A canonicalized Role, submitted as a gateway node primitive by the graph writer.
 
     `id` is `identity.role_id()`'s output; `properties` carries
     `name`/`confidence` (CA doc §0.1's Role attributes) — a plain
@@ -110,7 +110,7 @@ class RoleDefinesEdge:
 
 @dataclass(frozen=True, slots=True)
 class RequirementNode:
-    """A Requirement for `graph_writer.persist_role_and_requirement_graph` to `MERGE`.
+    """A Requirement, submitted as a gateway node primitive by the graph writer.
 
     `id` is `identity.requirement_id()`'s output, possibly disambiguated
     with a `#2`/`#3` suffix (PLAN_REVIEWED.md §5.2 step 5). `properties`
@@ -205,9 +205,9 @@ class ObligationAssignment(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ObligationNode:
-    """One Obligation for a future `persist_obligation_and_capability_graph` `MERGE`.
+    """One Obligation, submitted as a gateway node primitive by the graph writer.
 
-    In `graph_writer` (Increment 15, out of this batch's scope). `id` is
+    `id` is
     `identity.obligation_id(role_node_id, text)`'s output — Role-scoped
     (#42), so this Obligation belongs to exactly one Role. `properties`
     carries `text`/`confidence` (CA doc's Obligation attributes; the Edge
@@ -282,9 +282,9 @@ class CapabilityReuseVerdict(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class CapabilityNode:
-    """One Capability for a future `persist_obligation_and_capability_graph` `MERGE`.
+    """One Capability, submitted as a gateway node primitive by the graph writer.
 
-    In `graph_writer` (Increment 15, out of this batch's scope). `id` is
+    `id` is
     `identity.capability_id()`'s output — content-derived from `name`
     alone (deliberately Obligation- and Role-independent, PLAN_REVIEWED.md
     §7.4), so identical names across distinct Obligations converge onto one

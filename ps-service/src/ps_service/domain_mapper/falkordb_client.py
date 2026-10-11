@@ -1,4 +1,8 @@
-"""FalkorDB connection surface for `ps_service.domain_mapper`.
+"""Read-only FalkorDB connection surface for `ps_service.domain_mapper`.
+
+Since #209 the Domain Mapper writes nothing through this surface: its baseline-graph writes are
+Graph Write Gateway groups (`graph_writer`), and the handles built here only READ (the native
+graph, the baseline graph's Requirements and existing-node reads).
 
 Own copy of `ps_service.ingestion.falkordb_client`'s shape (PLAN_REVIEWED.md
 §1's "components stay independently readable/testable" design note — a
@@ -10,8 +14,8 @@ Naming (PLAN_REVIEWED.md §8): `native_graph_name` matches Ingestion's own
 `{short_name.lower()}_native` convention exactly — Domain Mapper reads the
 same native graph Ingestion wrote, so the naming formula must be identical,
 not just similarly-shaped. `baseline_graph_name` is this component's own
-per-regulation write target (`{short_name.lower()}_baseline`, AC-005) —
-never the company's merged single-tenant graph.
+per-regulation graph (`{short_name.lower()}_baseline`, AC-005; written through the gateway,
+read through a handle from here) — never the company's merged single-tenant graph.
 """
 
 from __future__ import annotations
@@ -48,10 +52,9 @@ class GraphQueryResult(Protocol):
 class GraphHandle(Protocol):
     """Structural stand-in for `falkordb.Graph`.
 
-    The `query()` call surface this component's adapters/graph
-    writer/derivation logic need: bare Cypher, or Cypher + `params=` for
-    parameterized reads/writes. Callers outside this module never import
-    `falkordb.Graph` directly.
+    The `query()` call surface this component's adapters and derivation logic need: bare
+    Cypher, or Cypher + `params=` for parameterized reads (the Domain Mapper issues no write
+    through a handle). Callers outside this module never import `falkordb.Graph` directly.
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
@@ -134,7 +137,7 @@ def native_graph_name(short_name: str) -> str:
 
 
 def baseline_graph_name(short_name: str) -> str:
-    """PLAN_REVIEWED.md §8: one FalkorDB graph per regulation for this component's own writes.
+    """PLAN_REVIEWED.md §8: one FalkorDB graph per regulation for this component's own output.
 
     (`{short_name.lower()}_baseline`, e.g. `"CRA"` -> `"cra_baseline"`) —
     distinct from `{short_name}_native` and from the company's merged

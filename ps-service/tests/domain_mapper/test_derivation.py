@@ -9,14 +9,16 @@ Requirement document order — never `unittest.mock.Mock`/`MagicMock`.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, cast
 
 import httpx
 import openai
 import pytest
+from graph_gateway._fakes import GatewayRig, close_all_rigs
 from litellm.types.utils import Choices, Message, ModelResponse
 
+from domain_mapper._gateway_fakes import BaselineRig, GatewayKeywords, entry_properties
 from ps_service.domain_mapper.derivation import (
     _derive_capabilities,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
     _derive_obligations,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
@@ -35,12 +37,19 @@ from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging import bind_run_context
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterator, Mapping
 
     from domain_mapper._fakes import MakeEmitter, ReadLines
     from ps_service.domain_mapper.models import DerivationResult
     from ps_service.llm_interface.client import CompletionCaller
     from ps_service.logging import LogEmitter
+
+
+@pytest.fixture(autouse=True)
+def close_gateway_rigs() -> Iterator[None]:
+    """Stop the gateway rigs the `_FakeBaselineGraph`s created."""
+    yield
+    close_all_rigs()
 
 
 def _model_response(content: str) -> ModelResponse:
@@ -923,15 +932,11 @@ def test_derive_capabilities_propagates_llm_provider_error_for_empty_completion_
 #
 # Per PLAN_REVIEWED.md §11 Increment 16: a hand-written structural fake for
 # the baseline `GraphHandle`, scripted with the rows
-# `_read_requirements_by_role`'s query expects, that also captures every
-# other (write-side) query for assertion -- mirrors `test_extraction.py`'s
+# `_read_requirements_by_role`'s query expects -- mirrors `test_extraction.py`'s
 # `_FakeBaselineGraph` style, no `unittest.mock`.
-
-
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
+#
+# #209: the write side now goes through the Graph Write Gateway, so the fake owns a `BaselineRig`
+# (`gateway_kwargs()`); the assertions below read the submitted group from `rig.logged()`.
 
 
 class _FakeQueryResult:
@@ -945,23 +950,43 @@ class _FakeQueryResult:
         return self._result_set
 
 
+_EXISTING_NODE_READ = re.compile(
+    r"^MATCH \(n:(?P<label>[A-Za-z_]+)\) WHERE n\.id IN \$ids RETURN n\.id$"
+)
+
+
 class _FakeBaselineGraph:
     """Satisfies `GraphHandle` structurally. Answers
     `_read_requirements_by_role`'s `OPTIONAL MATCH (rl:Role...` query with a
-    scripted row set; captures every other `(query, params)` call -- the
-    write-side calls `persist_obligation_and_capability_graph` issues --
-    for assertion.
+    scripted row set, and the writer's batched existing-node read with the Role and
+    Requirement ids those rows name. The write side is a gateway rig.
     """
 
     def __init__(self, requirement_rows: list[list[object]]) -> None:
         self._requirement_rows: list[object] = [*requirement_rows]
-        self.calls: list[_RecordedCall] = []
+        self.rig = BaselineRig()
+        for row in requirement_rows:  # what extraction left in the graph for the writer to find
+            self.rig.baseline.seed_node(("Requirement",), str(row[0]), {})
+            if row[3] is not None:
+                self.rig.baseline.seed_node(("Role",), str(row[3]), {})
+
+    def gateway_kwargs(self) -> GatewayKeywords:
+        """The gateway keywords the orchestrator hands the stage."""
+        return {
+            "submitter": self.rig.submitter,
+            "baseline_graph_name": self.rig.baseline_graph_name,
+            "audit_event_id": self.rig.audit_event_id,
+        }
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         if "OPTIONAL MATCH (rl:Role" in q:
             return _FakeQueryResult(self._requirement_rows)
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
+        match = _EXISTING_NODE_READ.match(q)
+        assert match is not None, q
+        assert params is not None
+        column = 3 if match.group("label") == "Role" else 0
+        known = {cast("list[object]", row)[column] for row in self._requirement_rows}
+        return _FakeQueryResult([[i] for i in cast("list[object]", params["ids"]) if i in known])
 
 
 class _VersionedBaselineGraph(_FakeBaselineGraph):
@@ -985,8 +1010,14 @@ class _VersionedBaselineGraph(_FakeBaselineGraph):
         return super().query(q, params)
 
 
-def _find_edge_calls(graph: _FakeBaselineGraph, relationship_type: str) -> list[_RecordedCall]:
-    return [call for call in graph.calls if f"[:{relationship_type}]" in call.query]
+def _edge_pairs(graph: _FakeBaselineGraph, relationship_type: str) -> list[tuple[str, str]]:
+    """`(source_id, target_id)` of every `relationship_type` edge the stage submitted, in order."""
+    pairs: list[tuple[str, str]] = []
+    for entry in graph.rig.entries_named(relationship_type):
+        source = cast("dict[str, str]", entry.content["source"])
+        target = cast("dict[str, str]", entry.content["target"])
+        pairs.append((source["id"], target["id"]))
+    return pairs
 
 
 def _never_called_completion(invocations: list[bool]) -> CompletionCaller:
@@ -1046,6 +1077,7 @@ def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter: MakeE
     result = derive_obligations_and_capabilities(
         "CRA-1.0",
         baseline_graph=baseline_graph,
+        **baseline_graph.gateway_kwargs(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1055,11 +1087,7 @@ def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter: MakeE
     assert len(result.obligation_node_ids) == 3
     assert len(result.capability_node_ids) == 3
 
-    satisfied_by_calls = _find_edge_calls(baseline_graph, "SATISFIED_BY")
-    has_calls = _find_edge_calls(baseline_graph, "HAS")
-    requires_calls = _find_edge_calls(baseline_graph, "REQUIRES")
-
-    satisfied_source_ids = {call.params["source_id"] for call in satisfied_by_calls if call.params}
+    satisfied_source_ids = {source for source, _ in _edge_pairs(baseline_graph, "SATISFIED_BY")}
     assert satisfied_source_ids == {
         "CRA_req_art_13.1",
         "CRA_req_art_13.2",
@@ -1068,15 +1096,13 @@ def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter: MakeE
 
     for obligation_node_id in result.obligation_node_ids:
         has_targets = [
-            call
-            for call in has_calls
-            if call.params and call.params["target_id"] == obligation_node_id
+            pair for pair in _edge_pairs(baseline_graph, "HAS") if pair[1] == obligation_node_id
         ]
         assert len(has_targets) == 1
         requires_sources = [
-            call
-            for call in requires_calls
-            if call.params and call.params["source_id"] == obligation_node_id
+            pair
+            for pair in _edge_pairs(baseline_graph, "REQUIRES")
+            if pair[0] == obligation_node_id
         ]
         assert len(requires_sources) >= 1
 
@@ -1106,6 +1132,7 @@ def test_derive_reads_only_the_requested_instruments_requirements(
     result = derive_obligations_and_capabilities(
         "CRA-2.0",
         baseline_graph=baseline_graph,
+        **baseline_graph.gateway_kwargs(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1113,11 +1140,7 @@ def test_derive_reads_only_the_requested_instruments_requirements(
 
     assert baseline_graph.read_params == [{"rid": "CRA-2.0"}]
     assert len(result.obligation_node_ids) == 1
-    satisfied = {
-        call.params["source_id"]
-        for call in _find_edge_calls(baseline_graph, "SATISFIED_BY")
-        if call.params
-    }
+    satisfied = {source for source, _ in _edge_pairs(baseline_graph, "SATISFIED_BY")}
     assert satisfied == {"CRA-2.0_req_1"}
 
 
@@ -1158,6 +1181,7 @@ def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surface
     result = derive_obligations_and_capabilities(
         "CRA-1.0",
         baseline_graph=baseline_graph,
+        **baseline_graph.gateway_kwargs(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1166,8 +1190,7 @@ def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surface
 
     assert result.unmatched_requirement_ids == ("CRA_req_art_13.9",)
 
-    satisfied_by_calls = _find_edge_calls(baseline_graph, "SATISFIED_BY")
-    satisfied_source_ids = {call.params["source_id"] for call in satisfied_by_calls if call.params}
+    satisfied_source_ids = {source for source, _ in _edge_pairs(baseline_graph, "SATISFIED_BY")}
     assert "CRA_req_art_13.9" not in satisfied_source_ids
 
     lines = read_lines(log_path)
@@ -1222,6 +1245,7 @@ def test_derive_obligations_and_capabilities_unmatched_obligation_surfaced(
     result = derive_obligations_and_capabilities(
         "CRA-1.0",
         baseline_graph=baseline_graph,
+        **baseline_graph.gateway_kwargs(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1232,8 +1256,7 @@ def test_derive_obligations_and_capabilities_unmatched_obligation_surfaced(
     assert second_obligation_id in result.obligation_node_ids
     assert len(result.capability_node_ids) == 1
 
-    requires_calls = _find_edge_calls(baseline_graph, "REQUIRES")
-    requires_source_ids = {call.params["source_id"] for call in requires_calls if call.params}
+    requires_source_ids = {source for source, _ in _edge_pairs(baseline_graph, "REQUIRES")}
     assert requires_source_ids == {
         oid for oid in result.obligation_node_ids if oid != second_obligation_id
     }
@@ -1266,6 +1289,7 @@ def test_derive_obligations_and_capabilities_ac007_emits_log_entry_with_bound_ru
         derive_obligations_and_capabilities(
             "CRA-1.0",
             baseline_graph=baseline_graph,
+            **baseline_graph.gateway_kwargs(),
             model="fake-model",
             call_completion=call_completion,
             emitter=emitter,
@@ -1316,6 +1340,7 @@ def test_derive_obligations_and_capabilities_all_requirements_unmatchable_for_ro
     result = derive_obligations_and_capabilities(
         "CRA-1.0",
         baseline_graph=baseline_graph,
+        **baseline_graph.gateway_kwargs(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1323,7 +1348,7 @@ def test_derive_obligations_and_capabilities_all_requirements_unmatchable_for_ro
 
     assert set(result.unmatched_requirement_ids) == {"CRA_req_art_13.1", "CRA_req_art_13.2"}
     assert result.obligation_node_ids == ()
-    assert _find_edge_calls(baseline_graph, "HAS") == []
+    assert _edge_pairs(baseline_graph, "HAS") == []
 
 
 def test_derive_obligations_and_capabilities_dangling_role_id_raises_before_any_llm_call(
@@ -1346,6 +1371,7 @@ def test_derive_obligations_and_capabilities_dangling_role_id_raises_before_any_
         derive_obligations_and_capabilities(
             "CRA-1.0",
             baseline_graph=baseline_graph,
+            **baseline_graph.gateway_kwargs(),
             model="fake-model",
             call_completion=call_completion,
             emitter=emitter,
@@ -1354,7 +1380,7 @@ def test_derive_obligations_and_capabilities_dangling_role_id_raises_before_any_
     assert invocations == []
     assert "CRA_req_art_13.1" in str(exc_info.value)
     assert "role_ghost_999" in str(exc_info.value)
-    assert baseline_graph.calls == []
+    assert baseline_graph.rig.logged() == []
 
 
 def test_derive_obligations_and_capabilities_renders_registry_with_id_name_and_description(
@@ -1406,6 +1432,7 @@ def test_derive_obligations_and_capabilities_renders_registry_with_id_name_and_d
     derive_obligations_and_capabilities(
         "CRA-1.0",
         baseline_graph=baseline_graph,
+        **baseline_graph.gateway_kwargs(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1424,7 +1451,7 @@ def test_derive_obligations_and_capabilities_renders_registry_with_id_name_and_d
         f"{capability_id('Security Logging')}: Security Logging — (no description)"
         in registry_block
     )
-    assert len(_find_edge_calls(baseline_graph, "REQUIRES")) == 3
+    assert len(_edge_pairs(baseline_graph, "REQUIRES")) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1469,6 +1496,7 @@ def _derive_through_entry_point(
     result = derive_obligations_and_capabilities(
         "CRA-1.0",
         baseline_graph=baseline_graph,
+        **baseline_graph.gateway_kwargs(),
         model="fake-model",
         call_completion=call_completion,
         emitter=emitter,
@@ -1477,15 +1505,11 @@ def _derive_through_entry_point(
     return result, baseline_graph, recorded, obligation_ids
 
 
-def _requires_pairs(graph: _FakeBaselineGraph) -> set[tuple[object, object]]:
-    return {
-        (call.params["source_id"], call.params["target_id"])
-        for call in _find_edge_calls(graph, "REQUIRES")
-        if call.params
-    }
+def _requires_pairs(graph: _FakeBaselineGraph) -> set[tuple[str, str]]:
+    return set(_edge_pairs(graph, "REQUIRES"))
 
 
-def _requires_targets_from(graph: _FakeBaselineGraph, source_id: str) -> set[object]:
+def _requires_targets_from(graph: _FakeBaselineGraph, source_id: str) -> set[str]:
     return {target for source, target in _requires_pairs(graph) if source == source_id}
 
 
@@ -1852,9 +1876,7 @@ def _rejected_reuse_scenario(
 
 def _capability_node_writes(graph: _FakeBaselineGraph) -> dict[object, object]:
     return {
-        call.params["id"]: call.params["properties"]
-        for call in graph.calls
-        if call.params and "MERGE (n:Capability" in call.query
+        entry.identity: entry_properties(entry) for entry in graph.rig.entries_named("Capability")
     }
 
 
@@ -1995,11 +2017,7 @@ def test_derive_obligations_and_capabilities_multiple_reuses_in_one_response_are
     )
 
     assert len(recorded["verification"]) == 2
-    c_targets = {
-        call.params["target_id"]
-        for call in _find_edge_calls(graph, "REQUIRES")
-        if call.params and call.params["source_id"] == id_c
-    }
+    c_targets = {target for source, target in _edge_pairs(graph, "REQUIRES") if source == id_c}
     assert c_targets == expected_c_targets
     assert rejected_id not in c_targets
     assert result.unmatched_obligation_ids == ()
@@ -2239,10 +2257,34 @@ def test_derive_obligations_and_capabilities_reuse_verification_provider_error_a
         derive_obligations_and_capabilities(
             "CRA-1.0",
             baseline_graph=baseline_graph,
+            **baseline_graph.gateway_kwargs(),
             model="fake-model",
             call_completion=call_completion,
             emitter=emitter,
         )
 
     for relationship_type in ("REQUIRES", "HAS", "SATISFIED_BY"):
-        assert _find_edge_calls(baseline_graph, relationship_type) == []
+        assert _edge_pairs(baseline_graph, relationship_type) == []
+
+
+def test_derive_obligations_and_capabilities_accepts_the_gateway_keywords_the_orchestrator_passes(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Signature-only slice (#209): the stage accepts `submitter`, `baseline_graph_name` and
+    `audit_event_id` (not yet used) so the orchestrator can hand them over.
+    """
+    emitter, _log_path = make_emitter()
+    rig = GatewayRig()
+
+    result = derive_obligations_and_capabilities(
+        "CRA-1.0",
+        baseline_graph=_FakeBaselineGraph([]),
+        submitter=rig.gateway,
+        baseline_graph_name="cra_baseline",
+        audit_event_id="audit-1",
+        model="fake-model",
+        call_completion=_scripted_sequential_call_completion([]),
+        emitter=emitter,
+    )
+
+    assert result.regulatory_instrument_id == "CRA-1.0"

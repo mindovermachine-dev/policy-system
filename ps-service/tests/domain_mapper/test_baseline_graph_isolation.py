@@ -3,12 +3,11 @@
 
 Two parts, per the plan:
 
-(a) Unit-level, hand-written structural fakes (`_FakeBaselineGraph`/
-`_FakeDerivationBaselineGraph`, mirroring `test_extraction.py`'s and
-`test_derivation.py`'s own fakes exactly -- no `unittest.mock`, per the
-binding testing convention, PLAN_REVIEWED.md §0.3/§0.5). Two INDEPENDENT
-`GraphHandle` fakes stand in for `cra_baseline`/`gdpr_baseline`; each is
-passed to its own `extract_roles_and_requirements`/
+(a) Unit-level, hand-written fakes (two INDEPENDENT gateway rigs for extraction, which writes
+through the Graph Write Gateway since #209, and a gateway rig
+for derivation too -- no `unittest.mock`, per the binding testing convention,
+PLAN_REVIEWED.md §0.3/§0.5). Two INDEPENDENT baseline graphs stand in for
+`cra_baseline`/`gdpr_baseline`; each is passed to its own `extract_roles_and_requirements`/
 `derive_obligations_and_capabilities` call. This proves the abstraction
 itself -- not just "two Python objects are different objects" (trivially
 true) -- by asserting a node/edge id computed for one regulation's run
@@ -30,12 +29,12 @@ failing one.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
 
+from domain_mapper._gateway_fakes import seed_extraction_output
 from ps_service.config import load_config
 from ps_service.domain_mapper.derivation import derive_obligations_and_capabilities
 from ps_service.domain_mapper.extraction import extract_roles_and_requirements
@@ -49,6 +48,7 @@ from ps_service.domain_mapper.models import ExtractionUnit
 
 if TYPE_CHECKING:
     from domain_mapper._fakes import MakeEmitter
+    from domain_mapper._gateway_fakes import BaselineRig
     from ps_service.llm_interface.client import CompletionCaller
 
 # --- shared helpers ----------------------------------------------------
@@ -80,18 +80,6 @@ def _requirements_json(*, role_name: str, text: str, confidence: float = 0.9) ->
             ]
         }
     )
-
-
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
-class _HasCallLog(Protocol):
-    """Structural type shared by both fake baseline graphs: a captured `(query, params)` log."""
-
-    calls: list[_RecordedCall]
 
 
 class _FakeQueryResult:
@@ -129,23 +117,6 @@ class _FakeNativeGraph:
         )
 
 
-class _FakeBaselineGraph:
-    """Satisfies `GraphHandle` structurally, capturing every `(query,
-    params)` call -- mirrors `test_extraction.py`'s `_FakeBaselineGraph`.
-    Each instance is a wholly independent, isolated in-memory call log:
-    there is no class-level or module-level state shared between two
-    instances of this fake, which is exactly the property this test is
-    checking the PRODUCTION code (not this fake) actually respects.
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
-
-
 class _FakeAdapter:
     """Satisfies `DomainMappingAdapter` structurally -- returns a
     pre-scripted tuple of `ExtractionUnit`s regardless of `graph`.
@@ -175,20 +146,14 @@ def _scripted_call_completion(responses: dict[str, str]) -> CompletionCaller:
     return _call
 
 
-def _graph_mentions(graph: _HasCallLog, needle: str) -> bool:
-    """True if `needle` appears anywhere in this graph's captured call
-    log -- either in a query string or anywhere inside a call's params
-    (stringified, so it also catches a needle nested inside a properties
-    dict). This is the actual isolation assertion: a value written to one
-    `GraphHandle` must never be observable, in any form, on a completely
-    separate `GraphHandle` instance.
+def _rig_mentions(rig: BaselineRig, needle: str) -> bool:
+    """True if `needle` appears anywhere in what this rig's baseline graph was written
+    (every logged entry: label, identity and content) or read (every query it received).
+    A value written for one regulation
+    must never be observable, in any form, on a completely separate graph.
     """
-    for call in graph.calls:
-        if needle in call.query:
-            return True
-        if call.params is not None and needle in str(call.params):
-            return True
-    return False
+    written = [(entry.name, entry.identity, entry.content) for entry in rig.logged()]
+    return needle in str(written) or needle in str(rig.read_graph.queries)
 
 
 # --- (a) unit-level: ExtractRolesAndRequirements ----------------------
@@ -196,11 +161,13 @@ def _graph_mentions(graph: _HasCallLog, needle: str) -> bool:
 
 def test_extract_roles_and_requirements_never_leaks_across_two_independent_graph_handles(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
+    other_baseline_rig: BaselineRig,
 ) -> None:
     emitter, _log_path = make_emitter()
 
-    cra_graph = _FakeBaselineGraph()
-    gdpr_graph = _FakeBaselineGraph()
+    cra_graph = baseline_rig
+    gdpr_graph = other_baseline_rig
 
     cra_unit = ExtractionUnit(
         citation_ref="Art. 13(1)",
@@ -221,7 +188,7 @@ def test_extract_roles_and_requirements_never_leaks_across_two_independent_graph
         "CRA-1.0",
         adapter=_FakeAdapter((cra_unit,)),
         native_graph=_FakeNativeGraph({"id": "CRA-1.0"}),
-        baseline_graph=cra_graph,
+        **cra_graph.gateway_keywords(),
         model="fake-model",
         call_completion=_scripted_call_completion(
             {
@@ -237,7 +204,7 @@ def test_extract_roles_and_requirements_never_leaks_across_two_independent_graph
         "GDPR-1.0",
         adapter=_FakeAdapter((gdpr_unit,)),
         native_graph=_FakeNativeGraph({"id": "GDPR-1.0"}),
-        baseline_graph=gdpr_graph,
+        **gdpr_graph.gateway_keywords(),
         model="fake-model",
         call_completion=_scripted_call_completion(
             {
@@ -258,42 +225,24 @@ def test_extract_roles_and_requirements_never_leaks_across_two_independent_graph
     (gdpr_requirement_id,) = gdpr_result.requirement_ids
 
     # Sanity: each graph's own writes actually landed.
-    assert _graph_mentions(cra_graph, cra_role_id)
-    assert _graph_mentions(cra_graph, cra_requirement_id)
-    assert _graph_mentions(gdpr_graph, gdpr_role_id)
-    assert _graph_mentions(gdpr_graph, gdpr_requirement_id)
+    assert _rig_mentions(cra_graph, cra_role_id)
+    assert _rig_mentions(cra_graph, cra_requirement_id)
+    assert _rig_mentions(gdpr_graph, gdpr_role_id)
+    assert _rig_mentions(gdpr_graph, gdpr_requirement_id)
 
     # The actual isolation proof: nothing written for one regulation's run
     # is observable, in any form, on the other regulation's GraphHandle.
-    assert not _graph_mentions(gdpr_graph, cra_role_id)
-    assert not _graph_mentions(gdpr_graph, cra_requirement_id)
-    assert not _graph_mentions(gdpr_graph, "CRA-1.0")
-    assert not _graph_mentions(gdpr_graph, "Manufacturer")
-    assert not _graph_mentions(cra_graph, gdpr_role_id)
-    assert not _graph_mentions(cra_graph, gdpr_requirement_id)
-    assert not _graph_mentions(cra_graph, "GDPR-1.0")
-    assert not _graph_mentions(cra_graph, "Controller")
+    assert not _rig_mentions(gdpr_graph, cra_role_id)
+    assert not _rig_mentions(gdpr_graph, cra_requirement_id)
+    assert not _rig_mentions(gdpr_graph, "CRA-1.0")
+    assert not _rig_mentions(gdpr_graph, "Manufacturer")
+    assert not _rig_mentions(cra_graph, gdpr_role_id)
+    assert not _rig_mentions(cra_graph, gdpr_requirement_id)
+    assert not _rig_mentions(cra_graph, "GDPR-1.0")
+    assert not _rig_mentions(cra_graph, "Controller")
 
 
 # --- (a) unit-level: DeriveObligationsAndCapabilities -------------------
-
-
-class _FakeDerivationBaselineGraph:
-    """Satisfies `GraphHandle` structurally. Answers
-    `_read_requirements_by_role`'s `OPTIONAL MATCH (rl:Role...` query with a
-    scripted row set; captures every other `(query, params)` call --
-    mirrors `test_derivation.py`'s own `_FakeBaselineGraph` exactly.
-    """
-
-    def __init__(self, requirement_rows: list[list[object]]) -> None:
-        self._requirement_rows: list[object] = [*requirement_rows]
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        if "OPTIONAL MATCH (rl:Role" in q:
-            return _FakeQueryResult(self._requirement_rows)
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
 
 
 def _mint_response(new_text: str, confidence: float = 0.9) -> str:
@@ -335,32 +284,26 @@ def _scripted_sequential_call_completion(responses: list[str]) -> CompletionCall
 
 def test_derive_obligations_and_capabilities_never_leaks_across_two_independent_graph_handles(
     make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
+    other_baseline_rig: BaselineRig,
 ) -> None:
     emitter, _log_path = make_emitter()
 
     cra_role = "role_manufacturer_cra"
     gdpr_role = "role_controller_gdpr"
-    cra_graph = _FakeDerivationBaselineGraph(
-        [
-            [
-                "CRA_req_art_13.1",
-                "Conduct a cybersecurity risk assessment.",
-                cra_role,
-                cra_role,
-                "Manufacturer",
-            ]
-        ]
+    cra_graph = baseline_rig
+    gdpr_graph = other_baseline_rig
+    seed_extraction_output(
+        cra_graph,
+        "CRA-1.0",
+        {cra_role: "Manufacturer"},
+        [("CRA_req_art_13.1", "Conduct a cybersecurity risk assessment.", cra_role)],
     )
-    gdpr_graph = _FakeDerivationBaselineGraph(
-        [
-            [
-                "GDPR_req_art_24.1",
-                "Implement appropriate technical measures.",
-                gdpr_role,
-                gdpr_role,
-                "Controller",
-            ]
-        ]
+    seed_extraction_output(
+        gdpr_graph,
+        "GDPR-1.0",
+        {gdpr_role: "Controller"},
+        [("GDPR_req_art_24.1", "Implement appropriate technical measures.", gdpr_role)],
     )
 
     cra_mint_text = "Conduct Cybersecurity Risk Assessment"
@@ -368,7 +311,7 @@ def test_derive_obligations_and_capabilities_never_leaks_across_two_independent_
 
     cra_result = derive_obligations_and_capabilities(
         "CRA-1.0",
-        baseline_graph=cra_graph,
+        **cra_graph.stage_kwargs(),
         model="fake-model",
         call_completion=_scripted_sequential_call_completion(
             [_mint_response(cra_mint_text), _capability_mint_response("Risk Assessment Tooling")]
@@ -377,7 +320,7 @@ def test_derive_obligations_and_capabilities_never_leaks_across_two_independent_
     )
     gdpr_result = derive_obligations_and_capabilities(
         "GDPR-1.0",
-        baseline_graph=gdpr_graph,
+        **gdpr_graph.stage_kwargs(),
         model="fake-model",
         call_completion=_scripted_sequential_call_completion(
             [
@@ -394,16 +337,16 @@ def test_derive_obligations_and_capabilities_never_leaks_across_two_independent_
     assert gdpr_result.obligation_node_ids == (gdpr_obligation_id,)
 
     # Sanity: each graph's own writes actually landed.
-    assert _graph_mentions(cra_graph, cra_obligation_id)
-    assert _graph_mentions(gdpr_graph, gdpr_obligation_id)
+    assert _rig_mentions(cra_graph, cra_obligation_id)
+    assert _rig_mentions(gdpr_graph, gdpr_obligation_id)
 
     # The actual isolation proof.
-    assert not _graph_mentions(gdpr_graph, cra_obligation_id)
-    assert not _graph_mentions(gdpr_graph, cra_role)
-    assert not _graph_mentions(gdpr_graph, "CRA_req_art_13.1")
-    assert not _graph_mentions(cra_graph, gdpr_obligation_id)
-    assert not _graph_mentions(cra_graph, gdpr_role)
-    assert not _graph_mentions(cra_graph, "GDPR_req_art_24.1")
+    assert not _rig_mentions(gdpr_graph, cra_obligation_id)
+    assert not _rig_mentions(gdpr_graph, cra_role)
+    assert not _rig_mentions(gdpr_graph, "CRA_req_art_13.1")
+    assert not _rig_mentions(cra_graph, gdpr_obligation_id)
+    assert not _rig_mentions(cra_graph, gdpr_role)
+    assert not _rig_mentions(cra_graph, "GDPR_req_art_24.1")
 
 
 # --- (b) live: two real, distinct FalkorDB graphs -----------------------

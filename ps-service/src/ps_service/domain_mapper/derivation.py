@@ -32,7 +32,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from ps_service.domain_mapper.errors import DomainMapperDerivationError
+from ps_service.domain_mapper.errors import (
+    DomainMapperDerivationError,
+    DomainMapperPersistenceError,
+)
 from ps_service.domain_mapper.graph_writer import (
     persist_obligation_and_capability_graph,
 )
@@ -56,6 +59,7 @@ from ps_service.domain_mapper.prompts import (
     parse_capability_reuse_verdict,
     parse_obligation_response,
 )
+from ps_service.ingestion.graph_submission import require_caught_up
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import LogEmitter, emit_log_entry
@@ -65,6 +69,7 @@ if TYPE_CHECKING:
 
     from ps_service.domain_mapper.falkordb_client import GraphHandle
     from ps_service.domain_mapper.models import CapabilityReuseVerdict
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import CompletionCaller
 
 _COMPONENT = "domain_mapper"
@@ -82,6 +87,9 @@ def derive_obligations_and_capabilities(
     regulatory_instrument_id: str,
     *,
     baseline_graph: GraphHandle,
+    submitter: GroupSubmitter,
+    baseline_graph_name: str,
+    audit_event_id: str,
     model: str,
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
@@ -92,6 +100,9 @@ def derive_obligations_and_capabilities(
     graph's own fixed PS-Conceptual-Model shape, identical regardless of
     source.
 
+    0. `require_caught_up` on the baseline graph: a group an earlier run committed but did not
+       apply (extraction's, on a solo resume) would make the read below stale, so the stage
+       fails with `DomainMapperPersistenceError` before any read, LLM call or write.
     1. `_read_requirements_by_role(baseline_graph, regulatory_instrument_id)` — §7.2's read-back
        (scoped to the Requirements this instrument version `EXPRESSES`),
        including its whole-collection dangling-`role_id` check, which runs
@@ -109,17 +120,19 @@ def derive_obligations_and_capabilities(
        `DerivationResult.unmatched_obligation_ids`, mirroring
        `unmatched_requirement_ids`'s own path from step 2 — this is
        surfaced data, not a run failure. Every Obligation node is still
-       persisted via `graph_writer.persist_obligation_and_capability_graph`
+       submitted via `graph_writer.persist_obligation_and_capability_graph`
        (step 4) regardless of whether its own Capability derivation
        resolved.
-    4. `graph_writer.persist_obligation_and_capability_graph` (Increment 15)
-       — plain writer, no validation of its own (see that module's
-       docstring for why).
+    4. `graph_writer.persist_obligation_and_capability_graph` (Increment 15, gateway since #209)
+       — submits the Obligations, Capabilities and edges as ONE Graph Write Gateway group on
+       `baseline_graph_name` under `audit_event_id`; `baseline_graph` is only read (the
+       Requirements here, the existing-endpoint check there); nothing to write submits nothing.
     5. Emits one `outcome="succeeded"` entry for the whole call. No
        `bind_run_context()` call here (§6) — `run_id` is whatever the
        caller already bound, or `None`.
     6. Returns `DerivationResult`.
     """
+    require_caught_up(submitter, baseline_graph_name, DomainMapperPersistenceError)
     roles = tuple(_read_requirements_by_role(baseline_graph, regulatory_instrument_id).values())
 
     obligation_nodes, has_edges, satisfied_by_edges, unmatched_requirement_ids = (
@@ -130,12 +143,15 @@ def derive_obligations_and_capabilities(
     )
 
     persist_obligation_and_capability_graph(
-        baseline_graph,
-        obligation_nodes,
-        has_edges,
-        satisfied_by_edges,
-        capability_nodes,
-        requires_edges,
+        submitter,
+        baseline_graph_name,
+        audit_event_id,
+        graph=baseline_graph,
+        obligation_nodes=obligation_nodes,
+        has_edges=has_edges,
+        satisfied_by_edges=satisfied_by_edges,
+        capability_nodes=capability_nodes,
+        requires_edges=requires_edges,
     )
 
     emit_log_entry(
@@ -295,9 +311,9 @@ def _derive_obligations(
 
     Returns `(obligation_nodes, has_edges, satisfied_by_edges,
     unmatched_requirement_ids)` — pure data, no graph writes. Persisting
-    this is Increment 15's `graph_writer.persist_obligation_and_capability_graph`
-    (out of this batch's scope), the same split Increment 8 (pure) /
-    Increment 9 (writer) established for Role/Requirement.
+    this is `graph_writer.persist_obligation_and_capability_graph`'s job (a gateway
+    group), the same split Increment 8 (pure) / Increment 9 (writer) established for
+    Role/Requirement.
     """
     state = _DerivationState()
     for role in roles:
@@ -555,9 +571,9 @@ def _derive_capabilities(
     here per §7.4/§11 Increment 13's explicit instruction).
 
     Returns `(capability_nodes, requires_edges, unmatched_obligation_ids)` —
-    pure data, no graph writes (Increment 15's
-    `graph_writer.persist_obligation_and_capability_graph`, out of this
-    batch's scope). A malformed/unparseable response for one Obligation
+    pure data, no graph writes (persisting is
+    `graph_writer.persist_obligation_and_capability_graph`'s job, a gateway group).
+    A malformed/unparseable response for one Obligation
     (`DomainMapperDerivationError` from `parse_capability_response`) is
     isolated by `_process_obligation` (issue #64): that one Obligation's id
     is added to `unmatched_obligation_ids` and an `outcome="unmatched"` log
@@ -618,8 +634,9 @@ def _process_obligation(
     Converge: if a verifier mints the same id as another mint in the same
     response, the apply loop creates the node once (registry guard), but
     `requires_edges` holds the `(obligation, capability)` pair twice (no
-    edge dedup). This is harmless: the writer issues
-    `MERGE (s)-[:REQUIRES]->(t)`, so FalkorDB holds one edge.
+    edge dedup). This is harmless: the graph writer
+    de-duplicates edges by identity before submitting, so the gateway group and the
+    graph hold one edge.
     """
     try:
         proposed_decisions = _derive_capabilities_for_obligation(
