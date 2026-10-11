@@ -147,7 +147,7 @@ tests:
       localTls.secretName: ""
     asserts:
       - notExists:
-          path: spec.template.spec.initContainers
+          path: spec.template.spec.initContainers[?(@.name=="build-ca-bundle")]
       - notExists:
           path: spec.template.spec.volumes
       - notExists:

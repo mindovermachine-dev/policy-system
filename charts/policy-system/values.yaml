@@ -39,6 +39,9 @@ psService:
     limits:
       cpu: "2"
       memory: 2Gi
+  # Init container that holds PS Service back until PS Postgres accepts connections (issue #223).
+  waitForPostgres:
+    timeoutSeconds: 300
   probes:
     readiness:
       timeoutSeconds: 5
@@ -179,6 +182,13 @@ psPostgres:
     graphOwnerRole: ps_state_graph_owner
     # Operator-managed Secret (key PS_STATE_POSTGRES_PASSWORD); empty = chart-generated.
     existingSecret: ""
+  # Readiness only (issue #223): the pod is Ready once the final server accepts TCP
+  # connections, i.e. after first-start initdb. There is no liveness probe on purpose.
+  probes:
+    readiness:
+      timeoutSeconds: 5
+      periodSeconds: 5
+      failureThreshold: 6
   # Job that applies the ordinary ps_state migrations and creates and migrates the
   # owner-protected graph log tables in ps_state with the admin credential (issue #205); runs
   # on fresh installs and on every `helm upgrade`. Disable it only if the operator provisions by

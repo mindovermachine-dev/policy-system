@@ -1,0 +1,68 @@
+suite: ps-service wait-for-postgres init container (issue #223)
+templates:
+  - ps-service-deployment.yaml
+set:
+  psService.localTestBypass.enabled: true
+  llm.existingSecret: x
+tests:
+  - it: holds ps-service back until ps-postgres accepts TCP connections (AC-BI-005)
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: wait-for-postgres
+      - equal:
+          path: spec.template.spec.initContainers[0].command[0]
+          value: python
+      - equal:
+          path: spec.template.spec.initContainers[0].command[3]
+          value: RELEASE-NAME-policy-system-ps-postgres
+      - equal:
+          path: spec.template.spec.initContainers[0].command[4]
+          value: "5432"
+  - it: reuses the ps-service image and runs as the non-root ps user (AC-BI-005)
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: ghcr.io/mindovermachine-dev/ps-service:3.23.0
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.runAsUser
+          value: 10001
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.runAsNonRoot
+          value: true
+  - it: bounds the wait with psService.waitForPostgres.timeoutSeconds (AC-BI-006)
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].command[5]
+          value: "300"
+  - it: takes a custom timeout from values (AC-BI-006)
+    set:
+      psService.waitForPostgres.timeoutSeconds: 45
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].command[5]
+          value: "45"
+  - it: exits non-zero when the wait times out so the pod fails visibly (AC-BI-006)
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: sys\.exit\(
+  - it: passes no credential to the wait (AC-BI-007)
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.initContainers[0].command
+          count: 6
+      - notExists:
+          path: spec.template.spec.initContainers[0].env
+      - notExists:
+          path: spec.template.spec.initContainers[0].envFrom
+  - it: runs after build-ca-bundle when local TLS is on, so that init stays first (AC-BI-005)
+    set:
+      localTls.secretName: policy-system-local-tls
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: build-ca-bundle
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: wait-for-postgres

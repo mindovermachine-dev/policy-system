@@ -66,6 +66,28 @@ spec:
                 secretKeyRef:
                   name: {{ include "policy-system.psPostgresSigningSecretName" . }}
                   key: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
+          # Ready only once the FINAL server accepts TCP connections. On an empty PGDATA the
+          # image first runs initdb and the init script against a temporary server, restarts,
+          # and only then serves; without this probe the pod is Ready (and routed to) during
+          # that window and ps-service crash-restarts. The TCP host (-h) is essential: over
+          # the unix socket pg_isready also succeeds against the temporary server. No
+          # credentials are needed, and there is deliberately no livenessProbe: a slow initdb
+          # must never cause a restart loop.
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - 127.0.0.1
+                - -p
+                - "5432"
+                - -d
+                - {{ .Values.psPostgres.state.database | quote }}
+                - -U
+                - {{ .Values.psPostgres.state.user | quote }}
+            timeoutSeconds: {{ .Values.psPostgres.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.psPostgres.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.psPostgres.probes.readiness.failureThreshold }}
           volumeMounts:
             - name: ps-postgres-data
               mountPath: /var/lib/postgresql/data

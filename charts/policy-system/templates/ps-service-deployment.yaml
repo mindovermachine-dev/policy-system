@@ -42,8 +42,8 @@ spec:
           hostnames: [{{ .Values.psService.authentikHostname | quote }}]
         {{- end }}
       {{- end }}
-      {{- if .Values.localTls.secretName }}
       initContainers:
+        {{- if .Values.localTls.secretName }}
         # Builds PS Service's trust bundle: the image's system CAs plus the local CA.
         # SSL_CERT_FILE REPLACES the default trust store, so pointing it at the local CA
         # alone would break every other HTTPS call (Azure OpenAI, Cellar). Same image as
@@ -64,7 +64,38 @@ spec:
               readOnly: true
             - name: ps-trust
               mountPath: /ps-trust
-      {{- end }}
+        {{- end }}
+        # Blocks PS Service from starting until PS Postgres accepts TCP connections (issue #223).
+        # Helm creates both Pods at once and PS Service exits on its first failed state-database
+        # connection, so without this a fresh PVC (first-start initdb) costs crash restarts and
+        # their back-off. The Service has no endpoints until ps-postgres' readiness probe passes,
+        # so a successful connect means the final server is serving. Same image as the main
+        # container (python is already there); exits non-zero after the timeout so the Pod fails
+        # visibly instead of waiting forever.
+        - name: wait-for-postgres
+          image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 10001
+            runAsNonRoot: true
+          command:
+            - python
+            - -c
+            - |
+              import socket, sys, time
+              host, port, timeout = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+              deadline = time.monotonic() + timeout
+              while True:
+                  try:
+                      socket.create_connection((host, port), timeout=2).close()
+                      break
+                  except OSError as exc:
+                      if time.monotonic() >= deadline:
+                          sys.exit(f"PS Postgres at {host}:{port} not reachable after {timeout:g}s: {exc}")
+                      time.sleep(1)
+            - {{ printf "%s-ps-postgres" (include "policy-system.fullname" .) | quote }}
+            - "5432"
+            - {{ .Values.psService.waitForPostgres.timeoutSeconds | quote }}
       containers:
         - name: ps-service
           image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag | default .Chart.AppVersion }}"
