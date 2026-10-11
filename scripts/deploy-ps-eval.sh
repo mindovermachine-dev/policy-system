@@ -14,8 +14,8 @@
 #                  to this machine on every machine that logs in (/etc/hosts).
 #   --apply-host-setup
 #                  Run the two sudo steps this machine needs when they are not already done
-#                  (map the hostname to 127.0.0.1 in /etc/hosts; trust the local CA in the macOS
-#                  system keychain) without asking. Without it, an interactive run asks first and
+#                  (map the hostname to 127.0.0.1 and ::1 in /etc/hosts; trust the local CA in the
+#                  macOS system keychain) without asking. Without it, an interactive run asks first and
 #                  a non-interactive run only prints the commands. Nothing is touched when both
 #                  are already in place.
 #   --yes          Non-interactive: never prompt (an owner email is then required).
@@ -282,12 +282,22 @@ hosts_file() {
   printf '%s' "${PS_HOSTS_FILE:-/etc/hosts}"
 }
 
-# host_maps_to_loopback <host>: 0 when the hosts file maps <host> to 127.0.0.1.
-host_maps_to_loopback() {
-  awk -v host="$1" '
+# host_maps_to <host> <address>: 0 when the hosts file maps <host> to <address>.
+host_maps_to() {
+  awk -v host="$1" -v addr="$2" '
     { sub(/#.*/, "") }
-    $1 == "127.0.0.1" { for (i = 2; i <= NF; i++) if ($i == host) found = 1 }
+    $1 == addr { for (i = 2; i <= NF; i++) if ($i == host) found = 1 }
     END { exit !found }' "$(hosts_file)" 2>/dev/null
+}
+
+# missing_host_mappings <host>: prints one hosts-file line per loopback address that does not yet
+# map <host>. Both families are needed: a `.local` name with no IPv6 entry makes macOS multicast
+# an mDNS query for the AAAA record and wait 5 seconds on every lookup (issue #224).
+missing_host_mappings() {
+  local address
+  for address in 127.0.0.1 ::1; do
+    host_maps_to "$1" "$address" || printf '%s %s\n' "$address" "$1"
+  done
 }
 
 # ca_is_trusted <ca.pem>: 0 when the macOS system trust settings accept the CA. Other systems
@@ -301,7 +311,7 @@ ca_is_trusted() {
 check_local_access() {
   needs_hosts=false
   needs_trust=false
-  host_maps_to_loopback "$1" || needs_hosts=true
+  [[ -z "$(missing_host_mappings "$1")" ]] || needs_hosts=true
   ca_is_trusted "$2" || needs_trust=true
 }
 
@@ -326,8 +336,8 @@ setup_local_access() {
   [[ "$needs_hosts" == false && "$needs_trust" == false ]] && return 0
   confirm_local_access_setup || return 0
   if [[ "$needs_hosts" == true ]]; then
-    log_step "Mapping ${host} to 127.0.0.1 in $(hosts_file) (sudo)"
-    printf '127.0.0.1 %s\n' "$host" | sudo tee -a "$(hosts_file)" >/dev/null || true
+    log_step "Mapping ${host} to 127.0.0.1 and ::1 in $(hosts_file) (sudo)"
+    missing_host_mappings "$host" | sudo tee -a "$(hosts_file)" >/dev/null || true
   fi
   if [[ "$needs_trust" == true && "$(uname -s)" == Darwin ]]; then
     log_step "Trusting the local CA in the system keychain (sudo)"
@@ -371,7 +381,10 @@ print_closing_summary() {
   if [[ "$needs_hosts" == true || "$needs_trust" == true ]]; then
     printf 'Before opening the enrolment link in a browser on this machine, run:\n'
     if [[ "$needs_hosts" == true ]]; then
-      printf "  echo '127.0.0.1 %s' | sudo tee -a %s\n" "$host" "$(hosts_file)"
+      local mapping
+      while IFS= read -r mapping; do
+        printf "  echo '%s' | sudo tee -a %s\n" "$mapping" "$(hosts_file)"
+      done < <(missing_host_mappings "$host")
     fi
     if [[ "$needs_trust" == true ]]; then
       printf '  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s\n' "$ca"
@@ -379,7 +392,7 @@ print_closing_summary() {
     fi
     printf '(or re-run with --apply-host-setup to have the script do it)\n\n'
   else
-    printf 'This machine is ready: %s resolves to 127.0.0.1 and the local CA is trusted.\n\n' "$host"
+    printf 'This machine is ready: %s resolves to 127.0.0.1 and ::1 and the local CA is trusted.\n\n' "$host"
   fi
   if [[ "$ps_cli_context_ready" == true ]]; then
     printf 'ps-cli is pointed at %s. After you register the passkey, log in with:\n' "$PS_SERVICE_LOCAL_URL"

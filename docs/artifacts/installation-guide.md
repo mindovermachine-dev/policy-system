@@ -425,7 +425,8 @@ three parts below in order.
 
 For the passkey page to open, this machine must do both of these:
 
-- Resolve `authentik.local` to `127.0.0.1`.
+- Resolve `authentik.local` to `127.0.0.1` and `::1`. Without the IPv6 line, macOS waits 5
+  seconds on every lookup of a `.local` name, and `ps-cli auth login` pauses for about 10.
 - Trust the local CA. The CA file is `~/.config/policy-system/eval-tls/ca.pem`, or the same
   file under `PS_EVAL_STATE_DIR`.
 
@@ -438,6 +439,7 @@ The script checks both. Then one of these happens:
 
 ```bash
 echo '127.0.0.1 authentik.local' | sudo tee -a /etc/hosts
+echo '::1 authentik.local' | sudo tee -a /etc/hosts
 ```
 
 ```bash

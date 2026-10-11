@@ -424,6 +424,7 @@ def test_closing_output_lists_the_missing_local_steps_and_points_at_the_guide(
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
 
     assert f"echo '127.0.0.1 {HOST}' | sudo tee -a {hosts}" in run.stdout
+    assert f"echo '::1 {HOST}' | sudo tee -a {hosts}" in run.stdout
     assert "sudo security add-trusted-cert" in run.stdout
     assert str(eval_fixture.state_dir / "ca.pem") in run.stdout
     assert "installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli" in run.stdout
@@ -480,7 +481,7 @@ def test_without_ps_cli_the_closing_output_prints_the_commands(eval_fixture: Eva
 def test_closing_output_omits_the_hosts_step_when_the_hostname_is_already_mapped(
     eval_fixture: EvalFixture,
 ) -> None:
-    hosts = _hosts_file(eval_fixture, f"127.0.0.1 localhost\n127.0.0.1 {HOST} # ps\n")
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 localhost\n127.0.0.1 {HOST} # ps\n::1 {HOST}\n")
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
 
@@ -506,7 +507,8 @@ def test_apply_host_setup_maps_the_hostname_and_trusts_the_ca_through_sudo(
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
 
-    assert f"127.0.0.1 {HOST}" in (eval_fixture.root / "hosts").read_text()
+    written = (eval_fixture.root / "hosts").read_text().splitlines()
+    assert written == [f"127.0.0.1 {HOST}", f"::1 {HOST}"]
     assert f"tee -a {hosts}" in sudo_log.read_text()
     assert "sudo tee -a" not in run.stdout
 
@@ -514,7 +516,7 @@ def test_apply_host_setup_maps_the_hostname_and_trusts_the_ca_through_sudo(
 def test_apply_host_setup_does_nothing_when_the_machine_is_already_set_up(
     eval_fixture: EvalFixture,
 ) -> None:
-    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n")
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n::1 {HOST}\n")
     sudo_log = _fake_sudo(eval_fixture)
     # CA trust is only checkable on macOS, so make the script see Darwin whatever the host is.
     # `uname` in bin_dir is a symlink to the real binary: unlink before writing, or the write
@@ -531,6 +533,31 @@ def test_apply_host_setup_does_nothing_when_the_machine_is_already_set_up(
 
     assert not sudo_log.exists()
     assert "This machine is ready" in run.stdout
+
+
+def test_a_hostname_mapped_only_for_ipv4_gets_just_the_ipv6_line(eval_fixture: EvalFixture) -> None:
+    """An earlier version wrote only the IPv4 line; macOS then waits 5s per lookup (#224)."""
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n")
+    sudo_log = _fake_sudo(eval_fixture)
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
+
+    assert (eval_fixture.root / "hosts").read_text().splitlines() == [
+        f"127.0.0.1 {HOST}",
+        f"::1 {HOST}",
+    ]
+    assert f"tee -a {hosts}" in sudo_log.read_text()
+
+
+def test_closing_output_prints_only_the_missing_ipv6_command_for_an_ipv4_only_hosts_file(
+    eval_fixture: EvalFixture,
+) -> None:
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
+
+    assert f"echo '::1 {HOST}' | sudo tee -a {hosts}" in run.stdout
+    assert f"echo '127.0.0.1 {HOST}'" not in run.stdout
 
 
 # --- helm idempotence --------------------------------------------------------------------------
