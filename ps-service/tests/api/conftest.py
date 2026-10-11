@@ -73,6 +73,19 @@ def configured_logging(tmp_path: Path) -> Iterator[Path]:
 
 
 @pytest.fixture
+def mirrored_logging(tmp_path: Path) -> Iterator[Path]:
+    """A real default emitter with failure mirroring on, restored afterwards."""
+    log_path = tmp_path / "failures.jsonl"
+    saved = facade._atexit_registered  # pyright: ignore[reportPrivateUsage]
+    facade.configure(log_path=log_path, mirror_failures_to_stderr=True)
+    try:
+        yield log_path
+    finally:
+        facade.reset_for_tests()
+        facade._atexit_registered = saved  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture
 def app_config() -> ServiceConfig:
     """A loopback ``ServiceConfig`` for building a test app (``logging_dir=None``).
 

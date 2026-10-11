@@ -671,15 +671,27 @@ exactly what was in the backups — anything recorded after the snapshots were t
 ### Reading a failed ingestion
 
 A failed stage returns only a generic message to the caller (for example `merge failed`),
-by design. The cause is in the server-side log:
+and an unexpected failure returns `internal_error` ("An internal error occurred."), by design.
+The cause is in the server-side log:
 
 - **`kubectl logs <ps-service pod>`** shows every failed log entry, because failures are
   mirrored to stderr as well as to the log file.
 - **The JSONL log file** `ps-service.jsonl`, in the directory set by `PS_LOGGING_DIR`,
-  holds all entries. Find the failing run with
+  holds all entries. Find a failing stage with
   `grep failing_stage ps-service.jsonl` (inside the pod, or from the file you copied out).
+  That finds only stage failures; for `internal_error` see the next bullet.
+- **An `internal_error` response** means an exception no handler names, for example an
+  unreachable graph store before any stage ran, or a failure on a route that is not an
+  ingestion. It logs one entry with `component` `api`, `action` `unhandled_request_error`,
+  `outcome` `failed`, `run_id`, `exception_type` and `detail`. Take the `run_id` from the
+  response body and run `grep <run_id> ps-service.jsonl`, or list every such failure with
+  `grep unhandled_request_error ps-service.jsonl`. A request that bound no run id has no
+  `run_id` on its entry. `detail` is scrubbed as described below. The uvicorn
+  `Exception in ASGI application` traceback in `kubectl logs` is unchanged and carries no
+  `run_id`, so match on the `unhandled_request_error` line next to it.
 - A stage failure entry has `outcome` `failed`, `failing_stage` (for example `merge`),
-  `exception_type` and `detail`. `detail` is the exception message with bearer and basic
+  `exception_type` and `detail`; an `unhandled_request_error` entry has the same
+  `exception_type` and `detail` without a stage. `detail` is the exception message with bearer and basic
   tokens, `key`/`token`/`secret`/`password` values, URLs, host:port pairs and file paths
   removed, cut to 300 characters. It is meant to name the cause without leaking secrets;
   if it is too thin, reproduce the call against a test instance.
@@ -688,7 +700,10 @@ by design. The cause is in the server-side log:
   detail entry.
 - `get_ingestion_status` for a run started with `start_ingestion` returns the run's
   `status`, `stage`, `result` and `error`; for the cause behind a generic `error`, use the
-  log as above.
+  log as above. A failure inside that background run does not reach the HTTP handler: it
+  logs as `component` `mcp_interface`, `outcome` `failed`, under the run id `start_ingestion`
+  returned, with action `background_ingestion_run` (or the submitting action), so
+  `grep <run_id> ps-service.jsonl` finds it.
 
 ## Teardown
 

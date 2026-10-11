@@ -4,13 +4,14 @@ Every 4xx/5xx body this API returns is minted here, in one shape
 (``{"error": {"code", "message", "failing_stage"}, "run_id": ...}`` — AC-BI-009,
 AC-BI-010). Messages from a whitelisted set of domain-level exception types are
 surfaced verbatim after path/host scrubbing; every other exception collapses to a
-generic message, with the real detail left for server-side logging only. No
+generic message, with the real detail written, scrubbed, to the operator log only. No
 stack trace, filesystem path, repo/home directory, ``host:port`` token, or URL
 ever reaches a response body.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -50,11 +51,14 @@ from ps_service.api.errors import (
     SystemOwnerFloorViolationError,
 )
 from ps_service.audit.errors import AuditTrailUnavailableError
+from ps_service.logging.facade import emit_log_entry
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from fastapi import FastAPI, Request
+
+_LOG = logging.getLogger(__name__)
 
 # --- text scrubbing (AC-BI-009 / PLAN_REVIEWED.md §1.1 M5) --------------------
 
@@ -419,13 +423,35 @@ async def _handle_request_validation_error(request: Request, exc: Exception) -> 
 
 
 async def _handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
-    """Catch-all: HTTP 500, generic message, no detail (AC-BI-009). Detail is logged upstream."""
-    del exc
+    """Catch-all: HTTP 500, generic message, no detail in the body (AC-BI-009).
+
+    The cause is logged here, not upstream: one ``failed`` entry (component ``api``, action
+    ``unhandled_request_error``) with the request's ``run_id`` (null when none is bound), the
+    ``exception_type`` and a scrubbed, 300-character ``detail``. ``main.configure`` mirrors
+    failed entries to stderr. A logging failure never changes the response; it leaves one
+    stdlib record naming only the logging error's type.
+    """
+    run_id = _bound_run_id(request)
+    try:
+        # Deferred: stage_failure_log imports this module (cycle); also keeps this module free
+        # of transitive imports (module docstring).
+        from ps_service.api.stage_failure_log import stage_failure_detail  # noqa: PLC0415
+
+        emit_log_entry(
+            component="api",
+            action="unhandled_request_error",
+            outcome="failed",
+            run_id=run_id,
+            extra={"exception_type": type(exc).__name__, "detail": stage_failure_detail(exc)},
+        )
+    except Exception as emit_exc:  # noqa: BLE001 - logging must never mask the generic 500
+        _LOG.error(
+            "unhandled_request_error log entry could not be emitted (%s)",
+            type(emit_exc).__name__,
+        )
     return _json(
         status.HTTP_500_INTERNAL_SERVER_ERROR,
-        _error_body(
-            code=_GENERIC_500_CODE, message=_GENERIC_500_MESSAGE, run_id=_bound_run_id(request)
-        ),
+        _error_body(code=_GENERIC_500_CODE, message=_GENERIC_500_MESSAGE, run_id=run_id),
     )
 
 

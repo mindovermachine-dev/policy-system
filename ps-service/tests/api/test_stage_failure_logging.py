@@ -66,19 +66,6 @@ def _close_rigs() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  #
     close_all_rigs()
 
 
-@pytest.fixture
-def mirrored_logging(tmp_path: Path) -> Iterator[Path]:
-    """A real default emitter with failure mirroring on, restored afterwards."""
-    log_path = tmp_path / "failures.jsonl"
-    saved = facade._atexit_registered  # pyright: ignore[reportPrivateUsage]
-    facade.configure(log_path=log_path, mirror_failures_to_stderr=True)
-    try:
-        yield log_path
-    finally:
-        facade.reset_for_tests()
-        facade._atexit_registered = saved  # pyright: ignore[reportPrivateUsage]
-
-
 def _post_failing_merge(error: Exception) -> tuple[int, dict[str, object]]:
     """POST an internal ingestion whose merge stage raises ``error``; return status and body."""
     rig = GatewayRig()
