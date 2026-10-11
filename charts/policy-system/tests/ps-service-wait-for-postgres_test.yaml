@@ -20,10 +20,12 @@ tests:
           path: spec.template.spec.initContainers[0].command[4]
           value: "5432"
   - it: reuses the ps-service image and runs as the non-root ps user (AC-BI-005)
+    set:
+      psService.image.tag: "1.2.3"
     asserts:
       - equal:
           path: spec.template.spec.initContainers[0].image
-          value: ghcr.io/mindovermachine-dev/ps-service:3.23.0
+          value: ghcr.io/mindovermachine-dev/ps-service:1.2.3
       - equal:
           path: spec.template.spec.initContainers[0].securityContext.runAsUser
           value: 10001
