@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.company_merge.models import ResolveOutcome
 
 
@@ -66,7 +67,10 @@ def test_signed_merge_that_finds_no_review_is_logged_server_side(
     )
 
     def _resolve_nothing(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         _ = (graph, review_id, decision)
         return None
@@ -132,7 +136,10 @@ def test_signed_merge_whose_execution_raises_is_logged_and_still_answers_200(
     )
 
     def _resolve_raises(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         _ = (graph, review_id, decision)
         raise RuntimeError("falkordb connection reset by peer")

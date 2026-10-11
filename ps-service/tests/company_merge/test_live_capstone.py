@@ -81,6 +81,8 @@ from ps_service.domain_mapper.identity import (
     requirement_id,
     role_id,
 )
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.logging import bind_run_context
 
 _CAPSTONE_GRAPH_NAME = "policy_system_capstone_test"
@@ -365,6 +367,19 @@ def _report_ac003_ac004_mechanism_presence(
     }
 
 
+def _live_audit_event_id(run_id: str) -> str:
+    """One system audit row for the run, the way production records it (#210).
+
+    The merge's gateway groups are logged under it. Not runnable in the implementation sandbox.
+    """
+    return build_system_audit_recorder(load_config())(
+        action="ingestion_run.submit",
+        resource_type="ingestion_run",
+        resource_id=run_id,
+        details={"trigger": "live_capstone"},
+    )
+
+
 @pytest.mark.falkordb_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
@@ -414,6 +429,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     emitter, log_path = make_emitter(filename=_LOG_FILENAME)
 
     run_ids: list[str] = []
+    submitter = build_default_graph_write_gateway(load_config())
 
     def _run_pass(pass_number: int) -> None:
         for fixture in _REGULATIONS:
@@ -427,6 +443,10 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
                     embed_model=embed_model,
                     similarity_threshold=_SIMILARITY_THRESHOLD,
                     emitter=emitter,
+                    submitter=submitter,
+                    single_tenant_graph_name=single_tenant_graph_name(),
+                    baseline_graph_name=baseline_graph_name(fixture.short_name),
+                    audit_event_id=_live_audit_event_id(run_id),
                 )
 
     # --- Pass 1: the actual 3-regulation merge ---

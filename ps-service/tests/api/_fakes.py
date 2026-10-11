@@ -440,6 +440,10 @@ class FakeMergeStage:
         *,
         baseline_graph: GraphHandle,
         single_tenant_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        single_tenant_graph_name: str,
+        baseline_graph_name: str,
+        audit_event_id: str,
         embed_model: str,
         similarity_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
@@ -448,13 +452,18 @@ class FakeMergeStage:
     ) -> MergeResult:
         """Record the call and return (or raise) a canned :class:`MergeResult`.
 
-        A call that carries a ``governance`` import (the internal pipeline) also records its
-        ``governance_owner`` and the ``emitter`` it was handed.
+        The call records the gateway it was handed (``submitter``, both graph names and the audit
+        event id, issue #210). A call that carries a ``governance`` import (the internal
+        pipeline) also records its ``governance_owner`` and the ``emitter`` it was handed.
         """
         _ = (baseline_graph, call_embedding)
         kwargs: dict[str, object] = {
             "embed_model": embed_model,
             "similarity_threshold": similarity_threshold,
+            "submitter": submitter,
+            "single_tenant_graph_name": single_tenant_graph_name,
+            "baseline_graph_name": baseline_graph_name,
+            "audit_event_id": audit_event_id,
         }
         if governance is not None:
             kwargs["governance_owner"] = governance.owner

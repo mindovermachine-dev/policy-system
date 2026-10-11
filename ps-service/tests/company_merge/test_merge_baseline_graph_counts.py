@@ -21,7 +21,10 @@ from ps_service.domain_mapper.identity import obligation_id
 from ps_service.logging import configure
 
 if TYPE_CHECKING:
+    from graph_gateway._fakes import InMemoryGraph
+
     from company_merge._fakes import MakeEmitter, ReadLines
+    from company_merge._gateway_fakes import MergeRig
 
 _THRESHOLD = 0.85
 _ROLE = "role_ops"
@@ -99,7 +102,12 @@ class _SingleTenant:
         capability_rows: tuple[tuple[str, str, list[float]], ...] = (),
         tombstones: dict[str, str] | None = None,
         markers: dict[str, str] | None = None,
+        gateway_graph: InMemoryGraph | None = None,
     ) -> None:
+        # issue #210: Obligations a merge submits through the gateway land in the rig's
+        # `policy_system` graph; the existence reads see them there.
+        self._gateway_graph = gateway_graph
+        self.gateway_obligations_at_probe: list[set[str]] = []
         self.obligations: set[str] = set(obligations)
         self.capabilities: dict[str, list[object]] = {
             cid: [cid, name, vec] for cid, name, vec in capability_rows
@@ -115,29 +123,39 @@ class _SingleTenant:
         if "MergedObligation" in q:
             return _Result([[k, v] for k, v in self._markers.items()])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
-            return _Result([list(row) for row in self.capabilities.values()])
-        if "MATCH (o:Obligation) WHERE o.id IN $ids" in q:
+            return _Result(self._capability_index_rows())
+        if "Obligation) WHERE" in q and "$ids" in q:
             assert params is not None
             ids = cast("list[str]", params["ids"])
-            return _Result([[i] for i in ids if i in self.obligations])
-        if "MERGE (n:Obligation {id: $id}) ON CREATE SET" in q:
-            assert params is not None
-            self.obligations.add(cast("str", params["id"]))
-        if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
-            assert params is not None
-            properties = cast("dict[str, object]", params["properties"])
-            self.capabilities.setdefault(
-                cast("str", params["id"]),
-                [params["id"], properties.get("name"), properties.get("embedding")],
-            )
+            held = self.obligations | self._gateway_obligations()
+            if "(o:Obligation)" in q:
+                self.gateway_obligations_at_probe.append(self._gateway_obligations())
+            return _Result([[i] for i in ids if i in held])
         return _Result([])
+
+    def _capability_index_rows(self) -> list[object]:
+        """`[id, name, embedding]` of the seeded Capabilities plus those the gateway has minted."""
+        rows: dict[str, list[object]] = {key: list(row) for key, row in self.capabilities.items()}
+        if self._gateway_graph is not None:
+            for (label, node_id), props in self._gateway_graph.nodes.items():
+                if label == "Capability" and node_id not in rows:
+                    rows[node_id] = [node_id, props.get("name"), props.get("embedding")]
+        return list(rows.values())
+
+    def _gateway_obligations(self) -> set[str]:
+        if self._gateway_graph is None:
+            return set()
+        return {node_id for label, node_id in self._gateway_graph.nodes if label == "Obligation"}
 
     def matching(self, fragment: str) -> list[tuple[str, dict[str, object] | None]]:
         return [c for c in self.calls if fragment in c[0]]
 
 
 def _merge(
-    baseline: _Baseline, single_tenant: _SingleTenant, emitter: object | None = None
+    baseline: _Baseline,
+    single_tenant: _SingleTenant,
+    emitter: object | None,
+    merge_rig: MergeRig,
 ) -> MergeResult:
     return merge_baseline_graph(
         "REG-C",
@@ -146,6 +164,7 @@ def _merge(
         embed_model="fake-embed-model",
         similarity_threshold=_THRESHOLD,
         emitter=emitter,  # pyright: ignore[reportArgumentType]
+        **merge_rig.merge_keywords(),
     )
 
 
@@ -185,22 +204,25 @@ def test_merge_result_counts_default_to_zero() -> None:
     ) == (0, 0, 0)
 
 
-def test_new_capability_count_counts_only_new_resolutions(make_emitter: MakeEmitter) -> None:
+def test_new_capability_count_counts_only_new_resolutions(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     emitter, _ = make_emitter()
     baseline = _Baseline(obligations=(), capabilities=_mixed_capabilities())
 
-    result = _merge(baseline, _mixed_single_tenant(), emitter)
+    result = _merge(baseline, _mixed_single_tenant(), emitter, merge_rig)
 
     assert result.new_capability_count == 1
 
 
 def test_matched_capability_count_counts_exact_semantic_and_redirected(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     emitter, _ = make_emitter()
     baseline = _Baseline(obligations=(), capabilities=_mixed_capabilities())
 
-    result = _merge(baseline, _mixed_single_tenant(), emitter)
+    result = _merge(baseline, _mixed_single_tenant(), emitter, merge_rig)
 
     assert result.matched_capability_count == 3
     assert result.new_capability_count + result.matched_capability_count == 4
@@ -208,6 +230,7 @@ def test_matched_capability_count_counts_exact_semantic_and_redirected(
 
 def test_new_obligation_count_excludes_obligations_already_in_the_single_tenant_graph(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     emitter, _ = make_emitter()
     baseline = _Baseline(
@@ -219,7 +242,7 @@ def test_new_obligation_count_excludes_obligations_already_in_the_single_tenant_
     )
     single_tenant = _SingleTenant(obligations=frozenset({_OBL_EXISTING}))
 
-    result = _merge(baseline, single_tenant, emitter)
+    result = _merge(baseline, single_tenant, emitter, merge_rig)
 
     assert result.new_obligation_count == 2
     assert len(result.obligation_ids) == 3
@@ -227,6 +250,7 @@ def test_new_obligation_count_excludes_obligations_already_in_the_single_tenant_
 
 def test_new_obligation_count_excludes_obligations_dropped_by_cleanup_redirects(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     emitter, _ = make_emitter()
     baseline = _Baseline(
@@ -236,7 +260,7 @@ def test_new_obligation_count_excludes_obligations_dropped_by_cleanup_redirects(
         obligations=frozenset({_OBL_SURVIVOR}), markers={_OBL_ABSORBED: _OBL_SURVIVOR}
     )
 
-    result = _merge(baseline, single_tenant, emitter)
+    result = _merge(baseline, single_tenant, emitter, merge_rig)
 
     assert result.obligation_ids == (_OBL_NEW_2,)
     assert result.new_obligation_count == 1
@@ -244,65 +268,75 @@ def test_new_obligation_count_excludes_obligations_dropped_by_cleanup_redirects(
 
 def test_second_merge_of_the_same_baseline_reports_zero_new_obligations_and_zero_new_capabilities(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     emitter, _ = make_emitter()
     baseline = _Baseline(
         obligations=((_OBL_NEW_1, "Report incidents."), (_OBL_NEW_2, "Keep records.")),
         capabilities=((_CAP_NEW, "Brand new", _VEC_B), (_CAP_EXACT, "Exact", _VEC_MIX)),
     )
-    single_tenant = _SingleTenant(capability_rows=((_CAP_EXACT, "Exact", _VEC_MIX),))
+    single_tenant = _SingleTenant(
+        capability_rows=((_CAP_EXACT, "Exact", _VEC_MIX),), gateway_graph=merge_rig.policy_system
+    )
 
-    first = _merge(baseline, single_tenant, emitter)
-    second = _merge(baseline, single_tenant, emitter)
+    first = _merge(baseline, single_tenant, emitter, merge_rig)
+    second = _merge(baseline, single_tenant, emitter, merge_rig)
 
     assert (first.new_obligation_count, first.new_capability_count) == (2, 1)
     assert (second.new_obligation_count, second.new_capability_count) == (0, 0)
     assert second.matched_capability_count == 2
 
 
-def test_obligation_existence_probe_is_one_parameterized_query(make_emitter: MakeEmitter) -> None:
+def test_obligation_existence_probe_is_one_parameterized_query(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     """L2 Query Safety: ids flow in as a parameter, and the probe precedes the first write."""
     emitter, _ = make_emitter()
     baseline = _Baseline(
         obligations=((_OBL_NEW_1, "Report incidents."), (_OBL_NEW_2, "Keep records."))
     )
-    single_tenant = _SingleTenant()
+    single_tenant = _SingleTenant(gateway_graph=merge_rig.policy_system)
 
-    _merge(baseline, single_tenant, emitter)
+    _merge(baseline, single_tenant, emitter, merge_rig)
 
     probes = single_tenant.matching("MATCH (o:Obligation) WHERE o.id IN $ids")
     assert len(probes) == 1
     query, params = probes[0]
     assert _OBL_NEW_1 not in query
     assert params == {"ids": sorted([_OBL_NEW_1, _OBL_NEW_2])}
-    first_probe = single_tenant.calls.index(probes[0])
-    first_mint = single_tenant.calls.index(
-        single_tenant.matching("MERGE (n:Obligation {id: $id}) ON CREATE SET")[0]
-    )
-    assert first_probe < first_mint
+    # the probe ran before the Obligation group was submitted ...
+    assert single_tenant.gateway_obligations_at_probe == [set()]
+    # ... which then created exactly the net-new nodes
+    assert {
+        node_id for label, node_id in merge_rig.policy_system.nodes if label == "Obligation"
+    } == {
+        _OBL_NEW_1,
+        _OBL_NEW_2,
+    }
 
 
 def test_obligation_probe_is_skipped_when_the_baseline_has_no_obligations(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     emitter, _ = make_emitter()
     single_tenant = _SingleTenant()
 
-    result = _merge(_Baseline(obligations=()), single_tenant, emitter)
+    result = _merge(_Baseline(obligations=()), single_tenant, emitter, merge_rig)
 
     assert result.new_obligation_count == 0
     assert single_tenant.matching("MATCH (o:Obligation) WHERE o.id IN $ids") == []
 
 
 def test_merge_succeeded_log_entry_carries_the_three_counts(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
     emitter, log_path = make_emitter()
     baseline = _Baseline(
         obligations=((_OBL_NEW_1, "Report incidents."),), capabilities=_mixed_capabilities()
     )
 
-    _merge(baseline, _mixed_single_tenant(), emitter)
+    _merge(baseline, _mixed_single_tenant(), emitter, merge_rig)
     emitter.flush()  # pyright: ignore[reportAttributeAccessIssue]
 
     [entry] = [

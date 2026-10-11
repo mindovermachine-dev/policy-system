@@ -202,7 +202,7 @@ class _FakeStagedGraph:
 
 class _FakeSingleTenantGraph:
     """Answers Capability/Policy existing-canonical-index reads and every
-    `graph_writer` write query `_run_baseline_merge` issues against the
+    `snapshot_merge_writer` write query `_run_baseline_merge` issues against the
     single-tenant/snapshot graph -- mirrors `test_restore_instrument_
     classification_passthrough.py`'s own `_FakeSingleTenantGraph` exactly
     (duplicated per this test suite's per-component fake convention), plus

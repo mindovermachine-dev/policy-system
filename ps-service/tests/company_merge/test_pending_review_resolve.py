@@ -7,103 +7,162 @@ own "stale reference" case, CHANGES.md H2), and AC-BI-009 (a structured log
 entry records the decision, review id, and timestamp -- plus winner/loser
 for merge).
 
-Mirrors `test_pending_review_list.py`'s `_FakeGraph`/`_FakeQueryResult`
-fakes -- structural stand-ins for `GraphHandle`/`GraphQueryResult`, no
-mocking library (PLAN.md §0.6's established convention). These scripted
-tests can only prove "this query string/these params were sent and this
-scripted return value was mapped onto `ResolveOutcome` correctly" -- NOT
-that the Cypher itself does what it says (a fake cannot execute Cypher).
-The merge query's actual correctness -- the `WITH DISTINCT winner, loser`
-C1 fix, the `coalesce(created_at, '')` M2 winner-selection convention, and
-FOREACH/CASE support itself -- is proven by the required
-`falkordb_live`-marked test in this same file, against a real FalkorDB
-instance.
+Issue #210: both decisions write ONE gateway group on `policy_system` (read, resolve the winner in
+Python, write), so these tests run `resolve_review` over the gateway rig: the reads are answered
+from the rig's own graph and the writes are asserted as gateway entries, not Cypher text. The
+winner rule and the five rewired families are also compared with the frozen pre-#210 statement
+(`_legacy_resolve_reference`), modulo edge identity; the `falkordb_live` test at the bottom is the
+live anchor and is not runnable in the implementation sandbox.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.company_merge.errors import StalePendingReviewError
+from company_merge._gateway_fakes import POLICY_SYSTEM, RigReadHandle, UnusedSubmitter
+from company_merge._legacy_reference import (
+    FROZEN_STATEMENT_HASHES,
+    LegacyRecordingGraph,
+    write_legacy_resolve_keep_separate,
+    write_legacy_resolve_merge,
+)
+from ps_service.company_merge.errors import CompanyMergePersistenceError, StalePendingReviewError
 from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import ResolveOutcome
 from ps_service.company_merge.pending_review import resolve_review
 from ps_service.config import load_config
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.digest import canonical_digest
+from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from graph_gateway._fakes import InMemoryGraph
+
     from company_merge._fakes import MakeEmitter, ReadLines
+    from company_merge._gateway_fakes import MergeRig
+    from ps_service.graph_gateway.models import GraphLogEntry
+    from ps_service.logging import LogEmitter
+
+_REVIEW_ID = "review_aaa"
 
 
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
+def _review_properties() -> dict[str, object]:
+    return {
+        "kind": "Capability",
+        "status": "pending",
+        "incoming_id": "cap_incoming",
+        "incoming_text": "incoming near-miss text",
+        "nearest_existing_id": "cap_existing",
+        "nearest_existing_text": "existing near-miss text",
+        "similarity": 0.91,
+        "created_at": "2024-06-01T00:00:00+00:00",
+    }
 
 
-class _FakeQueryResult:
-    """Satisfies `GraphQueryResult` structurally."""
-
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
-
-
-class _FakeGraph:
-    """Satisfies `GraphHandle` structurally; returns one scripted result per call, in order."""
-
-    def __init__(self, results: list[list[list[object]]]) -> None:
-        self.calls: list[_RecordedCall] = []
-        self._results = list(results)
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        rows = self._results.pop(0) if self._results else []
-        return _FakeQueryResult(cast("list[object]", rows))
+def _seed_review(rig: MergeRig) -> None:
+    """Both candidates, an Obligation requiring the incoming one, and the review naming them."""
+    graph = rig.policy_system
+    graph.seed_node(("Capability",), "cap_incoming", {"name": "incoming"})
+    graph.seed_node(("Capability",), "cap_existing", {"name": "existing"})
+    graph.seed_node(("Obligation",), "obl_a", {"text": "text"})
+    graph.seed_node(("PendingReview",), _REVIEW_ID, _review_properties())
+    graph.seed_legacy_edge(("REQUIRES", "Obligation", "obl_a", "Capability", "cap_incoming"), {})
 
 
-def test_resolve_keep_separate_deletes_review_only(make_emitter: MakeEmitter) -> None:
+def _target(rig: MergeRig) -> GraphWriteTarget:
+    return GraphWriteTarget(rig.gateway, POLICY_SYSTEM, rig.audit_event_id)
+
+
+def test_resolve_keep_separate_deletes_review_only(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     """AC-BI-004: the PendingReview record is removed, no other graph node/edge changes."""
     emitter, _log_path = make_emitter()
-    graph = _FakeGraph(results=[[["Capability"]], []])
+    _seed_review(merge_rig)
+    candidates_before = {
+        key: dict(props)
+        for key, props in merge_rig.policy_system.nodes.items()
+        if key[0] != "PendingReview"
+    }
 
-    outcome = resolve_review(graph, "review_aaa", "keep-separate", emitter=emitter)
+    outcome = resolve_review(
+        merge_rig.legacy, _REVIEW_ID, "keep-separate", target=_target(merge_rig), emitter=emitter
+    )
 
     assert outcome == ResolveOutcome(
         review_id="review_aaa", decision="keep-separate", winner_id=None, loser_id=None
     )
-    assert len(graph.calls) == 2
-    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in graph.calls[0].query
-    assert graph.calls[0].params == {"review_id": "review_aaa"}
-    assert "DELETE r" in graph.calls[1].query
-    assert graph.calls[1].params == {"review_id": "review_aaa"}
+    # The review is read first (a plain read), then deleted through the gateway.
+    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in merge_rig.legacy.statements[0]
+    assert merge_rig.legacy.params_seen[0] == {"review_id": "review_aaa"}
+    assert len(merge_rig.legacy.statements) == 1
+    assert ("PendingReview", _REVIEW_ID) not in merge_rig.policy_system.nodes
+    assert dict(merge_rig.policy_system.nodes) == candidates_before
+    assert merge_rig.legacy.edge_count("REQUIRES") == 1
 
 
-def test_resolve_nonexistent_id_returns_none_before_any_write() -> None:
+def test_keep_separate_submits_one_group_deleting_only_the_review_and_leaves_both_candidates_untouched(  # noqa: E501 -- name fixed by the plan
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """The write is ONE gateway group whose only entry removes the review, under the audit event."""
+    emitter, _log_path = make_emitter()
+    _seed_review(merge_rig)
+
+    resolve_review(
+        merge_rig.legacy, _REVIEW_ID, "keep-separate", target=_target(merge_rig), emitter=emitter
+    )
+
+    review_groups = [g for g in merge_rig.groups if g.audit_event_id == merge_rig.audit_event_id]
+    deletions = [
+        (entry.name, entry.identity)
+        for group in review_groups
+        for entry in group.entries
+        if entry.content.get("op") == "delete_node"
+    ]
+    assert deletions == [("PendingReview", _REVIEW_ID)]
+    # Everything else that reached the log is the one-off identity stamp of the seeded legacy edge.
+    assert [entry.content.get("op") for group in review_groups for entry in group.entries] == [
+        "stamp_edge_identity",
+        "delete_node",
+    ]
+    assert set(merge_rig.policy_system.nodes) == {
+        ("Capability", "cap_incoming"),
+        ("Capability", "cap_existing"),
+        ("Obligation", "obl_a"),
+    }
+
+
+def test_resolve_nonexistent_id_returns_none_before_any_write(
+    merge_rig: MergeRig,
+) -> None:
     """AC-BI-008 (not-found half): an unknown/already-resolved id makes no graph changes."""
-    graph = _FakeGraph(results=[[]])
+    target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
 
-    outcome = resolve_review(graph, "review_missing", "keep-separate")
+    outcome = resolve_review(merge_rig.legacy, "review_missing", "keep-separate", target=target)
 
     assert outcome is None
-    assert len(graph.calls) == 1
-    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in graph.calls[0].query
-    assert graph.calls[0].params == {"review_id": "review_missing"}
+    assert len(merge_rig.legacy.statements) == 1
+    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in merge_rig.legacy.statements[0]
+    assert merge_rig.legacy.params_seen[0] == {"review_id": "review_missing"}
+    assert merge_rig.logged() == []
 
 
 def test_resolve_keep_separate_emits_structured_log_entry(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
     """AC-BI-009 (keep-separate half): decision, review id, and timestamp are logged."""
     emitter, log_path = make_emitter()
-    graph = _FakeGraph(results=[[["Capability"]], []])
+    _seed_review(merge_rig)
 
-    resolve_review(graph, "review_aaa", "keep-separate", emitter=emitter)
+    resolve_review(
+        merge_rig.legacy, _REVIEW_ID, "keep-separate", target=_target(merge_rig), emitter=emitter
+    )
     emitter.flush()
 
     entries = read_lines(log_path)
@@ -117,245 +176,619 @@ def test_resolve_keep_separate_emits_structured_log_entry(
 
 
 def test_resolve_nonexistent_id_emits_no_log_entry(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
     """No log noise for an id that was never resolved -- nothing happened to log."""
     emitter, log_path = make_emitter()
-    graph = _FakeGraph(results=[[]])
+    target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
 
-    resolve_review(graph, "review_missing", "keep-separate", emitter=emitter)
+    resolve_review(
+        merge_rig.legacy, "review_missing", "keep-separate", target=target, emitter=emitter
+    )
     emitter.flush()
 
     assert read_lines(log_path) == []
 
 
-# --- decision="merge" (issue #35, Slice 4: AC-BI-005/006/007, AC-BI-008/009 completed) ---
+def test_keep_separate_of_a_review_deleted_since_the_read_is_a_no_op_that_still_resolves(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """The read-then-delete has no lock (C-0): a review gone in between logs nothing, as before.
+
+    The old `MATCH ... DELETE r` matched nothing and succeeded; the gateway drops a delete of an
+    absent node (`unchanged`) and nothing is logged for it.
+    """
+    emitter, _log_path = make_emitter()
+    _seed_review(merge_rig)
+
+    class _VanishingReview(RigReadHandle):
+        def _read(self, q: str, params: dict[str, object] | None) -> list[object]:
+            rows = super()._read(q, params)
+            self._graph.nodes.pop(("PendingReview", _REVIEW_ID), None)  # deleted after the read
+            return rows
+
+    vanishing = _VanishingReview(merge_rig.policy_system)
+
+    outcome = resolve_review(
+        vanishing, _REVIEW_ID, "keep-separate", target=_target(merge_rig), emitter=emitter
+    )
+
+    assert outcome == ResolveOutcome(review_id=_REVIEW_ID, decision="keep-separate")
+    assert [
+        e for g in merge_rig.groups for e in g.entries if e.content.get("op") == "delete_node"
+    ] == []
 
 
-def _merge_results(
-    *,
-    kind: str = "Capability",
-    incoming_id: str = "cap_incoming",
-    nearest_existing_id: str = "cap_existing",
-    incoming_exists: bool = True,
-    existing_exists: bool = True,
-    winner_id: str = "cap_existing",
-    loser_id: str = "cap_incoming",
-) -> list[list[list[object]]]:
-    """Build a 3-call scripted result sequence for a happy-path merge resolve."""
-    return [
-        [[kind]],
-        [[incoming_id, nearest_existing_id, incoming_exists, existing_exists]],
-        [[winner_id, loser_id]],
+def test_a_refused_keep_separate_group_raises_the_persistence_error_and_keeps_the_review(
+    make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
+) -> None:
+    """AC-BI-008: a gateway that cannot log the group fails the resolution, nothing is deleted."""
+    emitter, log_path = make_emitter()
+    _seed_review(merge_rig)
+    merge_rig.store.fail_appends()
+
+    with pytest.raises(CompanyMergePersistenceError, match=r"^FalkorDB write failed: "):
+        resolve_review(
+            merge_rig.legacy,
+            _REVIEW_ID,
+            "keep-separate",
+            target=_target(merge_rig),
+            emitter=emitter,
+        )
+    emitter.flush()
+
+    assert ("PendingReview", _REVIEW_ID) in merge_rig.policy_system.nodes
+    assert read_lines(log_path) == []
+
+
+def test_the_delete_statement_the_reference_replays_is_the_one_pinned_at_freeze() -> None:
+    """The frozen keep-separate statement is the original `_DELETE_REVIEW_QUERY`, byte for byte."""
+    recorded: list[str] = []
+
+    class _Recorder:
+        def query(self, q: str, params: dict[str, object] | None = None) -> object:
+            del params
+            recorded.append(q)
+
+    write_legacy_resolve_keep_separate(_Recorder(), _REVIEW_ID)
+
+    assert [hashlib.sha256(q.encode()).hexdigest() for q in recorded] == [
+        FROZEN_STATEMENT_HASHES["delete_review"]
     ]
 
 
-def test_resolve_merge_repoints_edges_and_deletes_loser_scripted(
-    make_emitter: MakeEmitter,
+def test_keep_separate_leaves_the_graph_the_frozen_reference_leaves(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-005/006/007: the full 3-query merge sequence, params, and outcome mapping."""
-    emitter, _log_path = make_emitter()
-    graph = _FakeGraph(results=_merge_results())
-
-    outcome = resolve_review(graph, "review_aaa", "merge", emitter=emitter)
-
-    assert outcome == ResolveOutcome(
-        review_id="review_aaa", decision="merge", winner_id="cap_existing", loser_id="cap_incoming"
-    )
-    assert len(graph.calls) == 3
-
-    # Step 1: shared "does the review exist" read (identical to keep-separate's own Step 1).
-    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in graph.calls[0].query
-    assert graph.calls[0].params == {"review_id": "review_aaa"}
-
-    # Step 2: H2's combined existence-check read, kind-templated.
-    existence_query = graph.calls[1].query
-    assert ":Capability {id: r.incoming_id}" in existence_query
-    assert ":Capability {id: r.nearest_existing_id}" in existence_query
-    assert "incoming_exists" in existence_query
-    assert "existing_exists" in existence_query
-    assert graph.calls[1].params == {"review_id": "review_aaa"}
-
-    # Step 3: the atomic merge write (Appendix C1), kind-templated, ids passed as params.
-    merge_query = graph.calls[2].query
-    assert ":Capability {id: $incoming_id}" in merge_query
-    assert ":Capability {id: $nearest_existing_id}" in merge_query
-    assert "DETACH DELETE loser, rev" in merge_query
-    assert graph.calls[2].params == {
-        "incoming_id": "cap_incoming",
-        "nearest_existing_id": "cap_existing",
-        "review_id": "review_aaa",
-    }
-
-
-def test_resolve_merge_query_has_distinct_after_every_foreach_c1_fix(
-    make_emitter: MakeEmitter,
-) -> None:
-    """CHANGES.md C1 regression guard: `WITH DISTINCT winner, loser` after every FOREACH block.
-
-    Without this, `DETACH DELETE loser, rev` would run once per surviving
-    row instead of once whenever the loser has more than one matching edge
-    (e.g. >=2 Obligations REQUIRES-ing the same loser Capability -- the
-    domain's primary scenario, not an edge case). Exactly 5 FOREACH blocks
-    (REQUIRES, GOVERNED_BY from loser, GOVERNED_BY to loser, SUPPORTED_BY,
-    MERGED_INTO re-point -- issue #190) means exactly 5
-    `WITH DISTINCT winner, loser` occurrences.
+    """R-keep (AC-BI-002): digest of the gateway path equals the frozen `DELETE r`'s, modulo edge
+    identity. Met modulo identity; live digest and live interpreter agreement are not verifiable
+    here (no FalkorDB in this sandbox).
     """
     emitter, _log_path = make_emitter()
-    graph = _FakeGraph(results=_merge_results())
+    _seed_review(merge_rig)
+    reference = LegacyRecordingGraph()
+    for (label, node_id), props in merge_rig.policy_system.nodes.items():
+        reference.nodes[(label, node_id)] = dict(props)
+    reference.edges[("REQUIRES", "Obligation", "obl_a", "Capability", "cap_incoming")] = {}
+    write_legacy_resolve_keep_separate(reference, _REVIEW_ID)
 
-    resolve_review(graph, "review_aaa", "merge", emitter=emitter)
-
-    merge_query = graph.calls[2].query
-    assert merge_query.count("FOREACH") == 5
-    assert merge_query.count("WITH DISTINCT winner, loser") == 5
-    # No plain, un-DISTINCT `WITH winner, loser` should remain between blocks.
-    assert "WITH winner, loser" not in merge_query.replace("WITH DISTINCT winner, loser", "")
-
-
-def test_resolve_merge_query_embeds_coalesce_null_created_at_convention(
-    make_emitter: MakeEmitter,
-) -> None:
-    """M2 (final, user-confirmed): `coalesce(created_at, '') <=` -- NULL/absent always wins."""
-    emitter, _log_path = make_emitter()
-    graph = _FakeGraph(results=_merge_results())
-
-    resolve_review(graph, "review_aaa", "merge", emitter=emitter)
-
-    merge_query = graph.calls[2].query
-    assert "coalesce(a.created_at, '') <= coalesce(b.created_at, '')" in merge_query
-
-
-def test_resolve_merge_uses_policy_label_when_kind_is_policy(make_emitter: MakeEmitter) -> None:
-    """The `{kind}` template substitutes `Policy`, not `Capability`, for a Policy review.
-
-    The merge write query (Appendix C1) is a single universal query covering
-    all four possible edge types unconditionally (`Capability`/`Standard`
-    legitimately still appear in the unrelated GOVERNED_BY/SUPPORTED_BY
-    blocks, which simply no-op for the wrong kind at the real-FalkorDB
-    level -- PLAN.md §4.3's own "style choice, not load-bearing" note) --
-    only the two `{kind}`-templated MATCH clauses that select `a`/`b`
-    themselves change.
-    """
-    emitter, _log_path = make_emitter()
-    graph = _FakeGraph(
-        results=_merge_results(
-            kind="Policy",
-            incoming_id="pol_incoming",
-            nearest_existing_id="pol_existing",
-            winner_id="pol_existing",
-            loser_id="pol_incoming",
-        )
+    resolve_review(
+        merge_rig.legacy, _REVIEW_ID, "keep-separate", target=_target(merge_rig), emitter=emitter
     )
 
-    outcome = resolve_review(graph, "review_aaa", "merge", emitter=emitter)
+    assert canonical_digest(merge_rig.policy_system) == canonical_digest(
+        reference.as_gateway_graph()
+    )
+
+
+# --- decision="merge": read, resolve the winner, write one group (issue #35 slice 4; #210 10b) ---
+
+_OLD = "2020-01-01T00:00:00+00:00"
+_NEW = "2024-01-01T00:00:00+00:00"
+_INCOMING = "cap_incoming"
+_EXISTING = "cap_existing"
+type _Edge = tuple[str, str, str, str, str]
+type _Node = tuple[str, str, dict[str, object]]
+
+
+def _seed_merge(
+    rig: MergeRig,
+    *,
+    incoming_created: str | None = _NEW,
+    existing_created: str | None = _OLD,
+    kind: str = "Capability",
+    nodes: tuple[_Node, ...] = (),
+    edges: tuple[_Edge, ...] = (),
+) -> None:
+    """Both candidates (with their `created_at`), the review naming them, extra nodes and edges.
+
+    Edges are seeded as a pre-gateway writer left them (no identity), so the first group stamps.
+    """
+    graph = rig.policy_system
+    for node_id, created in ((_INCOMING, incoming_created), (_EXISTING, existing_created)):
+        properties: dict[str, object] = {"name": node_id}
+        if created is not None:
+            properties["created_at"] = created
+        graph.seed_node((kind,), node_id, properties)
+    graph.seed_node(("PendingReview",), _REVIEW_ID, {**_review_properties(), "kind": kind})
+    for label, node_id, properties in nodes:
+        graph.seed_node((label,), node_id, properties)
+    for edge in edges:
+        graph.seed_legacy_edge(edge, {})
+
+
+def _merge(rig: MergeRig, emitter: LogEmitter) -> ResolveOutcome | None:
+    return resolve_review(rig.legacy, _REVIEW_ID, "merge", _target(rig), emitter=emitter)
+
+
+def _resolution_entries(rig: MergeRig) -> list[GraphLogEntry]:
+    """The entries of the resolution's groups, in order, without the one-off identity stamp."""
+    return [
+        entry
+        for group in rig.groups
+        if group.audit_event_id == rig.audit_event_id
+        for entry in group.entries
+        if entry.content.get("op") != "stamp_edge_identity"
+    ]
+
+
+_CAPABILITY_LOSER_NODES: tuple[_Node, ...] = (
+    ("Obligation", "obl_a", {"text": "t"}),
+    ("Obligation", "obl_b", {"text": "u"}),
+    ("Policy", "pol_a", {"name": "a"}),
+    ("Capability", "cap_tomb", {"name": "tomb", "status": "merged"}),
+)
+_CAPABILITY_LOSER_EDGES: tuple[_Edge, ...] = (
+    ("REQUIRES", "Obligation", "obl_b", "Capability", _INCOMING),
+    ("REQUIRES", "Obligation", "obl_a", "Capability", _INCOMING),
+    ("GOVERNED_BY", "Capability", _INCOMING, "Policy", "pol_a"),
+    ("MERGED_INTO", "Capability", "cap_tomb", "Capability", _INCOMING),
+)
+_POLICY_LOSER_NODES: tuple[_Node, ...] = (
+    ("Capability", "cap_a", {"name": "a"}),
+    ("Standard", "std_a", {"name": "s"}),
+)
+_POLICY_LOSER_EDGES: tuple[_Edge, ...] = (
+    ("GOVERNED_BY", "Capability", "cap_a", "Policy", _INCOMING),
+    ("SUPPORTED_BY", "Policy", _INCOMING, "Standard", "std_a"),
+)
+
+
+def test_older_created_at_wins_and_the_loser_is_the_newer_node(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """AC-BI-003: the incoming node is newer, so the existing one wins; the loser is gone."""
+    emitter, _log_path = make_emitter()
+    _seed_merge(merge_rig)
+
+    outcome = _merge(merge_rig, emitter)
 
     assert outcome == ResolveOutcome(
-        review_id="review_aaa", decision="merge", winner_id="pol_existing", loser_id="pol_incoming"
+        review_id=_REVIEW_ID, decision="merge", winner_id=_EXISTING, loser_id=_INCOMING
     )
-    assert ":Policy {id: r.incoming_id}" in graph.calls[1].query
-    assert graph.calls[2].query.startswith(
-        "MATCH (a:Policy {id: $incoming_id}), (b:Policy {id: $nearest_existing_id})"
-    )
+    assert ("Capability", _INCOMING) not in merge_rig.policy_system.nodes
+    assert ("Capability", _EXISTING) in merge_rig.policy_system.nodes
+    assert ("PendingReview", _REVIEW_ID) not in merge_rig.policy_system.nodes
+
+
+def test_a_capability_losers_families_are_rewired_in_one_group_before_the_deletes(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """Inbound REQUIRES (twice: C1 row multiplication), outbound GOVERNED_BY and inbound
+    MERGED_INTO move to the winner: ONE group of `UpsertEdge`s (one per edge, in the statement's
+    block order), then `DeleteNode(loser)`, then `DeleteNode(PendingReview)`.
+    """
+    emitter, _log_path = make_emitter()
+    _seed_merge(merge_rig, nodes=_CAPABILITY_LOSER_NODES, edges=_CAPABILITY_LOSER_EDGES)
+
+    _merge(merge_rig, emitter)
+
+    entries = _resolution_entries(merge_rig)
+    assert [(e.content.get("op"), e.name, e.identity) for e in entries] == [
+        ("upsert_edge", "REQUIRES", f"REQUIRES:obl_a->{_EXISTING}"),
+        ("upsert_edge", "REQUIRES", f"REQUIRES:obl_b->{_EXISTING}"),
+        ("upsert_edge", "GOVERNED_BY", f"GOVERNED_BY:{_EXISTING}->pol_a"),
+        ("upsert_edge", "MERGED_INTO", f"MERGED_INTO:cap_tomb->{_EXISTING}"),
+        ("delete_node", "Capability", _INCOMING),
+        ("delete_node", "PendingReview", _REVIEW_ID),
+    ]
+    assert len({e.group_id for e in entries}) == 1
+    assert merge_rig.legacy.edge_count("REQUIRES") == 2
+
+
+def test_a_policy_losers_families_are_rewired_in_one_group_before_the_deletes(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """Inbound GOVERNED_BY and outbound SUPPORTED_BY: the same rule holds for kind=Policy."""
+    emitter, _log_path = make_emitter()
+    _seed_merge(merge_rig, kind="Policy", nodes=_POLICY_LOSER_NODES, edges=_POLICY_LOSER_EDGES)
+
+    outcome = _merge(merge_rig, emitter)
+
+    assert outcome is not None
+    assert (outcome.winner_id, outcome.loser_id) == (_EXISTING, _INCOMING)
+    entries = _resolution_entries(merge_rig)
+    assert [(e.content.get("op"), e.name, e.identity) for e in entries] == [
+        ("upsert_edge", "GOVERNED_BY", f"GOVERNED_BY:cap_a->{_EXISTING}"),
+        ("upsert_edge", "SUPPORTED_BY", f"SUPPORTED_BY:{_EXISTING}->std_a"),
+        ("delete_node", "Policy", _INCOMING),
+        ("delete_node", "PendingReview", _REVIEW_ID),
+    ]
 
 
 @pytest.mark.parametrize(
-    ("winner_id", "loser_id"),
-    [("cap_a", "cap_b"), ("cap_b", "cap_a")],
+    ("kind", "nodes", "edges"),
+    [
+        pytest.param("Capability", _CAPABILITY_LOSER_NODES, _CAPABILITY_LOSER_EDGES, id="R-older"),
+        pytest.param("Policy", _POLICY_LOSER_NODES, _POLICY_LOSER_EDGES, id="R-five-policy"),
+    ],
 )
-def test_resolve_merge_maps_returned_winner_and_loser_onto_outcome(
-    winner_id: str, loser_id: str, make_emitter: MakeEmitter
+def test_the_merge_leaves_the_graph_the_frozen_reference_leaves(
+    kind: str,
+    nodes: tuple[_Node, ...],
+    edges: tuple[_Edge, ...],
+    make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
-    """Exit criterion #2: whatever the (scripted) query returns maps straight onto ResolveOutcome.
-
-    `resolve_review` itself performs no client-side created_at comparison --
-    winner/loser selection is entirely the merge query's own job (proven
-    live); this only proves the Python-side read-back is a faithful,
-    order-preserving passthrough in both directions.
+    """R-older / R-five (AC-BI-002): digest of the gateway path equals the frozen statement's,
+    modulo edge identity. Met modulo identity; live digest and live interpreter agreement are not
+    verifiable here (no FalkorDB in this sandbox).
     """
     emitter, _log_path = make_emitter()
-    graph = _FakeGraph(
-        results=_merge_results(
-            incoming_id="cap_a", nearest_existing_id="cap_b", winner_id=winner_id, loser_id=loser_id
-        )
+    _seed_merge(merge_rig, kind=kind, nodes=nodes, edges=edges)
+    reference = LegacyRecordingGraph.copy_of(merge_rig.policy_system)
+    expected = write_legacy_resolve_merge(reference, _REVIEW_ID)
+
+    outcome = _merge(merge_rig, emitter)
+
+    assert outcome is not None
+    assert expected == (outcome.winner_id, outcome.loser_id)
+    assert canonical_digest(merge_rig.policy_system) == canonical_digest(
+        reference.as_gateway_graph()
     )
 
-    outcome = resolve_review(graph, "review_aaa", "merge", emitter=emitter)
 
-    assert outcome == ResolveOutcome(
-        review_id="review_aaa", decision="merge", winner_id=winner_id, loser_id=loser_id
-    )
-    assert graph.calls[2].params == {
-        "incoming_id": "cap_a",
-        "nearest_existing_id": "cap_b",
-        "review_id": "review_aaa",
-    }
-
-
-def test_resolve_merge_of_nonexistent_review_returns_none_before_any_write() -> None:
-    """AC-BI-008 (not-found half, merge): an unknown/already-resolved id makes no graph changes."""
-    graph = _FakeGraph(results=[[]])
-
-    outcome = resolve_review(graph, "review_missing", "merge")
-
-    assert outcome is None
-    assert len(graph.calls) == 1
+_WINNER_RULE_CASES = [
+    pytest.param(_OLD, _NEW, _INCOMING, id="R-incoming-older"),
+    pytest.param(_NEW, _OLD, _EXISTING, id="R-existing-older"),
+    pytest.param(_OLD, _OLD, _INCOMING, id="R-tie"),
+    pytest.param(None, _OLD, _INCOMING, id="R-incoming-missing"),
+    pytest.param(_OLD, None, _EXISTING, id="R-existing-missing"),
+    pytest.param(None, None, _INCOMING, id="R-both-missing"),
+]
 
 
-def test_resolve_merge_when_review_vanishes_before_existence_check_returns_none() -> None:
-    """Benign race: Step 1 found the review, but it's gone by Step 2 -- treated as not-found."""
-    graph = _FakeGraph(results=[[["Capability"]], []])
-
-    outcome = resolve_review(graph, "review_aaa", "merge")
-
-    assert outcome is None
-    assert len(graph.calls) == 2
-
-
-def test_resolve_merge_with_stale_incoming_node_raises_stale_error() -> None:
-    """CHANGES.md H2: `incoming_id` no longer resolves -- stale, no merge write issued."""
-    graph = _FakeGraph(results=[[["Capability"]], [["cap_incoming", "cap_existing", False, True]]])
-
-    with pytest.raises(StalePendingReviewError) as excinfo:
-        resolve_review(graph, "review_aaa", "merge")
-
-    assert excinfo.value.review_id == "review_aaa"
-    assert len(graph.calls) == 2  # existence check only -- the merge write never ran
-
-
-def test_resolve_merge_with_stale_existing_node_raises_stale_error() -> None:
-    """CHANGES.md H2: `nearest_existing_id` no longer resolves -- stale, no merge write issued."""
-    graph = _FakeGraph(results=[[["Capability"]], [["cap_incoming", "cap_existing", True, False]]])
-
-    with pytest.raises(StalePendingReviewError) as excinfo:
-        resolve_review(graph, "review_aaa", "merge")
-
-    assert excinfo.value.review_id == "review_aaa"
-    assert len(graph.calls) == 2
-
-
-def test_resolve_merge_stale_reference_emits_no_log_entry(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+@pytest.mark.parametrize(
+    ("kind", "nodes", "edges"),
+    [
+        pytest.param(
+            "Capability", _CAPABILITY_LOSER_NODES, _CAPABILITY_LOSER_EDGES, id="capability"
+        ),
+        pytest.param("Policy", _POLICY_LOSER_NODES, _POLICY_LOSER_EDGES, id="policy"),
+    ],
+)
+@pytest.mark.parametrize(("incoming_created", "existing_created", "winner"), _WINNER_RULE_CASES)
+def test_the_winner_rule_leaves_the_graph_the_frozen_reference_leaves(
+    incoming_created: str | None,
+    existing_created: str | None,
+    winner: str,
+    kind: str,
+    nodes: tuple[_Node, ...],
+    edges: tuple[_Edge, ...],
+    make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
-    """No log noise for a stale reference -- no merge actually happened."""
-    emitter, log_path = make_emitter()
-    graph = _FakeGraph(results=[[["Capability"]], [["cap_incoming", "cap_existing", False, True]]])
+    """R-tie / R-missing / R-both-missing, both kinds (AC-BI-002, AC-BI-003): the older node wins,
+    a missing `created_at` wins, a tie (and both missing) goes to the incoming node, and the digest
+    equals the frozen statement's, modulo edge identity. The winner is asserted explicitly so the
+    rule cannot drift together with the reference. Met modulo identity; live digest and live
+    interpreter agreement are not verifiable here (no FalkorDB in this sandbox).
+    """
+    emitter, _log_path = make_emitter()
+    _seed_merge(
+        merge_rig,
+        incoming_created=incoming_created,
+        existing_created=existing_created,
+        kind=kind,
+        nodes=nodes,
+        edges=edges,
+    )
+    reference = LegacyRecordingGraph.copy_of(merge_rig.policy_system)
+    expected = write_legacy_resolve_merge(reference, _REVIEW_ID)
 
-    with pytest.raises(StalePendingReviewError):
-        resolve_review(graph, "review_aaa", "merge", emitter=emitter)
+    outcome = _merge(merge_rig, emitter)
+
+    loser = _EXISTING if winner == _INCOMING else _INCOMING
+    assert outcome == ResolveOutcome(
+        review_id=_REVIEW_ID, decision="merge", winner_id=winner, loser_id=loser
+    )
+    assert expected == (winner, loser)
+    assert (kind, loser) not in merge_rig.policy_system.nodes
+    assert canonical_digest(merge_rig.policy_system) == canonical_digest(
+        reference.as_gateway_graph()
+    )
+
+
+def test_a_tie_that_went_to_the_other_node_would_not_match_the_reference(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """Guard of the guard: the tie scenario is discriminating. Resolving the same tie with the
+    nodes swapped (existing as winner) gives a digest different from the reference's.
+    """
+    emitter, _log_path = make_emitter()
+    _seed_merge(merge_rig, incoming_created=_OLD, existing_created=_OLD)
+    reference = LegacyRecordingGraph.copy_of(merge_rig.policy_system)
+    write_legacy_resolve_merge(reference, _REVIEW_ID)
+    swapped = LegacyRecordingGraph.copy_of(merge_rig.policy_system)
+    swapped.nodes.pop(("Capability", _INCOMING))
+    swapped.nodes.pop(("PendingReview", _REVIEW_ID))
+
+    _merge(merge_rig, emitter)
+
+    assert canonical_digest(merge_rig.policy_system) == canonical_digest(
+        reference.as_gateway_graph()
+    )
+    assert canonical_digest(merge_rig.policy_system) != canonical_digest(swapped.as_gateway_graph())
+
+
+def test_an_edge_the_winner_already_has_is_not_logged_again(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """The rewire of an edge the winner already holds is dropped by the gateway (no-op)."""
+    emitter, _log_path = make_emitter()
+    _seed_merge(
+        merge_rig,
+        nodes=(("Obligation", "obl_a", {"text": "t"}),),
+        edges=(
+            ("REQUIRES", "Obligation", "obl_a", "Capability", _INCOMING),
+            ("REQUIRES", "Obligation", "obl_a", "Capability", _EXISTING),
+        ),
+    )
+
+    _merge(merge_rig, emitter)
+
+    assert [(e.content.get("op"), e.name) for e in _resolution_entries(merge_rig)] == [
+        ("delete_node", "Capability"),
+        ("delete_node", "PendingReview"),
+    ]
+    assert merge_rig.legacy.edge_count("REQUIRES") == 1
+
+
+def test_several_obligations_requiring_the_loser_leave_the_graph_the_frozen_reference_leaves(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """C1 row multiplication (the `WITH DISTINCT` comment of the retired statement): three
+    Obligations require the loser, one of them already requires the winner and one Policy is
+    reachable twice. Each edge ends up once on the winner; the digest equals the reference's,
+    modulo edge identity (live digest not verifiable here).
+    """
+    emitter, _log_path = make_emitter()
+    _seed_merge(
+        merge_rig,
+        nodes=(
+            ("Obligation", "obl_a", {"text": "a"}),
+            ("Obligation", "obl_b", {"text": "b"}),
+            ("Obligation", "obl_c", {"text": "c"}),
+            ("Policy", "pol_a", {"name": "a"}),
+        ),
+        edges=(
+            ("REQUIRES", "Obligation", "obl_a", "Capability", _INCOMING),
+            ("REQUIRES", "Obligation", "obl_b", "Capability", _INCOMING),
+            ("REQUIRES", "Obligation", "obl_c", "Capability", _INCOMING),
+            ("REQUIRES", "Obligation", "obl_c", "Capability", _EXISTING),
+            ("GOVERNED_BY", "Capability", _INCOMING, "Policy", "pol_a"),
+        ),
+    )
+    reference = LegacyRecordingGraph.copy_of(merge_rig.policy_system)
+    write_legacy_resolve_merge(reference, _REVIEW_ID)
+
+    _merge(merge_rig, emitter)
+
+    assert [(e.content.get("op"), e.name) for e in _resolution_entries(merge_rig)] == [
+        ("upsert_edge", "REQUIRES"),
+        ("upsert_edge", "REQUIRES"),
+        ("upsert_edge", "GOVERNED_BY"),
+        ("delete_node", "Capability"),
+        ("delete_node", "PendingReview"),
+    ]
+    assert merge_rig.legacy.edge_count("REQUIRES") == 3
+    assert canonical_digest(merge_rig.policy_system) == canonical_digest(
+        reference.as_gateway_graph()
+    )
+
+
+def test_a_tombstone_pointing_at_the_loser_ends_up_where_the_frozen_reference_puts_it(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """Issue #190: the inbound `MERGED_INTO` of a merged tombstone moves onto the winner; the
+    digest equals the reference's, modulo edge identity (live digest not verifiable here).
+    """
+    emitter, _log_path = make_emitter()
+    _seed_merge(
+        merge_rig,
+        nodes=(("Capability", "cap_tomb", {"name": "tomb", "status": "merged"}),),
+        edges=(("MERGED_INTO", "Capability", "cap_tomb", "Capability", _INCOMING),),
+    )
+    reference = LegacyRecordingGraph.copy_of(merge_rig.policy_system)
+    write_legacy_resolve_merge(reference, _REVIEW_ID)
+
+    _merge(merge_rig, emitter)
+
+    assert {key[:5] for key in merge_rig.policy_system.edges if key[0] == "MERGED_INTO"} == {
+        ("MERGED_INTO", "Capability", "cap_tomb", "Capability", _EXISTING)
+    }
+    assert canonical_digest(merge_rig.policy_system) == canonical_digest(
+        reference.as_gateway_graph()
+    )
+
+
+class _RaceAfterReads(RigReadHandle):
+    """A read handle that runs `race` once, right after the last loser-edge read: the window
+    between the reads and the single write, in which the old code held no lock either.
+    """
+
+    def __init__(self, graph: InMemoryGraph, race: Callable[[], object]) -> None:
+        super().__init__(graph)
+        self._race = race
+        self._loser_reads = 0
+
+    def _read(self, q: str, params: dict[str, object] | None) -> list[object]:
+        rows = super()._read(q, params)
+        if params is not None and "loser_id" in params:
+            self._loser_reads += 1
+            if self._loser_reads == 5:
+                self._race()
+        return rows
+
+
+def test_a_review_resolved_elsewhere_after_the_reads_still_merges_and_its_delete_is_a_no_op(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """The review vanishes after the reads (e.g. resolved by another caller). The old statement
+    rewired and then returned no row (IndexError); the group now rewires, deletes the loser and
+    finds the review already gone: the outcome is reported and nothing raises (recorded in 10b).
+    """
+    emitter, _log_path = make_emitter()
+    _seed_merge(merge_rig, nodes=_CAPABILITY_LOSER_NODES, edges=_CAPABILITY_LOSER_EDGES)
+    graph = merge_rig.policy_system
+    handle = _RaceAfterReads(graph, lambda: graph.nodes.pop(("PendingReview", _REVIEW_ID)))
+
+    outcome = resolve_review(handle, _REVIEW_ID, "merge", _target(merge_rig), emitter=emitter)
+
+    assert outcome is not None
+    assert (outcome.winner_id, outcome.loser_id) == (_EXISTING, _INCOMING)
+    assert ("Capability", _INCOMING) not in graph.nodes
+    assert handle.edge_count("REQUIRES") == 2
+    ops = [(e.content.get("op"), e.name) for e in _resolution_entries(merge_rig)]
+    assert ops == [
+        ("upsert_edge", "REQUIRES"),
+        ("upsert_edge", "REQUIRES"),
+        ("upsert_edge", "GOVERNED_BY"),
+        ("upsert_edge", "MERGED_INTO"),
+        ("delete_node", "Capability"),
+    ]
+
+
+def test_a_candidate_deleted_after_the_reads_is_a_refused_group_and_nothing_changes(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """AC-BI-008 / atomic: the winner vanishes between the reads and the write. The gateway
+    refuses the group on the missing endpoint (`MissingTargetError`): the persistence error is
+    raised, and neither the loser, the review nor any edge changed.
+    """
+    emitter, _log_path = make_emitter()
+    _seed_merge(merge_rig, nodes=_CAPABILITY_LOSER_NODES, edges=_CAPABILITY_LOSER_EDGES)
+    graph = merge_rig.policy_system
+    handle = _RaceAfterReads(graph, lambda: graph.nodes.pop(("Capability", _EXISTING)))
+
+    with pytest.raises(CompanyMergePersistenceError, match=r"^FalkorDB write failed: "):
+        resolve_review(handle, _REVIEW_ID, "merge", _target(merge_rig), emitter=emitter)
+
+    assert _resolution_entries(merge_rig) == []
+    assert ("Capability", _INCOMING) in graph.nodes
+    assert ("PendingReview", _REVIEW_ID) in graph.nodes
+    assert handle.edge_count("REQUIRES") == 2
+
+
+def test_a_refused_merge_group_raises_the_persistence_error_and_leaves_everything_in_place(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """AC-BI-008, atomic: the group is logged whole or not at all; nothing partial is left."""
+    emitter, _log_path = make_emitter()
+    _seed_merge(merge_rig, nodes=_CAPABILITY_LOSER_NODES, edges=_CAPABILITY_LOSER_EDGES)
+    merge_rig.store.fail_appends()
+
+    with pytest.raises(CompanyMergePersistenceError, match=r"^FalkorDB write failed: "):
+        _merge(merge_rig, emitter)
+
+    assert ("Capability", _INCOMING) in merge_rig.policy_system.nodes
+    assert ("PendingReview", _REVIEW_ID) in merge_rig.policy_system.nodes
+    assert merge_rig.legacy.edge_count("REQUIRES") == 2
+    assert merge_rig.legacy.edge_count("GOVERNED_BY") == 1
+
+
+def test_the_loser_edge_reads_are_issued_once_each_after_the_existence_check(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """Review kind, ONE combined existence read, then the five loser-edge reads (ids via params)."""
+    emitter, _log_path = make_emitter()
+    _seed_merge(merge_rig)
+
+    _merge(merge_rig, emitter)
+
+    statements = merge_rig.legacy.statements
+    assert len(statements) == 7
+    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in statements[0]
+    assert "incoming_created_at" in statements[1]
+    assert "existing_created_at" in statements[1]
+    assert all("$loser_id" in q for q in statements[2:])
+    assert merge_rig.legacy.params_seen[2:] == [{"loser_id": _INCOMING}] * 5
+
+
+def test_resolve_merge_of_nonexistent_review_returns_none_before_any_write(
+    merge_rig: MergeRig,
+) -> None:
+    """AC-BI-008 (not-found half, merge): an unknown/already-resolved id makes no graph changes."""
+    target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
+
+    outcome = resolve_review(merge_rig.legacy, "review_missing", "merge", target)
+
+    assert outcome is None
+    assert len(merge_rig.legacy.statements) == 1
+
+
+def test_resolve_merge_when_review_vanishes_before_existence_check_returns_none(
+    merge_rig: MergeRig,
+) -> None:
+    """Benign race: Step 1 found the review, but it's gone by Step 2 -- treated as not-found."""
+    _seed_merge(merge_rig)
+
+    class _VanishingReview(RigReadHandle):
+        def _read(self, q: str, params: dict[str, object] | None) -> list[object]:
+            rows = super()._read(q, params)
+            if q == "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind":
+                self._graph.nodes.pop(("PendingReview", _REVIEW_ID), None)
+            return rows
+
+    vanishing = _VanishingReview(merge_rig.policy_system)
+    target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
+
+    outcome = resolve_review(vanishing, _REVIEW_ID, "merge", target)
+
+    assert outcome is None
+    assert len(vanishing.statements) == 2
+
+
+@pytest.mark.parametrize("missing", [_INCOMING, _EXISTING])
+def test_stale_review_either_node_missing_raises_stale_error_and_writes_nothing(
+    missing: str, make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
+) -> None:
+    """AC-BI-004 / CHANGES.md H2 / issue #190: nothing is submitted, logged or changed."""
+    emitter, log_path = make_emitter()
+    _seed_merge(merge_rig)
+    del merge_rig.policy_system.nodes[("Capability", missing)]
+    before = {key: dict(props) for key, props in merge_rig.policy_system.nodes.items()}
+    target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
+
+    with pytest.raises(StalePendingReviewError) as excinfo:
+        resolve_review(merge_rig.legacy, _REVIEW_ID, "merge", target, emitter=emitter)
     emitter.flush()
 
+    assert excinfo.value.review_id == _REVIEW_ID
+    assert len(merge_rig.legacy.statements) == 2  # the review read and the existence read only
+    assert merge_rig.policy_system.nodes == before
+    assert merge_rig.logged() == []
     assert read_lines(log_path) == []
 
 
-def test_resolve_merge_emits_structured_log_entry_with_winner_and_loser(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+def test_the_resolve_log_entry_carries_winner_id_and_loser_id(
+    make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
     """AC-BI-009 (full): merge logs decision, review id, timestamp, AND winner/loser ids."""
     emitter, log_path = make_emitter()
-    graph = _FakeGraph(results=_merge_results())
+    _seed_merge(merge_rig)
 
-    resolve_review(graph, "review_aaa", "merge", emitter=emitter)
+    _merge(merge_rig, emitter)
     emitter.flush()
 
     entries = read_lines(log_path)
@@ -365,8 +798,8 @@ def test_resolve_merge_emits_structured_log_entry_with_winner_and_loser(
     assert entry["action"] == "resolve_near_miss_review"
     assert entry["entity_id"] == "review_aaa"
     assert entry["outcome"] == "merge"
-    assert entry["winner_id"] == "cap_existing"
-    assert entry["loser_id"] == "cap_incoming"
+    assert entry["winner_id"] == _EXISTING
+    assert entry["loser_id"] == _INCOMING
     assert "timestamp" in entry
 
 
@@ -375,16 +808,31 @@ def test_resolve_merge_emits_structured_log_entry_with_winner_and_loser(
 _LIVE_TEST_GRAPH = "policy_system_slice4_merge_live_test"
 
 
+def _live_target(graph_name: str) -> GraphWriteTarget:
+    """The real gateway on the disposable graph, under one system audit row (issue #210).
+
+    Not runnable in the implementation sandbox (needs the PS state Postgres and FalkorDB).
+    """
+    config = load_config()
+    audit_event_id = build_system_audit_recorder(config)(
+        action="ingestion_run.submit",
+        resource_type="ingestion_run",
+        resource_id=f"live-{graph_name}",
+        details={"trigger": "live_resolve_review"},
+    )
+    return GraphWriteTarget(build_default_graph_write_gateway(config), graph_name, audit_event_id)
+
+
 @pytest.mark.falkordb_live
 def test_resolve_merge_repoints_edges_and_deletes_loser_live(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     """AC-BI-005/006/007 against a REAL FalkorDB instance (CHANGES.md H1's required gate).
 
-    This is the one test in this file that can actually prove the C1
-    `WITH DISTINCT winner, loser` fix works -- a scripted fake cannot
-    execute Cypher, so it can never prove the FOREACH/CASE idiom is
-    supported or that the row-multiplication bug is actually fixed.
+    This is the live anchor of the file: since #210 the merge is a read-resolve-write group, and
+    only a real FalkorDB proves the read (`RETURN DISTINCT`) and the gateway application agree
+    with the pre-#210 single statement on the row-multiplication scenario below. (Not run in the
+    implementation sandbox.)
 
     Writes into a dedicated, disposable graph name
     (`policy_system_slice4_merge_live_test`), NEVER the real, shared
@@ -401,15 +849,9 @@ def test_resolve_merge_repoints_edges_and_deletes_loser_live(
     Seeds TWO `Obligation`s `REQUIRES`-ing the same loser `Capability`
     (mirroring `docs/artifacts/ps-domain-concepts.md:652-681`'s worked
     example -- the domain's *primary* convergence scenario, not an edge
-    case) plus a `Policy` the loser is `GOVERNED_BY`, so the merge query's
-    `OPTIONAL MATCH (o:Obligation)-[:REQUIRES]->(loser)` genuinely produces
-    2 rows before `WITH DISTINCT winner, loser` collapses them back to 1 --
-    exactly the condition CHANGES.md C1 identified as triggering a repeated
-    `DETACH DELETE loser, rev` (once per surviving row) without the fix.
-    If FOREACH/CASE had proven unsupported by real FalkorDB, this test
-    would have failed with a Cypher syntax/semantic error unrelated to
-    C1 -- that did not happen: FOREACH/CASE worked as-is once `DISTINCT`
-    was added, so CHANGES.md Appendix H1's UNWIND fallback was not needed.
+    case) plus a `Policy` the loser is `GOVERNED_BY`, so the loser's edge read genuinely returns
+    several rows that must collapse to one primitive per edge and one loser delete (the condition
+    CHANGES.md C1 identified for the pre-#210 statement).
     """
     db = connect_from_config(load_config())
 
@@ -466,7 +908,9 @@ def test_resolve_merge_repoints_edges_and_deletes_loser_live(
         )
 
         # The actual call under test: the real resolve_review, against real FalkorDB.
-        outcome = resolve_review(graph, review_id, "merge", emitter=emitter)
+        outcome = resolve_review(
+            graph, review_id, "merge", _live_target(_LIVE_TEST_GRAPH), emitter=emitter
+        )
         emitter.flush()
 
         assert outcome is not None, "resolve_review returned None -- review/nodes not found"

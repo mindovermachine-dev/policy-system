@@ -58,6 +58,7 @@ from ps_service.audit.errors import (
     AuditTrailUnavailableError,
     AuditUnknownActionError,
 )
+from ps_service.audit.store import EventIdAuditStore
 from ps_service.logging.errors import LoggingLifecycleError
 from ps_service.logging.facade import emit_log_entry
 
@@ -135,6 +136,50 @@ def record_opening_row(
     """
     try:
         audit.store.record_standalone(
+            actor_subject=audit.actor[0],
+            actor_issuer=audit.actor[1],
+            action=target.action,
+            resource_type=target.resource_type,
+            resource_id=target.resource_id,
+            outcome="applied",
+            details=details,
+        )
+    except _AUDIT_ERRORS as exc:
+        _log_failure(
+            log_action="audit_opening_failed",
+            component=component,
+            target=target,
+            error=exc,
+            emitter=emitter,
+        )
+        raise AuditTrailUnavailableError(_UNAVAILABLE_MESSAGE) from exc
+
+
+def record_opening_row_with_event_id(
+    audit: AuditContext,
+    target: AuditTarget,
+    *,
+    component: str,
+    details: Mapping[str, object],
+    emitter: LogEmitter | None = None,
+) -> str:
+    """Write the `applied` opening row as :func:`record_opening_row` does and return its id.
+
+    For an operation whose graph write is anchored to the audit row that opened it (issue #210:
+    the near-miss resolve's group carries the row's event id). Same FAIL-CLOSED policy.
+
+    Raises:
+        AuditTrailUnavailableError: the row could not be written; the caller must not run the
+            operation. The store error is chained as `__cause__`.
+        TypeError: `audit.store` cannot report the id of the row it wrote (a wiring error, not an
+            outage).
+    """
+    store = audit.store
+    if not isinstance(store, EventIdAuditStore):
+        message = f"{type(store).__name__} cannot report an audit event id"
+        raise TypeError(message)
+    try:
+        return store.record_standalone_with_event_id(
             actor_subject=audit.actor[0],
             actor_issuer=audit.actor[1],
             action=target.action,

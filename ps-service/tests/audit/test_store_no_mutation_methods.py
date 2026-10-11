@@ -20,6 +20,10 @@ from ps_service.audit.store import AuditStore, PsycopgAuditStore
 
 _FORBIDDEN_METHOD_NAME_SUBSTRINGS = ("update", "delete", "mutate")
 _EXPECTED_METHOD_NAMES = {"record", "record_standalone", "query"}
+# Issue #210: `record_standalone_with_event_id` is `record_standalone` returning the inserted id
+# (still insert-only). It is on the implementation and on the narrow `EventIdAuditStore` Protocol,
+# not on `AuditStore`, whose many fakes stay untouched.
+_EXPECTED_IMPLEMENTATION_METHOD_NAMES = _EXPECTED_METHOD_NAMES | {"record_standalone_with_event_id"}
 
 
 def _public_method_names(target: type[object]) -> set[str]:
@@ -41,7 +45,7 @@ def test_psycopg_audit_store_exposes_no_update_or_delete_method() -> None:
     """`PsycopgAuditStore`, the real implementation, matches the `Protocol` exactly."""
     method_names = _public_method_names(PsycopgAuditStore)
 
-    assert method_names == _EXPECTED_METHOD_NAMES
+    assert method_names == _EXPECTED_IMPLEMENTATION_METHOD_NAMES
     for method_name in method_names:
         assert not any(
             forbidden in method_name.lower() for forbidden in _FORBIDDEN_METHOD_NAME_SUBSTRINGS

@@ -3,10 +3,10 @@
 `BaselineGraphReader` answers `graph_reader.read_baseline_graph`'s queries from the state a real
 `ingest_internal_regulatory_instrument` left in a gateway rig's in-memory `{short}_baseline`
 graph, so the merge reads exactly the nodes and edges the ingestion minted. `SingleTenantStore`
-is the stateful `policy_system` stand-in: it interprets the fixed write statements
-`company_merge.graph_writer` issues (node `MERGE`, `MERGE ... ON CREATE SET`, edge `MERGE`) and
-the existence reads, and keeps every statement it was given. `OneHotEmbeddingCaller` is the LLM
-boundary: every distinct text gets its own orthogonal vector, so no two Capabilities converge.
+is the `policy_system` read stand-in: it answers the existence, embedding-state and index reads
+and keeps every statement it was given (a write statement is refused). `OneHotEmbeddingCaller` is
+the LLM boundary: every distinct text gets its own orthogonal vector, so no two Capabilities
+converge.
 """
 
 from __future__ import annotations
@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 
     from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
 
+_WRITE_CLAUSE = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE)\b")
+_EMBEDDING_STATE = re.compile(
+    r"^MATCH \(n:(\w+)\) WHERE n\.id IN \$ids RETURN n\.id, n\.embedding IS NULL$"
+)
 EMBED_MODEL = "fake-embed-model"
 SIMILARITY_THRESHOLD = 0.85
 _EMBEDDING_DIMENSION = 512
@@ -43,6 +47,10 @@ class _Node:
 @dataclass(frozen=True)
 class _Result:
     result_set: list[object]
+
+
+StoreResult = _Result
+"""The result type of a `SingleTenantStore` query (public for its write-capable subclass)."""
 
 
 def parse_seed(document: dict[str, object]) -> InternalRegulationSeed:
@@ -74,8 +82,11 @@ class BaselineGraphReader:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
         """Answer one reader query from the graph's current nodes and edges."""
-        if "WHERE n.embedding IS NULL SET n.embedding" in q:
-            return self._cache_embedding(params)
+        if _WRITE_CLAUSE.search(q):
+            raise AssertionError(f"a write statement reached the baseline reader: {q}")
+        embedding_state = _EMBEDDING_STATE.match(q)
+        if embedding_state is not None:
+            return self._embedding_state(embedding_state.group(1), params)
         for label in ("Policy", "Standard", "Control"):
             if q == f"MATCH (n:{label}) RETURN n":
                 return _Result([[_Node(props)] for props in self._nodes(label)])
@@ -102,13 +113,16 @@ class BaselineGraphReader:
                 return _Result([[src, tgt] for src, tgt, _ in self._edges(relationship)])
         return _Result(self._column_rows(q))
 
-    def _cache_embedding(self, params: dict[str, object] | None) -> _Result:
-        """The merge's write-back of a freshly computed incoming Capability embedding."""
-        assert params is not None
-        node = self._graph.nodes.get(("Capability", cast("str", params["id"])))
-        if node is not None and node.get("embedding") is None:
-            node["embedding"] = params["embedding"]
-        return _Result([])
+    def _embedding_state(self, label: str, params: dict[str, object] | None) -> _Result:
+        """The embedding backfill's read: which requested ids exist, and have no embedding yet."""
+        requested = cast("list[str]", (params or {})["ids"])
+        return _Result(
+            [
+                [node_id, self._graph.nodes[(label, node_id)].get("embedding") is None]
+                for node_id in requested
+                if (label, node_id) in self._graph.nodes
+            ]
+        )
 
     def _column_rows(self, q: str) -> list[object]:
         """Rows for the `RETURN n.a, n.b, ...` node reads, one column per named property."""
@@ -137,55 +151,49 @@ class BaselineGraphReader:
 
 @dataclass
 class SingleTenantStore:
-    """A stateful `policy_system` stand-in that interprets `graph_writer`'s fixed statements."""
+    """A `policy_system` read stand-in: the existence, embedding-state and index reads.
+
+    Since #210 every merge write is a gateway group, so a write statement is refused. The old
+    write interpreter is `_legacy_reference.SnapshotWriteStore` (Restore's interim writer).
+    """
 
     nodes: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
     edges: set[tuple[str, str, str]] = field(default_factory=set)
     statements: list[str] = field(default_factory=list)
     params_seen: list[dict[str, object]] = field(default_factory=list)
 
-    _NODE_WRITE = re.compile(
-        r"^MERGE \(n:(\w+) \{id: \$id\}\) (ON CREATE SET|SET) n \+= \$properties$"
-    )
-    _EDGE_WRITE = re.compile(
-        r"^MATCH \(s:(\w+) \{id: \$source_id\}\), \(t:(\w+) \{id: \$target_id\}\) "
-        r"MERGE \(s\)-\[:(\w+)\]->\(t\)$"
+    _EXISTING_READ = re.compile(r"^MATCH \(n:(\w+)\) WHERE n\.id IN \$ids RETURN n\.id$")
+    _EMBEDDING_STATE_READ = re.compile(
+        r"^MATCH \(n:(\w+)\) WHERE n\.id IN \$ids RETURN n\.id, n\.embedding IS NULL$"
     )
     _INDEX_READ = re.compile(r"^MATCH \(n:(\w+)\) RETURN n\.id, n\.(\w+), n\.embedding$")
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
-        """Apply a write or answer a read; unknown statements are recorded and answered `[[0]]`."""
+        """Answer a read; a write statement is refused (every merge write is a gateway group)."""
+        if _WRITE_CLAUSE.search(q):
+            raise AssertionError(f"a write statement reached the read double: {q}")
         self.statements.append(q)
         self.params_seen.append(dict(params or {}))
-        node_write = self._NODE_WRITE.match(q)
-        if node_write is not None and params is not None:
-            self._write_node(node_write.group(1), node_write.group(2), params)
-            return _Result([])
-        edge_write = self._EDGE_WRITE.match(q)
-        if edge_write is not None and params is not None:
-            self._write_edge(edge_write.group(3), params)
-            return _Result([])
         return _Result(self._read(q, params))
-
-    def _write_node(self, label: str, mode: str, params: dict[str, object]) -> None:
-        key = (label, cast("str", params["id"]))
-        properties = dict(cast("dict[str, object]", params["properties"]))
-        if mode == "SET":
-            self.nodes.setdefault(key, {}).update(properties)
-        elif key not in self.nodes:
-            self.nodes[key] = properties
-
-    def _write_edge(self, relationship: str, params: dict[str, object]) -> None:
-        source, target = cast("str", params["source_id"]), cast("str", params["target_id"])
-        known = {node_id for _, node_id in self.nodes}
-        if source in known and target in known:
-            self.edges.add((relationship, source, target))
 
     def _read(self, q: str, params: dict[str, object] | None) -> list[object]:
         if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
             requested = cast("list[str]", (params or {})["ids"])
             known = {node_id for _, node_id in self.nodes}
             return [[node_id] for node_id in requested if node_id in known]
+        embedding_state = self._EMBEDDING_STATE_READ.match(q)
+        if embedding_state is not None:
+            requested = cast("list[str]", (params or {})["ids"])
+            label = embedding_state.group(1)
+            return [
+                [i, self.nodes[(label, i)].get("embedding") is None]
+                for i in requested
+                if (label, i) in self.nodes
+            ]
+        existing = self._EXISTING_READ.match(q)
+        if existing is not None:
+            requested = cast("list[str]", (params or {})["ids"])
+            return [[i] for i in requested if (existing.group(1), i) in self.nodes]
         if q == "MATCH (o:Obligation) WHERE o.id IN $ids RETURN o.id":
             requested = cast("list[str]", (params or {})["ids"])
             return [[i] for i in requested if ("Obligation", i) in self.nodes]

@@ -136,14 +136,22 @@ def test_the_background_run_writes_its_native_graph_under_its_own_system_audit_r
     row = gateway.system_audit.rows[0]
     assert (row["action"], row["resource_id"]) == ("ingestion_run.submit", run_id)
     assert cast("dict[str, object]", row["details"])["trigger"] == "async_ingest"
-    # the extract and derive stages' groups follow (#209)
-    [group, baseline_group, derivation_group] = gateway.rig.store.groups
+    # the extract and derive stages' groups follow (#209), then the merge's three (#210)
+    [group, baseline_group, derivation_group, merge_group, obligation_group, capability_group] = (
+        gateway.rig.store.groups
+    )
     assert group.graph == "cra_native"
     assert group.audit_event_id == gateway.system_audit.ids[0]
     assert baseline_group.graph == "cra_baseline"
     assert baseline_group.audit_event_id == gateway.system_audit.ids[0]
     assert derivation_group.graph == "cra_baseline"
     assert derivation_group.audit_event_id == gateway.system_audit.ids[0]
+    assert merge_group.graph == "policy_system"
+    assert merge_group.audit_event_id == gateway.system_audit.ids[0]
+    assert obligation_group.graph == "policy_system"  # the Obligations are the merge's next group
+    assert obligation_group.audit_event_id == gateway.system_audit.ids[0]
+    assert capability_group.graph == "policy_system"  # then the minted Capabilities
+    assert capability_group.audit_event_id == gateway.system_audit.ids[0]
 
 
 def test_without_a_gateway_the_background_run_fails_closed_with_a_graph_unavailable_reason(

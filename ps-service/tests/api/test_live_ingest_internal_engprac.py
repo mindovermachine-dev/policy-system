@@ -34,12 +34,14 @@ from authz._fakes import FakeAccessRoleStore
 from fastapi.testclient import TestClient
 
 from ps_service.api.dependencies import get_principal
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
 from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
 from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.export import catalog_writer
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.logging import facade
 from ps_service.main import create_app
@@ -165,9 +167,14 @@ def ingest_env(tmp_path: Path) -> Iterator[tuple[TestClient, FalkorDB, str]]:
     facade.configure(log_path=tmp_path / "ingest.jsonl")
     app = create_app(load_config())
     app.dependency_overrides[get_principal] = lambda: Principal(sub=_OWNER[0], iss=_OWNER[1])
+    # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
+    # entered, so the app lifespan never installs it: install the real one the way a deployed
+    # service does. Not run in the implementation sandbox.
+    install_graph_write_gateway(build_default_graph_write_gateway(load_config()))
     try:
         yield TestClient(app, raise_server_exceptions=False), db, graph_name
     finally:
+        install_graph_write_gateway(None)
         monkeypatch.undo()
         for name in scratch:
             with contextlib.suppress(Exception):

@@ -4,15 +4,23 @@ The real engineering-practices seed is ingested into a gateway rig's baseline gr
 imported once by `merge_baseline_graph` (live internal ingest) and once by restore's
 `_run_baseline_merge`, each into its own empty `policy_system` stand-in. The Policy/Standard/
 Control nodes and the governance and classification edges must be identical.
+
+Since issue #210 the two paths write by different mechanisms (D1): live merge submits the tree as
+one Graph Write Gateway group, restore writes it with the verbatim snapshot Cypher into its
+staged copy. The parity this test pins is the RESULT; it also asserts the mechanisms really
+differ, so the equality cannot pass by both going through the same writer.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from company_merge._gateway_fakes import MergeRig
+from company_merge._legacy_reference import SnapshotWriteStore
 from company_merge._seed_merge_graphs import (
     EMBED_MODEL,
     SIMILARITY_THRESHOLD,
@@ -67,6 +75,13 @@ def rig() -> Iterator[GatewayRig]:
     gateway_rig.close()
 
 
+@pytest.fixture
+def merge_rig() -> Iterator[MergeRig]:
+    rig = MergeRig()
+    yield rig
+    rig.close()
+
+
 def _comparable(store: SingleTenantStore) -> tuple[object, object]:
     """The governance nodes (without their creation timestamp) and governance edges of `store`."""
     nodes = {
@@ -78,15 +93,33 @@ def _comparable(store: SingleTenantStore) -> tuple[object, object]:
     return nodes, edges
 
 
+def _gateway_governance_edges(rig: MergeRig) -> set[tuple[str, str, str]]:
+    """The governance edges the gateway wrote, read from the rig's graph (issue #210).
+
+    The merge side writes edges as gateway primitives, so they carry the gateway's `identity`
+    property (`TYPE:source->target`); the Restore snapshot edges are bare. Nothing else may differ:
+    the identity is checked against the endpoints and then dropped from the comparison.
+    """
+    edges: set[tuple[str, str, str]] = set()
+    for key, props in rig.policy_system.edges.items():
+        edge_type, _source_label, source_id, _target_label, target_id, identity = key
+        if edge_type not in _GOVERNANCE_EDGES:
+            continue
+        assert identity == f"{edge_type}:{source_id}->{target_id}"
+        assert props == {"identity": identity}
+        edges.add((edge_type, source_id, target_id))
+    return edges
+
+
 def test_restore_and_live_merge_write_identical_governance_trees(
-    rig: GatewayRig, make_emitter: MakeEmitter
+    rig: GatewayRig, make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
     emitter, _log_path = make_emitter()
     seed = parse_seed(json.loads(_SEED_PATH.read_text(encoding="utf-8")))
     baseline_name = ingest_seed(rig, seed)
     baseline = BaselineGraphReader(rig.graphs.open(baseline_name))
 
-    merged = SingleTenantStore()
+    merged = merge_rig.legacy
     merge_baseline_graph(
         _RID,
         baseline_graph=baseline,
@@ -96,9 +129,10 @@ def test_restore_and_live_merge_write_identical_governance_trees(
         call_embedding=OneHotEmbeddingCaller(),
         emitter=emitter,
         governance=GovernanceImport(owner=_OWNER),
+        **merge_rig.merge_keywords(),
     )
 
-    restored = SingleTenantStore()
+    restored = SnapshotWriteStore()
     fake_db = cast("FalkorDB", _FakeDb({baseline_name: baseline, "snapshot": restored}))
     restore_instrument_module._run_baseline_merge(  # pyright: ignore[reportPrivateUsage]
         fake_db,
@@ -111,8 +145,22 @@ def test_restore_and_live_merge_write_identical_governance_trees(
         GovernanceImport(owner=_OWNER),
     )
 
-    merged_nodes, merged_edges = _comparable(merged)
+    gateway_governance = [entry for entry in merge_rig.logged() if entry.name in _GOVERNANCE_LABELS]
+    assert len(gateway_governance) == 11 + 21 + 39
+    assert len({entry.group_id for entry in gateway_governance}) == 1
+    assert sum(1 for s in restored.statements if "ON CREATE SET" in s and "Policy" in s) == 11
+    for store in (merged, restored):
+        for label in _GOVERNANCE_LABELS:
+            for props in store.nodes_of(label).values():
+                # only a Policy is stamped, and the stamp is an ISO-8601 instant on either path
+                assert ("created_at" in props) == (label == "Policy")
+                if label == "Policy":
+                    assert datetime.fromisoformat(str(props["created_at"]))
+
+    merged_nodes, _view = _comparable(merged)
+    merged_edges = _gateway_governance_edges(merge_rig)
     restored_nodes, restored_edges = _comparable(restored)
     assert len(cast("dict[object, object]", merged_nodes)) == 11 + 21 + 39
     assert merged_nodes == restored_nodes
+    assert merged_edges
     assert merged_edges == restored_edges

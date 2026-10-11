@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Literal
 import pytest
 
 from api._audit_fakes import InMemoryAuditStore
-from ps_service.api.errors import PendingReviewNotFoundError
+from ps_service.api.errors import GraphWriteUnavailableError, PendingReviewNotFoundError
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.near_miss_review_orchestration import (
     NearMissReviewDependencies,
     run_resolve_near_miss,
@@ -24,7 +25,9 @@ from ps_service.config import ServiceConfig
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from api._gateway_fakes import ProcessGateway
     from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
+    from ps_service.company_merge.graph_submission import GraphWriteTarget
 
 Decision = Literal["keep-separate", "merge"]
 
@@ -63,8 +66,15 @@ def _deps(
     *,
     record: PendingReviewRecord | None = _RECORD,
     resolve: Callable[[str, Decision], ResolveOutcome | None] | None = None,
+    targets: list[GraphWriteTarget] | None = None,
 ) -> NearMissReviewDependencies:
-    def _resolve(_graph: GraphHandle, review_id: str, decision: Decision) -> ResolveOutcome | None:
+    if targets is None:
+        targets = []
+
+    def _resolve(
+        _graph: GraphHandle, review_id: str, decision: Decision, target: GraphWriteTarget
+    ) -> ResolveOutcome | None:
+        targets.append(target)
         store.events.append("graph:resolve")
         if resolve is not None:
             return resolve(review_id, decision)
@@ -243,3 +253,63 @@ def test_resolve_failure_is_still_raised_when_the_failed_row_cannot_be_written()
         _run(store, _deps(store, resolve=_boom))
 
     assert [r.outcome for r in store.rows] == ["applied"]
+
+
+@pytest.mark.parametrize("decision", ["keep-separate", "merge"])
+def test_resolve_without_a_gateway_is_503_after_the_not_found_check_and_before_any_audit_row(
+    decision: Decision,
+) -> None:
+    """Issue #210 (F2): the resolve writes through the gateway, so no gateway fails it closed.
+
+    The check comes after the not-found check (an unknown review is still a 404 and writes no
+    row) and before the opening audit row (no row for a resolution that cannot run).
+    """
+    install_graph_write_gateway(None)
+    store = InMemoryAuditStore()
+
+    with pytest.raises(GraphWriteUnavailableError):
+        _run(store, _deps(store), decision)
+
+    assert store.rows == []
+    assert store.events == []
+    with pytest.raises(PendingReviewNotFoundError):
+        _run(store, _deps(store, record=None), decision)
+
+
+@pytest.mark.parametrize("decision", ["keep-separate", "merge"])
+def test_resolve_anchors_the_group_to_the_opening_audit_rows_id(
+    decision: Decision, process_gateway: ProcessGateway
+) -> None:
+    """Issue #210 (A6): the resolution writes under the audit event of its own opening row.
+
+    The `GraphWriteTarget` handed to the resolution names the `policy_system` graph, carries the
+    id the store returned for the `near_miss.resolve` `applied` row (not one made up elsewhere),
+    and submits through the process gateway. The row is written before the target is built, so the
+    id exists when the group is logged.
+    """
+    store = InMemoryAuditStore(event_id_sink=process_gateway.rig.store.audit_rows.add)
+    targets: list[GraphWriteTarget] = []
+
+    _run(store, _deps(store, targets=targets), decision)
+
+    (opening_id,) = store.event_ids
+    (target,) = targets
+    assert target.audit_event_id == opening_id
+    assert target.graph_name == "policy_system"
+    assert target.submitter is process_gateway.rig.gateway
+    assert store.events == ["audit:near_miss.resolve:applied", "graph:resolve"]
+
+
+def test_a_failed_resolution_row_does_not_change_the_group_anchor() -> None:
+    """The follow-up `failed` row is a separate row: the group stays anchored to the opening one."""
+    store = InMemoryAuditStore()
+    targets: list[GraphWriteTarget] = []
+
+    def _boom(_review_id: str, _decision: Decision) -> ResolveOutcome | None:
+        raise CompanyMergePersistenceError("FalkorDB write failed: x")
+
+    with pytest.raises(CompanyMergePersistenceError):
+        _run(store, _deps(store, resolve=_boom, targets=targets))
+
+    assert [t.audit_event_id for t in targets] == [store.event_ids[0]]
+    assert len(store.event_ids) == 2  # opening row and failed row, each with its own id

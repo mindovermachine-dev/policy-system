@@ -3,12 +3,15 @@ persist_role_and_requirement_passthrough`/`persist_obligation_passthrough`
 (PLAN_REVIEWED.md §10 Increment 10; issue #28 AC-BI-006 fix): the
 Regulation/Role/Requirement/Obligation writers. RegulatoryInstrument keeps
 an unconditional `SET` (never canonically deduped, always refreshed);
-Role/Requirement/Obligation use `MERGE ... ON CREATE SET`, matching
+Role/Requirement/Obligation are create-only (an existing id is left out of the group), matching
 Capability's own load-bearing pattern (`persist_canonical_nodes`) exactly,
 since issue #28's live verification (IMPL_SLICE_7.md) found a real,
 pre-existing `policy_system` graph had 202 Role/Requirement/Obligation
 nodes' properties silently overwritten by a second `merge_baseline_graph`
 run against baseline graphs whose content had drifted slightly.
+
+Since issue #210 the RegulatoryInstrument/Role/Requirement writer submits a gateway group (the
+`merge_rig` fixture); the Obligation writer (slice 4a) submits a group too.
 
 Fakes implement the `GraphHandle`/`GraphQueryResult` Protocols
 (`ps_service.company_merge.falkordb_client`) structurally -- no mocking
@@ -18,90 +21,19 @@ this issue's binding testing convention.
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING
 
+from company_merge._gateway_fakes import POLICY_SYSTEM
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.graph_writer import (
     persist_obligation_passthrough,
     persist_role_and_requirement_passthrough,
 )
 from ps_service.company_merge.models import BaselineNode, ProvenanceEdge
 
-
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
-class _FakeQueryResult:
-    """Satisfies `GraphQueryResult` structurally."""
-
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
-
-
-class _FakeGraph:
-    """Satisfies `GraphHandle` structurally, capturing every `(query,
-    params)` call for assertion.
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
-
-
-_NODE_UPSERT_PATTERN = re.compile(
-    r"^MERGE \(n:(?P<label>\w+) \{id: \$id\}\) (?P<clause>ON CREATE SET|SET) n \+= \$properties$"
-)
-
-
-class _StatefulFakeGraph:
-    """A `GraphHandle` stand-in that actually IMPLEMENTS FalkorDB's own
-    `MERGE ... SET` vs `MERGE ... ON CREATE SET` property-write semantics,
-    unlike `_FakeGraph` above (which only records calls verbatim for
-    query/params assertions).
-
-    Keyed on `(label, id)`: an unconditional `SET` always (over)writes the
-    node's properties; `ON CREATE SET` writes them only the first time a
-    given `(label, id)` is seen, exactly mirroring the database-engine
-    guarantee `persist_canonical_nodes`'s docstring describes for
-    Capability. Used to prove, at the unit level with no real FalkorDB,
-    that a second `persist_*_passthrough` call with DIFFERENT property
-    values never disturbs a pre-existing node -- the real, live AC-BI-006
-    violation this test file's docstring describes (issue #28).
-    """
-
-    def __init__(self) -> None:
-        self._properties_by_label_and_id: dict[tuple[str, str], dict[str, object]] = {}
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        match = _NODE_UPSERT_PATTERN.match(q)
-        if match is None:
-            # Edge/instrument writes this file's tests never assert on the
-            # resulting state of -- record nothing, just succeed.
-            return _FakeQueryResult([[0]])
-        assert params is not None
-        label = match.group("label")
-        node_id = cast("str", params["id"])
-        key = (label, node_id)
-        already_exists = key in self._properties_by_label_and_id
-        if match.group("clause") == "SET" or not already_exists:
-            self._properties_by_label_and_id[key] = dict(
-                cast("dict[str, object]", params["properties"])
-            )
-        return _FakeQueryResult([[0]])
-
-    def properties_of(self, label: str, node_id: str) -> dict[str, object]:
-        return self._properties_by_label_and_id[(label, node_id)]
+if TYPE_CHECKING:
+    from company_merge._gateway_fakes import MergeRig
+    from ps_service.graph_gateway.models import GraphLogEntry
 
 
 def _role_node() -> BaselineNode:
@@ -126,8 +58,36 @@ def _regulatory_instrument_properties() -> dict[str, object]:
     return {"title": "Cyber Resilience Act", "jurisdiction": "EU"}
 
 
-def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
-    graph = _FakeGraph()
+def _target(rig: MergeRig) -> GraphWriteTarget:
+    return GraphWriteTarget(rig.gateway, POLICY_SYSTEM, rig.audit_event_id)
+
+
+def _persist(
+    rig: MergeRig,
+    instrument_id: str,
+    instrument_properties: dict[str, object],
+    roles: tuple[BaselineNode, ...],
+    requirements: tuple[BaselineNode, ...],
+    edges: tuple[ProvenanceEdge, ...],
+) -> None:
+    persist_role_and_requirement_passthrough(
+        _target(rig),
+        rig.legacy,
+        instrument_id,
+        instrument_properties,
+        roles,
+        requirements,
+        edges,
+    )
+
+
+def _properties(entry: GraphLogEntry) -> dict[str, object]:
+    properties = entry.content["properties"]
+    assert isinstance(properties, dict)
+    return {str(key): value for key, value in properties.items()}  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+
+
+def test_persist_writes_regulation_role_and_requirement_with_edges(merge_rig: MergeRig) -> None:
     role = _role_node()
     requirement = _requirement_node()
     defines_edge = ProvenanceEdge(
@@ -137,8 +97,8 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
         relationship_type="EXPRESSES", target_id=requirement.id, source_ref="Art. 13(1)"
     )
 
-    persist_role_and_requirement_passthrough(
-        graph,
+    _persist(
+        merge_rig,
         "CRA-1.0",
         _regulatory_instrument_properties(),
         (role,),
@@ -146,60 +106,45 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
         (defines_edge, expresses_edge),
     )
 
-    assert len(graph.calls) == 5
-    regulatory_instrument_call, role_call, requirement_call, defines_call, expresses_call = (
-        graph.calls
+    (group,) = merge_rig.groups
+    assert len(group.entries) == 5
+    regulatory_instrument_entry, role_entry, requirement_entry, defines_entry, expresses_entry = (
+        group.entries
     )
 
-    assert (
-        regulatory_instrument_call.query
-        == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert (regulatory_instrument_entry.name, regulatory_instrument_entry.identity) == (
+        "RegulatoryInstrument",
+        "CRA-1.0",
     )
-    assert regulatory_instrument_call.params == {
-        "id": "CRA-1.0",
-        "properties": _regulatory_instrument_properties(),
-    }
+    assert _properties(regulatory_instrument_entry) == _regulatory_instrument_properties()
 
-    assert role_call.query == "MERGE (n:Role {id: $id}) ON CREATE SET n += $properties"
-    assert role_call.params == {"id": role.id, "properties": role.properties}
+    assert (role_entry.name, role_entry.identity) == ("Role", role.id)
+    assert _properties(role_entry) == role.properties
 
-    assert (
-        requirement_call.query == "MERGE (n:Requirement {id: $id}) ON CREATE SET n += $properties"
+    assert (requirement_entry.name, requirement_entry.identity) == ("Requirement", requirement.id)
+    assert _properties(requirement_entry) == requirement.properties
+
+    assert (defines_entry.name, defines_entry.identity) == (
+        "DEFINES",
+        f"DEFINES:CRA-1.0->{role.id}",
     )
-    assert requirement_call.params == {"id": requirement.id, "properties": requirement.properties}
+    assert _properties(defines_entry) == {"source_ref": "Art. 13(1)"}
 
-    assert defines_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Role {id: $target_id}) "
-        "MERGE (r)-[e:DEFINES]->(n) SET e.source_ref = $source_ref"
+    assert (expresses_entry.name, expresses_entry.identity) == (
+        "EXPRESSES",
+        f"EXPRESSES:CRA-1.0->{requirement.id}",
     )
-    assert defines_call.params == {
-        "regulatory_instrument_id": "CRA-1.0",
-        "target_id": role.id,
-        "source_ref": "Art. 13(1)",
-    }
-
-    assert expresses_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), "
-        "(n:Requirement {id: $target_id}) "
-        "MERGE (r)-[e:EXPRESSES]->(n) SET e.source_ref = $source_ref"
-    )
-    assert expresses_call.params == {
-        "regulatory_instrument_id": "CRA-1.0",
-        "target_id": requirement.id,
-        "source_ref": "Art. 13(1)",
-    }
+    assert _properties(expresses_entry) == {"source_ref": "Art. 13(1)"}
 
 
-def test_persist_passthrough_writes_instrument_type_verbatim() -> None:
+def test_persist_passthrough_writes_instrument_type_verbatim(merge_rig: MergeRig) -> None:
     """AC-BI-011 (Company Merge, write side): `instrument_type` rides
-    through the Regulation MERGE verbatim inside `params["properties"]` —
+    through the Regulation upsert verbatim inside its properties —
     `regulatory_instrument_properties` is `dict[str, object]` with no key allow-list,
     so the key propagates by construction with NO src change.
     """
-    graph = _FakeGraph()
-
-    persist_role_and_requirement_passthrough(
-        graph,
+    _persist(
+        merge_rig,
         "NIS2-1.0",
         {"title": "NIS2 Directive", "jurisdiction": "EU", "instrument_type": "directive"},
         (),
@@ -207,24 +152,17 @@ def test_persist_passthrough_writes_instrument_type_verbatim() -> None:
         (),
     )
 
-    assert len(graph.calls) == 1
-    regulatory_instrument_call = graph.calls[0]
-    assert (
-        regulatory_instrument_call.query
-        == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    )
-    assert regulatory_instrument_call.params is not None
-    properties = regulatory_instrument_call.params["properties"]
-    assert isinstance(properties, dict)
-    assert properties["instrument_type"] == "directive"
+    (group,) = merge_rig.groups
+    assert len(group.entries) == 1
+    assert group.entries[0].name == "RegulatoryInstrument"
+    assert _properties(group.entries[0])["instrument_type"] == "directive"
 
 
-def test_persist_is_idempotent_across_repeated_calls() -> None:
-    """Re-running with identical input twice against the same fake graph
-    produces the same two sets of calls each time (trivial idempotency
-    shape check -- PLAN_REVIEWED.md §10 Increment 10).
+def test_persist_is_idempotent_across_repeated_calls(merge_rig: MergeRig) -> None:
+    """Re-running with identical input twice against the same graph leaves the graph as the
+    first run did and logs nothing more (PLAN_REVIEWED.md §10 Increment 10; the gateway drops
+    the mutations that change nothing).
     """
-    graph = _FakeGraph()
     role = _role_node()
     requirement = _requirement_node()
     defines_edge = ProvenanceEdge(
@@ -235,8 +173,8 @@ def test_persist_is_idempotent_across_repeated_calls() -> None:
     )
 
     for _ in range(2):
-        persist_role_and_requirement_passthrough(
-            graph,
+        _persist(
+            merge_rig,
             "CRA-1.0",
             _regulatory_instrument_properties(),
             (role,),
@@ -244,47 +182,50 @@ def test_persist_is_idempotent_across_repeated_calls() -> None:
             (defines_edge, expresses_edge),
         )
 
-    assert len(graph.calls) == 10
-    first_run, second_run = graph.calls[:5], graph.calls[5:]
-    assert first_run == second_run
+    assert len(merge_rig.groups) == 1
+    assert len(merge_rig.groups[0].entries) == 5
+    assert len(merge_rig.policy_system.nodes) == 3
+    assert len(merge_rig.policy_system.edges) == 2
 
 
-def test_persist_with_no_role_or_requirement_nodes_writes_only_regulation() -> None:
-    graph = _FakeGraph()
+def test_persist_with_no_role_or_requirement_nodes_writes_only_regulation(
+    merge_rig: MergeRig,
+) -> None:
+    _persist(merge_rig, "CRA-1.0", _regulatory_instrument_properties(), (), (), ())
 
-    persist_role_and_requirement_passthrough(
-        graph, "CRA-1.0", _regulatory_instrument_properties(), (), (), ()
-    )
-
-    assert len(graph.calls) == 1
-    assert graph.calls[0].query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    (group,) = merge_rig.groups
+    assert [entry.name for entry in group.entries] == ["RegulatoryInstrument"]
 
 
-def test_persist_role_and_requirement_query_uses_on_create_set() -> None:
-    """Issue #28 AC-BI-006 fix: Role/Requirement writes use `MERGE ... ON
-    CREATE SET`, matching Capability's own load-bearing pattern exactly --
-    NOT the unconditional `SET` RegulatoryInstrument still uses (it is
-    never canonically deduped and is always meant to refresh).
+def test_persist_role_and_requirement_are_create_only(merge_rig: MergeRig) -> None:
+    """Issue #28 AC-BI-006 fix: Role/Requirement writes are create-only, matching Capability's
+    own load-bearing pattern exactly -- NOT the refresh RegulatoryInstrument still gets (it is
+    never canonically deduped and is always meant to refresh). Since #210 an existing node is
+    left out of the group (a gateway upsert would merge over it), so the second run's group
+    carries the instrument alone.
     """
-    graph = _FakeGraph()
+    for _ in range(2):
+        _persist(
+            merge_rig,
+            "CRA-1.0",
+            {**_regulatory_instrument_properties(), "title": f"run {len(merge_rig.groups)}"},
+            (_role_node(),),
+            (_requirement_node(),),
+            (),
+        )
 
-    persist_role_and_requirement_passthrough(
-        graph,
-        "CRA-1.0",
-        _regulatory_instrument_properties(),
-        (_role_node(),),
-        (_requirement_node(),),
-        (),
-    )
-
-    _regulatory_instrument_call, role_call, requirement_call = graph.calls
-    assert role_call.query == "MERGE (n:Role {id: $id}) ON CREATE SET n += $properties"
-    assert (
-        requirement_call.query == "MERGE (n:Requirement {id: $id}) ON CREATE SET n += $properties"
-    )
+    first, second = merge_rig.groups
+    assert [entry.name for entry in first.entries] == [
+        "RegulatoryInstrument",
+        "Role",
+        "Requirement",
+    ]
+    assert [entry.name for entry in second.entries] == ["RegulatoryInstrument"]
 
 
-def test_persist_role_preserves_pre_existing_properties_on_second_write() -> None:
+def test_persist_role_preserves_pre_existing_properties_on_second_write(
+    merge_rig: MergeRig,
+) -> None:
     """Reproduces the real, live AC-BI-006 violation (IMPL_SLICE_7.md): a
     second `merge_baseline_graph` run (e.g. re-merging CRA against a
     baseline graph whose content has since drifted) must never overwrite a
@@ -293,21 +234,20 @@ def test_persist_role_preserves_pre_existing_properties_on_second_write() -> Non
     `role_the_obligations_laid_down_in_this_regulation_5e6f1d` in the real
     `policy_system` graph.
     """
-    graph = _StatefulFakeGraph()
     role_id = "role_the_obligations_laid_down_in_this_regulation_5e6f1d"
     original_properties: dict[str, str | float] = {"name": "Regulated Entity", "confidence": 0.86}
     drifted_properties: dict[str, str | float] = {"name": "Regulated Entity", "confidence": 0.93}
 
-    persist_role_and_requirement_passthrough(
-        graph,
+    _persist(
+        merge_rig,
         "CRA-1.0",
         _regulatory_instrument_properties(),
         (BaselineNode(role_id, original_properties),),
         (),
         (),
     )
-    persist_role_and_requirement_passthrough(
-        graph,
+    _persist(
+        merge_rig,
         "CRA-1.0",
         _regulatory_instrument_properties(),
         (BaselineNode(role_id, drifted_properties),),
@@ -315,17 +255,18 @@ def test_persist_role_preserves_pre_existing_properties_on_second_write() -> Non
         (),
     )
 
-    assert graph.properties_of("Role", role_id) == original_properties
+    assert merge_rig.policy_system.nodes[("Role", role_id)] == original_properties
 
 
-def test_persist_requirement_preserves_pre_existing_text_on_second_write() -> None:
+def test_persist_requirement_preserves_pre_existing_text_on_second_write(
+    merge_rig: MergeRig,
+) -> None:
     """Reproduces the real, live AC-BI-006 violation for a Requirement node
     (IMPL_SLICE_7.md): `CRA-1.0_req_art_4.3`'s `confidence` (0.97->0.92) AND
     `text` (a "Member States " prefix silently added) both changed on a
     second run against real `policy_system`. A second write with different
     property values must leave the pre-existing node untouched.
     """
-    graph = _StatefulFakeGraph()
     requirement_id = "CRA-1.0_req_art_4.3"
     original_properties: dict[str, str | float] = {
         "text": "Ensure conformity of the product.",
@@ -338,16 +279,16 @@ def test_persist_requirement_preserves_pre_existing_text_on_second_write() -> No
         "confidence": 0.92,
     }
 
-    persist_role_and_requirement_passthrough(
-        graph,
+    _persist(
+        merge_rig,
         "CRA-1.0",
         _regulatory_instrument_properties(),
         (),
         (BaselineNode(requirement_id, original_properties),),
         (),
     )
-    persist_role_and_requirement_passthrough(
-        graph,
+    _persist(
+        merge_rig,
         "CRA-1.0",
         _regulatory_instrument_properties(),
         (),
@@ -355,14 +296,13 @@ def test_persist_requirement_preserves_pre_existing_text_on_second_write() -> No
         (),
     )
 
-    assert graph.properties_of("Requirement", requirement_id) == original_properties
+    assert merge_rig.policy_system.nodes[("Requirement", requirement_id)] == original_properties
 
 
-def test_persist_obligation_query_uses_on_create_set() -> None:
-    """Issue #28 AC-BI-006 fix: Obligation writes use `MERGE ... ON CREATE
-    SET`, matching Role/Requirement/Capability's pattern exactly.
+def test_persist_obligation_writes_create_only_nodes_as_one_group(merge_rig: MergeRig) -> None:
+    """Issue #28 AC-BI-006 fix: Obligation writes are create-only, matching
+    Role/Requirement/Capability's pattern (since #210: one gateway group, not Cypher).
     """
-    graph = _FakeGraph()
     obligation = BaselineNode(
         id="obl_ensure_correct_application_of_the_ce_marking_regime_0579d8",
         properties={
@@ -371,13 +311,17 @@ def test_persist_obligation_query_uses_on_create_set() -> None:
         },
     )
 
-    persist_obligation_passthrough(graph, (obligation,))
+    persist_obligation_passthrough(_target(merge_rig), merge_rig.legacy, (obligation,))
 
-    assert len(graph.calls) == 1
-    assert graph.calls[0].query == "MERGE (n:Obligation {id: $id}) ON CREATE SET n += $properties"
+    assert len(merge_rig.groups) == 1
+    [entry] = merge_rig.groups[0].entries
+    assert (entry.name, entry.identity) == ("Obligation", obligation.id)
+    assert _properties(entry) == obligation.properties
 
 
-def test_persist_obligation_preserves_pre_existing_properties_on_second_write() -> None:
+def test_persist_obligation_preserves_pre_existing_properties_on_second_write(
+    merge_rig: MergeRig,
+) -> None:
     """Reproduces the real, live AC-BI-006 violation for Obligation nodes
     (IMPL_SLICE_7.md): 199 pre-existing Obligation nodes had `confidence`
     drift between a report's `before`/`after` snapshots (e.g.
@@ -386,7 +330,6 @@ def test_persist_obligation_preserves_pre_existing_properties_on_second_write() 
     with a different `confidence` value must leave the pre-existing node
     untouched.
     """
-    graph = _StatefulFakeGraph()
     obligation_id = "obl_ensure_correct_application_of_the_ce_marking_regime_0579d8"
     original_properties: dict[str, str | float] = {
         "text": "Ensure correct application of the CE marking regime.",
@@ -396,8 +339,14 @@ def test_persist_obligation_preserves_pre_existing_properties_on_second_write() 
         "text": "Ensure correct application of the CE marking regime.",
         "confidence": 0.93,
     }
+    target = _target(merge_rig)
 
-    persist_obligation_passthrough(graph, (BaselineNode(obligation_id, original_properties),))
-    persist_obligation_passthrough(graph, (BaselineNode(obligation_id, drifted_properties),))
+    persist_obligation_passthrough(
+        target, merge_rig.legacy, (BaselineNode(obligation_id, original_properties),)
+    )
+    persist_obligation_passthrough(
+        target, merge_rig.legacy, (BaselineNode(obligation_id, drifted_properties),)
+    )
 
-    assert graph.properties_of("Obligation", obligation_id) == original_properties
+    assert merge_rig.policy_system.nodes[("Obligation", obligation_id)] == original_properties
+    assert len(merge_rig.groups) == 1  # the second write found it and logged nothing

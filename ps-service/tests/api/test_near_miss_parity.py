@@ -25,12 +25,16 @@ from ps_service.main import create_app
 
 if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.graph_submission import GraphWriteTarget
 
 
 def _resolve(
-    graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+    graph: GraphHandle,
+    review_id: str,
+    decision: Literal["keep-separate", "merge"],
+    target: GraphWriteTarget,
 ) -> ResolveOutcome | None:
-    _ = graph
+    _ = (graph, target)
     return ResolveOutcome(review_id=review_id, decision=decision)
 
 

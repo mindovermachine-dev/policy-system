@@ -229,7 +229,7 @@ class DedupResult:
     already persisted before this run started) whose embedding had to be
     freshly computed during this run. A node minted DURING this run is
     deliberately excluded here -- its embedding is written as part of its
-    own ON CREATE SET properties at mint time (§6), never via backfill.
+    own properties at mint time (§6), never via backfill.
     merge.py (§7) passes this straight to
     graph_writer.backfill_canonical_embeddings after both kinds' dedup
     passes and all node/edge writes complete."""

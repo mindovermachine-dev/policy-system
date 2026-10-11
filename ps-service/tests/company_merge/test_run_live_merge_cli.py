@@ -34,7 +34,7 @@ from ps_service.logging import facade
 from ps_service.logging.run_context import current_run_id
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
     from types import ModuleType
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[3] / "tools" / "company-merge" / "run_live_merge.py"
@@ -208,6 +208,10 @@ class _RecordingMergeFn:
         *,
         baseline_graph: object,
         single_tenant_graph: object,
+        submitter: object,
+        single_tenant_graph_name: str,
+        baseline_graph_name: str,
+        audit_event_id: str,
         embed_model: str,
         similarity_threshold: float,
         call_embedding: object | None = None,
@@ -220,6 +224,10 @@ class _RecordingMergeFn:
                 "regulatory_instrument_id": regulatory_instrument_id,
                 "baseline_graph": baseline_graph,
                 "single_tenant_graph": single_tenant_graph,
+                "submitter": submitter,
+                "single_tenant_graph_name": single_tenant_graph_name,
+                "baseline_graph_name": baseline_graph_name,
+                "audit_event_id": audit_event_id,
                 "embed_model": embed_model,
                 "similarity_threshold": similarity_threshold,
                 "emitter": emitter,
@@ -229,6 +237,37 @@ class _RecordingMergeFn:
             message = f"boom on call #{len(self.calls)}"
             raise RuntimeError(message)
         return None
+
+
+class _FakeGateway:
+    """Stands in for the Graph Write Gateway: `merge_fn` is faked, so it is never submitted to."""
+
+
+class _FakeWriteAccess:
+    """The injected `write_access` builder: hands out one gateway and a recording audit recorder."""
+
+    def __init__(self) -> None:
+        self.gateway = _FakeGateway()
+        self.audit_calls: list[dict[str, object]] = []
+        self.build_calls = 0
+
+    def __call__(self, config: object) -> tuple[object, object]:
+        del config
+        self.build_calls += 1
+        return self.gateway, self._record
+
+    def _record(
+        self, *, action: str, resource_type: str, resource_id: str, details: Mapping[str, object]
+    ) -> str:
+        self.audit_calls.append(
+            {
+                "action": action,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "details": dict(details),
+            }
+        )
+        return f"audit-{len(self.audit_calls)}"
 
 
 _FIXED_CLOCK_VALUE = datetime(2026, 9, 13, 12, 0, 0, tzinfo=UTC)
@@ -461,6 +500,7 @@ def test_happy_path_calls_merge_fn_three_times_in_order_and_writes_report(
         _base_argv(approval_path=approval_path, report_path=report_path),
         graph_provider=provider,
         merge_fn=merge_fn,
+        write_access=_FakeWriteAccess(),
         clock=_fixed_clock,
     )
 
@@ -539,6 +579,7 @@ def test_merge_fn_raises_on_second_call_stops_before_third_and_leaves_approval_u
         _base_argv(approval_path=approval_path, report_path=report_path),
         graph_provider=provider,
         merge_fn=merge_fn,
+        write_access=_FakeWriteAccess(),
         clock=_fixed_clock,
     )
 
@@ -552,3 +593,124 @@ def test_merge_fn_raises_on_second_call_stops_before_third_and_leaves_approval_u
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["errors"] != []
     assert report["errors"][0]["regulatory_instrument_id"] == "NIS2-1.0"
+
+
+# --- Issue #210: the merge writes through the Graph Write Gateway ---------------------------
+
+
+def _passing_run(
+    cli_module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    write_access: object,
+    merge_fn: _RecordingMergeFn,
+) -> tuple[int, Path]:
+    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.9")
+    monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
+    approval_path = _write_approval_file(tmp_path)
+    provider, _calls = _make_graph_provider(
+        cli_module,
+        baseline_rows_by_short=_CLEAN_BASELINE_ROWS,
+        single_tenant_graph=_FakeSingleTenantGraph(),
+    )
+    exit_code = cli_module.main(
+        _base_argv(approval_path=approval_path, report_path=tmp_path / "report.json"),
+        graph_provider=provider,
+        merge_fn=merge_fn,
+        clock=_fixed_clock,
+        write_access=write_access,
+    )
+    return exit_code, approval_path
+
+
+def test_the_cli_passes_the_gateway_graph_names_and_an_audit_event_to_the_merge_function(
+    cli_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each regulation's merge gets the one gateway, both graph names and its own audit row id.
+
+    The row is a system-actor `ingestion_run.submit` row whose resource is the run id (the same
+    row an internal-seed run records), recorded once per regulation before its merge starts.
+    """
+    write_access = _FakeWriteAccess()
+    merge_fn = _RecordingMergeFn()
+
+    exit_code, _approval = _passing_run(
+        cli_module, tmp_path, monkeypatch, write_access=write_access, merge_fn=merge_fn
+    )
+
+    assert exit_code == 0
+    assert write_access.build_calls == 1
+    assert [
+        (
+            call["baseline_graph_name"],
+            call["single_tenant_graph_name"],
+            call["audit_event_id"],
+            call["submitter"] is write_access.gateway,
+        )
+        for call in merge_fn.calls
+    ] == [
+        ("cra_baseline", "policy_system", "audit-1", True),
+        ("nis2_baseline", "policy_system", "audit-2", True),
+        ("gdpr_baseline", "policy_system", "audit-3", True),
+    ]
+    assert [
+        (c["action"], c["resource_type"], c["resource_id"]) for c in write_access.audit_calls
+    ] == [
+        ("ingestion_run.submit", "ingestion_run", run_id)
+        for run_id in json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))["run_ids"]
+    ]
+    assert all(c["details"]["trigger"] == "operator_cli" for c in write_access.audit_calls)  # type: ignore[index]
+
+
+def test_the_cli_fails_closed_before_any_merge_when_no_gateway_can_be_built(
+    cli_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No PS state database / gateway: exit 1, no merge call, no graph selected, approval kept."""
+
+    def _no_gateway(config: object) -> tuple[object, object]:
+        del config
+        message = "the PS state database is not configured"
+        raise RuntimeError(message)
+
+    merge_fn = _RecordingMergeFn()
+
+    exit_code, approval_path = _passing_run(
+        cli_module, tmp_path, monkeypatch, write_access=_no_gateway, merge_fn=merge_fn
+    )
+
+    assert exit_code == 1
+    assert merge_fn.calls == []
+    assert approval_path.exists()
+    assert not (tmp_path / "report.json").exists()  # nothing ran, so no report of a run
+
+
+def test_an_unavailable_audit_trail_stops_the_run_before_that_regulations_merge(
+    cli_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The audit row is the group's anchor: if it cannot be written nothing may be merged."""
+
+    class _AuditDown(_FakeWriteAccess):
+        def _record(
+            self,
+            *,
+            action: str,
+            resource_type: str,
+            resource_id: str,
+            details: Mapping[str, object],
+        ) -> str:
+            del action, resource_type, resource_id, details
+            message = "The audit trail is temporarily unavailable."
+            raise RuntimeError(message)
+
+    merge_fn = _RecordingMergeFn()
+
+    exit_code, approval_path = _passing_run(
+        cli_module, tmp_path, monkeypatch, write_access=_AuditDown(), merge_fn=merge_fn
+    )
+
+    assert exit_code == 4
+    assert merge_fn.calls == []
+    assert approval_path.exists()
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["errors"][0]["regulatory_instrument_id"] == "CRA-1.0"

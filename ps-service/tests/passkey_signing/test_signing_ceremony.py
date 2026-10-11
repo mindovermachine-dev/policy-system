@@ -75,6 +75,7 @@ if TYPE_CHECKING:
     import pytest
 
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.passkey_signing.models import PendingApprovalRow, SigningCredentialRow
 
 # TestClient's default `base_url` is "http://testserver" -- `webauthn_rp.rp_id_and_origin`
@@ -121,7 +122,10 @@ def _client(
     audit_store: InMemoryAuditStore | None = None,
 ) -> TestClient:
     def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         _ = graph
         if recorded_calls is not None:

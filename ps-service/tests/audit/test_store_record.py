@@ -132,6 +132,30 @@ def test_record_returns_the_new_audit_event_id() -> None:
 
 
 @pytest.mark.postgres_live
+def test_record_standalone_with_event_id_returns_the_id_of_the_committed_row() -> None:
+    """Issue #210: the id returned names the row the standalone transaction committed."""
+    _require_configured_postgres()
+    config = load_config()
+    store = PsycopgAuditStore(config)
+    with connect_from_config(config) as conn:
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
+
+    event_id = store.record_standalone_with_event_id(
+        actor_subject="test-actor-subject",
+        actor_issuer="https://issuer.example.com/",
+        action="access_role.grant",
+        resource_type="principal",
+        resource_id="test-target-subject-event-id",
+        outcome="applied",
+        details={"access_role": "SystemAdmin"},
+    )
+
+    with connect_from_config(config) as conn, conn.cursor() as cur:
+        cur.execute("SELECT resource_id FROM audit_events WHERE id = %s", (event_id,))
+        assert cur.fetchone() == ("test-target-subject-event-id",)
+
+
+@pytest.mark.postgres_live
 def test_record_with_unregistered_action_raises_before_any_insert() -> None:
     """An unregistered `action` raises `AuditUnknownActionError` and never calls `cur.execute`."""
     _require_configured_postgres()

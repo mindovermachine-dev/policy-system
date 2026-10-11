@@ -5,9 +5,10 @@ Capability; restoring an instrument whose baseline Capability set includes
 one exact-match (the pre-seeded id) and one genuinely-new Capability results
 in: the finalized single-tenant graph gaining the new Capability node and
 the expected `DEFINES`/`EXPRESSES`/`HAS`/`SATISFIED_BY`/`REQUIRES` edges, via
-the EXISTING, unmodified `graph_writer.persist_*` functions (reused, not
-reimplemented -- `restore_instrument._run_baseline_merge` calls exactly
-these, in `merge.py::merge_baseline_graph`'s own write order) and the
+the interim `snapshot_merge_writer.persist_*` functions (a verbatim copy of
+Company Merge's pre-#210 writers, retired by #214 -- `restore_instrument.
+_run_baseline_merge` calls exactly these, in `merge.py::merge_baseline_graph`'s
+own write order, against the GRAPH.COPY snapshot) and the
 EXISTING, unmodified `resolve_capability_convergence_offline` (Slices
 5.3/5.4, D6) for the dedup decision itself.
 """

@@ -296,9 +296,8 @@ _EDGE_WRITE_RE = re.compile(
     r"MERGE \((?P=a_var)\)-\[(?:\w+)?:(?P<rel>\w+)\]->\((?P=b_var)\)"
     r"(?: SET \w+\.(?P<eprop>\w+) = \$(?P<eprop_param>\w+))?$"
 )
-_EMBEDDING_BACKFILL_RE = re.compile(
-    r"^MATCH \(n:(?P<label>\w+) \{id: \$id\}\) WHERE n\.embedding IS NULL "
-    r"SET n\.embedding = \$embedding$"
+_EMBEDDING_STATE_READ = re.compile(
+    r"^MATCH \(n:(?P<label>\w+)\) WHERE n\.id IN \$ids RETURN n\.id, n\.embedding IS NULL$"
 )
 _OBLIGATIONS_EXIST_QUERY = "MATCH (o:Obligation) WHERE o.id IN $ids RETURN o.id"
 _EXISTING_NODE_READ = re.compile(r"^MATCH \(n:(?P<label>\w+)\) WHERE n\.id IN \$ids RETURN n\.id$")
@@ -412,9 +411,17 @@ class _MiniGraph:
         if match := _EDGE_WRITE_RE.match(q):
             self._write_edge(match, params)
             return _FakeQueryResult([])
-        if match := _EMBEDDING_BACKFILL_RE.match(q):
-            self._backfill_embedding(match["label"], params)
-            return _FakeQueryResult([])
+        if match := _EMBEDDING_STATE_READ.match(q):
+            # issue #210: the backfills' read of which ids exist and have no embedding yet (the
+            # write is a gateway group, projected back by `_project_gateway_graph`)
+            known_nodes = self._nodes.get(match["label"], {})
+            return _FakeQueryResult(
+                [
+                    [i, known_nodes[i].get("embedding") is None]
+                    for i in cast("list[str]", params["ids"])
+                    if i in known_nodes
+                ]
+            )
         if match := _COUNT_RE.match(q):
             return _FakeQueryResult([[len(self._nodes.get(match["label"], {}))]])
         if match := _REACHABILITY_RE.match(q):
@@ -490,11 +497,6 @@ class _MiniGraph:
         edge_properties = self._edges.setdefault(key, {}).setdefault((a_id, b_id), {})
         if match["eprop"]:
             edge_properties[match["eprop"]] = params[match["eprop_param"]]
-
-    def _backfill_embedding(self, label: str, params: dict[str, object]) -> None:
-        node = self._nodes.get(label, {}).get(cast("str", params["id"]))
-        if node is not None and node.get("embedding") is None:
-            node["embedding"] = params["embedding"]
 
     def _count_unreachable(self, label: str) -> int:
         reachable: set[str] = set()
@@ -913,6 +915,10 @@ def _use_real_pipeline_stages(
         *,
         baseline_graph: object,
         single_tenant_graph: object,
+        submitter: GroupSubmitter,
+        single_tenant_graph_name: str,
+        baseline_graph_name: str,
+        audit_event_id: str,
         embed_model: str,
         similarity_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
@@ -920,16 +926,26 @@ def _use_real_pipeline_stages(
         governance: GovernanceImport | None = None,
     ) -> MergeResult:
         _ = call_embedding
-        return merge_baseline_graph(
+        result = merge_baseline_graph(
             regulatory_instrument_id,
             baseline_graph=baseline_graph,  # pyright: ignore[reportArgumentType] -- structural GraphHandle
             single_tenant_graph=single_tenant_graph,  # pyright: ignore[reportArgumentType]
+            submitter=submitter,
+            single_tenant_graph_name=single_tenant_graph_name,
+            baseline_graph_name=baseline_graph_name,
+            audit_event_id=audit_event_id,
             embed_model=embed_model,
             similarity_threshold=similarity_threshold,
             call_embedding=_fake_call_embedding,
             emitter=emitter,  # pyright: ignore[reportArgumentType]
             governance=governance,
         )
+        # the merge's gateway groups (issue #210) land in the rig's `policy_system`; the legacy
+        # writes it has not migrated yet are applied to `_MiniGraph` directly
+        _project_gateway_graph(
+            single_tenant_graph_name, into=cast("_MiniGraph", single_tenant_graph)
+        )
+        return result
 
     dependencies = PipelineDependencies(
         graphs=_mini_graph_openers(native, baseline, single_tenant, opened_short_names),
@@ -1134,14 +1150,22 @@ def test_the_ingest_stage_commits_its_native_graph_as_one_group_under_a_system_a
     result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
 
     assert result.is_error is False
-    # the extract and derive stages' groups follow (#209)
-    [group, baseline_group, derivation_group] = gateway.rig.store.groups
+    # the extract and derive stages' groups follow (#209), then the merge's three (#210)
+    [group, baseline_group, derivation_group, merge_group, obligation_group, capability_group] = (
+        gateway.rig.store.groups
+    )
     assert group.graph == "cra_native"
     assert group.audit_event_id == gateway.system_audit.ids[0]
     assert baseline_group.graph == "cra_baseline"
     assert baseline_group.audit_event_id == gateway.system_audit.ids[0]
     assert derivation_group.graph == "cra_baseline"
     assert derivation_group.audit_event_id == gateway.system_audit.ids[0]
+    assert merge_group.graph == "policy_system"
+    assert merge_group.audit_event_id == gateway.system_audit.ids[0]
+    assert obligation_group.graph == "policy_system"  # the Obligations are the merge's next group
+    assert obligation_group.audit_event_id == gateway.system_audit.ids[0]
+    assert capability_group.graph == "policy_system"  # then the minted Capabilities
+    assert capability_group.audit_event_id == gateway.system_audit.ids[0]
     row = gateway.system_audit.rows[0]
     assert cast("dict[str, object]", row["details"])["trigger"] == "sync_ingest"
     assert ("RegulatoryInstrument", _RID) in gateway.rig.graphs.open("cra_native").nodes

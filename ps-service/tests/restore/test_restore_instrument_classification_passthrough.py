@@ -5,11 +5,11 @@ passthrough (PLAN.md §5, IMPL_SLICE_5.md).
 `_run_baseline_merge` mirrors `company_merge.merge.merge_baseline_graph`'s
 live-path classification pass (Slices 1-4) exactly: after Capability/Policy
 dedup+writes complete, it persists PracticeArea/RiskPath nodes via
-`graph_writer.persist_practice_area_and_risk_path_passthrough` (no dedup, no
+`snapshot_merge_writer.persist_practice_area_and_risk_path_passthrough` (no dedup, no
 embedding call -- identity convergence is structural, content-hashed ids
 minted upstream by `internal_seed`), validates every COVERS/OWNS/
 MITIGATED_BY/VERIFIED_BY edge endpoint via
-`graph_writer.validate_classification_edge_endpoints` before any
+`snapshot_merge_writer.validate_classification_edge_endpoints` before any
 classification edge is written, then folds `classification_edges` into the
 same `persist_rewired_edges` call used for the regulatory-spine/governance
 edges.

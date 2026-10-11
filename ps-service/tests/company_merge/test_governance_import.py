@@ -1,61 +1,45 @@
-"""Tests for `ps_service.company_merge.governance_import` (issue #227, AC-BI-005).
+"""Tests for `ps_service.company_merge.governance_import` (issues #227, #210, AC-BI-005).
 
-The draft-governance pass is shared by restore and live internal ingest: a
-Policy/Standard/Control tree is imported as `draft`, owned by the importing
-caller, written only with `MERGE ... ON CREATE SET`. These tests drive the real
-pass against a stateful fake of the FalkorDB boundary that honours
-`ON CREATE SET`, so the "never overwrites an existing node" guarantee is proven
-against behaviour, not Cypher text.
+The draft-governance pass is shared by restore and live internal ingest: a Policy/Standard/Control
+tree is imported as `draft`, owned by the importing caller, create-only. The persistence step is
+supplied by the caller (`write_drafts` is required): live merge passes the Graph Write Gateway
+persister, restore its snapshot copy. These tests drive the real pass with the gateway persister
+over the merge rig, so the "never overwrites an existing node" guarantee is proven against
+behaviour (an existing node is left out of the group and nothing is logged for it).
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-from typing import cast
+from functools import partial
+from typing import TYPE_CHECKING
 
 import pytest
 
+from company_merge._gateway_fakes import POLICY_SYSTEM
 from ps_service.company_merge.errors import GovernanceOwnerRequiredError
 from ps_service.company_merge.governance_import import (
+    DraftGovernanceWriter,
     GovernanceImport,
     governance_count_fields,
     import_draft_governance,
 )
+from ps_service.company_merge.graph_submission import GraphWriteTarget
+from ps_service.company_merge.graph_writer import persist_governance_drafts
 from ps_service.company_merge.models import BaselineGraph, BaselineNode, GovernanceDraftCounts
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from company_merge._gateway_fakes import MergeRig
+
 _OWNER = ("alice@example.com", "https://idp.example/")
-_UPSERT = re.compile(r"^MERGE \(n:(?P<label>\w+) \{id: \$id\}\) ON CREATE SET n \+= \$properties$")
 
 
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
-class _FakeQueryResult:
-    @property
-    def result_set(self) -> list[object]:
-        return []
-
-
-class _StatefulFakeGraph:
-    """Records every call and keeps nodes keyed by `(label, id)`, honouring `ON CREATE SET`."""
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-        self.nodes: dict[tuple[str, str], dict[str, object]] = {}
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        match = _UPSERT.match(q)
-        assert match is not None, f"every governance write must be ON CREATE SET, got {q!r}"
-        assert params is not None
-        key = (match["label"], cast("str", params["id"]))
-        if key not in self.nodes:
-            self.nodes[key] = dict(cast("dict[str, object]", params["properties"]))
-        return _FakeQueryResult()
+def _write_drafts(rig: MergeRig) -> DraftGovernanceWriter:
+    """The writer live merge passes: the gateway persister with the rig's target bound."""
+    return partial(
+        persist_governance_drafts, GraphWriteTarget(rig.gateway, POLICY_SYSTEM, rig.audit_event_id)
+    )
 
 
 def _baseline(
@@ -91,71 +75,79 @@ def _control() -> BaselineNode:
     return BaselineNode(id="ctrl_a", properties={"title": "Access Control", "type": "manual"})
 
 
-def test_baseline_without_governance_writes_nothing_and_returns_none() -> None:
-    graph = _StatefulFakeGraph()
+def test_baseline_without_governance_writes_nothing_and_returns_none(merge_rig: MergeRig) -> None:
     mapping: dict[str, str] = {}
 
     counts = import_draft_governance(
         _baseline(),
-        single_tenant_graph=graph,
+        single_tenant_graph=merge_rig.legacy,
         governance=GovernanceImport(),
         canonical_id_by_incoming_id=mapping,
+        write_drafts=_write_drafts(merge_rig),
     )
 
     assert counts is None
-    assert graph.calls == []
+    assert merge_rig.legacy.statements == []
+    assert merge_rig.groups == []
     assert mapping == {}
 
 
-def test_governance_content_without_an_owner_is_refused_before_any_write() -> None:
-    graph = _StatefulFakeGraph()
-
+def test_governance_content_without_an_owner_is_refused_before_any_write(
+    merge_rig: MergeRig,
+) -> None:
     with pytest.raises(GovernanceOwnerRequiredError):
         import_draft_governance(
             _baseline(policies=(_policy(),)),
-            single_tenant_graph=graph,
+            single_tenant_graph=merge_rig.legacy,
             governance=GovernanceImport(owner=None),
             canonical_id_by_incoming_id={},
+            write_drafts=_write_drafts(merge_rig),
         )
 
-    assert graph.calls == []
+    assert merge_rig.legacy.statements == []
+    assert merge_rig.groups == []
 
 
-def test_tree_is_written_as_draft_owned_by_the_caller_with_on_create_set_only() -> None:
-    graph = _StatefulFakeGraph()
+def test_tree_is_written_as_draft_owned_by_the_caller_and_create_only(merge_rig: MergeRig) -> None:
     mapping: dict[str, str] = {}
 
     counts = import_draft_governance(
         _baseline(policies=(_policy(),), standards=(_standard(),), controls=(_control(),)),
-        single_tenant_graph=graph,
+        single_tenant_graph=merge_rig.legacy,
         governance=GovernanceImport(owner=_OWNER),
         canonical_id_by_incoming_id=mapping,
+        write_drafts=_write_drafts(merge_rig),
     )
 
+    nodes = merge_rig.policy_system.nodes
     assert counts == GovernanceDraftCounts(policies=1, standards=1, controls=1, status_overridden=1)
-    assert graph.nodes[("Policy", "pol_a")]["status"] == "draft"
-    assert graph.nodes[("Policy", "pol_a")]["owner_subject"] == _OWNER[0]
-    assert graph.nodes[("Policy", "pol_a")]["owner_issuer"] == _OWNER[1]
-    assert graph.nodes[("Standard", "std_a")]["status"] == "draft"
-    assert graph.nodes[("Control", "ctrl_a")]["status"] == "draft"
+    assert nodes[("Policy", "pol_a")]["status"] == "draft"
+    assert nodes[("Policy", "pol_a")]["owner_subject"] == _OWNER[0]
+    assert nodes[("Policy", "pol_a")]["owner_issuer"] == _OWNER[1]
+    assert nodes[("Standard", "std_a")]["status"] == "draft"
+    assert nodes[("Control", "ctrl_a")]["status"] == "draft"
     assert mapping == {"pol_a": "pol_a"}
+    assert len(merge_rig.groups) == 1
 
 
-def test_an_existing_approved_node_is_never_overwritten_by_a_reimport() -> None:
-    graph = _StatefulFakeGraph()
-    graph.nodes[("Policy", "pol_a")] = {"status": "approved", "owner_subject": "someone-else"}
+def test_an_existing_approved_node_is_never_overwritten_by_a_reimport(merge_rig: MergeRig) -> None:
+    merge_rig.policy_system.seed_node(
+        ("Policy",), "pol_a", {"status": "approved", "owner_subject": "someone-else"}
+    )
 
     import_draft_governance(
         _baseline(policies=(_policy(),)),
-        single_tenant_graph=graph,
+        single_tenant_graph=merge_rig.legacy,
         governance=GovernanceImport(owner=_OWNER),
         canonical_id_by_incoming_id={},
+        write_drafts=_write_drafts(merge_rig),
     )
 
-    assert graph.nodes[("Policy", "pol_a")] == {
+    assert merge_rig.policy_system.nodes[("Policy", "pol_a")] == {
         "status": "approved",
         "owner_subject": "someone-else",
     }
+    assert merge_rig.groups == []
 
 
 def test_count_fields_are_all_zero_without_governance_content() -> None:
@@ -176,3 +168,48 @@ def test_count_fields_carry_the_written_counts() -> None:
         "governance_controls": 39,
         "governance_status_overridden": 2,
     }
+
+
+def test_the_draft_writer_is_the_one_the_caller_supplies(merge_rig: MergeRig) -> None:
+    """Restore passes its snapshot writer (issue #210, D1); the pass must use it."""
+    seen: list[tuple[object, tuple[str, ...]]] = []
+    sentinel = GovernanceDraftCounts(policies=7, standards=0, controls=0, status_overridden=0)
+
+    def write_drafts(
+        target: object,
+        policies: tuple[BaselineNode, ...],
+        standards: tuple[BaselineNode, ...],
+        controls: tuple[BaselineNode, ...],
+        /,
+        *,
+        owner: tuple[str, str],
+        policy_embeddings: Mapping[str, tuple[float, ...]] | None,
+    ) -> GovernanceDraftCounts:
+        del standards, controls, owner, policy_embeddings
+        seen.append((target, tuple(policy.id for policy in policies)))
+        return sentinel
+
+    counts = import_draft_governance(
+        _baseline(policies=(_policy(),)),
+        single_tenant_graph=merge_rig.legacy,
+        governance=GovernanceImport(owner=_OWNER),
+        canonical_id_by_incoming_id={},
+        write_drafts=write_drafts,
+    )
+
+    assert counts is sentinel
+    assert seen == [(merge_rig.legacy, ("pol_a",))]
+    assert merge_rig.groups == []
+
+
+def test_the_draft_writer_has_no_default(merge_rig: MergeRig) -> None:
+    """A caller must choose the gateway or the snapshot writer: omitting it is a type error."""
+    with pytest.raises(TypeError, match="write_drafts"):
+        import_draft_governance(  # pyright: ignore[reportCallIssue]
+            _baseline(policies=(_policy(),)),
+            single_tenant_graph=merge_rig.legacy,
+            governance=GovernanceImport(owner=_OWNER),
+            canonical_id_by_incoming_id={},
+        )
+
+    assert merge_rig.groups == []

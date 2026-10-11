@@ -151,6 +151,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from api._gateway_fakes import installed_process_gateway
 from api.test_routes_near_misses import (
     _record,  # pyright: ignore[reportPrivateUsage]  -- reuse the existing REST-side fixture verbatim, not reinvented (PLAN.md Slice 3.1 instruction)
 )
@@ -460,7 +461,13 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """`near_misses_resolve` writes `near_miss.resolve` rows (issue #195): keep off Postgres."""
-    store = InMemoryAuditStore()
+
+    # Issue #210: the resolution's graph group is anchored to the opening row's id, which the
+    # graph log accepts only for a committed audit row -- register each id with the process rig.
+    def _register(event_id: str) -> None:
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+
+    store = InMemoryAuditStore(event_id_sink=_register)
     monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
@@ -476,7 +483,7 @@ def _call_near_misses_resolve(review_id: str, decision: str) -> CallToolResult:
 
 
 def test_keep_separate_resolves_with_winner_and_loser_left_none(
-    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
+    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines, audit_store: InMemoryAuditStore
 ) -> None:
     """AC-BI-004 (resolve half, keep-separate): the resolved review's
     `winner_id`/`loser_id` stay `None` in the response for this decision,
@@ -488,10 +495,14 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
 
     # Step 0 (`get_pending_review`, issue #195): the audit lookup of the review's entity ids.
     # Step 1 (`_FIND_REVIEW_QUERY`): the review exists, kind "Capability".
-    # Step 2 (`_DELETE_REVIEW_QUERY`): the real `resolve_review` does not
-    # inspect this call's return value at all for `keep-separate`.
-    graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]], []])
+    # Step 2 (issue #210): the review is deleted by a gateway group, not by a graph query, so
+    # the scripted handle sees no third call.
+    graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]]])
     _use_scripted_graph(monkeypatch, graph)
+    # The review node the gateway group deletes (a delete of an absent node logs nothing).
+    installed_process_gateway().rig.graphs.open("policy_system").seed_node(
+        ("PendingReview",), "review_aaa", {"kind": "Capability"}
+    )
 
     result = _call_near_misses_resolve("review_aaa", "keep-separate")
 
@@ -510,12 +521,16 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
     # 2-query sequence for `review_aaa`/`keep-separate` -- asserted on the
     # real queries/params it issued against `graph`, not on a fake
     # collaborator's own recorded call.
-    assert len(graph.calls) == 3
+    assert len(graph.calls) == 2
     assert graph.calls[0].params == {"review_id": "review_aaa"}
     assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in graph.calls[1].query
     assert graph.calls[1].params == {"review_id": "review_aaa"}
-    assert "DELETE r" in graph.calls[2].query
-    assert graph.calls[2].params == {"review_id": "review_aaa"}
+    # The delete reached the gateway as one group anchored to the opening audit row.
+    rig = installed_process_gateway().rig
+    (opening_id,) = audit_store.event_ids
+    assert [g.audit_event_id for g in rig.store.groups if g.graph == "policy_system"] == [
+        opening_id
+    ]
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
@@ -1006,17 +1021,13 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
 
-    # Step 1 (`_FIND_REVIEW_QUERY`) succeeds; Step 2 (`_DELETE_REVIEW_QUERY`,
-    # wrapped in `_execute_query`) raises something `_execute_query` itself
-    # does not catch (only `redis.exceptions.RedisError` is handled there).
-    graph = _ScriptedGraphHandle(
-        steps=[
-            [_row_for(_record("review_aaa"))],
-            [["Capability"]],
-            RuntimeError("boom -- must never reach the caller"),
-        ]
-    )
+    # Step 1 (`_FIND_REVIEW_QUERY`) succeeds; the delete is a gateway group (issue #210) whose log
+    # append raises something the gateway and `submit_group` do not classify.
+    graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]]])
     _use_scripted_graph(monkeypatch, graph)
+    rig = installed_process_gateway().rig
+    rig.graphs.open("policy_system").seed_node(("PendingReview",), "review_aaa", {"kind": "x"})
+    rig.store.fail_appends(error=RuntimeError("boom -- must never reach the caller"))
 
     result = _call_near_misses_resolve("review_aaa", "keep-separate")
 

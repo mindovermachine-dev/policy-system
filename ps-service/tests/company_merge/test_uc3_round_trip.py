@@ -32,7 +32,10 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from graph_gateway._fakes import InMemoryGraph
+
     from company_merge._fakes import MakeEmitter
+    from company_merge._gateway_fakes import MergeRig
 
 from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.company_merge.merge import merge_baseline_graph
@@ -185,15 +188,18 @@ class _ScriptedBaselineGraph:
             return _FakeQueryResult(
                 [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
-        if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
-            # issue #31 -- backfill_incoming_capability_embeddings' write
-            # against THIS (incoming) baseline graph.
+        if "WHERE n.id IN $ids RETURN n.id, n.embedding IS NULL" in q:
+            # issue #31, #210 -- backfill_incoming_capability_embeddings' read of which of its ids
+            # exist on THIS (incoming) baseline graph and have no embedding yet (the write is a
+            # gateway group on the rig's baseline graph).
             assert params is not None
-            node_id = cast("str", params["id"])
-            row = self._capabilities.get(node_id)
-            if row is not None and row[4] is None:
-                row[4] = params["embedding"]
-            return _FakeQueryResult([])
+            return _FakeQueryResult(
+                [
+                    [i, self._capabilities[i][4] is None]
+                    for i in cast("list[str]", params["ids"])
+                    if i in self._capabilities
+                ]
+            )
         raise AssertionError(f"unexpected query issued: {q!r}")
 
     @staticmethod
@@ -224,20 +230,36 @@ class _TraversableSingleTenantGraph:
     _NODE_WRITE_RE = re.compile(
         r"^MERGE \(n:(\w+) \{id: \$id\}\)( ON CREATE)? SET n \+= \$properties$"
     )
-    _EDGE_WRITE_RE = re.compile(
-        r"^MATCH \(s:(\w+) \{id: \$source_id\}\), \(t:(\w+) \{id: \$target_id\}\) "
-        r"MERGE \(s\)-\[:(\w+)\]->\(t\)$"
-    )
+    _EXISTENCE_RE = re.compile(r"^MATCH \(n:(\w+)\) WHERE n\.id IN \$ids RETURN n\.id$")
     _READ_INDEX_RE = re.compile(r"^MATCH \(n:(\w+)\) RETURN n\.id, n\.(\w+), n\.embedding$")
-    _BACKFILL_RE = re.compile(
-        r"^MATCH \(n:(\w+) \{id: \$id\}\) WHERE n\.embedding IS NULL "
-        r"SET n\.embedding = \$embedding$"
+    _EMBEDDING_STATE_RE = re.compile(
+        r"^MATCH \(n:(\w+)\) WHERE n\.id IN \$ids RETURN n\.id, n\.embedding IS NULL$"
     )
 
-    def __init__(self) -> None:
+    def __init__(self, gateway_graph: InMemoryGraph | None = None) -> None:
         self.nodes: dict[str, dict[str, dict[str, object]]] = defaultdict(dict)
-        self.edges: list[tuple[str, str, str]] = []
         self.calls: list[str] = []
+        # issue #210: the nodes the merge writes through the gateway (Capability so far) live in
+        # the rig's graph; this fake's own store holds the ones still written with Cypher.
+        self._gateway_graph = gateway_graph
+
+    @property
+    def edges(self) -> list[tuple[str, str, str]]:
+        """The edges the merge's gateway groups wrote, as (type, source id, target id)."""
+        if self._gateway_graph is None:
+            return []
+        return [(key[0], key[2], key[4]) for key in self._gateway_graph.edges]
+
+    def _node(self, label: str, node_id: str) -> dict[str, object] | None:
+        """The stored properties of one node: the Cypher-written store, then the gateway's."""
+        found = self.nodes[label].get(node_id)
+        if found is None and self._gateway_graph is not None:
+            found = self._gateway_graph.nodes.get((label, node_id))
+        return found
+
+    def holds(self, label: str, node_id: str) -> bool:
+        """Whether a `label` node `node_id` exists, however it was written."""
+        return self._node(label, node_id) is not None
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
@@ -254,36 +276,43 @@ class _TraversableSingleTenantGraph:
             self._write_node(label, node_id, properties, on_create=on_create)
             return _FakeQueryResult([])
 
-        edge_match = self._EDGE_WRITE_RE.match(q)
-        if edge_match is not None:
+        existence_match = self._EXISTENCE_RE.match(q)
+        if existence_match is not None:
+            # issue #210: the existing-node reads (create-only upserts, edge endpoints); every
+            # write is a gateway group, so the rig's graph answers
             assert params is not None
-            relationship_type = edge_match.group(3)
-            triple = (
-                relationship_type,
-                cast("str", params["source_id"]),
-                cast("str", params["target_id"]),
+            label = existence_match.group(1)
+            return _FakeQueryResult(
+                [[i] for i in cast("list[str]", params["ids"]) if self.holds(label, i)]
             )
-            if triple not in self.edges:
-                self.edges.append(triple)
-            return _FakeQueryResult([])
 
         read_index_match = self._READ_INDEX_RE.match(q)
         if read_index_match is not None:
             label, text_property = read_index_match.groups()
+            held = dict(self.nodes[label])
+            if self._gateway_graph is not None:
+                held.update(
+                    {i: p for (lbl, i), p in self._gateway_graph.nodes.items() if lbl == label}
+                )
             index_rows: list[object] = [
                 [node_id, props.get(text_property), props.get("embedding")]
-                for node_id, props in self.nodes[label].items()
+                for node_id, props in held.items()
             ]
             return _FakeQueryResult(index_rows)
 
-        backfill_match = self._BACKFILL_RE.match(q)
-        if backfill_match is not None:
+        state_match = self._EMBEDDING_STATE_RE.match(q)
+        if state_match is not None:
+            # issue #210: the backfill's read of which ids exist and have no embedding (its write
+            # is a gateway group on `policy_system`)
             assert params is not None
-            label = backfill_match.group(1)
-            node = self.nodes[label].get(cast("str", params["id"]))
-            if node is not None and node.get("embedding") is None:
-                node["embedding"] = params["embedding"]
-            return _FakeQueryResult([])
+            label = state_match.group(1)
+            return _FakeQueryResult(
+                [
+                    [i, node.get("embedding") is None]
+                    for i in cast("list[str]", params["ids"])
+                    if (node := self._node(label, i)) is not None
+                ]
+            )
 
         # Provenance-edge / RegulatoryInstrument writes: irrelevant to the
         # UC-3 traversal, safely ignored (never asserted on here).
@@ -307,7 +336,7 @@ class _TraversableSingleTenantGraph:
 
         rows: list[object] = []
         for capability_node_id, policy_node_id in governed_by:
-            policy = self.nodes["Policy"].get(policy_node_id)
+            policy = self._node("Policy", policy_node_id)
             if policy is None or "Engineering" not in str(policy.get("title", "")):
                 continue
             standard_node_id = supported_by.get(policy_node_id)
@@ -316,9 +345,9 @@ class _TraversableSingleTenantGraph:
             control_node_id = implemented_by.get(standard_node_id)
             if control_node_id is None:
                 continue
-            capability = self.nodes["Capability"].get(capability_node_id)
-            standard = self.nodes["Standard"].get(standard_node_id)
-            control = self.nodes["Control"].get(control_node_id)
+            capability = self._node("Capability", capability_node_id)
+            standard = self._node("Standard", standard_node_id)
+            control = self._node("Control", control_node_id)
             if capability is None or standard is None or control is None:
                 continue
             rows.append(
@@ -384,6 +413,7 @@ def _engineering_practices_baseline() -> _ScriptedBaselineGraph:
 
 def test_uc3_capability_policy_standard_control_query_returns_real_rows(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """S4's closing proof: after `merge_baseline_graph` merges the
     Engineering Practices baseline into `policy_system`, the exact UC-3
@@ -392,7 +422,7 @@ def test_uc3_capability_policy_standard_control_query_returns_real_rows(
     """
     emitter, _log_path = make_emitter()
     baseline = _engineering_practices_baseline()
-    single_tenant = _TraversableSingleTenantGraph()
+    single_tenant = _TraversableSingleTenantGraph(merge_rig.policy_system)
 
     result = merge_baseline_graph(
         _REGULATION_ID,
@@ -402,10 +432,11 @@ def test_uc3_capability_policy_standard_control_query_returns_real_rows(
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
         governance=GovernanceImport(owner=("sub-1", "https://issuer.example")),
+        **merge_rig.merge_keywords(),
     )
 
     assert result.governance_policies == 1
-    assert policy_id("Engineering Practices Policy") in single_tenant.nodes["Policy"]
+    assert single_tenant.holds("Policy", policy_id("Engineering Practices Policy"))
 
     query_result = single_tenant.query(_UC3_QUERY)
     rows = query_result.result_set

@@ -1,163 +1,216 @@
-"""Tests for `ps_service.company_merge.graph_writer.
-backfill_canonical_embeddings` (PLAN_REVIEWED.md §10 Increment 11, backfill
-half -- B2's fix): the `WHERE n.embedding IS NULL`-guarded embedding
-backfill writer for already-existing canonical nodes.
+"""Tests for the embedding backfill writers of `ps_service.company_merge.graph_writer`.
 
-Also `backfill_incoming_capability_embeddings` (issue #31) -- the
-incoming-side twin, same shape, targeting the baseline graph instead.
+PLAN_REVIEWED.md §10 Increment 11 (backfill half, B2's fix) and issue #31 (the incoming-side
+twin). Since issue #210 a backfill is a Graph Write Gateway group: the writer reads which of the
+named nodes exist and still have no embedding (one batched read per call, never the vector), and
+submits `UpsertNode(label, id, embedding=<vector>)` only for those. A node that already has an
+embedding, or does not exist, gets nothing (AC-BI-006): the gateway would merge over an existing
+embedding and would create an absent node, so set-if-null cannot be left to it.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 
+from company_merge._gateway_fakes import BASELINE, POLICY_SYSTEM
+from company_merge._seed_merge_graphs import SingleTenantStore
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.graph_writer import (
     backfill_canonical_embeddings,
     backfill_incoming_capability_embeddings,
+    build_embedding_backfill_primitives,
 )
+from ps_service.graph_gateway.digest import canonical_digest
+
+if TYPE_CHECKING:
+    from company_merge._gateway_fakes import MergeRig
 
 
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
+def _target(rig: MergeRig, graph_name: str = POLICY_SYSTEM) -> GraphWriteTarget:
+    return GraphWriteTarget(rig.gateway, graph_name, rig.audit_event_id)
 
 
-class _FakeQueryResult:
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
+def _node(rig: MergeRig, node_id: str, embedding: list[float] | None = None) -> None:
+    properties: dict[str, object] = {"name": node_id}
+    if embedding is not None:
+        properties["embedding"] = embedding
+    rig.policy_system.seed_node(("Capability",), node_id, properties)
 
 
-class _FakeGraph:
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
+def _logged_ids(rig: MergeRig) -> list[str]:
+    return [entry.identity for entry in rig.logged()]
 
 
-_EXPECTED_QUERY = (
-    "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL SET n.embedding = $embedding"
-)
+def test_a_node_without_an_embedding_receives_it_and_no_other_property_changes(
+    merge_rig: MergeRig,
+) -> None:
+    _node(merge_rig, "capability_1")
 
-
-def test_backfill_writes_exact_three_clause_query() -> None:
-    graph = _FakeGraph()
-
-    backfill_canonical_embeddings(graph, kind="Capability", embeddings={"capability_1": (0.1, 0.2)})
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == _EXPECTED_QUERY
-    assert "MATCH (n:Capability {id: $id})" in call.query
-    assert "WHERE n.embedding IS NULL" in call.query
-    assert "SET n.embedding = $embedding" in call.query
-    # Clauses appear in that order.
-    assert call.query.index("MATCH") < call.query.index("WHERE") < call.query.index("SET")
-    assert call.params == {"id": "capability_1", "embedding": [0.1, 0.2]}
-
-
-def test_backfill_writes_one_call_per_id_with_own_embedding() -> None:
-    graph = _FakeGraph()
-    embeddings = {
-        "capability_1": (0.1, 0.2),
-        "capability_2": (0.3, 0.4),
-        "capability_3": (0.5, 0.6),
-    }
-
-    backfill_canonical_embeddings(graph, kind="Capability", embeddings=embeddings)
-
-    assert len(graph.calls) == 3
-    calls_by_id = {call.params["id"]: call for call in graph.calls if call.params is not None}
-    assert set(calls_by_id) == {"capability_1", "capability_2", "capability_3"}
-    for node_id, embedding in embeddings.items():
-        call = calls_by_id[node_id]
-        assert call.query == _EXPECTED_QUERY
-        assert call.params == {"id": node_id, "embedding": list(embedding)}
-
-
-def test_backfill_with_empty_embeddings_writes_nothing() -> None:
-    graph = _FakeGraph()
-
-    backfill_canonical_embeddings(graph, kind="Capability", embeddings={})
-
-    assert graph.calls == []
-
-
-def test_backfill_capability_kind_writes_capability_label() -> None:
-    graph = _FakeGraph()
-
-    backfill_canonical_embeddings(graph, kind="Capability", embeddings={"capability_1": (0.9,)})
-
-    assert graph.calls[0].query == (
-        "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL SET n.embedding = $embedding"
+    backfill_canonical_embeddings(
+        _target(merge_rig),
+        merge_rig.legacy,
+        kind="Capability",
+        embeddings={"capability_1": (0.1, 0.2)},
     )
 
-
-def test_backfill_called_twice_with_identical_input_issues_identical_calls() -> None:
-    """Calling `backfill_canonical_embeddings` twice with the identical
-    `embeddings` dict against the same fake graph produces identical calls
-    both times -- call-shape identity. The real no-op-on-second-run EFFECT
-    depends on real FalkorDB state (the `WHERE n.embedding IS NULL` guard),
-    proven live elsewhere -- this only proves the writer doesn't behave
-    conditionally differently on a second call.
-    """
-    graph = _FakeGraph()
-    embeddings = {"capability_1": (0.1, 0.2), "capability_2": (0.3, 0.4)}
-
-    backfill_canonical_embeddings(graph, kind="Capability", embeddings=embeddings)
-    backfill_canonical_embeddings(graph, kind="Capability", embeddings=embeddings)
-
-    assert len(graph.calls) == 4
-    first_run, second_run = graph.calls[:2], graph.calls[2:]
-    assert first_run == second_run
+    [entry] = merge_rig.logged()
+    assert (entry.name, entry.identity, entry.embedding) == (
+        "Capability",
+        "capability_1",
+        (0.1, 0.2),
+    )
+    assert entry.content["properties"] == {}
+    assert merge_rig.policy_system.nodes[("Capability", "capability_1")] == {
+        "name": "capability_1",
+        "embedding": [0.1, 0.2],
+    }
 
 
-_EXPECTED_INCOMING_QUERY = (
-    "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL SET n.embedding = $embedding"
-)
+def test_a_node_that_already_has_an_embedding_is_unchanged_and_nothing_is_logged(
+    merge_rig: MergeRig,
+) -> None:
+    _node(merge_rig, "capability_1", embedding=[0.9, 0.9])
+    before = canonical_digest(merge_rig.policy_system)
+
+    backfill_canonical_embeddings(
+        _target(merge_rig),
+        merge_rig.legacy,
+        kind="Capability",
+        embeddings={"capability_1": (0.1, 0.2)},
+    )
+
+    assert merge_rig.logged() == []
+    assert merge_rig.groups == []
+    assert canonical_digest(merge_rig.policy_system) == before
+    assert merge_rig.policy_system.nodes[("Capability", "capability_1")]["embedding"] == [0.9, 0.9]
 
 
-def test_backfill_incoming_writes_exact_three_clause_query() -> None:
-    """Issue #31 (AC-BI-006/AC-BI-007): identical query shape to
-    `backfill_canonical_embeddings`, but this is the INCOMING side's own
-    writer -- no `kind` parameter, always Capability, and the caller passes
-    the regulation's own `{short}_baseline` `GraphHandle`, not the
-    single-tenant one (this fake stands in for either -- the writer itself
-    has no way to tell them apart, by design).
-    """
-    graph = _FakeGraph()
+def test_a_backfill_for_an_absent_node_creates_nothing(merge_rig: MergeRig) -> None:
+    backfill_canonical_embeddings(
+        _target(merge_rig),
+        merge_rig.legacy,
+        kind="Capability",
+        embeddings={"capability_gone": (0.1,)},
+    )
 
-    backfill_incoming_capability_embeddings(graph, embeddings={"capability_1": (0.1, 0.2)})
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == _EXPECTED_INCOMING_QUERY
-    assert call.query.index("MATCH") < call.query.index("WHERE") < call.query.index("SET")
-    assert call.params == {"id": "capability_1", "embedding": [0.1, 0.2]}
+    assert merge_rig.logged() == []
+    assert ("Capability", "capability_gone") not in merge_rig.policy_system.nodes
 
 
-def test_backfill_incoming_writes_one_call_per_id() -> None:
-    graph = _FakeGraph()
-    embeddings = {"capability_1": (0.1, 0.2), "capability_2": (0.3, 0.4)}
+def test_one_group_carries_one_primitive_per_eligible_id_in_input_order(
+    merge_rig: MergeRig,
+) -> None:
+    _node(merge_rig, "capability_1")
+    _node(merge_rig, "capability_2", embedding=[0.5])
+    _node(merge_rig, "capability_3")
 
-    backfill_incoming_capability_embeddings(graph, embeddings=embeddings)
+    backfill_canonical_embeddings(
+        _target(merge_rig),
+        merge_rig.legacy,
+        kind="Capability",
+        embeddings={
+            "capability_3": (0.3, 0.4),
+            "capability_2": (0.7,),
+            "capability_missing": (0.8,),
+            "capability_1": (0.1, 0.2),
+        },
+    )
 
-    assert len(graph.calls) == 2
-    calls_by_id = {call.params["id"]: call for call in graph.calls if call.params is not None}
-    assert set(calls_by_id) == {"capability_1", "capability_2"}
-    for node_id, embedding in embeddings.items():
-        assert calls_by_id[node_id].params == {"id": node_id, "embedding": list(embedding)}
+    assert _logged_ids(merge_rig) == ["capability_3", "capability_1"]
+    assert len(merge_rig.groups) == 1
 
 
-def test_backfill_incoming_with_empty_embeddings_writes_nothing() -> None:
-    graph = _FakeGraph()
+def test_the_state_read_is_one_batched_read_that_never_returns_the_vector(
+    merge_rig: MergeRig,
+) -> None:
+    _node(merge_rig, "capability_1")
+    _node(merge_rig, "capability_2")
 
-    backfill_incoming_capability_embeddings(graph, embeddings={})
+    backfill_canonical_embeddings(
+        _target(merge_rig),
+        merge_rig.legacy,
+        kind="Capability",
+        embeddings={"capability_1": (0.1,), "capability_2": (0.2,)},
+    )
 
-    assert graph.calls == []
+    reads = [q for q in merge_rig.legacy.statements if "embedding IS NULL" in q]
+    assert reads == ["MATCH (n:Capability) WHERE n.id IN $ids RETURN n.id, n.embedding IS NULL"]
+    assert merge_rig.legacy.params_seen[-1] == {"ids": ["capability_1", "capability_2"]}
+
+
+def test_backfill_with_empty_embeddings_reads_and_writes_nothing(merge_rig: MergeRig) -> None:
+    backfill_canonical_embeddings(
+        _target(merge_rig), merge_rig.legacy, kind="Capability", embeddings={}
+    )
+
+    assert merge_rig.legacy.statements == []
+    assert merge_rig.groups == []
+
+
+def test_a_second_backfill_with_the_same_input_logs_nothing_more(merge_rig: MergeRig) -> None:
+    _node(merge_rig, "capability_1")
+    embeddings = {"capability_1": (0.1, 0.2)}
+
+    backfill_canonical_embeddings(
+        _target(merge_rig), merge_rig.legacy, kind="Capability", embeddings=embeddings
+    )
+    backfill_canonical_embeddings(
+        _target(merge_rig), merge_rig.legacy, kind="Capability", embeddings=embeddings
+    )
+
+    assert _logged_ids(merge_rig) == ["capability_1"]
+
+
+def test_policy_kind_backfills_a_policy_node(merge_rig: MergeRig) -> None:
+    merge_rig.policy_system.seed_node(("Policy",), "policy_1", {"title": "p"})
+
+    backfill_canonical_embeddings(
+        _target(merge_rig), merge_rig.legacy, kind="Policy", embeddings={"policy_1": (0.4,)}
+    )
+
+    [entry] = merge_rig.logged()
+    assert (entry.name, entry.identity) == ("Policy", "policy_1")
+
+
+def test_the_builder_is_pure_and_keeps_only_ids_that_exist_with_a_null_embedding() -> None:
+    primitives = build_embedding_backfill_primitives(
+        {"a": True, "b": False},
+        {"a": (1.0,), "b": (2.0,), "c": (3.0,)},
+        label="Capability",
+    )
+
+    assert [(p.label, p.id, p.embedding) for p in primitives] == [("Capability", "a", (1.0,))]
+
+
+def test_the_incoming_embedding_is_backfilled_on_the_baseline_graph_as_a_group_on_that_graph(
+    merge_rig: MergeRig,
+) -> None:
+    baseline = merge_rig.graphs.open(BASELINE)
+    baseline.seed_node(("Capability",), "capability_1", {"name": "c"})
+    reader = SingleTenantStore(nodes=baseline.nodes)
+
+    backfill_incoming_capability_embeddings(
+        _target(merge_rig, BASELINE), reader, embeddings={"capability_1": (0.1, 0.2)}
+    )
+
+    [group] = [g for g in merge_rig.store.groups if g.graph == BASELINE]
+    assert [(e.name, e.identity, e.embedding) for e in group.entries] == [
+        ("Capability", "capability_1", (0.1, 0.2))
+    ]
+    assert baseline.nodes[("Capability", "capability_1")]["embedding"] == [0.1, 0.2]
+    assert merge_rig.groups == []  # nothing on policy_system
+
+
+def test_an_incoming_node_that_already_has_a_cached_embedding_is_not_rewritten(
+    merge_rig: MergeRig,
+) -> None:
+    baseline = merge_rig.graphs.open(BASELINE)
+    baseline.seed_node(("Capability",), "capability_1", {"name": "c", "embedding": [0.9]})
+    reader = SingleTenantStore(nodes=baseline.nodes)
+
+    backfill_incoming_capability_embeddings(
+        _target(merge_rig, BASELINE), reader, embeddings={"capability_1": (0.1, 0.2)}
+    )
+
+    assert [g for g in merge_rig.store.groups if g.graph == BASELINE] == []
+    assert cast("list[float]", baseline.nodes[("Capability", "capability_1")]["embedding"]) == [0.9]

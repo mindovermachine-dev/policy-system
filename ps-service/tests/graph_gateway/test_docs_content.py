@@ -630,3 +630,86 @@ def test_operations_guide_documents_the_503_when_the_gateway_is_not_running() ->
 
     assert "graph writes are unavailable" in troubleshooting
     assert "Ingestion never writes to FalkorDB directly" in troubleshooting
+
+
+# --- issue #210: Company Merge writes through the gateway ----------------------------------------
+
+
+def _company_merge_guidance() -> str:
+    section = _section(_read(_CA), "### Company Merge")
+    return section.split("#### Implementation Registration")[0]
+
+
+def test_architecture_company_merge_section_says_its_writes_go_through_the_gateway() -> None:
+    ca = _read(_CA)
+    guidance = _company_merge_guidance()
+
+    assert "Target design (not yet implemented" not in guidance
+    for needle in (
+        "Implemented (#210)",
+        "test_no_graph_write_path.py",
+        "create-only",
+        "set-if-null",
+        "read-resolve-write",
+        "StalePendingReviewError",
+        "record_opening_row_with_event_id",
+        "CompanyMergePersistenceError",
+        "AC-BI-002",
+    ):
+        assert needle in guidance, needle
+    assert "Company Merge target design" not in ca
+    assert "Company Merge (#210)" in ca or "Company Merge since #210" in ca
+    assert "#210" in _ca_row("| Graph Write Gateway | `ps.")
+
+
+def test_architecture_company_merge_lists_the_observable_differences() -> None:
+    guidance = _company_merge_guidance()
+    differences = guidance.split("Observable differences from the direct writes (#210)")[1]
+
+    for needle in (
+        "`None`",  # a classification row with a None required property now raises
+        "`status`",
+        "node deleted between the merge's reads and its write",
+        '(`stages_to_run == ("merge",)`)',  # merge-only resume needs the gateway
+        "`ingestion_run.submit`",
+        "BEFORE the approval is consumed",  # sign-route and resolve pre-check
+        "stays `pending`",
+        "marks it only when a transient fault outlasts its retries",  # health recording
+        "UNIDENTIFIED_EDGE_SCAN",
+        "PS state database",
+    ):
+        assert needle in differences, needle
+
+
+def test_architecture_restore_documents_the_interim_snapshot_writer_retired_by_214() -> None:
+    restore = _section(_read(_CA), "### Restore")
+
+    assert "restore/snapshot_merge_writer.py" in restore
+    assert "retired by #214" in restore
+    assert "test_restore_has_its_own_snapshot_writer.py" in restore
+
+
+def test_company_merge_registration_lists_the_gateway_modules_and_a_read_only_client() -> None:
+    section = _section(_read(_CA), "### Company Merge")
+    registration = section.split("#### Implementation Registration")[1].split("#### Actions")[0]
+    paths = re.findall(r"^\| `([^`]+)` \|", registration, flags=re.MULTILINE)
+
+    assert paths
+    for path in paths:
+        assert (_REPO / path).exists(), path
+    assert {Path(path).name for path in paths} >= {
+        "graph_submission.py",
+        "generated_values.py",
+        "pending_review.py",
+    }
+    assert "read-only client since #210" in registration
+
+
+def test_domain_concepts_and_operations_guide_name_company_merge_as_a_gateway_writer() -> None:
+    section = _section(_read(_DOMAIN_CONCEPTS), "## Graph Write Gateway and Mutation Log")
+    ops = _section(_read(_OPS), "## Troubleshooting / FAQ")
+
+    assert "Company Merge (the merge stage and the near-miss resolution) since #210" in section
+    assert "#210-#214" not in section
+    assert "Company Merge" in ops
+    assert "the approval stays pending" in ops

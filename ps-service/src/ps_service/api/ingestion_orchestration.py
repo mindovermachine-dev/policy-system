@@ -241,19 +241,27 @@ class IngestInternalStage(Protocol):
 class MergeStage(Protocol):
     """Call shape of ``ps_service.company_merge.merge_baseline_graph``."""
 
-    def __call__(
+    def __call__(  # noqa: PLR0913 -- the two read handles, the gateway seam (#210) and the merge's own options; no natural grouping
         self,
         regulatory_instrument_id: str,
         *,
         baseline_graph: GraphHandle,
         single_tenant_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        single_tenant_graph_name: str,
+        baseline_graph_name: str,
+        audit_event_id: str,
         embed_model: str,
         similarity_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
         governance: GovernanceImport | None = None,
     ) -> MergeResult:
-        """Merge one regulation's baseline graph into the single-tenant graph."""
+        """Merge one regulation's baseline graph into the single-tenant graph.
+
+        The two handles are READ handles; the merge's writes are submitted through `submitter`
+        as groups on the named graphs under `audit_event_id` (issue #210).
+        """
         ...
 
 
@@ -1064,8 +1072,8 @@ def _record_catalog_run_audit(
 class _LazyWriteContext:
     """The gateway and the one system audit event id of a run, resolved on first use.
 
-    Ingestion, extraction and derivation all write a graph under the same audit event; a
-    merge-only run never calls it, so it neither needs a gateway nor records a row (AC-BI-007).
+    Ingestion, extraction, derivation and merge all write a graph under the same audit event; the
+    first of them to run resolves the gateway and records the run's one row (AC-BI-007).
     """
 
     def __init__(
@@ -1230,12 +1238,17 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
         complete("derivation", _derivation_summary(derive_result))
     if "merge" in selected:
         set_stage(run_id, "merge")
+        writes, audit_event_id = write_context()
         merge_result = _run_stage(
             "merge",
             lambda: stages.merge(
                 rid,
                 baseline_graph=graphs.baseline,
                 single_tenant_graph=graphs.single_tenant,
+                submitter=writes.gateway,
+                single_tenant_graph_name=_single_tenant_graph_name(),
+                baseline_graph_name=baseline_graph_name,
+                audit_event_id=audit_event_id,
                 embed_model=resolved.embed_model,
                 similarity_threshold=resolved.similarity_threshold,
             ),
@@ -1712,6 +1725,15 @@ def _baseline_graph_name(short_name: str) -> str:
     return baseline_graph_name(short_name)
 
 
+def _single_tenant_graph_name() -> str:
+    """The single-tenant (``policy_system``) graph name, the target of the merge's groups."""
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+        single_tenant_graph_name,
+    )
+
+    return single_tenant_graph_name()
+
+
 def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators plus the caller identity; no natural grouping
     document: dict[str, object],
     *,
@@ -1828,6 +1850,10 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
                     rid,
                     baseline_graph=baseline_graph,
                     single_tenant_graph=single_tenant_graph,
+                    submitter=submitter,
+                    single_tenant_graph_name=_single_tenant_graph_name(),
+                    baseline_graph_name=_baseline_graph_name(short_name),
+                    audit_event_id=audit_event_id,
                     embed_model=resolved.embed_model,
                     similarity_threshold=resolved.similarity_threshold,
                     emitter=emitter,

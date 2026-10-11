@@ -15,8 +15,8 @@ filter is needed. It does filter on *resolvability* since issue #196
 (Cause 8): see that function's own docstring.
 This is a read, so -- mirroring `graph_reader.py`'s own
 "every query here is read-only, no dependency-health wrapper" convention --
-it calls `single_tenant_graph.query(...)` directly, not through
-`_execute_query` (which stays reserved for this module's writes).
+it calls `single_tenant_graph.query(...)` directly. Since issue #210 this module issues no
+write Cypher at all: its writes are gateway groups (`submit_group`).
 
 Slice 3 (AC-BI-004, the not-found half of AC-BI-008, the `keep-separate`
 half of AC-BI-009) adds `resolve_review`: reads the review first (a plain
@@ -37,8 +37,8 @@ to add `decision="merge"`. Per CHANGES.md H2, the merge branch runs one more
 read after the shared "does the review exist" check -- a combined
 existence-check (`_MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE`) confirming BOTH
 `incoming_id` and `nearest_existing_id` still resolve to real nodes -- before
-the atomic merge write (`_MERGE_QUERY_TEMPLATE`, CHANGES.md Appendix C1) is
-ever issued. A stale reference (either id no longer resolves -- e.g. a prior,
+the atomic merge group (issue #210; CHANGES.md Appendix C1 before it) is
+ever submitted. A stale reference (either id no longer resolves -- e.g. a prior,
 unrelated merge already deleted it) raises `StalePendingReviewError`
 (`company_merge/errors.py`), this module's own not-found-adjacent signal for
 that specific case, translated to `PendingReviewNotFoundError` with a
@@ -50,41 +50,33 @@ adapter/user-sourced) since Cypher labels are static/compile-time --
 (mirrors `dedup.py:101-103`'s own "fixed literal, no allow-list needed"
 precedent).
 
-`_MERGE_QUERY_TEMPLATE`'s `WITH DISTINCT winner, loser` after every
-`FOREACH` block (CHANGES.md C1) is the fix for the row-multiplication bug
-PLAN.md's original query had: each `OPTIONAL MATCH` can match more than one
-relationship (e.g. several `Obligation`s `REQUIRES`-ing the same loser
-`Capability` -- `docs/artifacts/ps-domain-concepts.md:652-681`'s own worked
-example, the domain's primary scenario, not an edge case), so without
-`DISTINCT` collapsing the row count back to 1 after each block, the trailing
-`DETACH DELETE loser, rev` would run once per surviving row instead of once.
-Verified against a real FalkorDB instance by the required
-`falkordb_live`-marked test in `test_pending_review_resolve.py` (issue #35
-Slice 4, CHANGES.md H1) -- see that test's own docstring for whether
-FOREACH/CASE worked as-is or the UNWIND fallback (CHANGES.md Appendix H1)
-was needed.
-
-Own copy of `graph_writer._execute_query`'s connectivity-wrapping shape
-(PLAN.md §4.3, mirroring `graph_writer.py`'s own module docstring
-precedent): a fresh private copy, not a shared import of another module's
-private, underscore-prefixed function.
+The merge is a read-resolve-write sequence (issue #210): the winner is decided in Python (older
+`created_at` wins, a missing one wins, a tie goes to the incoming node), the loser's edges are read
+with `RETURN DISTINCT`, and one group rewires them onto the winner and deletes the loser and the
+review. Several `Obligation`s `REQUIRES`-ing the same loser `Capability` is the domain's primary
+scenario (`docs/artifacts/ps-domain-concepts.md`): a repeated edge is one primitive and the loser
+is deleted once. The pre-#210 single-statement implementation is kept, frozen, in
+`tests/company_merge/_legacy_resolve_reference.py` as the equivalence reference; the
+`falkordb_live` test in `test_pending_review_resolve.py` is the live anchor.
 """
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, cast
 
-import redis.exceptions
+from pydantic import ValidationError
 
 from ps_service.company_merge.errors import CompanyMergePersistenceError, StalePendingReviewError
+from ps_service.company_merge.generated_values import SYSTEM_VALUES
+from ps_service.company_merge.graph_submission import edge_identity, read_rows, submit_group
 from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
-from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+from ps_service.graph_gateway.models import DeleteNode, NodeRef, UpsertEdge, UpsertNode
 from ps_service.logging import emit_log_entry
 
 if TYPE_CHECKING:
-    from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
+    from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.generated_values import ValueSource
+    from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.company_merge.models import NearMissPair
     from ps_service.logging import LogEmitter
 
@@ -131,7 +123,6 @@ _GET_REVIEW_QUERY = (
 )
 
 _FIND_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind"
-_DELETE_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) DELETE r"
 
 # Issue #190 -- a `merged` Capability tombstone is never a near-miss merge
 # side: the existence check treats it as gone (so a stale review naming one
@@ -153,53 +144,50 @@ _MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE = (
     "OPTIONAL MATCH (b:{kind} {{id: r.nearest_existing_id}}) "
     "WHERE coalesce(b.status, 'active') <> 'merged' "
     "RETURN r.incoming_id AS incoming_id, r.nearest_existing_id AS nearest_existing_id, "
-    "a IS NOT NULL AS incoming_exists, b IS NOT NULL AS existing_exists"
+    "a IS NOT NULL AS incoming_exists, b IS NOT NULL AS existing_exists, "
+    "a.created_at AS incoming_created_at, b.created_at AS existing_created_at"
 )
 
-# CHANGES.md Appendix C1 -- the corrected atomic merge/keep-separate write.
-# `WITH DISTINCT winner, loser` after every FOREACH block collapses however
-# many rows the preceding OPTIONAL MATCH produced back to exactly 1 before
-# the next OPTIONAL MATCH can multiply again -- without it, `DETACH DELETE
-# loser, rev` would run once per surviving row instead of once whenever the
-# loser has more than one matching edge (the domain's primary scenario, not
-# an edge case -- ps-domain-concepts.md:652-681). `{kind}` is templated for
-# the same static-label reason as above; `$incoming_id`/`$nearest_existing_id`
-# are real params here (already read back by the existence-check query,
-# not re-derived from `r`, since the loser node is about to be deleted and
-# re-matching by id after that would be pointless). M2 (final, user-confirmed):
-# `coalesce(created_at, '') <=` -- a missing/NULL created_at always wins
-# (sorts first) over a present one, since a node predating this feature is,
-# by definition, older than one minted after.
-_MERGE_QUERY_TEMPLATE = (
-    "MATCH (a:{kind} {{id: $incoming_id}}), (b:{kind} {{id: $nearest_existing_id}}) "
-    "WITH a, b, "
-    "CASE WHEN coalesce(a.created_at, '') <= coalesce(b.created_at, '') "
-    "THEN a ELSE b END AS winner, "
-    "CASE WHEN coalesce(a.created_at, '') <= coalesce(b.created_at, '') "
-    "THEN b ELSE a END AS loser "
-    "OPTIONAL MATCH (o:Obligation)-[:REQUIRES]->(loser) "
-    "FOREACH (_x IN CASE WHEN o IS NOT NULL THEN [1] ELSE [] END | "
-    "MERGE (o)-[:REQUIRES]->(winner)) "
-    "WITH DISTINCT winner, loser "
-    "OPTIONAL MATCH (loser)-[:GOVERNED_BY]->(p:Policy) "
-    "FOREACH (_x IN CASE WHEN p IS NOT NULL THEN [1] ELSE [] END | "
-    "MERGE (winner)-[:GOVERNED_BY]->(p)) "
-    "WITH DISTINCT winner, loser "
-    "OPTIONAL MATCH (c:Capability)-[:GOVERNED_BY]->(loser) "
-    "FOREACH (_x IN CASE WHEN c IS NOT NULL THEN [1] ELSE [] END | "
-    "MERGE (c)-[:GOVERNED_BY]->(winner)) "
-    "WITH DISTINCT winner, loser "
-    "OPTIONAL MATCH (loser)-[:SUPPORTED_BY]->(s:Standard) "
-    "FOREACH (_x IN CASE WHEN s IS NOT NULL THEN [1] ELSE [] END | "
-    "MERGE (winner)-[:SUPPORTED_BY]->(s)) "
-    "WITH DISTINCT winner, loser "
-    "OPTIONAL MATCH (t:Capability)-[:MERGED_INTO]->(loser) "
-    "FOREACH (_x IN CASE WHEN t IS NOT NULL THEN [1] ELSE [] END | "
-    "MERGE (t)-[:MERGED_INTO]->(winner)) "
-    "WITH DISTINCT winner, loser "
-    "MATCH (rev:PendingReview {{id: $review_id}}) "
-    "DETACH DELETE loser, rev "
-    "RETURN winner.id AS winner_id, loser.id AS loser_id"
+# Issue #210: the loser's edges are READ, then rewired by gateway primitives. One fixed read per
+# edge family, in the order the old single statement rewired them (inbound REQUIRES, outbound
+# GOVERNED_BY, inbound GOVERNED_BY, outbound SUPPORTED_BY, inbound MERGED_INTO); `{kind}` is the
+# loser's label (labels are static in Cypher) and the loser's id is a param. Every family is read
+# whatever the kind, as the old statement matched every family: a pattern that cannot exist for
+# the kind returns no rows. `DISTINCT` is the row-multiplication guard the old `WITH DISTINCT
+# winner, loser` was (several Obligations can require one loser; a parallel edge is one edge).
+#
+# (edge type, other end's label, loser is the target, read template)
+_LOSER_EDGE_READS: tuple[tuple[str, str, bool, str], ...] = (
+    (
+        "REQUIRES",
+        "Obligation",
+        True,
+        "MATCH (n:Obligation)-[:REQUIRES]->(l:{kind} {{id: $loser_id}}) RETURN DISTINCT n.id",
+    ),
+    (
+        "GOVERNED_BY",
+        "Policy",
+        False,
+        "MATCH (l:{kind} {{id: $loser_id}})-[:GOVERNED_BY]->(n:Policy) RETURN DISTINCT n.id",
+    ),
+    (
+        "GOVERNED_BY",
+        "Capability",
+        True,
+        "MATCH (n:Capability)-[:GOVERNED_BY]->(l:{kind} {{id: $loser_id}}) RETURN DISTINCT n.id",
+    ),
+    (
+        "SUPPORTED_BY",
+        "Standard",
+        False,
+        "MATCH (l:{kind} {{id: $loser_id}})-[:SUPPORTED_BY]->(n:Standard) RETURN DISTINCT n.id",
+    ),
+    (
+        "MERGED_INTO",
+        "Capability",
+        True,
+        "MATCH (n:Capability)-[:MERGED_INTO]->(l:{kind} {{id: $loser_id}}) RETURN DISTINCT n.id",
+    ),
 )
 
 _REVIEW_ID_PREFIX = "review_"
@@ -208,65 +196,80 @@ _COMPONENT = "company_merge"
 _RESOLVE_ACTION = "resolve_near_miss_review"
 
 
-def _execute_query(
-    graph: GraphHandle, query: str, params: dict[str, object] | None = None
-) -> GraphQueryResult:
-    """Wrap every `graph.query()` write in this module for connectivity-health recording.
-
-    Own copy of `graph_writer._execute_query` -- see module docstring.
-    """
-    try:
-        result = graph.query(query, params=params)
-    except redis.exceptions.RedisError as exc:
-        mark_unhealthy(FALKORDB, error=exc)
-        raise CompanyMergePersistenceError(f"FalkorDB write failed: {exc}") from exc
-    mark_healthy(FALKORDB)
-    return result
-
-
-def persist_pending_reviews(
-    single_tenant_graph: GraphHandle,
+def build_pending_review_primitives(
     near_misses: tuple[NearMissPair, ...],
     *,
     kind: Literal["Capability", "Policy"],
-) -> None:
-    """Persist one `PendingReview` node per `NearMissPair` (AC-BI-001, AC-BI-002).
+    values: ValueSource,
+) -> tuple[UpsertNode, ...]:
+    """One `PendingReview` node primitive per `NearMissPair`, its uuid and `created_at` fixed.
 
-    `CREATE`, not `MERGE`: every `NearMissPair` this function receives is, by
-    construction, a genuinely new occurrence surfaced during THIS merge run
-    -- there is no dedup-of-near-misses concept in this schema
-    (`dedup.py` never re-surfaces a pair it already recorded in a prior run).
-    A repeat `merge_baseline_graph` run over unchanged input could in
-    principle re-surface the same `incoming_id`/`nearest_existing_id` pair
-    and create a duplicate `PendingReview` -- an accepted, pre-existing-
-    pattern-consistent gap (PLAN.md §4.1): deduplicating review records
-    themselves is out of this issue's AC scope (no bulk/batch resolve).
+    Pure apart from `values`: nothing is read or submitted. For each pair, in order, the id is
+    drawn first (`review_<values.new_id()>`) and then the instant (`values.now()` as ISO-8601
+    text), the order the Cypher writer drew them (`uuid4`, then `datetime.now`). They are drawn
+    HERE, while the group is built, so the group carries literals: submitting it twice leaves one
+    node per review (an `UpsertNode` merges into the node it created) and a replay of the log
+    reproduces the same ids and timestamps (AC-BI-007).
 
-    `id` is minted via `uuid.uuid4().hex`, prefixed `review_` for operator
-    readability -- a `PendingReview` is an operational/review record, not a
-    regulatory/canonical entity, so it has no stable content to hash
-    (PLAN.md §2.4).
+    Raises:
+        CompanyMergePersistenceError: a review carries a property the gateway cannot store (a
+            non-finite similarity); nothing has been submitted by then.
     """
+    primitives: list[UpsertNode] = []
     for pair in near_misses:
-        _execute_query(
-            single_tenant_graph,
-            "CREATE (r:PendingReview {id: $id, kind: $kind, status: $status, "
-            "incoming_id: $incoming_id, incoming_text: $incoming_text, "
-            "nearest_existing_id: $nearest_existing_id, "
-            "nearest_existing_text: $nearest_existing_text, "
-            "similarity: $similarity, created_at: $created_at})",
-            params={
-                "id": f"{_REVIEW_ID_PREFIX}{uuid.uuid4().hex}",
-                "kind": kind,
-                "status": "pending",
-                "incoming_id": pair.incoming_id,
-                "incoming_text": pair.incoming_text,
-                "nearest_existing_id": pair.nearest_existing_id,
-                "nearest_existing_text": pair.nearest_existing_text,
-                "similarity": pair.similarity,
-                "created_at": datetime.now(UTC).isoformat(),
-            },
-        )
+        review_id = f"{_REVIEW_ID_PREFIX}{values.new_id()}"
+        try:
+            primitives.append(
+                UpsertNode(
+                    label="PendingReview",
+                    id=review_id,
+                    properties={
+                        "kind": kind,
+                        "status": "pending",
+                        "incoming_id": pair.incoming_id,
+                        "incoming_text": pair.incoming_text,
+                        "nearest_existing_id": pair.nearest_existing_id,
+                        "nearest_existing_text": pair.nearest_existing_text,
+                        "similarity": pair.similarity,
+                        "created_at": values.now().isoformat(),
+                    },
+                )
+            )
+        except ValidationError as exc:
+            raise CompanyMergePersistenceError(
+                f"PendingReview {review_id!r} has a property the graph cannot store "
+                "(a reserved key, or a value that is not finite or is out of range)"
+            ) from exc
+    return tuple(primitives)
+
+
+def persist_pending_reviews(
+    target: GraphWriteTarget,
+    near_misses: tuple[NearMissPair, ...],
+    *,
+    kind: Literal["Capability", "Policy"],
+    values: ValueSource = SYSTEM_VALUES,
+) -> None:
+    """Persist one `PendingReview` node per `NearMissPair`, as ONE gateway group (AC-BI-001/002).
+
+    Always a create: every `NearMissPair` this function receives is, by construction, a genuinely
+    new occurrence surfaced during THIS merge run -- there is no dedup-of-near-misses concept in
+    this schema (`dedup.py` never re-surfaces a pair it already recorded in a prior run). A repeat
+    `merge_baseline_graph` run over unchanged input could in principle re-surface the same
+    `incoming_id`/`nearest_existing_id` pair and create a duplicate `PendingReview` -- an accepted,
+    pre-existing-pattern-consistent gap (PLAN.md §4.1): deduplicating review records themselves is
+    out of this issue's AC scope (no bulk/batch resolve). Nothing is read first, for that reason.
+
+    `id` is `review_` plus a uuid, prefixed for operator readability -- a `PendingReview` is an
+    operational/review record, not a regulatory/canonical entity, so it has no stable content to
+    hash (PLAN.md §2.4). Since issue #210 the uuid and `created_at` come from `values` and are
+    fixed before submission (`build_pending_review_primitives`). No near-miss submits nothing.
+
+    Raises:
+        CompanyMergePersistenceError: a review carries a property the gateway cannot store, or the
+            gateway did not take the group (`FalkorDB write failed:`).
+    """
+    submit_group(target, build_pending_review_primitives(near_misses, kind=kind, values=values))
 
 
 def list_pending_reviews(single_tenant_graph: GraphHandle) -> tuple[PendingReviewRecord, ...]:
@@ -333,6 +336,7 @@ def resolve_review(
     single_tenant_graph: GraphHandle,
     review_id: str,
     decision: Literal["merge", "keep-separate"],
+    target: GraphWriteTarget,
     *,
     emitter: LogEmitter | None = None,
 ) -> ResolveOutcome | None:
@@ -348,9 +352,12 @@ def resolve_review(
     (nothing has been written yet). See the module docstring for why `None`,
     not a raised exception, is this module's own not-found signal.
 
-    Step 2 (`decision="keep-separate"`, AC-BI-004): one write query,
-    `MATCH (r:PendingReview {id: $review_id}) DELETE r` -- nothing else
-    touched (no other graph node or edge changes).
+    Step 2 (`decision="keep-separate"`, AC-BI-004): one gateway group on `target` whose only
+    primitive deletes the `PendingReview` node -- nothing else touched (no other graph node or
+    edge changes, issue #210). The review is read first and deleted after, with no lock between:
+    a review that vanished in between makes the delete a no-op (the gateway drops it), as the old
+    `MATCH ... DELETE` matched nothing. `target` names the `policy_system` graph and the audit
+    event of the resolution's opening row; the merge decision does not use it yet (slice 10b).
 
     Step 2 (`decision="merge"`, AC-BI-005/006/007): delegates to
     `_resolve_merge` -- CHANGES.md H2's combined existence-check read, then
@@ -376,7 +383,7 @@ def resolve_review(
     kind = cast('Literal["Capability", "Policy"]', rows[0][0])
 
     if decision == "merge":
-        merge_ids = _resolve_merge(single_tenant_graph, review_id, kind)
+        merge_ids = _resolve_merge(single_tenant_graph, review_id, kind, target)
         if merge_ids is None:
             return None
         winner_id, loser_id = merge_ids
@@ -392,7 +399,7 @@ def resolve_review(
             review_id=review_id, decision=decision, winner_id=winner_id, loser_id=loser_id
         )
 
-    _execute_query(single_tenant_graph, _DELETE_REVIEW_QUERY, params={"review_id": review_id})
+    submit_group(target, (DeleteNode(label="PendingReview", id=review_id),))
     emit_log_entry(
         component=_COMPONENT,
         action=_RESOLVE_ACTION,
@@ -407,42 +414,97 @@ def _resolve_merge(
     single_tenant_graph: GraphHandle,
     review_id: str,
     kind: Literal["Capability", "Policy"],
+    target: GraphWriteTarget,
 ) -> tuple[str, str] | None:
     """The `decision="merge"` half of `resolve_review`'s Step 2 (AC-BI-005/006/007).
 
-    First issues CHANGES.md H2's combined existence-check read. Zero rows
-    (the review vanished between `resolve_review`'s own Step 1 and this call
-    -- a benign, narrow race) returns `None`, propagated by the caller as a
-    plain not-found, identically to Step 1's own zero-rows case. A row with
-    either `incoming_exists`/`existing_exists` false raises
-    `StalePendingReviewError` -- before the merge write query below is ever
-    issued, so "no graph changes" holds on this path too.
+    Issue #210: read, resolve, then write ONE gateway group.
 
-    Only once both referenced nodes are confirmed present does the single
-    atomic `_MERGE_QUERY_TEMPLATE` write run -- one `GRAPH.QUERY` call:
-    determines winner/loser (earlier `created_at` wins, §M2), re-points
-    every edge type that can reference a Capability/Policy loser onto the
-    winner, deletes the loser node and the `PendingReview` record.
+    Read: CHANGES.md H2's combined existence-check, widened to return both nodes' `created_at`.
+    Zero rows (the review vanished between `resolve_review`'s own Step 1 and this call -- a benign,
+    narrow race) returns `None`, propagated by the caller as a plain not-found. A row with either
+    `incoming_exists`/`existing_exists` false raises `StalePendingReviewError` -- before anything
+    is submitted, so "no graph changes" holds on this path too.
+
+    Resolve: the winner is decided here, in Python (`_incoming_wins`): earlier `created_at` wins, a
+    missing one counts as the earliest, a tie goes to the incoming node (§M2). Then the loser's
+    five edge families are read (`_LOSER_EDGE_READS`).
+
+    Write: `UpsertEdge`s putting each of the loser's edges on the winner, then `DeleteNode(loser)`
+    (which removes whatever edges remain), then `DeleteNode(PendingReview)`, as one group on
+    `target`: all or nothing. No lock spans the reads and the write (C-0, as before): a node
+    deleted in between makes the gateway refuse the group on a missing endpoint, and a review
+    deleted in between makes its delete a no-op.
     """
     existence_query = _MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE.format(kind=kind)
     existence_result = single_tenant_graph.query(existence_query, params={"review_id": review_id})
     existence_rows = cast("list[list[object]]", existence_result.result_set)
     if not existence_rows:
         return None
-    incoming_id, nearest_existing_id, incoming_exists, existing_exists = existence_rows[0]
+    (
+        incoming_id,
+        nearest_existing_id,
+        incoming_exists,
+        existing_exists,
+        incoming_created_at,
+        existing_created_at,
+    ) = existence_rows[0]
     if not incoming_exists or not existing_exists:
         raise StalePendingReviewError(review_id)
 
-    merge_query = _MERGE_QUERY_TEMPLATE.format(kind=kind)
-    merge_result = _execute_query(
-        single_tenant_graph,
-        merge_query,
-        params={
-            "incoming_id": incoming_id,
-            "nearest_existing_id": nearest_existing_id,
-            "review_id": review_id,
-        },
+    incoming_id, nearest_existing_id = cast("str", incoming_id), cast("str", nearest_existing_id)
+    if _incoming_wins(incoming_created_at, existing_created_at):
+        winner_id, loser_id = incoming_id, nearest_existing_id
+    else:
+        winner_id, loser_id = nearest_existing_id, incoming_id
+
+    primitives = (
+        *_rewire_primitives(single_tenant_graph, kind, winner_id, loser_id),
+        DeleteNode(label=kind, id=loser_id),
+        DeleteNode(label="PendingReview", id=review_id),
     )
-    merge_rows = cast("list[list[object]]", merge_result.result_set)
-    winner_id, loser_id = merge_rows[0]
-    return cast("str", winner_id), cast("str", loser_id)
+    submit_group(target, primitives)
+    return winner_id, loser_id
+
+
+def _incoming_wins(incoming_created_at: object, existing_created_at: object) -> bool:
+    """`coalesce(a.created_at, '') <= coalesce(b.created_at, '')`: the old statement's CASE.
+
+    ISO-8601 text compares as text; a missing `created_at` is `''`, which sorts first, so it wins
+    over any present one; equal (or both missing) goes to the incoming node. A stored value that is
+    not text cannot be compared with text (null in Cypher), so the existing node wins.
+    """
+    incoming = "" if incoming_created_at is None else incoming_created_at
+    existing = "" if existing_created_at is None else existing_created_at
+    if not isinstance(incoming, str) or not isinstance(existing, str):
+        return False
+    return incoming <= existing
+
+
+def _rewire_primitives(
+    single_tenant_graph: GraphHandle,
+    kind: Literal["Capability", "Policy"],
+    winner_id: str,
+    loser_id: str,
+) -> tuple[UpsertEdge, ...]:
+    """One `UpsertEdge` per edge of the loser's five families, moved onto the winner.
+
+    The other end of each edge was just read from the graph, so it exists; the winner exists (the
+    existence check). A repeated identity (a family read twice cannot repeat, but the same edge may
+    arise from two families on a self-loop) folds to one. The edge keeps no properties.
+    """
+    edges: dict[str, UpsertEdge] = {}
+    for edge_type, other_label, loser_is_target, template in _LOSER_EDGE_READS:
+        rows = read_rows(
+            single_tenant_graph, template.format(kind=kind), params={"loser_id": loser_id}
+        )
+        for (other_id,) in rows:
+            other = NodeRef(label=other_label, id=cast("str", other_id))
+            winner = NodeRef(label=kind, id=winner_id)
+            source, edge_target = (other, winner) if loser_is_target else (winner, other)
+            identity = edge_identity(edge_type, source.id, edge_target.id)
+            edges.setdefault(
+                identity,
+                UpsertEdge(type=edge_type, identity=identity, source=source, target=edge_target),
+            )
+    return tuple(edges.values())

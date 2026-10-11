@@ -11,6 +11,7 @@ own copies (package convention).
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -28,7 +29,10 @@ from ps_service.domain_mapper.identity import capability_id, obligation_id
 from ps_service.logging import configure
 
 if TYPE_CHECKING:
+    from graph_gateway._fakes import InMemoryGraph
+
     from company_merge._fakes import MakeEmitter, ReadLines
+    from company_merge._gateway_fakes import MergeRig
 
 _THRESHOLD = 0.85
 _ROLE = "role_h_operator"
@@ -56,11 +60,21 @@ class _SingleTenant:
     """Single-tenant graph with scripted `MergedObligation` markers and Obligation ids."""
 
     def __init__(
-        self, *, markers: dict[str, str] | None = None, existing: frozenset[str] = frozenset()
+        self,
+        *,
+        markers: dict[str, str] | None = None,
+        existing: frozenset[str] = frozenset(),
+        gateway_graph: InMemoryGraph | None = None,
     ) -> None:
         self._markers = markers or {}
         self._existing = existing
+        self._gateway_graph = gateway_graph
         self.calls: list[tuple[str, dict[str, object] | None]] = []
+        # the existing Obligations are nodes the graph holds, so an edge to one is valid (the
+        # gateway rejects a group edge whose endpoint is missing; issue #210)
+        for node_id in existing:
+            if gateway_graph is not None:
+                gateway_graph.seed_node(("Obligation",), node_id, {})
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
         self.calls.append((q, params))
@@ -70,6 +84,11 @@ class _SingleTenant:
             assert params is not None
             ids = cast("list[str]", params["ids"])
             return _Result([[i] for i in ids if i in self._existing])
+        existence = re.match(r"^MATCH \(n:(\w+)\) WHERE n\.id IN \$ids RETURN n\.id$", q)
+        if existence is not None and self._gateway_graph is not None:
+            assert params is not None
+            held = {i for lbl, i in self._gateway_graph.nodes if lbl == existence.group(1)}
+            return _Result([[i] for i in cast("list[str]", params["ids"]) if i in held])
         return _Result([])
 
     def matching(self, fragment: str) -> list[tuple[str, dict[str, object] | None]]:
@@ -230,11 +249,16 @@ def test_resolve_with_a_deleted_survivor_raises_before_any_write() -> None:
 
 def test_merge_baseline_graph_rewires_the_regenerated_obligation_onto_the_survivor(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """A regenerated absorbed Obligation is never minted; its edges land on the survivor."""
     emitter, _log_path = make_emitter()
     cap_id = capability_id("Incident Reporting")
-    single_tenant = _SingleTenant(markers={_ABSORBED: _SURVIVOR}, existing=frozenset({_SURVIVOR}))
+    single_tenant = _SingleTenant(
+        markers={_ABSORBED: _SURVIVOR},
+        existing=frozenset({_SURVIVOR}),
+        gateway_graph=merge_rig.policy_system,
+    )
 
     result = merge_baseline_graph(
         "REG-H",
@@ -243,22 +267,32 @@ def test_merge_baseline_graph_rewires_the_regenerated_obligation_onto_the_surviv
         embed_model="fake-embed-model",
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
-    mints = single_tenant.matching("MERGE (n:Obligation {id: $id}) ON CREATE SET")
-    assert [p["id"] for _, p in mints if p is not None] == [_OTHER]
+    minted = [e.identity for g in merge_rig.groups for e in g.entries if e.name == "Obligation"]
+    assert minted == [_OTHER]
     assert result.obligation_ids == (_OTHER,)
-    has_writes = [p for _, p in single_tenant.matching("[:HAS]") if p is not None]
-    assert {"source_id": _ROLE, "target_id": _SURVIVOR} in has_writes
-    sat_writes = [p for _, p in single_tenant.matching("[:SATISFIED_BY]") if p is not None]
-    assert sat_writes == [{"source_id": "REG-H_req_art_1.1", "target_id": _SURVIVOR}]
-    req_writes = [p for _, p in single_tenant.matching("[:REQUIRES]") if p is not None]
-    assert req_writes == [{"source_id": _SURVIVOR, "target_id": cap_id}]
-    written = [p for q, p in single_tenant.calls if p is not None and "MERGE" in q]
-    assert not any(_ABSORBED in map(str, p.values()) for p in written)
+
+    def edge_pairs(relationship: str) -> list[dict[str, str]]:
+        return [
+            {"source_id": key[2], "target_id": key[4]}
+            for key in merge_rig.policy_system.edges
+            if key[0] == relationship
+        ]
+
+    assert {"source_id": _ROLE, "target_id": _SURVIVOR} in edge_pairs("HAS")
+    assert edge_pairs("SATISFIED_BY") == [
+        {"source_id": "REG-H_req_art_1.1", "target_id": _SURVIVOR}
+    ]
+    assert edge_pairs("REQUIRES") == [{"source_id": _SURVIVOR, "target_id": cap_id}]
+    assert not any(_ABSORBED in (key[2], key[4]) for key in merge_rig.policy_system.edges)
+    assert not any(_ABSORBED in str(e.identity) for e in merge_rig.logged())
 
 
-def test_merge_baseline_graph_without_markers_is_unchanged(make_emitter: MakeEmitter) -> None:
+def test_merge_baseline_graph_without_markers_is_unchanged(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     emitter, _log_path = make_emitter()
     cap_id = capability_id("Incident Reporting")
     single_tenant = _SingleTenant()
@@ -270,11 +304,12 @@ def test_merge_baseline_graph_without_markers_is_unchanged(make_emitter: MakeEmi
         embed_model="fake-embed-model",
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert result.obligation_ids == (_ABSORBED, _OTHER)
-    mints = single_tenant.matching("MERGE (n:Obligation {id: $id}) ON CREATE SET")
-    assert len(mints) == 2
+    minted = [e.identity for g in merge_rig.groups for e in g.entries if e.name == "Obligation"]
+    assert len(minted) == 2
 
 
 def test_applying_a_redirect_emits_one_semantic_log_entry_with_the_count(

@@ -7,8 +7,8 @@ underlying `staging.stage_and_finalize_policy_system_leg` WATCH/MULTI/EXEC
 retry mechanism in isolation, with a bare `calls.append` spy standing in for
 `run_offline_merge`. This file proves the SAME mechanism survives
 integration with `restore_instrument`'s real offline dedup+merge callback
-(`resolve_capability_convergence_offline` + the unmodified `graph_writer.
-persist_*` functions) -- not a fake-graph unit test, and not merely a retry
+(`resolve_capability_convergence_offline` + the interim
+`snapshot_merge_writer.persist_*` functions) -- not a fake-graph unit test, and not merely a retry
 of the lower-level proof: the merge callback under test here is the real
 one `restore_instrument` builds, reading/writing real staged FalkorDB keys.
 

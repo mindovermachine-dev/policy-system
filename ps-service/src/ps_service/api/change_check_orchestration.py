@@ -562,9 +562,10 @@ def _build_pipeline_runner(
     baseline graph is opened or any stage runs (AC-BI-006), runs exactly the requested
     stage subset for `new_version`'s instrument id, reports each completed stage to
     `on_stage_complete`, and always clears the `run_status` entry. When any stage that writes a
-    graph (ingestion, extraction or derivation, issues #208 and #209) is among the requested ones,
+    graph (ingestion, extraction, derivation or merge, issues #208, #209 and #210) is among the
+    requested ones,
     the process's Graph Write Gateway is resolved up front: without one the run fails closed,
-    before the baseline graph is opened. A merge-only run resolves none. Nothing is caught:
+    before the baseline graph is opened. Nothing is caught:
     a `PipelineStageError`, `IngestionConfigIncompleteError`, `GraphWriteUnavailableError` or
     `AuditTrailUnavailableError` propagates to the sweep's per-instrument boundary.
     """
@@ -579,7 +580,7 @@ def _build_pipeline_runner(
         resolved = _require_ingestion_config(config)
         graph_writes = (
             graph_write_access(config)
-            if {"ingestion", "extraction", "derivation"} & set(stages)
+            if {"ingestion", "extraction", "derivation", "merge"} & set(stages)
             else None
         )
         graphs = _OpenGraphs(

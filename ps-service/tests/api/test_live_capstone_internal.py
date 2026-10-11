@@ -82,10 +82,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ps_service.api.dependencies import get_principal
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.auth.models import Principal
 from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
 from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.logging import facade
 from ps_service.main import create_app
@@ -257,6 +259,10 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_InternalCaps
     facade.configure(log_path=tmp_path_factory.mktemp("api_internal_capstone") / "capstone.jsonl")
 
     app = create_app(load_config())
+    # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
+    # entered, so the app lifespan never installs it: install the real one (PS state Postgres and
+    # FalkorDB) the way a deployed service does. Not run in the implementation sandbox.
+    install_graph_write_gateway(build_default_graph_write_gateway(load_config()))
     # Issue #227: a Policy-bearing seed needs a verified caller, who then owns the imported
     # draft tree; the override stands in for the sign-in a deployed service performs.
     app.dependency_overrides[get_principal] = lambda: Principal(
@@ -309,6 +315,7 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_InternalCaps
             disposable_graph=disposable_graph,
         )
     finally:
+        install_graph_write_gateway(None)
         monkeypatch.undo()
         for graph_name in (
             _DISPOSABLE_GRAPH,

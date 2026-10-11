@@ -106,3 +106,13 @@ def test_no_source_file_cites_the_issue_number() -> None:
     ]
 
     assert offenders == []
+
+
+def test_container_architecture_states_the_merge_only_resume_needs_the_gateway() -> None:
+    """Issue #210: the audit anchor, fail-closed and difference entries name merge-only resume."""
+    text = _text(_DOCS["container"])
+
+    assert "extraction, derivation (#209) or merge (#210)" in text
+    assert "since #210 merge, including a resume or repair run that starts there" in text
+    assert "Company Merge (#210): a merge-only resume or repair now needs the gateway" in text
+    assert "an audit outage blocks such a resume (`reingest_failed`, marker untouched" in text

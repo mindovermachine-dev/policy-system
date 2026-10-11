@@ -9,9 +9,14 @@ Naming (PLAN_REVIEWED.md §1): `single_tenant_graph_name()` mirrors
 `ps_service.mcp_interface.mcp_server`'s existing
 `os.environ.get("PS_FALKORDB_GRAPH", "policy_system")` convention exactly --
 confirmed directly against that module's own `DEFAULT_GRAPH` line, not
-assumed by analogy. Company Merge reads/writes the SAME single-tenant graph
+assumed by analogy. Company Merge reads the SAME single-tenant graph
 `mcp_interface` exposes read-only Cypher access to; this is not a new graph
 name, just this component's own accessor for the existing convention.
+
+Read-only since issue #210: every Company Merge write is a Graph Write Gateway group
+(`graph_submission.submit_group`), and `tests/company_merge/test_no_graph_write_path.py` pins that
+no write Cypher is handed to `GraphHandle.query`. This module is the one place `falkordb` is
+imported.
 """
 
 from __future__ import annotations
@@ -48,10 +53,11 @@ class GraphQueryResult(Protocol):
 class GraphHandle(Protocol):
     """Structural stand-in for `falkordb.Graph`.
 
-    The `query()` call surface this component's graph reader/dedup/writer/merge
+    The `query()` call surface this component's graph reader/dedup/redirect
     logic needs: bare Cypher, or Cypher + `params=` for parameterized
-    reads/writes. Callers outside this module never import `falkordb.Graph`
-    directly.
+    reads. Callers outside this module never import `falkordb.Graph`
+    directly. (The Protocol is shared with Restore's interim snapshot writer, which still issues
+    writes through it until #214; Company Merge itself does not.)
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
@@ -129,6 +135,6 @@ def single_tenant_graph_name() -> str:
     `ps_service.mcp_interface.mcp_server`'s `DEFAULT_GRAPH` convention exactly
     (verified directly against that module's own source, not assumed by
     analogy) -- this is the one graph name shared across the whole system for
-    read-only query access and Company Merge's own add/merge-only writes.
+    read-only query access and the gateway's writes.
     """
     return os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_SINGLE_TENANT_GRAPH_NAME)

@@ -15,9 +15,10 @@ Flow (§7, with the governance import of issue #227 as item 3a):
 2. Dedupe Capability nodes against the single-tenant graph. (Obligation is
    Role-scoped since #42 -- a weak entity of exactly one Role, never deduped
    across sources -- so there is no Obligation dedup pass.)
-3. Persist RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` and
-   Obligation (unconditional `SET`); persist canonical Capability nodes for
-   every `match_kind="new"` resolution (`ON CREATE SET`).
+3. Persist RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` as one Graph Write
+   Gateway group (#210; a Role/Requirement the graph already holds is left out of the group,
+   so it keeps its properties) and Obligation (create-only); persist canonical Capability
+   nodes for every `match_kind="new"` resolution (create-only).
 3a. (#227) If the baseline carries a Policy/Standard/Control tree (an
     internal-sourced baseline), `governance_import.import_draft_governance`
     writes it as `draft`, owned by `governance.owner`, create-only and never
@@ -25,7 +26,7 @@ Flow (§7, with the governance import of issue #227 as item 3a):
     An external-sourced baseline skips this step (a structural no-op); an
     internal one with no owner raises `GovernanceOwnerRequiredError` before
     any governance write.
-3b. (#106) Persist PracticeArea/RiskPath nodes as `ON CREATE SET`
+3b. (#106) Persist PracticeArea/RiskPath nodes as create-only
     passthrough, then validate every `COVERS`/`OWNS`/`MITIGATED_BY`/
     `VERIFIED_BY` edge endpoint exists (AC-BI-008) before any of those four
     edges is written. No dedup, no embedding call for PracticeArea/RiskPath
@@ -64,6 +65,8 @@ for it; it only ever runs as part of this orchestration.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
 from ps_service.company_merge import (
@@ -74,14 +77,18 @@ from ps_service.company_merge import (
     obligation_redirect,
 )
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
+from ps_service.company_merge.generated_values import SYSTEM_VALUES
 from ps_service.company_merge.governance_import import GovernanceImport, governance_count_fields
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import MergeResult
 from ps_service.company_merge.pending_review import persist_pending_reviews
 from ps_service.logging import LogEmitter, emit_log_entry
 
 if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.generated_values import ValueSource
     from ps_service.company_merge.models import BaselineGraph, DedupResult
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import EmbeddingCaller
 
 __all__ = ["merge_baseline_graph"]
@@ -91,7 +98,16 @@ _MERGE_ACTION = "merge_baseline_graph"
 _DEDUP_ACTION = "dedupe_canonical_nodes"
 
 
+@dataclass(frozen=True)
+class _MergeTargets:
+    """The two graphs a merge run writes through the gateway, each with its own stamp state."""
+
+    single_tenant: GraphWriteTarget
+    baseline: GraphWriteTarget
+
+
 def _persist_classification_passthrough(
+    target: GraphWriteTarget,
     single_tenant_graph: GraphHandle,
     graph: BaselineGraph,
     canonical_id_by_incoming_id: dict[str, str],
@@ -102,11 +118,10 @@ def _persist_classification_passthrough(
     structural (content-hashed ids minted upstream by `internal_seed`, per
     `docs/artifacts/ps-domain-concepts.md`'s identity notes). A structural
     no-op when the baseline carries no classification-layer content
-    (AC-BI-009): both loops in
-    `graph_writer.persist_practice_area_and_risk_path_passthrough` no-op on
-    empty input, and `graph_writer.validate_classification_edge_endpoints`
-    returns immediately when `classification_edges` is empty (no endpoints
-    to resolve).
+    (AC-BI-009): `graph_writer.persist_practice_area_and_risk_path_passthrough`
+    reads and submits nothing for empty input, and
+    `graph_writer.validate_classification_edge_endpoints` returns immediately
+    when `classification_edges` is empty (no endpoints to resolve).
 
     `canonical_id_by_incoming_id` (mutated in place by the Capability pass and the
     draft-governance import above) is passed straight through to
@@ -118,7 +133,7 @@ def _persist_classification_passthrough(
     node passthrough call above has already persisted it by this point.
     """
     graph_writer.persist_practice_area_and_risk_path_passthrough(
-        single_tenant_graph, graph.practice_area_nodes, graph.risk_path_nodes
+        target, single_tenant_graph, graph.practice_area_nodes, graph.risk_path_nodes
     )
     graph_writer.validate_classification_edge_endpoints(
         single_tenant_graph, graph.classification_edges, canonical_id_by_incoming_id
@@ -145,16 +160,21 @@ def _log_dedup_decisions(dedup_result: DedupResult, *, emitter: LogEmitter | Non
         )
 
 
-def merge_baseline_graph(
+def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway seam (#210) and the merge's own options; no natural grouping
     regulatory_instrument_id: str,
     *,
     baseline_graph: GraphHandle,
     single_tenant_graph: GraphHandle,
+    submitter: GroupSubmitter,
+    single_tenant_graph_name: str,
+    baseline_graph_name: str,
+    audit_event_id: str,
     embed_model: str,
     similarity_threshold: float | None,
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
     governance: GovernanceImport | None = None,
+    values: ValueSource = SYSTEM_VALUES,
 ) -> MergeResult:
     """Merge one regulation's `{short}_baseline` graph into `single_tenant_graph`.
 
@@ -168,8 +188,8 @@ def merge_baseline_graph(
     Add/merge-only (per UC-1): an existing canonical Obligation/Capability
     node's own properties are never overwritten -- only its incoming
     duplicate's edges are rewired onto it. See `graph_writer.py` for the
-    `ON CREATE SET`/`WHERE n.embedding IS NULL` mechanisms that make this a
-    database-engine guarantee, not application-logic discipline.
+    create-only and set-if-null decisions, which are made from a read before the
+    gateway group is submitted.
 
     `governance` (issue #227) carries the ingesting caller's `owner` for the
     Policy/Standard/Control tree of an internal-sourced baseline, which is
@@ -177,6 +197,14 @@ def merge_baseline_graph(
     also calls). It defaults to an ownerless `GovernanceImport`, so such a
     baseline fails closed with `GovernanceOwnerRequiredError`; an external
     baseline never reads it.
+
+    `submitter`, `single_tenant_graph_name`, `baseline_graph_name` and `audit_event_id` (issue
+    #210) are the Graph Write Gateway seam: a migrated write is submitted as a group on the named
+    graph under the run's audit event, while `single_tenant_graph` and `baseline_graph` stay READ
+    handles for it. The graph's legacy edges are stamped before its first group, after the
+    pre-flight checks and the dedup pass above have completed. `values` is where the merge draws
+    what it generates at write time (a created Capability's `created_at`): drawn while a group is
+    built, so the group carries it and a replay reproduces it.
     """
     if similarity_threshold is None:
         raise CompanyMergeConfigurationError(
@@ -185,6 +213,10 @@ def merge_baseline_graph(
             "merge_baseline_graph"
         )
 
+    targets = _MergeTargets(
+        single_tenant=GraphWriteTarget(submitter, single_tenant_graph_name, audit_event_id),
+        baseline=GraphWriteTarget(submitter, baseline_graph_name, audit_event_id),
+    )
     graph = graph_reader.read_baseline_graph(baseline_graph, regulatory_instrument_id)
     governance = governance or GovernanceImport()
 
@@ -215,6 +247,7 @@ def merge_baseline_graph(
     # anything written -- "abort with no partial write" on a raised
     # LlmProviderError is therefore automatic, not enforced by a try/except.
     graph_writer.persist_role_and_requirement_passthrough(
+        targets.single_tenant,
         single_tenant_graph,
         regulatory_instrument_id,
         graph.regulatory_instrument_properties,
@@ -222,12 +255,16 @@ def merge_baseline_graph(
         graph.requirement_nodes,
         graph.provenance_edges,
     )
-    graph_writer.persist_obligation_passthrough(single_tenant_graph, graph.obligation_nodes)
+    graph_writer.persist_obligation_passthrough(
+        targets.single_tenant, single_tenant_graph, graph.obligation_nodes
+    )
     graph_writer.persist_canonical_nodes(
+        targets.single_tenant,
         single_tenant_graph,
         graph.capability_nodes,
         capability_dedup.resolutions,
         kind="Capability",
+        values=values,
     )
 
     # persist_rewired_edges only ever rewrites a REQUIRES edge's Capability
@@ -249,6 +286,9 @@ def merge_baseline_graph(
             single_tenant_graph=single_tenant_graph,
             governance=governance,
             canonical_id_by_incoming_id=canonical_id_by_incoming_id,
+            write_drafts=partial(
+                graph_writer.persist_governance_drafts, targets.single_tenant, values=values
+            ),
         )
     )
 
@@ -256,19 +296,23 @@ def merge_baseline_graph(
     # no-op for a baseline with no classification-layer content. Runs after
     # Capability dedup and the governance import complete and before the edge rewiring
     # call below, mirroring the governance import's own placement.
-    _persist_classification_passthrough(single_tenant_graph, graph, canonical_id_by_incoming_id)
+    _persist_classification_passthrough(
+        targets.single_tenant, single_tenant_graph, graph, canonical_id_by_incoming_id
+    )
 
     # One rewiring call over the regulatory-spine edges, the governance
     # edges, and the classification edges -- governance_edges/
     # classification_edges are empty for an external baseline, so this is
     # unchanged from before S4/#106 in that case.
     graph_writer.persist_rewired_edges(
+        targets.single_tenant,
         single_tenant_graph,
         graph.bare_edges + graph.governance_edges + graph.classification_edges,
         canonical_id_by_incoming_id,
     )
 
     graph_writer.backfill_canonical_embeddings(
+        targets.single_tenant,
         single_tenant_graph,
         kind="Capability",
         embeddings=capability_dedup.embedding_backfills,
@@ -279,6 +323,7 @@ def merge_baseline_graph(
     # unchanged baseline (e.g. a re-ingested amended regulation, #19) reuses
     # it instead of paying another route_embedding call.
     graph_writer.backfill_incoming_capability_embeddings(
+        targets.baseline,
         baseline_graph,
         embeddings=capability_dedup.incoming_embedding_backfills,
     )
@@ -304,7 +349,9 @@ def merge_baseline_graph(
     # issue #35, Slice 1 (AC-BI-001/AC-BI-002): persist a PendingReview node
     # for every Capability near-miss, at the same point its own decision is
     # already logged -- never logged without also being persisted.
-    persist_pending_reviews(single_tenant_graph, capability_dedup.near_misses, kind="Capability")
+    persist_pending_reviews(
+        targets.single_tenant, capability_dedup.near_misses, kind="Capability", values=values
+    )
 
     return MergeResult(
         regulatory_instrument_id=regulatory_instrument_id,

@@ -1,411 +1,479 @@
-"""Tests for `ps_service.company_merge.graph_writer.persist_rewired_edges`
-(PLAN_REVIEWED.md §10 Increment 12, §6.2): the edge writer that mirrors
-`domain_mapper.graph_writer._upsert_bare_edge`'s `MATCH ... MERGE` shape.
-Since issue #42 only a `REQUIRES` edge's Capability target is rewritten
-through the caller-supplied canonical-id mapping; every other endpoint
-(Role, Requirement, Obligation) is a passthrough node written as its
-baseline-local id.
+"""Tests for `ps_service.company_merge.graph_writer.persist_rewired_edges` (issue #210, slice 7a).
+
+PLAN_REVIEWED.md §10 Increment 12, §6.2: the edge writer. Since issue #42 only a `REQUIRES` edge's
+Capability target (and, since #54/#106, the Policy and Capability endpoints of the governance and
+classification edges) is rewritten through the caller-supplied canonical-id mapping; every other
+endpoint is a passthrough node written as its baseline-local id.
+
+Since #210 each edge is an `UpsertEdge` primitive in ONE gateway group on `policy_system`
+(identity `{type}:{source}->{target}`, no properties). The old `MATCH ... MERGE` wrote nothing when
+an endpoint was missing; that is decided before submission from one batched existing-id read per
+label, and an edge with a missing endpoint is left out of the group (a group edge with a missing
+endpoint would fail the whole group). The gateway rig is the true boundary.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pytest
+import redis.exceptions
 
+from company_merge._gateway_fakes import POLICY_SYSTEM, MergeRig
 from ps_service.company_merge.errors import CompanyMergePersistenceError
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.graph_writer import persist_rewired_edges
 from ps_service.company_merge.models import BareEdge
+from ps_service.dependency_health import FALKORDB, is_healthy
+from ps_service.domain_mapper.graph_writer import (
+    _edge_identity,  # pyright: ignore[reportPrivateUsage]
+)
+from ps_service.graph_gateway.label_allow_list import (
+    ALLOWED_NODE_LABELS,
+    ALLOWED_RELATIONSHIP_TYPES,
+)
+
+if TYPE_CHECKING:
+    from ps_service.company_merge.falkordb_client import GraphQueryResult
+
+# relationship type -> (source label, target label): the Edge Catalog rows this writer handles.
+_ENDPOINTS: dict[str, tuple[str, str]] = {
+    "HAS": ("Role", "Obligation"),
+    "SATISFIED_BY": ("Requirement", "Obligation"),
+    "REQUIRES": ("Obligation", "Capability"),
+    "GOVERNED_BY": ("Capability", "Policy"),
+    "SUPPORTED_BY": ("Policy", "Standard"),
+    "IMPLEMENTED_BY": ("Standard", "Control"),
+    "COVERS": ("PracticeArea", "Capability"),
+    "OWNS": ("PracticeArea", "Policy"),
+    "MITIGATED_BY": ("RiskPath", "Capability"),
+    "VERIFIED_BY": ("RiskPath", "Control"),
+}
 
 
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
+class _DownGraph:
+    def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
+        del q, params
+        raise redis.exceptions.ConnectionError("Error 111 connecting to 10.0.0.5:6379")
 
 
-class _FakeQueryResult:
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
+def _target(rig: MergeRig) -> GraphWriteTarget:
+    return GraphWriteTarget(rig.gateway, POLICY_SYSTEM, rig.audit_event_id)
 
 
-class _FakeGraph:
-    """Satisfies `GraphHandle` structurally, capturing every `(query,
-    params)` call for assertion.
+def _seed(rig: MergeRig, label: str, node_id: str) -> None:
+    rig.policy_system.seed_node((label,), node_id, {})
+
+
+def _seed_endpoints(rig: MergeRig, edge_type: str, source_id: str, target_id: str) -> None:
+    source_label, target_label = _ENDPOINTS[edge_type]
+    _seed(rig, source_label, source_id)
+    _seed(rig, target_label, target_id)
+
+
+def _written(rig: MergeRig) -> set[tuple[str, str, str, str, str]]:
+    """The edges `policy_system` holds, as (type, source label, source id, target label, id)."""
+    return {key[:5] for key in rig.policy_system.edges}
+
+
+def _edge_entries(rig: MergeRig) -> list[tuple[str, str]]:
+    return [(e.name, e.identity) for e in rig.logged() if e.name in _ENDPOINTS]
+
+
+def test_every_edge_type_is_submitted_with_its_type_source_arrow_target_identity(
+    merge_rig: MergeRig,
+) -> None:
+    """All ten Edge Catalog types, one group; the identity scheme is the Domain Mapper's own."""
+    edges: list[BareEdge] = []
+    for edge_type in _ENDPOINTS:
+        _seed_endpoints(merge_rig, edge_type, f"{edge_type}_s", f"{edge_type}_t")
+        edges.append(BareEdge(edge_type, f"{edge_type}_s", f"{edge_type}_t"))  # pyright: ignore[reportArgumentType]
+    mapping = {e.source_id: e.source_id for e in edges} | {e.target_id: e.target_id for e in edges}
+
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, tuple(edges), mapping)
+
+    assert len(merge_rig.groups) == 1
+    assert merge_rig.groups[0].audit_event_id == merge_rig.audit_event_id
+    assert [(e.name, e.identity) for e in merge_rig.groups[0].entries] == [
+        (edge_type, _edge_identity(edge_type, f"{edge_type}_s", f"{edge_type}_t"))
+        for edge_type in _ENDPOINTS
+    ]
+    assert _written(merge_rig) == {
+        (
+            edge_type,
+            *_ENDPOINTS[edge_type][:1],
+            f"{edge_type}_s",
+            _ENDPOINTS[edge_type][1],
+            f"{edge_type}_t",
+        )
+        for edge_type in _ENDPOINTS
+    }
+    assert [e.content["properties"] for e in merge_rig.groups[0].entries] == [{}] * 10  # pyright: ignore[reportIndexIssue]
+
+
+def test_all_ten_edge_types_and_their_endpoint_labels_are_gateway_allow_listed() -> None:
+    """A type or label outside the allow-list would fail the whole group at submission."""
+    assert set(_ENDPOINTS) <= ALLOWED_RELATIONSHIP_TYPES
+    assert {label for pair in _ENDPOINTS.values() for label in pair} <= ALLOWED_NODE_LABELS
+
+
+def test_has_edge_target_is_rewritten_to_canonical_id(merge_rig: MergeRig) -> None:
+    """A HAS edge whose baseline-local Obligation id maps onto a DIFFERENT existing node's
+    canonical id is written with the canonical id as its target, never the baseline-local one.
     """
+    _seed_endpoints(merge_rig, "HAS", "role_manufacturer_abc123", "obl_canonical_existing")
+    edge = BareEdge("HAS", "role_manufacturer_abc123", "obl_baseline_local")
 
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
-
-
-def test_has_edge_target_is_rewritten_to_canonical_id() -> None:
-    """A HAS edge with a resolution mapping the baseline-local Obligation id
-    onto a DIFFERENT existing node's canonical id -- the written edge's
-    target must be the canonical id, never the baseline-local one.
-    """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="HAS",
-        source_id="role_manufacturer_abc123",
-        target_id="obl_baseline_local",
+    persist_rewired_edges(
+        _target(merge_rig),
+        merge_rig.legacy,
+        (edge,),
+        {"obl_baseline_local": "obl_canonical_existing"},
     )
-    canonical_id_by_incoming_id = {"obl_baseline_local": "obl_canonical_existing"}
 
-    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == (
-        "MATCH (s:Role {id: $source_id}), (t:Obligation {id: $target_id}) MERGE (s)-[:HAS]->(t)"
-    )
-    # Exact dict equality already proves the target is the canonical id,
-    # never the baseline-local one.
-    assert call.params == {
-        "source_id": "role_manufacturer_abc123",
-        "target_id": "obl_canonical_existing",
+    assert _written(merge_rig) == {
+        ("HAS", "Role", "role_manufacturer_abc123", "Obligation", "obl_canonical_existing")
     }
-
-
-def test_satisfied_by_edge_target_is_rewritten_to_canonical_id() -> None:
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="SATISFIED_BY",
-        source_id="CRA-1.0_req_art_13.1",
-        target_id="obl_baseline_local",
-    )
-    canonical_id_by_incoming_id = {"obl_baseline_local": "obl_canonical_existing"}
-
-    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == (
-        "MATCH (s:Requirement {id: $source_id}), (t:Obligation {id: $target_id}) "
-        "MERGE (s)-[:SATISFIED_BY]->(t)"
-    )
-    assert call.params == {
-        "source_id": "CRA-1.0_req_art_13.1",
-        "target_id": "obl_canonical_existing",
-    }
-
-
-def test_requires_edge_source_is_rewritten_to_canonical_id() -> None:
-    """A REQUIRES edge is rewritten on its SOURCE id (Obligation is the
-    source of REQUIRES), not its target. Its Capability target
-    (`cap_encrypt_data`) is a realistic exact-match resolution -- mapping
-    onto itself -- since validation now requires an entry for every
-    dedupe-eligible endpoint (Obligation OR Capability), not just the
-    Obligation-typed one.
-    """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="REQUIRES", source_id="obl_baseline_local", target_id="cap_encrypt_data"
-    )
-    canonical_id_by_incoming_id = {
-        "obl_baseline_local": "obl_canonical_existing",
-        "cap_encrypt_data": "cap_encrypt_data",
-    }
-
-    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == (
-        "MATCH (s:Obligation {id: $source_id}), (t:Capability {id: $target_id}) "
-        "MERGE (s)-[:REQUIRES]->(t)"
-    )
-    # Exact dict equality already proves the source is the canonical id,
-    # never the baseline-local one.
-    assert call.params == {
-        "source_id": "obl_canonical_existing",
-        "target_id": "cap_encrypt_data",
-    }
-
-
-def test_requires_edge_target_is_rewritten_to_canonical_capability_id() -> None:
-    """The bug this test guards against: a REQUIRES edge's Capability target
-    that is exact-or-semantically matched onto a DIFFERENT existing
-    canonical Capability id (its baseline-local id maps to a different
-    canonical id in canonical_id_by_incoming_id) must be written with the
-    CANONICAL Capability id as its target, not the baseline-local one. Prior
-    to the fix, only the Obligation-typed (source) endpoint of REQUIRES was
-    ever rewritten -- the Capability target passed through unchanged
-    unconditionally, so a matched (never separately node-written) Capability
-    would make the MATCH clause match zero rows and the MERGE would silently
-    write NOTHING at all. So this test asserts both that a call WAS made
-    (the previously-missing-edge case) and that its target is correct.
-    """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="REQUIRES",
-        source_id="obl_baseline_local",
-        target_id="cap_baseline_local",
-    )
-    canonical_id_by_incoming_id = {
-        "obl_baseline_local": "obl_canonical_existing",
-        "cap_baseline_local": "cap_canonical_existing",
-    }
-
-    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == (
-        "MATCH (s:Obligation {id: $source_id}), (t:Capability {id: $target_id}) "
-        "MERGE (s)-[:REQUIRES]->(t)"
-    )
-    assert call.params == {
-        "source_id": "obl_canonical_existing",
-        "target_id": "cap_canonical_existing",
-    }
-
-
-def test_role_and_requirement_endpoints_pass_through_unchanged() -> None:
-    """Role (HAS's source) and Requirement (SATISFIED_BY's source) are
-    never in any resolution mapping -- they pass through unchanged, and an
-    empty mapping doesn't break either of them.
-    """
-    graph = _FakeGraph()
-    has_edge = BareEdge(
-        relationship_type="HAS", source_id="role_manufacturer_abc123", target_id="obl_x"
-    )
-    satisfied_by_edge = BareEdge(
-        relationship_type="SATISFIED_BY", source_id="CRA-1.0_req_art_13.1", target_id="obl_x"
-    )
-    canonical_id_by_incoming_id = {"obl_x": "obl_x"}  # exact match: canonical id == incoming id
-
-    persist_rewired_edges(graph, (has_edge, satisfied_by_edge), canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 2
-    assert graph.calls[0].params == {
-        "source_id": "role_manufacturer_abc123",
-        "target_id": "obl_x",
-    }
-    assert graph.calls[1].params == {
-        "source_id": "CRA-1.0_req_art_13.1",
-        "target_id": "obl_x",
-    }
-
-
-def test_rerunning_identical_edge_set_targets_the_same_triple_both_times() -> None:
-    """Idempotency shape check: re-running the identical edge set twice
-    against a fake graph that tracks distinct (source, relationship_type,
-    target) triples -- the second run's MERGE targets the exact same
-    triple as the first (full duplicate-count proof against real FalkorDB
-    MERGE semantics is deferred to the live capstone, PLAN_REVIEWED.md §10
-    Increment 12).
-    """
-    graph = _FakeGraph()
-    edges = (
-        BareEdge(relationship_type="HAS", source_id="role_manufacturer_abc123", target_id="obl_x"),
-        BareEdge(relationship_type="REQUIRES", source_id="obl_x", target_id="cap_encrypt_data"),
-    )
-    canonical_id_by_incoming_id = {
-        "obl_x": "obl_canonical_x",
-        "cap_encrypt_data": "cap_encrypt_data",
-    }
-
-    for _ in range(2):
-        persist_rewired_edges(graph, edges, canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 4
-
-    def _triple(call: _RecordedCall) -> tuple[object, str, object]:
-        assert call.params is not None
-        return (call.params["source_id"], call.query, call.params["target_id"])
-
-    first_run_triples = {_triple(call) for call in graph.calls[:2]}
-    second_run_triples = {_triple(call) for call in graph.calls[2:]}
-    assert first_run_triples == second_run_triples
-    assert first_run_triples == {
-        ("role_manufacturer_abc123", graph.calls[0].query, "obl_canonical_x"),
-        ("obl_canonical_x", graph.calls[1].query, "cap_encrypt_data"),
-    }
-
-
-def test_has_edge_obligation_target_absent_from_mapping_passes_through() -> None:
-    """Since #42, an Obligation is a passthrough node -- a `HAS` edge's
-    Obligation target is NOT required to have a mapping entry, and an
-    absent one is a pass-through (write its baseline-local id verbatim),
-    not a `CompanyMergePersistenceError`. Contrast
-    `test_requires_edge_target_missing_from_mapping_raises_before_any_write`
-    below, where the Capability target still must be present.
-    """
-    graph = _FakeGraph()
-    edges = (
-        BareEdge(relationship_type="HAS", source_id="role_manufacturer_abc123", target_id="obl_x"),
-        BareEdge(
-            relationship_type="HAS", source_id="role_importer_def456", target_id="obl_never_mapped"
-        ),
-    )
-
-    persist_rewired_edges(graph, edges, {})
-
-    assert [c.params for c in graph.calls] == [
-        {"source_id": "role_manufacturer_abc123", "target_id": "obl_x"},
-        {"source_id": "role_importer_def456", "target_id": "obl_never_mapped"},
+    assert _edge_entries(merge_rig) == [
+        ("HAS", "HAS:role_manufacturer_abc123->obl_canonical_existing")
     ]
 
 
-def test_covers_edge_target_is_rewritten_to_canonical_capability_id() -> None:
-    """AC-BI-005 (issue #106): a `COVERS` edge's Capability target that was
-    resolved by dedup onto a DIFFERENT existing canonical Capability id must
-    be written with the CANONICAL id as its target, never the baseline-local
-    one -- the identical mechanism as
-    `test_requires_edge_target_is_rewritten_to_canonical_capability_id`,
-    now driven by `_EDGE_ENDPOINT_LABELS`'s `COVERS` entry
-    (`(PracticeArea, Capability)`) with zero other code change.
-    """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="COVERS",
-        source_id="pa_secure_sdlc_4a7c1d",
-        target_id="cap_baseline_local",
-    )
-    canonical_id_by_incoming_id = {"cap_baseline_local": "cap_canonical_existing"}
+def test_satisfied_by_edge_target_is_rewritten_to_canonical_id(merge_rig: MergeRig) -> None:
+    _seed_endpoints(merge_rig, "SATISFIED_BY", "CRA-1.0_req_art_13.1", "obl_canonical_existing")
+    edge = BareEdge("SATISFIED_BY", "CRA-1.0_req_art_13.1", "obl_baseline_local")
 
-    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == (
-        "MATCH (s:PracticeArea {id: $source_id}), (t:Capability {id: $target_id}) "
-        "MERGE (s)-[:COVERS]->(t)"
+    persist_rewired_edges(
+        _target(merge_rig),
+        merge_rig.legacy,
+        (edge,),
+        {"obl_baseline_local": "obl_canonical_existing"},
     )
-    assert call.params == {
-        "source_id": "pa_secure_sdlc_4a7c1d",
-        "target_id": "cap_canonical_existing",
+
+    assert _written(merge_rig) == {
+        (
+            "SATISFIED_BY",
+            "Requirement",
+            "CRA-1.0_req_art_13.1",
+            "Obligation",
+            "obl_canonical_existing",
+        )
     }
 
 
-def test_owns_edge_target_is_rewritten_to_canonical_policy_id() -> None:
-    """AC-BI-005 (issue #106): an `OWNS` edge's Policy target is rewritten
-    the same way `GOVERNED_BY`'s Policy target already is (`_EDGE_ENDPOINT_LABELS`'s
-    `OWNS` entry, `(PracticeArea, Policy)`).
+def test_requires_edge_source_is_rewritten_to_canonical_id(merge_rig: MergeRig) -> None:
+    """A REQUIRES edge's Obligation SOURCE is rewritten too (the rule is endpoint-agnostic); the
+    Capability target maps onto itself (an exact match), since validation requires an entry for it.
     """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="OWNS",
-        source_id="pa_secure_sdlc_4a7c1d",
-        target_id="pol_baseline_local",
-    )
-    canonical_id_by_incoming_id = {"pol_baseline_local": "pol_canonical_existing"}
+    _seed_endpoints(merge_rig, "REQUIRES", "obl_canonical_existing", "cap_encrypt_data")
+    edge = BareEdge("REQUIRES", "obl_baseline_local", "cap_encrypt_data")
 
-    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == (
-        "MATCH (s:PracticeArea {id: $source_id}), (t:Policy {id: $target_id}) "
-        "MERGE (s)-[:OWNS]->(t)"
+    persist_rewired_edges(
+        _target(merge_rig),
+        merge_rig.legacy,
+        (edge,),
+        {"obl_baseline_local": "obl_canonical_existing", "cap_encrypt_data": "cap_encrypt_data"},
     )
-    assert call.params == {
-        "source_id": "pa_secure_sdlc_4a7c1d",
-        "target_id": "pol_canonical_existing",
+
+    assert _written(merge_rig) == {
+        ("REQUIRES", "Obligation", "obl_canonical_existing", "Capability", "cap_encrypt_data")
     }
 
 
-def test_mitigated_by_edge_target_is_rewritten_to_canonical_capability_id() -> None:
-    """AC-BI-005 (issue #106): a `MITIGATED_BY` edge's Capability target is
-    rewritten the same way `REQUIRES`'s/`COVERS`'s Capability targets are
-    (`_EDGE_ENDPOINT_LABELS`'s `MITIGATED_BY` entry, `(RiskPath, Capability)`).
+def test_a_requires_target_is_rewritten_to_the_canonical_id_before_the_primitive_is_built(
+    merge_rig: MergeRig,
+) -> None:
+    """The bug this guards: a matched Capability is never minted under its baseline-local id, so
+    leaving that id in place made the old `MATCH` find no row and the edge was silently never
+    written. The edge is written, to the CANONICAL Capability.
     """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="MITIGATED_BY",
-        source_id="rp_secure_build_release_d93f8a",
-        target_id="cap_baseline_local",
-    )
-    canonical_id_by_incoming_id = {"cap_baseline_local": "cap_canonical_existing"}
+    _seed_endpoints(merge_rig, "REQUIRES", "obl_canonical_existing", "cap_canonical_existing")
+    edge = BareEdge("REQUIRES", "obl_baseline_local", "cap_baseline_local")
 
-    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == (
-        "MATCH (s:RiskPath {id: $source_id}), (t:Capability {id: $target_id}) "
-        "MERGE (s)-[:MITIGATED_BY]->(t)"
+    persist_rewired_edges(
+        _target(merge_rig),
+        merge_rig.legacy,
+        (edge,),
+        {
+            "obl_baseline_local": "obl_canonical_existing",
+            "cap_baseline_local": "cap_canonical_existing",
+        },
     )
-    assert call.params == {
-        "source_id": "rp_secure_build_release_d93f8a",
-        "target_id": "cap_canonical_existing",
+
+    assert _edge_entries(merge_rig) == [
+        ("REQUIRES", "REQUIRES:obl_canonical_existing->cap_canonical_existing")
+    ]
+
+
+def test_role_and_requirement_endpoints_pass_through_unchanged(merge_rig: MergeRig) -> None:
+    """Role (HAS's source) and Requirement (SATISFIED_BY's source) are never in a mapping."""
+    _seed_endpoints(merge_rig, "HAS", "role_manufacturer_abc123", "obl_x")
+    _seed(merge_rig, "Requirement", "CRA-1.0_req_art_13.1")
+    edges = (
+        BareEdge("HAS", "role_manufacturer_abc123", "obl_x"),
+        BareEdge("SATISFIED_BY", "CRA-1.0_req_art_13.1", "obl_x"),
+    )
+
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, edges, {"obl_x": "obl_x"})
+
+    assert _written(merge_rig) == {
+        ("HAS", "Role", "role_manufacturer_abc123", "Obligation", "obl_x"),
+        ("SATISFIED_BY", "Requirement", "CRA-1.0_req_art_13.1", "Obligation", "obl_x"),
     }
 
 
-def test_verified_by_edge_control_target_passes_through_unchanged() -> None:
-    """`VERIFIED_BY`'s Control target is never canonically deduped (Control
-    is a weak entity, `_EDGE_ENDPOINT_LABELS`'s `VERIFIED_BY` entry is
-    `(RiskPath, Control)` -- neither endpoint is in
-    `_dedupe_eligible_endpoint_ids`'s `(Capability, Policy)` set) -- an empty
-    mapping doesn't break it, mirroring
-    `test_role_and_requirement_endpoints_pass_through_unchanged`.
-    """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="VERIFIED_BY",
-        source_id="rp_secure_build_release_d93f8a",
-        target_id="ctrl_baseline_local",
+def test_rerunning_the_merge_adds_no_parallel_edge(merge_rig: MergeRig) -> None:
+    """Idempotent: the same edge set again leaves one edge each and logs nothing new."""
+    _seed_endpoints(merge_rig, "HAS", "role_manufacturer_abc123", "obl_canonical_x")
+    _seed(merge_rig, "Capability", "cap_encrypt_data")
+    edges = (
+        BareEdge("HAS", "role_manufacturer_abc123", "obl_x"),
+        BareEdge("REQUIRES", "obl_x", "cap_encrypt_data"),
     )
+    _seed(merge_rig, "Obligation", "obl_canonical_x")
+    mapping = {"obl_x": "obl_canonical_x", "cap_encrypt_data": "cap_encrypt_data"}
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, edges, mapping)
+    logged = len(merge_rig.logged())
 
-    persist_rewired_edges(graph, (edge,), {})
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, edges, mapping)
 
-    assert len(graph.calls) == 1
-    assert graph.calls[0].params == {
-        "source_id": "rp_secure_build_release_d93f8a",
-        "target_id": "ctrl_baseline_local",
+    assert len(merge_rig.logged()) == logged
+    assert len(merge_rig.policy_system.edges) == 2
+    assert _written(merge_rig) == {
+        ("HAS", "Role", "role_manufacturer_abc123", "Obligation", "obl_canonical_x"),
+        ("REQUIRES", "Obligation", "obl_canonical_x", "Capability", "cap_encrypt_data"),
     }
 
 
-def test_covers_edge_target_missing_from_mapping_raises_before_any_write() -> None:
-    """AC-BI-005's flip side: a `COVERS` edge's Capability target with no
-    entry in `canonical_id_by_incoming_id` raises `CompanyMergePersistenceError`,
-    zero `graph.query` calls made -- mirrors
-    `test_requires_edge_target_missing_from_mapping_raises_before_any_write`.
+def test_has_edge_obligation_target_absent_from_mapping_passes_through(
+    merge_rig: MergeRig,
+) -> None:
+    """Since #42 an Obligation is a passthrough node: no mapping entry is required, and an absent
+    one is written verbatim, not a `CompanyMergePersistenceError`.
     """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="COVERS",
-        source_id="pa_secure_sdlc_4a7c1d",
-        target_id="cap_unmapped",
+    _seed_endpoints(merge_rig, "HAS", "role_manufacturer_abc123", "obl_x")
+    _seed(merge_rig, "Role", "role_importer_def456")
+    _seed(merge_rig, "Obligation", "obl_never_mapped")
+    edges = (
+        BareEdge("HAS", "role_manufacturer_abc123", "obl_x"),
+        BareEdge("HAS", "role_importer_def456", "obl_never_mapped"),
     )
+
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, edges, {})
+
+    assert _edge_entries(merge_rig) == [
+        ("HAS", "HAS:role_manufacturer_abc123->obl_x"),
+        ("HAS", "HAS:role_importer_def456->obl_never_mapped"),
+    ]
+
+
+def test_covers_edge_target_is_rewritten_to_canonical_capability_id(merge_rig: MergeRig) -> None:
+    """AC-BI-005 (issue #106): `COVERS` (PracticeArea, Capability) rewrites its Capability."""
+    _seed_endpoints(merge_rig, "COVERS", "pa_secure_sdlc_4a7c1d", "cap_canonical_existing")
+    edge = BareEdge("COVERS", "pa_secure_sdlc_4a7c1d", "cap_baseline_local")
+
+    persist_rewired_edges(
+        _target(merge_rig),
+        merge_rig.legacy,
+        (edge,),
+        {"cap_baseline_local": "cap_canonical_existing"},
+    )
+
+    assert _written(merge_rig) == {
+        ("COVERS", "PracticeArea", "pa_secure_sdlc_4a7c1d", "Capability", "cap_canonical_existing")
+    }
+
+
+def test_owns_edge_target_is_rewritten_to_canonical_policy_id(merge_rig: MergeRig) -> None:
+    """AC-BI-005 (issue #106): `OWNS` (PracticeArea, Policy) rewrites its Policy target."""
+    _seed_endpoints(merge_rig, "OWNS", "pa_secure_sdlc_4a7c1d", "pol_canonical_existing")
+    edge = BareEdge("OWNS", "pa_secure_sdlc_4a7c1d", "pol_baseline_local")
+
+    persist_rewired_edges(
+        _target(merge_rig),
+        merge_rig.legacy,
+        (edge,),
+        {"pol_baseline_local": "pol_canonical_existing"},
+    )
+
+    assert _written(merge_rig) == {
+        ("OWNS", "PracticeArea", "pa_secure_sdlc_4a7c1d", "Policy", "pol_canonical_existing")
+    }
+
+
+def test_mitigated_by_edge_target_is_rewritten_to_canonical_capability_id(
+    merge_rig: MergeRig,
+) -> None:
+    """AC-BI-005 (issue #106): `MITIGATED_BY` (RiskPath, Capability) rewrites its Capability."""
+    _seed_endpoints(
+        merge_rig, "MITIGATED_BY", "rp_secure_build_release_d93f8a", "cap_canonical_existing"
+    )
+    edge = BareEdge("MITIGATED_BY", "rp_secure_build_release_d93f8a", "cap_baseline_local")
+
+    persist_rewired_edges(
+        _target(merge_rig),
+        merge_rig.legacy,
+        (edge,),
+        {"cap_baseline_local": "cap_canonical_existing"},
+    )
+
+    assert _written(merge_rig) == {
+        (
+            "MITIGATED_BY",
+            "RiskPath",
+            "rp_secure_build_release_d93f8a",
+            "Capability",
+            "cap_canonical_existing",
+        )
+    }
+
+
+def test_verified_by_edge_control_target_passes_through_unchanged(merge_rig: MergeRig) -> None:
+    """`VERIFIED_BY` (RiskPath, Control): neither endpoint is canonically deduped."""
+    _seed_endpoints(
+        merge_rig, "VERIFIED_BY", "rp_secure_build_release_d93f8a", "ctrl_baseline_local"
+    )
+    edge = BareEdge("VERIFIED_BY", "rp_secure_build_release_d93f8a", "ctrl_baseline_local")
+
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, (edge,), {})
+
+    assert _written(merge_rig) == {
+        (
+            "VERIFIED_BY",
+            "RiskPath",
+            "rp_secure_build_release_d93f8a",
+            "Control",
+            "ctrl_baseline_local",
+        )
+    }
+
+
+def test_an_edge_whose_endpoint_exists_in_neither_graph_nor_group_is_dropped_silently(
+    merge_rig: MergeRig,
+) -> None:
+    """The old `MATCH` found no row for a missing endpoint and wrote nothing: no error, no log.
+
+    Also the label counts: an Obligation id held under another label is not an endpoint.
+    """
+    _seed(merge_rig, "Role", "role_a")
+    _seed(merge_rig, "Capability", "obl_wrong_label")
+    edges = (
+        BareEdge("HAS", "role_a", "obl_missing"),
+        BareEdge("HAS", "role_missing", "obl_missing"),
+        BareEdge("HAS", "role_a", "obl_wrong_label"),
+    )
+
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, edges, {})
+
+    assert merge_rig.groups == []
+    assert merge_rig.policy_system.edges == {}
+
+
+def test_a_dangling_edge_among_valid_ones_is_dropped_and_the_rest_are_written(
+    merge_rig: MergeRig,
+) -> None:
+    _seed_endpoints(merge_rig, "HAS", "role_a", "obl_a")
+    edges = (BareEdge("HAS", "role_a", "obl_missing"), BareEdge("HAS", "role_a", "obl_a"))
+
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, edges, {})
+
+    assert _edge_entries(merge_rig) == [("HAS", "HAS:role_a->obl_a")]
+
+
+def test_a_duplicate_edge_collapses_to_one_primitive(merge_rig: MergeRig) -> None:
+    """A repeated edge is one primitive; so are two edges that rewrite to the same ends."""
+    _seed_endpoints(merge_rig, "HAS", "role_a", "obl_canonical")
+    edges = (
+        BareEdge("HAS", "role_a", "obl_canonical"),
+        BareEdge("HAS", "role_a", "obl_canonical"),
+        BareEdge("HAS", "role_a", "obl_local"),
+    )
+
+    persist_rewired_edges(
+        _target(merge_rig), merge_rig.legacy, edges, {"obl_local": "obl_canonical"}
+    )
+
+    assert [(e.name, e.identity) for e in merge_rig.groups[0].entries] == [
+        ("HAS", "HAS:role_a->obl_canonical")
+    ]
+
+
+def test_endpoints_are_read_once_per_label_with_the_ids_as_parameters(merge_rig: MergeRig) -> None:
+    _seed_endpoints(merge_rig, "HAS", "role_a", "obl_a")
+    _seed_endpoints(merge_rig, "REQUIRES", "obl_b", "cap_a")
+    edges = (
+        BareEdge("HAS", "role_a", "obl_a"),
+        BareEdge("REQUIRES", "obl_b", "cap_a"),
+        BareEdge("HAS", "role_a", "obl_b"),
+    )
+
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, edges, {"cap_a": "cap_a"})
+
+    reads = sorted(merge_rig.legacy.statements)
+    assert reads == [
+        "MATCH (n:Capability) WHERE n.id IN $ids RETURN n.id",
+        "MATCH (n:Obligation) WHERE n.id IN $ids RETURN n.id",
+        "MATCH (n:Role) WHERE n.id IN $ids RETURN n.id",
+    ]
+    assert sorted(
+        (str(statement), params["ids"])
+        for statement, params in zip(
+            merge_rig.legacy.statements, merge_rig.legacy.params_seen, strict=True
+        )
+    ) == [
+        ("MATCH (n:Capability) WHERE n.id IN $ids RETURN n.id", ["cap_a"]),
+        ("MATCH (n:Obligation) WHERE n.id IN $ids RETURN n.id", ["obl_a", "obl_b"]),
+        ("MATCH (n:Role) WHERE n.id IN $ids RETURN n.id", ["role_a"]),
+    ]
+
+
+def test_no_edges_reads_and_submits_nothing(merge_rig: MergeRig) -> None:
+    persist_rewired_edges(_target(merge_rig), merge_rig.legacy, (), {})
+
+    assert merge_rig.groups == []
+    assert merge_rig.legacy.statements == []
+
+
+def test_a_failing_endpoint_read_is_query_failed_and_submits_nothing(merge_rig: MergeRig) -> None:
+    with pytest.raises(CompanyMergePersistenceError, match=r"^FalkorDB query failed: "):
+        persist_rewired_edges(
+            _target(merge_rig), _DownGraph(), (BareEdge("HAS", "role_a", "obl_a"),), {}
+        )
+
+    assert merge_rig.groups == []
+    assert is_healthy(FALKORDB) is False
+
+
+def test_covers_edge_target_missing_from_mapping_raises_before_any_write(
+    merge_rig: MergeRig,
+) -> None:
+    """AC-BI-005's flip side: a `COVERS` Capability target with no mapping entry raises, with no
+    read made and nothing submitted.
+    """
+    edge = BareEdge("COVERS", "pa_secure_sdlc_4a7c1d", "cap_unmapped")
 
     with pytest.raises(CompanyMergePersistenceError, match="cap_unmapped"):
-        persist_rewired_edges(graph, (edge,), {})
+        persist_rewired_edges(_target(merge_rig), merge_rig.legacy, (edge,), {})
 
-    assert graph.calls == []
+    assert merge_rig.groups == []
+    assert merge_rig.legacy.statements == []
 
 
-def test_requires_edge_target_missing_from_mapping_raises_before_any_write() -> None:
-    """A REQUIRES edge whose Capability-typed TARGET has no entry in
-    canonical_id_by_incoming_id raises CompanyMergePersistenceError, with
-    zero graph.query calls made. This closes the gap left by the prior fix:
-    validation now requires an entry for EVERY dedupe-eligible endpoint
-    (Obligation or Capability), not just the one endpoint (REQUIRES's
-    Obligation-typed source) guaranteed present by a single edge type's own
-    construction. Absent this check, a REQUIRES edge with an incomplete
-    caller-supplied mapping would silently write its baseline-local
-    Capability id verbatim instead of raising -- reproducing a milder
-    version of the exact dangling-edge bug the write-side fix already
-    closed, just triggered by an incomplete mapping instead of a
-    never-looked-up endpoint.
+def test_requires_edge_target_missing_from_mapping_raises_before_any_write(
+    merge_rig: MergeRig,
+) -> None:
+    """An incomplete caller-supplied mapping is a hard pre-write error: absent this check the
+    baseline-local Capability id would be written verbatim, reproducing the dangling-edge bug.
     """
-    graph = _FakeGraph()
-    edge = BareEdge(
-        relationship_type="REQUIRES",
-        source_id="obl_baseline_local",
-        target_id="cap_unmapped",
-    )
-    canonical_id_by_incoming_id = {"obl_baseline_local": "obl_canonical_existing"}
+    edge = BareEdge("REQUIRES", "obl_baseline_local", "cap_unmapped")
 
     with pytest.raises(CompanyMergePersistenceError, match="cap_unmapped"):
-        persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
+        persist_rewired_edges(
+            _target(merge_rig),
+            merge_rig.legacy,
+            (edge,),
+            {"obl_baseline_local": "obl_canonical_existing"},
+        )
 
-    assert graph.calls == []
+    assert merge_rig.groups == []
+    assert merge_rig.legacy.statements == []

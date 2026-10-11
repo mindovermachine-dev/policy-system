@@ -1,135 +1,136 @@
 """Near-miss merge and `merged` Capability tombstones (issue #190).
 
 Two guarantees. First, a `PendingReview` naming a tombstone on either side is
-stale: `resolve_review` raises `StalePendingReviewError` before the merge write
-runs, so the tombstone and its `MERGED_INTO` redirect survive. Second, the merge
-write re-points every inbound `MERGED_INTO` edge from the deleted loser onto the
-winner (statement-shape tests here; the real Cypher is proven by the
-`falkordb_live` test at the bottom).
+stale: `resolve_review` raises `StalePendingReviewError` before anything is submitted, so the
+tombstone and its `MERGED_INTO` redirect survive. Second, the merge group re-points every inbound
+`MERGED_INTO` edge from the deleted loser onto the winner (gateway entries here; the real graph is
+proven by the `falkordb_live` test at the bottom, not runnable in the implementation sandbox).
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from company_merge._gateway_fakes import POLICY_SYSTEM, UnusedSubmitter
 from ps_service.company_merge.errors import StalePendingReviewError
 from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.pending_review import resolve_review
 from ps_service.config import load_config
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from company_merge._fakes import MakeEmitter
+    from company_merge._gateway_fakes import MergeRig
+
+_REVIEW = "review_aaa"
 
 
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
-class _FakeQueryResult:
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
-
-
-class _TombstoneAwareGraph:
-    """Evaluates the existence check's status predicate the way FalkorDB would.
-
-    An endpoint whose id is in `merged_ids` counts as existing only when the
-    existence query text carries no `<> 'merged'` exclusion for it -- so the
-    test turns red on the query text, not on a scripted boolean.
-    """
-
-    def __init__(self, *, incoming_id: str, existing_id: str, merged_ids: Iterable[str]) -> None:
-        self._incoming_id = incoming_id
-        self._existing_id = existing_id
-        self._merged_ids = frozenset(merged_ids)
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        if "RETURN r.kind" in q:
-            return _FakeQueryResult([["Capability"]])
-        if "incoming_exists" in q:
-            incoming_excluded = "coalesce(a.status, 'active') <> 'merged'" in q
-            existing_excluded = "coalesce(b.status, 'active') <> 'merged'" in q
-            incoming_exists = not (incoming_excluded and self._incoming_id in self._merged_ids)
-            existing_exists = not (existing_excluded and self._existing_id in self._merged_ids)
-            return _FakeQueryResult(
-                [[self._incoming_id, self._existing_id, incoming_exists, existing_exists]]
-            )
-        return _FakeQueryResult([[self._existing_id, self._incoming_id]])
-
-    def merge_write_calls(self) -> list[_RecordedCall]:
-        return [c for c in self.calls if "DETACH DELETE" in c.query]
+def _seed(rig: MergeRig, *, incoming: str, existing: str, merged: tuple[str, ...] = ()) -> None:
+    graph = rig.policy_system
+    for node_id in (incoming, existing):
+        properties: dict[str, object] = {"name": node_id, "created_at": "2020-01-01T00:00:00+00:00"}
+        if node_id in merged:
+            properties["status"] = "merged"
+        graph.seed_node(("Capability",), node_id, properties)
+    graph.seed_node(
+        ("PendingReview",),
+        _REVIEW,
+        {"kind": "Capability", "incoming_id": incoming, "nearest_existing_id": existing},
+    )
 
 
 @pytest.mark.parametrize(
     ("incoming_id", "existing_id", "merged_ids"),
     [
-        pytest.param("cap_tomb", "cap_live", {"cap_tomb"}, id="incoming-is-tombstone"),
-        pytest.param("cap_live", "cap_tomb", {"cap_tomb"}, id="existing-is-tombstone"),
+        pytest.param("cap_tomb", "cap_live", ("cap_tomb",), id="incoming-is-tombstone"),
+        pytest.param("cap_live", "cap_tomb", ("cap_tomb",), id="existing-is-tombstone"),
     ],
 )
-def test_review_naming_a_tombstone_is_stale_and_issues_no_merge_write(
-    incoming_id: str, existing_id: str, merged_ids: set[str]
+def test_review_naming_a_tombstone_is_stale_and_submits_nothing(
+    incoming_id: str, existing_id: str, merged_ids: tuple[str, ...], merge_rig: MergeRig
 ) -> None:
-    graph = _TombstoneAwareGraph(
-        incoming_id=incoming_id, existing_id=existing_id, merged_ids=merged_ids
-    )
+    _seed(merge_rig, incoming=incoming_id, existing=existing_id, merged=merged_ids)
+    target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
 
     with pytest.raises(StalePendingReviewError):
-        resolve_review(graph, "review_aaa", "merge")
+        resolve_review(merge_rig.legacy, _REVIEW, "merge", target)
 
-    assert graph.merge_write_calls() == []
+    assert merge_rig.logged() == []
+    assert ("Capability", "cap_tomb") in merge_rig.policy_system.nodes
 
 
-def test_review_between_two_active_capabilities_still_merges(make_emitter: MakeEmitter) -> None:
+def test_review_between_two_active_capabilities_still_merges(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     emitter, _ = make_emitter()
-    graph = _TombstoneAwareGraph(incoming_id="cap_a", existing_id="cap_b", merged_ids=set())
+    _seed(merge_rig, incoming="cap_a", existing="cap_b")
+    target = GraphWriteTarget(merge_rig.gateway, POLICY_SYSTEM, merge_rig.audit_event_id)
 
-    outcome = resolve_review(graph, "review_aaa", "merge", emitter=emitter)
+    outcome = resolve_review(merge_rig.legacy, _REVIEW, "merge", target, emitter=emitter)
 
     assert outcome is not None
-    assert len(graph.merge_write_calls()) == 1
+    # Equal `created_at` is a tie, which goes to the incoming node: the existing one is the loser.
+    assert (outcome.winner_id, outcome.loser_id) == ("cap_a", "cap_b")
+    assert ("Capability", "cap_b") not in merge_rig.policy_system.nodes
 
 
-def test_existence_check_carries_the_predicate_on_both_sides(make_emitter: MakeEmitter) -> None:
+def test_existence_read_carries_the_predicate_on_both_sides(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     emitter, _ = make_emitter()
-    graph = _TombstoneAwareGraph(incoming_id="pol_a", existing_id="pol_b", merged_ids=set())
+    _seed(merge_rig, incoming="cap_a", existing="cap_b")
+    target = GraphWriteTarget(merge_rig.gateway, POLICY_SYSTEM, merge_rig.audit_event_id)
 
-    resolve_review(graph, "review_aaa", "merge", emitter=emitter)
+    resolve_review(merge_rig.legacy, _REVIEW, "merge", target, emitter=emitter)
 
-    existence = next(c.query for c in graph.calls if "incoming_exists" in c.query)
+    existence = next(q for q in merge_rig.legacy.statements if "incoming_exists" in q)
     assert existence.count("<> 'merged'") == 2
 
 
-def test_merge_statement_repoints_inbound_merged_into_before_deleting_the_loser(
-    make_emitter: MakeEmitter,
+def test_loser_with_inbound_tombstone_repoints_the_tombstone_to_the_winner(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
+    """S absorbed T earlier, then loses a near-miss to W: T's `MERGED_INTO` moves onto W."""
     emitter, _ = make_emitter()
-    graph = _TombstoneAwareGraph(incoming_id="cap_a", existing_id="cap_b", merged_ids=set())
-
-    resolve_review(graph, "review_aaa", "merge", emitter=emitter)
-
-    statement = graph.merge_write_calls()[0].query
-    repoint = statement.index("(t:Capability)-[:MERGED_INTO]->(loser)")
-    assert statement.index("[:SUPPORTED_BY]") < repoint
-    assert repoint < statement.index("MERGE (t)-[:MERGED_INTO]->(winner)")
-    assert statement.index("MERGE (t)-[:MERGED_INTO]->(winner)") < statement.index("DETACH DELETE")
-    assert re.search(
-        r"MERGE \(t\)-\[:MERGED_INTO\]->\(winner\)\) WITH DISTINCT winner, loser", statement
+    graph = merge_rig.policy_system
+    graph.seed_node(
+        ("Capability",), "cap_w", {"name": "W", "created_at": "2020-01-01T00:00:00+00:00"}
     )
+    graph.seed_node(
+        ("Capability",), "cap_s", {"name": "S", "created_at": "2024-01-01T00:00:00+00:00"}
+    )
+    graph.seed_node(("Capability",), "cap_t", {"name": "T", "status": "merged"})
+    graph.seed_legacy_edge(("MERGED_INTO", "Capability", "cap_t", "Capability", "cap_s"), {})
+    graph.seed_node(
+        ("PendingReview",),
+        _REVIEW,
+        {"kind": "Capability", "incoming_id": "cap_s", "nearest_existing_id": "cap_w"},
+    )
+    target = GraphWriteTarget(merge_rig.gateway, POLICY_SYSTEM, merge_rig.audit_event_id)
+
+    outcome = resolve_review(merge_rig.legacy, _REVIEW, "merge", target, emitter=emitter)
+
+    assert outcome is not None
+    assert (outcome.winner_id, outcome.loser_id) == ("cap_w", "cap_s")
+    assert {key[:5] for key in graph.edges if key[0] == "MERGED_INTO"} == {
+        ("MERGED_INTO", "Capability", "cap_t", "Capability", "cap_w")
+    }
+
+
+def _live_target(graph_name: str) -> GraphWriteTarget:
+    """The real gateway on the disposable graph, under one system audit row (issue #210)."""
+    config = load_config()
+    audit_event_id = build_system_audit_recorder(config)(
+        action="ingestion_run.submit",
+        resource_type="ingestion_run",
+        resource_id=f"live-{graph_name}",
+        details={"trigger": "live_resolve_review"},
+    )
+    return GraphWriteTarget(build_default_graph_write_gateway(config), graph_name, audit_event_id)
 
 
 _LIVE_TEST_GRAPH = "policy_system_issue190_near_miss_tombstone_live_test"
@@ -155,7 +156,7 @@ def test_loser_with_inbound_tombstone_leaves_the_tombstone_resolving_to_the_winn
             "nearest_existing_text: 'W', similarity: 0.9, created_at: '2024-06-01T00:00:00+00:00'})"
         )
 
-        outcome = resolve_review(graph, "review_t190", "merge")
+        outcome = resolve_review(graph, "review_t190", "merge", _live_target(_LIVE_TEST_GRAPH))
 
         assert outcome is not None
         assert (outcome.winner_id, outcome.loser_id) == ("cap_w", "cap_s")

@@ -33,8 +33,9 @@ Issue #195 audits the signed merge as ``near_miss.resolve`` (approver as actor, 
 in the details). The single-use approval is consumed (``mark_signed`` precedes the merge) even
 when the opening audit row cannot be written: the merge then does not run, nothing is audited as
 applied, the stored outcome is ``_AUDIT_UNAVAILABLE_MESSAGE`` and the user must request a new
-approval. There is deliberately no pre-check: an audit row written before ``mark_signed`` would
-be orphaned if the CAS were lost.
+approval. There is deliberately no pre-check of the AUDIT row: one written before ``mark_signed``
+would be orphaned if the CAS were lost. The graph write gateway, which writes nothing, is checked
+before ``mark_signed`` (issue #210), so a missing gateway is a 503 that leaves the approval pending.
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ from ps_service.api.dependencies import (
     provide_pending_approval_store,
 )
 from ps_service.api.errors import PendingApprovalInvalidOrExpiredError, PendingReviewNotFoundError
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.near_miss_review_orchestration import (
     NearMissReviewDependencies,
     run_resolve_near_miss,
@@ -636,9 +638,10 @@ def _execute_merge_and_record_outcome(
     actor, whose credential just signed) as actor and `approval_id=row.id`; the `applied` row
     precedes the write. If that opening row cannot be written the merge does not run and the
     stored outcome is the fixed `_AUDIT_UNAVAILABLE_MESSAGE`. The single-use approval is consumed
-    either way (`mark_signed` precedes this call; there is deliberately no pre-check, because an
-    audit row written before `mark_signed` would be orphaned if the CAS were lost), so the user
-    must request a new approval.
+    either way (`mark_signed` precedes this call; there is deliberately no pre-check of the audit
+    row, because one written before `mark_signed` would be orphaned if the CAS were lost), so the
+    user must request a new approval. A missing gateway never gets here: `post_sign_verify`
+    checks it before `mark_signed` (issue #210).
 
     Only ever called after `store.mark_signed` has already committed
     (PLAN.md §3: "post-signature merge-execution" -- the signature's
@@ -803,6 +806,11 @@ async def post_sign_verify(
             credential_current_sign_count=credential.sign_count,
         )
 
+    if row.tool_name == _NEAR_MISS_TOOL_NAME:
+        # Issue #210: the merge writes through the Graph Write Gateway. Check it BEFORE the
+        # single-use approval is consumed, so a missing gateway is a 503 the same approval can
+        # retry, not a burned approval. Side-effect free; no audit row exists yet.
+        graph_write_access(config)
     if not store.mark_signed(pending_approval_id):
         # Lost the atomic CAS race, or the row was consumed/expired between
         # `_verify_code`'s check and here -- never attempt the merge.

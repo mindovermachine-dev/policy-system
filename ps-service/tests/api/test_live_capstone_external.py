@@ -51,10 +51,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ps_service.api.dependencies import provide_pipeline_dependencies
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import build_default_pipeline_dependencies
 from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
 from ps_service.config import load_config
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.logging import facade
 from ps_service.main import create_app
 
@@ -203,6 +205,10 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
 
     app = create_app(load_config())
     app.dependency_overrides[provide_pipeline_dependencies] = _limited_dependencies
+    # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
+    # entered, so the app lifespan never installs it: install the real one (PS state Postgres and
+    # FalkorDB) the way a deployed service does. Not run in the implementation sandbox.
+    install_graph_write_gateway(build_default_graph_write_gateway(load_config()))
 
     try:
         client = TestClient(app, raise_server_exceptions=False)
@@ -230,6 +236,7 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
             disposable_graph=disposable_graph,
         )
     finally:
+        install_graph_write_gateway(None)
         monkeypatch.undo()
         with contextlib.suppress(Exception):
             db.select_graph(_DISPOSABLE_GRAPH).delete()

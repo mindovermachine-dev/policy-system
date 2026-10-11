@@ -51,9 +51,11 @@ from ps_service.api.dependencies import (
     provide_near_miss_review_dependencies,
     provide_pending_approval_store,
 )
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth import Principal
+from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
@@ -63,6 +65,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.passkey_signing.store import PendingApprovalStore
 
 _ACTOR_SUBJECT = "user-1"
@@ -171,7 +174,10 @@ def _record(
 
 
 def _unexpected_resolve_review(
-    graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+    graph: GraphHandle,
+    review_id: str,
+    decision: Literal["keep-separate", "merge"],
+    target: GraphWriteTarget,
 ) -> ResolveOutcome | None:
     """Default `resolve_review` stub for a list-only test -- fails loudly if ever called."""
     _ = graph, review_id, decision
@@ -181,7 +187,10 @@ def _unexpected_resolve_review(
 def _fake_dependencies(
     records: tuple[PendingReviewRecord, ...],
     *,
-    resolve: Callable[[GraphHandle, str, Literal["keep-separate", "merge"]], ResolveOutcome | None]
+    resolve: Callable[
+        [GraphHandle, str, Literal["keep-separate", "merge"], GraphWriteTarget],
+        ResolveOutcome | None,
+    ]
     | None = None,
 ) -> tuple[NearMissReviewDependencies, list[ServiceConfig]]:
     open_calls: list[ServiceConfig] = []
@@ -289,7 +298,10 @@ def test_get_near_misses_is_unauthenticated_never_401_or_403() -> None:
 
 
 def _client_for_resolve(
-    resolve: Callable[[GraphHandle, str, Literal["keep-separate", "merge"]], ResolveOutcome | None],
+    resolve: Callable[
+        [GraphHandle, str, Literal["keep-separate", "merge"], GraphWriteTarget],
+        ResolveOutcome | None,
+    ],
     *,
     records: tuple[PendingReviewRecord, ...] = (),
     principal: Principal | None = None,
@@ -318,7 +330,10 @@ def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
     recorded_calls: list[tuple[str, str]] = []
 
     def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         _ = graph
         recorded_calls.append((review_id, decision))
@@ -340,11 +355,67 @@ def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
     assert recorded_calls == [("review_aaa", "keep-separate")]
 
 
+def test_post_resolve_keep_separate_without_a_gateway_is_503_and_writes_no_audit_row() -> None:
+    """Issue #210 (F2): keep-separate writes through the gateway; none installed fails closed."""
+    install_graph_write_gateway(None)
+    audit = InMemoryAuditStore()
+
+    def _resolve(
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
+    ) -> ResolveOutcome | None:
+        raise AssertionError("the resolution must not run without a gateway")
+
+    client = _client_for_resolve(_resolve, records=(_record("review_aaa"),), audit_store=audit)
+
+    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
+
+    assert response.status_code == 503
+    assert audit.rows == []
+
+
+def test_post_resolve_persistence_failure_is_a_generic_500_with_a_failed_audit_row() -> None:
+    """Issue #210 (AC-BI-008): a refused or unapplied graph write is classified as before.
+
+    The route answers the generic 500 (no gateway text, host or port in the body) and the
+    resolution's follow-up audit row records `graph_write_failed`.
+    """
+    audit = InMemoryAuditStore()
+
+    def _resolve(
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
+    ) -> ResolveOutcome | None:
+        raise CompanyMergePersistenceError("FalkorDB write failed: could not reach 10.0.0.5:6379")
+
+    client = TestClient(
+        _client_for_resolve(_resolve, records=(_record("review_aaa"),), audit_store=audit).app,
+        raise_server_exceptions=False,  # the catch-all handler answers; do not re-raise it here
+    )
+
+    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
+
+    assert response.status_code == 500
+    for leak in ("10.0.0.5", "6379", "FalkorDB", "committed_apply_pending"):
+        assert leak not in response.text
+    assert [(r.outcome, r.details.get("reason_code")) for r in audit.rows] == [
+        ("applied", None),
+        ("failed", "graph_write_failed"),
+    ]
+
+
 def test_post_resolve_unknown_id_returns_404_pending_review_not_found() -> None:
     """AC-BI-008 (not-found half): a bad id surfaces as a clear 404, not a 500/200."""
 
     def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         _ = graph, review_id, decision
         return None
@@ -389,7 +460,10 @@ def test_post_resolve_merge_returns_pending_approval_and_does_not_execute() -> N
     recorded_calls: list[tuple[str, str]] = []
 
     def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         _ = graph
         recorded_calls.append((review_id, decision))
@@ -639,7 +713,10 @@ def test_get_approval_status_unknown_id_returns_404() -> None:
 
 
 def _outcome_resolve(
-    graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+    graph: GraphHandle,
+    review_id: str,
+    decision: Literal["keep-separate", "merge"],
+    target: GraphWriteTarget,
 ) -> ResolveOutcome | None:
     _ = graph
     return ResolveOutcome(review_id=review_id, decision=decision)
@@ -684,10 +761,13 @@ def test_post_resolve_returns_503_when_audit_is_unavailable_and_graph_is_untouch
     resolve_calls: list[str] = []
 
     def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         resolve_calls.append(review_id)
-        return _outcome_resolve(graph, review_id, decision)
+        return _outcome_resolve(graph, review_id, decision, target)
 
     client = _client_for_resolve(
         _resolve, records=(_record("review_aaa"),), principal=_principal(), audit_store=audit

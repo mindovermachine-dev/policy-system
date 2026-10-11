@@ -19,8 +19,7 @@ full `connect_from_config` -> `select_graph` -> named single-tenant graph
 round trip. `_open_single_tenant_graph` below is a byte-for-byte copy of
 that function (own private copy, not a shared import -- mirrors
 `falkordb_client.py`/`graph_writer.py`'s own "own copy, not shared import"
-module-docstring convention, and `pending_review.py`'s own `_execute_query`
-precedent).
+module-docstring convention).
 
 Slice 3 (AC-BI-004, the not-found half of AC-BI-008, the `keep-separate`
 half of AC-BI-009) adds `resolve_review` to this bundle and
@@ -71,6 +70,7 @@ from typing import TYPE_CHECKING
 import redis.exceptions
 
 from ps_service.api.errors import PendingReviewNotFoundError
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.models import (
     PendingReviewEntry,
     PendingReviewListResponse,
@@ -80,7 +80,11 @@ from ps_service.api.near_miss_audit_actions import (
     NEAR_MISS_RESOLVE_ACTION,
     NEAR_MISS_REVIEW_RESOURCE_TYPE,
 )
-from ps_service.audit import AuditTarget, record_follow_up_row, record_opening_row
+from ps_service.audit import (
+    AuditTarget,
+    record_follow_up_row,
+    record_opening_row_with_event_id,
+)
 from ps_service.company_merge.errors import CompanyMergePersistenceError, StalePendingReviewError
 from ps_service.logging import emit_log_entry
 from ps_service.logging.errors import LoggingLifecycleError
@@ -92,8 +96,10 @@ if TYPE_CHECKING:
     from ps_service.api.near_miss_audit_actions import NearMissResolveReason
     from ps_service.audit import AuditContext
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
     from ps_service.config import ServiceConfig
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.logging import LogEmitter
 
 _COMPONENT = "near_miss_review"
@@ -106,7 +112,8 @@ class NearMissReviewDependencies:
     open_single_tenant_graph: Callable[[ServiceConfig], GraphHandle]
     list_pending_reviews: Callable[[GraphHandle], tuple[PendingReviewRecord, ...]]
     resolve_review: Callable[
-        [GraphHandle, str, Literal["keep-separate", "merge"]], ResolveOutcome | None
+        [GraphHandle, str, Literal["keep-separate", "merge"], GraphWriteTarget],
+        ResolveOutcome | None,
     ]
     get_pending_review: Callable[[GraphHandle, str], PendingReviewRecord | None]
 
@@ -258,6 +265,9 @@ def run_resolve_near_miss(
         PendingReviewNotFoundError: `review_id` doesn't exist, was already
             resolved, or (merge only) references a node a prior merge
             already deleted.
+        GraphWriteUnavailableError: no Graph Write Gateway is installed (HTTP 503); checked after
+            the not-found check and before the opening audit row, so nothing was audited or
+            resolved.
         AuditTrailUnavailableError: the opening audit row could not be written; nothing was
             resolved.
     """
@@ -265,6 +275,10 @@ def run_resolve_near_miss(
     record = dependencies.get_pending_review(graph, review_id)
     if record is None:
         raise PendingReviewNotFoundError(f"no unresolved PendingReview with id {review_id!r}")
+    # Issue #210: the resolution is written through the Graph Write Gateway, so with none installed
+    # it fails closed here -- after the not-found check (an unknown review is still a 404) and
+    # before the opening audit row (nothing is audited for a resolution that cannot run).
+    write_access = graph_write_access(config)
     target = AuditTarget(NEAR_MISS_RESOLVE_ACTION, NEAR_MISS_REVIEW_RESOURCE_TYPE, record.id)
     details: dict[str, object] = {
         "review_id": record.id,
@@ -275,9 +289,15 @@ def run_resolve_near_miss(
     }
     if approval_id is not None:
         details["approval_id"] = approval_id
-    record_opening_row(audit, target, component=_COMPONENT, details=details, emitter=emitter)
+    # The opening row's id anchors the resolution's graph group to the audit trail (issue #210).
+    audit_event_id = record_opening_row_with_event_id(
+        audit, target, component=_COMPONENT, details=details, emitter=emitter
+    )
+    write_target = _graph_write_target(write_access.gateway, audit_event_id)
     try:
-        response = _resolve_or_raise_not_found(dependencies, graph, review_id, decision)
+        response = _resolve_or_raise_not_found(
+            dependencies, graph, review_id, decision, write_target
+        )
     except Exception as exc:
         reason = _failure_reason(exc)
         record_follow_up_row(
@@ -308,15 +328,28 @@ def run_resolve_near_miss(
     return response
 
 
+def _graph_write_target(gateway: GroupSubmitter, audit_event_id: str) -> GraphWriteTarget:
+    """Where the resolution's group goes: `policy_system`, under the opening row's audit event."""
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+        single_tenant_graph_name,
+    )
+    from ps_service.company_merge.graph_submission import (  # noqa: PLC0415 -- M6, as above
+        GraphWriteTarget,
+    )
+
+    return GraphWriteTarget(gateway, single_tenant_graph_name(), audit_event_id)
+
+
 def _resolve_or_raise_not_found(
     dependencies: NearMissReviewDependencies,
     graph: GraphHandle,
     review_id: str,
     decision: Literal["keep-separate", "merge"],
+    write_target: GraphWriteTarget,
 ) -> ResolveReviewResponse:
     """Run `resolve_review`, translating its not-found/stale signals into API errors."""
     try:
-        outcome = dependencies.resolve_review(graph, review_id, decision)
+        outcome = dependencies.resolve_review(graph, review_id, decision, write_target)
     except StalePendingReviewError as exc:
         raise PendingReviewNotFoundError(
             f"pending review {review_id!r} references a node that no longer exists "

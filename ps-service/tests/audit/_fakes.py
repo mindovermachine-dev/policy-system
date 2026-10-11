@@ -12,6 +12,7 @@ Import as `from audit._fakes import InMemoryAuditStore` (the cross-package idiom
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -51,6 +52,10 @@ class InMemoryAuditStore:
     fail_on_outcome: dict[str, Exception] = field(default_factory=dict)
     fail_on_action: dict[str, Exception] = field(default_factory=dict)
     history: list[AuditEventRow] = field(default_factory=list)
+    event_ids: list[str] = field(default_factory=list)
+    """The id `record_standalone_with_event_id` handed out for each row, in order."""
+    event_id_sink: Callable[[str], None] | None = None
+    """Called with each new event id (a test's way to register it with the graph log)."""
 
     def record(self, cur: object, **kwargs: object) -> str:
         del cur, kwargs
@@ -67,12 +72,42 @@ class InMemoryAuditStore:
         outcome: str,
         details: Mapping[str, object],
     ) -> None:
+        self.record_standalone_with_event_id(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            details=details,
+        )
+
+    def record_standalone_with_event_id(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: str,
+        details: Mapping[str, object],
+    ) -> str:
+        """Record the row as `record_standalone` does and return its fresh event id (issue #210).
+
+        The id is appended to `event_ids` and handed to `event_id_sink`, which a test points at the
+        graph log's committed audit rows so a group anchored to this row is accepted.
+        """
         error = self.fail_on_action.get(action) or self.fail_on_outcome.get(outcome)
         if error is not None:
             raise error
         model = resolve_details_model(action)
         assert model is not None, f"unregistered audit action {action!r}"
         validated = model.model_validate(dict(details))
+        event_id = str(uuid.uuid4())
+        self.event_ids.append(event_id)
+        if self.event_id_sink is not None:
+            self.event_id_sink(event_id)
         self.events.append(f"audit:{action}:{outcome}")
         self.rows.append(
             RecordedAuditRow(
@@ -85,6 +120,7 @@ class InMemoryAuditStore:
                 details=validated.model_dump(mode="json", exclude_none=True),
             )
         )
+        return event_id
 
     def query(
         self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int

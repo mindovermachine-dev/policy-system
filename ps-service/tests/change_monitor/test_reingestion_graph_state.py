@@ -27,6 +27,11 @@ from api._fakes import (
     FakeInternalSeedAdapter,
     build_fake_change_check_dependencies,
 )
+from api._gateway_fakes import (
+    RecordingSystemAudit,
+    install_process_gateway,
+    installed_process_gateway,
+)
 
 from change_monitor._fakes import (
     FakeAdapter,
@@ -49,6 +54,7 @@ from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
 )
 from ps_service.audit import AuditContext
+from ps_service.audit.errors import AuditTrailUnavailableError
 from ps_service.change_monitor.models import AmendmentFinding, PollReport, TrackedInstrumentNode
 from ps_service.change_monitor.trigger import trigger_reingestion, will_reingest
 from ps_service.config import ServiceConfig
@@ -370,3 +376,40 @@ def test_repair_that_fails_at_derive_resumes_at_derive_and_ends_as_a_clean_repai
     ]
     assert graphs.native.edges[("SUPERSEDED_BY", _PRIOR, _NEW)] == {"absorbed": True}
     assert graphs.native.marker_stage(_NEW) is None
+
+
+def test_an_audit_outage_blocks_a_merge_only_resume_and_the_next_sweep_resumes_it(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #210 (CHANGES F4 difference 3): a merge-only resume needs its one audit row.
+
+    The merge stage failed once, leaving the marker at `derivation`. While the audit trail is
+    down the resume fails closed before the merge runs (`reingest_failed`, marker untouched, no
+    stage run); once the trail is back the next sweep resumes at merge alone.
+    """
+    emitter, _ = make_emitter()
+    graphs, stages = _seeded()
+    stages.arm_failure("merge", partial=False)
+    first = _sweep(graphs, stages, emitter)
+    assert [o.outcome for o in first.instruments] == ["reingest_failed"]
+    assert graphs.native.marker_stage(_NEW) == "derivation"
+    healthy = installed_process_gateway()
+    install_process_gateway(
+        healthy.rig, RecordingSystemAudit(healthy.rig, error=AuditTrailUnavailableError("down"))
+    )
+    graphs.events.clear()
+
+    blocked = _sweep(graphs, stages, emitter)
+
+    assert [o.outcome for o in blocked.instruments] == ["reingest_failed"]
+    assert graphs.native.marker_stage(_NEW) == "derivation"
+    assert [e for e in graphs.events if e.startswith("stage:")] == []
+    install_process_gateway(healthy.rig, healthy.system_audit)
+
+    resumed = _sweep(graphs, stages, emitter)
+
+    assert [o.outcome for o in resumed.instruments] == ["amendment_reingested"]
+    assert [e for e in graphs.events if e.startswith("stage:")] == ["stage:merge"]
+    assert graphs.native.marker_stage(_NEW) is None
+    (resume_row,) = healthy.system_audit.rows[-1:]
+    assert resume_row["resource_id"] == resumed.instruments[0].reingest_run_id

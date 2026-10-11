@@ -36,6 +36,7 @@ from ps_service.audit.emit import (
     AuditTarget,
     record_follow_up_row,
     record_opening_row,
+    record_opening_row_with_event_id,
 )
 from ps_service.audit.errors import (
     AuditActorUnresolvedError,
@@ -57,7 +58,7 @@ from ps_service.audit.models import (
     register_audit_resource_type,
     resolve_details_model,
 )
-from ps_service.audit.store import AuditStore, PsycopgAuditStore
+from ps_service.audit.store import AuditStore, EventIdAuditStore, PsycopgAuditStore
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 """This component's own migration directory, listed by the composition root (`ps_service.main`)."""
@@ -80,10 +81,12 @@ __all__ = [
     "AuditTarget",
     "AuditTrailUnavailableError",
     "AuditUnknownActionError",
+    "EventIdAuditStore",
     "PsycopgAuditStore",
     "is_known_resource_type",
     "record_follow_up_row",
     "record_opening_row",
+    "record_opening_row_with_event_id",
     "register_audit_action",
     "register_audit_resource_type",
     "resolve_audit_actor",

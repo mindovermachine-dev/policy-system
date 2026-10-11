@@ -19,7 +19,11 @@ from ps_service.audit import (
     AuditUnknownActionError,
     register_audit_action,
 )
-from ps_service.audit.emit import record_follow_up_row, record_opening_row
+from ps_service.audit.emit import (
+    record_follow_up_row,
+    record_opening_row,
+    record_opening_row_with_event_id,
+)
 from ps_service.audit.errors import AuditTrailUnavailableError
 from ps_service.logging import bind_run_context
 
@@ -199,3 +203,68 @@ def test_failure_log_omits_the_resource_id_when_the_target_marks_it_personal_dat
     (line,) = read_lines(log_path)
     assert "entity_id" not in line
     assert "a@example.com" not in str(line)
+
+
+# --- issue #210 (A6): the opening row hands back its audit event id ---
+
+
+def test_record_opening_row_with_event_id_writes_the_opening_row_and_returns_its_id() -> None:
+    store = InMemoryAuditStore()
+
+    event_id = record_opening_row_with_event_id(
+        _context(store), _TARGET, component="probe", details={"status": "started"}
+    )
+
+    (row,) = store.rows
+    assert (row.outcome, row.action, row.resource_id) == ("applied", _ACTION, "res-1")
+    assert (row.actor_subject, row.actor_issuer) == _ACTOR
+    assert store.event_ids == [event_id]
+
+
+@pytest.mark.parametrize("error", _STORE_ERRORS, ids=lambda e: type(e).__name__)
+def test_record_opening_row_with_event_id_is_fail_closed_like_the_plain_opening_row(
+    error: Exception,
+) -> None:
+    store = InMemoryAuditStore(fail_on_outcome={"applied": error})
+
+    with pytest.raises(AuditTrailUnavailableError) as raised:
+        record_opening_row_with_event_id(
+            _context(store), _TARGET, component="probe", details={"status": "started"}
+        )
+
+    assert raised.value.__cause__ is error
+    assert store.rows == []
+
+
+def test_record_opening_row_with_event_id_logs_class_name_only_when_the_store_is_down(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    emitter, log_path = make_emitter()
+    store = InMemoryAuditStore(
+        fail_on_outcome={"applied": AuditPostgresUnavailableError("host=db.internal")}
+    )
+
+    with pytest.raises(AuditTrailUnavailableError):
+        record_opening_row_with_event_id(
+            _context(store), _TARGET, component="probe", details={}, emitter=emitter
+        )
+    emitter.flush()
+
+    (line,) = read_lines(log_path)
+    assert line["action"] == "audit_opening_failed"
+    assert line["reason"] == "AuditPostgresUnavailableError"
+    assert "db.internal" not in str(line)
+
+
+class _StoreWithoutEventIds:
+    """An `AuditStore` that cannot report ids: only the plain write."""
+
+    def record_standalone(self, **kwargs: object) -> None:
+        del kwargs
+
+
+def test_record_opening_row_with_event_id_rejects_a_store_that_cannot_report_ids() -> None:
+    context = AuditContext(actor=_ACTOR, store=_StoreWithoutEventIds())  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(TypeError, match="event id"):
+        record_opening_row_with_event_id(context, _TARGET, component="probe", details={})

@@ -38,7 +38,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Literal, cast
 
-from ps_service.company_merge import graph_reader, graph_writer, obligation_redirect
+from ps_service.company_merge import graph_reader, obligation_redirect
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
 from ps_service.company_merge.falkordb_client import (
     select_graph as select_company_merge_graph,
@@ -52,7 +52,7 @@ from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.falkordb_connection import raw_connection
 from ps_service.export.serialize import checksum_bytes, parse_serialized_graph_json
 from ps_service.logging.facade import emit_log_entry
-from ps_service.restore import schema_allowlist
+from ps_service.restore import schema_allowlist, snapshot_merge_writer
 from ps_service.restore.errors import (
     ArtifactContentRejectedError,
     ArtifactIntegrityError,
@@ -161,7 +161,7 @@ def _emit_restore_log(
 
     Issue #106/AC-BI-011: the `"succeeded"` call site folds in the six
     PracticeArea/RiskPath/classification-edge write counts
-    (`graph_writer.classification_write_counts`) via `extra=`, merged
+    (`snapshot_merge_writer.classification_write_counts`) via `extra=`, merged
     alongside `caller`/`schema_version` rather than replacing them --
     mirroring `company_merge/merge.py`'s own `"succeeded"` entry so the
     requirement holds regardless of which of the two entry points (live
@@ -253,8 +253,8 @@ def _run_baseline_merge(
     `graph_reader.read_baseline_graph` (never reimplemented); dedupes its
     Capability nodes via `resolve_capability_convergence_offline` (Slices
     5.3/5.4, D6) against `snapshot_name`'s own existing canonical index; then
-    persists via the EXISTING, unmodified `graph_writer.persist_*` functions
-    (Slice 5.6's own requirement -- reused, not reimplemented), in the same
+    persists via `snapshot_merge_writer.persist_*` (the verbatim interim copy of the
+    pre-#210 Company Merge writers, retired by #214), in the same
     write order `merge.py::merge_baseline_graph` itself uses: role/
     requirement passthrough, obligation passthrough, canonical Capability
     mints, (issue #183/#227) the shared draft-governance import
@@ -274,7 +274,7 @@ def _run_baseline_merge(
     `baseline.classification_edges` into the same `persist_rewired_edges`
     call -- mirroring `merge.py::merge_baseline_graph`'s live-path placement
     exactly (§5 of PLAN.md). Returns the six-key
-    `graph_writer.classification_write_counts(baseline)` dict (AC-BI-011)
+    `snapshot_merge_writer.classification_write_counts(baseline)` dict (AC-BI-011)
     for the caller to attach to its own `"succeeded"` audit log entry.
 
     This function is passed as `stage_and_finalize_policy_system_leg`'s
@@ -334,7 +334,7 @@ def _run_baseline_merge(
         snapshot_graph, baseline, emitter=emitter
     )
 
-    graph_writer.persist_role_and_requirement_passthrough(
+    snapshot_merge_writer.persist_role_and_requirement_passthrough(
         snapshot_graph,
         baseline.regulatory_instrument_id,
         baseline.regulatory_instrument_properties,
@@ -342,8 +342,8 @@ def _run_baseline_merge(
         baseline.requirement_nodes,
         baseline.provenance_edges,
     )
-    graph_writer.persist_obligation_passthrough(snapshot_graph, baseline.obligation_nodes)
-    graph_writer.persist_canonical_nodes(
+    snapshot_merge_writer.persist_obligation_passthrough(snapshot_graph, baseline.obligation_nodes)
+    snapshot_merge_writer.persist_canonical_nodes(
         snapshot_graph, baseline.capability_nodes, dedup_result.resolutions, kind="Capability"
     )
     canonical_id_by_incoming_id = {
@@ -361,6 +361,7 @@ def _run_baseline_merge(
             single_tenant_graph=snapshot_graph,
             governance=governance,
             canonical_id_by_incoming_id=canonical_id_by_incoming_id,
+            write_drafts=snapshot_merge_writer.persist_governance_drafts,
         )
     )
 
@@ -370,10 +371,10 @@ def _run_baseline_merge(
     # call below, mirroring merge.py's own live-path placement exactly: no
     # dedup, no embedding call (AC-BI-006) -- identity convergence is
     # structural (content-hashed ids minted upstream by `internal_seed`).
-    graph_writer.persist_practice_area_and_risk_path_passthrough(
+    snapshot_merge_writer.persist_practice_area_and_risk_path_passthrough(
         snapshot_graph, baseline.practice_area_nodes, baseline.risk_path_nodes
     )
-    graph_writer.validate_classification_edge_endpoints(
+    snapshot_merge_writer.validate_classification_edge_endpoints(
         snapshot_graph, baseline.classification_edges, canonical_id_by_incoming_id
     )
 
@@ -381,16 +382,16 @@ def _run_baseline_merge(
     # edges, and the classification edges -- governance_edges/
     # classification_edges are empty for an external-sourced restore, so
     # this is unchanged from before S6/#106 in that case.
-    graph_writer.persist_rewired_edges(
+    snapshot_merge_writer.persist_rewired_edges(
         snapshot_graph,
         baseline.bare_edges + baseline.governance_edges + baseline.classification_edges,
         canonical_id_by_incoming_id,
     )
-    graph_writer.backfill_canonical_embeddings(
+    snapshot_merge_writer.backfill_canonical_embeddings(
         snapshot_graph, kind="Capability", embeddings=dedup_result.embedding_backfills
     )
 
-    return {**graph_writer.classification_write_counts(baseline), **governance_counts}
+    return {**snapshot_merge_writer.classification_write_counts(baseline), **governance_counts}
 
 
 def _require_owner_for_governance(baseline_graph: SerializedGraph, owner: object | None) -> None:
@@ -439,7 +440,7 @@ def restore_instrument(
 
     `owner` (issue #183) is the restoring caller's verified `(sub, iss)` pair.
     An internal-sourced artifact's Policy/Standard/Control tree is imported as
-    `draft`, owned by `owner` (`graph_writer.persist_governance_drafts`); an
+    `draft`, owned by `owner` (`snapshot_merge_writer.persist_governance_drafts`); an
     artifact with a Policy and no `owner` raises `RestoreOwnerRequiredError`
     before any staged key exists. An external-sourced artifact carries no such
     content, so `owner` is never read and may be `None`.

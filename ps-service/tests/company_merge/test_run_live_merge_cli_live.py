@@ -62,6 +62,21 @@ def _node_count(graph: GraphHandle) -> int:
     return cast("int", rows[0][0])
 
 
+def _offline_write_access(config: object) -> tuple[object, object]:
+    """Issue #210: the gateway and audit row are not the subject of this smoke test.
+
+    The gateway is never submitted to (`merge_fn` raises first) and the audit recorder is
+    replaced so the test issues no write to the PS state database either. Mechanism updated for
+    #210; not run in the implementation sandbox.
+    """
+    del config
+
+    def record(**_row: object) -> str:
+        return "audit-offline"
+
+    return object(), record
+
+
 def _load_cli_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(_MODULE_NAME, _SCRIPT_PATH)
     assert spec is not None
@@ -103,12 +118,17 @@ class _RaisingOnFirstCallMergeFn:
         *,
         baseline_graph: object,
         single_tenant_graph: object,
+        submitter: object,
+        single_tenant_graph_name: str,
+        baseline_graph_name: str,
+        audit_event_id: str,
         embed_model: str,
         similarity_threshold: float,
         call_embedding: object | None = None,
         emitter: object | None = None,
     ) -> object:
-        del call_embedding, emitter
+        del call_embedding, emitter, submitter, single_tenant_graph_name, baseline_graph_name
+        del audit_event_id
         self.calls.append(
             {
                 "regulatory_instrument_id": regulatory_instrument_id,
@@ -160,6 +180,7 @@ def test_real_wiring_reaches_merge_fn_with_real_args_and_issues_zero_writes(
             str(report_path),
         ],
         merge_fn=merge_fn,
+        write_access=_offline_write_access,
         # graph_provider/clock deliberately left at their REAL defaults -- this is the whole
         # point of this test, per CHANGES.md #2.
     )

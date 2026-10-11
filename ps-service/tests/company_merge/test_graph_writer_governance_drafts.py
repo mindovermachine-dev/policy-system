@@ -1,57 +1,33 @@
-"""Tests for `ps_service.company_merge.graph_writer.persist_governance_drafts` (issue #183).
+"""Tests for `ps_service.company_merge.graph_writer.persist_governance_drafts` (issues #183, #210).
 
-Restore of an internal curated instrument writes its Policy/Standard/Control
-tree into the single-tenant graph as `draft`, owned by the restoring caller,
-without ever converging onto an existing canonical node. Every write is
-`MERGE ... ON CREATE SET`, so a node that already exists -- including one a
-user has since approved -- is never touched by a re-restore.
-
-The fake implements FalkorDB's `MERGE ... ON CREATE SET` semantics for real
-(rather than only recording calls) so idempotency is proven against behaviour,
-not against the Cypher text.
+An internal instrument's Policy/Standard/Control tree is written into the single-tenant graph as
+`draft`, owned by the importing caller, without ever converging onto an existing canonical node.
+Since issue #210 the write is ONE Graph Write Gateway group: each node is a create-only
+`UpsertNode` (an id the graph already holds is decided BEFORE submission, from one batched
+existing-id read per label, and left out, so a node a user has since approved is never touched and
+nothing is logged for it). The Policy `created_at` is drawn from the injected `ValueSource` once,
+while the group is built, and a Policy embedding travels in the primitive's `embedding` field.
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-from typing import cast
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
+import pytest
+
+from company_merge._gateway_fakes import POLICY_SYSTEM, stepped_values
+from ps_service.company_merge.errors import CompanyMergePersistenceError
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.graph_writer import persist_governance_drafts
 from ps_service.company_merge.models import BaselineNode, GovernanceDraftCounts
 
+if TYPE_CHECKING:
+    from company_merge._gateway_fakes import MergeRig
+    from ps_service.graph_gateway.models import GraphLogEntry
+
 _OWNER = ("alice@example.com", "https://idp.example/")
-_UPSERT = re.compile(r"^MERGE \(n:(?P<label>\w+) \{id: \$id\}\) ON CREATE SET n \+= \$properties$")
-
-
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
-class _FakeQueryResult:
-    @property
-    def result_set(self) -> list[object]:
-        return []
-
-
-class _StatefulFakeGraph:
-    """Records every call and keeps nodes keyed by `(label, id)`, honouring `ON CREATE SET`."""
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-        self.nodes: dict[tuple[str, str], dict[str, object]] = {}
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        match = _UPSERT.match(q)
-        assert match is not None, f"unexpected query shape: {q!r}"
-        assert params is not None
-        key = (match["label"], cast("str", params["id"]))
-        if key not in self.nodes:
-            self.nodes[key] = dict(cast("dict[str, object]", params["properties"]))
-        return _FakeQueryResult()
+_FIRST_INSTANT = datetime(2026, 3, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _policy(node_id: str = "pol_a", **extra: str | float) -> BaselineNode:
@@ -71,147 +47,216 @@ def _control(node_id: str = "ctrl_a", **extra: str | float) -> BaselineNode:
     )
 
 
-def test_policy_standard_and_control_are_written_as_draft() -> None:
-    """AC-BI-003: every restored Policy, Standard and Control is `status = draft`."""
-    graph = _StatefulFakeGraph()
-
-    persist_governance_drafts(
-        graph, (_policy(),), (_standard(),), (_control(),), owner=_OWNER, policy_embeddings=None
+def _persist(
+    rig: MergeRig,
+    policies: tuple[BaselineNode, ...],
+    standards: tuple[BaselineNode, ...] = (),
+    controls: tuple[BaselineNode, ...] = (),
+    *,
+    policy_embeddings: dict[str, tuple[float, ...]] | None = None,
+) -> GovernanceDraftCounts:
+    return persist_governance_drafts(
+        GraphWriteTarget(rig.gateway, POLICY_SYSTEM, rig.audit_event_id),
+        rig.legacy,
+        policies,
+        standards,
+        controls,
+        owner=_OWNER,
+        policy_embeddings=policy_embeddings,
+        values=stepped_values(),
     )
 
-    assert graph.nodes[("Policy", "pol_a")]["status"] == "draft"
-    assert graph.nodes[("Standard", "std_a")]["status"] == "draft"
-    assert graph.nodes[("Control", "ctrl_a")]["status"] == "draft"
+
+def _entries(rig: MergeRig) -> list[GraphLogEntry]:
+    return [entry for group in rig.groups for entry in group.entries]
 
 
-def test_standard_and_control_without_status_default_to_draft() -> None:
+def _properties(entry: GraphLogEntry) -> dict[str, object]:
+    properties = entry.content["properties"]
+    assert isinstance(properties, dict)
+    return {str(key): value for key, value in properties.items()}  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+
+
+def test_drafts_are_one_group_with_status_owner_version_and_one_shared_created_at(
+    merge_rig: MergeRig,
+) -> None:
+    """AC-BI-003/001/007: one group; Policy, Standard, Control in that order; one `created_at`."""
+    _persist(
+        merge_rig,
+        (_policy("pol_a"), _policy("pol_b")),
+        (_standard(),),
+        (_control(),),
+    )
+
+    assert len(merge_rig.groups) == 1
+    entries = _entries(merge_rig)
+    assert [(e.name, e.identity) for e in entries] == [
+        ("Policy", "pol_a"),
+        ("Policy", "pol_b"),
+        ("Standard", "std_a"),
+        ("Control", "ctrl_a"),
+    ]
+    policy_a, policy_b, standard, control = (_properties(e) for e in entries)
+    assert policy_a["created_at"] == policy_b["created_at"] == _FIRST_INSTANT.isoformat()
+    assert policy_a["status"] == "draft"
+    assert (policy_a["owner_subject"], policy_a["owner_issuer"]) == _OWNER
+    assert policy_a["version"] == "1"
+    assert "created_at" not in standard
+    assert "created_at" not in control
+    assert standard["status"] == control["status"] == "draft"
+
+
+def test_standard_and_control_without_status_default_to_draft(merge_rig: MergeRig) -> None:
     """AC-BI-004: an artifact node with no `status` is written as `draft`."""
-    graph = _StatefulFakeGraph()
-
-    persist_governance_drafts(
-        graph, (_policy(),), (_standard(),), (_control(),), owner=_OWNER, policy_embeddings=None
-    )
+    _persist(merge_rig, (_policy(),), (_standard(),), (_control(),))
 
     assert "status" not in _standard().properties
-    assert graph.nodes[("Standard", "std_a")]["status"] == "draft"
-    assert graph.nodes[("Control", "ctrl_a")]["status"] == "draft"
+    assert merge_rig.policy_system.nodes[("Standard", "std_a")]["status"] == "draft"
+    assert merge_rig.policy_system.nodes[("Control", "ctrl_a")]["status"] == "draft"
 
 
-def test_non_draft_artifact_status_is_overridden_and_counted() -> None:
-    """AC-BI-005: an artifact `approved`/`proposed` status is written as `draft` and counted."""
-    graph = _StatefulFakeGraph()
+def test_artifact_authored_status_is_overridden_and_counted_even_when_the_node_exists(
+    merge_rig: MergeRig,
+) -> None:
+    """AC-BI-005: `approved`/`proposed` is written `draft` and counted, present or not."""
+    merge_rig.policy_system.seed_node(("Standard",), "std_a", {"status": "approved"})
 
-    counts = persist_governance_drafts(
-        graph,
+    counts = _persist(
+        merge_rig,
         (_policy("pol_a", status="approved"),),
         (_standard("std_a", status="proposed"), _standard("std_b")),
         (_control("ctrl_a", status="approved"),),
-        owner=_OWNER,
-        policy_embeddings=None,
     )
 
-    assert graph.nodes[("Policy", "pol_a")]["status"] == "draft"
-    assert graph.nodes[("Standard", "std_a")]["status"] == "draft"
-    assert graph.nodes[("Control", "ctrl_a")]["status"] == "draft"
+    nodes = merge_rig.policy_system.nodes
+    assert nodes[("Policy", "pol_a")]["status"] == "draft"
+    assert nodes[("Standard", "std_a")]["status"] == "approved"  # existing: untouched
+    assert nodes[("Control", "ctrl_a")]["status"] == "draft"
     assert counts == GovernanceDraftCounts(policies=1, standards=2, controls=1, status_overridden=3)
 
 
-def test_policy_is_owned_by_the_restoring_caller() -> None:
-    """AC-BI-001: `owner_subject`/`owner_issuer` are the caller's `(sub, iss)` pair."""
-    graph = _StatefulFakeGraph()
+def test_an_existing_approved_policy_is_neither_changed_nor_logged(merge_rig: MergeRig) -> None:
+    """AC-BI-005/010: a node that already exists keeps status, owner and content; no entry."""
+    merge_rig.policy_system.seed_node(
+        ("Policy",),
+        "pol_a",
+        {"status": "approved", "owner_subject": "bob@example.com", "owner_issuer": "https://x/"},
+    )
+    merge_rig.policy_system.seed_node(("Standard",), "std_a", {"status": "approved"})
+    merge_rig.policy_system.seed_node(("Control",), "ctrl_a", {"status": "approved"})
 
-    persist_governance_drafts(graph, (_policy(),), (), (), owner=_OWNER, policy_embeddings=None)
+    _persist(merge_rig, (_policy(),), (_standard(),), (_control(),))
 
-    policy = graph.nodes[("Policy", "pol_a")]
-    assert policy["owner_subject"] == "alice@example.com"
-    assert policy["owner_issuer"] == "https://idp.example/"
+    nodes = merge_rig.policy_system.nodes
+    assert nodes[("Policy", "pol_a")]["status"] == "approved"
+    assert nodes[("Policy", "pol_a")]["owner_subject"] == "bob@example.com"
+    assert nodes[("Standard", "std_a")]["status"] == "approved"
+    assert nodes[("Control", "ctrl_a")]["status"] == "approved"
+    assert merge_rig.groups == []
 
 
-def test_policy_without_version_defaults_to_string_one() -> None:
+def test_the_existing_id_reads_are_one_batched_read_per_label(merge_rig: MergeRig) -> None:
+    _persist(merge_rig, (_policy("pol_a"), _policy("pol_b")), (_standard(),), (_control(),))
+
+    reads = [s for s in merge_rig.legacy.statements if s.startswith("MATCH")]
+    assert reads == [
+        "MATCH (n:Policy) WHERE n.id IN $ids RETURN n.id",
+        "MATCH (n:Standard) WHERE n.id IN $ids RETURN n.id",
+        "MATCH (n:Control) WHERE n.id IN $ids RETURN n.id",
+    ]
+
+
+def test_the_first_occurrence_of_a_repeated_id_wins(merge_rig: MergeRig) -> None:
+    first = _policy("pol_a", title_note="first")
+    second = _policy("pol_a", title_note="second")
+
+    _persist(merge_rig, (first, second))
+
+    assert [e.identity for e in _entries(merge_rig)] == ["pol_a"]
+    assert merge_rig.policy_system.nodes[("Policy", "pol_a")]["title_note"] == "first"
+
+
+def test_policy_embedding_travels_in_the_embedding_field_not_in_properties(
+    merge_rig: MergeRig,
+) -> None:
+    """The offline embedding survives, so later Policy convergence on ingest can use it."""
+    _persist(merge_rig, (_policy(),), policy_embeddings={"pol_a": (0.5, 0.25)})
+
+    [entry] = _entries(merge_rig)
+    assert entry.embedding == (0.5, 0.25)
+    assert "embedding" not in _properties(entry)
+    assert merge_rig.policy_system.nodes[("Policy", "pol_a")]["embedding"] == [0.5, 0.25]
+
+
+def test_policy_without_an_embedding_gets_no_embedding_key(merge_rig: MergeRig) -> None:
+    _persist(merge_rig, (_policy(),), policy_embeddings={})
+
+    assert "embedding" not in merge_rig.policy_system.nodes[("Policy", "pol_a")]
+
+
+def test_policy_without_version_defaults_to_string_one(merge_rig: MergeRig) -> None:
     """The lifecycle's `version` is string-typed and starts at `"1"`."""
-    graph = _StatefulFakeGraph()
     unversioned = BaselineNode(id="pol_a", properties={"title": "P", "status": "draft"})
 
-    persist_governance_drafts(graph, (unversioned,), (), (), owner=_OWNER, policy_embeddings=None)
+    _persist(merge_rig, (unversioned,))
 
-    assert graph.nodes[("Policy", "pol_a")]["version"] == "1"
+    assert merge_rig.policy_system.nodes[("Policy", "pol_a")]["version"] == "1"
 
 
-def test_every_artifact_property_is_carried_onto_the_draft() -> None:
+def test_every_artifact_property_is_carried_onto_the_draft(merge_rig: MergeRig) -> None:
     """A reviewer approving the draft sees the full authored content, not a hollow shell."""
-    graph = _StatefulFakeGraph()
-
-    persist_governance_drafts(
-        graph,
+    _persist(
+        merge_rig,
         (_policy(scope_in="all repos"),),
         (_standard(procedure="Do the thing"),),
         (_control(evidence_plan="Quarterly export"),),
-        owner=_OWNER,
-        policy_embeddings=None,
     )
 
-    assert graph.nodes[("Policy", "pol_a")]["scope_in"] == "all repos"
-    assert graph.nodes[("Standard", "std_a")]["procedure"] == "Do the thing"
-    assert graph.nodes[("Control", "ctrl_a")]["evidence_plan"] == "Quarterly export"
+    nodes = merge_rig.policy_system.nodes
+    assert nodes[("Policy", "pol_a")]["scope_in"] == "all repos"
+    assert nodes[("Standard", "std_a")]["procedure"] == "Do the thing"
+    assert nodes[("Control", "ctrl_a")]["evidence_plan"] == "Quarterly export"
 
 
-def test_artifact_supplied_policy_embedding_is_stored() -> None:
-    """The offline embedding survives, so later Policy convergence on ingest can use it."""
-    graph = _StatefulFakeGraph()
+def test_counts_describe_the_input_not_the_nodes_actually_created(merge_rig: MergeRig) -> None:
+    merge_rig.policy_system.seed_node(("Policy",), "pol_a", {"status": "approved"})
 
-    persist_governance_drafts(
-        graph, (_policy(),), (), (), owner=_OWNER, policy_embeddings={"pol_a": (0.5, 0.25)}
-    )
+    counts = _persist(merge_rig, (_policy("pol_a"), _policy("pol_b")), (_standard(),))
 
-    assert graph.nodes[("Policy", "pol_a")]["embedding"] == [0.5, 0.25]
+    assert counts == GovernanceDraftCounts(policies=2, standards=1, controls=0, status_overridden=0)
+    assert [e.identity for e in _entries(merge_rig)] == ["pol_b", "std_a"]
 
 
-def test_policy_without_an_embedding_gets_no_embedding_key() -> None:
-    graph = _StatefulFakeGraph()
-
-    persist_governance_drafts(graph, (_policy(),), (), (), owner=_OWNER, policy_embeddings={})
-
-    assert "embedding" not in graph.nodes[("Policy", "pol_a")]
-
-
-def test_existing_approved_tree_is_not_reset_by_a_second_restore() -> None:
-    """AC-BI-010: `ON CREATE SET` leaves an approved node's status and owner alone."""
-    graph = _StatefulFakeGraph()
-    graph.nodes[("Policy", "pol_a")] = {
-        "status": "approved",
-        "owner_subject": "bob@example.com",
-        "owner_issuer": "https://idp.example/",
-    }
-    graph.nodes[("Standard", "std_a")] = {"status": "approved"}
-    graph.nodes[("Control", "ctrl_a")] = {"status": "approved"}
-
-    persist_governance_drafts(
-        graph, (_policy(),), (_standard(),), (_control(),), owner=_OWNER, policy_embeddings=None
-    )
-
-    assert graph.nodes[("Policy", "pol_a")]["status"] == "approved"
-    assert graph.nodes[("Policy", "pol_a")]["owner_subject"] == "bob@example.com"
-    assert graph.nodes[("Standard", "std_a")]["status"] == "approved"
-    assert graph.nodes[("Control", "ctrl_a")]["status"] == "approved"
-
-
-def test_second_restore_adds_no_nodes() -> None:
-    """AC-BI-011: repeating the same restore leaves the same node set."""
-    graph = _StatefulFakeGraph()
+def test_second_restore_adds_no_nodes_and_logs_nothing(merge_rig: MergeRig) -> None:
+    """AC-BI-011: repeating the same import leaves the same node set; the second group is empty."""
     args = ((_policy(),), (_standard(),), (_control(),))
 
-    persist_governance_drafts(graph, *args, owner=_OWNER, policy_embeddings=None)
-    first = {key: dict(value) for key, value in graph.nodes.items()}
-    persist_governance_drafts(graph, *args, owner=_OWNER, policy_embeddings=None)
+    _persist(merge_rig, *args)
+    first = {key: dict(value) for key, value in merge_rig.policy_system.nodes.items()}
+    logged = len(merge_rig.logged())
+    _persist(merge_rig, *args)
 
-    assert graph.nodes == first
+    assert merge_rig.policy_system.nodes == first
+    assert len(merge_rig.logged()) == logged
 
 
-def test_empty_input_issues_no_queries_and_counts_zero() -> None:
-    """AC-BI-007: an external-sourced restore (no governance content) writes nothing."""
-    graph = _StatefulFakeGraph()
+def test_empty_input_issues_no_queries_submits_nothing_and_counts_zero(
+    merge_rig: MergeRig,
+) -> None:
+    """AC-BI-007: an external-sourced import (no governance content) writes nothing."""
+    counts = _persist(merge_rig, ())
 
-    counts = persist_governance_drafts(graph, (), (), (), owner=_OWNER, policy_embeddings=None)
-
-    assert graph.calls == []
+    assert merge_rig.legacy.statements == []
+    assert merge_rig.groups == []
     assert counts == GovernanceDraftCounts(policies=0, standards=0, controls=0, status_overridden=0)
+
+
+def test_a_property_the_graph_cannot_store_raises_before_anything_is_submitted(
+    merge_rig: MergeRig,
+) -> None:
+    bad = BaselineNode(id="pol_bad", properties={"title": "x", "score": float("inf")})
+
+    with pytest.raises(CompanyMergePersistenceError, match="cannot store"):
+        _persist(merge_rig, (_policy(), bad))
+
+    assert merge_rig.groups == []

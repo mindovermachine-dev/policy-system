@@ -16,8 +16,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from company_merge._fakes import MakeEmitter, ReadLines
+    from collections.abc import Mapping
 
+    from graph_gateway._fakes import InMemoryGraph
+
+    from company_merge._fakes import MakeEmitter, ReadLines
+    from company_merge._gateway_fakes import MergeRig
+
+import re
 from dataclasses import dataclass
 from typing import cast
 
@@ -76,12 +82,37 @@ class _RecordedCall:
 # (Capability only, since #42) -- used to distinguish a "read" call from a
 # "write" call in a fake single-tenant graph's call log (test (b)'s
 # call-order proof).
+_EXISTENCE_READ = re.compile(
+    r"^MATCH \((?:n|o):(\w+)\) WHERE (?:n|o)\.id IN \$ids RETURN (?:n|o)\.id$"
+)
+
+_EMBEDDING_STATE_READ = re.compile(
+    r"^MATCH \(n:(Capability|Policy)\) WHERE n\.id IN \$ids RETURN n\.id, n\.embedding IS NULL$"
+)
+
 _READ_MARKERS = (
     "RETURN n.id, n.name, n.embedding",
+    "RETURN n.id, n.embedding IS NULL",
     "RETURN n.id, n.title, n.embedding",
     "RETURN a.id, b.id",
     "RETURN m.id, m.merged_into",
 )
+
+
+def _minted_capability_ids(rig: MergeRig) -> list[str]:
+    """The Capability nodes the merge created through the gateway (issue #210), in log order."""
+    return [e.identity for g in rig.groups for e in g.entries if e.name == "Capability"]
+
+
+def _review_nodes(rig: MergeRig) -> list[dict[str, object]]:
+    """The `PendingReview` nodes the merge created through the gateway (issue #210)."""
+    return [
+        props for (label, _), props in rig.policy_system.nodes.items() if label == "PendingReview"
+    ]
+
+
+_DEDUP_READ_EVENT = "dedup_read"
+"""What the fake single-tenant graph appends to the rig's shared event list per merge read."""
 
 
 def _is_read_call(call: _RecordedCall) -> bool:
@@ -219,18 +250,17 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(
                 [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
-        if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
-            # issue #31 -- backfill_incoming_capability_embeddings' write,
-            # targeting THIS (the incoming baseline) graph. Same `WHERE
-            # n.embedding IS NULL` no-op-when-already-set semantics as
-            # `_FakeSingleTenantGraph._backfill`, index 4 (embedding) rather
-            # than index 2, per this fake's own 5-element row shape.
+        if "WHERE n.id IN $ids RETURN n.id, n.embedding IS NULL" in q:
+            # issue #210: backfill_incoming_capability_embeddings' read of which of its ids exist
+            # and still have no embedding (the write is a gateway group on the baseline graph).
             assert params is not None
-            node_id = cast("str", params["id"])
-            row = self._capabilities.get(node_id)
-            if row is not None and row[4] is None:
-                row[4] = params["embedding"]
-            return _FakeQueryResult([])
+            return _FakeQueryResult(
+                [
+                    [i, self._capabilities[i][4] is None]
+                    for i in cast("list[str]", params["ids"])
+                    if i in self._capabilities
+                ]
+            )
         raise AssertionError(f"unexpected query issued: {q!r}")
 
     @staticmethod
@@ -274,16 +304,10 @@ class _FakeSingleTenantGraph:
     this fake to ACCUMULATE state ACROSS two separate `merge_baseline_graph`
     calls against the SAME instance -- simulating two regulations merged one
     after another into the same single-tenant graph, the way a real
-    FalkorDB graph would. `query()` therefore mutates internal
-    Obligation/Capability tables on a mint (`ON CREATE SET`) or embedding
-    backfill (`WHERE n.embedding IS NULL`) write, mirroring the real
-    Cypher's own conditional-write semantics exactly (a mint against an id
-    already present is a no-op, matching a real `MERGE ... ON CREATE SET`
-    against an existing node firing no `SET` at all; a backfill against an
-    already-non-`None` embedding is a no-op, matching the real `WHERE
-    n.embedding IS NULL` guard) -- so a SECOND call's
-    `read_existing_canonical_index` read sees everything the FIRST call
-    wrote, exactly as AC-002/003/004 require.
+    FalkorDB graph would. Since #210 every write is a gateway group applied to the rig's
+    `policy_system` graph, and this fake answers its reads from that graph plus its seeded rows,
+    so a SECOND call's `read_existing_canonical_index` read sees everything the FIRST call
+    wrote, exactly as AC-002/003/004 require. It refuses a write statement.
     """
 
     def __init__(
@@ -295,7 +319,11 @@ class _FakeSingleTenantGraph:
         practice_area_rows: list[object] | None = None,
         risk_path_rows: list[object] | None = None,
         merged_rows: list[object] | None = None,
+        gateway_graph: InMemoryGraph | None = None,
     ) -> None:
+        # issue #210: the Obligation nodes a merge submits through the gateway live in the rig's
+        # `policy_system` graph; the existence reads below are answered from it too.
+        self._gateway_graph = gateway_graph
         # issue #190: `[tombstone_id, survivor_id]` rows answering the
         # tombstone redirect read; empty by default (no tombstones).
         self._merged_rows: list[object] = merged_rows or []
@@ -311,8 +339,6 @@ class _FakeSingleTenantGraph:
         for row in policy_rows or []:
             row_list = list(cast("list[object]", row))
             self._policies[cast("str", row_list[0])] = row_list
-        self._standards: dict[str, list[object]] = {}
-        self._controls: dict[str, list[object]] = {}
         # issue #106: `practice_area_rows`/`risk_path_rows` mirror
         # `capability_rows`/`policy_rows`'s "seed pre-existing rows" role,
         # but store the FULL properties dict per row (`[id, properties]`)
@@ -333,48 +359,55 @@ class _FakeSingleTenantGraph:
                 cast("dict[str, object]", row_list[1])
             )
         self.calls: list[_RecordedCall] = []
+        # A seeded row is a node the graph already holds, so an edge to it is valid (the gateway
+        # rejects a group edge whose endpoint is missing from the graph).
+        for label, ids in (
+            ("Obligation", self._obligations),
+            ("Capability", self._capabilities),
+            ("Policy", self._policies),
+            ("PracticeArea", self._practice_areas),
+            ("RiskPath", self._risk_paths),
+        ):
+            for node_id in ids:
+                if gateway_graph is not None and (label, node_id) not in gateway_graph.nodes:
+                    gateway_graph.seed_node((label,), node_id, {})
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
+        call = _RecordedCall(q, params)
+        self.calls.append(call)
+        if self._gateway_graph is not None and _is_read_call(call):
+            self._gateway_graph.events.append(_DEDUP_READ_EVENT)
         if "MERGED_INTO" in q:
             return _FakeQueryResult([list(cast("list[object]", row)) for row in self._merged_rows])
         if "MergedObligation" in q:  # issue #190: no cleanup-merge obligation markers
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
-            return _FakeQueryResult([list(row) for row in self._capabilities.values()])
+            return _FakeQueryResult(self._capability_index_rows())
         if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._policies.values()])
-        if "MERGE (n:Obligation {id: $id}) ON CREATE SET" in q:
-            # #42: Obligation is a passthrough node, keyed on id (Role-scoped).
-            # Issue #28 AC-BI-006's fix: `ON CREATE SET`, not unconditional
-            # `SET` -- a recurring id (e.g. a second merge run against a
-            # drifted baseline) must never overwrite the existing node.
-            self._mint(self._obligations, params, "text")
-            return _FakeQueryResult([])
-        if "MERGE (n:Standard {id: $id}) ON CREATE SET" in q:
-            self._mint(self._standards, params, "title")
-            return _FakeQueryResult([])
-        if "MERGE (n:Control {id: $id}) ON CREATE SET" in q:
-            self._mint(self._controls, params, "title")
-            return _FakeQueryResult([])
-        if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
-            self._mint(self._capabilities, params, "name")
-            return _FakeQueryResult([])
-        if "MERGE (n:Policy {id: $id}) ON CREATE SET" in q:
-            self._mint(self._policies, params, "title")
-            return _FakeQueryResult([])
-        if "MERGE (n:PracticeArea {id: $id}) ON CREATE SET" in q:
-            self._mint_properties(self._practice_areas, params)
-            return _FakeQueryResult([])
-        if "MERGE (n:RiskPath {id: $id}) ON CREATE SET" in q:
-            self._mint_properties(self._risk_paths, params)
-            return _FakeQueryResult([])
-        if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
-            self._backfill(self._capabilities, params)
-            return _FakeQueryResult([])
-        if "MATCH (n:Policy {id: $id}) WHERE n.embedding IS NULL" in q:
-            self._backfill(self._policies, params)
-            return _FakeQueryResult([])
+        existence = _EXISTENCE_READ.search(q)
+        if existence is not None and "$ids" in q:
+            # the existing-node reads (`_read_existing_ids`, `count_new_obligations`) of the labels
+            # whose writes are gateway groups since #210
+            assert params is not None
+            held = self._held_ids(existence.group(1))
+            return _FakeQueryResult([[i] for i in cast("list[str]", params["ids"]) if i in held])
+        state_read = _EMBEDDING_STATE_READ.search(q)
+        if state_read is not None:
+            # issue #210: the backfills' read of which of their ids exist and have no embedding
+            # (the write is a gateway group on `policy_system`)
+            assert params is not None
+            table = {
+                "Capability": self._capabilities,
+                "Policy": self._policies,
+            }[state_read.group(1)]
+            return _FakeQueryResult(
+                [
+                    [i, self._embedding_of(state_read.group(1), i, table) is None]
+                    for i in cast("list[str]", params["ids"])
+                    if i in table or (state_read.group(1), i) in self._gateway_nodes()
+                ]
+            )
         if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
             # issue #106, AC-BI-008: `validate_classification_edge_endpoints`'s
             # batched existence check -- answer with whichever requested ids
@@ -383,84 +416,73 @@ class _FakeSingleTenantGraph:
             assert params is not None
             requested_ids = cast("list[str]", params["ids"])
             known_ids = (
-                set(self._obligations)
+                set(self.obligation_ids())
                 | set(self._capabilities)
                 | set(self._policies)
-                | set(self._standards)
-                | set(self._controls)
                 | set(self._practice_areas)
                 | set(self._risk_paths)
+                | {node_id for _label, node_id in self._gateway_nodes()}
             )
             return _FakeQueryResult([[rid] for rid in requested_ids if rid in known_ids])
         return _FakeQueryResult([[0]])
 
-    def _mint(
-        self,
-        table: dict[str, list[object]],
-        params: dict[str, object] | None,
-        text_key: str,
-    ) -> None:
-        """`MERGE ... ON CREATE SET` semantics: a node id already present in
-        `table` fires no `SET` at all -- matches real FalkorDB, and is
-        exactly what makes a second call's exact/semantic-matched
-        resolution (which never even issues this query -- see
-        `persist_canonical_nodes`, only a `match_kind="new"` resolution
-        does) safe regardless.
-        """
-        assert params is not None
-        node_id = cast("str", params["id"])
-        if node_id in table:
-            return
-        properties = cast("dict[str, object]", params["properties"])
-        table[node_id] = [
-            node_id,
-            properties.get(text_key),
-            properties.get("embedding"),
-        ]
-
-    def _mint_properties(
-        self,
-        table: dict[str, dict[str, object]],
-        params: dict[str, object] | None,
-    ) -> None:
-        """`MERGE ... ON CREATE SET` semantics over a FULL properties dict.
-
-        Unlike `_mint` (which tracks only one text field + embedding, per
-        Capability/Policy's fixed row shape), this preserves every property
-        as-is -- used for PracticeArea/RiskPath (issue #106), whose
-        properties are richer (`name`/`status`/`description`/`version`/
-        `owner_id`/`risk_type`). A node id already present in `table` fires
-        no `SET` at all -- matches real FalkorDB's `ON CREATE SET` and is
-        the exact mechanism AC-BI-007 proves.
-        """
-        assert params is not None
-        node_id = cast("str", params["id"])
-        if node_id in table:
-            return
-        properties = cast("dict[str, object]", params["properties"])
-        table[node_id] = dict(properties)
-
-    def _backfill(self, table: dict[str, list[object]], params: dict[str, object] | None) -> None:
-        """`WHERE n.embedding IS NULL` semantics: a no-op when the id is
-        absent from `table` or its embedding is already set -- matches real
-        FalkorDB's own guard exactly (PLAN_REVIEWED.md §6.2).
-        """
-        assert params is not None
-        node_id = cast("str", params["id"])
-        row = table.get(node_id)
-        if row is None or row[2] is not None:
-            return
-        row[2] = params["embedding"]
-
-    def writes(self) -> list[_RecordedCall]:
-        return [call for call in self.calls if not _is_read_call(call)]
-
     def calls_matching(self, substring: str) -> list[_RecordedCall]:
         return [call for call in self.calls if substring in call.query]
 
+    def edges_of(self, relationship: str) -> list[dict[str, str]]:
+        """The `relationship` edges the gateway has written, as `{"source_id", "target_id"}`.
+
+        Since issue #210 an edge is a gateway primitive, not a statement this fake receives.
+        """
+        if self._gateway_graph is None:
+            return []
+        return [
+            {"source_id": key[2], "target_id": key[4]}
+            for key in self._gateway_graph.edges
+            if key[0] == relationship
+        ]
+
     def policy_ids(self) -> set[str]:
-        """Issue #227: the ids of every Policy node currently held (seeded or written)."""
-        return set(self._policies)
+        """Issue #227: the ids of every Policy node currently held (seeded or gateway-written)."""
+        return set(self._policies) | {i for lbl, i in self._gateway_nodes() if lbl == "Policy"}
+
+    def _capability_index_rows(self) -> list[object]:
+        """`[id, name, embedding]` of the seeded Capabilities plus those the gateway has minted.
+
+        A seeded row without an embedding shows the one a gateway backfill has set since.
+        """
+        rows: dict[str, list[object]] = {key: list(row) for key, row in self._capabilities.items()}
+        for key, row in rows.items():
+            row[2] = self._embedding_of("Capability", key, self._capabilities)
+        for (label, node_id), props in self._gateway_nodes().items():
+            if label == "Capability" and node_id not in rows:
+                rows[node_id] = [node_id, props.get("name"), props.get("embedding")]
+        return list(rows.values())
+
+    def _embedding_of(
+        self, label: str, node_id: str, table: dict[str, list[object]]
+    ) -> object | None:
+        """The embedding a node holds: the seeded row's, else what the gateway has written."""
+        row = table.get(node_id)
+        if row is not None and row[2] is not None:
+            return row[2]
+        node = self._gateway_nodes().get((label, node_id))
+        return node.get("embedding") if node is not None else None
+
+    def _gateway_nodes(self) -> dict[tuple[str, str], dict[str, object]]:
+        """The nodes the merge's gateway groups have written (empty without a rig graph)."""
+        return self._gateway_graph.nodes if self._gateway_graph is not None else {}
+
+    def _held_ids(self, label: str) -> set[str]:
+        """Ids of the `label` nodes held: the seeded rows plus what the gateway has written."""
+        seeded: Mapping[str, object] = {
+            "Obligation": self._obligations,
+            "Capability": self._capabilities,
+            "Policy": self._policies,
+            "PracticeArea": self._practice_areas,
+            "RiskPath": self._risk_paths,
+        }.get(label, {})
+        return set(seeded) | {i for lbl, i in self._gateway_nodes() if lbl == label}
 
     def obligation_ids(self) -> frozenset[str]:
         """Increments 15/16: the current set of distinct canonical
@@ -469,25 +491,27 @@ class _FakeSingleTenantGraph:
         direct proof that a cross-regulation exact/semantic match never
         mints a second node for the same canonical concept.
         """
-        return frozenset(self._obligations)
+        return frozenset(self._held_ids("Obligation"))
 
     def practice_area_properties(self, node_id: str) -> dict[str, object] | None:
         """Issue #106: the current stored properties for a PracticeArea `node_id`.
 
-        `None` if no `MERGE (n:PracticeArea {id: node_id}) ON CREATE SET`
-        call has ever landed for this id -- a public read-back accessor,
+        `None` if no PracticeArea with this id was ever seeded or written through the
+        gateway -- a public read-back accessor,
         mirroring `obligation_ids()`'s role, so tests never reach into
         `_practice_areas` directly.
         """
-        return self._practice_areas.get(node_id)
+        return self._practice_areas.get(node_id) or self._gateway_nodes().get(
+            ("PracticeArea", node_id)
+        )
 
     def risk_path_properties(self, node_id: str) -> dict[str, object] | None:
         """Issue #106: the current stored properties for a RiskPath `node_id`.
 
-        `None` if no `MERGE (n:RiskPath {id: node_id}) ON CREATE SET` call
-        has ever landed for this id -- see `practice_area_properties`.
+        `None` if no RiskPath with this id was ever seeded or written through the
+        gateway -- see `practice_area_properties`.
         """
-        return self._risk_paths.get(node_id)
+        return self._risk_paths.get(node_id) or self._gateway_nodes().get(("RiskPath", node_id))
 
 
 class _ScriptedCallEmbedding:
@@ -572,16 +596,17 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
 
 def test_everything_new_writes_every_node_type_directly(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """(a) AC-001, "everything is new": an empty existing single-tenant
     graph -> every node type present afterward in the fake single-tenant
-    graph's write log, directly (Obligation via passthrough `ON CREATE SET`
+    graph's write log, directly (Obligation via create-only passthrough
     since #42/#28 AC-BI-006; Capability via match_kind="new", nothing to
     converge onto).
     """
     emitter, _log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     result = merge_baseline_graph(
         "REG-1.0",
@@ -590,25 +615,27 @@ def test_everything_new_writes_every_node_type_directly(
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert len(result.obligation_ids) == 1
     assert len(result.capability_canonical_ids) == 1
     assert result.near_misses == ()
 
-    writes = single_tenant.writes()
-    assert any("MERGE (n:RegulatoryInstrument" in c.query for c in writes)
-    assert any("MERGE (n:Role" in c.query for c in writes)
-    assert any("MERGE (n:Requirement" in c.query for c in writes)
-    assert any("MERGE (n:Obligation {id: $id}) ON CREATE SET" in c.query for c in writes)
-    assert any("MERGE (n:Capability {id: $id}) ON CREATE SET" in c.query for c in writes)
-    assert any("[:HAS]" in c.query for c in writes)
-    assert any("[:SATISFIED_BY]" in c.query for c in writes)
-    assert any("[:REQUIRES]" in c.query for c in writes)
+    # RegulatoryInstrument/Role/Requirement leave as one gateway group (issue #210)
+    assert {entry.name for group in merge_rig.groups for entry in group.entries} >= {
+        "RegulatoryInstrument",
+        "Role",
+        "Requirement",
+    }
+    assert {entry.name for group in merge_rig.groups for entry in group.entries} >= {"Obligation"}
+    assert any(key[0] == "Capability" for key in merge_rig.policy_system.nodes)
+    assert {key[0] for key in merge_rig.policy_system.edges} >= {"HAS", "SATISFIED_BY", "REQUIRES"}
 
 
 def test_both_dedup_reads_complete_before_any_write_call(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """(b) call-order proof: the Capability dedup pass completes (its
     read_existing_canonical_index read happens) before any write call
@@ -616,7 +643,7 @@ def test_both_dedup_reads_complete_before_any_write_call(
     """
     emitter, _log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     merge_baseline_graph(
         "REG-1.0",
@@ -625,17 +652,22 @@ def test_both_dedup_reads_complete_before_any_write_call(
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     read_positions = [i for i, call in enumerate(single_tenant.calls) if _is_read_call(call)]
-    write_positions = [i for i, call in enumerate(single_tenant.calls) if not _is_read_call(call)]
     assert len(read_positions) == 3  # index + tombstone + obligation-marker reads (issue #190)
-    assert write_positions
-    assert max(read_positions) < min(write_positions)
+    # since #210 a write is a gateway group: its first log append must come after the last read
+    events = merge_rig.events
+    assert events.count(_DEDUP_READ_EVENT) == 3
+    assert max(i for i, event in enumerate(events) if event == _DEDUP_READ_EVENT) < events.index(
+        "log_append"
+    )
 
 
 def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """(c) Q3's fix, "the Capability dedup target is reused," proven
     end-to-end within ONE call: pre-seed the fake single_tenant_graph with
@@ -645,7 +677,7 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     `REQUIRES` edge targets the pre-existing canonical id.
 
     The Obligation, since #42, is a passthrough node: it is written with
-    `ON CREATE SET` (issue #28 AC-BI-006's fix) under its own baseline-local
+    create-only (issue #28 AC-BI-006's fix) under its own baseline-local
     (Role-scoped) id, and the Role's `HAS` / Requirement's `SATISFIED_BY`
     edges target that same id -- never a "canonical" id, because there is no
     Obligation dedup.
@@ -681,6 +713,7 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
         requires_rows=[[obligation_node_id, shared_capability_id]],
     )
     single_tenant = _FakeSingleTenantGraph(
+        gateway_graph=merge_rig.policy_system,
         capability_rows=[[shared_capability_id, shared_capability_name, None]],
     )
 
@@ -691,49 +724,49 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert result.obligation_ids == (obligation_node_id,)
     assert result.capability_canonical_ids == (shared_capability_id,)
 
-    writes = single_tenant.writes()
-    assert not any("MERGE (n:Capability {id: $id}) ON CREATE SET" in c.query for c in writes), (
+    assert _minted_capability_ids(merge_rig) == [], (
         "no new Capability node should have been minted -- the dedup target was reused"
     )
-    assert any("MERGE (n:Obligation {id: $id}) ON CREATE SET" in c.query for c in writes), (
+    assert ("Obligation", obligation_node_id) in merge_rig.policy_system.nodes, (
         "the Obligation is written straight through as a passthrough node"
     )
 
-    has_writes = single_tenant.calls_matching("[:HAS]")
+    has_writes = single_tenant.edges_of("HAS")
     assert len(has_writes) == 1
-    assert has_writes[0].params == {
+    assert has_writes[0] == {
         "source_id": role_node_id,
         "target_id": obligation_node_id,
     }
 
-    satisfied_by_writes = single_tenant.calls_matching("[:SATISFIED_BY]")
+    satisfied_by_writes = single_tenant.edges_of("SATISFIED_BY")
     assert len(satisfied_by_writes) == 1
-    assert satisfied_by_writes[0].params == {
+    assert satisfied_by_writes[0] == {
         "source_id": requirement_node_id,
         "target_id": obligation_node_id,
     }
 
-    requires_writes = single_tenant.calls_matching("[:REQUIRES]")
+    requires_writes = single_tenant.edges_of("REQUIRES")
     assert len(requires_writes) == 1
-    assert requires_writes[0].params == {
+    assert requires_writes[0] == {
         "source_id": obligation_node_id,
         "target_id": shared_capability_id,
     }
 
 
-def test_missing_similarity_threshold_raises_before_any_call() -> None:
+def test_missing_similarity_threshold_raises_before_any_call(merge_rig: MergeRig) -> None:
     """(d) B1's fix, runtime enforcement: similarity_threshold=None raises
     CompanyMergeConfigurationError; both the fake baseline_graph and fake
     single_tenant_graph receive ZERO calls of any kind (the check fires
     before even the Regulation read).
     """
     baseline = _everything_new_baseline_graph()
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     with pytest.raises(CompanyMergeConfigurationError):
         merge_baseline_graph(
@@ -742,6 +775,7 @@ def test_missing_similarity_threshold_raises_before_any_call() -> None:
             single_tenant_graph=single_tenant,
             embed_model=_MODEL,
             similarity_threshold=None,
+            **merge_rig.merge_keywords(),
         )
 
     assert baseline.calls == []
@@ -749,7 +783,7 @@ def test_missing_similarity_threshold_raises_before_any_call() -> None:
 
 
 def test_succeeded_log_entry_carries_bound_run_id(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
     """Increment 14(a): with bind_run_context("run-x"), the
     outcome="succeeded" entry for action="merge_baseline_graph" carries
@@ -757,7 +791,7 @@ def test_succeeded_log_entry_carries_bound_run_id(
     """
     emitter, log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     with bind_run_context("run-x"):
         merge_baseline_graph(
@@ -767,6 +801,7 @@ def test_succeeded_log_entry_carries_bound_run_id(
             embed_model=_MODEL,
             similarity_threshold=_THRESHOLD,
             emitter=emitter,
+            **merge_rig.merge_keywords(),
         )
     emitter.flush()
 
@@ -781,7 +816,7 @@ def test_succeeded_log_entry_carries_bound_run_id(
 
 
 def test_dedup_decision_log_entries_carry_bound_run_id(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
     """Increment 14(b): at least one per-decision entry for
     action="dedupe_canonical_nodes" also carries run_id="run-x", with
@@ -790,7 +825,7 @@ def test_dedup_decision_log_entries_carry_bound_run_id(
     """
     emitter, log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     with bind_run_context("run-x"):
         result = merge_baseline_graph(
@@ -800,6 +835,7 @@ def test_dedup_decision_log_entries_carry_bound_run_id(
             embed_model=_MODEL,
             similarity_threshold=_THRESHOLD,
             emitter=emitter,
+            **merge_rig.merge_keywords(),
         )
     emitter.flush()
 
@@ -864,6 +900,7 @@ def _single_obligation_baseline_graph(
 
 def test_cross_regulation_obligations_are_passed_through_never_deduped(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """#42: two regulations whose duty text is IDENTICAL but whose Roles
     differ (Roles are regulation-scoped) produce two DISTINCT Obligation
@@ -877,7 +914,7 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
     id_b = obligation_id("role_b_provider", shared_text)
     assert id_a != id_b
 
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     merge_baseline_graph(
         "REG-A",
@@ -891,6 +928,7 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
     assert single_tenant.obligation_ids() == {id_a}
 
@@ -908,6 +946,7 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert result_b.obligation_ids == (id_b,)
@@ -919,12 +958,13 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
     # No dedup read query for Obligation was ever issued.
     assert not single_tenant.calls_matching("(n:Obligation) RETURN n.id, n.text, n.embedding")
 
-    has_writes = single_tenant.calls_matching("[:HAS]")
-    assert any(c.params == {"source_id": "role_b_provider", "target_id": id_b} for c in has_writes)
+    has_writes = single_tenant.edges_of("HAS")
+    assert any(c == {"source_id": "role_b_provider", "target_id": id_b} for c in has_writes)
 
 
 def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """Increment 16, extra scenario (PLAN_REVIEWED.md §6.2's "Orchestrator
     correction," found during Increment 12): Capability-side cross-regulation
@@ -942,7 +982,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     shared_capability_name = "Multi-Factor Authentication Capability"
     canonical_capability_id = capability_id(shared_capability_name)
 
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     first_obligation_text = "Implement strong authentication for remote access."
     first_obligation_id = obligation_id("role_g_operator", first_obligation_text)
@@ -973,8 +1013,9 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
-    assert len(single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")) == 1
+    assert len(_minted_capability_ids(merge_rig)) == 1
 
     # The Obligation side needs no special handling: since #42 Obligation is
     # a passthrough node (no dedup pass, no call_embedding), so REG-H's
@@ -1008,18 +1049,18 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert result_h.capability_canonical_ids == (canonical_capability_id,)
     # No second Capability node was ever minted -- the dedup target was
     # reused via exact-key match (same capability name -> same
     # capability_id hash across both regulations).
-    mint_writes = single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")
-    assert len(mint_writes) == 1
+    assert len(_minted_capability_ids(merge_rig)) == 1
 
-    requires_writes = single_tenant.calls_matching("[:REQUIRES]")
+    requires_writes = single_tenant.edges_of("REQUIRES")
     assert any(
-        c.params == {"source_id": second_obligation_id, "target_id": canonical_capability_id}
+        c == {"source_id": second_obligation_id, "target_id": canonical_capability_id}
         for c in requires_writes
     ), (
         "REQUIRES edge's Capability TARGET must be rewritten to the canonical id "
@@ -1074,6 +1115,7 @@ def _internal_baseline_with_governance() -> _FakeBaselineGraph:
 
 def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """S4, #227: an internal-sourced baseline (`graph.policy_nodes` non-empty)
     is imported by the shared draft-governance pass -- Policy/Standard/Control
@@ -1084,7 +1126,7 @@ def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
     """
     emitter, _log_path = make_emitter()
     baseline = _internal_baseline_with_governance()
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     result = merge_baseline_graph(
         "ENGPRAC-3.0",
@@ -1094,32 +1136,34 @@ def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
         governance=_GOVERNANCE,
+        **merge_rig.merge_keywords(),
     )
 
     assert (result.governance_policies, result.governance_standards) == (1, 1)
     assert result.governance_controls == 1
 
-    writes = single_tenant.writes()
+    created = {entry.name for group in merge_rig.groups for entry in group.entries}
+    assert {"Policy", "Standard", "Control"} <= created
     for label in ("Policy", "Standard", "Control"):
-        assert any(f"MERGE (n:{label} {{id: $id}}) ON CREATE SET" in c.query for c in writes)
+        assert any(key[0] == label for key in merge_rig.policy_system.nodes)
 
-    governed_by_writes = single_tenant.calls_matching("[:GOVERNED_BY]")
+    governed_by_writes = single_tenant.edges_of("GOVERNED_BY")
     assert len(governed_by_writes) == 1
-    assert governed_by_writes[0].params == {
+    assert governed_by_writes[0] == {
         "source_id": "cap_engineering_review_abc",
         "target_id": "pol_engineering_practices_xyz",
     }
 
-    supported_by_writes = single_tenant.calls_matching("[:SUPPORTED_BY]")
+    supported_by_writes = single_tenant.edges_of("SUPPORTED_BY")
     assert len(supported_by_writes) == 1
-    assert supported_by_writes[0].params == {
+    assert supported_by_writes[0] == {
         "source_id": "pol_engineering_practices_xyz",
         "target_id": "std_pol_engineering_practices_xyz_v1",
     }
 
-    implemented_by_writes = single_tenant.calls_matching("[:IMPLEMENTED_BY]")
+    implemented_by_writes = single_tenant.edges_of("IMPLEMENTED_BY")
     assert len(implemented_by_writes) == 1
-    assert implemented_by_writes[0].params == {
+    assert implemented_by_writes[0] == {
         "source_id": "std_pol_engineering_practices_xyz_v1",
         "target_id": "ctrl_std_pol_engineering_practices_xyz_v1_manual",
     }
@@ -1188,6 +1232,7 @@ def _baseline_graph_with_classification_nodes(
 
 def test_practice_area_and_risk_path_nodes_pass_through_to_single_tenant(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """AC-BI-003 (PracticeArea+RiskPath halves): a baseline carrying
     PracticeArea/RiskPath nodes (with name/description/status/version/
@@ -1221,7 +1266,7 @@ def test_practice_area_and_risk_path_nodes_pass_through_to_single_tenant(
             ]
         ],
     )
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     merge_baseline_graph(
         "REG-1.0",
@@ -1230,6 +1275,7 @@ def test_practice_area_and_risk_path_nodes_pass_through_to_single_tenant(
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert single_tenant.practice_area_properties(practice_area_id_value) == {
@@ -1246,23 +1292,21 @@ def test_practice_area_and_risk_path_nodes_pass_through_to_single_tenant(
         "risk_type": "operational",
         "version": "2.0",
     }
-    writes = single_tenant.writes()
-    assert any("MERGE (n:PracticeArea {id: $id}) ON CREATE SET" in c.query for c in writes)
-    assert any("MERGE (n:RiskPath {id: $id}) ON CREATE SET" in c.query for c in writes)
+    names = {entry.name for group in merge_rig.groups for entry in group.entries}
+    assert {"PracticeArea", "RiskPath"} <= names
 
 
 def test_practice_area_and_risk_path_properties_unchanged_when_node_already_exists(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """AC-BI-007 (both halves), CHANGES.md Appendix A3: a PracticeArea/
     RiskPath node that already exists in the single-tenant graph keeps its
-    existing properties after the merge -- `MERGE ... ON CREATE SET`
+    existing properties after the merge -- create-only
     semantics, not an overwrite -- even though the incoming baseline node
-    shares the same `id` but carries different property values. The
-    `MERGE ... ON CREATE SET` query is still issued (proving
-    `persist_practice_area_and_risk_path_passthrough` ran unconditionally);
-    the no-op itself is FalkorDB's own `ON CREATE SET` guarantee, not an
-    `if` in application code.
+    shares the same `id` but carries different property values. Since #210
+    the writer reads the existing ids first and leaves them out of its
+    gateway group, so nothing is logged for either node.
     """
     emitter, _log_path = make_emitter()
     practice_area_id_value = "pa_existing"
@@ -1291,6 +1335,7 @@ def test_practice_area_and_risk_path_properties_unchanged_when_node_already_exis
         ],
     )
     single_tenant = _FakeSingleTenantGraph(
+        gateway_graph=merge_rig.policy_system,
         practice_area_rows=[
             [
                 practice_area_id_value,
@@ -1324,6 +1369,7 @@ def test_practice_area_and_risk_path_properties_unchanged_when_node_already_exis
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert single_tenant.practice_area_properties(practice_area_id_value) == {
@@ -1340,11 +1386,14 @@ def test_practice_area_and_risk_path_properties_unchanged_when_node_already_exis
         "risk_type": "operational",
         "version": "1.0",
     }
-    assert single_tenant.calls_matching("MERGE (n:PracticeArea {id: $id}) ON CREATE SET")
-    assert single_tenant.calls_matching("MERGE (n:RiskPath {id: $id}) ON CREATE SET")
+    # nothing was logged for either node: the existing ones were left out of the group
+    names = {entry.name for group in merge_rig.groups for entry in group.entries}
+    assert not {"PracticeArea", "RiskPath"} & names
 
 
-def test_capability_near_miss_persists_pending_review_node(make_emitter: MakeEmitter) -> None:
+def test_capability_near_miss_persists_pending_review_node(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     """Issue #35, Slice 1 (AC-BI-001/AC-BI-002): a below-threshold near-miss
     surfaced during the Capability dedup pass is persisted as a
     `PendingReview` node -- wired at the same call site
@@ -1372,6 +1421,7 @@ def test_capability_near_miss_persists_pending_review_node(make_emitter: MakeEmi
         requires_rows=[],
     )
     single_tenant = _FakeSingleTenantGraph(
+        gateway_graph=merge_rig.policy_system,
         capability_rows=[[existing_capability_id, existing_capability_name, existing_vector]],
     )
     call_embedding = _ScriptedCallEmbedding({incoming_capability_name: incoming_vector})
@@ -1384,12 +1434,12 @@ def test_capability_near_miss_persists_pending_review_node(make_emitter: MakeEmi
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
-    pending_review_writes = single_tenant.calls_matching("CREATE (r:PendingReview")
-    assert len(pending_review_writes) == 1
-    params = pending_review_writes[0].params
-    assert params is not None
+    pending_reviews = _review_nodes(merge_rig)
+    assert len(pending_reviews) == 1
+    params = pending_reviews[0]
     assert params["kind"] == "Capability"
     assert params["incoming_id"] == incoming_capability_id
     assert params["incoming_text"] == incoming_capability_name
@@ -1399,6 +1449,7 @@ def test_capability_near_miss_persists_pending_review_node(make_emitter: MakeEmi
 
 def test_near_title_policy_is_a_separate_draft_with_no_embedding_call_and_no_review(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """Issue #227 (AC-BI-007): a Policy whose title is only NEAR an existing Policy's is
     not converged onto it. It gets its own draft node, no Policy embedding is computed
@@ -1423,6 +1474,7 @@ def test_near_title_policy_is_a_separate_draft_with_no_embedding_call_and_no_rev
         policy_rows=[[incoming_policy_id, "Secure Development Policy", "draft", 0.9]],
     )
     single_tenant = _FakeSingleTenantGraph(
+        gateway_graph=merge_rig.policy_system,
         policy_rows=[[existing_policy_id, "Engineering Practices Policy", [1.0, 0.0]]],
     )
     call_embedding = _ScriptedCallEmbedding({})
@@ -1436,16 +1488,18 @@ def test_near_title_policy_is_a_separate_draft_with_no_embedding_call_and_no_rev
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,
+        **merge_rig.merge_keywords(),
     )
 
     assert result.governance_policies == 1
     assert single_tenant.policy_ids() == {existing_policy_id, incoming_policy_id}
-    assert single_tenant.calls_matching("CREATE (r:PendingReview") == []
+    assert _review_nodes(merge_rig) == []
     assert call_embedding.calls == []
 
 
 def test_pending_review_count_covers_capability_near_misses_only(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """Issue #35, Slice 5 (AC-BI-010), #227: `MergeResult.pending_review_count` is the
     run-scoped count of `PendingReview` nodes THIS call persisted. Only Capability
@@ -1477,6 +1531,7 @@ def test_pending_review_count_covers_capability_near_misses_only(
         ],
     )
     single_tenant = _FakeSingleTenantGraph(
+        gateway_graph=merge_rig.policy_system,
         capability_rows=[[existing_capability_id, existing_capability_name, existing_vector]],
         policy_rows=[
             ["pol_existing_engineering_practices", "Engineering Practices Policy", existing_vector]
@@ -1493,13 +1548,16 @@ def test_pending_review_count_covers_capability_near_misses_only(
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,
+        **merge_rig.merge_keywords(),
     )
 
     assert result.pending_review_count == 1
-    assert len(single_tenant.calls_matching("CREATE (r:PendingReview")) == 1
+    assert len(_review_nodes(merge_rig)) == 1
 
 
-def test_external_baseline_unaffected_by_policy_pass(make_emitter: MakeEmitter) -> None:
+def test_external_baseline_unaffected_by_policy_pass(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     """S4: an external-sourced baseline (`graph.policy_nodes == ()`) is a
     structural no-op for the whole governance import -- all four
     governance counts are zero, no Policy dedup read ever issued, no
@@ -1507,7 +1565,7 @@ def test_external_baseline_unaffected_by_policy_pass(make_emitter: MakeEmitter) 
     """
     emitter, _log_path = make_emitter()
     baseline = _everything_new_baseline_graph()  # Capability-only, no governance rows
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     result = merge_baseline_graph(
         "REG-1.0",
@@ -1516,13 +1574,18 @@ def test_external_baseline_unaffected_by_policy_pass(make_emitter: MakeEmitter) 
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert result.governance_policies == 0
     assert not single_tenant.calls_matching("(n:Policy) RETURN n.id, n.title, n.embedding")
     assert not any(
-        "Policy" in c.query or "Standard" in c.query or "Control" in c.query
-        for c in single_tenant.writes()
+        label in {"Policy", "Standard", "Control"} for label, _ in merge_rig.policy_system.nodes
+    )
+    assert not any(
+        entry.name in {"Policy", "Standard", "Control"}
+        for group in merge_rig.groups
+        for entry in group.entries
     )
 
 
@@ -1534,7 +1597,9 @@ def test_external_baseline_unaffected_by_policy_pass(make_emitter: MakeEmitter) 
 # ---------------------------------------------------------------------------
 
 
-def test_external_baseline_unaffected_by_classification_pass(make_emitter: MakeEmitter) -> None:
+def test_external_baseline_unaffected_by_classification_pass(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
     """AC-BI-009: an external-sourced baseline (no `internal_seed` content
     at all) issues NO query matching any of the six classification-layer
     markers -- checked against `single_tenant.calls` (every call, read AND
@@ -1543,7 +1608,7 @@ def test_external_baseline_unaffected_by_classification_pass(make_emitter: MakeE
     """
     emitter, _log_path = make_emitter()
     baseline = _everything_new_baseline_graph()  # Capability-only, no classification rows
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     merge_baseline_graph(
         "REG-1.0",
@@ -1552,6 +1617,7 @@ def test_external_baseline_unaffected_by_classification_pass(make_emitter: MakeE
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert not any(
@@ -1563,6 +1629,7 @@ def test_external_baseline_unaffected_by_classification_pass(make_emitter: MakeE
 
 def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """AC-BI-006 (CHANGES.md Appendix A2): two independent baselines
     (simulating two separate `internal_seed` mints of the same PracticeArea
@@ -1581,7 +1648,7 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
     cap_b_id = capability_id(cap_b_name)
 
     emitter, _log_path = make_emitter()
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     baseline_a = _classification_only_baseline_graph(
         regulatory_instrument_id="REG-A",
@@ -1608,6 +1675,7 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
     merge_baseline_graph(
         "REG-B",
@@ -1617,17 +1685,19 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     # Exactly one PracticeArea MERGE target across both calls.
-    practice_area_merges = single_tenant.calls_matching("MERGE (n:PracticeArea {id: $id})")
-    assert practice_area_merges
-    assert {c.params["id"] for c in practice_area_merges if c.params is not None} == {shared_id}
+    practice_area_entries = [
+        e.identity for g in merge_rig.groups for e in g.entries if e.name == "PracticeArea"
+    ]
+    assert practice_area_entries == [shared_id]  # the second merge found it and logged nothing
 
     # Both baselines' COVERS edges resolve onto the same source id.
-    covers_writes = single_tenant.calls_matching("[:COVERS]")
-    assert {c.params["source_id"] for c in covers_writes if c.params is not None} == {shared_id}
-    assert {c.params["target_id"] for c in covers_writes if c.params is not None} == {
+    covers_writes = single_tenant.edges_of("COVERS")
+    assert {c["source_id"] for c in covers_writes} == {shared_id}
+    assert {c["target_id"] for c in covers_writes} == {
         cap_a_id,
         cap_b_id,
     }
@@ -1641,6 +1711,7 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
 
 def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """AC-BI-006, within-a-single-call structural proof (PLAN.md §4.5): a
     baseline carrying two PracticeArea rows AND two RiskPath rows, each pair
@@ -1699,7 +1770,7 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
         ],
         covers_rows=[[shared_pa_id, cap_a_id], [shared_pa_id, cap_b_id]],
     )
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
     # The single-tenant graph starts empty, so the FIRST capability minted
     # this run needs no embedding call at all (an empty working index
     # short-circuits `find_best_semantic_match`) -- but the SECOND
@@ -1726,6 +1797,7 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     # No RouteEmbedding-reachable call was ever made with either passthrough
@@ -1741,22 +1813,22 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
     assert "Secure SDLC" not in call_embedding.calls
     assert "Unpatched Internet-Facing Service" not in call_embedding.calls
 
-    # Exactly one PracticeArea node: both MERGE calls target the SAME id
-    # (the second is a database-engine no-op, `ON CREATE SET` against an
-    # id already minted by the first).
-    pa_merges = single_tenant.calls_matching("MERGE (n:PracticeArea {id: $id}) ON CREATE SET")
-    assert len(pa_merges) == 2
-    assert {c.params["id"] for c in pa_merges if c.params is not None} == {shared_pa_id}
+    # Exactly one PracticeArea node: both rows target the SAME id (the second row is dropped by
+    # the create-only fold). The gateway group carries one create-only primitive per id, the
+    # first row's.
+    pa_entries = [
+        e.identity for g in merge_rig.groups for e in g.entries if e.name == "PracticeArea"
+    ]
+    assert pa_entries == [shared_pa_id]
 
     # Same structural-convergence proof, RiskPath side.
-    rp_merges = single_tenant.calls_matching("MERGE (n:RiskPath {id: $id}) ON CREATE SET")
-    assert len(rp_merges) == 2
-    assert {c.params["id"] for c in rp_merges if c.params is not None} == {shared_rp_id}
+    rp_entries = [e.identity for g in merge_rig.groups for e in g.entries if e.name == "RiskPath"]
+    assert rp_entries == [shared_rp_id]
 
     # That one PracticeArea node carries both incoming rows' edges.
-    covers_writes = single_tenant.calls_matching("[:COVERS]")
-    assert {c.params["source_id"] for c in covers_writes if c.params is not None} == {shared_pa_id}
-    assert {c.params["target_id"] for c in covers_writes if c.params is not None} == {
+    covers_writes = single_tenant.edges_of("COVERS")
+    assert {c["source_id"] for c in covers_writes} == {shared_pa_id}
+    assert {c["target_id"] for c in covers_writes} == {
         cap_a_id,
         cap_b_id,
     }
@@ -1764,6 +1836,7 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
 
 def test_missing_classification_edge_endpoint_raises_before_any_classification_edge_write(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """AC-BI-008 (CHANGES.md row 5): a `COVERS` edge referencing an endpoint
     id absent from BOTH the baseline and the single-tenant graph raises
@@ -1782,7 +1855,7 @@ def test_missing_classification_edge_endpoint_raises_before_any_classification_e
         risk_path_rows=[],
         covers_rows=[[practice_area_id_value, "cap_never_persisted_anywhere"]],
     )
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
     with pytest.raises(CompanyMergePersistenceError, match="cap_never_persisted_anywhere"):
         merge_baseline_graph(
@@ -1792,13 +1865,14 @@ def test_missing_classification_edge_endpoint_raises_before_any_classification_e
             embed_model=_MODEL,
             similarity_threshold=_THRESHOLD,
             emitter=emitter,
+            **merge_rig.merge_keywords(),
         )
 
-    for marker in ("[:COVERS]", "[:OWNS]", "[:MITIGATED_BY]", "[:VERIFIED_BY]"):
-        assert single_tenant.calls_matching(marker) == []
+    for relationship in ("COVERS", "OWNS", "MITIGATED_BY", "VERIFIED_BY"):
+        assert single_tenant.edges_of(relationship) == []
     # Accepted precedent: the PracticeArea node write already landed before
     # the edge-endpoint validation ran.
-    assert single_tenant.calls_matching("MERGE (n:PracticeArea {id: $id}) ON CREATE SET")
+    assert ("PracticeArea", practice_area_id_value) in merge_rig.policy_system.nodes
 
 
 def _baseline_graph_with_classification_content() -> _FakeBaselineGraph:
@@ -1832,6 +1906,7 @@ def _baseline_graph_with_classification_content() -> _FakeBaselineGraph:
 
 def test_no_classification_writes_when_capability_embedding_fails(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """AC-BI-010 (CHANGES.md Appendix A1): if Capability dedup's embedding
     call raises `LlmProviderError`, `merge_baseline_graph` never reaches
@@ -1845,6 +1920,7 @@ def test_no_classification_writes_when_capability_embedding_fails(
     existing_capability_name = "Conduct Risk Assessment Capability"
     incoming_capability_name = "Report Incident Capability"
     single_tenant = _FakeSingleTenantGraph(
+        gateway_graph=merge_rig.policy_system,
         # A non-empty existing index forces `find_best_semantic_match` to
         # actually attempt an embedding call for the incoming Capability
         # (an empty index would short-circuit with zero calls, per
@@ -1868,14 +1944,18 @@ def test_no_classification_writes_when_capability_embedding_fails(
             similarity_threshold=_THRESHOLD,
             call_embedding=call_embedding,
             emitter=emitter,
+            **merge_rig.merge_keywords(),
         )
 
-    for marker in ("PracticeArea", "RiskPath", "COVERS", "OWNS", "MITIGATED_BY", "VERIFIED_BY"):
-        assert single_tenant.calls_matching(marker) == []
+    for marker in ("PracticeArea", "RiskPath"):
+        assert not any(label == marker for label, _ in merge_rig.policy_system.nodes)
+    for relationship in ("COVERS", "OWNS", "MITIGATED_BY", "VERIFIED_BY"):
+        assert single_tenant.edges_of(relationship) == []
+    assert merge_rig.groups == []  # since #210 the node writes are gateway groups
 
 
 def test_succeeded_log_entry_carries_classification_write_counts(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
     """AC-BI-011: the `outcome="succeeded"` `merge_baseline_graph` log entry
     carries the six PracticeArea/RiskPath/classification-edge write counts
@@ -1912,7 +1992,7 @@ def test_succeeded_log_entry_carries_classification_write_counts(
         mitigated_by_rows=[[rp_1, cap_1]],
         verified_by_rows=[[rp_1, ctrl_1], [rp_1, ctrl_2]],
     )
-    single_tenant = _FakeSingleTenantGraph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
     # Four Capabilities land in this one baseline (the fixture's own spine
     # Capability plus cap_1/cap_2/cap_3): the single-tenant graph starts
     # empty, so the FIRST one minted needs no embedding call, but every
@@ -1939,6 +2019,7 @@ def test_succeeded_log_entry_carries_classification_write_counts(
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,
+        **merge_rig.merge_keywords(),
     )
     emitter.flush()
 
@@ -1997,6 +2078,7 @@ def _classification_only_baseline_graph(
 
 def test_incoming_capability_matching_a_tombstone_attaches_requires_to_the_survivor(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """Issue #190, AC-BI-008 (live half): the baseline regenerates a Capability whose id
     is a `merged` tombstone in the single-tenant graph. No node is minted for it and the
@@ -2008,6 +2090,7 @@ def test_incoming_capability_matching_a_tombstone_attaches_requires_to_the_survi
     survivor_name = "Vulnerability Remediation"
     survivor_id = capability_id(survivor_name)
     single_tenant = _FakeSingleTenantGraph(
+        gateway_graph=merge_rig.policy_system,
         capability_rows=[
             [absorbed_id, absorbed_name, None],
             [survivor_id, survivor_name, None],
@@ -2037,10 +2120,11 @@ def test_incoming_capability_matching_a_tombstone_attaches_requires_to_the_survi
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert result.capability_canonical_ids == (survivor_id,)
-    assert single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET") == []
-    requires_writes = single_tenant.calls_matching("[:REQUIRES]")
-    assert any(c.params == {"source_id": obl_id, "target_id": survivor_id} for c in requires_writes)
-    assert not any(c.params and c.params.get("target_id") == absorbed_id for c in requires_writes)
+    assert _minted_capability_ids(merge_rig) == []
+    requires_writes = single_tenant.edges_of("REQUIRES")
+    assert any(c == {"source_id": obl_id, "target_id": survivor_id} for c in requires_writes)
+    assert not any(c["target_id"] == absorbed_id for c in requires_writes)

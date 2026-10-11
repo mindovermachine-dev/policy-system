@@ -219,7 +219,7 @@ def test_scan_flags_an_unknown_label_in_a_copied_source_tree(tmp_path: Path) -> 
 # here is a conscious edit: a new dynamic site is invisible to the scan.
 _DYNAMIC_SITES: dict[str, int] = {
     "company_merge/dedup.py": 2,
-    "company_merge/graph_writer.py": 10,
+    "company_merge/graph_writer.py": 2,  # the existing-id and embedding-state reads (#210)
     "domain_mapper/graph_writer.py": 1,  # the existing-node read, fixed labels only (#209)
     "export/embeddings.py": 3,
     "export/serialize.py": 2,
@@ -227,6 +227,9 @@ _DYNAMIC_SITES: dict[str, int] = {
     "ingestion/graph_writer.py": 3,
     "policy_lifecycle/graph_writer.py": 3,
     "restore/populate.py": 4,
+    # The verbatim interim copy of Company Merge's pre-#210 Cypher writers (retired by #214); the
+    # ten sites moved here from company_merge/graph_writer.py, which now builds gateway primitives.
+    "restore/snapshot_merge_writer.py": 10,
 }
 
 

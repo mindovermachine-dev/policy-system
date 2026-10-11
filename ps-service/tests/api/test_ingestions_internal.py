@@ -17,11 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from company_merge._seed_merge_graphs import (
-    BaselineGraphReader,
-    OneHotEmbeddingCaller,
-    SingleTenantStore,
-)
+from company_merge._gateway_fakes import POLICY_SYSTEM, RigReadHandle
+from company_merge._seed_merge_graphs import BaselineGraphReader, OneHotEmbeddingCaller
 from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig, close_all_rigs
 
@@ -30,6 +27,7 @@ from api._gateway_fakes import RecordingSystemAudit, override_gateway
 from ps_service.api.dependencies import get_principal, provide_pipeline_dependencies
 from ps_service.api.ingestion_orchestration import GraphOpeners, run_internal_ingestion_pipeline
 from ps_service.auth.models import Principal
+from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
@@ -47,6 +45,7 @@ if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import GraphHandle, PipelineDependencies
     from ps_service.company_merge.governance_import import GovernanceImport
     from ps_service.company_merge.models import MergeResult
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.logging import LogEmitter
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -121,13 +120,14 @@ def _client_with_fake(fake_deps: PipelineDependencies, rig: GatewayRig | None = 
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _real_stage_dependencies(rig: GatewayRig, store: SingleTenantStore) -> PipelineDependencies:
+def _real_stage_dependencies(rig: GatewayRig, store: RigReadHandle) -> PipelineDependencies:
     """Fake dependencies whose internal stages are the REAL ones, over in-memory graphs.
 
     ``internal_ingestion`` is the real ``ingest_internal_regulatory_instrument`` writing through
     the rig's gateway into its ``{short}_baseline`` graph; ``merge`` is the real
-    ``merge_baseline_graph`` reading that graph back and writing into ``store`` (the
-    ``policy_system`` stand-in), with the embedding LLM as the only faked call. The catalog
+    ``merge_baseline_graph`` reading that graph back and writing into the rig's ``policy_system``
+    (``store`` is its read handle, which also applies the not yet migrated legacy writes), with the
+    embedding LLM as the only faked call. The catalog
     stages stay fakes -- an internal request never reaches them.
     """
     base = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-1.0").dependencies
@@ -138,6 +138,10 @@ def _real_stage_dependencies(rig: GatewayRig, store: SingleTenantStore) -> Pipel
         *,
         baseline_graph: GraphHandle,
         single_tenant_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        single_tenant_graph_name: str,
+        baseline_graph_name: str,
+        audit_event_id: str,
         embed_model: str,
         similarity_threshold: float | None,
         emitter: LogEmitter | None = None,
@@ -147,6 +151,10 @@ def _real_stage_dependencies(rig: GatewayRig, store: SingleTenantStore) -> Pipel
             regulatory_instrument_id,
             baseline_graph=baseline_graph,
             single_tenant_graph=single_tenant_graph,
+            submitter=submitter,
+            single_tenant_graph_name=single_tenant_graph_name,
+            baseline_graph_name=baseline_graph_name,
+            audit_event_id=audit_event_id,
             embed_model=embed_model,
             similarity_threshold=similarity_threshold,
             call_embedding=embedder,
@@ -181,7 +189,7 @@ def test_post_ingestions_internal_runs_real_pipeline(configured_logging: Path) -
     """
     del configured_logging  # the real merge logs through the process-default emitter
     rig = GatewayRig()  # the internal route fails closed without a gateway (issue #208)
-    store = SingleTenantStore()
+    store = RigReadHandle(rig.graphs.open(POLICY_SYSTEM))
     client = _client_with_fake(_real_stage_dependencies(rig, store), rig=rig)
 
     response = client.post(
@@ -244,6 +252,62 @@ def test_merge_stage_receives_the_caller_as_governance_owner() -> None:
 
     merge_call = next(call for call in fake.recorder.calls if call.stage == "merge")
     assert merge_call.kwargs["governance_owner"] == ("owner-1", "https://idp")
+
+
+def test_merge_stage_receives_the_gateway_graph_names_and_the_ingest_audit_event(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #210 (3a): the internal-seed merge writes through the gateway the run resolved.
+
+    The merge gets the same submitter as the ingest stage, the single-tenant and baseline graph
+    names, and the ONE system audit event id of the run (the ingest stage's group and the merge's
+    groups are logged under it).
+    """
+    emitter, _log_path = make_emitter()
+    rig = GatewayRig()
+    audit = RecordingSystemAudit(rig)
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+
+    run_internal_ingestion_pipeline(
+        _REAL_SEED_DOCUMENT,
+        config=_app_config(),
+        run_id="run-1",
+        caller="test",
+        dependencies=fake.dependencies,
+        gateway=rig.gateway,
+        system_audit=audit,
+        owner=("owner-1", "https://idp"),
+        emitter=emitter,
+    )
+
+    merge_call = next(call for call in fake.recorder.calls if call.stage == "merge")
+    (audit_event_id,) = audit.ids
+    assert merge_call.kwargs["submitter"] is rig.gateway
+    assert merge_call.kwargs["single_tenant_graph_name"] == POLICY_SYSTEM
+    assert merge_call.kwargs["baseline_graph_name"] == baseline_graph_name("ENGPRAC")
+    assert merge_call.kwargs["audit_event_id"] == audit_event_id
+
+
+def test_a_gateway_failure_in_the_merge_is_a_502_merge_failure_without_gateway_text() -> None:
+    """Issue #210 (3a, AC-BI-008): a persistence error from the merge is the usual merge 502."""
+    fake = build_fake_pipeline_dependencies(
+        internal_rid="ENGPRAC-3.0",
+        merge_error=CompanyMergePersistenceError(
+            "FalkorDB write failed: the group was committed to the graph log but could not be "
+            "applied to the graph yet"
+        ),
+    )
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post(
+        "/ingestions", json={"source": "internal", "content": _REAL_SEED_DOCUMENT}
+    )
+
+    assert response.status_code == 502
+    error = response.json()["error"]
+    assert error["failing_stage"] == "merge"
+    assert "FalkorDB write failed" not in error["message"]
+    assert "graph log" not in error["message"]
 
 
 def test_merge_stage_receives_the_pipeline_emitter(make_emitter: MakeEmitter) -> None:

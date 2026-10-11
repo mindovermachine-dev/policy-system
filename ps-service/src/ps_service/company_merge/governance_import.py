@@ -12,14 +12,43 @@ the two paths cannot drift apart.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
-from ps_service.company_merge import graph_writer
 from ps_service.company_merge.errors import GovernanceOwnerRequiredError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from ps_service.company_merge.falkordb_client import GraphHandle
-    from ps_service.company_merge.models import BaselineGraph, GovernanceDraftCounts
+    from ps_service.company_merge.models import (
+        BaselineGraph,
+        BaselineNode,
+        GovernanceDraftCounts,
+    )
+
+
+class DraftGovernanceWriter(Protocol):
+    """The write step of the pass: persists a Policy/Standard/Control tree as `draft`.
+
+    Company Merge passes `graph_writer.persist_governance_drafts` with its gateway write target
+    bound (a Graph Write Gateway group, issue #210); Restore passes its snapshot copy
+    (`restore.snapshot_merge_writer`, issue #210 D1), which writes Cypher into the staged copy.
+    `graph` is the handle the writer reads (and, for the snapshot copy, writes) through.
+    """
+
+    def __call__(
+        self,
+        graph: GraphHandle,
+        policy_nodes: tuple[BaselineNode, ...],
+        standard_nodes: tuple[BaselineNode, ...],
+        control_nodes: tuple[BaselineNode, ...],
+        /,
+        *,
+        owner: tuple[str, str],
+        policy_embeddings: Mapping[str, tuple[float, ...]] | None,
+    ) -> GovernanceDraftCounts:
+        """Persist the tree as `draft` and return what was written."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +72,7 @@ def import_draft_governance(
     single_tenant_graph: GraphHandle,
     governance: GovernanceImport,
     canonical_id_by_incoming_id: dict[str, str],
+    write_drafts: DraftGovernanceWriter,
 ) -> GovernanceDraftCounts | None:
     """Import `baseline`'s Policy/Standard/Control tree into `single_tenant_graph` as `draft`.
 
@@ -53,6 +83,9 @@ def import_draft_governance(
     Each Policy maps onto itself in `canonical_id_by_incoming_id` (mutated in
     place): `persist_rewired_edges` requires an entry for every Policy endpoint
     of `GOVERNED_BY`/`SUPPORTED_BY`/`OWNS`, and here canonical == incoming.
+
+    `write_drafts` is the persistence step and has no default: the caller decides whether the tree
+    goes through the gateway (live merge) or into a staged snapshot (restore, issue #210 D1).
 
     Returns:
         The written counts, or `None` when there was nothing to import.
@@ -67,7 +100,7 @@ def import_draft_governance(
         raise GovernanceOwnerRequiredError(
             "an imported policy tree needs an owner; none was supplied"
         )
-    counts = graph_writer.persist_governance_drafts(
+    counts = write_drafts(
         single_tenant_graph,
         baseline.policy_nodes,
         baseline.standard_nodes,

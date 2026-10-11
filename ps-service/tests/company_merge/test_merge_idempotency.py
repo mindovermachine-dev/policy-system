@@ -42,9 +42,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from company_merge._fakes import MakeEmitter
+    from graph_gateway._fakes import InMemoryGraph
 
-from dataclasses import dataclass
+    from company_merge._fakes import MakeEmitter
+    from company_merge._gateway_fakes import MergeRig
+    from ps_service.graph_gateway.models import GraphLogEntry
+
+import re
+from dataclasses import dataclass, replace
 from typing import cast
 
 from litellm.types.utils import Embedding, EmbeddingResponse
@@ -84,14 +89,9 @@ class _RecordedCall:
     params: dict[str, object] | None
 
 
-_READ_MARKERS = (
-    "RETURN n.id, n.name, n.embedding",  # Capability index only, since #42
-    "RETURN a.id, b.id",  # tombstone redirect read, issue #190
+_EXISTENCE_READ = re.compile(
+    r"^MATCH \((?:n|o):(\w+)\) WHERE (?:n|o)\.id IN \$ids RETURN (?:n|o)\.id$"
 )
-
-
-def _is_read_call(call: _RecordedCall) -> bool:
-    return any(marker in call.query for marker in _READ_MARKERS)
 
 
 class _FakeBaselineGraph:
@@ -135,6 +135,11 @@ class _FakeBaselineGraph:
         self._satisfied_by_rows = satisfied_by_rows
         self._requires_rows = requires_rows
         self.calls: list[str] = []
+        self._gateway_graph: InMemoryGraph | None = None
+
+    def attach_gateway(self, graph: InMemoryGraph) -> None:
+        """Issue #210: the embedding cached on this baseline is a gateway group on `graph`."""
+        self._gateway_graph = graph
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
@@ -170,7 +175,12 @@ class _FakeBaselineGraph:
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)
         if "n.description" in q:
-            return _FakeQueryResult([list(row) for row in self._capabilities.values()])
+            return _FakeQueryResult(
+                [
+                    [*row[:4], self._embedding_of(cast("str", row[0]))]
+                    for row in self._capabilities.values()
+                ]
+            )
         if "n.name, n.confidence" in q:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
@@ -179,32 +189,42 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(
                 [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
-        if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
-            # issue #31 -- backfill_incoming_capability_embeddings' write
-            # against THIS (incoming) baseline graph.
+        if "WHERE n.id IN $ids RETURN n.id, n.embedding IS NULL" in q:
+            # issue #31, #210 -- backfill_incoming_capability_embeddings' read of which of its ids
+            # exist on THIS (incoming) baseline graph and have no embedding yet.
             assert params is not None
-            node_id = cast("str", params["id"])
-            row = self._capabilities.get(node_id)
-            if row is not None and row[4] is None:
-                row[4] = params["embedding"]
-            return _FakeQueryResult([])
+            return _FakeQueryResult(
+                [
+                    [i, self._embedding_of(i) is None]
+                    for i in cast("list[str]", params["ids"])
+                    if i in self._capabilities
+                ]
+            )
         raise AssertionError(f"unexpected query issued: {q!r}")
 
     def capability_embedding(self, node_id: str) -> tuple[float, ...] | None:
         """Issue #31 test accessor: this baseline graph's own current cached
         `embedding` for Capability `node_id`, or `None` if never backfilled.
         """
-        row = self._capabilities.get(node_id)
-        if row is None:
+        raw = self._embedding_of(node_id)
+        return tuple(cast("list[float]", raw)) if raw is not None else None
+
+    def _embedding_of(self, node_id: str) -> object | None:
+        """The embedding the row holds, else the one a gateway group has cached on the graph."""
+        row = self._capabilities[node_id]
+        if row[4] is not None:
+            return row[4]
+        if self._gateway_graph is None:
             return None
-        raw = cast("list[float] | None", row[4])
-        return tuple(raw) if raw is not None else None
+        node = self._gateway_graph.nodes.get(("Capability", node_id))
+        return node.get("embedding") if node is not None else None
 
 
 class _FakeSingleTenantGraph:
-    """Accumulates Obligation/Capability state ACROSS calls, mirroring real
-    `MERGE ... ON CREATE SET`/`WHERE n.embedding IS NULL` semantics exactly
-    -- copied from `test_merge_baseline_graph.py`'s own `_FakeSingleTenantGraph`,
+    """Answers Obligation/Capability reads ACROSS calls from its seeded rows plus the gateway graph.
+
+    (#210: writes are gateway groups, so it never interprets one.) Copied from
+    `test_merge_baseline_graph.py`'s own `_FakeSingleTenantGraph`,
     plus `capability_ids()` (this increment's own small addition, the
     Capability-side analogue of the original's `obligation_ids()`).
     """
@@ -224,56 +244,85 @@ class _FakeSingleTenantGraph:
             row_list = list(cast("list[object]", row))
             self._capabilities[cast("str", row_list[0])] = row_list
         self.calls: list[_RecordedCall] = []
+        self._gateway_graph: InMemoryGraph | None = None
+
+    def attach_gateway(self, graph: InMemoryGraph) -> None:
+        """Issue #210: the nodes a merge submits through the gateway live in `graph`.
+
+        The rows seeded into this fake are nodes the graph already holds, so they are seeded into
+        `graph` too: an edge to one of them is valid, and the existence reads see one state.
+        """
+        self._gateway_graph = graph
+        for label, table in (("Obligation", self._obligations), ("Capability", self._capabilities)):
+            for node_id in table:
+                if (label, node_id) not in graph.nodes:
+                    graph.seed_node((label,), node_id, {})
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
         if "MERGED_INTO" in q or "MergedObligation" in q:  # issue #190: no tombstones/markers
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
-            return _FakeQueryResult([list(row) for row in self._capabilities.values()])
-        if "MERGE (n:Obligation {id: $id}) ON CREATE SET" in q:
-            # #42: Obligation passthrough; issue #28 AC-BI-006's fix uses
-            # `ON CREATE SET`, not unconditional `SET` -- a recurring id
-            # must never overwrite the existing node's properties.
-            self._mint(self._obligations, params, "text")
-            return _FakeQueryResult([])
-        if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
-            self._mint(self._capabilities, params, "name")
-            return _FakeQueryResult([])
-        if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
-            self._backfill(self._capabilities, params)
-            return _FakeQueryResult([])
+            return _FakeQueryResult(self._capability_index_rows())
+        existence = _EXISTENCE_READ.match(q)
+        if existence is not None:
+            # the existing-node reads (`count_new_obligations`, the create-only and edge-endpoint
+            # reads): every write is a gateway group since #210, so the graph answers
+            assert params is not None
+            held: set[str] = (
+                set(self.obligation_ids()) if existence.group(1) == "Obligation" else set()
+            )
+            if self._gateway_graph is not None:
+                held |= {i for lbl, i in self._gateway_graph.nodes if lbl == existence.group(1)}
+            return _FakeQueryResult([[i] for i in cast("list[str]", params["ids"]) if i in held])
+        if "WHERE n.id IN $ids RETURN n.id, n.embedding IS NULL" in q:
+            # issue #210: the canonical backfill's read (its write is a gateway group)
+            assert params is not None
+            return _FakeQueryResult(
+                [
+                    [i, self._embedding_of(i) is None]
+                    for i in cast("list[str]", params["ids"])
+                    if i in self._capabilities or i in self._gateway_capabilities()
+                ]
+            )
         return _FakeQueryResult([[0]])
 
-    def _mint(
-        self,
-        table: dict[str, list[object]],
-        params: dict[str, object] | None,
-        text_key: str,
-    ) -> None:
-        assert params is not None
-        node_id = cast("str", params["id"])
-        if node_id in table:
-            return
-        properties = cast("dict[str, object]", params["properties"])
-        table[node_id] = [node_id, properties.get(text_key), properties.get("embedding")]
+    def _gateway_capabilities(self) -> dict[str, dict[str, object]]:
+        """The Capability nodes the merge's gateway groups have written (issue #210)."""
+        if self._gateway_graph is None:
+            return {}
+        return {
+            node_id: props
+            for (label, node_id), props in self._gateway_graph.nodes.items()
+            if label == "Capability"
+        }
 
-    def _backfill(self, table: dict[str, list[object]], params: dict[str, object] | None) -> None:
-        assert params is not None
-        node_id = cast("str", params["id"])
-        row = table.get(node_id)
-        if row is None or row[2] is not None:
-            return
-        row[2] = params["embedding"]
+    def _capability_index_rows(self) -> list[object]:
+        rows: dict[str, list[object]] = {key: list(row) for key, row in self._capabilities.items()}
+        for key, row in rows.items():
+            row[2] = self._embedding_of(key)
+        for node_id, props in self._gateway_capabilities().items():
+            rows.setdefault(node_id, [node_id, props.get("name"), props.get("embedding")])
+        return list(rows.values())
 
-    def writes(self) -> list[_RecordedCall]:
-        return [call for call in self.calls if not _is_read_call(call)]
+    def _embedding_of(self, node_id: str) -> object | None:
+        """The seeded row's embedding, else the one a gateway group has set on the node."""
+        row = self._capabilities.get(node_id)
+        if row is not None and row[2] is not None:
+            return row[2]
+        node = self._gateway_capabilities().get(node_id)
+        return node.get("embedding") if node is not None else None
 
     def calls_matching(self, substring: str) -> list[_RecordedCall]:
         return [call for call in self.calls if substring in call.query]
 
     def obligation_ids(self) -> frozenset[str]:
-        return frozenset(self._obligations)
+        gateway_ids = {
+            node_id
+            for label, node_id in (self._gateway_graph.nodes if self._gateway_graph else {})
+            if label == "Obligation"
+        }
+        return frozenset(self._obligations) | gateway_ids
 
     def capability_ids(self) -> frozenset[str]:
         """This increment's own addition: the Capability-side analogue of
@@ -281,7 +330,7 @@ class _FakeSingleTenantGraph:
         Capability node ids accumulated so far across however many
         `merge_baseline_graph` calls have run against this instance.
         """
-        return frozenset(self._capabilities)
+        return frozenset(self._capabilities) | frozenset(self._gateway_capabilities())
 
 
 class _ScriptedCallEmbedding:
@@ -303,29 +352,28 @@ class _ScriptedCallEmbedding:
         )
 
 
-def _edge_write_triples(single_tenant: _FakeSingleTenantGraph) -> set[tuple[str, str, str]]:
-    """Every distinct `(source_id, relationship_type, target_id)` triple
-    that has EVER been written into `single_tenant`'s edge-write log, read
-    directly from each recorded write call's own query text and params --
-    not a raw call-count assertion, since a `MERGE`-based fake graph is
-    expected to reissue the identical call on every idempotent re-run.
-    What must not grow across a re-run is the DISTINCT triple set, which is
-    exactly what this helper computes.
+def _edge_write_triples(rig: MergeRig) -> set[tuple[str, str, str]]:
+    """Every distinct `(source_id, relationship_type, target_id)` triple `policy_system` holds.
+
+    Read from the rig's graph (issue #210: an edge is a gateway primitive, no longer a statement
+    the fake single-tenant graph receives). What must not grow across a re-run is the DISTINCT
+    triple set, which is exactly what this helper computes.
     """
-    triples: set[tuple[str, str, str]] = set()
-    for call in single_tenant.writes():
-        for relationship_type in ("HAS", "SATISFIED_BY", "REQUIRES"):
-            if f"[:{relationship_type}]" in call.query:
-                assert call.params is not None
-                source_id = cast("str", call.params["source_id"])
-                target_id = cast("str", call.params["target_id"])
-                triples.add((source_id, relationship_type, target_id))
-    return triples
+    return {
+        (key[2], key[0], key[4])
+        for key in rig.policy_system.edges
+        if key[0] in ("HAS", "SATISFIED_BY", "REQUIRES")
+    }
 
 
-def _idempotency_fixture() -> tuple[
-    _FakeBaselineGraph, _FakeSingleTenantGraph, _ScriptedCallEmbedding, str, str, str
-]:
+def _edge_entry_count(rig: MergeRig) -> int:
+    """How many edge entries `policy_system`'s log holds."""
+    return sum(1 for e in rig.logged() if e.name in ("HAS", "SATISFIED_BY", "REQUIRES"))
+
+
+def _idempotency_fixture(
+    rig: MergeRig,
+) -> tuple[_FakeBaselineGraph, _FakeSingleTenantGraph, _ScriptedCallEmbedding, str, str, str]:
     """One Role, one Requirement, one Obligation, one Capability, fully
     wired. Since #42 the Obligation is a passthrough node (written straight
     through under its Role-scoped id, never deduped). The Capability side
@@ -370,6 +418,8 @@ def _idempotency_fixture() -> tuple[
             existing_capability_name: [1.0, 0.0],
         }
     )
+    baseline.attach_gateway(rig.graphs.open(rig.baseline_graph_name))
+    single_tenant.attach_gateway(rig.policy_system)
     return (
         baseline,
         single_tenant,
@@ -382,6 +432,7 @@ def _idempotency_fixture() -> tuple[
 
 def test_second_identical_call_produces_field_for_field_identical_merge_result(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """The core AC-005 claim: `merge_baseline_graph`'s second call's resolved
     `MergeResult`, against IDENTICAL inputs (same baseline graph object, same
@@ -398,7 +449,7 @@ def test_second_identical_call_produces_field_for_field_identical_merge_result(
         existing_obligation_id,
         existing_capability_id,
         _incoming_capability_id,
-    ) = _idempotency_fixture()
+    ) = _idempotency_fixture(merge_rig)
 
     result_1 = merge_baseline_graph(
         _REGULATION_ID,
@@ -408,6 +459,7 @@ def test_second_identical_call_produces_field_for_field_identical_merge_result(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
     result_2 = merge_baseline_graph(
         _REGULATION_ID,
@@ -417,17 +469,28 @@ def test_second_identical_call_produces_field_for_field_identical_merge_result(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert isinstance(result_1, MergeResult)
-    assert result_1 == result_2
+    # `new_obligation_count` is the DELTA a run makes (issue #195): the first run creates the
+    # Obligation, the second finds it. The pre-#210 fake never answered that read (every id looked
+    # new), which is the only reason this equality once held whole; see IMPL_SLICE_7a.md.
+    assert (result_1.new_obligation_count, result_2.new_obligation_count) == (1, 0)
+    assert replace(result_2, new_obligation_count=result_1.new_obligation_count) == result_1
     assert result_2.obligation_ids == (existing_obligation_id,)
     assert result_2.capability_canonical_ids == (existing_capability_id,)
     assert result_2.near_misses == ()
 
 
+def _obligation_entry_count(rig: MergeRig) -> int:
+    """How many Obligation entries the rig's gateway has logged on `policy_system`."""
+    return sum(1 for group in rig.groups for entry in group.entries if entry.name == "Obligation")
+
+
 def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """The fake `single_tenant_graph`'s accumulated node-id set is IDENTICAL
     after both calls to what it was after the first call alone -- no new
@@ -435,15 +498,14 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
 
     Proven by direct set comparison for both kinds, plus a zero-mint-call
     check for Capability specifically: `persist_canonical_nodes` only ever
-    issues its `ON CREATE SET` call for a `match_kind="new"` resolution, and
+    submits a group for a `match_kind="new"` resolution, and
     both resolutions here are `match_kind="semantic"` onto pre-existing ids,
     so neither call ever mints one. Obligation has no such call-level
-    signal to check -- since issue #28's AC-BI-006 fix, its `ON CREATE SET`
-    call is issued unconditionally on EVERY run for every baseline
-    Obligation node (unlike Capability's conditional mint), so its presence
-    proves nothing about whether a node was actually created; the direct
-    `obligation_ids()` set comparison above is the real proof that no new
-    Obligation id appeared.
+    signal to check -- since issue #28's AC-BI-006 fix every baseline
+    Obligation node is a create-only candidate on EVERY run (unlike
+    Capability's conditional mint); since #210 the existing one is left out
+    of the gateway group, which the `obligation_ids()` set comparison above
+    (fake plus the rig's graph) and the empty Obligation group list prove.
     """
     emitter, _log_path = make_emitter()
     (
@@ -453,7 +515,7 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
         existing_obligation_id,
         existing_capability_id,
         _incoming_capability_id,
-    ) = _idempotency_fixture()
+    ) = _idempotency_fixture(merge_rig)
 
     merge_baseline_graph(
         _REGULATION_ID,
@@ -463,9 +525,11 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
     obligation_ids_after_first = single_tenant.obligation_ids()
     capability_ids_after_first = single_tenant.capability_ids()
+    obligation_entries_after_first = _obligation_entry_count(merge_rig)
     assert obligation_ids_after_first == {existing_obligation_id}
     assert capability_ids_after_first == {existing_capability_id}
 
@@ -477,15 +541,26 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
     assert single_tenant.obligation_ids() == obligation_ids_after_first
     assert single_tenant.capability_ids() == capability_ids_after_first
-    assert not single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")
+    # no Capability is minted on either run; the only Capability entry is the first run's
+    # embedding backfill of the existing node, and the second run adds none
+    assert [
+        (e.identity, e.content["properties"])
+        for g in merge_rig.groups
+        for e in g.entries
+        if e.name == "Capability"
+    ] == [(existing_capability_id, {})]
+    assert obligation_entries_after_first == 1
+    assert _obligation_entry_count(merge_rig) == obligation_entries_after_first
 
 
 def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """The fake `single_tenant_graph`'s edge-write log, deduplicated by
     `(source, type, target)` triple, is unchanged in SIZE after the second
@@ -503,7 +578,7 @@ def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(
         _existing_obligation_id,
         _existing_capability_id,
         _incoming_capability_id,
-    ) = _idempotency_fixture()
+    ) = _idempotency_fixture(merge_rig)
 
     merge_baseline_graph(
         _REGULATION_ID,
@@ -513,11 +588,11 @@ def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
-    triples_after_first = _edge_write_triples(single_tenant)
+    triples_after_first = _edge_write_triples(merge_rig)
     assert len(triples_after_first) == 3  # HAS, SATISFIED_BY, REQUIRES
-
-    calls_before_second = len(single_tenant.calls)
+    assert _edge_entry_count(merge_rig) == 3
 
     merge_baseline_graph(
         _REGULATION_ID,
@@ -527,25 +602,26 @@ def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
-    triples_after_second = _edge_write_triples(single_tenant)
+    triples_after_second = _edge_write_triples(merge_rig)
     assert triples_after_second == triples_after_first
-    # The second call DID reissue the same three edge MERGE calls (expected,
-    # idempotent MERGE behavior) -- this asserts that repetition happened,
-    # distinguishing "unchanged because nothing ran" from "unchanged despite
-    # running again".
-    second_call_calls = single_tenant.calls[calls_before_second:]
-    second_call_edge_writes = [
-        c
-        for c in second_call_calls
-        if any(f"[:{rt}]" in c.query for rt in ("HAS", "SATISFIED_BY", "REQUIRES"))
-    ]
-    assert len(second_call_edge_writes) == 3
+    # The second call re-submitted the same three edges, and the gateway logged nothing for them
+    # (nothing changed): "unchanged because nothing ran" is excluded by the group count below.
+    assert _edge_entry_count(merge_rig) == 3
+    assert len(_edge_write_triples(merge_rig)) == 3
+    assert len(merge_rig.policy_system.edges) == 3 + 2  # plus DEFINES and EXPRESSES
+
+
+def _embedding_entries(rig: MergeRig) -> list[GraphLogEntry]:
+    """The logged entries that set an embedding on a Capability of `policy_system` (issue #210)."""
+    return [e for e in rig.logged() if e.name == "Capability" and e.embedding is not None]
 
 
 def test_second_call_makes_zero_further_embedding_backfill_writes(
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """The embedding-backfill effect, not just its call shape: the fake
     graph's `WHERE n.embedding IS NULL` handler mutates real in-memory state
@@ -579,7 +655,7 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(
         _existing_obligation_id,
         existing_capability_id,
         incoming_capability_id,
-    ) = _idempotency_fixture()
+    ) = _idempotency_fixture(merge_rig)
 
     merge_baseline_graph(
         _REGULATION_ID,
@@ -589,15 +665,14 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
-    backfill_writes_after_first = single_tenant.calls_matching("WHERE n.embedding IS NULL")
+    backfill_writes_after_first = _embedding_entries(merge_rig)
     # The one pre-existing Capability node had embedding=None going in -> it
     # gets backfilled. (Obligation is a passthrough node since #42 -- no
     # embedding, no backfill.)
     assert len(backfill_writes_after_first) == 1
-    backfilled_ids_after_first = {
-        cast("str", c.params["id"]) for c in backfill_writes_after_first if c.params is not None
-    }
+    backfilled_ids_after_first = {entry.identity for entry in backfill_writes_after_first}
     assert backfilled_ids_after_first == {existing_capability_id}
 
     # Every call the first run made to compute an embedding: the incoming
@@ -605,7 +680,6 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(
     # calls total.
     assert len(call_embedding.calls) == 2
 
-    calls_before_second = len(single_tenant.calls)
     embedding_calls_before_second = len(call_embedding.calls)
 
     merge_baseline_graph(
@@ -616,12 +690,10 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        **merge_rig.merge_keywords(),
     )
 
-    second_call_calls = single_tenant.calls[calls_before_second:]
-    second_call_backfill_writes = [
-        c for c in second_call_calls if "WHERE n.embedding IS NULL" in c.query
-    ]
+    second_call_backfill_writes = _embedding_entries(merge_rig)[len(backfill_writes_after_first) :]
     assert second_call_backfill_writes == [], (
         "the second run must issue ZERO embedding-backfill write calls -- both "
         "existing nodes were already backfilled by the first run, so there is "

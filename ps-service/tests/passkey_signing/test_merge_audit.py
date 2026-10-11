@@ -30,12 +30,14 @@ from passkey_signing.test_signing_ceremony import (
     _seed_pending_approval,  # pyright: ignore[reportPrivateUsage]
 )
 from ps_service.api.dependencies import provide_near_miss_review_dependencies
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth import Principal
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.falkordb_client import (
     GraphHandle,
 )
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import ResolveOutcome
 from ps_service.logging import configure
 
@@ -50,12 +52,17 @@ def _configured_logging() -> None:  # pyright: ignore[reportUnusedFunction]  # a
     configure()
 
 
-Resolve = Callable[[GraphHandle, str, Literal["keep-separate", "merge"]], ResolveOutcome | None]
+Resolve = Callable[
+    [GraphHandle, str, Literal["keep-separate", "merge"], GraphWriteTarget], ResolveOutcome | None
+]
 
 
 def _merge_resolve(audit: InMemoryAuditStore) -> Resolve:
     def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         _ = graph
         audit.events.append("graph:merge")
@@ -66,10 +73,10 @@ def _merge_resolve(audit: InMemoryAuditStore) -> Resolve:
     return _resolve
 
 
-def _sign(
+def _ceremony(
     *, audit: InMemoryAuditStore, resolve: Resolve | None = None
-) -> tuple[dict[str, object], str]:
-    """Run the full ceremony for one seeded merge approval; return the sign/verify body + row id."""
+) -> tuple[int, dict[str, object], FakePendingApprovalStore, str]:
+    """Run the full ceremony for one seeded merge approval; return the sign/verify response."""
     pending_store = FakePendingApprovalStore()
     credential_store = FakeSigningCredentialStore()
     row, code = _seed_pending_approval(pending_store)
@@ -97,8 +104,16 @@ def _sign(
     response = client.post(
         f"/approvals/{row.id}/sign/verify", json={"code": code, "credential": assertion}
     )
-    assert response.status_code == 200
-    return response.json(), row.id
+    return response.status_code, response.json(), pending_store, row.id
+
+
+def _sign(
+    *, audit: InMemoryAuditStore, resolve: Resolve | None = None
+) -> tuple[dict[str, object], str]:
+    """Run the full ceremony for one seeded merge approval; return the sign/verify body + row id."""
+    status_code, body, _pending_store, row_id = _ceremony(audit=audit, resolve=resolve)
+    assert status_code == 200
+    return body, row_id
 
 
 def test_signed_merge_records_applied_row_with_approver_as_actor_and_approval_id() -> None:
@@ -130,7 +145,10 @@ def test_signed_merge_graph_failure_adds_a_failed_row_with_graph_write_failed() 
     audit = InMemoryAuditStore()
 
     def _boom(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
     ) -> ResolveOutcome | None:
         _ = (graph, review_id, decision)
         raise CompanyMergePersistenceError("FalkorDB write failed")
@@ -187,3 +205,25 @@ def test_merge_audit_row_never_contains_the_approval_code_or_credential() -> Non
         "decision",
         "approval_id",
     }
+
+
+def test_signing_a_merge_with_no_gateway_installed_returns_503_and_leaves_the_approval_pending() -> (  # noqa: E501
+    None
+):
+    """Issue #210 (F2): the gateway is checked BEFORE `mark_signed`, so the approval is not burned.
+
+    Without the pre-check the single-use approval was consumed and the merge then failed; now the
+    caller gets a 503 and can retry the same approval link once the gateway is back.
+    """
+    audit = InMemoryAuditStore()
+    install_graph_write_gateway(None)
+
+    status_code, body, pending_store, row_id = _ceremony(audit=audit)
+
+    assert status_code == 503
+    assert body["error"]["code"] == "graph_write_unavailable"  # pyright: ignore[reportIndexIssue]
+    row = pending_store.get_by_id(row_id)
+    assert row is not None
+    assert (row.status, row.outcome) == ("pending", None)
+    assert audit.rows == []
+    assert audit.events == []

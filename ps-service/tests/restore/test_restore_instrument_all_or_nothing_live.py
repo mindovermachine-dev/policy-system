@@ -3,7 +3,7 @@ live target untouched (PLAN.md Slice 5.7, critical -- "the single most
 important proof in the whole plan" alongside Slice 5.6b; do not relax to a
 fake-graph unit test).
 
-Injects a fake `graph_writer.persist_canonical_nodes` that raises partway
+Injects a fake `snapshot_merge_writer.persist_canonical_nodes` that raises partway
 through the merge step (D8 step 5). Asserts AFTER the call: the live
 single-tenant graph is byte-for-byte unchanged from before the call
 (compared as `SerializedGraph`s via `export.serialize.serialize_graph`, not
@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import ps_service.company_merge.graph_writer as graph_writer_module
+import ps_service.restore.snapshot_merge_writer as snapshot_merge_writer_module
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 from ps_service.export.serialize import serialize_graph
@@ -112,7 +112,7 @@ def test_merge_step_failure_leaves_single_tenant_and_native_untouched(
     # Fault-injection seam proving D8's all-or-nothing rollback guarantee
     # against real, live FalkorDB state (issue #163 §2 case 1).
     # detroit-exception: fault seam proving the all-or-nothing rollback guarantee
-    monkeypatch.setattr(graph_writer_module, "persist_canonical_nodes", _raise)
+    monkeypatch.setattr(snapshot_merge_writer_module, "persist_canonical_nodes", _raise)
 
     try:
         with pytest.raises(_ForcedMergeFailureError):

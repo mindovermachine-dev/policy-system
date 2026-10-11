@@ -33,6 +33,9 @@ from typing import Literal, cast
 
 import pytest
 
+from company_merge._gateway_fakes import (
+    MergeRig,  # noqa: TC001 -- pytest resolves the fixture annotation
+)
 from ps_service.company_merge import dedup as dedup_module
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.governance_import import GovernanceImport
@@ -321,6 +324,7 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
     expected_kinds: list[str],
     monkeypatch: pytest.MonkeyPatch,
     make_emitter: MakeEmitter,
+    merge_rig: MergeRig,
 ) -> None:
     """Runtime proof, the actual enforcement mechanism (PLAN_REVIEWED.md §9),
     widened by issue #54's S4 (CHANGES.md F2): a hand-written wrapper -- not
@@ -397,6 +401,7 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
         governance=GovernanceImport(owner=("sub-1", "https://issuer.example")),
+        **merge_rig.merge_keywords(),
     )
 
     assert recorded_kinds == expected_kinds

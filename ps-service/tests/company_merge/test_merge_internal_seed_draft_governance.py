@@ -2,9 +2,9 @@
 
 The seed is ingested by the real `ingest_internal_regulatory_instrument` into a gateway rig's
 `engprac_baseline` graph, then merged by the real `merge_baseline_graph`. Only the graph engines
-(the rig's in-memory baseline, `SingleTenantStore` for `policy_system`) and the embedding LLM are
-doubles. Every Policy/Standard/Control the seed carries arrives `draft`, owned by the caller,
-created-only and never converged.
+(the rig's in-memory baseline, the merge rig's `policy_system` and its legacy read handle) and
+the embedding LLM are doubles. Every Policy/Standard/Control the seed carries arrives `draft`,
+owned by the caller, created-only and never converged.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from company_merge._seed_merge_graphs import (
     SIMILARITY_THRESHOLD,
     BaselineGraphReader,
     OneHotEmbeddingCaller,
-    SingleTenantStore,
     ingest_seed,
     parse_seed,
 )
@@ -36,6 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from company_merge._fakes import MakeEmitter
+    from company_merge._gateway_fakes import MergeRig, RigReadHandle
     from ps_service.company_merge.models import MergeResult
     from ps_service.logging import LogEmitter
 
@@ -72,8 +72,9 @@ def baseline(rig: GatewayRig) -> BaselineGraphReader:
 
 def _merge(
     baseline: BaselineGraphReader,
-    store: SingleTenantStore,
+    store: RigReadHandle,
     emitter: LogEmitter,
+    merge_rig: MergeRig,
     *,
     governance: GovernanceImport | None = _GOVERNANCE,
     call_embedding: OneHotEmbeddingCaller | None = None,
@@ -87,16 +88,17 @@ def _merge(
         call_embedding=call_embedding or OneHotEmbeddingCaller(),
         emitter=emitter,
         governance=governance,
+        **merge_rig.merge_keywords(),
     )
 
 
 def test_seed_tree_is_written_as_drafts_owned_by_the_caller(
-    baseline: BaselineGraphReader, emitter: LogEmitter
+    baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
     """AC-BI-002/004: 11 Policies, 21 Standards, 39 Controls, all `draft`, with every edge."""
-    store = SingleTenantStore()
+    store = merge_rig.legacy
 
-    result = _merge(baseline, store, emitter)
+    result = _merge(baseline, store, emitter, merge_rig)
 
     assert (len(store.nodes_of("Policy")), len(store.nodes_of("Standard"))) == (11, 21)
     assert len(store.nodes_of("Control")) == 39
@@ -120,34 +122,45 @@ def test_seed_tree_is_written_as_drafts_owned_by_the_caller(
 
 
 def test_every_governance_write_is_create_only(
-    baseline: BaselineGraphReader, emitter: LogEmitter
+    baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-006: no Policy/Standard/Control statement can overwrite an existing node."""
-    store = SingleTenantStore()
+    """AC-BI-006/005: one group of 71 nodes the first time, and nothing the second time."""
+    store = merge_rig.legacy
 
-    _merge(baseline, store, emitter)
+    _merge(baseline, store, emitter, merge_rig)
 
-    governance_writes = [
-        statement
-        for statement in store.statements
-        if any(f"MERGE (n:{label} {{id: $id}})" in statement for label in _GOVERNANCE_LABELS)
+    governance_entries = [
+        entry
+        for group in merge_rig.groups
+        for entry in group.entries
+        if entry.name in _GOVERNANCE_LABELS
     ]
-    assert len(governance_writes) == 11 + 21 + 39
-    assert all("ON CREATE SET" in statement for statement in governance_writes)
+    assert len(governance_entries) == 11 + 21 + 39
+    assert all(entry.content["op"] == "upsert_node" for entry in governance_entries)
+    assert len({entry.group_id for entry in governance_entries}) == 1
+
+    _merge(baseline, store, emitter, merge_rig)
+
+    assert [
+        entry
+        for group in merge_rig.groups
+        for entry in group.entries
+        if entry.name in _GOVERNANCE_LABELS
+    ] == governance_entries
 
 
 def test_an_approved_tree_is_untouched_by_a_reingest(
-    baseline: BaselineGraphReader, emitter: LogEmitter
+    baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
     """AC-BI-006: a second merge leaves an approved Policy, its Standards and Controls alone."""
-    store = SingleTenantStore()
-    _merge(baseline, store, emitter)
+    store = merge_rig.legacy
+    _merge(baseline, store, emitter, merge_rig)
     approved = {"status": "approved", "owner_subject": "someone-else"}
     for label in _GOVERNANCE_LABELS:
         for node_id in store.nodes_of(label):
             store.nodes[(label, node_id)].update(approved)
 
-    _merge(baseline, store, emitter)
+    _merge(baseline, store, emitter, merge_rig)
 
     for label in _GOVERNANCE_LABELS:
         for props in store.nodes_of(label).values():
@@ -157,10 +170,10 @@ def test_an_approved_tree_is_untouched_by_a_reingest(
 
 
 def test_a_near_title_policy_is_a_separate_draft_and_nothing_is_embedded_for_it(
-    baseline: BaselineGraphReader, emitter: LogEmitter
+    baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
     """AC-BI-007: a different id is never converged onto, even with an embedding to compare."""
-    store = SingleTenantStore()
+    store = merge_rig.legacy
     store.nodes[("Policy", "pol_existing_engineering_practices")] = {
         "title": "Engineering Practice Policy",
         "status": "approved",
@@ -168,7 +181,7 @@ def test_a_near_title_policy_is_a_separate_draft_and_nothing_is_embedded_for_it(
     }
     embedder = OneHotEmbeddingCaller()
 
-    _merge(baseline, store, emitter, call_embedding=embedder)
+    _merge(baseline, store, emitter, merge_rig, call_embedding=embedder)
 
     policies = store.nodes_of("Policy")
     assert len(policies) == 12
@@ -188,24 +201,24 @@ def test_a_near_title_policy_is_a_separate_draft_and_nothing_is_embedded_for_it(
 
 
 def test_an_ownerless_merge_of_a_governance_baseline_is_refused_before_any_governance_write(
-    baseline: BaselineGraphReader, emitter: LogEmitter
+    baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
-    store = SingleTenantStore()
+    store = merge_rig.legacy
 
     with pytest.raises(GovernanceOwnerRequiredError):
-        _merge(baseline, store, emitter, governance=None)
+        _merge(baseline, store, emitter, merge_rig, governance=None)
 
     assert store.nodes_of("Policy") == {}
 
 
 def test_an_edge_to_a_node_that_exists_nowhere_still_fails_the_merge(
-    rig: GatewayRig, baseline: BaselineGraphReader, emitter: LogEmitter
+    rig: GatewayRig, baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
     """AC-BI-008: a dangling endpoint is still `CompanyMergePersistenceError`."""
     graph = rig.graphs.open("engprac_baseline")
     verified_control = next(edge[4] for edge in graph.edges if edge[0] == "VERIFIED_BY")
     del graph.nodes[("Control", verified_control)]
-    store = SingleTenantStore()
+    store = merge_rig.legacy
 
     with pytest.raises(CompanyMergePersistenceError):
-        _merge(baseline, store, emitter)
+        _merge(baseline, store, emitter, merge_rig)

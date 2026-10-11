@@ -231,7 +231,9 @@ def test_resume_from_extraction_resolves_the_gateway_and_records_one_audit_event
         assert call.kwargs["audit_event_id"] == audit_event_id
 
 
-@pytest.mark.parametrize("stages", [("extraction", "derivation", "merge"), ("derivation", "merge")])
+@pytest.mark.parametrize(
+    "stages", [("extraction", "derivation", "merge"), ("derivation", "merge"), ("merge",)]
+)
 def test_resume_with_no_gateway_installed_fails_closed_before_the_baseline_graph_is_opened(
     process_gateway: ProcessGateway, stages: tuple[str, ...]
 ) -> None:
@@ -250,10 +252,14 @@ def test_resume_with_no_gateway_installed_fails_closed_before_the_baseline_graph
     assert process_gateway.system_audit.rows == []
 
 
-def test_resume_at_merge_only_resolves_no_gateway_and_records_no_audit_row(
+def test_resume_at_merge_resolves_the_gateway_and_records_one_audit_event(
     process_gateway: ProcessGateway,
 ) -> None:
-    install_graph_write_gateway(None)
+    """Issue #210: the merge stage writes through the gateway, so a merge-only resume needs one.
+
+    Reverses #209's `test_resume_at_merge_only_resolves_no_gateway_and_records_no_audit_row`
+    deliberately (CHANGES.md F4, DECISIONS D2): the baseline write is no longer direct.
+    """
     pipeline = build_fake_pipeline_dependencies()
 
     _runner(pipeline, _config())(
@@ -261,4 +267,10 @@ def test_resume_at_merge_only_resolves_no_gateway_and_records_no_audit_row(
     )
 
     assert pipeline.recorder.order == ["merge"]
-    assert process_gateway.system_audit.rows == []
+    (audit_event_id,) = process_gateway.system_audit.ids
+    assert process_gateway.system_audit.rows[0]["resource_id"] == _RUN_ID
+    (merge_call,) = pipeline.recorder.calls
+    assert merge_call.kwargs["submitter"] is process_gateway.rig.gateway
+    assert merge_call.kwargs["audit_event_id"] == audit_event_id
+    assert merge_call.kwargs["baseline_graph_name"] == "cra_baseline"
+    assert merge_call.kwargs["single_tenant_graph_name"] == "policy_system"

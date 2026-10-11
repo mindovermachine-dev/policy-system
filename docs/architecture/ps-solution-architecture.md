@@ -256,7 +256,7 @@ graph TB
 | Ingestion Runs | Tracks catalog ingestion runs submitted asynchronously over MCP, so a caller can poll a long run instead of blocking on it | Persist each submitted run's status and terminal result/error in the ingestion_runs table of the PS state Postgres; run each submission on a background thread under a configured cap on concurrently in-flight runs; record submission and completion through Audit | ps.service.ingestionruns |
 | Process Harness | The process composition root that starts PS Service and exposes its liveness/readiness surface | Expose `/health` (liveness) and `/ready` (readiness); probe FalkorDB, LLM Interface, and Cellar/ELI once at startup; confirm every ingestion-required configuration field resolved; own `load_config()`/`uvicorn.run()` | ps.service.main |
 
-*Graph Write Gateway rows describe the target design (not yet implemented; delivered by #205-#214).*
+*Graph Write Gateway rows: the gateway is implemented (#205-#207) and Ingestion (#208), Domain Mapper (#209) and Company Merge (#210) write through it; the other writers' moves onto it (#211-#214) are target design.*
 
 ---
 

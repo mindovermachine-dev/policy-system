@@ -51,8 +51,19 @@ internal baseline that carries a Policy, the merge fails closed with
 `GovernanceOwnerRequiredError` (and the run is reported as a `merge_fn` failure, exit code 4).
 Internal documents are ingested through `POST /ingestions` (or restored), not through this tool.
 
+**Writes go through the Graph Write Gateway (issue #210).** `merge_baseline_graph` no longer
+writes `policy_system` directly: every write is a logged group submitted to the gateway, which
+anchors it to an audit event. This CLI builds the gateway from config
+(`build_default_graph_write_gateway`) and, for each regulation, records one system-actor
+`ingestion_run.submit` audit row whose `resource_id` is that run's id
+(`build_system_audit_recorder`), then hands the gateway, the two graph names and the row's id to
+the merge. It fails closed: if the PS state database is not configured (no gateway can be built)
+it exits 1 before any graph is selected, and if the audit row cannot be written the run stops
+as a `merge_fn` failure (exit 4) before that regulation's merge. The CLI therefore needs the PS
+state database (`PS_STATE_POSTGRES_*`) in addition to FalkorDB.
+
 Requires a running FalkorDB instance with `cra_baseline`/`gdpr_baseline`/
-`nis2_baseline` and `policy_system` reachable, and
+`nis2_baseline` and `policy_system` reachable, the PS state Postgres, and
 `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`/`PS_LLMINTERFACE_EMBED_MODEL` resolvable
 via `ps_service.config.load_config()`.
 """
@@ -79,8 +90,14 @@ from ps_service.company_merge.live_merge_approval import (
 )
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.company_merge.preconditions import check_obligation_has_edge_cardinality
-from ps_service.config import load_config
+from ps_service.config import ServiceConfig, load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.system_audit import build_system_audit_recorder
+from ps_service.ingestion_runs.audit_actions import (
+    INGESTION_RUN_RESOURCE_TYPE,
+    INGESTION_RUN_SUBMIT_ACTION,
+)
 from ps_service.logging import bind_run_context
 from ps_service.logging.facade import configure as configure_logging
 from ps_service.logging.facade import resolve_default_log_path
@@ -91,6 +108,8 @@ if TYPE_CHECKING:
 
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.company_merge.models import MergeResult
+    from ps_service.graph_gateway.system_audit import SystemAuditRecorder
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.logging import LogEmitter
 
 # Connection defaults, env-driven -- same PS_FALKORDB_HOST/PS_FALKORDB_PORT convention every
@@ -133,6 +152,9 @@ if TYPE_CHECKING:
     MergeFn = Callable[..., MergeResult]
     ClockFn = Callable[[], datetime]
     GraphProvider = Callable[[str], GraphHandle]
+    WriteAccessBuilder = Callable[[ServiceConfig], tuple[GroupSubmitter, SystemAuditRecorder]]
+
+_AUDIT_TRIGGER = "operator_cli"
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -188,6 +210,19 @@ def _default_graph_provider(host: str, port: int) -> GraphProvider:
         return select_graph(db, graph_name)
 
     return provider
+
+
+def _default_write_access(config: ServiceConfig) -> tuple[GroupSubmitter, SystemAuditRecorder]:
+    """Build the Graph Write Gateway and the system audit recorder from `config` (issue #210).
+
+    Contacts neither store. Raises if the PS state database is not configured: there is no
+    direct-write fallback.
+    """
+    if config.state_postgres_host is None:
+        message = "the PS state database is not configured (PS_STATE_POSTGRES_HOST is unset)"
+        raise RuntimeError(message)
+    gateway = cast("GroupSubmitter", build_default_graph_write_gateway(config))
+    return gateway, build_system_audit_recorder(config)
 
 
 def _query_rows(
@@ -319,7 +354,16 @@ def _check_precondition_gate(provider: GraphProvider, *, host: str, port: int) -
     return None
 
 
-def _resolve_merge_config() -> tuple[float, str] | int:
+@dataclass(frozen=True, slots=True)
+class _MergeSettings:
+    """The resolved service config and the two merge values drawn from it."""
+
+    config: ServiceConfig
+    similarity_threshold: float
+    embed_model: str
+
+
+def _resolve_merge_config() -> _MergeSettings | int:
     """Fail-closed config resolution, before any write. An `int` return is the exit code."""
     config = load_config()
     if config.company_merge_similarity_threshold is None:
@@ -336,25 +380,32 @@ def _resolve_merge_config() -> tuple[float, str] | int:
             file=sys.stderr,
         )
         return 1
-    return config.company_merge_similarity_threshold, config.llm_interface_embed_model
+    return _MergeSettings(
+        config=config,
+        similarity_threshold=config.company_merge_similarity_threshold,
+        embed_model=config.llm_interface_embed_model,
+    )
 
 
 def _run_all_regulations(
     *,
-    provider: GraphProvider,
     single_tenant_graph: GraphHandle,
     baseline_graphs: dict[str, GraphHandle],
-    embed_model: str,
-    similarity_threshold: float,
+    settings: _MergeSettings,
     emitter: LogEmitter,
     merge_fn: MergeFn,
     run_timestamp: str,
+    submitter: GroupSubmitter,
+    system_audit: SystemAuditRecorder,
 ) -> tuple[list[str], list[str], list[dict[str, object]]]:
     """Call `merge_fn` for CRA-1.0, NIS2-1.0, GDPR-1.0 in order, stopping on the first raise.
 
+    Each regulation first records its own system audit row (resource = its run id); the row's id
+    anchors every group the merge submits. If the row cannot be written the regulation is
+    recorded as failed and nothing is merged.
+
     Returns `(run_ids, regulations_attempted, errors)`.
     """
-    del provider  # graphs already selected by the caller; kept for signature symmetry/clarity
     run_ids: list[str] = []
     regulations_attempted: list[str] = []
     errors: list[dict[str, object]] = []
@@ -364,13 +415,27 @@ def _run_all_regulations(
         run_ids.append(run_id)
         regulations_attempted.append(regulatory_instrument_id)
         try:
+            audit_event_id = system_audit(
+                action=INGESTION_RUN_SUBMIT_ACTION,
+                resource_type=INGESTION_RUN_RESOURCE_TYPE,
+                resource_id=run_id,
+                details={
+                    "status": "started",
+                    "trigger": _AUDIT_TRIGGER,
+                    "short_name": short_name,
+                },
+            )
             with bind_run_context(run_id):
                 merge_fn(
                     regulatory_instrument_id,
                     baseline_graph=baseline_graphs[short_name],
                     single_tenant_graph=single_tenant_graph,
-                    embed_model=embed_model,
-                    similarity_threshold=similarity_threshold,
+                    submitter=submitter,
+                    single_tenant_graph_name=single_tenant_graph_name(),
+                    baseline_graph_name=baseline_graph_name(short_name),
+                    audit_event_id=audit_event_id,
+                    embed_model=settings.embed_model,
+                    similarity_threshold=settings.similarity_threshold,
                     emitter=emitter,
                 )
         except Exception as exc:  # noqa: BLE001 -- record and stop, never continue past a failed regulation
@@ -429,6 +494,7 @@ def main(
     graph_provider: GraphProvider | None = None,
     merge_fn: MergeFn = merge_baseline_graph,
     clock: ClockFn | None = None,
+    write_access: WriteAccessBuilder = _default_write_access,
 ) -> int:
     """Run the approval-gated, precondition-gated live merge for CRA/NIS2/GDPR.
 
@@ -461,7 +527,15 @@ def main(
     resolved_config = _resolve_merge_config()
     if isinstance(resolved_config, int):
         return resolved_config
-    similarity_threshold, embed_model = resolved_config
+
+    try:
+        submitter, system_audit = write_access(resolved_config.config)
+    except Exception as exc:  # noqa: BLE001 -- fail closed: no gateway, no write; friendly message, no traceback
+        print(
+            f"The Graph Write Gateway could not be built -- live merge will not proceed: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
     single_tenant_graph = provider(single_tenant_graph_name())
     baseline_graphs = {
@@ -474,14 +548,14 @@ def main(
     started_at = clock_fn().isoformat()
 
     run_ids, regulations_attempted, errors = _run_all_regulations(
-        provider=provider,
         single_tenant_graph=single_tenant_graph,
         baseline_graphs=baseline_graphs,
-        embed_model=embed_model,
-        similarity_threshold=similarity_threshold,
+        settings=resolved_config,
         emitter=emitter,
         merge_fn=merge_fn,
         run_timestamp=run_timestamp,
+        submitter=submitter,
+        system_audit=system_audit,
     )
 
     after_snapshot = _snapshot_graph(single_tenant_graph)

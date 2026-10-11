@@ -31,7 +31,7 @@ import base64
 import binascii
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 import psycopg
 from psycopg.types.json import Json
@@ -310,6 +310,30 @@ class AuditStore(Protocol):
         ...
 
 
+@runtime_checkable
+class EventIdAuditStore(Protocol):
+    """An `AuditStore` that can report the id of the row it just wrote (issue #210, A6).
+
+    Narrow and additive: `AuditStore` and its many fakes are unchanged. Only a caller that must
+    anchor a later write to the audit row it opened (the near-miss resolve, whose graph group
+    carries the row's id) asks for it; `PsycopgAuditStore` satisfies it.
+    """
+
+    def record_standalone_with_event_id(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: Literal["applied", "rejected", "failed"],
+        details: Mapping[str, object],
+    ) -> str:
+        """`AuditStore.record_standalone`, returning the inserted row's id (a UUID string)."""
+        ...
+
+
 class PsycopgAuditStore:
     """Real `AuditStore` backed by PostgreSQL via `psycopg[binary]`.
 
@@ -387,8 +411,35 @@ class PsycopgAuditStore:
     ) -> None:
         """Open its own connection/transaction, call `record`, commit.
 
-        See `AuditStore.record_standalone`'s docstring for the full
-        contract. Two distinct failure phases (PLAN.md §3.3): opening the
+        Delegates to `record_standalone_with_event_id` and discards the id; see
+        `AuditStore.record_standalone`'s docstring for the full contract.
+        """
+        self.record_standalone_with_event_id(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            details=details,
+        )
+
+    def record_standalone_with_event_id(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: Literal["applied", "rejected", "failed"],
+        details: Mapping[str, object],
+    ) -> str:
+        """Open its own connection/transaction, call `record`, commit; return the row's id.
+
+        Issue #210 (A6): `record_standalone` with the `INSERT ... RETURNING id` handed back, for a
+        caller that anchors a later write to this row. See `AuditStore.record_standalone`'s
+        docstring for the full contract. Two distinct failure phases (PLAN.md §3.3): opening the
         connection (`AuditPostgresUnavailableError`, AC-BI-011 -- the
         message never carries `self._config`'s host/port, mirroring
         `AuthorizationStoreUnavailableError`'s own fixed-message discipline)
@@ -405,7 +456,7 @@ class PsycopgAuditStore:
             raise AuditPostgresUnavailableError(_AUDIT_STORE_UNAVAILABLE_MESSAGE) from exc
         try:
             with conn, conn.cursor() as cur:
-                self.record(
+                event_id = self.record(
                     cur,
                     actor_subject=actor_subject,
                     actor_issuer=actor_issuer,
@@ -423,6 +474,7 @@ class PsycopgAuditStore:
             message = f"failed to record standalone audit event {action!r}: {exc}"
             raise AuditPersistenceError(message) from exc
         mark_healthy(STATE_POSTGRES)
+        return event_id
 
     def query(
         self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int

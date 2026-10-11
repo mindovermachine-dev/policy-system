@@ -23,8 +23,8 @@ class CompanyMergePersistenceError(Exception):
 
     For example, an edge rewiring write references a canonical id with no
     corresponding `CanonicalResolution` (PLAN_REVIEWED.md §6). Raised by
-    `graph_writer.py`, before any `graph.query()` call is made for the
-    offending write.
+    `graph_writer.py`, before any group is submitted for the offending write; also raised when
+    the Graph Write Gateway refuses a group or cannot confirm it was applied.
     """
 
 

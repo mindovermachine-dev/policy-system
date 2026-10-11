@@ -1,120 +1,65 @@
 """FalkorDB persistence for `ps_service.company_merge`'s single-tenant graph.
 
-`persist_role_and_requirement_passthrough` (PLAN_REVIEWED.md §10 Increment
-10, §6) and `persist_canonical_nodes`/`backfill_canonical_embeddings`
-(PLAN_REVIEWED.md §10 Increment 11, §6.1/§6.2).
+Since issue #210 every write this module makes is a Graph Write Gateway group: each `persist_*` /
+`backfill_*` function builds gateway primitives (`build_*_primitives`) and submits them as one
+group through `graph_submission.submit_group`. The module issues no Cypher write. The few reads it
+makes (existing ids, embedding state) go through `graph_submission.read_rows`, which records
+FalkorDB reachability.
 
-Own copy of `ps_service.domain_mapper.graph_writer`'s connectivity-wrapping
-shape (PLAN_REVIEWED.md §0.3 -- a deliberate near-duplicate, not a shared
-import): the `_execute_query` dependency-health wrapper, and the
-`MERGE ... SET n += $properties` node-upsert shape for RegulatoryInstrument
-(and, until issue #28's AC-BI-006 fix below, Role/Requirement/Obligation
-too), which are never canonically deduped (unconditional `SET`, same as
-#15's own writer).
+Decisions that depend on graph state are made BEFORE submission, from a batched read, because a
+gateway upsert merges over an existing node and so cannot express them:
 
-**The one deliberate, load-bearing difference from #15's writer (§6.1)**:
-Capability node upserts use `MERGE (n:Capability {id: $id}) ON CREATE
-SET n += $properties` -- NOT the unconditional `SET` used for
-RegulatoryInstrument above. `persist_canonical_nodes` is only
-ever called for a `match_kind="new"` `CanonicalResolution` (an exact/
-semantic match writes NOTHING onto the node it resolved to) -- but even so,
-`ON CREATE SET` is what makes "an existing canonical node's properties are
-never overwritten" a database-engine guarantee rather than application logic
-remembering to check: an exact-key match means the incoming node's `id`
-already equals an existing canonical node's `id`, and that incoming node's
-`properties` dict comes from a *different* regulation's baseline graph and
-could legitimately differ slightly. `ON CREATE SET` makes overwriting it
-structurally impossible, regardless of what a caller passes.
+- Create-only (RegulatoryInstrument excepted): a Role, Requirement, Obligation, Capability,
+  PracticeArea, RiskPath or draft governance node whose id the graph already holds is left out of
+  the group, so an existing node's properties are never overwritten and nothing is logged for it.
+  For an id repeated in one input the first occurrence is kept. Role/Requirement/Obligation ids
+  can legitimately recur across merge runs with drifted content (issue #28 AC-BI-006), exactly like
+  a Capability's exact-key match.
+- Set-if-null: an embedding backfill is submitted only for a node that exists and has no
+  embedding; an already-embedded node is untouched. `persist_canonical_nodes` mints only for a
+  `match_kind="new"` resolution; an exact or semantic match writes nothing onto the node it
+  resolved to.
+- Edge rewiring (`persist_rewired_edges`): one `UpsertEdge` per edge, identity
+  `TYPE:source->target`. The rewrite rule is endpoint-agnostic: for BOTH ends, an id with an entry
+  in `canonical_id_by_incoming_id` (`incoming_id -> canonical_id`, built by `merge.py` from
+  Capability dedup) is rewritten to the canonical id, otherwise it passes through. In practice
+  only Capability endpoints are mapped, so `REQUIRES`' Capability target is the one rewritten (a
+  matched Capability is never minted, so its baseline-local id would dangle). An edge whose
+  endpoint the graph does not hold is dropped before submission.
+- Values generated at write time (`created_at`, embeddings, uuids) are fixed before submission
+  from a `ValueSource` and carried in the group, so a replay reproduces them.
 
-**Issue #28 AC-BI-006 fix**: live verification against the real,
-already-populated `policy_system` graph (IMPL_SLICE_7.md) found that
-re-running `merge_baseline_graph` for CRA/NIS2 (baseline graphs whose
-current content had drifted slightly from what was already merged)
-overwrote 202 pre-existing Role/Requirement/Obligation nodes' properties
-via this module's then-unconditional `SET` -- `confidence` score drift on
-most of them, one Requirement's `text` outright changed. Role/Requirement/
-Obligation are passthrough nodes (never canonically deduped), but their ids
-CAN legitimately recur across separate merge runs of the same or an
-adjacent regulation, exactly like Capability's exact-key match case above --
-so they now use the identical `ON CREATE SET` pattern
-(`_upsert_passthrough_node(..., preserve_existing_properties=True)`),
-making "an existing Role/Requirement/Obligation node's properties are never
-overwritten" the same database-engine guarantee Capability already had,
-rather than an assumption that a recurring id always carries identical
-properties. This does not retroactively repair data already corrupted by
-the old unconditional `SET` -- that is a separate, still-pending,
-explicitly-approved repair step.
-
-**The second, new load-bearing difference (§6.2, B2's fix)**:
-`backfill_canonical_embeddings` writes `MATCH (n:{kind} {id: $id}) WHERE
-n.embedding IS NULL SET n.embedding = $embedding` for an ALREADY-EXISTING
-canonical node whose embedding was computed during this run
-(`dedup.dedupe_canonical_nodes`'s `DedupResult.embedding_backfills`) --
-distinct from `persist_canonical_nodes`' `ON CREATE SET` mint path, and
-deliberately never touching a node's other properties. The `WHERE
-n.embedding IS NULL` guard is the mechanism, not an optimization: it makes a
-re-run's backfill call against an already-backfilled node a structural
-no-op at the database-engine level, the same load-bearing role `ON CREATE
-SET` plays for the mint path above -- the caller (`merge.py`) does not need
-to check first.
-
-**Obligation is a passthrough node (issue #42)**: Obligation identity is
-Role-scoped, so an Obligation is a weak entity of exactly one Role and is
-never deduped across sources. `persist_obligation_passthrough` writes it
-with the same `MERGE ... ON CREATE SET` shape used for Role/Requirement
-since issue #28's AC-BI-006 fix (see above) -- not the unconditional `SET`
-Standard/Control still use below. Only Capability (and, later,
-internal-SoP-derived Policy) is canonically deduped by Company Merge.
-
-**Edge rewiring (`persist_rewired_edges`, PLAN_REVIEWED.md §10 Increment 12,
-§6.2)**: uses the `MATCH ... MERGE (s)-[:TYPE]->(t)` shape (no properties) the Domain
-Mapper used before it moved onto the Graph Write Gateway (#209) for `HAS`/
-`SATISFIED_BY`/`REQUIRES`. The rewrite rule is endpoint-agnostic, not
-edge-type-specific: for BOTH the source and target of every edge, if that
-endpoint's baseline-local id has an entry in `canonical_id_by_incoming_id`
-(`incoming_id -> canonical_id`), it is rewritten to the canonical id;
-otherwise it passes through unchanged. In practice only Capability endpoints
-are ever in the mapping, so `REQUIRES`'s Capability-typed TARGET is the only
-endpoint rewritten; `HAS`/`SATISFIED_BY` and `REQUIRES`'s Obligation-typed
-source pass through unchanged (Obligation, Role, and Requirement are all
-passthrough nodes whose baseline-local id is already their final id).
-
-**Why `REQUIRES`'s target must be rewritten** (PLAN_REVIEWED.md §6.2): a
-semantically-or-exactly-matched Capability is never minted as its own graph
-node (`persist_canonical_nodes` only writes a node for `match_kind="new"`),
-so leaving the baseline-local id in place would make `MATCH (s...),(t...)`
-match zero rows for `t` -- the whole `MERGE` silently never fires and the
-edge is never created: a dangling reference. The endpoint-agnostic rewrite
-handles this without special-casing by relationship type.
-
-`canonical_id_by_incoming_id` is a `dict[str, str]` the caller (`merge.py`)
-builds from Capability dedup's `CanonicalResolution.incoming_id ->
-canonical_id` entries.
+Obligation is a passthrough node (issue #42): its identity is Role-scoped, so it is never deduped
+across sources. Only Capability (and internal-SoP-derived Policy) is canonically deduped by
+Company Merge.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, cast
 
-import redis.exceptions
+from pydantic import ValidationError
 
 from ps_service.company_merge.errors import CompanyMergePersistenceError
+from ps_service.company_merge.generated_values import SYSTEM_VALUES
+from ps_service.company_merge.graph_submission import edge_identity, read_rows, submit_group
 from ps_service.company_merge.models import GovernanceDraftCounts
-from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+from ps_service.graph_gateway.models import NodeRef, UpsertEdge, UpsertNode
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
-    from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
+    from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.generated_values import ValueSource
+    from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.company_merge.models import (
         BareEdge,
         BaselineGraph,
         BaselineNode,
-        CanonicalNodeProperties,
         CanonicalResolution,
         ProvenanceEdge,
     )
+    from ps_service.graph_gateway.models import Primitive
 
 __all__ = [
     "backfill_canonical_embeddings",
@@ -183,87 +128,120 @@ _EDGE_ENDPOINT_LABELS: dict[
 }
 
 
-def _execute_query(
-    graph: GraphHandle, query: str, params: dict[str, object] | None = None
-) -> GraphQueryResult:
-    """Wrap every `graph.query()` call in this module for connectivity-health recording.
+_EDGE_LABELS = tuple(sorted({label for pair in _EDGE_ENDPOINT_LABELS.values() for label in pair}))
+"""Every node label an edge endpoint can carry, sorted: the endpoint reads run in this order."""
 
-    The one call site every write (and, since issue #106's
-    `validate_classification_edge_endpoints`, the one pre-write read) goes
-    through, so FalkorDB connectivity failures get recorded in
-    `ps_service.dependency_health` -- mirrors
-    `ps_service.domain_mapper.graph_writer._execute_query` exactly.
+
+def _read_existing_ids(graph: GraphHandle, label: str, node_ids: Iterable[str]) -> set[str]:
+    """Which of `node_ids` are `label` nodes of `graph`: one batched read, ids via `params`.
+
+    `label` is always one of this module's fixed label literals, never baseline- or LLM-sourced,
+    so interpolating it is safe; the ids travel as a parameter. Nothing to ask reads nothing.
+
+    Raises:
+        CompanyMergePersistenceError: `FalkorDB query failed: <error>` if the read could not be
+            made; nothing has been submitted by then.
+    """
+    ids = sorted(set(node_ids))
+    if not ids:
+        return set()
+    rows = read_rows(graph, f"MATCH (n:{label}) WHERE n.id IN $ids RETURN n.id", {"ids": ids})
+    return {str(row[0]) for row in rows}
+
+
+def _unstorable(what: str) -> CompanyMergePersistenceError:
+    return CompanyMergePersistenceError(
+        f"{what} has a property the graph cannot store "
+        "(a reserved key, or a value that is not finite or is out of range)"
+    )
+
+
+def _create_only_nodes(
+    label: str, nodes: tuple[BaselineNode, ...], existing: set[str]
+) -> tuple[UpsertNode, ...]:
+    """One node primitive per id the graph does not hold, the FIRST occurrence's properties kept.
+
+    Create-only: an id repeated in one input keeps its first occurrence's properties and the rest
+    change nothing (the opposite of the Domain Mapper's last-wins fold). An id in `existing` is
+    left out entirely: nothing is logged for it.
+
+    Raises:
+        CompanyMergePersistenceError: a node carries a property the gateway cannot store (a
+            reserved key, a non-finite number); nothing has been submitted by then.
+    """
+    created: dict[str, UpsertNode] = {}
+    for node in nodes:
+        if node.id in existing or node.id in created:
+            continue
+        try:
+            created[node.id] = UpsertNode(label=label, id=node.id, properties=dict(node.properties))
+        except ValidationError as exc:
+            raise _unstorable(f"{label} {node.id!r}") from exc
+    return tuple(created.values())
+
+
+def build_role_and_requirement_primitives(
+    existing_roles: set[str],
+    existing_requirements: set[str],
+    regulatory_instrument_id: str,
+    regulatory_instrument_properties: dict[str, object],
+    role_nodes: tuple[BaselineNode, ...],
+    requirement_nodes: tuple[BaselineNode, ...],
+    provenance_edges: tuple[ProvenanceEdge, ...],
+) -> tuple[Primitive, ...]:
+    """The group's mutations: instrument, Roles, Requirements, `DEFINES`, `EXPRESSES`.
+
+    Pure: nothing is read or submitted. The instrument is refreshed on every run (an upsert that
+    merges the properties over the node, as the old unconditional `SET` did) with `id` left out of
+    the bag (a whole-bag copy of the NATIVE node, whose `id` may differ in casing and must never
+    rewrite the match key). A Role or Requirement is create-only (`_create_only_nodes`): one
+    already in `existing_*` is left out of the group, so it keeps every property and nothing is
+    logged for it. A provenance edge carries the identity `{type}:{instrument}->{target}` and its
+    `source_ref`; one whose target is in neither the graph nor the group is dropped, silently, as
+    a missing endpoint writes nothing (a group edge with a missing endpoint would fail the whole
+    group); a repeated edge folds to one primitive, the last `source_ref` winning.
+
+    Raises:
+        CompanyMergePersistenceError: a node or edge carries a property the gateway cannot store;
+            nothing has been submitted by then.
     """
     try:
-        result = graph.query(query, params=params)
-    except redis.exceptions.RedisError as exc:
-        mark_unhealthy(FALKORDB, error=exc)
-        raise CompanyMergePersistenceError(f"FalkorDB query failed: {exc}") from exc
-    mark_healthy(FALKORDB)
-    return result
-
-
-def _upsert_passthrough_node(
-    graph: GraphHandle,
-    label: str,
-    node_id: str,
-    properties: dict[str, str | float],
-    *,
-    preserve_existing_properties: bool = False,
-) -> None:
-    """Upsert one passthrough node, keyed on `(label, id)`.
-
-    `preserve_existing_properties=True` issues `MERGE ... ON CREATE SET`
-    instead of an unconditional `SET` -- the identical pattern
-    `persist_canonical_nodes` uses for Capability (see module docstring),
-    now also used for Role/Requirement/Obligation since issue #28's
-    AC-BI-006 fix: their ids can legitimately recur across separate merge
-    runs with slightly different incoming properties, and `ON CREATE SET`
-    makes "an existing node's properties are never overwritten" a
-    database-engine guarantee rather than an assumption.
-    """
-    # label is always one of this module's own fixed literals (_ROLE_LABEL/
-    # _REQUIREMENT_LABEL/...) -- never adapter/LLM-sourced -- mirrors
-    # domain_mapper.graph_writer's own "no allow-list needed" design note.
-    set_clause = "ON CREATE SET" if preserve_existing_properties else "SET"
-    _execute_query(
-        graph,
-        f"MERGE (n:{label} {{id: $id}}) {set_clause} n += $properties",
-        params={"id": node_id, "properties": properties},
-    )
-
-
-def _upsert_provenance_edge(
-    graph: GraphHandle,
-    relationship_type: Literal["DEFINES", "EXPRESSES"],
-    target_label: str,
-    regulatory_instrument_id: str,
-    target_id: str,
-    source_ref: str,
-) -> None:
-    """Write a `RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label` edge.
-
-    Shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
-    edges -- the same `MATCH ... MERGE` shape the Domain Mapper used for these
-    edges before it moved onto the Graph Write Gateway (#209).
-    `relationship_type`/`target_label` are always fixed Python literals;
-    `target_id`/`source_ref` flow through `params` only.
-    """
-    _execute_query(
-        graph,
-        f"MATCH (r:{_REGULATORY_INSTRUMENT_LABEL} {{id: $regulatory_instrument_id}}), "
-        f"(n:{target_label} {{id: $target_id}}) "
-        f"MERGE (r)-[e:{relationship_type}]->(n) SET e.source_ref = $source_ref",
-        params={
-            "regulatory_instrument_id": regulatory_instrument_id,
-            "target_id": target_id,
-            "source_ref": source_ref,
-        },
-    )
+        instrument = UpsertNode(
+            label=_REGULATORY_INSTRUMENT_LABEL,
+            id=regulatory_instrument_id,
+            properties={k: v for k, v in regulatory_instrument_properties.items() if k != "id"},
+        )
+    except ValidationError as exc:
+        raise _unstorable(f"{_REGULATORY_INSTRUMENT_LABEL} {regulatory_instrument_id!r}") from exc
+    roles = _create_only_nodes(_ROLE_LABEL, role_nodes, existing_roles)
+    requirements = _create_only_nodes(_REQUIREMENT_LABEL, requirement_nodes, existing_requirements)
+    present = {
+        _ROLE_LABEL: existing_roles | {node.id for node in roles},
+        _REQUIREMENT_LABEL: existing_requirements | {node.id for node in requirements},
+    }
+    source = NodeRef(label=_REGULATORY_INSTRUMENT_LABEL, id=regulatory_instrument_id)
+    edges: dict[str, UpsertEdge] = {}
+    for edge in provenance_edges:
+        target_label = _ROLE_LABEL if edge.relationship_type == "DEFINES" else _REQUIREMENT_LABEL
+        if edge.target_id not in present[target_label]:
+            continue
+        identity = edge_identity(edge.relationship_type, regulatory_instrument_id, edge.target_id)
+        try:
+            edges[identity] = UpsertEdge(
+                type=edge.relationship_type,
+                identity=identity,
+                source=source,
+                target=NodeRef(label=target_label, id=edge.target_id),
+                properties={"source_ref": edge.source_ref},
+            )
+        except ValidationError as exc:
+            raise _unstorable(f"{edge.relationship_type} edge to {edge.target_id!r}") from exc
+    return (instrument, *roles, *requirements, *edges.values())
 
 
 def persist_role_and_requirement_passthrough(
-    single_tenant_graph: GraphHandle,
+    target: GraphWriteTarget,
+    graph: GraphHandle,
     regulatory_instrument_id: str,
     regulatory_instrument_properties: dict[str, object],
     role_nodes: tuple[BaselineNode, ...],
@@ -272,61 +250,47 @@ def persist_role_and_requirement_passthrough(
 ) -> None:
     """Persist one regulation's RegulatoryInstrument/Role/Requirement nodes and provenance edges.
 
-    RegulatoryInstrument keeps an unconditional `MERGE ... SET` (mirroring
-    #15's own `persist_role_and_requirement_graph` shape, PLAN_REVIEWED.md
-    §6) -- it has exactly one node per regulation and is always meant to
-    refresh. Role/Requirement dedup is out of scope (AC-008), but their ids
-    CAN legitimately recur across separate merge runs (e.g. re-merging the
-    same regulation against a baseline graph whose content has since
-    drifted) -- since issue #28's AC-BI-006 fix, Role/Requirement writes use
-    `MERGE ... ON CREATE SET` instead, the same "existing wins"
-    database-engine guarantee Capability already had
-    (`persist_canonical_nodes`, below). Obligation is in the same
-    passthrough category since #42 -- see `persist_obligation_passthrough`.
-    The `DEFINES`/`EXPRESSES` edge writes themselves keep an unconditional
-    `SET` on their own `source_ref` property -- out of this fix's scope.
+    One gateway group on `target`'s graph: the instrument (refreshed every run), then every
+    Role and Requirement the graph does not hold yet, then the `DEFINES`/`EXPRESSES` edges. Role
+    and Requirement ids can legitimately recur across merge runs with different properties; since
+    issue #28's AC-BI-006 fix an existing node keeps every property, and since #210 that is
+    decided here, before submission, from one batched read per label on `graph` (a gateway upsert
+    would merge over the existing node). Obligation is in the same passthrough category since #42
+    -- see `persist_obligation_passthrough`.
 
-    Idempotent: re-running with identical input against the same graph issues
-    the same calls and leaves the same end state, since every write is a
-    `MERGE` keyed on `id`.
+    Idempotent: re-running with identical input leaves the same graph and logs nothing new (the
+    gateway drops the mutations that change nothing).
 
-    All nodes (RegulatoryInstrument, then every Role, then every Requirement)
-    are written before any edge -- an edge write `MATCH`es both its
-    RegulatoryInstrument and target endpoints, so writing nodes first is
-    load-bearing, not stylistic, mirroring `domain_mapper.graph_writer`'s own
-    write-order contract.
+    Raises:
+        CompanyMergePersistenceError: the existing-node read failed (`FalkorDB query failed:`), or
+            the gateway did not take the group (`FalkorDB write failed:`).
     """
-    _execute_query(
-        single_tenant_graph,
-        f"MERGE (n:{_REGULATORY_INSTRUMENT_LABEL} {{id: $id}}) SET n += $properties",
-        params={"id": regulatory_instrument_id, "properties": regulatory_instrument_properties},
+    existing_roles = _read_existing_ids(
+        graph,
+        _ROLE_LABEL,
+        (
+            *(node.id for node in role_nodes),
+            *(e.target_id for e in provenance_edges if e.relationship_type == "DEFINES"),
+        ),
     )
-    for role in role_nodes:
-        _upsert_passthrough_node(
-            single_tenant_graph,
-            _ROLE_LABEL,
-            role.id,
-            role.properties,
-            preserve_existing_properties=True,
-        )
-    for requirement in requirement_nodes:
-        _upsert_passthrough_node(
-            single_tenant_graph,
-            _REQUIREMENT_LABEL,
-            requirement.id,
-            requirement.properties,
-            preserve_existing_properties=True,
-        )
-    for edge in provenance_edges:
-        target_label = _ROLE_LABEL if edge.relationship_type == "DEFINES" else _REQUIREMENT_LABEL
-        _upsert_provenance_edge(
-            single_tenant_graph,
-            edge.relationship_type,
-            target_label,
-            regulatory_instrument_id,
-            edge.target_id,
-            edge.source_ref,
-        )
+    existing_requirements = _read_existing_ids(
+        graph,
+        _REQUIREMENT_LABEL,
+        (
+            *(node.id for node in requirement_nodes),
+            *(e.target_id for e in provenance_edges if e.relationship_type == "EXPRESSES"),
+        ),
+    )
+    primitives = build_role_and_requirement_primitives(
+        existing_roles,
+        existing_requirements,
+        regulatory_instrument_id,
+        regulatory_instrument_properties,
+        role_nodes,
+        requirement_nodes,
+        provenance_edges,
+    )
+    submit_group(target, primitives)
 
 
 def count_new_obligations(single_tenant_graph: GraphHandle, obligation_ids: tuple[str, ...]) -> int:
@@ -336,90 +300,89 @@ def count_new_obligations(single_tenant_graph: GraphHandle, obligation_ids: tupl
     `persist_obligation_passthrough` so the answer is the delta that write will make. Net-new is
     decided by this read, not driver statistics: `GraphQueryResult` exposes only `result_set`.
     Duplicate ids count once; an empty tuple issues no query.
+
+    Raises:
+        CompanyMergePersistenceError: `FalkorDB query failed: <error>` if the read could not be
+            made.
     """
     unique_ids = sorted(set(obligation_ids))
     if not unique_ids:
         return 0
-    result = _execute_query(
-        single_tenant_graph,
-        _EXISTING_OBLIGATIONS_QUERY,
-        params={"ids": unique_ids},
-    )
-    existing = {cast("str", row[0]) for row in cast("list[list[object]]", result.result_set)}
-    return len(set(unique_ids) - existing)
+    rows = read_rows(single_tenant_graph, _EXISTING_OBLIGATIONS_QUERY, {"ids": unique_ids})
+    return len(set(unique_ids) - {cast("str", row[0]) for row in rows})
 
 
 def persist_obligation_passthrough(
+    target: GraphWriteTarget,
     single_tenant_graph: GraphHandle,
     obligation_nodes: tuple[BaselineNode, ...],
 ) -> None:
-    """Persist one regulation's Obligation nodes into `single_tenant_graph`.
+    """Persist one regulation's Obligation nodes as one gateway group on `target`'s graph.
 
-    Uses the same `MERGE ... ON CREATE SET` shape as Role/Requirement since
-    issue #28's AC-BI-006 fix (issue #42: Obligation is Role-scoped, a weak
-    entity of exactly one Role, never deduped across sources). Re-merging
-    the same regulation against a baseline graph whose content has since
-    drifted is a real, observed way the same Obligation id recurs with
-    DIFFERENT properties (IMPL_SLICE_7.md's live finding: 199 pre-existing
-    Obligation nodes had `confidence` drift after a second live merge run)
-    -- `ON CREATE SET` makes "an existing Obligation's properties are never
-    overwritten" a database-engine guarantee rather than the now-disproven
-    assumption that a recurring id always carries identical properties.
+    Create-only, like Role/Requirement since issue #28's AC-BI-006 fix (issue #42: Obligation is
+    Role-scoped, a weak entity of exactly one Role, never deduped across sources). Re-merging the
+    same regulation against a baseline graph whose content has since drifted is a real, observed
+    way the same Obligation id recurs with DIFFERENT properties (IMPL_SLICE_7.md's live finding:
+    199 pre-existing Obligation nodes had `confidence` drift after a second live merge run), so an
+    existing Obligation keeps every property. Since #210 that is decided here, before submission,
+    from one batched read on `single_tenant_graph` (a gateway upsert would merge over the
+    existing node): an Obligation the graph holds is left out of the group and nothing is logged
+    for it. For an id repeated in the input the first occurrence wins.
 
-    Called by `merge.py` after `persist_role_and_requirement_passthrough`
-    and before `persist_rewired_edges`, so the `HAS`/`SATISFIED_BY`/
-    `REQUIRES` edge writes can `MATCH` these nodes.
+    Called by `merge.py` after `persist_role_and_requirement_passthrough` and before
+    `persist_rewired_edges`, so the `HAS`/`SATISFIED_BY`/`REQUIRES` edge writes find these nodes.
+
+    Raises:
+        CompanyMergePersistenceError: the existing-node read failed (`FalkorDB query failed:`), a
+            node carries a property the gateway cannot store, or the gateway did not take the
+            group (`FalkorDB write failed:`).
     """
-    for obligation in obligation_nodes:
-        _upsert_passthrough_node(
-            single_tenant_graph,
-            _OBLIGATION_LABEL,
-            obligation.id,
-            obligation.properties,
-            preserve_existing_properties=True,
-        )
+    existing = _read_existing_ids(
+        single_tenant_graph, _OBLIGATION_LABEL, (node.id for node in obligation_nodes)
+    )
+    submit_group(target, _create_only_nodes(_OBLIGATION_LABEL, obligation_nodes, existing))
 
 
-def persist_governance_drafts(
-    single_tenant_graph: GraphHandle,
+def build_draft_governance_primitives(
+    existing: dict[str, set[str]],
     policy_nodes: tuple[BaselineNode, ...],
     standard_nodes: tuple[BaselineNode, ...],
     control_nodes: tuple[BaselineNode, ...],
     *,
     owner: tuple[str, str],
     policy_embeddings: Mapping[str, tuple[float, ...]] | None,
-) -> GovernanceDraftCounts:
-    """Persist a restored instrument's Policy/Standard/Control tree as `draft` (issue #183).
+    created_at: str,
+) -> tuple[tuple[UpsertNode, ...], int]:
+    """The create-only draft nodes of a governance tree, and how many authored a non-draft status.
 
-    The write behind `governance_import.import_draft_governance`, shared by
-    restore and live internal ingest (issue #227): an imported tree has not
-    been through the customer's governance, so it arrives `draft`, owned by
-    the importing caller (`owner` is their verified
-    `(sub, iss)` pair, stored as `owner_subject`/`owner_issuer` exactly as
-    `policy_lifecycle.create_policy_draft` stores them), and can only become
-    `approved` through the normal propose/approve flow.
+    Pure. Returns one `UpsertNode` per Policy, Standard and Control id that `existing` (label ->
+    ids the graph already holds) does not hold, Policies first, the FIRST occurrence of a repeated
+    id kept (create-only, in Policy, Standard, Control order). `status` is forced to
+    `"draft"` after the artifact's own properties are spread, so an artifact-authored `approved`
+    never wins; `version` defaults to the lifecycle's string `"1"`. A Policy also carries the
+    owner pair and `created_at` (fixed by the caller, the same for every Policy of the call); its
+    artifact-supplied embedding travels in the primitive's `embedding` field. The override count
+    describes the INPUT nodes, whether or not the graph already holds them.
 
-    No dedup of any kind: each node is keyed on its own content-hashed id. A
-    draft must never converge onto an existing canonical Policy, since the
-    draft Standards/Controls would then hang under a possibly-approved parent
-    and the whole-tree-moves-together rule would break. Near-duplicate
-    detection is the near-miss review flow's job, not restore's.
-
-    Every statement is `MERGE ... ON CREATE SET`, so a node that already
-    exists -- including one a user has since approved -- keeps its status,
-    owner and content; a re-restore is a structural no-op for it. `status` is
-    forced to `"draft"` after the artifact's own properties are spread, so an
-    artifact-authored `approved` never wins; each such override is counted in
-    the returned `GovernanceDraftCounts.status_overridden`. `version` defaults
-    to the lifecycle's string `"1"` when the artifact has none.
-
-    `policy_embeddings` carries the artifact-supplied Policy vectors (by id) so
-    a later cleanup flow still has them; a Policy without one
-    gets no `embedding` key.
+    Raises:
+        CompanyMergePersistenceError: a node carries a property the gateway cannot store.
     """
     owner_subject, owner_issuer = owner
-    now = datetime.now(UTC).isoformat()
     status_overridden = 0
+    created: dict[tuple[str, str], UpsertNode] = {}
+
+    def add(label: str, node_id: str, properties: dict[str, object], *, embedding: object) -> None:
+        if node_id in existing.get(label, ()) or (label, node_id) in created:
+            return
+        try:
+            created[(label, node_id)] = UpsertNode(
+                label=label,
+                id=node_id,
+                properties=properties,
+                embedding=cast("tuple[float, ...] | None", embedding),
+            )
+        except ValidationError as exc:
+            raise _unstorable(f"{label} {node_id!r}") from exc
 
     for policy in policy_nodes:
         properties: dict[str, object] = dict(policy.properties)
@@ -428,19 +391,83 @@ def persist_governance_drafts(
         properties.setdefault("version", "1")
         properties["owner_subject"] = owner_subject
         properties["owner_issuer"] = owner_issuer
-        properties["created_at"] = now
-        embedding = (policy_embeddings or {}).get(policy.id)
-        if embedding is not None:
-            properties["embedding"] = list(embedding)
-        _upsert_draft_node(single_tenant_graph, _POLICY_LABEL, policy.id, properties)
+        properties["created_at"] = created_at
+        add(
+            _POLICY_LABEL,
+            policy.id,
+            properties,
+            embedding=(policy_embeddings or {}).get(policy.id),
+        )
 
     for label, nodes in ((_STANDARD_LABEL, standard_nodes), (_CONTROL_LABEL, control_nodes)):
         for node in nodes:
             properties = dict(node.properties)
             status_overridden += _status_override_count(properties)
             properties["status"] = _DRAFT_STATUS
-            _upsert_draft_node(single_tenant_graph, label, node.id, properties)
+            add(label, node.id, properties, embedding=None)
 
+    return tuple(created.values()), status_overridden
+
+
+def persist_governance_drafts(
+    target: GraphWriteTarget,
+    single_tenant_graph: GraphHandle,
+    policy_nodes: tuple[BaselineNode, ...],
+    standard_nodes: tuple[BaselineNode, ...],
+    control_nodes: tuple[BaselineNode, ...],
+    *,
+    owner: tuple[str, str],
+    policy_embeddings: Mapping[str, tuple[float, ...]] | None,
+    values: ValueSource = SYSTEM_VALUES,
+) -> GovernanceDraftCounts:
+    """Persist an internal instrument's Policy/Standard/Control tree as `draft`, as one group.
+
+    The write behind `governance_import.import_draft_governance`, used by live internal ingest
+    (issues #183, #227): an imported tree has not been through the customer's governance, so it
+    arrives `draft`, owned by the importing caller (`owner` is their verified `(sub, iss)` pair,
+    stored as `owner_subject`/`owner_issuer` exactly as `policy_lifecycle.create_policy_draft`
+    stores them), and can only become `approved` through the normal propose/approve flow.
+
+    No dedup of any kind: each node is keyed on its own content-hashed id. A draft must never
+    converge onto an existing canonical Policy, since the draft Standards/Controls would then
+    hang under a possibly-approved parent and the whole-tree-moves-together rule would break.
+    Near-duplicate detection is the near-miss review flow's job.
+
+    Since #210 this is a Graph Write Gateway group. Create-only is decided here, before
+    submission, from one batched existing-id read per label (a gateway upsert would merge over
+    the existing node), so a node that already exists -- including one a user has since approved
+    -- keeps its status, owner and content, and nothing is logged for it. `created_at` is drawn
+    from `values` ONCE, before the group is built, so the group carries it and a replay
+    reproduces it (AC-BI-007). `policy_embeddings` carries the artifact-supplied Policy vectors
+    (by id) so a later cleanup flow still has them; a Policy without one gets no embedding.
+
+    Returns:
+        `GovernanceDraftCounts` describing the INPUT (not the nodes actually created).
+
+    Raises:
+        CompanyMergePersistenceError: an existing-id read failed (`FalkorDB query failed:`), a
+            node carries a property the gateway cannot store, or the gateway did not take the
+            group (`FalkorDB write failed:`).
+    """
+    created_at = values.now().isoformat()
+    existing = {
+        label: _read_existing_ids(single_tenant_graph, label, (node.id for node in nodes))
+        for label, nodes in (
+            (_POLICY_LABEL, policy_nodes),
+            (_STANDARD_LABEL, standard_nodes),
+            (_CONTROL_LABEL, control_nodes),
+        )
+    }
+    primitives, status_overridden = build_draft_governance_primitives(
+        existing,
+        policy_nodes,
+        standard_nodes,
+        control_nodes,
+        owner=owner,
+        policy_embeddings=policy_embeddings,
+        created_at=created_at,
+    )
+    submit_group(target, primitives)
     return GovernanceDraftCounts(
         policies=len(policy_nodes),
         standards=len(standard_nodes),
@@ -455,18 +482,8 @@ def _status_override_count(properties: dict[str, object]) -> int:
     return 1 if authored is not None and authored != _DRAFT_STATUS else 0
 
 
-def _upsert_draft_node(
-    graph: GraphHandle, label: str, node_id: str, properties: dict[str, object]
-) -> None:
-    """Create one draft governance node, never touching an existing one."""
-    _execute_query(
-        graph,
-        f"MERGE (n:{label} {{id: $id}}) ON CREATE SET n += $properties",
-        params={"id": node_id, "properties": properties},
-    )
-
-
 def persist_practice_area_and_risk_path_passthrough(
+    target: GraphWriteTarget,
     single_tenant_graph: GraphHandle,
     practice_area_nodes: tuple[BaselineNode, ...],
     risk_path_nodes: tuple[BaselineNode, ...],
@@ -475,38 +492,42 @@ def persist_practice_area_and_risk_path_passthrough(
 
     PracticeArea/RiskPath ids are content-hashed from `name` alone and are
     EXPECTED to recur across separate baselines
-    (`ps-domain-concepts.md`'s identity notes) -- so this uses the same
-    `MERGE ... ON CREATE SET` shape as Capability/Policy
-    (`persist_canonical_nodes`) and Role/Requirement/Obligation
-    (`_upsert_passthrough_node(..., preserve_existing_properties=True)`),
+    (`ps-domain-concepts.md`'s identity notes) -- so they are create-only, like
+    Capability/Policy (`persist_canonical_nodes`) and Role/Requirement/Obligation,
     making AC-BI-007's "an existing node's properties are never overwritten"
-    a database-engine guarantee, not application discipline.
+    hold. Since #210 that is decided here, before submission, from one batched
+    existing-node read per label on `single_tenant_graph` (a gateway upsert would
+    merge over the existing node): a node the graph holds is left out of the
+    group and nothing is logged for it. Every PracticeArea precedes every
+    RiskPath in the one group; for an id repeated in the input the first
+    occurrence wins.
 
     No dedup call of any kind precedes this -- identity convergence is
-    structural (identical `name` -> identical hash -> identical `MERGE`
-    key), so there is nothing to compute (AC-BI-006).
+    structural (identical `name` -> identical hash -> identical node id), so
+    there is nothing to compute (AC-BI-006).
 
     A baseline with `practice_area_nodes == () and risk_path_nodes == ()`
-    issues zero `graph.query` calls (AC-BI-009's structural no-op for the
-    node half) -- the `for` loops below simply don't execute, no guard
-    needed.
+    issues no read and submits no group (AC-BI-009's structural no-op for the
+    node half).
+
+    Raises:
+        CompanyMergePersistenceError: an existing-node read failed (`FalkorDB query failed:`), a
+            node carries a property the gateway cannot store, or the gateway did not take the
+            group (`FalkorDB write failed:`).
     """
-    for practice_area in practice_area_nodes:
-        _upsert_passthrough_node(
-            single_tenant_graph,
-            _PRACTICE_AREA_LABEL,
-            practice_area.id,
-            practice_area.properties,
-            preserve_existing_properties=True,
-        )
-    for risk_path in risk_path_nodes:
-        _upsert_passthrough_node(
-            single_tenant_graph,
-            _RISK_PATH_LABEL,
-            risk_path.id,
-            risk_path.properties,
-            preserve_existing_properties=True,
-        )
+    existing_practice_areas = _read_existing_ids(
+        single_tenant_graph, _PRACTICE_AREA_LABEL, (node.id for node in practice_area_nodes)
+    )
+    existing_risk_paths = _read_existing_ids(
+        single_tenant_graph, _RISK_PATH_LABEL, (node.id for node in risk_path_nodes)
+    )
+    submit_group(
+        target,
+        (
+            *_create_only_nodes(_PRACTICE_AREA_LABEL, practice_area_nodes, existing_practice_areas),
+            *_create_only_nodes(_RISK_PATH_LABEL, risk_path_nodes, existing_risk_paths),
+        ),
+    )
 
 
 def validate_classification_edge_endpoints(
@@ -551,12 +572,12 @@ def validate_classification_edge_endpoints(
                 unresolved_ids.add(endpoint_id)
     if not unresolved_ids:
         return
-    result = _execute_query(
+    rows = read_rows(
         single_tenant_graph,
         "UNWIND $ids AS id MATCH (n {id: id}) RETURN id",
-        params={"ids": sorted(unresolved_ids)},
+        {"ids": sorted(unresolved_ids)},
     )
-    existing_ids = {cast("str", row[0]) for row in cast("list[list[object]]", result.result_set)}
+    existing_ids = {cast("str", row[0]) for row in rows}
     missing = unresolved_ids - existing_ids
     if missing:
         raise CompanyMergePersistenceError(
@@ -595,139 +616,199 @@ def classification_write_counts(graph: BaselineGraph) -> dict[str, int]:
     }
 
 
+def build_canonical_node_primitives(
+    existing_ids: set[str],
+    incoming_nodes: tuple[BaselineNode, ...],
+    resolutions: tuple[CanonicalResolution, ...],
+    *,
+    kind: Literal["Capability", "Policy"],
+    values: ValueSource,
+) -> tuple[UpsertNode, ...]:
+    """One create-only `kind` node per `match_kind="new"` resolution the graph does not hold.
+
+    Pure apart from `values`: nothing is read or submitted. `created_at` is drawn from `values`
+    once per new resolution, in resolution order, HERE, so the primitive carries a literal (the
+    Cypher writer drew `datetime.now` at apply time). The embedding travels in the primitive's
+    `embedding` field, present only when the resolution has one; a mint that never triggered a
+    comparison (an empty working index) carries none and is backfilled later. A canonical id in
+    `existing_ids` is left out of the group, so the node keeps every property and nothing is
+    logged for it.
+
+    `incoming_nodes`/`resolutions` are guaranteed 1:1 by construction (`dedup.dedupe_canonical_
+    nodes` builds exactly one `CanonicalResolution` per incoming node, `incoming_id` set to that
+    node's own `id`), so there is no validate-then-write pass.
+
+    Raises:
+        CompanyMergePersistenceError: a node carries a property the gateway cannot store.
+    """
+    nodes_by_id = {node.id: node for node in incoming_nodes}
+    minted: dict[str, UpsertNode] = {}
+    for resolution in resolutions:
+        if resolution.match_kind != "new":
+            continue
+        node = nodes_by_id[resolution.incoming_id]
+        properties: dict[str, object] = dict(node.properties)
+        properties["created_at"] = values.now().isoformat()
+        if resolution.canonical_id in existing_ids or resolution.canonical_id in minted:
+            continue
+        try:
+            minted[resolution.canonical_id] = UpsertNode(
+                label=kind,
+                id=resolution.canonical_id,
+                properties=properties,
+                embedding=resolution.embedding,
+            )
+        except ValidationError as exc:
+            raise _unstorable(f"{kind} {resolution.canonical_id!r}") from exc
+    return tuple(minted.values())
+
+
 def persist_canonical_nodes(
+    target: GraphWriteTarget,
     single_tenant_graph: GraphHandle,
     incoming_nodes: tuple[BaselineNode, ...],
     resolutions: tuple[CanonicalResolution, ...],
     *,
     kind: Literal["Capability", "Policy"],
+    values: ValueSource = SYSTEM_VALUES,
 ) -> None:
-    """Mint every `match_kind="new"` `CanonicalResolution` as a `kind` node.
+    """Mint every `match_kind="new"` `CanonicalResolution` as a `kind` node, as one group.
 
-    Writes into `single_tenant_graph` (PLAN_REVIEWED.md §6.1, Increment 11's
-    mint half). A `match_kind="exact"`/`"semantic"` resolution gets NO write
-    call at all here -- it already resolved onto an existing canonical node,
-    and this function's whole point is to never touch one.
+    Writes into the graph `target` names (PLAN_REVIEWED.md §6.1, Increment 11's mint half). A
+    `match_kind="exact"`/`"semantic"` resolution gets NO write at all here -- it already resolved
+    onto an existing canonical node, and this function's whole point is to never touch one.
 
-    `kind` is `"Capability"` since #42 -- Obligation is no longer
-    canonically deduped (`persist_obligation_passthrough` above) -- .
+    `kind` is `"Capability"` since #42 -- Obligation is no longer canonically deduped
+    (`persist_obligation_passthrough` above).
 
-    `MERGE (n:{kind} {id: $id}) ON CREATE SET n += $properties` -- NOT an
-    unconditional `SET` -- is the load-bearing invariant that makes
-    "existing canonical node's properties are never overwritten" a
-    database-engine guarantee (see module docstring).
+    Create-only is the load-bearing invariant that makes "existing canonical node's properties
+    are never overwritten" hold. Since #210 it is decided here, before submission, from one
+    batched existing-id read on `single_tenant_graph` (a gateway upsert would merge over the
+    existing node); see `build_canonical_node_primitives` for what a new node carries. The
+    properties are the underlying `BaselineNode.properties` plus `created_at` (issue #35, the
+    near-miss review workflow: the deterministic "earlier-created wins" winner selection of
+    `resolve --decision=merge`), set once at mint and never touched again.
 
-    `$properties` is the underlying `BaselineNode.properties` (looked up
-    from `incoming_nodes` by `resolution.incoming_id`) merged with
-    `{"embedding": list(resolution.embedding)}` ONLY when
-    `resolution.embedding is not None` -- a mint that never triggered any
-    comparison (an empty working index the first time it fired, §5.4) has
-    `embedding=None` and gets no `embedding` key at all; that node's
-    embedding is filled in later, either later in the same run or via a
-    future run's `backfill_canonical_embeddings` call.
-
-    `$properties` also always carries `"created_at": datetime.now(UTC).isoformat()`
-    (issue #35, near-miss review workflow, PLAN.md §2.2) -- added
-    unconditionally at mint time, alongside the conditional `embedding` key
-    above. Since this write already goes through `MERGE ... ON CREATE SET`,
-    this is free: `created_at` is set exactly once, at genuine mint time,
-    never touched again on a re-run against the same id -- the same
-    guarantee `ON CREATE SET` already gives every other property here. This
-    is needed later for AC-BI-006's deterministic "earlier-created wins"
-    winner-selection query (`resolve --decision=merge`, a later slice); this
-    slice only adds the write.
-
-    `incoming_nodes`/`resolutions` are guaranteed 1:1 by construction
-    (`dedup.dedupe_canonical_nodes` builds exactly one `CanonicalResolution`
-    per incoming node, `incoming_id` set to that node's own `id`) -- no
-    validate-then-write pass, mirroring `domain_mapper.graph_writer.
-    persist_obligation_and_capability_graph`'s own "correct by construction,
-    no defensive re-check" reasoning.
+    Raises:
+        CompanyMergePersistenceError: the existing-node read failed (`FalkorDB query failed:`), a
+            node carries a property the gateway cannot store, or the gateway did not take the
+            group (`FalkorDB write failed:`).
     """
-    nodes_by_id = {node.id: node for node in incoming_nodes}
-    for resolution in resolutions:
-        if resolution.match_kind != "new":
+    existing = _read_existing_ids(
+        single_tenant_graph,
+        kind,
+        (r.canonical_id for r in resolutions if r.match_kind == "new"),
+    )
+    submit_group(
+        target,
+        build_canonical_node_primitives(
+            existing, incoming_nodes, resolutions, kind=kind, values=values
+        ),
+    )
+
+
+def _read_embedding_state(
+    graph: GraphHandle, label: str, node_ids: Iterable[str]
+) -> dict[str, bool]:
+    """Which of `node_ids` are `label` nodes of `graph`, and whether each still has no embedding.
+
+    One batched read, ids via `params`; the vector itself is never returned. An id the graph does
+    not hold is absent from the result. `label` is always one of this module's fixed literals.
+
+    Raises:
+        CompanyMergePersistenceError: `FalkorDB query failed: <error>` if the read could not be
+            made; nothing has been submitted by then.
+    """
+    ids = sorted(set(node_ids))
+    if not ids:
+        return {}
+    rows = read_rows(
+        graph,
+        f"MATCH (n:{label}) WHERE n.id IN $ids RETURN n.id, n.embedding IS NULL",
+        {"ids": ids},
+    )
+    return {str(row[0]): bool(row[1]) for row in rows}
+
+
+def build_embedding_backfill_primitives(
+    embedding_is_null: dict[str, bool],
+    embeddings: dict[str, tuple[float, ...]],
+    *,
+    label: str,
+) -> tuple[UpsertNode, ...]:
+    """One `UpsertNode(label, id, embedding=...)` per id that exists and has no embedding yet.
+
+    Pure. `embedding_is_null` maps each id the graph holds to whether it has no embedding; an id
+    missing from it is absent (a gateway upsert would create it, which `MATCH` never did), and an
+    id mapped to `False` already has an embedding (a gateway upsert would replace it). Neither is
+    submitted, so nothing is logged for them. Input order is kept. `embedding` is a reserved
+    property key, so it travels in the primitive's `embedding` field and no other property is
+    named: the node keeps everything else it has.
+
+    Raises:
+        CompanyMergePersistenceError: an embedding the gateway cannot store (non-finite value).
+    """
+    primitives: list[UpsertNode] = []
+    for node_id, embedding in embeddings.items():
+        if not embedding_is_null.get(node_id, False):
             continue
-        node = nodes_by_id[resolution.incoming_id]
-        properties: CanonicalNodeProperties = dict(node.properties)
-        properties["created_at"] = datetime.now(UTC).isoformat()
-        if resolution.embedding is not None:
-            properties["embedding"] = list(resolution.embedding)
-        _execute_query(
-            single_tenant_graph,
-            f"MERGE (n:{kind} {{id: $id}}) ON CREATE SET n += $properties",
-            params={"id": resolution.canonical_id, "properties": properties},
-        )
+        try:
+            primitives.append(UpsertNode(label=label, id=node_id, embedding=embedding))
+        except ValidationError as exc:
+            raise _unstorable(f"{label} {node_id!r} embedding") from exc
+    return tuple(primitives)
 
 
 def backfill_canonical_embeddings(
+    target: GraphWriteTarget,
     single_tenant_graph: GraphHandle,
     *,
     kind: Literal["Capability", "Policy"],
     embeddings: dict[str, tuple[float, ...]],
 ) -> None:
-    """Write each `embeddings` entry onto an ALREADY-EXISTING `kind` canonical node.
+    """Set each `embeddings` entry on an already-existing `kind` canonical node that has none.
 
-    For every `(id, embedding)` pair (PLAN_REVIEWED.md §6.2, B2's fix) --
-    distinct from `persist_canonical_nodes`' `ON CREATE SET` mint path, and
-    deliberately never touching a node's other properties.
+    PLAN_REVIEWED.md §6.2, B2's fix -- distinct from `persist_canonical_nodes`' create-only mint,
+    and never touching a node's other properties. Since #210 set-if-null is decided here, before
+    submission: one batched read of which ids exist and have no embedding
+    (`_read_embedding_state`), then ONE group of `build_embedding_backfill_primitives`. A node
+    that already has an embedding, or is absent, is left out; a re-run therefore submits and logs
+    nothing (AC-BI-006). Every id is guaranteed (by construction -- `dedup.dedupe_canonical_nodes`'
+    `original_existing_ids` filter, §5.4) to exist already; `merge.py` calls this after the mint
+    and the edge writes.
 
-    One call per id:
-
-        MATCH (n:{kind} {id: $id})
-        WHERE n.embedding IS NULL
-        SET n.embedding = $embedding
-
-    The `WHERE n.embedding IS NULL` guard is the mechanism, not an
-    optimization: it makes a re-run's backfill call against an
-    already-backfilled node a structural no-op at the database-engine
-    level, the same load-bearing role `ON CREATE SET` plays for the mint
-    path above -- the caller (`merge.py`) does not need to check first.
-
-    Every id passed here is guaranteed (by construction --
-    `dedup.dedupe_canonical_nodes`' `original_existing_ids` filter, §5.4) to
-    already exist as a graph node by the time this is called; `merge.py`
-    calls `persist_canonical_nodes` and all edge writes before this.
+    Raises:
+        CompanyMergePersistenceError: the state read failed (`FalkorDB query failed:`), an
+            embedding cannot be stored, or the gateway did not take the group
+            (`FalkorDB write failed:`).
     """
-    for node_id, embedding in embeddings.items():
-        _execute_query(
-            single_tenant_graph,
-            f"MATCH (n:{kind} {{id: $id}}) WHERE n.embedding IS NULL SET n.embedding = $embedding",
-            params={"id": node_id, "embedding": list(embedding)},
-        )
+    state = _read_embedding_state(single_tenant_graph, kind, embeddings)
+    submit_group(target, build_embedding_backfill_primitives(state, embeddings, label=kind))
 
 
 def backfill_incoming_capability_embeddings(
+    target: GraphWriteTarget,
     baseline_graph: GraphHandle,
     *,
     embeddings: dict[str, tuple[float, ...]],
 ) -> None:
-    """Write each `embeddings` entry onto its own INCOMING `{short}_baseline` Capability node.
+    """Set each `embeddings` entry on its own INCOMING `{short}_baseline` Capability node, if null.
 
-    Issue #31 -- the incoming-side twin of `backfill_canonical_embeddings`
-    above: same shape, same `WHERE n.embedding IS NULL` idempotent-write
-    guard (AC-BI-006), same "only `embedding` is ever touched, no other
-    property" contract (AC-BI-007), but targets `baseline_graph` (the
-    regulation's OWN `{short}_baseline` graph) rather than
-    `single_tenant_graph`, and is always `kind="Capability"` -- there is no
-    Policy-side incoming embedding to cache (see `DedupResult.
-    incoming_embedding_backfills`'s own docstring).
+    Issue #31 -- the incoming-side twin of `backfill_canonical_embeddings`: same set-if-null
+    contract (AC-BI-006) and the same "only `embedding` is ever touched" contract, but `target`
+    names the regulation's OWN `{short}_baseline` graph, `baseline_graph` is its read handle, and
+    the kind is always Capability (there is no Policy-side incoming embedding to cache, see
+    `DedupResult.incoming_embedding_backfills`).
 
-    Every `(incoming_id, embedding)` pair comes from `DedupResult.
-    incoming_embedding_backfills` (`dedup.dedupe_canonical_nodes`, AC-BI-005)
-    -- the incoming node's own id, already known to exist in `baseline_graph`
-    since it was just read from there by `graph_reader.read_baseline_graph`.
-    A later `read_baseline_graph` call against this same, unchanged baseline
-    (e.g. a re-ingested amended regulation, #19) reads this cached value back
-    onto `BaselineNode.embedding`, letting `dedup.find_best_semantic_match`
-    skip the `route_embedding` call for it entirely (AC-BI-002/AC-BI-003).
+    Every `(incoming_id, embedding)` pair comes from `DedupResult.incoming_embedding_backfills`
+    (`dedup.dedupe_canonical_nodes`, AC-BI-005); a later `graph_reader.read_baseline_graph` of the
+    same, unchanged baseline reads the cached value back onto `BaselineNode.embedding`, letting
+    `dedup.find_best_semantic_match` skip the `route_embedding` call for it (AC-BI-002/003).
     """
-    for node_id, embedding in embeddings.items():
-        _execute_query(
-            baseline_graph,
-            "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL SET n.embedding = $embedding",
-            params={"id": node_id, "embedding": list(embedding)},
-        )
+    state = _read_embedding_state(baseline_graph, _CAPABILITY_LABEL, embeddings)
+    submit_group(
+        target, build_embedding_backfill_primitives(state, embeddings, label=_CAPABILITY_LABEL)
+    )
 
 
 def _dedupe_eligible_endpoint_ids(edge: BareEdge) -> tuple[str, ...]:
@@ -789,60 +870,89 @@ def _validate_rewired_edge_endpoints(
                 )
 
 
-def persist_rewired_edges(
-    single_tenant_graph: GraphHandle,
+def build_rewired_edge_primitives(
+    existing: Mapping[str, set[str]],
     bare_edges: tuple[BareEdge, ...],
     canonical_id_by_incoming_id: dict[str, str],
-) -> None:
-    """Persist `HAS`/`SATISFIED_BY`/`REQUIRES` edges into `single_tenant_graph`.
+) -> tuple[UpsertEdge, ...]:
+    """One `UpsertEdge` per distinct edge whose two endpoints (after the rewrite) both exist.
 
-    Rewrites each edge's endpoints through `canonical_id_by_incoming_id`
-    (`incoming_id -> canonical_id`, Capability dedup's resolutions -- see
-    module docstring) instead of writing the baseline-local id verbatim
-    (PLAN_REVIEWED.md §6.2/§10 Increment 12).
-
-    The rule is endpoint-agnostic, not edge-type-specific: for BOTH the
-    source and target of every edge, if that endpoint's baseline-local id
-    has an entry in `canonical_id_by_incoming_id`, it is rewritten to the
-    canonical id; otherwise it passes through unchanged. Concretely, since
-    #42 (Obligation is a passthrough node):
-
-    - `HAS` (Role -[:HAS]-> Obligation): both endpoints pass through
-      unchanged -- neither Role nor Obligation is ever in the mapping.
-    - `SATISFIED_BY` (Requirement -[:SATISFIED_BY]-> Obligation): both
-      endpoints pass through unchanged.
-    - `REQUIRES` (Obligation -[:REQUIRES]-> Capability): source (Obligation)
-      passes through, target (Capability) is rewritten -- Capability is the
-      only canonically deduped endpoint. Its mapping entry is *required*
-      (see `_validate_rewired_edge_endpoints`/`_dedupe_eligible_endpoint_ids`)
-      -- an absent entry is a hard pre-write error, not a pass-through.
-
-    Uses the `MATCH ... MERGE (s)-[:TYPE]->(t)` shape the Domain Mapper used
-    before it moved onto the Graph Write Gateway (#209) -- no properties, since
-    `HAS`/`SATISFIED_BY`/`REQUIRES` never carry any (Edge Catalog).
-
-    Raises `CompanyMergePersistenceError` (via `_validate_rewired_edge_endpoints`)
-    before any write if a `REQUIRES` edge's Capability target has no entry
-    in `canonical_id_by_incoming_id` -- validate-then-write over the whole
-    collection, mirroring `domain_mapper.graph_writer`'s own B3 fix shape,
-    so a bad edge set writes
-    nothing at all rather than a partial graph.
-
-    Idempotent: re-running with the identical `bare_edges`/
-    `canonical_id_by_incoming_id` against the same graph issues the same
-    calls and leaves the same end state, since every write is a `MERGE`
-    keyed on the same resolved `(source_id, relationship_type, target_id)`
-    triple both times.
+    Pure: nothing is read or submitted. Each endpoint goes through `canonical_id_by_incoming_id`
+    (a missing entry passes through). `existing` maps a node label to the ids the graph holds. An
+    edge with a missing endpoint writes nothing, and a group edge with a missing endpoint would
+    fail the WHOLE group, so such an edge is dropped here, silently. The identity is
+    `{type}:{source}->{target}` (`_edge_identity`): a repeated edge, or two that rewrite to the
+    same ends, fold to one primitive (first position kept). The edge carries no properties (Edge
+    Catalog).
     """
-    _validate_rewired_edge_endpoints(bare_edges, canonical_id_by_incoming_id)
+    edges: dict[str, UpsertEdge] = {}
     for edge in bare_edges:
         source_label, target_label = _EDGE_ENDPOINT_LABELS[edge.relationship_type]
         source_id = canonical_id_by_incoming_id.get(edge.source_id, edge.source_id)
         target_id = canonical_id_by_incoming_id.get(edge.target_id, edge.target_id)
-        _execute_query(
-            single_tenant_graph,
-            f"MATCH (s:{source_label} {{id: $source_id}}), "
-            f"(t:{target_label} {{id: $target_id}}) "
-            f"MERGE (s)-[:{edge.relationship_type}]->(t)",
-            params={"source_id": source_id, "target_id": target_id},
+        if source_id not in existing[source_label] or target_id not in existing[target_label]:
+            continue
+        identity = edge_identity(edge.relationship_type, source_id, target_id)
+        edges.setdefault(
+            identity,
+            UpsertEdge(
+                type=edge.relationship_type,
+                identity=identity,
+                source=NodeRef(label=source_label, id=source_id),
+                target=NodeRef(label=target_label, id=target_id),
+            ),
         )
+    return tuple(edges.values())
+
+
+def persist_rewired_edges(
+    target: GraphWriteTarget,
+    single_tenant_graph: GraphHandle,
+    bare_edges: tuple[BareEdge, ...],
+    canonical_id_by_incoming_id: dict[str, str],
+) -> None:
+    """Persist `bare_edges` (the ten Edge Catalog types) into `target`'s graph as ONE group.
+
+    Rewrites each edge's endpoints through `canonical_id_by_incoming_id`
+    (`incoming_id -> canonical_id`, Capability dedup's resolutions -- see module docstring)
+    instead of writing the baseline-local id verbatim (PLAN_REVIEWED.md §6.2/§10 Increment 12).
+
+    The rule is endpoint-agnostic, not edge-type-specific: for BOTH the source and target of every
+    edge, if that endpoint's baseline-local id has an entry in `canonical_id_by_incoming_id`, it is
+    rewritten to the canonical id; otherwise it passes through unchanged. Only Capability (and
+    Policy) endpoints are ever canonically deduped, so in practice `REQUIRES`'s Capability target,
+    `GOVERNED_BY`'s two ends and the classification edges' Capability/Policy targets are the ones
+    rewritten; an Obligation redirect (issue #190) is in the mapping too. A dedupe-eligible
+    endpoint (`_dedupe_eligible_endpoint_ids`) MUST have an entry.
+
+    Since #210 each edge is an `UpsertEdge` (no properties) in one gateway group, and "an endpoint
+    that is missing writes nothing" is decided here, before submission, from one batched
+    existing-id read per label on `single_tenant_graph` (`build_rewired_edge_primitives`). The
+    nodes were written by the earlier groups of this run, which the gateway has applied.
+
+    Idempotent: re-running with the same input leaves the same graph, and the gateway logs nothing
+    for edges that already exist.
+
+    Raises:
+        CompanyMergePersistenceError: a dedupe-eligible endpoint has no mapping entry (before any
+            read or write: validate-then-write over the whole collection, so a bad edge set
+            writes nothing), an endpoint read failed (`FalkorDB query failed:`), or the gateway
+            did not take the group (`FalkorDB write failed:`).
+    """
+    _validate_rewired_edge_endpoints(bare_edges, canonical_id_by_incoming_id)
+    endpoint_ids: dict[str, set[str]] = {label: set() for label in _EDGE_LABELS}
+    for edge in bare_edges:
+        source_label, target_label = _EDGE_ENDPOINT_LABELS[edge.relationship_type]
+        endpoint_ids[source_label].add(
+            canonical_id_by_incoming_id.get(edge.source_id, edge.source_id)
+        )
+        endpoint_ids[target_label].add(
+            canonical_id_by_incoming_id.get(edge.target_id, edge.target_id)
+        )
+    existing = {
+        label: _read_existing_ids(single_tenant_graph, label, ids)
+        for label, ids in endpoint_ids.items()
+    }
+    submit_group(
+        target, build_rewired_edge_primitives(existing, bare_edges, canonical_id_by_incoming_id)
+    )
