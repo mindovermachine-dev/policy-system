@@ -129,6 +129,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
+    from ps_service.company_merge.governance_import import GovernanceImport
     from ps_service.company_merge.models import MergeResult
     from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
     from ps_service.ingestion.graph_submission import GroupSubmitter
@@ -307,10 +308,8 @@ _REACHABILITY_RE = re.compile(
     r"RETURN count\(n\)$"
 )
 _WHOLE_NODE_READ_RE = re.compile(r"^MATCH \(n:(?P<label>\w+) \{id: \$(?P<param>\w+)\}\) RETURN n$")
-_NODE_READ_RE = re.compile(
-    r"^MATCH \(n:(?P<label>\w+)\)(?P<filter> WHERE n\.status = 'approved')? "
-    r"RETURN (?P<cols>n\.\w+(?:, n\.\w+)*)$"
-)
+_ALL_NODES_READ_RE = re.compile(r"^MATCH \(n:(?P<label>\w+)\) RETURN n$")
+_NODE_READ_RE = re.compile(r"^MATCH \(n:(?P<label>\w+)\) RETURN (?P<cols>n\.\w+(?:, n\.\w+)*)$")
 _PROVENANCE_READ_RE = re.compile(
     r"^MATCH \(r:RegulatoryInstrument \{id: \$regulatory_instrument_id\}\)-\[e:(?P<rel>\w+)\]->"
     r"\(n:(?P<label>\w+)\) RETURN n\.id, e\.(?P<prop>\w+)$"
@@ -425,6 +424,14 @@ class _MiniGraph:
             if node is None:
                 return _FakeQueryResult([])
             return _FakeQueryResult([[_FakeGraphNode(dict(node))]])
+        if match := _ALL_NODES_READ_RE.match(q):
+            # issue #227: the governance read takes every node, whatever its status.
+            return _FakeQueryResult(
+                [
+                    [_FakeGraphNode(dict(node))]
+                    for node in self._nodes.get(match["label"], {}).values()
+                ]
+            )
         if match := _PROVENANCE_READ_RE.match(q):
             key = (match["rel"], "RegulatoryInstrument", match["label"])
             wanted_source = cast("str", params["regulatory_instrument_id"])
@@ -443,12 +450,9 @@ class _MiniGraph:
             )
         if match := _NODE_READ_RE.match(q):
             label = match["label"]
-            approved_only = bool(match["filter"])
             columns = [c.split(".", 1)[1] for c in match["cols"].split(", ")]
             rows: list[object] = []
             for node in self._nodes.get(label, {}).values():
-                if approved_only and node.get("status") != "approved":
-                    continue
                 rows.append([node.get(column) for column in columns])
             return _FakeQueryResult(rows)
         raise AssertionError(f"unexpected query issued against the fake pipeline graph: {q!r}")
@@ -913,6 +917,7 @@ def _use_real_pipeline_stages(
         similarity_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: object = None,
+        governance: GovernanceImport | None = None,
     ) -> MergeResult:
         _ = call_embedding
         return merge_baseline_graph(
@@ -923,6 +928,7 @@ def _use_real_pipeline_stages(
             similarity_threshold=similarity_threshold,
             call_embedding=_fake_call_embedding,
             emitter=emitter,  # pyright: ignore[reportArgumentType]
+            governance=governance,
         )
 
     dependencies = PipelineDependencies(

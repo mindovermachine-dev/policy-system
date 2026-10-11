@@ -119,6 +119,16 @@ class PendingReviewNotFoundError(ApiError):
     """
 
 
+class InternalIngestOwnerRequiredError(ApiError):
+    """A ``POST /ingestions`` internal seed carries a Policy but the caller is not verified.
+
+    Issue #227, AC-BI-001: an imported Policy tree is created ``draft`` and owned by the
+    ingesting caller; an ownerless draft would be unreachable by the propose/edit flow, so the
+    request is refused at the door -- before any stage, audit row, or graph write. Handled as
+    HTTP 401 (``owner_required``); ``str(exc)`` is a fixed, domain-level message.
+    """
+
+
 class MergeApprovalRequiresAuthenticatedCallerError(ApiError):
     """A `POST /near-misses/{review_id}/resolve` `decision="merge"` call has no real caller.
 

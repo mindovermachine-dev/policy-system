@@ -301,11 +301,9 @@ class MergeResult:
     obligation_ids: tuple[str, ...]  # passed through per source since #42, not deduped
     capability_canonical_ids: tuple[str, ...]
     near_misses: tuple[NearMissPair, ...]  # AC-004, Capability
-    # issue #54, S4 -- empty for an external-sourced baseline (no Policy pass ran).
-    policy_canonical_ids: tuple[str, ...] = ()
     # issue #35, Slice 5 (AC-BI-010): the run-scoped count of `PendingReview`
-    # nodes THIS call actually persisted -- `len(capability near_misses) +
-    # len(policy near_misses)`, i.e. exactly the number of
+    # nodes THIS call actually persisted -- `len(capability near_misses)`
+    # (Policy near-misses no longer exist, issue #227), i.e. exactly the number of
     # `persist_pending_reviews` writes issued during this call (CREATE, not
     # MERGE -- see pending_review.py), never a fresh "all unresolved reviews
     # ever" graph read. Zero by default so every pre-existing `MergeResult(...)`
@@ -319,6 +317,12 @@ class MergeResult:
     new_capability_count: int = 0
     matched_capability_count: int = 0
     new_obligation_count: int = 0
+    # issue #227: what the shared draft-governance import wrote (all 0 for a baseline with no
+    # Policy/Standard/Control), the same four counts restore records (#183).
+    governance_policies: int = 0
+    governance_standards: int = 0
+    governance_controls: int = 0
+    governance_status_overridden: int = 0
 
 
 # S1's fix: a properties-dict type distinct from BaselineNode.properties,

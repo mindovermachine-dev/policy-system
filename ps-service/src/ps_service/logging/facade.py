@@ -79,7 +79,12 @@ def _find_repo_root(start: Path) -> Path:
     )
 
 
-def configure(log_path: Path | None = None, *, fallback: TextSink | None = None) -> LogEmitter:
+def configure(
+    log_path: Path | None = None,
+    *,
+    fallback: TextSink | None = None,
+    mirror_failures_to_stderr: bool = False,
+) -> LogEmitter:
     """Repoint the process-wide default emitter, stopping the previous one after install.
 
     `log_path=None` resolves the default via `resolve_default_log_path()`
@@ -90,10 +95,19 @@ def configure(log_path: Path | None = None, *, fallback: TextSink | None = None)
     daemon thread can survive that — so entries queued at that instant are
     lost. Multi-process/durable delivery is explicitly "under exploration"
     in the architecture doc and out of scope here.
+
+    `mirror_failures_to_stderr=True` also writes every `outcome == "failed"` entry to stderr
+    (issue #227), so a failure cause is visible to `kubectl logs`.
     """
     global _default_emitter, _atexit_registered  # noqa: PLW0603 — module-level default emitter is the documented facade singleton (see module docstring)
     resolved_path = log_path if log_path is not None else resolve_default_log_path()
-    emitter = LogEmitter(EmitterConfig(log_path=resolved_path, fallback=fallback))
+    emitter = LogEmitter(
+        EmitterConfig(
+            log_path=resolved_path,
+            fallback=fallback,
+            mirror_failures_to_stderr=mirror_failures_to_stderr,
+        )
+    )
     with _lock:
         previous = _default_emitter
         _default_emitter = emitter

@@ -4,9 +4,11 @@ Restoring an internal curated instrument imports its Policy/Standard/Control
 tree as `draft`, owned by the restoring caller. This replaces the restore
 path's earlier Policy *convergence* (issue #54, S6, AC-BI-021): a draft must
 never converge onto an existing canonical Policy, because its draft
-Standards/Controls would then hang under a possibly-approved parent. The live
-ingestion-to-merge path (`merge_baseline_graph`) keeps its convergence -- that
-is proven in `tests/company_merge`, not here.
+Standards/Controls would then hang under a possibly-approved parent. Since
+issue #227 the live ingestion-to-merge path (`merge_baseline_graph`) imports
+through the same shared function (`governance_import.import_draft_governance`);
+that it does is proven in `tests/restore/test_restore_merge_governance_parity.py`
+and `tests/company_merge/test_merge_internal_seed_draft_governance.py`.
 
 `_run_baseline_merge` is driven directly against scripted fakes mirroring
 `tests/company_merge/test_merge_baseline_graph.py`'s conventions (duplicated

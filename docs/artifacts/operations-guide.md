@@ -18,6 +18,7 @@
   - [Rotate the API key later](#rotate-the-api-key-later)
   - [Start and stop the AKS cluster](#start-and-stop-the-aks-cluster)
   - [Manual steps and operational notes](#manual-steps-and-operational-notes)
+- [Imported policy trees (restore and internal ingest)](#imported-policy-trees-restore-and-internal-ingest)
 - [Backup](#backup)
   - [FalkorDB](#falkordb)
   - [PS Postgres (`ps_state` and `ps_signing`)](#ps-postgres-ps_state-and-ps_signing)
@@ -25,6 +26,7 @@
   - [FalkorDB](#falkordb-1)
   - [PS Postgres (`ps_state` and `ps_signing`)](#ps-postgres-ps_state-and-ps_signing-1)
 - [Troubleshooting / FAQ](#troubleshooting--faq)
+  - [Reading a failed ingestion](#reading-a-failed-ingestion)
 - [Teardown](#teardown)
 
 This guide is for administrators **operating an already-deployed** Policy System
@@ -430,6 +432,32 @@ this guide:
    The underlying FalkorDB startup race is out of scope for this deployment
    script; only the workaround is documented here, not a fix.
 
+## Imported policy trees (restore and internal ingest)
+
+An internal instrument carries a Policy/Standard/Control tree. Restoring a curated
+internal instrument and ingesting an internal document (`ps-cli ingest document`, or
+`POST /ingestions` with `source: "internal"`) import that tree the same way, through one
+shared step:
+
+- **Always `draft`.** Every Policy, Standard and Control is written `draft` with its
+  authored properties, whatever `status` the artifact or document carried. Only the Policy
+  Lifecycle (propose, approve) moves it on. The authored `status` is informational.
+- **Owned by the importer.** Each Policy is owned by the verified identity of the caller who
+  restored or ingested it. A document that carries a Policy therefore requires a signed-in
+  caller: without one, `POST /ingestions` answers 401 `owner_required` and nothing is
+  written. A document with no Policy (or an external regulation) needs no owner.
+- **Never merged into existing policies.** Imported nodes are created only if absent
+  (their ids derive from their content). A node that already exists, including one since
+  approved, is left untouched when the same content is imported again. A Policy with a
+  similar but different title becomes a separate draft; there is no semantic comparison
+  and no near-miss review for Policies.
+- **Counts.** The merge stage of the ingestion response, and the `succeeded` entry of the
+  run log, report `governance_policies`, `governance_standards`, `governance_controls`
+  (nodes imported) and `governance_status_overridden` (authored statuses replaced by
+  `draft`). A restore's `succeeded` log entry carries the same counts.
+
+Importing is not approval: review the drafts and take them through the Policy Lifecycle.
+
 ## Backup
 
 ### FalkorDB
@@ -639,6 +667,28 @@ exactly what was in the backups — anything recorded after the snapshots were t
 | The deploy script stops with "Authentik rejected the shared API token" | Authentik's bootstrap token never rotates and the Secret no longer matches it. See [Installation Guide: Upgrading an existing install](./installation-guide.md#upgrading-an-existing-install). |
 | An owner or invite link says "No recovery flow set" or the script waited for the blueprint | The bundled Authentik blueprint had not applied yet (about a minute on a fresh install). The scripts wait for it; re-run once Authentik's worker is Ready. |
 | Referencing a context that doesn't exist | `ps-cli` exits non-zero and lists valid context names — see [User Guide: ps-cli Troubleshooting](./user-guide.md#troubleshooting). |
+
+### Reading a failed ingestion
+
+A failed stage returns only a generic message to the caller (for example `merge failed`),
+by design. The cause is in the server-side log:
+
+- **`kubectl logs <ps-service pod>`** shows every failed log entry, because failures are
+  mirrored to stderr as well as to the log file.
+- **The JSONL log file** `ps-service.jsonl`, in the directory set by `PS_LOGGING_DIR`,
+  holds all entries. Find the failing run with
+  `grep failing_stage ps-service.jsonl` (inside the pod, or from the file you copied out).
+- A stage failure entry has `outcome` `failed`, `failing_stage` (for example `merge`),
+  `exception_type` and `detail`. `detail` is the exception message with bearer and basic
+  tokens, `key`/`token`/`secret`/`password` values, URLs, host:port pairs and file paths
+  removed, cut to 300 characters. It is meant to name the cause without leaking secrets;
+  if it is too thin, reproduce the call against a test instance.
+- Failures the service names itself (such as `owner_required`, a 401 for a Policy-bearing
+  document with no signed-in caller) are returned in the response and do not produce a
+  detail entry.
+- `get_ingestion_status` for a run started with `start_ingestion` returns the run's
+  `status`, `stage`, `result` and `error`; for the cause behind a generic `error`, use the
+  log as above.
 
 ## Teardown
 

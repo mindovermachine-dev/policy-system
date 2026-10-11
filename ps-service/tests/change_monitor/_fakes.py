@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from ps_service.change_monitor.models import PipelineRunResult
+    from ps_service.company_merge.governance_import import GovernanceImport
     from ps_service.ingestion.models import (
         FetchedRegulatoryInstrumentStructure,
         RegulatoryInstrumentMetadata,
@@ -711,6 +712,7 @@ class StatefulStages:
         similarity_threshold: float | None = None,
         call_embedding: object = None,
         emitter: object = None,
+        governance: GovernanceImport | None = None,
     ) -> MergeResult:
         """MERGE the version's canonical Obligations / Capabilities into `policy_system`."""
         rid = regulatory_instrument_id

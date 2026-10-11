@@ -53,7 +53,12 @@ from ps_service.ingestion.falkordb_client import connect as connect_falkordb
 from ps_service.ingestion.falkordb_client import select_graph
 from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
-from ps_service.logging.facade import configure, reset_for_tests, resolve_default_log_path
+from ps_service.logging.facade import (
+    configure,
+    emit_log_entry,
+    reset_for_tests,
+    resolve_default_log_path,
+)
 from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
@@ -757,6 +762,35 @@ def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_fil
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
 
     assert len(lines) >= 1
+
+
+def test_lifespan_mirrors_failed_log_entries_to_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Issue #227: `lifespan` configures the emitter so `outcome=failed` lines reach stderr.
+
+    A pod's JSONL file is invisible to `kubectl logs`; the failure detail must also be on stderr.
+    """
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=tmp_path,
+        is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
+    )
+
+    with TestClient(create_app(config)):
+        emit_log_entry(component="api", action="ingestion_run", outcome="failed")
+        emit_log_entry(component="api", action="ingestion_run", outcome="succeeded")
+
+    reset_for_tests()  # drain the emitter's queue before reading stderr
+
+    mirrored = [line for line in capsys.readouterr().err.splitlines() if line.startswith("{")]
+    outcomes = [json.loads(line).get("outcome") for line in mirrored]
+    assert "failed" in outcomes
+    assert "succeeded" not in outcomes
 
 
 def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path) -> None:

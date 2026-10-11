@@ -122,7 +122,7 @@ def _to_accepted_response(run_id: str, outcome: IngestionOutcome) -> IngestionAc
     )
 
 
-async def create_ingestion(
+async def create_ingestion(  # noqa: PLR0913, PLR0917 -- FastAPI dependency injection: one parameter per injected collaborator
     request_body: IngestionRequest,
     http_request: Request,
     run_id: Annotated[str, Depends(provide_run_id)],
@@ -131,6 +131,7 @@ async def create_ingestion(
     audit: Annotated[AuditContext, Depends(provide_audit_context)],
     gateway: Annotated[GroupSubmitter | None, Depends(provide_graph_write_gateway)],
     system_audit: Annotated[SystemAuditRecorder, Depends(provide_system_audit_recorder)],
+    principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> IngestionAcceptedResponse:
     """Trigger the in-process ingestion pipeline for one ``POST /ingestions`` request.
 
@@ -163,9 +164,10 @@ async def create_ingestion(
     resolution) and runs the internal-seed pipeline (issue #54, S2): today,
     one ``internal_ingestion`` stage that parses, validates, mints, and
     persists the submission into ``{short}_baseline``/``{short}_native``.
-    The internal path stays entirely ungated (AC-BI-011) -- it is
-    ``ps-cli ingest document``'s existing internal-authoring flow, out of
-    scope for issue #145.
+    The internal path has no role gate (AC-BI-011, out of scope for issue #145), but a
+    document that carries a Policy needs a verified caller (issue #227): the imported tree is
+    created as a draft owned by that caller, so an unauthenticated request is refused with 401
+    ``owner_required`` before any stage runs.
 
     Args:
         request_body: The ``source``-discriminated request body.
@@ -182,11 +184,15 @@ async def create_ingestion(
             internal path only).
         system_audit: Records the system audit row the internal path's graph groups are logged
             under (injected; internal path only).
+        principal: The verified caller, or ``None`` under the local-test bypass (injected);
+            the owner of an imported Policy tree (internal path only).
 
     Returns:
         An :class:`IngestionAcceptedResponse` with the run id and per-stage outcomes.
 
     Raises:
+        InternalIngestOwnerRequiredError: The internal document carries a Policy and there is
+            no verified caller (401; issue #227).
         AccessDeniedError: The caller (catalog path only) lacks
             ``ComplianceOfficer`` (403; issue #145).
         CatalogIdentifierNotFoundError: The CELEX does not exist on Cellar/ELI (404).
@@ -211,6 +217,7 @@ async def create_ingestion(
             dependencies=dependencies,
             gateway=gateway,
             system_audit=system_audit,
+            owner=_restore_owner(principal),
         )
         return _to_accepted_response(run_id, outcome)
     await run_in_threadpool(require_access_role(AccessRole.COMPLIANCE_OFFICER), http_request)

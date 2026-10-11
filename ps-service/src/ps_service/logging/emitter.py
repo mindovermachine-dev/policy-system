@@ -66,6 +66,12 @@ class EmitterConfig:
 
     log_path: Path
     fallback: TextSink | None = None  # None -> resolve sys.stderr dynamically at failure time (N1)
+    mirror_failures_to_stderr: bool = False
+    """Also write each ``outcome == "failed"`` entry's JSON line to stderr (issue #227).
+
+    The JSONL file inside a pod is invisible to ``kubectl logs``; mirroring failures puts the
+    cause where an operator looks first. Resolved like the fallback sink (``fallback`` if set).
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +98,13 @@ class LogEmitter:
         self._lifecycle_lock = threading.Lock()
         self._thread = threading.Thread(
             target=_run_writer_loop,
-            args=(self._queue, config.log_path, self._writer_factory, config.fallback),
+            args=(
+                self._queue,
+                config.log_path,
+                self._writer_factory,
+                config.fallback,
+            ),
+            kwargs={"mirror_failures": config.mirror_failures_to_stderr},
             name="ps-service-log-writer",
             daemon=True,
         )
@@ -153,6 +165,8 @@ def _run_writer_loop(
     log_path: Path,
     writer_factory: WriterFactory,
     configured_fallback: TextSink | None,
+    *,
+    mirror_failures: bool = False,
 ) -> None:
     """Drain `entry_queue` until a stop sentinel; never die on an exception (M3, M6)."""
     sink: TextSink | None = None
@@ -160,7 +174,10 @@ def _run_writer_loop(
         item = entry_queue.get()
         try:
             if not isinstance(item, _Sentinel):
-                sink = _append_line(item.to_json_line(), sink, log_path, writer_factory)
+                line = item.to_json_line()
+                if mirror_failures and item.outcome == "failed":
+                    _write_fallback(configured_fallback, line)
+                sink = _append_line(line, sink, log_path, writer_factory)
         except Exception as exc:  # noqa: BLE001 - the writer thread must never die (M3)
             _write_fallback(configured_fallback, _safe_fallback_line(item, exc))
         finally:

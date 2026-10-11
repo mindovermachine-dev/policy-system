@@ -28,6 +28,16 @@ class CompanyMergePersistenceError(Exception):
     """
 
 
+class GovernanceOwnerRequiredError(Exception):
+    """A baseline carries Policy/Standard/Control content but no importing owner was supplied.
+
+    Issue #227: raised by `governance_import.import_draft_governance` before any
+    write. An imported tree is created `draft`, owned by whoever imports it; an
+    ownerless draft would be unreachable by the propose/edit flow, so the import
+    is refused instead. The message is fixed and domain-level.
+    """
+
+
 class CompanyMergeValidationError(Exception):
     """An input to a pure `company_merge` computation is malformed.
 

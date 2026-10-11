@@ -48,14 +48,17 @@ from ps_service.api.errors import (
     CelexAlreadyIngestedError,
     GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
+    InternalIngestOwnerRequiredError,
     InternalSeedValidationError,
     PipelineStageError,
     ShortNameCollisionError,
 )
 from ps_service.api.graph_write_access import GRAPH_WRITE_UNAVAILABLE_MESSAGE, graph_write_access
 from ps_service.api.run_status import clear_stage, set_stage
+from ps_service.api.stage_failure_log import stage_failure_detail
 from ps_service.audit.emit import AuditTarget, record_follow_up_row, record_opening_row
 from ps_service.audit.errors import AuditTrailUnavailableError
+from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.config import missing_ingestion_config_fields
 from ps_service.ingestion.adapters.cellar_eli.adapter import CellarEliAdapter
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_rdf, fetch_xhtml
@@ -111,6 +114,12 @@ _RUN_ACTION = "ingestion_run"
 _STAGE_REASON_MAX_LEN = 300
 _INTERNAL_INGESTION_SOURCE_IDENTIFIER = "internal-document"
 _INTERNAL_RUN_AUDIT_TRIGGER = "internal_seed"
+_OWNER_REQUIRED_MESSAGE = (
+    "Ingesting a document that carries a Policy requires a signed-in user; the imported "
+    "policy tree is created as a draft owned by the ingesting caller."
+)
+Owner = tuple[str, str]
+"""A verified caller's ``(sub, iss)`` identity pair."""
 """Fixed ``source_identifier`` for every internal-ingestion ``_emit_run`` call
 (D7, issue #91) -- there is no filesystem path any more to use as this value,
 and the parsed document's own id is not known until after parsing (the
@@ -242,6 +251,7 @@ class MergeStage(Protocol):
         similarity_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
+        governance: GovernanceImport | None = None,
     ) -> MergeResult:
         """Merge one regulation's baseline graph into the single-tenant graph."""
         ...
@@ -387,7 +397,8 @@ def _classify_stage_failure(
     Returns:
         A :class:`PipelineStageError` whose ``reason`` is the scrubbed message
         for a whitelisted domain error, else a generic ``"<name> failed"`` --
-        with the full ``repr`` emitted server-side only (AC-BI-009).
+        with the scrubbed, truncated message and exception type emitted server-side only
+        (AC-BI-009/010, issue #227).
     """
     if is_safe_verbatim(exc):
         reason = _scrub_text(f"{type(exc).__name__}: {exc}")[:_STAGE_REASON_MAX_LEN]
@@ -397,7 +408,11 @@ def _classify_stage_failure(
             component=_COMPONENT,
             action=_RUN_ACTION,
             outcome="failed",
-            extra={"failing_stage": name, "detail": repr(exc)},
+            extra={
+                "failing_stage": name,
+                "exception_type": type(exc).__name__,
+                "detail": stage_failure_detail(exc),
+            },
             emitter=emitter,
         )
     return PipelineStageError(stage=name, reason=reason)
@@ -840,6 +855,10 @@ def _merge_summary(result: MergeResult) -> dict[str, int]:
         "new_obligations": result.new_obligation_count,
         "new_capabilities": result.new_capability_count,
         "matched_capabilities": result.matched_capability_count,
+        "governance_policies": result.governance_policies,
+        "governance_standards": result.governance_standards,
+        "governance_controls": result.governance_controls,
+        "governance_status_overridden": result.governance_status_overridden,
     }
 
 
@@ -1626,6 +1645,20 @@ def _read_internal_seed_and_short_name(
     return seed, short_name
 
 
+def _require_owner_for_policies(seed: InternalRegulationSeed, owner: Owner | None) -> None:
+    """Refuse a seed that carries a Policy when the caller has no verified identity (issue #227).
+
+    An imported Policy tree is created ``draft`` and owned by the ingesting caller (AC-BI-001);
+    without an owner the draft would be unreachable by the propose/edit flow. Runs before any
+    audit row, stage, or graph write. A seed with no Policy is not gated.
+
+    Raises:
+        InternalIngestOwnerRequiredError: ``owner`` is ``None`` and the seed holds a Policy.
+    """
+    if owner is None and any(node.label == "Policy" for node in seed.nodes):
+        raise InternalIngestOwnerRequiredError(_OWNER_REQUIRED_MESSAGE)
+
+
 def _require_graph_write_gateway(gateway: GroupSubmitter | None) -> GroupSubmitter:
     """Return ``gateway``, or raise if the service has none (issue #208, fail closed).
 
@@ -1679,7 +1712,7 @@ def _baseline_graph_name(short_name: str) -> str:
     return baseline_graph_name(short_name)
 
 
-def run_internal_ingestion_pipeline(
+def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators plus the caller identity; no natural grouping
     document: dict[str, object],
     *,
     config: ServiceConfig,
@@ -1688,6 +1721,7 @@ def run_internal_ingestion_pipeline(
     dependencies: PipelineDependencies,
     gateway: GroupSubmitter | None,
     system_audit: SystemAuditRecorder,
+    owner: Owner | None = None,
     emitter: LogEmitter | None = None,
 ) -> IngestionOutcome:
     """Run the internal-seed ingestion pipeline for one already-parsed document.
@@ -1729,6 +1763,8 @@ def run_internal_ingestion_pipeline(
             graph directly (issue #208).
         system_audit: Records the system audit row (actor ``system:ingestion``) the run's graph
             groups are logged under; the internal path has no principal of its own (issue #208).
+        owner: The ingesting caller's verified ``(sub, iss)``, or ``None`` with no verified
+            identity; a seed carrying a Policy is refused without it (issue #227).
         emitter: Optional explicit log emitter; otherwise the process default.
 
     Returns:
@@ -1738,6 +1774,8 @@ def run_internal_ingestion_pipeline(
     Raises:
         IngestionConfigIncompleteError: If the configuration is missing an
             LLM model / embed model / similarity threshold (HTTP 503).
+        InternalIngestOwnerRequiredError: The seed carries a Policy and ``owner`` is ``None``
+            (HTTP 401); nothing ran.
         GraphWriteUnavailableError: ``gateway`` is ``None`` (HTTP 503); nothing ran.
         AuditTrailUnavailableError: The system audit row could not be written (HTTP 503);
             nothing was written to any graph.
@@ -1763,6 +1801,7 @@ def run_internal_ingestion_pipeline(
     try:
         try:
             seed, short_name = _read_internal_seed_and_short_name(adapter, document)
+            _require_owner_for_policies(seed, owner)
             baseline_graph = dependencies.graphs.baseline(config, short_name)
             single_tenant_graph = dependencies.graphs.single_tenant(config)
             audit_event_id = _record_internal_run_audit(
@@ -1791,6 +1830,8 @@ def run_internal_ingestion_pipeline(
                     single_tenant_graph=single_tenant_graph,
                     embed_model=resolved.embed_model,
                     similarity_threshold=resolved.similarity_threshold,
+                    emitter=emitter,
+                    governance=GovernanceImport(owner=owner),
                 ),
                 emitter=emitter,
             )
@@ -1814,6 +1855,7 @@ def run_internal_ingestion_pipeline(
         caller=caller,
         emitter=emitter,
         duration_ms=_elapsed_ms(started),
+        audit_facts=dict(_merge_summary(merge_result)),
     )
     return IngestionOutcome(
         regulatory_instrument_id=rid,

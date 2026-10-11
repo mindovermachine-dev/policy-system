@@ -12,24 +12,42 @@ other route test in this package uses (``tests/api/_fakes.py``).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from company_merge._seed_merge_graphs import (
+    BaselineGraphReader,
+    OneHotEmbeddingCaller,
+    SingleTenantStore,
+)
 from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig, close_all_rigs
 
 from api._fakes import build_fake_pipeline_dependencies
 from api._gateway_fakes import RecordingSystemAudit, override_gateway
-from ps_service.api.dependencies import provide_pipeline_dependencies
+from ps_service.api.dependencies import get_principal, provide_pipeline_dependencies
+from ps_service.api.ingestion_orchestration import GraphOpeners, run_internal_ingestion_pipeline
+from ps_service.auth.models import Principal
+from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.config import ServiceConfig
+from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
+from ps_service.ingestion.adapters.internal_seed.persist import (
+    ingest_internal_regulatory_instrument,
+)
+from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from ps_service.api.ingestion_orchestration import PipelineDependencies
+    from api._fakes import MakeEmitter
+    from ps_service.api.ingestion_orchestration import GraphHandle, PipelineDependencies
+    from ps_service.company_merge.governance_import import GovernanceImport
+    from ps_service.company_merge.models import MergeResult
+    from ps_service.logging import LogEmitter
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REAL_SEED_DOCUMENT: dict[str, object] = json.loads(
@@ -93,29 +111,113 @@ def _close_gateway_rigs() -> Iterator[None]:  # pyright: ignore[reportUnusedFunc
     close_all_rigs()
 
 
-def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
+def _client_with_fake(fake_deps: PipelineDependencies, rig: GatewayRig | None = None) -> TestClient:
     """A ``TestClient`` whose pipeline dependencies are ``fake_deps``, over a gateway rig."""
-    rig = GatewayRig()  # the internal route fails closed without a gateway (issue #208)
+    rig = rig or GatewayRig()  # the internal route fails closed without a gateway (issue #208)
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
+    app.dependency_overrides[get_principal] = lambda: Principal(sub="owner-1", iss="https://idp")
     override_gateway(app, rig, RecordingSystemAudit(rig))
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_post_ingestions_internal_runs_real_pipeline() -> None:
-    """A well-formed internal request runs the real ``internal_ingestion`` and
-    ``merge`` stages (GH #76 removed the ``governance_derivation`` stage
-    outright -- Policy/Standard/Control are now authored directly in the
-    submitted document and minted by ``internal_ingestion`` itself; issue
-    #54 S4's ``merge`` stage still closes the loop to ``policy_system``).
+def _real_stage_dependencies(rig: GatewayRig, store: SingleTenantStore) -> PipelineDependencies:
+    """Fake dependencies whose internal stages are the REAL ones, over in-memory graphs.
 
-    ``content`` is the parsed ``engineering-practices-seed.json`` fixture
-    (B1), read from ``test-data/`` at test-collection time -- the fake
-    adapter delegates to the real, already-tested
-    ``InternalSeedIngestionAdapter.parse_seed`` so this test exercises real
-    schema/parse validation, while the persistence/merge stages themselves stay
-    faked (no real FalkorDB/LLM reached, matching every other route test in
-    this package).
+    ``internal_ingestion`` is the real ``ingest_internal_regulatory_instrument`` writing through
+    the rig's gateway into its ``{short}_baseline`` graph; ``merge`` is the real
+    ``merge_baseline_graph`` reading that graph back and writing into ``store`` (the
+    ``policy_system`` stand-in), with the embedding LLM as the only faked call. The catalog
+    stages stay fakes -- an internal request never reaches them.
+    """
+    base = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-1.0").dependencies
+    embedder = OneHotEmbeddingCaller()
+
+    def _merge(
+        regulatory_instrument_id: str,
+        *,
+        baseline_graph: GraphHandle,
+        single_tenant_graph: GraphHandle,
+        embed_model: str,
+        similarity_threshold: float | None,
+        emitter: LogEmitter | None = None,
+        governance: GovernanceImport | None = None,
+    ) -> MergeResult:
+        return merge_baseline_graph(
+            regulatory_instrument_id,
+            baseline_graph=baseline_graph,
+            single_tenant_graph=single_tenant_graph,
+            embed_model=embed_model,
+            similarity_threshold=similarity_threshold,
+            call_embedding=embedder,
+            emitter=emitter,
+            governance=governance,
+        )
+
+    return replace(
+        base,
+        graphs=GraphOpeners(
+            native=lambda _config, short_name: rig.graphs.open(native_graph_name(short_name)),
+            baseline=lambda _config, short_name: BaselineGraphReader(
+                rig.graphs.open(baseline_graph_name(short_name))
+            ),
+            single_tenant=lambda _config: store,
+        ),
+        stages=replace(
+            base.stages, ingest_internal=ingest_internal_regulatory_instrument, merge=_merge
+        ),
+    )
+
+
+def test_post_ingestions_internal_runs_real_pipeline(configured_logging: Path) -> None:
+    """A well-formed internal request runs the real ``internal_ingestion`` and ``merge`` stages.
+
+    Issue #227: ``content`` is the parsed ``engineering-practices-seed.json``; the seed is
+    ingested by the real ``internal_ingestion`` stage and merged by the real ``merge`` stage
+    (no faked merge any more), so the draft governance import is exercised end to end. The
+    caller is ``("owner-1", "https://idp")`` -- every stored Policy is ``draft`` and owned by
+    them (AC-BI-002), the tree is complete (AC-BI-004) and the merge summary reports its
+    counts (AC-BI-011).
+    """
+    del configured_logging  # the real merge logs through the process-default emitter
+    rig = GatewayRig()  # the internal route fails closed without a gateway (issue #208)
+    store = SingleTenantStore()
+    client = _client_with_fake(_real_stage_dependencies(rig, store), rig=rig)
+
+    response = client.post(
+        "/ingestions",
+        json={
+            "source": _ENVELOPE_CONTRACT["source"],
+            _ENVELOPE_CONTRACT["content_field_name"]: _REAL_SEED_DOCUMENT,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"]
+    assert body["regulatory_instrument_id"] == "ENGPRAC-1.0"
+    assert body["source"] == "internal"
+    assert body["outcome"] == "fresh"
+    assert [stage["stage"] for stage in body["stages"]] == ["internal_ingestion", "merge"]
+    assert all(stage["status"] == "succeeded" for stage in body["stages"])
+    policies = store.nodes_of("Policy")
+    assert len(policies) == 11
+    for policy in policies.values():
+        assert policy["status"] == "draft"
+        assert (policy["owner_subject"], policy["owner_issuer"]) == ("owner-1", "https://idp")
+    assert (len(store.nodes_of("Standard")), len(store.nodes_of("Control"))) == (21, 39)
+    merge_summary = body["stages"][1]["summary"]
+    assert merge_summary["governance_policies"] == 11
+    assert merge_summary["governance_standards"] == 21
+    assert merge_summary["governance_controls"] == 39
+    assert merge_summary["governance_status_overridden"] == 0
+
+
+def test_post_ingestions_internal_runs_stages_in_order() -> None:
+    """The internal pipeline runs ``internal_ingestion`` then ``merge`` and nothing else.
+
+    Stages are fakes here (the real-stage run is the test above); the catalog-only
+    already-merged pre-flight never queries the single-tenant graph (AC-BI-005, issue #135).
     """
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     client = _client_with_fake(fake.dependencies)
@@ -129,19 +231,41 @@ def test_post_ingestions_internal_runs_real_pipeline() -> None:
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["run_id"]
-    assert body["regulatory_instrument_id"] == "ENGPRAC-3.0"
-    assert body["source"] == "internal"
-    assert body["outcome"] == "fresh"
-    assert [stage["stage"] for stage in body["stages"]] == ["internal_ingestion", "merge"]
-    assert body["stages"][0]["status"] == "succeeded"
-    assert body["stages"][1]["status"] == "succeeded"
     assert fake.recorder.order == ["internal_ingestion", "merge"]
-    # AC-BI-005 (issue #135): the catalog-only already-merged pre-flight check
-    # never runs for source="internal" -- the single-tenant graph is never
-    # queried by anything but the (faked, no-op) merge stage.
     assert fake.single_tenant.calls == []
+
+
+def test_merge_stage_receives_the_caller_as_governance_owner() -> None:
+    """Issue #227: the pipeline hands the verified caller to the merge stage as the import owner."""
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies)
+
+    client.post("/ingestions", json={"source": "internal", "content": _REAL_SEED_DOCUMENT})
+
+    merge_call = next(call for call in fake.recorder.calls if call.stage == "merge")
+    assert merge_call.kwargs["governance_owner"] == ("owner-1", "https://idp")
+
+
+def test_merge_stage_receives_the_pipeline_emitter(make_emitter: MakeEmitter) -> None:
+    """Issue #227: the emitter the run was given reaches the merge stage."""
+    emitter, _log_path = make_emitter()
+    rig = GatewayRig()
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+
+    run_internal_ingestion_pipeline(
+        _REAL_SEED_DOCUMENT,
+        config=_app_config(),
+        run_id="run-1",
+        caller="test",
+        dependencies=fake.dependencies,
+        gateway=rig.gateway,
+        system_audit=RecordingSystemAudit(rig),
+        owner=("owner-1", "https://idp"),
+        emitter=emitter,
+    )
+
+    merge_call = next(call for call in fake.recorder.calls if call.stage == "merge")
+    assert merge_call.kwargs["emitter"] is emitter
 
 
 def test_post_ingestions_internal_summary_reports_policies_key() -> None:

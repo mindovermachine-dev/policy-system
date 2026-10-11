@@ -71,8 +71,6 @@ class _ScriptedFakeGraph:
         policy_rows: list[object] | None = None,
         standard_rows: list[object] | None = None,
         control_rows: list[object] | None = None,
-        standard_status_by_id: dict[str, str] | None = None,
-        control_status_by_id: dict[str, str] | None = None,
         governed_by_rows: list[object] | None = None,
         supported_by_rows: list[object] | None = None,
         implemented_by_rows: list[object] | None = None,
@@ -96,15 +94,6 @@ class _ScriptedFakeGraph:
         self._policy_rows = policy_rows or []
         self._standard_rows = standard_rows or []
         self._control_rows = control_rows or []
-        # issue #134, S29 (AC-BI-021): Standard/Control's lifecycle `status`
-        # is never a returned column (only `implementation_status` is), so
-        # unlike Policy (status IS a returned column, filtered directly off
-        # the row) this fake needs a separate id->status map to decide which
-        # scripted rows a real `WHERE n.status = 'approved'` would keep.
-        # Unmapped ids default to "approved" so every pre-existing test that
-        # never populates this map keeps its current (unfiltered) behavior.
-        self._standard_status_by_id = standard_status_by_id or {}
-        self._control_status_by_id = control_status_by_id or {}
         self._governed_by_rows = governed_by_rows or []
         self._supported_by_rows = supported_by_rows or []
         self._implemented_by_rows = implemented_by_rows or []
@@ -140,29 +129,12 @@ class _ScriptedFakeGraph:
             return _FakeQueryResult(self._mitigated_by_rows)
         if "[:VERIFIED_BY]" in q:
             return _FakeQueryResult(self._verified_by_rows)
-        if "(n:Policy)" in q:
-            # issue #134, S29: mirrors the real `WHERE n.status = 'approved'`
-            # (AC-BI-021, D-8) only when the query text actually carries it --
-            # pre-fix (no clause), every scripted row is returned unfiltered.
-            # Policy's `status` IS a returned column (index 2), so it is
-            # filtered directly off each row.
-            if "WHERE n.status = 'approved'" in q:
-                return _FakeQueryResult(
-                    [row for row in self._policy_rows if cast("list[object]", row)[2] == "approved"]
-                )
-            return _FakeQueryResult(self._policy_rows)
-        if "(n:Standard)" in q:
-            if "WHERE n.status = 'approved'" in q:
-                return _FakeQueryResult(
-                    self._filter_by_status(self._standard_rows, self._standard_status_by_id)
-                )
-            return _FakeQueryResult(self._standard_rows)
-        if "(n:Control)" in q:
-            if "WHERE n.status = 'approved'" in q:
-                return _FakeQueryResult(
-                    self._filter_by_status(self._control_rows, self._control_status_by_id)
-                )
-            return _FakeQueryResult(self._control_rows)
+        if "(n:Policy) RETURN n" in q:
+            return _FakeQueryResult(self._node_rows(self._policy_rows))
+        if "(n:Standard) RETURN n" in q:
+            return _FakeQueryResult(self._node_rows(self._standard_rows))
+        if "(n:Control) RETURN n" in q:
+            return _FakeQueryResult(self._node_rows(self._control_rows))
         if "(n:PracticeArea) RETURN" in q:
             return _FakeQueryResult(self._practice_area_rows)
         if "(n:RiskPath) RETURN" in q:
@@ -182,16 +154,11 @@ class _ScriptedFakeGraph:
         raise AssertionError(f"unexpected query issued: {q!r}")
 
     @staticmethod
-    def _filter_by_status(rows: list[object], status_by_id: dict[str, str]) -> list[object]:
-        """Standard/Control's lifecycle `status` is never a returned column
-        (only `implementation_status` is), so filtering happens against the
-        id->status side-table instead of the row itself. An id absent from
-        `status_by_id` defaults to `"approved"` (see `__init__`'s docstring).
-        """
+    def _node_rows(property_maps: list[object]) -> list[object]:
+        """Governance nodes are read whole (`RETURN n`): one single-node row per property map."""
         return [
-            row
-            for row in rows
-            if status_by_id.get(cast("str", cast("list[object]", row)[0]), "approved") == "approved"
+            [_FakeRegulatoryInstrumentNode(cast("dict[str, object]", props))]
+            for props in property_maps
         ]
 
 
@@ -464,41 +431,42 @@ def test_read_requirement_nodes_omits_role_id_when_absent() -> None:
 
 
 def test_reads_policy_standard_control_and_governance_edges() -> None:
-    """Issue #54, S4: `read_baseline_graph` reads Policy/Standard/Control
-    nodes and the `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` edges onto
+    """Issues #54 S4, #227: `read_baseline_graph` reads Policy/Standard/Control
+    nodes (whole, every property, whatever their `status`) and the
+    `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` edges onto
     `BaselineGraph.policy_nodes`/`standard_nodes`/`control_nodes`/
-    `governance_edges` -- reusing `BareEdge` for the governance edges (no
-    parallel `GovernanceEdge` type).
-
-    Policy status is `"approved"` (issue #134, S29's `WHERE n.status =
-    'approved'` filter, AC-BI-021 -- a `draft` Policy would no longer be
-    read back at all; that behavior has its own dedicated test below).
+    `governance_edges` -- reusing `BareEdge` for the governance edges.
     """
     graph = _empty_scripted_graph(
         capability_rows=[
             ["cap_engineering_review_abc", "Engineering Review Capability", 0.8, None, None]
         ],
         policy_rows=[
-            ["pol_engineering_practices_xyz", "Engineering Practices Policy", "approved", 0.9]
+            {
+                "id": "pol_engineering_practices_xyz",
+                "title": "Engineering Practices Policy",
+                "status": "draft",
+                "confidence": 0.9,
+                "embedding": [0.1],
+            }
         ],
         standard_rows=[
-            [
-                "std_pol_engineering_practices_xyz_v1",
-                "Code Review Standard",
-                "draft",
-                0.85,
-                "Peer review before merge",
-            ]
+            {
+                "id": "std_pol_engineering_practices_xyz_v1",
+                "title": "Code Review Standard",
+                "implementation_status": "draft",
+                "confidence": 0.85,
+                "description": "Peer review before merge",
+            }
         ],
         control_rows=[
-            [
-                "ctrl_std_pol_engineering_practices_xyz_v1_manual",
-                "manual",
-                "Peer Review Control",
-                "planned",
-                0.8,
-                None,
-            ]
+            {
+                "id": "ctrl_std_pol_engineering_practices_xyz_v1_manual",
+                "type": "manual",
+                "title": "Peer Review Control",
+                "implementation_status": "planned",
+                "confidence": 0.8,
+            }
         ],
         governed_by_rows=[["cap_engineering_review_abc", "pol_engineering_practices_xyz"]],
         supported_by_rows=[
@@ -519,7 +487,7 @@ def test_reads_policy_standard_control_and_governance_edges() -> None:
             id="pol_engineering_practices_xyz",
             properties={
                 "title": "Engineering Practices Policy",
-                "status": "approved",
+                "status": "draft",
                 "confidence": 0.9,
             },
         ),
@@ -565,69 +533,35 @@ def test_reads_policy_standard_control_and_governance_edges() -> None:
     )
 
 
-def test_policy_standard_control_reads_are_approved_only() -> None:
-    """Issue #134, S29 (AC-BI-021, D-8): `company_merge`'s Policy/Standard/
-    Control reads are approved-only, applied at the baseline READ (not at
-    merge-orchestration time). A baseline containing one fully-`approved`
-    Policy/Standard/Control tree and one fully-`draft` tree yields
-    `policy_nodes`/`standard_nodes`/`control_nodes` containing ONLY the
-    approved tree's ids -- the draft tree is excluded entirely, at every
-    level (Policy, Standard, Control).
+def test_policy_standard_control_reads_take_every_status() -> None:
+    """Issue #227 (AC-BI-012): the Policy/Standard/Control reads are not filtered on
+    `status`. A baseline holding an `approved` tree and a `draft` tree yields both,
+    at every level (Policy, Standard, Control) -- an internal seed's tree arrives
+    `draft`, and the approved-only read that dropped it is gone.
     """
     graph = _empty_scripted_graph(
         policy_rows=[
-            ["pol_approved_xyz", "Approved Policy", "approved", 0.9],
-            ["pol_draft_abc", "Draft Policy", "draft", 0.9],
+            {"id": "pol_approved_xyz", "title": "Approved Policy", "status": "approved"},
+            {"id": "pol_draft_abc", "title": "Draft Policy", "status": "draft"},
         ],
         standard_rows=[
-            [
-                "std_approved_xyz_v1",
-                "Approved Standard",
-                "in_progress",
-                0.85,
-                None,
-            ],
-            [
-                "std_draft_abc_v1",
-                "Draft Standard",
-                "in_progress",
-                0.85,
-                None,
-            ],
+            {"id": "std_approved_xyz_v1", "title": "Approved Standard", "status": "approved"},
+            {"id": "std_draft_abc_v1", "title": "Draft Standard", "status": "draft"},
         ],
-        standard_status_by_id={
-            "std_approved_xyz_v1": "approved",
-            "std_draft_abc_v1": "draft",
-        },
         control_rows=[
-            [
-                "ctrl_std_approved_xyz_v1_manual",
-                "manual",
-                "Approved Control",
-                "planned",
-                0.8,
-                None,
-            ],
-            [
-                "ctrl_std_draft_abc_v1_manual",
-                "manual",
-                "Draft Control",
-                "planned",
-                0.8,
-                None,
-            ],
+            {"id": "ctrl_approved_xyz_manual", "title": "Approved Control", "status": "approved"},
+            {"id": "ctrl_draft_abc_manual", "title": "Draft Control", "status": "draft"},
         ],
-        control_status_by_id={
-            "ctrl_std_approved_xyz_v1_manual": "approved",
-            "ctrl_std_draft_abc_v1_manual": "draft",
-        },
     )
 
     result = read_baseline_graph(graph, "REG-1.0")
 
-    assert [n.id for n in result.policy_nodes] == ["pol_approved_xyz"]
-    assert [n.id for n in result.standard_nodes] == ["std_approved_xyz_v1"]
-    assert [n.id for n in result.control_nodes] == ["ctrl_std_approved_xyz_v1_manual"]
+    assert [n.id for n in result.policy_nodes] == ["pol_approved_xyz", "pol_draft_abc"]
+    assert [n.id for n in result.standard_nodes] == ["std_approved_xyz_v1", "std_draft_abc_v1"]
+    assert [n.id for n in result.control_nodes] == [
+        "ctrl_approved_xyz_manual",
+        "ctrl_draft_abc_manual",
+    ]
 
 
 def test_external_baseline_yields_empty_governance_tuples() -> None:
@@ -656,7 +590,7 @@ def test_reads_practice_area_and_risk_path_nodes() -> None:
     onto `BaselineGraph.practice_area_nodes`/`risk_path_nodes`, omitting
     `description`/`version`/`owner_id` (PracticeArea) or `description`/
     `risk_type`/`version` (RiskPath) from `properties` when the query
-    returns them as `NULL` -- mirroring `_read_standard_nodes`'s "optional
+    returns them as `NULL` -- with an "optional
     description" shape.
     """
     graph = _empty_scripted_graph(

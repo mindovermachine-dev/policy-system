@@ -81,6 +81,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from fastapi.testclient import TestClient
 
+from ps_service.api.dependencies import get_principal
+from ps_service.auth.models import Principal
 from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
 from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
@@ -255,6 +257,11 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_InternalCaps
     facade.configure(log_path=tmp_path_factory.mktemp("api_internal_capstone") / "capstone.jsonl")
 
     app = create_app(load_config())
+    # Issue #227: a Policy-bearing seed needs a verified caller, who then owns the imported
+    # draft tree; the override stands in for the sign-in a deployed service performs.
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        sub="capstone-owner", iss="https://idp.example"
+    )
 
     try:
         client = TestClient(app, raise_server_exceptions=False)

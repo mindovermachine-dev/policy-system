@@ -2,10 +2,10 @@
 
 The top-level orchestration (PLAN_REVIEWED.md §7, §10 Increments 13-14) that
 wires `graph_reader.read_baseline_graph`, `dedup.dedupe_canonical_nodes`
-(Capability, and since issue #54's S4, Policy), and every `graph_writer`
-function together.
+(Capability), `governance_import.import_draft_governance` and every
+`graph_writer` function together.
 
-Flow (§7, extended by #54 S4's item 3a):
+Flow (§7, with the governance import of issue #227 as item 3a):
 
 0. B1's fix, enforced first, before anything else runs: if
    `similarity_threshold is None`, raise `CompanyMergeConfigurationError` --
@@ -18,12 +18,13 @@ Flow (§7, extended by #54 S4's item 3a):
 3. Persist RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` and
    Obligation (unconditional `SET`); persist canonical Capability nodes for
    every `match_kind="new"` resolution (`ON CREATE SET`).
-3a. (#54, S4) If `graph.policy_nodes` is non-empty (an internal-sourced
-    baseline): dedupe Policy nodes the same way Capability was deduped
-    above, persist canonical Policy nodes, and persist Standard/Control as
-    unconditional-`SET` passthrough nodes (weak entities, never deduped).
-    An external-sourced baseline (`graph.policy_nodes == ()`) skips this
-    step entirely -- a structural no-op.
+3a. (#227) If the baseline carries a Policy/Standard/Control tree (an
+    internal-sourced baseline), `governance_import.import_draft_governance`
+    writes it as `draft`, owned by `governance.owner`, create-only and never
+    converged onto an existing Policy -- the same function restore calls.
+    An external-sourced baseline skips this step (a structural no-op); an
+    internal one with no owner raises `GovernanceOwnerRequiredError` before
+    any governance write.
 3b. (#106) Persist PracticeArea/RiskPath nodes as `ON CREATE SET`
     passthrough, then validate every `COVERS`/`OWNS`/`MITIGATED_BY`/
     `VERIFIED_BY` edge endpoint exists (AC-BI-008) before any of those four
@@ -35,10 +36,9 @@ Flow (§7, extended by #54 S4's item 3a):
    `IMPLEMENTED_BY`/`COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY` edges in one
    `persist_rewired_edges` call, using the combined Capability+Policy
    canonical-id mapping (a `REQUIRES`/`COVERS`/`MITIGATED_BY` edge's
-   Capability target and a `GOVERNED_BY`/`OWNS` edge's Policy target are
-   rewritten -- see `graph_writer.persist_rewired_edges`); then backfill
-   Capability (and, if step 3a ran, Policy) embeddings onto the
-   single-tenant graph's canonical nodes, and (issue #31) any
+   Capability target is rewritten; a Policy maps onto itself -- see
+   `graph_writer.persist_rewired_edges`); then backfill Capability
+   embeddings onto the single-tenant graph's canonical nodes, and (issue #31) any
    freshly-computed INCOMING Capability embeddings back onto this
    regulation's own `{short}_baseline` graph
    (`graph_writer.backfill_incoming_capability_embeddings`).
@@ -47,19 +47,14 @@ Flow (§7, extended by #54 S4's item 3a):
    `extra=graph_writer.classification_write_counts(graph)`. No
    `bind_run_context()` self-bind here -- `run_id` is whatever the caller
    already bound, or `None`.
-6. Emit one additional log entry per Capability (and Policy) dedup decision
+6. Emit one additional log entry per Capability dedup decision
    (AC-007): one per `CanonicalResolution`, outcome=`match_kind`; one per
    `NearMissPair`, outcome="near_miss".
 7. Return `MergeResult`.
 
-If step 2 (or 3a's Policy dedup) raises (`LlmProviderError` from an
-embedding call), the exception propagates unchanged. For step 2, no write
-has yet occurred at all, satisfying "abort with no partial write" as a
-structural property of call order. For 3a's Policy dedup, per PLAN.md §6 S4
-this pass deliberately runs AFTER the Capability writes already landed --
-so a Policy-dedup failure after step 3 leaves the Capability writes in
-place; `dedupe_canonical_nodes` itself never issues a write call of its own
-either way (see `dedup.py`'s own docstring).
+If step 2 raises (`LlmProviderError` from an embedding call), the exception
+propagates unchanged, with no write yet made, satisfying "abort with no
+partial write" as a structural property of call order.
 
 `DedupeCanonicalNodes` is not exposed as its own separately-invocable public
 action alongside `merge_baseline_graph`, per the CA doc's exact wording
@@ -71,8 +66,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ps_service.company_merge import dedup, graph_reader, graph_writer, obligation_redirect
+from ps_service.company_merge import (
+    dedup,
+    governance_import,
+    graph_reader,
+    graph_writer,
+    obligation_redirect,
+)
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
+from ps_service.company_merge.governance_import import GovernanceImport, governance_count_fields
 from ps_service.company_merge.models import MergeResult
 from ps_service.company_merge.pending_review import persist_pending_reviews
 from ps_service.logging import LogEmitter, emit_log_entry
@@ -87,55 +89,6 @@ __all__ = ["merge_baseline_graph"]
 _COMPONENT = "company_merge"
 _MERGE_ACTION = "merge_baseline_graph"
 _DEDUP_ACTION = "dedupe_canonical_nodes"
-
-
-def _run_policy_pass(
-    graph: BaselineGraph,
-    *,
-    single_tenant_graph: GraphHandle,
-    embed_model: str,
-    similarity_threshold: float,
-    call_embedding: EmbeddingCaller | None,
-    emitter: LogEmitter | None,
-    canonical_id_by_incoming_id: dict[str, str],
-) -> DedupResult | None:
-    """Issue #54, S4's Policy convergence + Standard/Control passthrough pass.
-
-    A no-op (returns `None`, no calls of any kind) when `graph.policy_nodes`
-    is empty -- an external-sourced baseline. Otherwise: dedupe Policy nodes
-    the same way Capability was deduped by the caller, persist canonical
-    Policy nodes, persist Standard/Control as unconditional-`SET` passthrough
-    nodes (weak entities, never deduped), and fold the Policy resolutions
-    into `canonical_id_by_incoming_id` (mutated in place) so the caller's
-    single `persist_rewired_edges` call covers both Capability and Policy
-    endpoints. Extracted from `merge_baseline_graph` to keep its own
-    cyclomatic complexity within L1's budget.
-    """
-    if not graph.policy_nodes:
-        return None
-
-    policy_dedup = dedup.dedupe_canonical_nodes(
-        graph.policy_nodes,
-        kind="Policy",
-        single_tenant_graph=single_tenant_graph,
-        model=embed_model,
-        threshold=similarity_threshold,
-        call_embedding=call_embedding,
-        emitter=emitter,
-    )
-    graph_writer.persist_canonical_nodes(
-        single_tenant_graph,
-        graph.policy_nodes,
-        policy_dedup.resolutions,
-        kind="Policy",
-    )
-    graph_writer.persist_standard_and_control_passthrough(
-        single_tenant_graph, graph.standard_nodes, graph.control_nodes
-    )
-    canonical_id_by_incoming_id.update(
-        {resolution.incoming_id: resolution.canonical_id for resolution in policy_dedup.resolutions}
-    )
-    return policy_dedup
 
 
 def _persist_classification_passthrough(
@@ -155,8 +108,8 @@ def _persist_classification_passthrough(
     returns immediately when `classification_edges` is empty (no endpoints
     to resolve).
 
-    `canonical_id_by_incoming_id` (mutated in place by the Capability/Policy
-    passes above) is passed straight through to
+    `canonical_id_by_incoming_id` (mutated in place by the Capability pass and the
+    draft-governance import above) is passed straight through to
     `validate_classification_edge_endpoints` (AC-BI-008): a `COVERS`/
     `MITIGATED_BY` edge's Capability target or an `OWNS` edge's Policy
     target already has an entry there when it was dedup-resolved; every
@@ -172,16 +125,8 @@ def _persist_classification_passthrough(
     )
 
 
-def _log_dedup_decisions(dedup_result: DedupResult | None, *, emitter: LogEmitter | None) -> None:
-    """Emit one log entry per `CanonicalResolution` and per `NearMissPair` (AC-007).
-
-    A no-op when `dedup_result` is `None` -- the Policy pass never ran
-    (external-sourced baseline). Shared between the Capability and Policy
-    passes so `merge_baseline_graph` itself carries no per-kind branching for
-    this step.
-    """
-    if dedup_result is None:
-        return
+def _log_dedup_decisions(dedup_result: DedupResult, *, emitter: LogEmitter | None) -> None:
+    """Emit one log entry per `CanonicalResolution` and per `NearMissPair` (AC-007)."""
     for resolution in dedup_result.resolutions:
         emit_log_entry(
             component=_COMPONENT,
@@ -200,27 +145,6 @@ def _log_dedup_decisions(dedup_result: DedupResult | None, *, emitter: LogEmitte
         )
 
 
-def _finish_policy_pass(
-    single_tenant_graph: GraphHandle,
-    policy_dedup: DedupResult | None,
-    *,
-    emitter: LogEmitter | None,
-) -> None:
-    """Backfill Policy embeddings and log Policy dedup decisions; a no-op if no Policy pass ran."""
-    if policy_dedup is None:
-        return
-    graph_writer.backfill_canonical_embeddings(
-        single_tenant_graph,
-        kind="Policy",
-        embeddings=policy_dedup.embedding_backfills,
-    )
-    _log_dedup_decisions(policy_dedup, emitter=emitter)
-    # issue #35, Slice 1 (AC-BI-001/AC-BI-002): persist a PendingReview node
-    # for every Policy near-miss, at the same point its own decision is
-    # already logged -- never logged without also being persisted.
-    persist_pending_reviews(single_tenant_graph, policy_dedup.near_misses, kind="Policy")
-
-
 def merge_baseline_graph(
     regulatory_instrument_id: str,
     *,
@@ -230,6 +154,7 @@ def merge_baseline_graph(
     similarity_threshold: float | None,
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
+    governance: GovernanceImport | None = None,
 ) -> MergeResult:
     """Merge one regulation's `{short}_baseline` graph into `single_tenant_graph`.
 
@@ -245,6 +170,13 @@ def merge_baseline_graph(
     duplicate's edges are rewired onto it. See `graph_writer.py` for the
     `ON CREATE SET`/`WHERE n.embedding IS NULL` mechanisms that make this a
     database-engine guarantee, not application-logic discipline.
+
+    `governance` (issue #227) carries the ingesting caller's `owner` for the
+    Policy/Standard/Control tree of an internal-sourced baseline, which is
+    imported as `draft` by `import_draft_governance` (the function restore
+    also calls). It defaults to an ownerless `GovernanceImport`, so such a
+    baseline fails closed with `GovernanceOwnerRequiredError`; an external
+    baseline never reads it.
     """
     if similarity_threshold is None:
         raise CompanyMergeConfigurationError(
@@ -254,6 +186,7 @@ def merge_baseline_graph(
         )
 
     graph = graph_reader.read_baseline_graph(baseline_graph, regulatory_instrument_id)
+    governance = governance or GovernanceImport()
 
     capability_dedup = dedup.dedupe_canonical_nodes(
         graph.capability_nodes,
@@ -307,26 +240,22 @@ def merge_baseline_graph(
     }
     canonical_id_by_incoming_id.update(obligation_redirects)
 
-    # issue #54, S4 -- the Policy convergence + Standard/Control passthrough
-    # pass, a structural no-op for an external-sourced baseline (empty
-    # policy_nodes): no Policy dedup read, no Standard/Control write, no
-    # Policy entries folded into the rewiring mapping. Mirrors the
-    # Capability pass above exactly; extracted to `_run_policy_pass` to keep
-    # this function's own cyclomatic complexity within budget.
-    policy_dedup = _run_policy_pass(
-        graph,
-        single_tenant_graph=single_tenant_graph,
-        embed_model=embed_model,
-        similarity_threshold=similarity_threshold,
-        call_embedding=call_embedding,
-        emitter=emitter,
-        canonical_id_by_incoming_id=canonical_id_by_incoming_id,
+    # issue #227 -- the shared draft-governance import (the same function restore calls): a
+    # structural no-op for an external-sourced baseline, otherwise Policy/Standard/Control
+    # written `draft`, owned by the caller, create-only, never converged.
+    governance_counts = governance_count_fields(
+        governance_import.import_draft_governance(
+            graph,
+            single_tenant_graph=single_tenant_graph,
+            governance=governance,
+            canonical_id_by_incoming_id=canonical_id_by_incoming_id,
+        )
     )
 
     # issue #106 -- PracticeArea/RiskPath node passthrough, a structural
     # no-op for a baseline with no classification-layer content. Runs after
-    # Capability/Policy dedup+writes complete and before the edge rewiring
-    # call below, mirroring the Policy pass's own placement.
+    # Capability dedup and the governance import complete and before the edge rewiring
+    # call below, mirroring the governance import's own placement.
     _persist_classification_passthrough(single_tenant_graph, graph, canonical_id_by_incoming_id)
 
     # One rewiring call over the regulatory-spine edges, the governance
@@ -353,7 +282,6 @@ def merge_baseline_graph(
         baseline_graph,
         embeddings=capability_dedup.incoming_embedding_backfills,
     )
-    _finish_policy_pass(single_tenant_graph, policy_dedup, emitter=emitter)
 
     new_capability_count = sum(1 for r in capability_dedup.resolutions if r.match_kind == "new")
     matched_capability_count = len(capability_dedup.resolutions) - new_capability_count
@@ -367,6 +295,7 @@ def merge_baseline_graph(
             "new_obligations": new_obligation_count,
             "new_capabilities": new_capability_count,
             "matched_capabilities": matched_capability_count,
+            **governance_counts,
         },
         emitter=emitter,
     )
@@ -377,25 +306,14 @@ def merge_baseline_graph(
     # already logged -- never logged without also being persisted.
     persist_pending_reviews(single_tenant_graph, capability_dedup.near_misses, kind="Capability")
 
-    # issue #35, Slice 5 (AC-BI-010): the run-scoped PendingReview count --
-    # exactly the number of persist_pending_reviews CREATE writes issued
-    # above (both call sites), across whichever pass(es) ran this call.
-    pending_review_count = len(capability_dedup.near_misses) + (
-        len(policy_dedup.near_misses) if policy_dedup is not None else 0
-    )
-
     return MergeResult(
         regulatory_instrument_id=regulatory_instrument_id,
         obligation_ids=tuple(node.id for node in graph.obligation_nodes),
         capability_canonical_ids=tuple(r.canonical_id for r in capability_dedup.resolutions),
         near_misses=capability_dedup.near_misses,
-        policy_canonical_ids=(
-            tuple(r.canonical_id for r in policy_dedup.resolutions)
-            if policy_dedup is not None
-            else ()
-        ),
-        pending_review_count=pending_review_count,
+        pending_review_count=len(capability_dedup.near_misses),
         new_capability_count=new_capability_count,
         matched_capability_count=matched_capability_count,
         new_obligation_count=new_obligation_count,
+        **governance_counts,
     )

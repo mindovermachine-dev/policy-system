@@ -77,6 +77,8 @@ partial file is ever accepted.
 |---|---|
 | `RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`, `Capability`, `Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath` | `DEFINES`, `EXPRESSES`, `HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`, `IMPLEMENTED_BY`, `COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY` |
 
+Everything under `Policy`, `Standard` and `Control` is imported as a `draft` tree owned by the user who ingests the file, and ingesting a file that contains a Policy requires a signed-in user. Existing nodes, including approved ones, are never changed by re-ingesting. See the [User Guide](./user-guide.md#running-commands).
+
 `Policy`, `Standard`, and `Control` are **authored by you**, not derived — see the
 [`Policy`](#policy), [`Standard`](#standard), and [`Control`](#control) node references and the
 [`GOVERNED_BY`](#edge-reference)/[`SUPPORTED_BY`](#edge-reference)/
@@ -168,7 +170,7 @@ organizational commitment your Capabilities are governed by.
 | Property | Required | Notes |
 |---|---|---|
 | `title` | Yes | e.g. `"Access Control Policy"` |
-| `status` | Yes | `draft` \| `approved` \| `deprecated` — use `draft` for a first submission |
+| `status` | Yes | `draft` \| `approved` \| `deprecated` — informational only: the imported Policy is always created `draft`, whatever you submit. Use `draft` for a first submission |
 | `description` | No | |
 | `owner_id` | No | An identifier for the person/team accountable for this Policy, if useful |
 | `version` | No | |
@@ -188,7 +190,7 @@ enough to build and verify. Every `Standard` must support exactly one `Policy` (
 | Property | Required | Notes |
 |---|---|---|
 | `title` | Yes | e.g. `"Access Control Standard"` |
-| `implementation_status` | Yes | `draft` \| `implemented` \| `reviewed` \| `deprecated` — use `draft` for a first submission |
+| `implementation_status` | Yes | `draft` \| `implemented` \| `reviewed` \| `deprecated` — use `draft` for a first submission. The imported Standard's governance `status` is always `draft`; this property is kept as you wrote it |
 | `description` | No | |
 | `version` | No | |
 

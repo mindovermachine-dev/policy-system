@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter
 
+from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import (
     capability_id,
@@ -145,17 +146,24 @@ class _ScriptedBaselineGraph:
             return _FakeQueryResult(self._supported_by_rows)
         if "[:IMPLEMENTED_BY]" in q:
             return _FakeQueryResult(self._implemented_by_rows)
-        if "(n:Policy)" in q:
-            # issue #134, S29: `_POLICY_QUERY` gained `WHERE n.status =
-            # 'approved'` (AC-BI-021, D-8) -- this fake does not model that
-            # filter (out of scope for the tests in this file; the filter
-            # itself is proven in test_graph_reader.py), so dispatch matches
-            # on the label alone and returns every scripted row unfiltered.
-            return _FakeQueryResult(self._policy_rows)
-        if "(n:Standard)" in q:
-            return _FakeQueryResult(self._standard_rows)
-        if "(n:Control)" in q:
-            return _FakeQueryResult(self._control_rows)
+        if "(n:Policy) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(self._policy_rows, ("id", "title", "status", "confidence"))
+            )
+        if "(n:Standard) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(
+                    self._standard_rows,
+                    ("id", "title", "implementation_status", "confidence", "description"),
+                )
+            )
+        if "(n:Control) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(
+                    self._control_rows,
+                    ("id", "type", "title", "implementation_status", "confidence", "description"),
+                )
+            )
         if "(n:PracticeArea) RETURN" in q:
             return _FakeQueryResult([])
         if "(n:RiskPath) RETURN" in q:
@@ -187,6 +195,25 @@ class _ScriptedBaselineGraph:
                 row[4] = params["embedding"]
             return _FakeQueryResult([])
         raise AssertionError(f"unexpected query issued: {q!r}")
+
+    @staticmethod
+    def _node_rows(rows: list[object], keys: tuple[str, ...]) -> list[object]:
+        """Governance nodes are read whole (`RETURN n`): one single-node row per scripted row.
+
+        The scripted rows keep their column order; a `None` column is an absent property.
+        """
+        return [
+            [
+                _FakeRegulatoryInstrumentNode(
+                    {
+                        key: value
+                        for key, value in zip(keys, cast("list[object]", row), strict=True)
+                        if value is not None
+                    }
+                )
+            ]
+            for row in rows
+        ]
 
 
 class _TraversableSingleTenantGraph:
@@ -374,9 +401,11 @@ def test_uc3_capability_policy_standard_control_query_returns_real_rows(
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        governance=GovernanceImport(owner=("sub-1", "https://issuer.example")),
     )
 
-    assert result.policy_canonical_ids == (policy_id("Engineering Practices Policy"),)
+    assert result.governance_policies == 1
+    assert policy_id("Engineering Practices Policy") in single_tenant.nodes["Policy"]
 
     query_result = single_tenant.query(_UC3_QUERY)
     rows = query_result.result_set

@@ -105,21 +105,8 @@ _REQUIRES_QUERY = "MATCH (s:Obligation)-[:REQUIRES]->(t:Capability) RETURN s.id,
 
 # issue #54, S4 -- Policy/Standard/Control + governance edges. Empty result
 # sets for an external-sourced baseline (DeriveGovernanceArtifacts never ran).
-# issue #134, S29 (AC-BI-021, D-8) -- approved-only filter applied at the read,
-# not at merge-orchestration time: a draft/proposed/deprecated tree is silently
-# excluded from `company_merge` until its `status` reaches `"approved"`.
-_POLICY_QUERY = (
-    "MATCH (n:Policy) WHERE n.status = 'approved' RETURN n.id, n.title, n.status, n.confidence"
-)
-_STANDARD_QUERY = (
-    "MATCH (n:Standard) WHERE n.status = 'approved' RETURN n.id, n.title, "
-    "n.implementation_status, n.confidence, n.description"
-)
-_CONTROL_QUERY = (
-    "MATCH (n:Control) WHERE n.status = 'approved' RETURN n.id, n.type, n.title, "
-    "n.implementation_status, n.confidence, n.description"
-)
-# issue #183 -- restore's draft-governance read: every authored node, no `status` filter.
+# issue #227 -- the governance read takes every authored node, whatever its `status`:
+# an imported tree arrives `draft` and is written through the shared draft import.
 _POLICY_ALL_QUERY = "MATCH (n:Policy) RETURN n"
 _STANDARD_ALL_QUERY = "MATCH (n:Standard) RETURN n"
 _CONTROL_ALL_QUERY = "MATCH (n:Control) RETURN n"
@@ -201,8 +188,6 @@ class _RegulatoryInstrumentNode(Protocol):
 def read_baseline_graph(
     baseline_graph: GraphHandle,
     regulatory_instrument_id: str,
-    *,
-    draft_governance: bool = False,
 ) -> BaselineGraph:
     """Read one regulation's complete `{short}_baseline` graph.
 
@@ -218,11 +203,9 @@ def read_baseline_graph(
     every edge collection that would otherwise reference them -- with no
     exception raised.
 
-    `draft_governance` (issue #183, restore only) swaps the approved-only
-    Policy/Standard/Control reads (AC-BI-021, D-8 -- what the live
-    ingestion-to-merge path needs) for `_read_governance_nodes`, which reads
-    every authored node regardless of `status` and carries every property.
-    The default keeps the live-path behaviour byte-for-byte unchanged.
+    Policy/Standard/Control nodes are read at every `status` with every
+    property (`_read_governance_nodes`): the imported tree arrives `draft`
+    (issues #183, #227) and is written by `governance_import`.
     """
     regulatory_instrument_properties = _read_regulatory_instrument_properties(
         baseline_graph, regulatory_instrument_id
@@ -233,14 +216,9 @@ def read_baseline_graph(
     capability_nodes = _read_capability_nodes(baseline_graph)
     provenance_edges = _read_provenance_edges(baseline_graph, regulatory_instrument_id)
     bare_edges = _read_bare_edges(baseline_graph)
-    if draft_governance:
-        policy_nodes = _read_governance_nodes(baseline_graph, _POLICY_ALL_QUERY)
-        standard_nodes = _read_governance_nodes(baseline_graph, _STANDARD_ALL_QUERY)
-        control_nodes = _read_governance_nodes(baseline_graph, _CONTROL_ALL_QUERY)
-    else:
-        policy_nodes = _read_policy_nodes(baseline_graph)
-        standard_nodes = _read_standard_nodes(baseline_graph)
-        control_nodes = _read_control_nodes(baseline_graph)
+    policy_nodes = _read_governance_nodes(baseline_graph, _POLICY_ALL_QUERY)
+    standard_nodes = _read_governance_nodes(baseline_graph, _STANDARD_ALL_QUERY)
+    control_nodes = _read_governance_nodes(baseline_graph, _CONTROL_ALL_QUERY)
     governance_edges = _read_governance_edges(baseline_graph)
     practice_area_nodes = _read_practice_area_nodes(baseline_graph)
     risk_path_nodes = _read_risk_path_nodes(baseline_graph)
@@ -467,98 +445,11 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
     return tuple(edges)
 
 
-def _read_policy_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every `approved` Policy node (issue #54, S4; issue #134, S29).
-
-    Empty for an external-sourced baseline. Properties are
-    `title`/`status`/`confidence` -- never optional, mirroring
-    `_read_role_nodes`'s own "no optional fields" shape (`DeriveGovernanceArtifacts`
-    always sets all three at mint time). `_POLICY_QUERY`'s `WHERE n.status =
-    'approved'` (AC-BI-021, D-8) excludes `draft`/`proposed`/`deprecated`
-    Policy nodes from every read -- `status` here is therefore always
-    `"approved"`.
-    """
-    result = baseline_graph.query(_POLICY_QUERY)
-    rows = cast("list[list[object]]", result.result_set)
-    nodes: list[BaselineNode] = []
-    for row in rows:
-        node_id, title, status, confidence = row
-        nodes.append(
-            BaselineNode(
-                id=cast("str", node_id),
-                properties={
-                    "title": cast("str", title),
-                    "status": cast("str", status),
-                    "confidence": cast("float", confidence),
-                },
-            )
-        )
-    return tuple(nodes)
-
-
-def _read_standard_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every `approved` Standard node (issue #54, S4; issue #134, S29).
-
-    Empty for an external-sourced baseline. Properties are
-    `title`/`implementation_status`/`confidence` and, when set, `description`
-    -- mirroring `_read_capability_nodes`'s own "optional description" shape.
-    `_STANDARD_QUERY`'s `WHERE n.status = 'approved'` (AC-BI-021, D-8) filters
-    on the Standard's own lifecycle `status` property (distinct from
-    `implementation_status`, which is never filtered on).
-    """
-    result = baseline_graph.query(_STANDARD_QUERY)
-    rows = cast("list[list[object]]", result.result_set)
-    nodes: list[BaselineNode] = []
-    for row in rows:
-        node_id, title, implementation_status, confidence, description = row
-        properties: dict[str, str | float] = {
-            "title": cast("str", title),
-            "implementation_status": cast("str", implementation_status),
-            "confidence": cast("float", confidence),
-        }
-        if description is not None:
-            properties["description"] = cast("str", description)
-        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
-    return tuple(nodes)
-
-
-def _read_control_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every `approved` Control node (issue #54, S4; issue #134, S29).
-
-    Empty for an external-sourced baseline. Properties are
-    `type`/`title`/`implementation_status`/`confidence` and, when set,
-    `description` -- mirroring `_read_capability_nodes`'s own "optional
-    description" shape. The four AC-BI-017 operational fields
-    (`execution_frequency`/`last_test_date`/`next_review_date`/
-    `evidence_ref`) are never written at mint time, so they are never present
-    to read back here either -- no special handling needed.
-    `_CONTROL_QUERY`'s `WHERE n.status = 'approved'` (AC-BI-021, D-8) filters
-    on the Control's own lifecycle `status` property (distinct from
-    `implementation_status`, which is never filtered on).
-    """
-    result = baseline_graph.query(_CONTROL_QUERY)
-    rows = cast("list[list[object]]", result.result_set)
-    nodes: list[BaselineNode] = []
-    for row in rows:
-        node_id, control_type, title, implementation_status, confidence, description = row
-        properties: dict[str, str | float] = {
-            "type": cast("str", control_type),
-            "title": cast("str", title),
-            "implementation_status": cast("str", implementation_status),
-            "confidence": cast("float", confidence),
-        }
-        if description is not None:
-            properties["description"] = cast("str", description)
-        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
-    return tuple(nodes)
-
-
 def _read_governance_nodes(baseline_graph: GraphHandle, query: str) -> tuple[BaselineNode, ...]:
     """Read every Policy/Standard/Control node `query` returns, whatever its `status` (issue #183).
 
-    Unlike `_read_policy_nodes`/`_read_standard_nodes`/`_read_control_nodes`
-    (the live path's approved-only, field-by-field reads), this returns each
-    node's full property map so a restored draft keeps its authored content.
+    Returns each node's full property map so an imported draft keeps its
+    authored content.
     `id` is the node identity and `embedding` is carried separately (restore
     reads the artifact-supplied vectors off the parsed blob), so neither is
     left in `properties`. Only scalar properties are kept -- the node
@@ -631,7 +522,7 @@ def _read_practice_area_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode
     """Read every PracticeArea node (issue #106). Empty for a baseline with no authored content.
 
     Properties are `name`/`status` (required) and, when set, `description`/
-    `version`/`owner_id` -- mirroring `_read_standard_nodes`'s "optional
+    `version`/`owner_id` -- with an "optional
     description" shape (`ps-domain-concepts.md`'s PracticeArea section).
     """
     result = baseline_graph.query(_PRACTICE_AREA_QUERY)

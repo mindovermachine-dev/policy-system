@@ -36,13 +36,17 @@ sequence above completes), and `"failed"` (whenever anything after
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
 from ps_service.company_merge import graph_reader, graph_writer, obligation_redirect
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
 from ps_service.company_merge.falkordb_client import (
     select_graph as select_company_merge_graph,
+)
+from ps_service.company_merge.governance_import import (
+    GovernanceImport,
+    governance_count_fields,
+    import_draft_governance,
 )
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.falkordb_connection import raw_connection
@@ -65,8 +69,6 @@ from ps_service.restore.staging import (
 if TYPE_CHECKING:
     from falkordb import FalkorDB
 
-    from ps_service.company_merge.falkordb_client import GraphHandle
-    from ps_service.company_merge.models import BaselineGraph, GovernanceDraftCounts
     from ps_service.export.models import SerializedGraph
     from ps_service.logging.emitter import LogEmitter
     from ps_service.restore.models import RestoreArtifact
@@ -229,80 +231,10 @@ def _capability_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[f
 def _policy_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[float, ...]]:
     """Extract every Policy node's artifact-supplied embedding (D7), keyed by id.
 
-    Issue #54, S6 -- restore's Policy-convergence counterpart to
-    `_capability_embeddings`. See `_embeddings_by_label`.
+    The vectors stored on the imported draft Policies (issue #183), the
+    counterpart to `_capability_embeddings`. See `_embeddings_by_label`.
     """
     return _embeddings_by_label(baseline_graph, "Policy")
-
-
-@dataclass(frozen=True, slots=True)
-class GovernanceImport:
-    """The restore-only inputs the draft-governance pass needs (issue #183).
-
-    `owner` is the restoring caller's verified `(sub, iss)` pair -- the owner of
-    every imported draft Policy (`None` when no verified identity exists, in
-    which case governance content is refused). `policy_embeddings` are the
-    artifact-supplied Policy vectors (by id), stored on the draft so later Policy
-    convergence on ingest still has them. Bundled so `_run_baseline_merge`
-    keeps a bounded parameter count.
-    """
-
-    owner: tuple[str, str] | None = None
-    policy_embeddings: dict[str, tuple[float, ...]] = field(default_factory=dict)
-
-
-def _run_draft_governance_pass(
-    baseline: BaselineGraph,
-    *,
-    snapshot_graph: GraphHandle,
-    governance: GovernanceImport,
-    canonical_id_by_incoming_id: dict[str, str],
-) -> dict[str, int]:
-    """Issue #183: import a restored instrument's Policy/Standard/Control tree as `draft`.
-
-    Replaces the earlier Policy *convergence* pass (issue #54, S6, AC-BI-021):
-    a restored tree has not been through the customer's governance, so it is
-    written `draft`, owned by `owner`, each node under its own content-hashed
-    id (`graph_writer.persist_governance_drafts`) -- never converged onto an
-    existing canonical Policy, whose draft Standards/Controls would otherwise
-    hang under a possibly-approved parent. The live ingestion-to-merge path
-    (`merge.py`) keeps its convergence; only restore changes.
-
-    A structural no-op (zero writes, all-zero counts) when `baseline` has no
-    governance content -- an external-sourced restore. Otherwise `owner` must be
-    set (`RestoreOwnerRequiredError`: an ownerless draft would be unreachable
-    by the propose/edit flow).
-
-    Each Policy maps onto itself in `canonical_id_by_incoming_id` (mutated in
-    place): `persist_rewired_edges` requires an entry for every Policy endpoint
-    of `GOVERNED_BY`/`SUPPORTED_BY`/`OWNS`, and here canonical == incoming.
-    Returns the four-key count dict folded into the `"succeeded"` audit entry
-    (issue #183, AC-BI-014).
-    """
-    if not (baseline.policy_nodes or baseline.standard_nodes or baseline.control_nodes):
-        return _governance_counts_dict(None)
-    if governance.owner is None:
-        raise RestoreOwnerRequiredError
-    counts = graph_writer.persist_governance_drafts(
-        snapshot_graph,
-        baseline.policy_nodes,
-        baseline.standard_nodes,
-        baseline.control_nodes,
-        owner=governance.owner,
-        policy_embeddings=governance.policy_embeddings,
-    )
-    canonical_id_by_incoming_id.update({policy.id: policy.id for policy in baseline.policy_nodes})
-    return _governance_counts_dict(counts)
-
-
-def _governance_counts_dict(counts: GovernanceDraftCounts | None) -> dict[str, int]:
-    """The four audit-entry keys for `counts` (all zero when no governance content was restored)."""
-    return {
-        "governance_policies": counts.policies if counts else 0,
-        "governance_standards": counts.standards if counts else 0,
-        "governance_controls": counts.controls if counts else 0,
-        "governance_status_overridden": counts.status_overridden if counts else 0,
-    }
 
 
 def _run_baseline_merge(
@@ -325,17 +257,17 @@ def _run_baseline_merge(
     (Slice 5.6's own requirement -- reused, not reimplemented), in the same
     write order `merge.py::merge_baseline_graph` itself uses: role/
     requirement passthrough, obligation passthrough, canonical Capability
-    mints, (issue #54, S6) canonical Policy mints + Standard/Control
-    passthrough when `baseline.policy_nodes` is non-empty, rewired edges
-    (regulatory-spine + governance), then Capability (and, if the Policy
-    pass ran, Policy) embedding backfill.
+    mints, (issue #183/#227) the shared draft-governance import
+    (`governance_import.import_draft_governance`) when the baseline carries a
+    Policy/Standard/Control tree, rewired edges (regulatory-spine +
+    governance), then Capability embedding backfill.
 
     `governance` (issue #183) carries the restoring caller's `owner` and the
     artifact-supplied Policy embeddings; it defaults to `None` (an empty
     `GovernanceImport`) so callers that never restore an internal-sourced
     instrument (no Policy content in the artifact) need not pass it.
 
-    Issue #106: after the Policy pass, persists PracticeArea/RiskPath nodes
+    Issue #106: after the governance import, persists PracticeArea/RiskPath nodes
     (exact-identity passthrough, no dedup call of any kind) and validates
     every COVERS/OWNS/MITIGATED_BY/VERIFIED_BY edge endpoint exists before
     any classification edge is written (AC-BI-008), then folds
@@ -352,9 +284,7 @@ def _run_baseline_merge(
     WATCH-guarded retry attempts.
     """
     baseline_staged_graph = select_company_merge_graph(db, baseline_staged_name)
-    baseline = graph_reader.read_baseline_graph(
-        baseline_staged_graph, regulatory_instrument_id, draft_governance=True
-    )
+    baseline = graph_reader.read_baseline_graph(baseline_staged_graph, regulatory_instrument_id)
     governance = governance or GovernanceImport()
     if governance.owner is None and (
         baseline.policy_nodes or baseline.standard_nodes or baseline.control_nodes
@@ -425,16 +355,18 @@ def _run_baseline_merge(
     # owned by the restoring caller, never converged (replaces issue #54 S6/B6's
     # Policy convergence pass for restore). A structural no-op for an external-sourced
     # restore (no governance content).
-    governance_counts = _run_draft_governance_pass(
-        baseline,
-        snapshot_graph=snapshot_graph,
-        governance=governance,
-        canonical_id_by_incoming_id=canonical_id_by_incoming_id,
+    governance_counts = governance_count_fields(
+        import_draft_governance(
+            baseline,
+            single_tenant_graph=snapshot_graph,
+            governance=governance,
+            canonical_id_by_incoming_id=canonical_id_by_incoming_id,
+        )
     )
 
     # issue #106 -- PracticeArea/RiskPath node passthrough, a structural
     # no-op for a baseline with no classification-layer content. Runs after
-    # Capability/Policy dedup+writes complete and before the edge rewiring
+    # Capability dedup and the governance import complete and before the edge rewiring
     # call below, mirroring merge.py's own live-path placement exactly: no
     # dedup, no embedding call (AC-BI-006) -- identity convergence is
     # structural (content-hashed ids minted upstream by `internal_seed`).

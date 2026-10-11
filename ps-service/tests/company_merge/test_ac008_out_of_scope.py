@@ -29,12 +29,13 @@ issue #42 Obligation joined Role/Requirement as a passthrough node
 from __future__ import annotations
 
 import typing
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
 from ps_service.company_merge import dedup as dedup_module
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
+from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 
@@ -134,17 +135,24 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._supported_by_rows)
         if "[:IMPLEMENTED_BY]" in q:
             return _FakeQueryResult(self._implemented_by_rows)
-        if "(n:Policy)" in q:
-            # issue #134, S29: `_POLICY_QUERY` gained `WHERE n.status =
-            # 'approved'` (AC-BI-021, D-8) -- this fake does not model that
-            # filter (out of scope for the tests in this file; the filter
-            # itself is proven in test_graph_reader.py), so dispatch matches
-            # on the label alone and returns every scripted row unfiltered.
-            return _FakeQueryResult(self._policy_rows)
-        if "(n:Standard)" in q:
-            return _FakeQueryResult(self._standard_rows)
-        if "(n:Control)" in q:
-            return _FakeQueryResult(self._control_rows)
+        if "(n:Policy) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(self._policy_rows, ("id", "title", "status", "confidence"))
+            )
+        if "(n:Standard) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(
+                    self._standard_rows,
+                    ("id", "title", "implementation_status", "confidence", "description"),
+                )
+            )
+        if "(n:Control) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(
+                    self._control_rows,
+                    ("id", "type", "title", "implementation_status", "confidence", "description"),
+                )
+            )
         if "(n:PracticeArea) RETURN" in q:
             return _FakeQueryResult([])
         if "(n:RiskPath) RETURN" in q:
@@ -167,6 +175,25 @@ class _FakeBaselineGraph:
                 [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
         raise AssertionError(f"unexpected query issued: {q!r}")
+
+    @staticmethod
+    def _node_rows(rows: list[object], keys: tuple[str, ...]) -> list[object]:
+        """Governance nodes are read whole (`RETURN n`): one single-node row per scripted row.
+
+        The scripted rows keep their column order; a `None` column is an absent property.
+        """
+        return [
+            [
+                _FakeRegulatoryInstrumentNode(
+                    {
+                        key: value
+                        for key, value in zip(keys, cast("list[object]", row), strict=True)
+                        if value is not None
+                    }
+                )
+            ]
+            for row in rows
+        ]
 
 
 class _FakeSingleTenantGraph:
@@ -223,8 +250,8 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
 def _internal_baseline_with_governance() -> _FakeBaselineGraph:
     """F2 (CHANGES.md): an internal-sourced baseline -- one Capability, one
     Policy, one Standard, one Control, fully wired with `GOVERNED_BY`/
-    `SUPPORTED_BY`/`IMPLEMENTED_BY` -- so `merge_baseline_graph`'s Policy
-    dedup pass (`if graph.policy_nodes:`) actually fires. Mirrors
+    `SUPPORTED_BY`/`IMPLEMENTED_BY` -- so `merge_baseline_graph`'s governance
+    import actually runs. Mirrors
     `test_merge_baseline_graph.py`'s own `_internal_baseline_with_governance`
     fixture.
     """
@@ -285,11 +312,11 @@ def test_dedupe_canonical_nodes_kind_parameter_is_literal_capability_or_policy()
 @pytest.mark.parametrize(
     ("baseline_factory", "expected_kinds"),
     [
-        pytest.param(_internal_baseline_with_governance, ["Capability", "Policy"], id="internal"),
+        pytest.param(_internal_baseline_with_governance, ["Capability"], id="internal"),
         pytest.param(_everything_new_baseline_graph, ["Capability"], id="external"),
     ],
 )
-def test_merge_baseline_graph_calls_dedup_for_capability_and_policy_only(
+def test_merge_baseline_graph_calls_dedup_for_capability_only(
     baseline_factory: typing.Callable[[], _FakeBaselineGraph],
     expected_kinds: list[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -305,10 +332,10 @@ def test_merge_baseline_graph_calls_dedup_for_capability_and_policy_only(
     wrapper's presence).
 
     Two cases: an internal-sourced baseline (`graph.policy_nodes`
-    non-empty) records `["Capability", "Policy"]` -- the Policy pass fired,
-    guarded by `if graph.policy_nodes:` (`merge.py`); an external-sourced
-    baseline (`graph.policy_nodes == ()`) records `["Capability"]` only --
-    the Policy pass never ran. Neither case ever records `"Role"`,
+    non-empty) and an external-sourced one both record `["Capability"]` only
+    -- since issue #227 the governance tree is imported as drafts by
+    `governance_import`, never deduped, so no Policy dedup pass exists on the
+    live path. Neither case ever records `"Role"`,
     `"Requirement"`, `"Obligation"`, `"Standard"`, or `"Control"` (all
     passthrough).
 
@@ -350,7 +377,7 @@ def test_merge_baseline_graph_calls_dedup_for_capability_and_policy_only(
     # detroit-exception: AC-008 ("Role/Requirement/Obligation dedup is out of scope") is itself
     # phrased as a call-shape claim, not a state/output one -- which `kind=` values
     # `merge_baseline_graph` invokes `dedupe_canonical_nodes` with, across the two parametrized
-    # baseline shapes (Policy pass firing vs. not), IS the specified behavior here (§1.2's
+    # baseline shapes (governance-bearing vs. not), IS the specified behavior here (§1.2's
     # "interaction is the specified behavior" carve-out; see AUDIT_RAW/company_merge_groupA.md's
     # ambiguous-case #1 and issue #163 Slice 17's ruling, which distinguishes this site from the
     # otherwise-identical `test_merge_baseline_graph.py:1642` site -- that one asserted a fixed,
@@ -369,6 +396,7 @@ def test_merge_baseline_graph_calls_dedup_for_capability_and_policy_only(
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        governance=GovernanceImport(owner=("sub-1", "https://issuer.example")),
     )
 
     assert recorded_kinds == expected_kinds

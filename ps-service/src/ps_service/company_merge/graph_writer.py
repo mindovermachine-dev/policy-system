@@ -125,7 +125,6 @@ __all__ = [
     "persist_practice_area_and_risk_path_passthrough",
     "persist_rewired_edges",
     "persist_role_and_requirement_passthrough",
-    "persist_standard_and_control_passthrough",
     "validate_classification_edge_endpoints",
 ]
 
@@ -221,9 +220,7 @@ def _upsert_passthrough_node(
     AC-BI-006 fix: their ids can legitimately recur across separate merge
     runs with slightly different incoming properties, and `ON CREATE SET`
     makes "an existing node's properties are never overwritten" a
-    database-engine guarantee rather than an assumption. Standard/Control
-    (`persist_standard_and_control_passthrough`) keep the default
-    unconditional `SET` -- out of this fix's scope.
+    database-engine guarantee rather than an assumption.
     """
     # label is always one of this module's own fixed literals (_ROLE_LABEL/
     # _REQUIREMENT_LABEL/...) -- never adapter/LLM-sourced -- mirrors
@@ -383,34 +380,6 @@ def persist_obligation_passthrough(
         )
 
 
-def persist_standard_and_control_passthrough(
-    single_tenant_graph: GraphHandle,
-    standard_nodes: tuple[BaselineNode, ...],
-    control_nodes: tuple[BaselineNode, ...],
-) -> None:
-    """Persist one governance-derivation run's Standard/Control nodes (issue #54, S4).
-
-    Uses the same unconditional `MERGE ... SET` shape as Role/Requirement/
-    Obligation: Standard is a weak entity of exactly one Policy, and Control
-    a weak entity of exactly one Standard (`ps-domain-concepts.md`) -- never
-    canonically deduped across sources, so there is no "existing wins"
-    concern here, unlike Capability/Policy (`persist_canonical_nodes`,
-    above).
-
-    Called by `merge.py` after `persist_canonical_nodes(..., kind="Policy")`
-    and before `persist_rewired_edges`, so the `SUPPORTED_BY`/
-    `IMPLEMENTED_BY` edge writes can `MATCH` these nodes.
-    """
-    for standard in standard_nodes:
-        _upsert_passthrough_node(
-            single_tenant_graph, _STANDARD_LABEL, standard.id, standard.properties
-        )
-    for control in control_nodes:
-        _upsert_passthrough_node(
-            single_tenant_graph, _CONTROL_LABEL, control.id, control.properties
-        )
-
-
 def persist_governance_drafts(
     single_tenant_graph: GraphHandle,
     policy_nodes: tuple[BaselineNode, ...],
@@ -422,10 +391,10 @@ def persist_governance_drafts(
 ) -> GovernanceDraftCounts:
     """Persist a restored instrument's Policy/Standard/Control tree as `draft` (issue #183).
 
-    The restore-path counterpart to `persist_canonical_nodes(kind="Policy")` +
-    `persist_standard_and_control_passthrough`, used instead of them: a
-    restored tree has not been through the customer's governance, so it
-    arrives `draft`, owned by the restoring caller (`owner` is their verified
+    The write behind `governance_import.import_draft_governance`, shared by
+    restore and live internal ingest (issue #227): an imported tree has not
+    been through the customer's governance, so it arrives `draft`, owned by
+    the importing caller (`owner` is their verified
     `(sub, iss)` pair, stored as `owner_subject`/`owner_issuer` exactly as
     `policy_lifecycle.create_policy_draft` stores them), and can only become
     `approved` through the normal propose/approve flow.
@@ -445,7 +414,7 @@ def persist_governance_drafts(
     to the lifecycle's string `"1"` when the artifact has none.
 
     `policy_embeddings` carries the artifact-supplied Policy vectors (by id) so
-    later Policy convergence on ingest still has them; a Policy without one
+    a later cleanup flow still has them; a Policy without one
     gets no `embedding` key.
     """
     owner_subject, owner_issuer = owner
@@ -504,9 +473,8 @@ def persist_practice_area_and_risk_path_passthrough(
 ) -> None:
     """Persist PracticeArea/RiskPath nodes (issue #106): exact-identity passthrough.
 
-    Unlike `persist_standard_and_control_passthrough` (weak entities,
-    unconditional `SET`), PracticeArea/RiskPath ids are content-hashed from
-    `name` alone and are EXPECTED to recur across separate baselines
+    PracticeArea/RiskPath ids are content-hashed from `name` alone and are
+    EXPECTED to recur across separate baselines
     (`ps-domain-concepts.md`'s identity notes) -- so this uses the same
     `MERGE ... ON CREATE SET` shape as Capability/Policy
     (`persist_canonical_nodes`) and Role/Requirement/Obligation
@@ -642,10 +610,7 @@ def persist_canonical_nodes(
     and this function's whole point is to never touch one.
 
     `kind` is `"Capability"` since #42 -- Obligation is no longer
-    canonically deduped (`persist_obligation_passthrough` above) -- or,
-    since issue #54's S4, `"Policy"` (Standard/Control are weak entities,
-    never canonically deduped -- see `persist_standard_and_control_passthrough`
-    below).
+    canonically deduped (`persist_obligation_passthrough` above) -- .
 
     `MERGE (n:{kind} {id: $id}) ON CREATE SET n += $properties` -- NOT an
     unconditional `SET` -- is the load-bearing invariant that makes

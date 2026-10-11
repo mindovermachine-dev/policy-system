@@ -426,7 +426,7 @@ Beyond that baseline, PS Service enforces four additional roles:
 | `SystemOwner` | Automatically, once — the first authenticated caller whose identity (`sub` + `iss`) matches the one the operator configured at deploy time (`psService.authzBootstrapOwner`; the deploy scripts set it to the owner's email), not simply whoever calls first: any other caller who reaches an empty instance first is granted nothing. Never grantable afterward; exactly one exists for the life of a real deployment. See [SystemOwner bootstrap](./installation-guide.md#systemowner-bootstrap) for how an operator claims it. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
 | `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, and `list-audit-events`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
-| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is unaffected), and the MCP tools `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
+| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is not gated by this role, but a document that carries a Policy needs a signed-in user, see [Running commands](#running-commands)), and the MCP tools `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |
 
 Two safety rules apply to every grant or revoke, regardless of role:
@@ -596,6 +596,15 @@ ps-cli ingest document <document_path>.json
 Reads the file locally, sends its content. (Ingesting a regulation by CELEX is
 done through the `ps-ingest-regulation` skill, not `ps-cli` — see [Find and
 ingest a regulation from EUR-Lex](#find-and-ingest-a-regulation-from-eur-lex).)
+
+The Policy, Standard and Control nodes in the document are imported as `draft`
+whatever `status` they carry, and each Policy is owned by you (the signed-in user), exactly as
+when you restore a curated internal instrument. A document that carries a Policy needs a
+signed-in user: without one the command fails with HTTP 401 `owner_required` and nothing is
+written. Nodes that already exist (for example a Policy since approved) are not changed by a
+re-ingest. The merge stage summary reports how many Policies, Standards and Controls were
+imported as drafts and how many authored statuses were overridden. Take the drafts through
+the Policy Lifecycle to approve them.
 
 `ingest document` exercises the full pipeline, so the PS Service instance you're
 targeting needs FalkorDB and its LLM interface configured — check its `/ready`

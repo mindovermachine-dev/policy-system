@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import GraphHandle
     from ps_service.change_monitor.models import PipelineRunner, TrackedInstrumentNode
     from ps_service.change_monitor.trigger import MetadataFetchingAdapter
+    from ps_service.company_merge.governance_import import GovernanceImport
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
     from ps_service.domain_mapper.models import ExtractionUnit
@@ -417,8 +418,13 @@ class FakeMergeStage:
         new_capabilities: int = 0,
         matched_capabilities: int = 0,
         writes_nodes: bool = False,
+        governance_counts: tuple[int, int, int, int] = (0, 0, 0, 0),
     ) -> None:
-        """Prime the recorder, an optional error to raise and the scripted merge facts."""
+        """Prime the recorder, an optional error to raise and the scripted merge facts.
+
+        ``governance_counts`` is ``(policies, standards, controls, status_overridden)`` -- what
+        the shared draft-governance import reports on the returned ``MergeResult`` (issue #227).
+        """
         self._recorder = recorder
         self._error = error
         self._error_once = error_once
@@ -426,6 +432,7 @@ class FakeMergeStage:
         self._new_capabilities = new_capabilities
         self._matched_capabilities = matched_capabilities
         self._writes_nodes = writes_nodes
+        self._governance_counts = governance_counts
 
     def __call__(
         self,
@@ -437,16 +444,22 @@ class FakeMergeStage:
         similarity_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
+        governance: GovernanceImport | None = None,
     ) -> MergeResult:
-        """Record the call and return (or raise) a canned :class:`MergeResult`."""
-        _ = (baseline_graph, call_embedding, emitter)
-        self._recorder.calls.append(
-            StageCall(
-                "merge",
-                regulatory_instrument_id,
-                {"embed_model": embed_model, "similarity_threshold": similarity_threshold},
-            )
-        )
+        """Record the call and return (or raise) a canned :class:`MergeResult`.
+
+        A call that carries a ``governance`` import (the internal pipeline) also records its
+        ``governance_owner`` and the ``emitter`` it was handed.
+        """
+        _ = (baseline_graph, call_embedding)
+        kwargs: dict[str, object] = {
+            "embed_model": embed_model,
+            "similarity_threshold": similarity_threshold,
+        }
+        if governance is not None:
+            kwargs["governance_owner"] = governance.owner
+            kwargs["emitter"] = emitter
+        self._recorder.calls.append(StageCall("merge", regulatory_instrument_id, kwargs))
         if self._error is not None:
             error = self._error
             if self._error_once:
@@ -472,6 +485,10 @@ class FakeMergeStage:
             new_obligation_count=self._new_obligations,
             new_capability_count=self._new_capabilities,
             matched_capability_count=self._matched_capabilities,
+            governance_policies=self._governance_counts[0],
+            governance_standards=self._governance_counts[1],
+            governance_controls=self._governance_counts[2],
+            governance_status_overridden=self._governance_counts[3],
         )
 
 
@@ -610,6 +627,7 @@ def build_fake_pipeline_dependencies(
     merge_new_capabilities: int = 0,
     merge_matched_capabilities: int = 0,
     merge_writes_nodes: bool = False,
+    merge_governance_counts: tuple[int, int, int, int] = (0, 0, 0, 0),
     errors_once: bool = False,
 ) -> FakePipeline:
     """Assemble a :class:`FakePipeline` around one shared :class:`StageRecorder`.
@@ -650,6 +668,8 @@ def build_fake_pipeline_dependencies(
         merge_new_obligations: Net-new Obligations the fake merge reports (issue #201).
         merge_new_capabilities: Net-new Capabilities the fake merge reports.
         merge_matched_capabilities: Capabilities the fake merge resolves onto existing nodes.
+        merge_governance_counts: ``(policies, standards, controls, status_overridden)`` the fake
+            merge reports as its draft-governance import counts (issue #227).
         errors_once: Make the injected ``*_error`` of each external stage fire on its first call
             only (a transient failure: the next sweep's retry of that stage succeeds).
         merge_writes_nodes: Also write one node per net-new Obligation / Capability to the
@@ -723,6 +743,7 @@ def build_fake_pipeline_dependencies(
                 new_capabilities=merge_new_capabilities,
                 matched_capabilities=merge_matched_capabilities,
                 writes_nodes=merge_writes_nodes,
+                governance_counts=merge_governance_counts,
             ),
             ingest_internal=FakeIngestInternalStage(
                 recorder, rid=internal_rid, error=ingest_internal_error

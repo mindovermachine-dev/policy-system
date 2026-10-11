@@ -753,7 +753,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
         """
         _refuse_non_loopback_bypass_bind(config)
         log_path = (config.logging_dir / _LOG_FILENAME) if config.logging_dir is not None else None
-        configure(log_path=log_path)
+        configure(log_path=log_path, mirror_failures_to_stderr=True)
         if not _is_loopback(config.host):
             emit_log_entry(
                 component="entrypoint",

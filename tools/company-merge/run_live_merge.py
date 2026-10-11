@@ -44,6 +44,13 @@ same still-relevant approval remains possible).
 APPROVAL_LIVE_MERGE_INITIAL.md \\
         --run-kind initial
 
+**Scope (issue #227)**: this CLI merges the three EXTERNAL regulations only. It passes no
+`governance=` to `merge_baseline_graph`, which imports an internal-sourced baseline's
+Policy/Standard/Control tree as caller-owned drafts and so needs an owner: pointed at an
+internal baseline that carries a Policy, the merge fails closed with
+`GovernanceOwnerRequiredError` (and the run is reported as a `merge_fn` failure, exit code 4).
+Internal documents are ingested through `POST /ingestions` (or restored), not through this tool.
+
 Requires a running FalkorDB instance with `cra_baseline`/`gdpr_baseline`/
 `nis2_baseline` and `policy_system` reachable, and
 `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`/`PS_LLMINTERFACE_EMBED_MODEL` resolvable

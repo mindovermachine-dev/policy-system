@@ -31,6 +31,7 @@ from ps_service.api.errors import (
     ExportStageFailedError,
     GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
+    InternalIngestOwnerRequiredError,
     InternalSeedValidationError,
     InvalidAccessRoleError,
     InvalidAuditQueryFilterError,
@@ -118,6 +119,7 @@ _SAFE_VERBATIM: tuple[type[Exception], ...] = (
     ExportConfigIncompleteError,
     CuratedSourceUnavailableError,
     MergeApprovalRequiresAuthenticatedCallerError,
+    InternalIngestOwnerRequiredError,
     PendingApprovalNotFoundError,
     PendingApprovalInvalidOrExpiredError,
     InvalidAccessRoleError,
@@ -137,6 +139,7 @@ _SAFE_VERBATIM_NAMES: frozenset[str] = frozenset(
         "DomainMapperDerivationError",
         "CompanyMergeConfigurationError",
         "ArtifactContentRejectedError",  # ps_service.restore (GH #104) -- by name, never imported
+        "GovernanceOwnerRequiredError",  # ps_service.company_merge (#227) -- by name
         "RestoreOwnerRequiredError",  # ps_service.restore (issue #183) -- by name, never imported
     }
 )
@@ -272,6 +275,11 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
     (
         MergeApprovalRequiresAuthenticatedCallerError,
         "merge_approval_requires_authenticated_caller",
+        status.HTTP_401_UNAUTHORIZED,
+    ),
+    (
+        InternalIngestOwnerRequiredError,
+        "owner_required",
         status.HTTP_401_UNAUTHORIZED,
     ),
     (

@@ -30,6 +30,7 @@ from ps_service.company_merge.errors import (
     CompanyMergeConfigurationError,
     CompanyMergePersistenceError,
 )
+from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import (
     capability_id,
@@ -42,6 +43,7 @@ from ps_service.logging import bind_run_context
 
 _MODEL = "fake-embed-model"
 _THRESHOLD = 0.85
+_GOVERNANCE = GovernanceImport(owner=("sub-1", "https://issuer.example"))
 
 
 class _FakeQueryResult:
@@ -183,17 +185,24 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._mitigated_by_rows)
         if "[:VERIFIED_BY]" in q:
             return _FakeQueryResult(self._verified_by_rows)
-        if "(n:Policy)" in q:
-            # issue #134, S29: `_POLICY_QUERY` gained `WHERE n.status =
-            # 'approved'` (AC-BI-021, D-8) -- this fake does not model that
-            # filter (out of scope for the tests in this file; the filter
-            # itself is proven in test_graph_reader.py), so dispatch matches
-            # on the label alone and returns every scripted row unfiltered.
-            return _FakeQueryResult(self._policy_rows)
-        if "(n:Standard)" in q:
-            return _FakeQueryResult(self._standard_rows)
-        if "(n:Control)" in q:
-            return _FakeQueryResult(self._control_rows)
+        if "(n:Policy) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(self._policy_rows, ("id", "title", "status", "confidence"))
+            )
+        if "(n:Standard) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(
+                    self._standard_rows,
+                    ("id", "title", "implementation_status", "confidence", "description"),
+                )
+            )
+        if "(n:Control) RETURN n" in q:
+            return _FakeQueryResult(
+                self._node_rows(
+                    self._control_rows,
+                    ("id", "type", "title", "implementation_status", "confidence", "description"),
+                )
+            )
         if "(n:PracticeArea) RETURN" in q:
             return _FakeQueryResult(self._practice_area_rows)
         if "(n:RiskPath) RETURN" in q:
@@ -223,6 +232,25 @@ class _FakeBaselineGraph:
                 row[4] = params["embedding"]
             return _FakeQueryResult([])
         raise AssertionError(f"unexpected query issued: {q!r}")
+
+    @staticmethod
+    def _node_rows(rows: list[object], keys: tuple[str, ...]) -> list[object]:
+        """Governance nodes are read whole (`RETURN n`): one single-node row per scripted row.
+
+        The scripted rows keep their column order; a `None` column is an absent property.
+        """
+        return [
+            [
+                _FakeRegulatoryInstrumentNode(
+                    {
+                        key: value
+                        for key, value in zip(keys, cast("list[object]", row), strict=True)
+                        if value is not None
+                    }
+                )
+            ]
+            for row in rows
+        ]
 
     def capability_embedding(self, node_id: str) -> tuple[float, ...] | None:
         """Issue #31 test accessor: this baseline graph's own current cached
@@ -323,11 +351,11 @@ class _FakeSingleTenantGraph:
             # drifted baseline) must never overwrite the existing node.
             self._mint(self._obligations, params, "text")
             return _FakeQueryResult([])
-        if "MERGE (n:Standard {id: $id}) SET n += $properties" in q:
-            self._set(self._standards, params, "title")
+        if "MERGE (n:Standard {id: $id}) ON CREATE SET" in q:
+            self._mint(self._standards, params, "title")
             return _FakeQueryResult([])
-        if "MERGE (n:Control {id: $id}) SET n += $properties" in q:
-            self._set(self._controls, params, "title")
+        if "MERGE (n:Control {id: $id}) ON CREATE SET" in q:
+            self._mint(self._controls, params, "title")
             return _FakeQueryResult([])
         if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
             self._mint(self._capabilities, params, "name")
@@ -365,22 +393,6 @@ class _FakeSingleTenantGraph:
             )
             return _FakeQueryResult([[rid] for rid in requested_ids if rid in known_ids])
         return _FakeQueryResult([[0]])
-
-    def _set(
-        self,
-        table: dict[str, list[object]],
-        params: dict[str, object] | None,
-        text_key: str,
-    ) -> None:
-        """Unconditional `MERGE ... SET n += $properties` semantics."""
-        assert params is not None
-        node_id = cast("str", params["id"])
-        properties = cast("dict[str, object]", params["properties"])
-        table[node_id] = [
-            node_id,
-            properties.get(text_key),
-            properties.get("embedding"),
-        ]
 
     def _mint(
         self,
@@ -445,6 +457,10 @@ class _FakeSingleTenantGraph:
 
     def calls_matching(self, substring: str) -> list[_RecordedCall]:
         return [call for call in self.calls if substring in call.query]
+
+    def policy_ids(self) -> set[str]:
+        """Issue #227: the ids of every Policy node currently held (seeded or written)."""
+        return set(self._policies)
 
     def obligation_ids(self) -> frozenset[str]:
         """Increments 15/16: the current set of distinct canonical
@@ -1059,12 +1075,12 @@ def _internal_baseline_with_governance() -> _FakeBaselineGraph:
 def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
     make_emitter: MakeEmitter,
 ) -> None:
-    """S4: an internal-sourced baseline (`graph.policy_nodes` non-empty)
-    runs the Policy dedup pass, mints the canonical Policy node, persists
-    Standard/Control as passthrough, and rewrites `GOVERNED_BY`/
-    `SUPPORTED_BY`/`IMPLEMENTED_BY` -- closing the loop to a real UC-3
-    `Capability-[:GOVERNED_BY]->Policy-[:SUPPORTED_BY]->Standard-
-    [:IMPLEMENTED_BY]->Control` traversal in the single-tenant graph.
+    """S4, #227: an internal-sourced baseline (`graph.policy_nodes` non-empty)
+    is imported by the shared draft-governance pass -- Policy/Standard/Control
+    written create-only -- and `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`
+    are rewritten, closing the loop to a real UC-3 `Capability-[:GOVERNED_BY]->
+    Policy-[:SUPPORTED_BY]->Standard-[:IMPLEMENTED_BY]->Control` traversal in
+    the single-tenant graph.
     """
     emitter, _log_path = make_emitter()
     baseline = _internal_baseline_with_governance()
@@ -1077,14 +1093,15 @@ def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
+        governance=_GOVERNANCE,
     )
 
-    assert result.policy_canonical_ids == ("pol_engineering_practices_xyz",)
+    assert (result.governance_policies, result.governance_standards) == (1, 1)
+    assert result.governance_controls == 1
 
     writes = single_tenant.writes()
-    assert any("MERGE (n:Policy {id: $id}) ON CREATE SET" in c.query for c in writes)
-    assert any("MERGE (n:Standard {id: $id}) SET n += $properties" in c.query for c in writes)
-    assert any("MERGE (n:Control {id: $id}) SET n += $properties" in c.query for c in writes)
+    for label in ("Policy", "Standard", "Control"):
+        assert any(f"MERGE (n:{label} {{id: $id}}) ON CREATE SET" in c.query for c in writes)
 
     governed_by_writes = single_tenant.calls_matching("[:GOVERNED_BY]")
     assert len(governed_by_writes) == 1
@@ -1380,18 +1397,17 @@ def test_capability_near_miss_persists_pending_review_node(make_emitter: MakeEmi
     assert params["nearest_existing_text"] == existing_capability_name
 
 
-def test_policy_near_miss_persists_pending_review_node(make_emitter: MakeEmitter) -> None:
-    """Issue #35, Slice 1: same wiring proof as the Capability case above, but
-    for the Policy pass's own `_log_dedup_decisions(policy_dedup, ...)` call
-    site inside `_finish_policy_pass` (PLAN.md §4.1's second call site).
+def test_near_title_policy_is_a_separate_draft_with_no_embedding_call_and_no_review(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #227 (AC-BI-007): a Policy whose title is only NEAR an existing Policy's is
+    not converged onto it. It gets its own draft node, no Policy embedding is computed
+    (the scripted embedder would fail the test on any call) and no Policy
+    `PendingReview` is raised -- convergence is gone from the live path.
     """
     emitter, _log_path = make_emitter()
     existing_policy_id = "pol_existing_engineering_practices"
-    existing_policy_title = "Engineering Practices Policy"
     incoming_policy_id = "pol_incoming_secure_development"
-    incoming_policy_title = "Secure Development Policy"
-    existing_vector = [1.0, 0.0]
-    incoming_vector = [0.6, 0.8]  # cosine similarity with existing_vector is well below _THRESHOLD
 
     baseline = _FakeBaselineGraph(
         regulatory_instrument_properties={"id": "ENGPRAC-NM", "title": "Engineering Practices"},
@@ -1404,14 +1420,14 @@ def test_policy_near_miss_persists_pending_review_node(make_emitter: MakeEmitter
         has_rows=[],
         satisfied_by_rows=[],
         requires_rows=[],
-        policy_rows=[[incoming_policy_id, incoming_policy_title, "draft", 0.9]],
+        policy_rows=[[incoming_policy_id, "Secure Development Policy", "draft", 0.9]],
     )
     single_tenant = _FakeSingleTenantGraph(
-        policy_rows=[[existing_policy_id, existing_policy_title, existing_vector]],
+        policy_rows=[[existing_policy_id, "Engineering Practices Policy", [1.0, 0.0]]],
     )
-    call_embedding = _ScriptedCallEmbedding({incoming_policy_title: incoming_vector})
+    call_embedding = _ScriptedCallEmbedding({})
 
-    merge_baseline_graph(
+    result = merge_baseline_graph(
         "ENGPRAC-NM",
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
@@ -1419,41 +1435,29 @@ def test_policy_near_miss_persists_pending_review_node(make_emitter: MakeEmitter
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        governance=_GOVERNANCE,
     )
 
-    pending_review_writes = single_tenant.calls_matching("CREATE (r:PendingReview")
-    assert len(pending_review_writes) == 1
-    params = pending_review_writes[0].params
-    assert params is not None
-    assert params["kind"] == "Policy"
-    assert params["incoming_id"] == incoming_policy_id
-    assert params["incoming_text"] == incoming_policy_title
-    assert params["nearest_existing_id"] == existing_policy_id
-    assert params["nearest_existing_text"] == existing_policy_title
+    assert result.governance_policies == 1
+    assert single_tenant.policy_ids() == {existing_policy_id, incoming_policy_id}
+    assert single_tenant.calls_matching("CREATE (r:PendingReview") == []
+    assert call_embedding.calls == []
 
 
-def test_merge_result_reports_pending_review_count_including_policy_pass(
+def test_pending_review_count_covers_capability_near_misses_only(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #35, Slice 5 (AC-BI-010): `MergeResult.pending_review_count` is
-    the run-scoped count of `PendingReview` nodes THIS call actually
-    persisted -- one per `NearMissPair` surfaced by either the Capability or
-    the Policy pass in this run (PLAN.md §5), not "every unresolved review
-    ever" (which would need a fresh graph read this function has no other
-    reason to perform). A below-threshold Capability pair and a
-    below-threshold Policy pair both surface in the same run here, so
-    `pending_review_count == 2`, matching the two `CREATE (r:PendingReview
-    ...)` writes actually issued.
+    """Issue #35, Slice 5 (AC-BI-010), #227: `MergeResult.pending_review_count` is the
+    run-scoped count of `PendingReview` nodes THIS call persisted. Only Capability
+    near-misses exist now: a below-threshold Capability pair and a near-title Policy
+    both appear in the run, yet the count is 1, matching the one `CREATE (r:PendingReview
+    ...)` write actually issued.
     """
     emitter, _log_path = make_emitter()
     existing_capability_id = "capability_existing_conduct_risk_assessment"
     existing_capability_name = "Conduct Risk Assessment Capability"
     incoming_capability_id = "capability_incoming_report_incident"
     incoming_capability_name = "Report Incident Capability"
-    existing_policy_id = "pol_existing_engineering_practices"
-    existing_policy_title = "Engineering Practices Policy"
-    incoming_policy_id = "pol_incoming_secure_development"
-    incoming_policy_title = "Secure Development Policy"
     existing_vector = [1.0, 0.0]
     incoming_vector = [0.6, 0.8]  # cosine similarity with existing_vector is well below _THRESHOLD
 
@@ -1468,18 +1472,17 @@ def test_merge_result_reports_pending_review_count_including_policy_pass(
         has_rows=[],
         satisfied_by_rows=[],
         requires_rows=[],
-        policy_rows=[[incoming_policy_id, incoming_policy_title, "draft", 0.9]],
+        policy_rows=[
+            ["pol_incoming_secure_development", "Secure Development Policy", "draft", 0.9]
+        ],
     )
     single_tenant = _FakeSingleTenantGraph(
         capability_rows=[[existing_capability_id, existing_capability_name, existing_vector]],
-        policy_rows=[[existing_policy_id, existing_policy_title, existing_vector]],
+        policy_rows=[
+            ["pol_existing_engineering_practices", "Engineering Practices Policy", existing_vector]
+        ],
     )
-    call_embedding = _ScriptedCallEmbedding(
-        {
-            incoming_capability_name: incoming_vector,
-            incoming_policy_title: incoming_vector,
-        }
-    )
+    call_embedding = _ScriptedCallEmbedding({incoming_capability_name: incoming_vector})
 
     result = merge_baseline_graph(
         "REG-NM-2",
@@ -1489,17 +1492,17 @@ def test_merge_result_reports_pending_review_count_including_policy_pass(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        governance=_GOVERNANCE,
     )
 
-    assert result.pending_review_count == 2
-    pending_review_writes = single_tenant.calls_matching("CREATE (r:PendingReview")
-    assert len(pending_review_writes) == 2
+    assert result.pending_review_count == 1
+    assert len(single_tenant.calls_matching("CREATE (r:PendingReview")) == 1
 
 
 def test_external_baseline_unaffected_by_policy_pass(make_emitter: MakeEmitter) -> None:
     """S4: an external-sourced baseline (`graph.policy_nodes == ()`) is a
-    structural no-op for the whole Policy pass -- `MergeResult.
-    policy_canonical_ids == ()`, no Policy dedup read ever issued, no
+    structural no-op for the whole governance import -- all four
+    governance counts are zero, no Policy dedup read ever issued, no
     Policy/Standard/Control write ever issued.
     """
     emitter, _log_path = make_emitter()
@@ -1515,7 +1518,7 @@ def test_external_baseline_unaffected_by_policy_pass(make_emitter: MakeEmitter) 
         emitter=emitter,
     )
 
-    assert result.policy_canonical_ids == ()
+    assert result.governance_policies == 0
     assert not single_tenant.calls_matching("(n:Policy) RETURN n.id, n.title, n.embedding")
     assert not any(
         "Policy" in c.query or "Standard" in c.query or "Control" in c.query
@@ -1935,6 +1938,7 @@ def test_succeeded_log_entry_carries_classification_write_counts(
         similarity_threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
+        governance=_GOVERNANCE,
     )
     emitter.flush()
 
@@ -1946,6 +1950,7 @@ def test_succeeded_log_entry_carries_classification_write_counts(
     ]
     assert len(succeeded) == 1
     entry = succeeded[0]
+    assert (entry["governance_policies"], entry["governance_controls"]) == (1, 2)
     # `extra=` fields flatten onto the top-level JSON payload (`LogEntry.
     # to_json_line`), not nested under an "extra" key.
     assert entry["practice_area_count"] == 2

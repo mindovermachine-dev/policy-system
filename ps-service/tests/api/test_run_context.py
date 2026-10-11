@@ -35,10 +35,12 @@ from api._fakes import (
 )
 from api._gateway_fakes import RecordingSystemAudit, override_gateway
 from ps_service.api.dependencies import (
+    get_principal,
     provide_audit_store,
     provide_curated_catalog_dependencies,
     provide_pipeline_dependencies,
 )
+from ps_service.auth.models import Principal
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.logging import facade
@@ -83,6 +85,7 @@ def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
     """A ``TestClient`` whose ``provide_pipeline_dependencies`` yields ``fake_deps``."""
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
+    app.dependency_overrides[get_principal] = lambda: Principal(sub="owner-1", iss="https://idp")
     audit_store = InMemoryAuditStore()  # catalog ingestion writes `ingestion_run.*` rows (#195)
     app.dependency_overrides[provide_audit_store] = lambda: audit_store
     rig = GatewayRig()  # the internal route fails closed without a gateway (issue #208)
