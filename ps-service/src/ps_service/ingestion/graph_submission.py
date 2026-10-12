@@ -57,7 +57,7 @@ class GroupSubmitter(Protocol):
         ...
 
     def stamp_legacy_edge_identity(
-        self, graph: str, audit_event_id: str
+        self, graph: str, audit_event_id: str | None
     ) -> EdgeIdentityBackfillOutcome:
         """Give the identity-less edges of `graph` their identity (a no-op read if none)."""
         ...
@@ -130,7 +130,7 @@ def read_persisted_or_raise[ErrorT: Exception](
 
 
 def stamp_legacy_edges_before_first_write[ErrorT: Exception](
-    submitter: GroupSubmitter, graph: str, audit_event_id: str, error_type: type[ErrorT]
+    submitter: GroupSubmitter, graph: str, audit_event_id: str | None, error_type: type[ErrorT]
 ) -> EdgeIdentityBackfillOutcome:
     """Run the idempotent edge-identity backfill on `graph` before a writer's first group.
 

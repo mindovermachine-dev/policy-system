@@ -307,8 +307,13 @@ class MutationGroup(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     graph: str = Field(min_length=1, pattern=_NON_BLANK)
-    audit_event_id: str
-    """The id of the audit event of the command that caused the group (a UUID string)."""
+    audit_event_id: str | None = None
+    """The id of the audit event of the command that caused the group (a UUID string).
+
+    `None` for a group no audit event caused (Policy Lifecycle's draft edits and status/version
+    backfills, and the legacy-edge stamp ahead of them, write no `audit_events` row today): the
+    group is logged with a null link.
+    """
     primitives: tuple[Primitive, ...] = Field(min_length=1)
     """The mutations, in submission order."""
     preconditions: tuple[Precondition, ...] = ()
@@ -322,8 +327,9 @@ class MutationGroup(BaseModel):
 
     @field_validator("audit_event_id")
     @classmethod
-    def _check_audit_event_id(cls, audit_event_id: str) -> str:
-        uuid.UUID(audit_event_id)
+    def _check_audit_event_id(cls, audit_event_id: str | None) -> str | None:
+        if audit_event_id is not None:
+            uuid.UUID(audit_event_id)
         return audit_event_id
 
 

@@ -225,7 +225,6 @@ _DYNAMIC_SITES: dict[str, int] = {
     "export/serialize.py": 2,
     "graph_gateway/cypher.py": 5,
     "ingestion/graph_writer.py": 3,
-    "policy_lifecycle/graph_writer.py": 3,
     "restore/populate.py": 4,
     # The verbatim interim copy of Company Merge's pre-#210 Cypher writers (retired by #214); the
     # ten sites moved here from company_merge/graph_writer.py, which now builds gateway primitives.

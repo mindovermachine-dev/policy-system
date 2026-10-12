@@ -21,11 +21,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 import redis.exceptions
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package (has `__init__.py`); mirrors `test_access_role_tools.py`'s own cross-package import convention
     FakeAccessRoleStore,
 )
@@ -33,6 +35,13 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
+from policy_lifecycle._gateway_fakes import (
+    FlippingRead,
+    PolicyGraphSeeder,
+    PolicyReadGraph,
+    SeedControl,
+    SeedStandard,
+)
 
 from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
@@ -43,6 +52,8 @@ from ps_service.mcp_interface import mcp_server
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
     from pathlib import Path
+
+    from graph_gateway._fakes import GatewayRig
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -69,19 +80,31 @@ class _FakeQueryResult:
     result_set: list[object] = field(default_factory=list)
 
 
+class _QueryResult(Protocol):
+    """The part of a query result the lifecycle reads: its rows."""
+
+    @property
+    def result_set(self) -> list[object]: ...
+
+
 class _GraphHandleDouble(Protocol):
     """Structural shape both `_FakeGraph` (write-flow tests) and `_TreeFakeGraph`
     (`get-policy`'s read-flow tests, added S14) satisfy -- lets `_install_graph`/
-    `_FakeFalkorDB` accept either without a shared base class.
+    `_FakeFalkorDB` accept either without a shared base class. The lifecycle rig's read double
+    (issue #211) satisfies it too.
     """
 
     def query(
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult: ...
+    ) -> _QueryResult: ...
 
 
 class _FakeGraph:
-    """Fake FalkorDB graph handle: existence-check read, plus recorded writes."""
+    """Fake FalkorDB graph handle for the reads of a create that never reaches the gateway.
+
+    It answers the title-collision and Capability-governor reads and refuses anything else: every
+    write is a Graph Write Gateway group (issue #211), never a statement through this handle.
+    """
 
     def __init__(
         self,
@@ -93,8 +116,6 @@ class _FakeGraph:
         # Issue #185: `{capability_id: governing_policy_id | None}`; absent ids do not exist.
         self._governors = governors if governors is not None else {}
         self.total_queries = 0
-        self.write_queries: list[str] = []
-        self.raise_on_write: Exception | None = None
 
     def query(
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
@@ -109,12 +130,7 @@ class _FakeGraph:
             return _FakeQueryResult(
                 result_set=[[i, self._governors[i]] for i in ids if i in self._governors]
             )
-        self.write_queries.append(q)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        if "size(caps) = $expected" in q:
-            return _FakeQueryResult(result_set=[["pol"]])
-        return _FakeQueryResult()
+        raise AssertionError(f"not a read this double answers: {q}")
 
 
 class _FakeFalkorDB:
@@ -176,6 +192,31 @@ class _FakeAuditStore:
                 details=details,
             )
         )
+
+    def record_standalone_with_event_id(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: str,
+        details: Mapping[str, object],
+    ) -> str:
+        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        self.record_standalone(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            details=details,
+        )
+        event_id = str(uuid.uuid4())
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+        return event_id
 
     def query(self, *args: object, **kwargs: object) -> object:
         raise NotImplementedError
@@ -260,20 +301,24 @@ def test_duplicate_title_surfaces_as_its_own_distinct_error(
 def test_graph_unavailable_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
     configure()
-    graph = _FakeGraph()
-    graph.raise_on_write = redis.exceptions.ConnectionError("boom")
-    _install_graph(monkeypatch, graph)
-    _install_audit_store(monkeypatch, _FakeAuditStore())
+    rig = installed_process_gateway().rig
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
+    _install_graph(monkeypatch, _FakeGraph())
+    audit_store = _FakeAuditStore()
+    _install_audit_store(monkeypatch, audit_store)
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_create_policy_draft()
 
     assert result.is_error is False
     text = _text(result)
-    assert text == "error: the policy graph database is not reachable"
+    assert text.startswith("error: FalkorDB write failed: ")
+    assert "boom" not in text
     # Distinct from the duplicate-title error string above.
     assert "already exists" not in text
+    assert [call.outcome for call in audit_store.calls] == ["applied", "failed"]
 
 
 def test_without_a_real_authenticated_caller_and_no_bypass_is_refused() -> None:
@@ -320,9 +365,12 @@ def test_capability_ids_claims_capabilities_and_echoes_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    graph = _FakeGraph(governors={"cap_a": None, "cap_b": None})
+    rig = installed_process_gateway().rig
+    graph = rig.graphs.open("policy_system")
+    PolicyGraphSeeder(graph).seed_capability("cap_a")
+    PolicyGraphSeeder(graph).seed_capability("cap_b")
     audit_store = _FakeAuditStore()
-    _install_graph(monkeypatch, graph)
+    _install_graph(monkeypatch, PolicyReadGraph(graph))
     _install_audit_store(monkeypatch, audit_store)
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -331,7 +379,8 @@ def test_capability_ids_claims_capabilities_and_echoes_them(
     assert result.is_error is False
     body = json.loads(_text(result))
     assert body["governed_capability_ids"] == ["cap_a", "cap_b"]
-    assert any("MERGE (c)-[:GOVERNED_BY]->(p)" in q for q in graph.write_queries)
+    assert {key[2] for key in graph.edges if key[0] == "GOVERNED_BY"} == {"cap_a", "cap_b"}
+    assert {key[4] for key in graph.edges if key[0] == "GOVERNED_BY"} == {body["policy_id"]}
     assert audit_store.calls[0].details["capability_ids"] == ("cap_a", "cap_b")
 
 
@@ -345,7 +394,8 @@ def test_empty_capability_ids_behaves_like_omitted(monkeypatch: pytest.MonkeyPat
         result = _call_create_policy_draft(capability_ids=[])
 
     assert json.loads(_text(result))["governed_capability_ids"] == []
-    assert not any("GOVERNED_BY" in q for q in graph.write_queries)
+    edges = installed_process_gateway().rig.graphs.open("policy_system").edges
+    assert not any(key[0] == "GOVERNED_BY" for key in edges)
 
 
 def test_unknown_capability_id_surfaces_as_error_string_with_no_writes(
@@ -363,7 +413,7 @@ def test_unknown_capability_id_surfaces_as_error_string_with_no_writes(
     assert text.startswith("error: ")
     assert "no Capability exists" in text
     assert "cap_missing" in text
-    assert graph.write_queries == []
+    assert installed_process_gateway().rig.store.groups == []
 
 
 def test_already_governed_capability_id_surfaces_as_error_string_with_no_writes(
@@ -381,7 +431,7 @@ def test_already_governed_capability_id_surfaces_as_error_string_with_no_writes(
     assert text.startswith("error: ")
     assert "already governed" in text
     assert "pol_other" not in text
-    assert graph.write_queries == []
+    assert installed_process_gateway().rig.store.groups == []
 
 
 def test_blank_capability_id_entry_is_rejected_before_any_work(
@@ -478,211 +528,15 @@ def test_create_policy_draft_with_malformed_standards_returns_named_error(
     assert "standards[0].title" in text
 
 
-@dataclass
-class _E2EControlState:
-    title: str
-    status: str
-    control_type: str
+def _install_stateful_rig(monkeypatch: pytest.MonkeyPatch) -> GatewayRig:
+    """Read through the lifecycle read double over the process rig's graph (issue #211).
 
-
-@dataclass
-class _E2EStandardState:
-    title: str
-    status: str
-    controls: dict[str, _E2EControlState] = field(default_factory=dict)
-
-
-@dataclass
-class _E2EPolicyState:
-    title: str
-    status: str
-    version: str
-    owner_subject: str
-    owner_issuer: str
-    standards: dict[str, _E2EStandardState] = field(default_factory=dict)
-
-
-class _StatefulFakeGraph:
-    """Minimal in-memory FalkorDB double that actually persists across calls.
-
-    Unlike `_FakeGraph` (write-only recorder) and `_TreeFakeGraph` (read-only
-    canned fixture), this fake implements just enough of `graph_writer`'s own
-    Cypher shapes -- existence check, Policy/Standard/Control write, tree
-    read, cascade write -- to prove a real create -> get -> propose round
-    trip end to end, matched on each query's own distinguishing exact text
-    or substring. Every other query (`backfill_governance_status`'s three
-    `SET ... IS NULL` statements) is a no-op, safe here because every node
-    this fake ever creates already has a non-`NULL` `status`/`version`.
+    Every write -- creates, draft edits and the transition cascades -- is a gateway group on that
+    graph, so a create -> get -> propose -> approve round trip runs over one graph.
     """
-
-    def __init__(self) -> None:
-        self._policies: dict[str, _E2EPolicyState] = {}
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        del timeout
-        p = params or {}
-        if q.strip() == "MATCH (p:Policy {id: $policy_id}) RETURN p.id, p.title":
-            policy_id = cast("str", p["policy_id"])
-            policy = self._policies.get(policy_id)
-            if policy is None:
-                return _FakeQueryResult(result_set=[])
-            return _FakeQueryResult(result_set=[[policy_id, policy.title]])
-        if "MERGE (p:Policy {id: $policy_id}) SET p += $properties" in q:
-            props = cast("dict[str, object]", p["properties"])
-            self._policies[cast("str", p["policy_id"])] = _E2EPolicyState(
-                title=cast("str", props["title"]),
-                status=cast("str", props["status"]),
-                version=cast("str", props["version"]),
-                owner_subject=cast("str", props["owner_subject"]),
-                owner_issuer=cast("str", props["owner_issuer"]),
-            )
-            return _FakeQueryResult()
-        if "RETURN s.id, properties(s), c.id, properties(c)" in q:
-            # `read_policy_tree_for_fork` (issue #136, Slice 6) -- checked
-            # BEFORE the `find_standard_with_parent`/`SUPPORTED_BY]->
-            # (s:Standard {id: $standard_id})` branches below, own
-            # distinguishing `RETURN` clause, no substring overlap.
-            policy_id = cast("str", p["policy_id"])
-            policy = self._policies.get(policy_id)
-            if policy is None or not policy.standards:
-                return _FakeQueryResult(result_set=[])
-            fork_rows: list[object] = []
-            for standard_id, standard in policy.standards.items():
-                standard_props: dict[str, object] = {
-                    "id": standard_id,
-                    "title": standard.title,
-                    "status": standard.status,
-                }
-                if not standard.controls:
-                    fork_rows.append([standard_id, standard_props, None, None])
-                    continue
-                for control_id, control in standard.controls.items():
-                    control_props: dict[str, object] = {
-                        "id": control_id,
-                        "title": control.title,
-                        "status": control.status,
-                        "type": control.control_type,
-                    }
-                    fork_rows.append([standard_id, standard_props, control_id, control_props])
-            return _FakeQueryResult(result_set=fork_rows)
-        if "RETURN p.id, p.owner_subject, p.owner_issuer, p.status, s.status, s.title" in q:
-            # `find_standard_with_parent` (issue #136, Slice 3) -- checked BEFORE the
-            # write-shaped branch below, since this read query's own text also
-            # contains that branch's `SUPPORTED_BY]->(s:Standard {id: $standard_id})`
-            # matching substring.
-            target_standard_id = cast("str", p["standard_id"])
-            for policy_id, policy in self._policies.items():
-                standard = policy.standards.get(target_standard_id)
-                if standard is not None:
-                    return _FakeQueryResult(
-                        result_set=[
-                            [
-                                policy_id,
-                                policy.owner_subject,
-                                policy.owner_issuer,
-                                policy.status,
-                                standard.status,
-                                standard.title,
-                            ]
-                        ]
-                    )
-            return _FakeQueryResult(result_set=[])
-        if "SUPPORTED_BY]->(s:Standard {id: $standard_id})" in q:
-            props = cast("dict[str, object]", p["properties"])
-            policy = self._policies[cast("str", p["policy_id"])]
-            policy.standards[cast("str", p["standard_id"])] = _E2EStandardState(
-                title=cast("str", props["title"]), status=cast("str", props["status"])
-            )
-            return _FakeQueryResult()
-        if "RETURN s.id, p.id, p.owner_subject, p.owner_issuer, p.status, c.status, c.title" in q:
-            # `find_control_with_parent` (issue #136, Slice 5) -- checked
-            # BEFORE the write-shaped branch below, since this read query's
-            # own text also contains that branch's
-            # `IMPLEMENTED_BY]->(c:Control {id: $control_id})` matching
-            # substring (the same routing-collision risk Slice 3 flagged for
-            # `find_standard_with_parent`, one hop deeper).
-            target_control_id = cast("str", p["control_id"])
-            for policy_id, policy in self._policies.items():
-                for standard_id, standard in policy.standards.items():
-                    control = standard.controls.get(target_control_id)
-                    if control is not None:
-                        return _FakeQueryResult(
-                            result_set=[
-                                [
-                                    standard_id,
-                                    policy_id,
-                                    policy.owner_subject,
-                                    policy.owner_issuer,
-                                    policy.status,
-                                    control.status,
-                                    control.title,
-                                ]
-                            ]
-                        )
-            return _FakeQueryResult(result_set=[])
-        if "IMPLEMENTED_BY]->(c:Control {id: $control_id})" in q:
-            props = cast("dict[str, object]", p["properties"])
-            standard = self._find_standard(cast("str", p["standard_id"]))
-            standard.controls[cast("str", p["control_id"])] = _E2EControlState(
-                title=cast("str", props["title"]),
-                status=cast("str", props["status"]),
-                control_type=cast("str", props["type"]),
-            )
-            return _FakeQueryResult()
-        if "s.id, s.title, s.status, c.id" in q:
-            policy_id = cast("str", p["policy_id"])
-            policy = self._policies.get(policy_id)
-            if policy is None:
-                return _FakeQueryResult(result_set=[])
-            return _FakeQueryResult(result_set=self._tree_rows(policy_id, policy))
-        if "SET p.status = $target_status" in q:
-            policy = self._policies[cast("str", p["policy_id"])]
-            target = cast("str", p["target_status"])
-            policy.status = target
-            for standard in policy.standards.values():
-                standard.status = target
-                for control in standard.controls.values():
-                    control.status = target
-            return _FakeQueryResult()
-        return _FakeQueryResult()
-
-    def _find_standard(self, standard_id: str) -> _E2EStandardState:
-        for policy in self._policies.values():
-            if standard_id in policy.standards:
-                return policy.standards[standard_id]
-        raise AssertionError(f"no standard {standard_id}")
-
-    def _tree_rows(self, policy_id: str, policy: _E2EPolicyState) -> list[object]:
-        head = [
-            policy_id,
-            policy.title,
-            policy.status,
-            policy.version,
-            policy.owner_subject,
-            policy.owner_issuer,
-        ]
-        if not policy.standards:
-            return [[*head, None, None, None, None, None, None, None]]
-        rows: list[object] = []
-        for standard_id, standard in policy.standards.items():
-            standard_head = [standard_id, standard.title, standard.status]
-            if not standard.controls:
-                rows.append([*head, *standard_head, None, None, None, None])
-                continue
-            for control_id, control in standard.controls.items():
-                rows.append(
-                    [
-                        *head,
-                        *standard_head,
-                        control_id,
-                        control.title,
-                        control.status,
-                        control.control_type,
-                    ]
-                )
-        return rows
+    rig = installed_process_gateway().rig
+    _install_graph(monkeypatch, PolicyReadGraph(rig.graphs.open("policy_system")))
+    return rig
 
 
 def test_create_policy_draft_with_standards_creates_full_tree_all_draft(
@@ -693,8 +547,7 @@ def test_create_policy_draft_with_standards_creates_full_tree_all_draft(
     verified by reading it straight back via `get-policy`.
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
+    _install_stateful_rig(monkeypatch)
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
@@ -757,8 +610,7 @@ def test_create_policy_draft_with_standards_then_propose_policy_succeeds(
     `create-policy-draft` could only ever produce a zero-Standard Policy.
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
+    _install_stateful_rig(monkeypatch)
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -797,8 +649,7 @@ def test_create_policy_draft_with_supersedes_policy_id_success_shape(
     IMMEDIATELY usable in a following real `update-standard-draft` call.
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
+    _install_stateful_rig(monkeypatch)
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -913,7 +764,7 @@ def test_create_policy_draft_supersede_log_triad_carries_entity_id(
     )
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        _install_graph(monkeypatch, _TreeFakeGraph(approved_prior))
+        _install_rig_graph(monkeypatch, approved_prior)
         success_result = asyncio.run(
             mcp_server.server.call_tool(
                 "create-policy-draft",
@@ -924,7 +775,7 @@ def test_create_policy_draft_supersede_log_triad_carries_entity_id(
             )
         )
 
-        _install_graph(monkeypatch, _TreeFakeGraph(_draft_fixture()))
+        _install_rig_graph(monkeypatch, _draft_fixture())
         failure_result = asyncio.run(
             mcp_server.server.call_tool(
                 "create-policy-draft",
@@ -1251,32 +1102,68 @@ def test_get_policy_with_standards_and_controls_returns_full_nested_tree(
 # --- `update-policy-draft` (issue #136, Slice 1) ----------------------------
 
 
-class _UpdatePolicyDraftFakeGraph(_TreeFakeGraph):
-    """Extends `_TreeFakeGraph` with `update_policy_fields`'s own writes.
+def _install_rig_graph(
+    monkeypatch: pytest.MonkeyPatch, policy: _PolicyFixture | None
+) -> GatewayRig:
+    """Seed `policy` (no children) into the process gateway rig's `policy_system` graph.
 
-    Every other query (the tree read, each of `backfill_governance_status`'s
-    three `SET` statements) is handled by `_TreeFakeGraph.query` unchanged;
-    only `update_policy_fields`'s own two distinguishing shapes
-    (`$set_properties` map-merge, `= null` single-field clear) are
-    intercepted here.
+    Issue #211: `update-policy-draft` writes through the Graph Write Gateway (the process gateway
+    the package's autouse fixture installs), so the graph it reads is the rig graph the gateway
+    writes. The read handle is the lifecycle read double over it (it refuses a write statement).
     """
+    rig = installed_process_gateway().rig
+    graph = rig.graphs.open("policy_system")
+    if policy is not None:
+        PolicyGraphSeeder(graph).seed_policy(
+            policy.id,
+            title=policy.title,
+            status=policy.status,
+            version=policy.version,
+            owner=(policy.owner_subject, policy.owner_issuer),
+            legacy_edges=False,
+        )
+    _install_graph(monkeypatch, PolicyReadGraph(graph))
+    return rig
 
-    def __init__(self, policy: _PolicyFixture | None) -> None:
-        super().__init__(policy)
-        self.write_queries: list[str] = []
-        self.write_params: list[dict[str, object] | None] = []
-        self.raise_on_write: Exception | None = None
 
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        if "$set_properties" not in q and "= null" not in q:
-            return super().query(q, params, timeout)
-        self.write_queries.append(q)
-        self.write_params.append(params)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        return _FakeQueryResult()
+def _install_tree_rig(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    owner_subject: str = _ACTOR_SUBJECT,
+    owner_issuer: str = _ACTOR_ISSUER,
+    standard_status: str | None = "draft",
+    control_status: str | None = "draft",
+    with_control: bool = False,
+) -> GatewayRig:
+    """Seed the existing Policy with its Standard (and optionally a Control) into the rig.
+
+    Issue #211: the Standard and Control tools write through the Graph Write Gateway, so the
+    graph they read is the rig graph the gateway writes. `standard_status=None` /
+    `control_status=None` seed a legacy node with no `status` (the backfill fixtures).
+    """
+    controls = (
+        (SeedControl(_EXISTING_CONTROL_ID, "Key Rotation Check", status=control_status),)
+        if with_control
+        else ()
+    )
+    rig = installed_process_gateway().rig
+    graph = rig.graphs.open("policy_system")
+    PolicyGraphSeeder(graph).seed_policy(
+        _EXISTING_POLICY_ID,
+        title=_TITLE,
+        owner=(owner_subject, owner_issuer),
+        standards=(
+            SeedStandard(
+                _EXISTING_STANDARD_ID,
+                "Encryption Standard",
+                status=standard_status,
+                controls=controls,
+            ),
+        ),
+        legacy_edges=False,
+    )
+    _install_graph(monkeypatch, PolicyReadGraph(graph))
+    return rig
 
 
 def _call_update_policy_draft(
@@ -1292,7 +1179,7 @@ def _call_update_policy_draft(
 
 def test_update_policy_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(_draft_fixture()))
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1306,20 +1193,18 @@ def test_update_policy_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> N
 def test_update_policy_draft_applies_only_supplied_fields_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008, proven as a genuine round trip: create -> update -> get,
-    against the same stateful fake graph, showing the patched field
-    actually persists and only the supplied field changed.
+    """AC-BI-008, proven as a genuine round trip: update -> get, against the same rig graph,
+    showing the patched field actually persists and only the supplied field changed.
+
+    The Policy is seeded rather than created: `create-policy-draft` still writes through the
+    direct writer until it migrates (a later slice of #211).
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
-    _install_audit_store(monkeypatch, _FakeAuditStore())
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+    policy_id = _EXISTING_POLICY_ID
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        create_result = _call_create_policy_draft()
-        policy_id = json.loads(_text(create_result))["policy_id"]
-
         update_result = _call_update_policy_draft(
             policy_id=policy_id, fields={"description": "revised text"}
         )
@@ -1333,20 +1218,23 @@ def test_update_policy_draft_applies_only_supplied_fields_end_to_end(
     assert get_result.is_error is False
     # `get-policy`'s own response shape (S13) never echoes back arbitrary
     # content fields like `description` -- the round trip proves the write
-    # landed by confirming the Policy is still readable, still owned by the
-    # same actor, and still `draft` (i.e. the PATCH didn't corrupt anything
-    # else in the process).
+    # landed by confirming the node holds it, the Policy is still readable,
+    # still owned by the same actor, and still `draft` (i.e. the PATCH didn't
+    # corrupt anything else in the process).
     body = json.loads(_text(get_result))
     assert body["policy_id"] == policy_id
     assert body["status"] == "draft"
     assert body["owner_subject"] == _ACTOR_SUBJECT
+    assert rig.graphs.open("policy_system").nodes[("Policy", policy_id)]["description"] == (
+        "revised text"
+    )
 
 
 def test_update_policy_draft_unknown_field_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(_draft_fixture()))
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1362,7 +1250,7 @@ def test_update_policy_draft_non_owner_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(_draft_fixture()))
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_OTHER_SUBJECT):
@@ -1384,7 +1272,7 @@ def test_update_policy_draft_non_draft_status_returns_named_error(
         owner_issuer=_ACTOR_ISSUER,
     )
     configure()
-    _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(policy))
+    _install_rig_graph(monkeypatch, policy)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1400,7 +1288,7 @@ def test_update_policy_draft_missing_policy_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(None))
+    _install_rig_graph(monkeypatch, None)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1415,10 +1303,14 @@ def test_update_policy_draft_missing_policy_returns_named_error(
 def test_update_policy_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    graph = _UpdatePolicyDraftFakeGraph(_draft_fixture())
-    graph.raise_on_write = redis.exceptions.ConnectionError("boom")
-    _install_graph(monkeypatch, graph)
+    """The gateway failure is the module's persistence error, `FalkorDB write failed: ` prefixed.
+
+    Since #211 the direct writer's generic "not reachable" text is replaced by the gateway-mapped
+    message (Decision 4, AC-BI-011); the tool still answers `error: ...` and never leaks detail.
+    """
     configure()
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1426,7 +1318,8 @@ def test_update_policy_draft_graph_unavailable_returns_named_error(
 
     assert result.is_error is False
     text = _text(result)
-    assert text == "error: the policy graph database is not reachable"
+    assert text.startswith("error: FalkorDB write failed: ")
+    assert "boom" not in text
     assert "not a patchable field" not in text
 
 
@@ -1441,10 +1334,10 @@ def test_update_policy_draft_log_triad_carries_actor_action_node_id_and_timestam
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(_draft_fixture()))
+        _install_rig_graph(monkeypatch, _draft_fixture())
         success_result = _call_update_policy_draft(fields={"description": "x"})
 
-        _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         failure_result = _call_update_policy_draft(
             policy_id="pol_missing", fields={"description": "x"}
         )
@@ -1475,33 +1368,6 @@ def test_update_policy_draft_log_triad_carries_actor_action_node_id_and_timestam
 # --- `add-standard-to-draft` (issue #136, Slice 2) --------------------------
 
 
-class _AddStandardToDraftFakeGraph(_TreeFakeGraph):
-    """Extends `_TreeFakeGraph` with `add_standard_to_policy`'s own write.
-
-    Every other query (the tree read, each of `backfill_governance_status`'s
-    three `SET` statements) is handled by `_TreeFakeGraph.query` unchanged;
-    only `add_standard_to_policy`'s own distinguishing `MERGE ... Standard`
-    shape is intercepted here.
-    """
-
-    def __init__(self, policy: _PolicyFixture | None) -> None:
-        super().__init__(policy)
-        self.write_queries: list[str] = []
-        self.write_params: list[dict[str, object] | None] = []
-        self.raise_on_write: Exception | None = None
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        if "SUPPORTED_BY]->(s:Standard {id: $standard_id})" not in q:
-            return super().query(q, params, timeout)
-        self.write_queries.append(q)
-        self.write_params.append(params)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        return _FakeQueryResult()
-
-
 def _call_add_standard_to_draft(
     *,
     policy_id: str = _EXISTING_POLICY_ID,
@@ -1518,7 +1384,7 @@ def _call_add_standard_to_draft(
 
 def test_add_standard_to_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(_draft_fixture()))
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1538,29 +1404,23 @@ def test_add_standard_to_draft_success_shape(monkeypatch: pytest.MonkeyPatch) ->
 def test_add_standard_to_draft_response_id_usable_in_get_policy_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009, proven as a genuine round trip: create Policy -> add Standard
-    -> get-policy, against the same stateful fake graph, showing the new
-    Standard's id genuinely round-trips into a second, real call.
+    """AC-BI-009, proven as a genuine round trip: add Standard -> get-policy, against the same
+    rig graph the gateway writes, showing the new Standard's id genuinely round-trips into a
+    second, real call.
 
-    `update-standard-draft` (the more direct AC-BI-009 chained call) is
-    Slice 3's own tool, not yet implemented -- `get-policy` is the read this
-    slice uses to prove usability instead, per the task's own guidance.
+    The Policy is seeded rather than created: `create-policy-draft` still writes through the
+    direct writer until it migrates (a later slice of #211).
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
-    _install_audit_store(monkeypatch, _FakeAuditStore())
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        create_result = _call_create_policy_draft()
-        policy_id = json.loads(_text(create_result))["policy_id"]
-
-        add_result = _call_add_standard_to_draft(policy_id=policy_id)
+        add_result = _call_add_standard_to_draft(policy_id=_EXISTING_POLICY_ID)
         assert add_result.is_error is False
         new_standard_id = json.loads(_text(add_result))["standard_id"]
 
-        get_result = _call_get_policy(policy_id=policy_id)
+        get_result = _call_get_policy(policy_id=_EXISTING_POLICY_ID)
 
     assert get_result.is_error is False
     body = json.loads(_text(get_result))
@@ -1574,7 +1434,7 @@ def test_add_standard_to_draft_unknown_field_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(_draft_fixture()))
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1590,7 +1450,7 @@ def test_add_standard_to_draft_invalid_implementation_status_returns_named_error
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(_draft_fixture()))
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1606,7 +1466,7 @@ def test_add_standard_to_draft_non_owner_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(_draft_fixture()))
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_OTHER_SUBJECT):
@@ -1628,7 +1488,7 @@ def test_add_standard_to_draft_non_draft_status_returns_named_error(
         owner_issuer=_ACTOR_ISSUER,
     )
     configure()
-    _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(policy))
+    _install_rig_graph(monkeypatch, policy)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1644,7 +1504,7 @@ def test_add_standard_to_draft_missing_policy_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(None))
+    _install_rig_graph(monkeypatch, None)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1659,10 +1519,10 @@ def test_add_standard_to_draft_missing_policy_returns_named_error(
 def test_add_standard_to_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    graph = _AddStandardToDraftFakeGraph(_draft_fixture())
-    graph.raise_on_write = redis.exceptions.ConnectionError("boom")
-    _install_graph(monkeypatch, graph)
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
     configure()
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1670,7 +1530,8 @@ def test_add_standard_to_draft_graph_unavailable_returns_named_error(
 
     assert result.is_error is False
     text = _text(result)
-    assert text == "error: the policy graph database is not reachable"
+    assert text.startswith("error: FalkorDB write failed: ")
+    assert "boom" not in text
     assert "not a patchable field" not in text
 
 
@@ -1686,10 +1547,10 @@ def test_add_standard_to_draft_log_triad_carries_actor_action_node_id_and_timest
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(_draft_fixture()))
+        _install_rig_graph(monkeypatch, _draft_fixture())
         success_result = _call_add_standard_to_draft()
 
-        _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         failure_result = _call_add_standard_to_draft(policy_id="pol_missing")
 
     assert success_result.is_error is False
@@ -1718,80 +1579,6 @@ def test_add_standard_to_draft_log_triad_carries_actor_action_node_id_and_timest
 _EXISTING_STANDARD_ID = "std_encryption_standard_aaaaaa"
 
 
-@dataclass
-class _StandardParentFixture:
-    policy_id: str
-    owner_subject: str
-    owner_issuer: str
-    policy_status: str
-    standard_status: str | None
-    standard_title: str = "Encryption Standard"
-
-
-class _UpdateStandardDraftFakeGraph:
-    """Fake FalkorDB graph handle for `update-standard-draft`'s tests (issue #136, Slice 3).
-
-    Mirrors `test_service.py`'s own `_StandardWithParentFakeGraph`: models one
-    Standard's parent-Policy owner/status plus the Standard's own (possibly
-    `None`, pre-backfill) status as a single mutable fixture, so the same
-    instance answers `find_standard_with_parent`'s read both before and after
-    `backfill_governance_status`'s own `s.status IS NULL` write actually
-    mutates `standard_status` (CHANGES.md finding #2).
-    """
-
-    def __init__(
-        self, fixture: _StandardParentFixture | None, *, raise_on_write: Exception | None = None
-    ) -> None:
-        self._fixture = fixture
-        self.write_queries: list[str] = []
-        self.write_params: list[dict[str, object] | None] = []
-        self.raise_on_write = raise_on_write
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        del timeout
-        fixture = self._fixture
-        if "RETURN p.id, p.owner_subject, p.owner_issuer, p.status, s.status, s.title" in q:
-            if fixture is None:
-                return _FakeQueryResult(result_set=[])
-            return _FakeQueryResult(
-                result_set=[
-                    [
-                        fixture.policy_id,
-                        fixture.owner_subject,
-                        fixture.owner_issuer,
-                        fixture.policy_status,
-                        fixture.standard_status,
-                        fixture.standard_title,
-                    ]
-                ]
-            )
-        if "s.status IS NULL" in q and "SET s.status = p.status" in q:
-            if fixture is not None and fixture.standard_status is None:
-                fixture.standard_status = fixture.policy_status
-            return _FakeQueryResult()
-        if "$set_properties" not in q and "= null" not in q:
-            return _FakeQueryResult()
-        self.write_queries.append(q)
-        self.write_params.append(params)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        return _FakeQueryResult()
-
-
-def _standard_parent_fixture(
-    *, owner_subject: str = _ACTOR_SUBJECT, status: str = "draft"
-) -> _StandardParentFixture:
-    return _StandardParentFixture(
-        policy_id=_EXISTING_POLICY_ID,
-        owner_subject=owner_subject,
-        owner_issuer=_ACTOR_ISSUER,
-        policy_status="draft",
-        standard_status=status,
-    )
-
-
 def _call_update_standard_draft(
     *, standard_id: str = _EXISTING_STANDARD_ID, fields: dict[str, object] | None = None
 ) -> CallToolResult:
@@ -1805,7 +1592,7 @@ def _call_update_standard_draft(
 
 def test_update_standard_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1824,22 +1611,19 @@ def test_update_standard_draft_success_shape(monkeypatch: pytest.MonkeyPatch) ->
 def test_update_standard_draft_response_id_usable_in_update_standard_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009, real round trip (CHANGES.md Appendix D): create Policy ->
-    add Standard -> update-standard-draft, against the same stateful fake
-    graph, proving the new Standard's id genuinely round-trips into a
-    second, real call -- not just a determinism check.
+    """AC-BI-009, real round trip (CHANGES.md Appendix D): add Standard -> update-standard-draft,
+    against the same rig graph the gateway writes, proving the new Standard's id genuinely
+    round-trips into a second, real call -- not just a determinism check.
+
+    The Policy is seeded rather than created: `create-policy-draft` still writes through the
+    direct writer until it migrates (a later slice of #211).
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
-    _install_audit_store(monkeypatch, _FakeAuditStore())
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        create_result = _call_create_policy_draft()
-        policy_id = json.loads(_text(create_result))["policy_id"]
-
-        add_result = _call_add_standard_to_draft(policy_id=policy_id)
+        add_result = _call_add_standard_to_draft(policy_id=_EXISTING_POLICY_ID)
         assert add_result.is_error is False
         new_standard_id = json.loads(_text(add_result))["standard_id"]
 
@@ -1850,7 +1634,7 @@ def test_update_standard_draft_response_id_usable_in_update_standard_draft(
     assert update_result.is_error is False
     assert json.loads(_text(update_result)) == {
         "standard_id": new_standard_id,
-        "policy_id": policy_id,
+        "policy_id": _EXISTING_POLICY_ID,
         "title": "Encryption Standard",
         "status": "draft",
     }
@@ -1860,7 +1644,7 @@ def test_update_standard_draft_unknown_field_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1876,7 +1660,7 @@ def test_update_standard_draft_non_owner_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_OTHER_SUBJECT):
@@ -1890,9 +1674,7 @@ def test_update_standard_draft_non_draft_status_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(
-        monkeypatch, _UpdateStandardDraftFakeGraph(_standard_parent_fixture(status="proposed"))
-    )
+    _install_tree_rig(monkeypatch, standard_status="proposed")
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1908,7 +1690,7 @@ def test_update_standard_draft_missing_standard_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(None))
+    _install_rig_graph(monkeypatch, None)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1930,10 +1712,10 @@ def test_update_standard_draft_missing_standard_returns_distinct_error_from_miss
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         standard_result = _call_update_standard_draft(standard_id="std_missing")
 
-        _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         policy_result = _call_update_policy_draft(
             policy_id="pol_missing", fields={"description": "x"}
         )
@@ -1948,11 +1730,10 @@ def test_update_standard_draft_missing_standard_returns_distinct_error_from_miss
 def test_update_standard_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    graph = _UpdateStandardDraftFakeGraph(
-        _standard_parent_fixture(), raise_on_write=redis.exceptions.ConnectionError("boom")
-    )
-    _install_graph(monkeypatch, graph)
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
     configure()
+    rig = _install_tree_rig(monkeypatch)
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -1960,7 +1741,8 @@ def test_update_standard_draft_graph_unavailable_returns_named_error(
 
     assert result.is_error is False
     text = _text(result)
-    assert text == "error: the policy graph database is not reachable"
+    assert text.startswith("error: FalkorDB write failed: ")
+    assert "boom" not in text
     assert "not a patchable field" not in text
 
 
@@ -1971,10 +1753,10 @@ def test_update_standard_draft_log_triad_carries_actor_action_node_id_and_timest
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(_standard_parent_fixture()))
+        _install_tree_rig(monkeypatch)
         success_result = _call_update_standard_draft(fields={"description": "x"})
 
-        _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         failure_result = _call_update_standard_draft(
             standard_id="std_missing", fields={"description": "x"}
         )
@@ -2011,76 +1793,18 @@ def test_update_standard_draft_backfills_legacy_null_status_before_gating(
     `_read_standard_with_parent_backfilled`, not spuriously rejected.
     """
     configure()
-    fixture = _StandardParentFixture(
-        policy_id=_EXISTING_POLICY_ID,
-        owner_subject=_ACTOR_SUBJECT,
-        owner_issuer=_ACTOR_ISSUER,
-        policy_status="draft",
-        standard_status=None,
-    )
-    _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(fixture))
+    rig = _install_tree_rig(monkeypatch, standard_status=None)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_update_standard_draft(fields={"description": "now editable"})
 
     assert result.is_error is False
-    assert fixture.standard_status == "draft"
+    standard = rig.graphs.open("policy_system").nodes[("Standard", _EXISTING_STANDARD_ID)]
+    assert standard["status"] == "draft"
 
 
 # --- `add-control-to-draft` (issue #136, Slice 4) ----------------------------
-
-
-class _AddControlToDraftFakeGraph:
-    """Fake FalkorDB graph handle for `add-control-to-draft`'s tests (issue #136, Slice 4).
-
-    Mirrors `_UpdateStandardDraftFakeGraph` exactly for the read/backfill
-    half -- PLAN.md §1.4's own correction: `add-control-to-draft` shares
-    `update-standard-draft`'s (Slice 3) one-hop `find_standard_with_parent`
-    ownership shape, never a two-hop traversal (that belongs to
-    `update-control-draft` alone, Slice 5). Adds `add_control_to_standard`'s
-    own distinguishing `MERGE ... Control` write branch.
-    """
-
-    def __init__(
-        self, fixture: _StandardParentFixture | None, *, raise_on_write: Exception | None = None
-    ) -> None:
-        self._fixture = fixture
-        self.write_queries: list[str] = []
-        self.write_params: list[dict[str, object] | None] = []
-        self.raise_on_write = raise_on_write
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        del timeout
-        fixture = self._fixture
-        if "RETURN p.id, p.owner_subject, p.owner_issuer, p.status, s.status, s.title" in q:
-            if fixture is None:
-                return _FakeQueryResult(result_set=[])
-            return _FakeQueryResult(
-                result_set=[
-                    [
-                        fixture.policy_id,
-                        fixture.owner_subject,
-                        fixture.owner_issuer,
-                        fixture.policy_status,
-                        fixture.standard_status,
-                        fixture.standard_title,
-                    ]
-                ]
-            )
-        if "s.status IS NULL" in q and "SET s.status = p.status" in q:
-            if fixture is not None and fixture.standard_status is None:
-                fixture.standard_status = fixture.policy_status
-            return _FakeQueryResult()
-        if "IMPLEMENTED_BY]->(c:Control {id: $control_id})" not in q:
-            return _FakeQueryResult()
-        self.write_queries.append(q)
-        self.write_params.append(params)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        return _FakeQueryResult()
 
 
 def _call_add_control_to_draft(
@@ -2102,7 +1826,7 @@ def _call_add_control_to_draft(
 
 def test_add_control_to_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2127,16 +1851,15 @@ def test_add_control_to_draft_defaults_implementation_status_planned_not_draft(
     own `"draft"` default -- easy to copy-paste wrong.
     """
     configure()
-    graph = _AddControlToDraftFakeGraph(_standard_parent_fixture())
-    _install_graph(monkeypatch, graph)
+    rig = _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_add_control_to_draft()
 
     assert result.is_error is False
-    params = cast("dict[str, object]", graph.write_params[0])
-    props = cast("dict[str, object]", params["properties"])
+    new_control_id = json.loads(_text(result))["control_id"]
+    props = rig.graphs.open("policy_system").nodes[("Control", new_control_id)]
     assert props["implementation_status"] == "planned"
     assert props["status"] == "draft"
 
@@ -2144,24 +1867,19 @@ def test_add_control_to_draft_defaults_implementation_status_planned_not_draft(
 def test_add_control_to_draft_response_id_usable_in_get_policy_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009-shaped, proven as a genuine round trip: create Policy -> add
-    Standard -> add Control -> get-policy, against the same stateful fake
-    graph, showing the new Control's id genuinely round-trips into a real
-    call. `update-control-draft` (the more direct chained call) is Slice 5's
-    own tool, not yet implemented -- `get-policy` is the read this slice uses
-    instead, per the task's own guidance.
+    """AC-BI-009-shaped, proven as a genuine round trip: add Standard -> add Control ->
+    get-policy, against the same rig graph the gateway writes, showing the new Control's id
+    genuinely round-trips into a real call.
+
+    The Policy is seeded rather than created: `create-policy-draft` still writes through the
+    direct writer until it migrates (a later slice of #211).
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
-    _install_audit_store(monkeypatch, _FakeAuditStore())
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        create_result = _call_create_policy_draft()
-        policy_id = json.loads(_text(create_result))["policy_id"]
-
-        add_standard_result = _call_add_standard_to_draft(policy_id=policy_id)
+        add_standard_result = _call_add_standard_to_draft(policy_id=_EXISTING_POLICY_ID)
         assert add_standard_result.is_error is False
         new_standard_id = json.loads(_text(add_standard_result))["standard_id"]
 
@@ -2169,7 +1887,7 @@ def test_add_control_to_draft_response_id_usable_in_get_policy_end_to_end(
         assert add_control_result.is_error is False
         new_control_id = json.loads(_text(add_control_result))["control_id"]
 
-        get_result = _call_get_policy(policy_id=policy_id)
+        get_result = _call_get_policy(policy_id=_EXISTING_POLICY_ID)
 
     assert get_result.is_error is False
     body = json.loads(_text(get_result))
@@ -2184,7 +1902,7 @@ def test_add_control_to_draft_unknown_field_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2203,7 +1921,7 @@ def test_add_control_to_draft_fields_type_key_rejected_returns_named_error(
     the single path to set a Control's type at creation.
     """
     configure()
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2219,7 +1937,7 @@ def test_add_control_to_draft_invalid_implementation_status_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2235,7 +1953,7 @@ def test_add_control_to_draft_invalid_control_type_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2251,7 +1969,7 @@ def test_add_control_to_draft_non_owner_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(_standard_parent_fixture()))
+    _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_OTHER_SUBJECT):
@@ -2265,9 +1983,7 @@ def test_add_control_to_draft_non_draft_status_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(
-        monkeypatch, _AddControlToDraftFakeGraph(_standard_parent_fixture(status="proposed"))
-    )
+    _install_tree_rig(monkeypatch, standard_status="proposed")
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2283,7 +1999,7 @@ def test_add_control_to_draft_missing_standard_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(None))
+    _install_rig_graph(monkeypatch, None)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2298,10 +2014,10 @@ def test_add_control_to_draft_missing_standard_returns_named_error(
 def test_add_control_to_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    graph = _AddControlToDraftFakeGraph(_standard_parent_fixture())
-    graph.raise_on_write = redis.exceptions.ConnectionError("boom")
-    _install_graph(monkeypatch, graph)
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
     configure()
+    rig = _install_tree_rig(monkeypatch)
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2309,7 +2025,8 @@ def test_add_control_to_draft_graph_unavailable_returns_named_error(
 
     assert result.is_error is False
     text = _text(result)
-    assert text == "error: the policy graph database is not reachable"
+    assert text.startswith("error: FalkorDB write failed: ")
+    assert "boom" not in text
     assert "not a patchable field" not in text
 
 
@@ -2324,10 +2041,10 @@ def test_add_control_to_draft_log_triad_carries_actor_action_node_id_and_timesta
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        _install_graph(monkeypatch, _AddControlToDraftFakeGraph(_standard_parent_fixture()))
+        _install_tree_rig(monkeypatch)
         success_result = _call_add_control_to_draft()
 
-        _install_graph(monkeypatch, _AddControlToDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         failure_result = _call_add_control_to_draft(standard_id="std_missing")
 
     assert success_result.is_error is False
@@ -2360,109 +2077,20 @@ def test_add_control_to_draft_backfills_legacy_null_status_before_gating(
     `_read_standard_with_parent_backfilled`, not spuriously rejected.
     """
     configure()
-    fixture = _StandardParentFixture(
-        policy_id=_EXISTING_POLICY_ID,
-        owner_subject=_ACTOR_SUBJECT,
-        owner_issuer=_ACTOR_ISSUER,
-        policy_status="draft",
-        standard_status=None,
-    )
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(fixture))
+    rig = _install_tree_rig(monkeypatch, standard_status=None)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_add_control_to_draft()
 
     assert result.is_error is False
-    assert fixture.standard_status == "draft"
+    standard = rig.graphs.open("policy_system").nodes[("Standard", _EXISTING_STANDARD_ID)]
+    assert standard["status"] == "draft"
 
 
 # --- `update-control-draft` (issue #136, Slice 5) ----------------------------
 
 _EXISTING_CONTROL_ID = "ctrl_key_rotation_check_aaaaaa"
-
-
-@dataclass
-class _ControlParentFixture:
-    """The two-hop analogue of `_StandardParentFixture` (Slice 3): a Control's
-    own status/title plus its ROOT Policy's owner/status -- neither the
-    Control nor its parent Standard carries an ownership field of its own.
-    """
-
-    standard_id: str
-    policy_id: str
-    owner_subject: str
-    owner_issuer: str
-    policy_status: str
-    control_status: str | None
-    control_title: str = "Key Rotation Check"
-
-
-class _UpdateControlDraftFakeGraph:
-    """Fake FalkorDB graph handle for `update-control-draft`'s tests (issue #136, Slice 5).
-
-    Mirrors `_UpdateStandardDraftFakeGraph` (Slice 3) exactly, one hop
-    deeper: models the Control's ROOT-Policy owner/status plus the Control's
-    own (possibly `None`, pre-backfill) status as a single mutable fixture,
-    so the same instance answers `find_control_with_parent`'s two-hop read
-    both before and after `backfill_governance_status`'s own
-    `c.status IS NULL` write actually mutates `control_status` (CHANGES.md
-    finding #2).
-    """
-
-    def __init__(
-        self, fixture: _ControlParentFixture | None, *, raise_on_write: Exception | None = None
-    ) -> None:
-        self._fixture = fixture
-        self.write_queries: list[str] = []
-        self.write_params: list[dict[str, object] | None] = []
-        self.raise_on_write = raise_on_write
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        del timeout
-        fixture = self._fixture
-        if "RETURN s.id, p.id, p.owner_subject, p.owner_issuer, p.status, c.status, c.title" in q:
-            if fixture is None:
-                return _FakeQueryResult(result_set=[])
-            return _FakeQueryResult(
-                result_set=[
-                    [
-                        fixture.standard_id,
-                        fixture.policy_id,
-                        fixture.owner_subject,
-                        fixture.owner_issuer,
-                        fixture.policy_status,
-                        fixture.control_status,
-                        fixture.control_title,
-                    ]
-                ]
-            )
-        if "c.status IS NULL" in q and "SET c.status = p.status" in q:
-            if fixture is not None and fixture.control_status is None:
-                fixture.control_status = fixture.policy_status
-            return _FakeQueryResult()
-        if "$set_properties" not in q and "= null" not in q:
-            return _FakeQueryResult()
-        self.write_queries.append(q)
-        self.write_params.append(params)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        return _FakeQueryResult()
-
-
-def _control_parent_fixture(
-    *, owner_subject: str = _ACTOR_SUBJECT, status: str = "draft"
-) -> _ControlParentFixture:
-    return _ControlParentFixture(
-        standard_id=_EXISTING_STANDARD_ID,
-        policy_id=_EXISTING_POLICY_ID,
-        owner_subject=owner_subject,
-        owner_issuer=_ACTOR_ISSUER,
-        policy_status="draft",
-        control_status=status,
-    )
 
 
 def _call_update_control_draft(
@@ -2478,7 +2106,7 @@ def _call_update_control_draft(
 
 def test_update_control_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(_control_parent_fixture()))
+    _install_tree_rig(monkeypatch, with_control=True)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2498,28 +2126,23 @@ def test_update_control_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> 
 def test_update_control_draft_ownership_traverses_two_hops_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The task's own required proof: a REAL Policy -> Standard -> Control
-    chain, built entirely through the tool surface
-    (`create-policy-draft` -> `add-standard-to-draft` -> `add-control-to-
-    draft`), then `update-control-draft` called against that same live
-    `_StatefulFakeGraph` -- not a one-hop stand-in, not a fixture asserted
-    into existence. `find_control_with_parent`'s own two-hop `MATCH (p:Policy)
-    -[:SUPPORTED_BY]->(s:Standard)-[:IMPLEMENTED_BY]->(c:Control)` query is
-    the only thing that can resolve `update-control-draft`'s ownership here,
-    since `_StatefulFakeGraph` never stores an "owner" concept anywhere
-    except on the Policy node itself.
+    """The task's own required proof: a REAL Policy -> Standard -> Control chain, built through
+    the tool surface (`add-standard-to-draft` -> `add-control-to-draft`) onto a seeded Policy,
+    then `update-control-draft` called against that same live rig graph -- not a one-hop
+    stand-in, not a fixture asserted into existence. `find_control_with_parent`'s own two-hop
+    `MATCH (p:Policy)-[:SUPPORTED_BY]->(s:Standard)-[:IMPLEMENTED_BY]->(c:Control)` query is the
+    only thing that can resolve `update-control-draft`'s ownership here, since only the Policy
+    node carries an owner.
+
+    The Policy is seeded rather than created: `create-policy-draft` still writes through the
+    direct writer until it migrates (a later slice of #211).
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
-    _install_audit_store(monkeypatch, _FakeAuditStore())
+    _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        create_result = _call_create_policy_draft()
-        policy_id = json.loads(_text(create_result))["policy_id"]
-
-        add_standard_result = _call_add_standard_to_draft(policy_id=policy_id)
+        add_standard_result = _call_add_standard_to_draft(policy_id=_EXISTING_POLICY_ID)
         assert add_standard_result.is_error is False
         new_standard_id = json.loads(_text(add_standard_result))["standard_id"]
 
@@ -2535,7 +2158,7 @@ def test_update_control_draft_ownership_traverses_two_hops_end_to_end(
     assert json.loads(_text(update_result)) == {
         "control_id": new_control_id,
         "standard_id": new_standard_id,
-        "policy_id": policy_id,
+        "policy_id": _EXISTING_POLICY_ID,
         "title": "Key Rotation Check",
         "status": "draft",
     }
@@ -2546,23 +2169,19 @@ def test_update_control_draft_ownership_traverses_two_hops_end_to_end_rejects_no
 ) -> None:
     """Same real chain as above, but the caller isn't the root Policy's
     owner -- rejected purely via the two-hop traversal, since nothing
-    Standard/Control-level carries an ownership concept in this fake either.
+    Standard/Control-level carries an ownership concept in this graph either.
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
-    _install_audit_store(monkeypatch, _FakeAuditStore())
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        create_result = _call_create_policy_draft()
-        policy_id = json.loads(_text(create_result))["policy_id"]
-
-        add_standard_result = _call_add_standard_to_draft(policy_id=policy_id)
+        add_standard_result = _call_add_standard_to_draft(policy_id=_EXISTING_POLICY_ID)
         new_standard_id = json.loads(_text(add_standard_result))["standard_id"]
 
         add_control_result = _call_add_control_to_draft(standard_id=new_standard_id)
         new_control_id = json.loads(_text(add_control_result))["control_id"]
+    logged = len(rig.store.groups)
 
     with _verified_actor(sub=_OTHER_SUBJECT):
         update_result = _call_update_control_draft(
@@ -2571,13 +2190,14 @@ def test_update_control_draft_ownership_traverses_two_hops_end_to_end_rejects_no
 
     assert update_result.is_error is False
     assert _text(update_result) == "error: you do not have access to this Policy"
+    assert len(rig.store.groups) == logged
 
 
 def test_update_control_draft_unknown_field_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(_control_parent_fixture()))
+    _install_tree_rig(monkeypatch, with_control=True)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2595,7 +2215,7 @@ def test_update_control_draft_type_field_is_patchable(monkeypatch: pytest.Monkey
     to change a Control's type.
     """
     configure()
-    _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(_control_parent_fixture()))
+    _install_tree_rig(monkeypatch, with_control=True)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2608,7 +2228,7 @@ def test_update_control_draft_non_owner_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(_control_parent_fixture()))
+    _install_tree_rig(monkeypatch, with_control=True)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_OTHER_SUBJECT):
@@ -2622,9 +2242,7 @@ def test_update_control_draft_non_draft_status_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(
-        monkeypatch, _UpdateControlDraftFakeGraph(_control_parent_fixture(status="proposed"))
-    )
+    _install_tree_rig(monkeypatch, with_control=True, control_status="proposed")
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2640,7 +2258,7 @@ def test_update_control_draft_missing_control_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(None))
+    _install_rig_graph(monkeypatch, None)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2663,13 +2281,13 @@ def test_update_control_draft_missing_control_error_distinct_from_standard_and_p
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         control_result = _call_update_control_draft(control_id="ctrl_missing")
 
-        _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         standard_result = _call_update_standard_draft(standard_id="std_missing")
 
-        _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         policy_result = _call_update_policy_draft(
             policy_id="pol_missing", fields={"description": "x"}
         )
@@ -2686,11 +2304,10 @@ def test_update_control_draft_missing_control_error_distinct_from_standard_and_p
 def test_update_control_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    graph = _UpdateControlDraftFakeGraph(
-        _control_parent_fixture(), raise_on_write=redis.exceptions.ConnectionError("boom")
-    )
-    _install_graph(monkeypatch, graph)
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
     configure()
+    rig = _install_tree_rig(monkeypatch, with_control=True)
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2698,7 +2315,8 @@ def test_update_control_draft_graph_unavailable_returns_named_error(
 
     assert result.is_error is False
     text = _text(result)
-    assert text == "error: the policy graph database is not reachable"
+    assert text.startswith("error: FalkorDB write failed: ")
+    assert "boom" not in text
     assert "not a patchable field" not in text
 
 
@@ -2709,10 +2327,10 @@ def test_update_control_draft_log_triad_carries_actor_action_node_id_and_timesta
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(_control_parent_fixture()))
+        _install_tree_rig(monkeypatch, with_control=True)
         success_result = _call_update_control_draft(fields={"description": "x"})
 
-        _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(None))
+        _install_rig_graph(monkeypatch, None)
         failure_result = _call_update_control_draft(
             control_id="ctrl_missing", fields={"description": "x"}
         )
@@ -2746,52 +2364,18 @@ def test_update_control_draft_backfills_legacy_null_status_before_gating(
     `_read_control_with_parent_backfilled`, not spuriously rejected.
     """
     configure()
-    fixture = _ControlParentFixture(
-        standard_id=_EXISTING_STANDARD_ID,
-        policy_id=_EXISTING_POLICY_ID,
-        owner_subject=_ACTOR_SUBJECT,
-        owner_issuer=_ACTOR_ISSUER,
-        policy_status="draft",
-        control_status=None,
-    )
-    _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(fixture))
+    rig = _install_tree_rig(monkeypatch, with_control=True, control_status=None)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_update_control_draft(fields={"description": "now editable"})
 
     assert result.is_error is False
-    assert fixture.control_status == "draft"
+    control = rig.graphs.open("policy_system").nodes[("Control", _EXISTING_CONTROL_ID)]
+    assert control["status"] == "draft"
 
 
 # --- `propose-policy` (issue #134, S16) -------------------------------------
-
-
-class _ProposeFakeGraph(_TreeFakeGraph):
-    """Extends `_TreeFakeGraph` with `cascade_status`'s single cascading write (S16).
-
-    Every other query (the tree read, each of `backfill_governance_status`'s
-    three `SET` statements) is handled by `_TreeFakeGraph.query` unchanged;
-    only the cascade's own distinguishing `SET p.status = $target_status`
-    substring is intercepted here.
-    """
-
-    def __init__(
-        self, policy: _PolicyFixture | None, *, raise_on_write: Exception | None = None
-    ) -> None:
-        super().__init__(policy)
-        self.write_queries: list[str] = []
-        self.raise_on_write = raise_on_write
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        if "SET p.status = $target_status" not in q:
-            return super().query(q, params, timeout)
-        self.write_queries.append(q)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        return _FakeQueryResult()
 
 
 def _proposable_fixture(
@@ -2813,6 +2397,59 @@ def _proposable_fixture(
     )
 
 
+def _install_fixture_rig(
+    monkeypatch: pytest.MonkeyPatch,
+    policy: _PolicyFixture | None,
+    *,
+    fork_of: tuple[str, tuple[str, ...]] | None = None,
+) -> GatewayRig:
+    """Seed `policy` (with its tree) into the process gateway rig and read through its double.
+
+    Issue #211: the transition tools write through the Graph Write Gateway, so the graph they
+    read is the rig graph the gateway writes. `fork_of=(prior_id, capability_ids)` makes the
+    Policy a fork of a `deprecated` prior (not auto-deprecated) that governs `capability_ids`.
+    """
+    rig = installed_process_gateway().rig
+    graph = rig.graphs.open("policy_system")
+    seeder = PolicyGraphSeeder(graph)
+    if policy is not None:
+        seeder.seed_policy(
+            policy.id,
+            title=policy.title,
+            status=policy.status,
+            version=policy.version,
+            owner=(policy.owner_subject, policy.owner_issuer),
+            standards=tuple(
+                SeedStandard(
+                    standard.id,
+                    standard.title,
+                    status=standard.status,
+                    controls=tuple(
+                        SeedControl(
+                            control.id,
+                            control.title,
+                            status=control.status,
+                            control_type=control.control_type,
+                        )
+                        for control in standard.controls
+                    ),
+                )
+                for standard in policy.standards
+            ),
+            legacy_edges=False,
+        )
+    if fork_of is not None:
+        assert policy is not None
+        prior_id, capability_ids = fork_of
+        seeder.seed_policy(prior_id, status="deprecated", legacy_edges=False)
+        seeder.seed_supersedes(prior_id, policy.id, legacy=False)
+        for capability_id in capability_ids:
+            seeder.seed_capability(capability_id)
+            seeder.seed_governs(capability_id, prior_id, legacy=False)
+    _install_graph(monkeypatch, PolicyReadGraph(graph))
+    return rig
+
+
 def _call_propose_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:
     result = asyncio.run(mcp_server.server.call_tool("propose-policy", {"policy_id": policy_id}))
     assert isinstance(result, CallToolResult)
@@ -2821,7 +2458,7 @@ def _call_propose_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult
 
 def test_propose_policy_tool_is_registered_and_callable(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    _install_graph(monkeypatch, _ProposeFakeGraph(_proposable_fixture()))
+    _install_fixture_rig(monkeypatch, _proposable_fixture())
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2832,8 +2469,7 @@ def test_propose_policy_tool_is_registered_and_callable(monkeypatch: pytest.Monk
 
 def test_propose_policy_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    graph = _ProposeFakeGraph(_proposable_fixture())
-    _install_graph(monkeypatch, graph)
+    rig = _install_fixture_rig(monkeypatch, _proposable_fixture())
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
 
@@ -2848,7 +2484,7 @@ def test_propose_policy_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
         "standard_ids": ["std_1"],
         "control_ids": [],
     }
-    assert len(graph.write_queries) == 1
+    assert len(rig.store.groups) == 1
     assert len(audit_store.calls) == 1
     assert audit_store.calls[0].outcome == "applied"
     assert audit_store.calls[0].action == "policy.propose"
@@ -2858,9 +2494,7 @@ def test_propose_policy_non_owner_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(
-        monkeypatch, _ProposeFakeGraph(_proposable_fixture(owner_subject=_OTHER_SUBJECT))
-    )
+    _install_fixture_rig(monkeypatch, _proposable_fixture(owner_subject=_OTHER_SUBJECT))
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
 
@@ -2877,7 +2511,7 @@ def test_propose_policy_zero_standards_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ProposeFakeGraph(_proposable_fixture(standards=())))
+    _install_fixture_rig(monkeypatch, _proposable_fixture(standards=()))
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2893,7 +2527,7 @@ def test_propose_policy_wrong_status_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ProposeFakeGraph(_proposable_fixture(status="proposed")))
+    _install_fixture_rig(monkeypatch, _proposable_fixture(status="proposed"))
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2909,7 +2543,7 @@ def test_propose_policy_nonexistent_policy_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ProposeFakeGraph(None))
+    _install_fixture_rig(monkeypatch, None)
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -2925,17 +2559,15 @@ def test_propose_policy_graph_unavailable_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    graph = _ProposeFakeGraph(
-        _proposable_fixture(), raise_on_write=redis.exceptions.ConnectionError("boom")
-    )
-    _install_graph(monkeypatch, graph)
+    rig = _install_fixture_rig(monkeypatch, _proposable_fixture())
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_propose_policy()
 
     assert result.is_error is False
-    assert _text(result) == "error: the policy graph database is not reachable"
+    assert _text(result).startswith("error: FalkorDB write failed: ")
 
 
 def test_propose_policy_without_a_real_authenticated_caller_and_no_bypass_is_refused() -> None:
@@ -2953,36 +2585,6 @@ def test_propose_policy_without_a_real_authenticated_caller_and_no_bypass_is_ref
 # --- `approve-policy` (issue #134, S18) -------------------------------------
 
 _MANAGER_SUBJECT = "policy-manager"
-
-
-class _ApproveFakeGraph(_TreeFakeGraph):
-    """Extends `_TreeFakeGraph` with `cascade_status`'s single cascading write (S18).
-
-    Mirrors `_ProposeFakeGraph` exactly -- none of this slice's own tests
-    seed a `SUPERSEDED_BY` edge (that behavior is already fully covered at
-    the service layer, `test_service.py`'s S17/S25 tests), so the
-    `find_approved_prior` read this tool's own `approve_policy` call always
-    issues after a successful cascade falls through to `_TreeFakeGraph.
-    query`'s own default branch, which returns an empty `result_set` --
-    exactly what "no prior" looks like.
-    """
-
-    def __init__(
-        self, policy: _PolicyFixture | None, *, raise_on_write: Exception | None = None
-    ) -> None:
-        super().__init__(policy)
-        self.write_queries: list[str] = []
-        self.raise_on_write = raise_on_write
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        if "SET p.status = $target_status" not in q:
-            return super().query(q, params, timeout)
-        self.write_queries.append(q)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        return _FakeQueryResult()
 
 
 def _approvable_fixture(
@@ -3022,7 +2624,7 @@ def _install_manager_role(
 
 def test_approve_policy_tool_is_registered_and_callable(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(_approvable_fixture()))
+    _install_fixture_rig(monkeypatch, _approvable_fixture())
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3034,8 +2636,7 @@ def test_approve_policy_tool_is_registered_and_callable(monkeypatch: pytest.Monk
 
 def test_approve_policy_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    graph = _ApproveFakeGraph(_approvable_fixture())
-    _install_graph(monkeypatch, graph)
+    rig = _install_fixture_rig(monkeypatch, _approvable_fixture())
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
     _install_manager_role(monkeypatch)
@@ -3053,41 +2654,19 @@ def test_approve_policy_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
         "auto_deprecated_policy_id": None,
         "governed_capability_ids": [],
     }
-    assert len(graph.write_queries) == 1
+    assert len(rig.store.groups) == 1
     assert len(audit_store.calls) == 1
     assert audit_store.calls[0].outcome == "applied"
     assert audit_store.calls[0].action == "policy.approve"
-
-
-class _ForkApproveFakeGraph(_ApproveFakeGraph):
-    """A fork of `prior_old` governing `capability_ids`; the guarded re-point row is toggleable."""
-
-    def __init__(
-        self, policy: _PolicyFixture, *, capability_ids: list[str], guard_holds: bool
-    ) -> None:
-        super().__init__(policy)
-        self._capability_ids = capability_ids
-        self._guard_holds = guard_holds
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        if "RETURN prior.id, collect(cap.id)" in q:
-            return _FakeQueryResult(result_set=[["prior_old", self._capability_ids]])
-        if "DELETE r" in q:
-            self.write_queries.append(q)
-            return _FakeQueryResult(result_set=[["pol"]] if self._guard_holds else [])
-        return super().query(q, params, timeout)
 
 
 def test_approve_policy_fork_returns_governed_capability_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    graph = _ForkApproveFakeGraph(
-        _approvable_fixture(), capability_ids=["cap_a", "cap_b"], guard_holds=True
+    rig = _install_fixture_rig(
+        monkeypatch, _approvable_fixture(), fork_of=("prior_old", ("cap_a", "cap_b"))
     )
-    _install_graph(monkeypatch, graph)
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3097,17 +2676,25 @@ def test_approve_policy_fork_returns_governed_capability_ids(
     assert result.is_error is False
     body = json.loads(_text(result))
     assert body["governed_capability_ids"] == ["cap_a", "cap_b"]
-    assert len(graph.write_queries) == 1
+    assert len(rig.store.groups) == 1
 
 
 def test_approve_policy_governance_conflict_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    graph = _ForkApproveFakeGraph(
-        _approvable_fixture(), capability_ids=["cap_a"], guard_holds=False
+    rig = _install_fixture_rig(
+        monkeypatch, _approvable_fixture(), fork_of=("prior_old", ("cap_a",))
     )
-    _install_graph(monkeypatch, graph)
+    graph = rig.graphs.open("policy_system")
+
+    def _third_party_takes_cap_a() -> None:
+        del graph.edges[next(k for k in graph.edges if k[0] == "GOVERNED_BY")]
+        PolicyGraphSeeder(graph).seed_governs("cap_a", "pol_third", legacy=False)
+
+    _install_graph(
+        monkeypatch, FlippingRead(graph, _third_party_takes_cap_a, marker="collect(cap.id)")
+    )
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
     _install_manager_role(monkeypatch)
@@ -3119,13 +2706,14 @@ def test_approve_policy_governance_conflict_surfaces_as_its_own_distinct_error(
     assert text.startswith("error: ")
     assert "nothing was changed" in text
     assert [call.outcome for call in audit_store.calls] == ["applied", "failed"]
+    assert rig.store.groups == []
 
 
 def test_approve_policy_owner_self_approval_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(_approvable_fixture()))
+    _install_fixture_rig(monkeypatch, _approvable_fixture())
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
     _install_manager_role(monkeypatch, subject=_ACTOR_SUBJECT)
@@ -3143,7 +2731,7 @@ def test_approve_policy_non_policy_manager_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(_approvable_fixture()))
+    _install_fixture_rig(monkeypatch, _approvable_fixture())
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
@@ -3158,7 +2746,7 @@ def test_approve_policy_wrong_status_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(_approvable_fixture(status="draft")))
+    _install_fixture_rig(monkeypatch, _approvable_fixture(status="draft"))
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3175,7 +2763,7 @@ def test_approve_policy_nonexistent_policy_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(None))
+    _install_fixture_rig(monkeypatch, None)
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3192,10 +2780,8 @@ def test_approve_policy_graph_unavailable_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    graph = _ApproveFakeGraph(
-        _approvable_fixture(), raise_on_write=redis.exceptions.ConnectionError("boom")
-    )
-    _install_graph(monkeypatch, graph)
+    rig = _install_fixture_rig(monkeypatch, _approvable_fixture())
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3203,7 +2789,7 @@ def test_approve_policy_graph_unavailable_surfaces_as_its_own_distinct_error(
         result = _call_approve_policy()
 
     assert result.is_error is False
-    assert _text(result) == "error: the policy graph database is not reachable"
+    assert _text(result).startswith("error: FalkorDB write failed: ")
 
 
 def test_approve_policy_without_a_real_authenticated_caller_and_no_bypass_is_refused() -> None:
@@ -3234,7 +2820,7 @@ def _call_reject_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:
 
 def test_reject_policy_tool_is_registered_and_callable(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(_approvable_fixture()))
+    _install_fixture_rig(monkeypatch, _approvable_fixture())
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3246,8 +2832,7 @@ def test_reject_policy_tool_is_registered_and_callable(monkeypatch: pytest.Monke
 
 def test_reject_policy_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    graph = _ApproveFakeGraph(_approvable_fixture())
-    _install_graph(monkeypatch, graph)
+    rig = _install_fixture_rig(monkeypatch, _approvable_fixture())
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
     _install_manager_role(monkeypatch)
@@ -3263,7 +2848,7 @@ def test_reject_policy_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
         "standard_ids": ["std_1"],
         "control_ids": [],
     }
-    assert len(graph.write_queries) == 1
+    assert len(rig.store.groups) == 1
     assert len(audit_store.calls) == 1
     assert audit_store.calls[0].outcome == "applied"
     assert audit_store.calls[0].action == "policy.reject"
@@ -3273,7 +2858,7 @@ def test_reject_policy_owner_self_rejection_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(_approvable_fixture()))
+    _install_fixture_rig(monkeypatch, _approvable_fixture())
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
     _install_manager_role(monkeypatch, subject=_ACTOR_SUBJECT)
@@ -3291,7 +2876,7 @@ def test_reject_policy_non_policy_manager_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(_approvable_fixture()))
+    _install_fixture_rig(monkeypatch, _approvable_fixture())
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
@@ -3306,7 +2891,7 @@ def test_reject_policy_wrong_status_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(_approvable_fixture(status="draft")))
+    _install_fixture_rig(monkeypatch, _approvable_fixture(status="draft"))
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3323,7 +2908,7 @@ def test_reject_policy_nonexistent_policy_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _ApproveFakeGraph(None))
+    _install_fixture_rig(monkeypatch, None)
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3340,10 +2925,8 @@ def test_reject_policy_graph_unavailable_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    graph = _ApproveFakeGraph(
-        _approvable_fixture(), raise_on_write=redis.exceptions.ConnectionError("boom")
-    )
-    _install_graph(monkeypatch, graph)
+    rig = _install_fixture_rig(monkeypatch, _approvable_fixture())
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3351,7 +2934,7 @@ def test_reject_policy_graph_unavailable_surfaces_as_its_own_distinct_error(
         result = _call_reject_policy()
 
     assert result.is_error is False
-    assert _text(result) == "error: the policy graph database is not reachable"
+    assert _text(result).startswith("error: FalkorDB write failed: ")
 
 
 def test_reject_policy_without_a_real_authenticated_caller_and_no_bypass_is_refused() -> None:
@@ -3373,27 +2956,6 @@ def test_reject_policy_without_a_real_authenticated_caller_and_no_bypass_is_refu
 # `PolicyManager`-gated shape. The non-owner test below deliberately grants
 # the non-owner caller `PolicyManager` to prove this tool's own action is
 # genuinely owner-only, not role-gated.
-
-
-class _RevertFakeGraph(_TreeFakeGraph):
-    """Extends `_TreeFakeGraph` with `cascade_status`'s single cascading write (S22)."""
-
-    def __init__(
-        self, policy: _PolicyFixture | None, *, raise_on_write: Exception | None = None
-    ) -> None:
-        super().__init__(policy)
-        self.write_queries: list[str] = []
-        self.raise_on_write = raise_on_write
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        if "SET p.status = $target_status" not in q:
-            return super().query(q, params, timeout)
-        self.write_queries.append(q)
-        if self.raise_on_write is not None:
-            raise self.raise_on_write
-        return _FakeQueryResult()
 
 
 def _revertable_fixture(
@@ -3427,7 +2989,7 @@ def test_revert_policy_to_draft_tool_is_registered_and_callable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _RevertFakeGraph(_revertable_fixture()))
+    _install_fixture_rig(monkeypatch, _revertable_fixture())
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -3438,8 +3000,7 @@ def test_revert_policy_to_draft_tool_is_registered_and_callable(
 
 def test_revert_policy_to_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    graph = _RevertFakeGraph(_revertable_fixture())
-    _install_graph(monkeypatch, graph)
+    rig = _install_fixture_rig(monkeypatch, _revertable_fixture())
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
 
@@ -3454,7 +3015,7 @@ def test_revert_policy_to_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -
         "standard_ids": ["std_1"],
         "control_ids": [],
     }
-    assert len(graph.write_queries) == 1
+    assert len(rig.store.groups) == 1
     assert len(audit_store.calls) == 1
     assert audit_store.calls[0].outcome == "applied"
     assert audit_store.calls[0].action == "policy.revert"
@@ -3465,7 +3026,7 @@ def test_revert_policy_to_draft_non_owner_policy_manager_surfaces_as_its_own_dis
 ) -> None:
     """A `PolicyManager` who is not the owner is still rejected -- no RBAC gate exists here."""
     configure()
-    _install_graph(monkeypatch, _RevertFakeGraph(_revertable_fixture(owner_subject=_OTHER_SUBJECT)))
+    _install_fixture_rig(monkeypatch, _revertable_fixture(owner_subject=_OTHER_SUBJECT))
     audit_store = _FakeAuditStore()
     _install_audit_store(monkeypatch, audit_store)
     _install_manager_role(monkeypatch)
@@ -3483,7 +3044,7 @@ def test_revert_policy_to_draft_wrong_status_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _RevertFakeGraph(_revertable_fixture(status="draft")))
+    _install_fixture_rig(monkeypatch, _revertable_fixture(status="draft"))
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -3499,7 +3060,7 @@ def test_revert_policy_to_draft_nonexistent_policy_surfaces_as_its_own_distinct_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_graph(monkeypatch, _RevertFakeGraph(None))
+    _install_fixture_rig(monkeypatch, None)
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -3515,17 +3076,15 @@ def test_revert_policy_to_draft_graph_unavailable_surfaces_as_its_own_distinct_e
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    graph = _RevertFakeGraph(
-        _revertable_fixture(), raise_on_write=redis.exceptions.ConnectionError("boom")
-    )
-    _install_graph(monkeypatch, graph)
+    rig = _install_fixture_rig(monkeypatch, _revertable_fixture())
+    rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_revert_policy_to_draft()
 
     assert result.is_error is False
-    assert _text(result) == "error: the policy graph database is not reachable"
+    assert _text(result).startswith("error: FalkorDB write failed: ")
 
 
 def test_revert_policy_to_draft_no_auth_caller_and_no_bypass_is_refused() -> None:
@@ -3556,31 +3115,6 @@ def test_revert_policy_to_draft_no_auth_caller_and_no_bypass_is_refused() -> Non
 # under the bypass") is real and intended, not a defect.
 
 
-class _ParamCapturingFakeGraph:
-    """A `_FakeGraph` variant that also records each write's `params` (S28).
-
-    `_FakeGraph` (S12, above) discards `params` entirely -- none of its own
-    tests needed to inspect them, since the tool's own success response only
-    surfaces `owner_subject`, not `owner_issuer`. AC-BI-018's literal
-    requirement that BOTH halves of the owner pair are the bypass
-    principal can only be confirmed by inspecting the
-    `graph_writer.create_policy_draft` write's own params directly.
-    """
-
-    def __init__(self) -> None:
-        self.write_params: list[dict[str, object]] = []
-
-    def query(
-        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _FakeQueryResult:
-        del timeout
-        if "RETURN p.id, p.title" in q:
-            return _FakeQueryResult(result_set=[])
-        assert params is not None
-        self.write_params.append(params)
-        return _FakeQueryResult()
-
-
 def test_bypass_sets_owner_subject_and_owner_issuer_to_the_bypass_principal_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3594,16 +3128,16 @@ def test_bypass_sets_owner_subject_and_owner_issuer_to_the_bypass_principal_pair
     """
     configure()
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    graph = _ParamCapturingFakeGraph()
-    _install_graph(monkeypatch, graph)
+    _install_graph(monkeypatch, _FakeGraph())
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     result = _call_create_policy_draft()
 
     assert result.is_error is False
-    policy_write_params = next(params for params in graph.write_params if "properties" in params)
-    properties = policy_write_params["properties"]
-    assert isinstance(properties, dict)
+    policy_id = json.loads(_text(result))["policy_id"]
+    properties = (
+        installed_process_gateway().rig.graphs.open("policy_system").nodes[("Policy", policy_id)]
+    )
     assert properties["owner_subject"] == LOCAL_TEST_PRINCIPAL_ID
     assert properties["owner_issuer"] == LOCAL_TEST_PRINCIPAL_ID
 
@@ -3655,7 +3189,7 @@ def test_bypass_approve_policy_is_always_rejected_by_self_approval_block(
     """
     configure()
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _install_graph(monkeypatch, _ApproveFakeGraph(_bypass_owned_proposed_fixture()))
+    _install_fixture_rig(monkeypatch, _bypass_owned_proposed_fixture())
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_bypass_manager_role(monkeypatch)
 
@@ -3674,7 +3208,7 @@ def test_bypass_reject_policy_is_always_rejected_by_self_approval_block(
     """
     configure()
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _install_graph(monkeypatch, _ApproveFakeGraph(_bypass_owned_proposed_fixture()))
+    _install_fixture_rig(monkeypatch, _bypass_owned_proposed_fixture())
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_bypass_manager_role(monkeypatch)
 
@@ -3713,7 +3247,7 @@ def test_bypass_update_policy_draft_treats_bypass_principal_as_owner(
         owner_subject=LOCAL_TEST_PRINCIPAL_ID,
         owner_issuer=LOCAL_TEST_PRINCIPAL_ID,
     )
-    _install_graph(monkeypatch, _UpdatePolicyDraftFakeGraph(fixture))
+    _install_rig_graph(monkeypatch, fixture)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     result = _call_update_policy_draft(fields={"description": "revised text"})
@@ -3738,7 +3272,7 @@ def test_bypass_add_standard_to_draft_treats_bypass_principal_as_owner(
         owner_subject=LOCAL_TEST_PRINCIPAL_ID,
         owner_issuer=LOCAL_TEST_PRINCIPAL_ID,
     )
-    _install_graph(monkeypatch, _AddStandardToDraftFakeGraph(fixture))
+    _install_rig_graph(monkeypatch, fixture)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     result = _call_add_standard_to_draft()
@@ -3754,14 +3288,9 @@ def test_bypass_update_standard_draft_treats_bypass_principal_as_owner(
 ) -> None:
     configure()
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    fixture = _StandardParentFixture(
-        policy_id=_EXISTING_POLICY_ID,
-        owner_subject=LOCAL_TEST_PRINCIPAL_ID,
-        owner_issuer=LOCAL_TEST_PRINCIPAL_ID,
-        policy_status="draft",
-        standard_status="draft",
+    _install_tree_rig(
+        monkeypatch, owner_subject=LOCAL_TEST_PRINCIPAL_ID, owner_issuer=LOCAL_TEST_PRINCIPAL_ID
     )
-    _install_graph(monkeypatch, _UpdateStandardDraftFakeGraph(fixture))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     result = _call_update_standard_draft(fields={"description": "revised text"})
@@ -3777,14 +3306,9 @@ def test_bypass_add_control_to_draft_treats_bypass_principal_as_owner(
 ) -> None:
     configure()
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    fixture = _StandardParentFixture(
-        policy_id=_EXISTING_POLICY_ID,
-        owner_subject=LOCAL_TEST_PRINCIPAL_ID,
-        owner_issuer=LOCAL_TEST_PRINCIPAL_ID,
-        policy_status="draft",
-        standard_status="draft",
+    _install_tree_rig(
+        monkeypatch, owner_subject=LOCAL_TEST_PRINCIPAL_ID, owner_issuer=LOCAL_TEST_PRINCIPAL_ID
     )
-    _install_graph(monkeypatch, _AddControlToDraftFakeGraph(fixture))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     result = _call_add_control_to_draft()
@@ -3800,15 +3324,12 @@ def test_bypass_update_control_draft_treats_bypass_principal_as_owner(
 ) -> None:
     configure()
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    fixture = _ControlParentFixture(
-        standard_id=_EXISTING_STANDARD_ID,
-        policy_id=_EXISTING_POLICY_ID,
+    _install_tree_rig(
+        monkeypatch,
         owner_subject=LOCAL_TEST_PRINCIPAL_ID,
         owner_issuer=LOCAL_TEST_PRINCIPAL_ID,
-        policy_status="draft",
-        control_status="draft",
+        with_control=True,
     )
-    _install_graph(monkeypatch, _UpdateControlDraftFakeGraph(fixture))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     result = _call_update_control_draft(fields={"description": "revised text"})
@@ -3834,8 +3355,7 @@ def test_bypass_create_policy_draft_supersedes_fork_owned_and_editable(
     under a verified actor).
     """
     configure()
-    graph = _StatefulFakeGraph()
-    _install_graph(monkeypatch, graph)
+    _install_stateful_rig(monkeypatch)
     _install_audit_store(monkeypatch, _FakeAuditStore())
     _install_manager_role(monkeypatch)
 
@@ -3871,7 +3391,6 @@ def test_bypass_create_policy_draft_supersedes_fork_owned_and_editable(
     assert body["owner_subject"] == LOCAL_TEST_PRINCIPAL_ID
     assert len(body["standard_ids"]) == 1
     new_standard_id = body["standard_ids"][0]
-
     update_result = _call_update_standard_draft(
         standard_id=new_standard_id, fields={"description": "revised"}
     )
@@ -3895,19 +3414,16 @@ def test_bypass_create_policy_draft_supersedes_fork_owned_and_editable(
 def test_create_policy_draft_unexpected_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unlike the `redis.exceptions.RedisError` case (`test_graph_unavailable_
-    surfaces_as_its_own_distinct_error` above), `create_policy_draft` only
-    ever catches `RedisError` around its graph write -- a non-`RedisError`
-    exception (e.g. a driver bug, a malformed response) is genuinely
-    unclassified and must fall through to `_run_mcp_action`'s residual
-    safety net instead of the named "graph database is not reachable"
-    message. Scripted for real via `_FakeGraph.raise_on_write`, not by
+    """Unlike a gateway failure (`test_graph_unavailable_surfaces_as_its_own_distinct_error`
+    above, the named persistence error), a non-gateway exception (e.g. a driver bug, a malformed
+    response) is genuinely unclassified and must fall through to `_run_mcp_action`'s residual
+    safety net instead of a named message. Scripted for real via the log store's failure, not by
     replacing the tool's own delegate.
     """
     configure()
-    graph = _FakeGraph()
-    graph.raise_on_write = RuntimeError("connection refused to db-internal-7.prod:6379")
-    _install_graph(monkeypatch, graph)
+    rig = installed_process_gateway().rig
+    rig.store.fail_appends(error=RuntimeError("connection refused to db-internal-7.prod:6379"))
+    _install_graph(monkeypatch, _FakeGraph())
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -3927,9 +3443,8 @@ def test_update_policy_draft_unexpected_error_is_sanitized(
     same non-`RedisError`-escapes-the-catch shape, this tool's own fixture.
     """
     configure()
-    graph = _UpdatePolicyDraftFakeGraph(_draft_fixture())
-    graph.raise_on_write = RuntimeError("connection refused to db-internal-7.prod:6379")
-    _install_graph(monkeypatch, graph)
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
+    rig.store.fail_appends(error=RuntimeError("connection refused to db-internal-7.prod:6379"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -3947,9 +3462,8 @@ def test_add_standard_to_draft_unexpected_error_is_sanitized(
 ) -> None:
     """See `test_create_policy_draft_unexpected_error_is_sanitized` above."""
     configure()
-    graph = _AddStandardToDraftFakeGraph(_draft_fixture())
-    graph.raise_on_write = RuntimeError("connection refused to db-internal-7.prod:6379")
-    _install_graph(monkeypatch, graph)
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
+    rig.store.fail_appends(error=RuntimeError("connection refused to db-internal-7.prod:6379"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -3967,11 +3481,8 @@ def test_update_standard_draft_unexpected_error_is_sanitized(
 ) -> None:
     """See `test_create_policy_draft_unexpected_error_is_sanitized` above."""
     configure()
-    graph = _UpdateStandardDraftFakeGraph(
-        _standard_parent_fixture(),
-        raise_on_write=RuntimeError("connection refused to db-internal-7.prod:6379"),
-    )
-    _install_graph(monkeypatch, graph)
+    rig = _install_tree_rig(monkeypatch)
+    rig.store.fail_appends(error=RuntimeError("connection refused to db-internal-7.prod:6379"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -3989,9 +3500,8 @@ def test_add_control_to_draft_unexpected_error_is_sanitized(
 ) -> None:
     """See `test_create_policy_draft_unexpected_error_is_sanitized` above."""
     configure()
-    graph = _AddControlToDraftFakeGraph(_standard_parent_fixture())
-    graph.raise_on_write = RuntimeError("connection refused to db-internal-7.prod:6379")
-    _install_graph(monkeypatch, graph)
+    rig = _install_tree_rig(monkeypatch)
+    rig.store.fail_appends(error=RuntimeError("connection refused to db-internal-7.prod:6379"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
@@ -4009,11 +3519,8 @@ def test_update_control_draft_unexpected_error_is_sanitized(
 ) -> None:
     """See `test_create_policy_draft_unexpected_error_is_sanitized` above."""
     configure()
-    graph = _UpdateControlDraftFakeGraph(
-        _control_parent_fixture(),
-        raise_on_write=RuntimeError("connection refused to db-internal-7.prod:6379"),
-    )
-    _install_graph(monkeypatch, graph)
+    rig = _install_tree_rig(monkeypatch, with_control=True)
+    rig.store.fail_appends(error=RuntimeError("connection refused to db-internal-7.prod:6379"))
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):

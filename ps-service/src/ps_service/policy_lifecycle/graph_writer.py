@@ -12,49 +12,27 @@ not in this module. A FalkorDB failure from either function still surfaces
 through `redis.exceptions.RedisError`, unwrapped, exactly like
 `backfill_governance_status`.
 
-`backfill_governance_status` (GH issue #134, D-7/S8): the idempotent,
-self-healing backfill for Standard/Control's new `status` property and
-Policy's `version` property. No schema/data-migration mechanism exists in
-this codebase (`docs/architecture/ps-solution-architecture.md`'s own
-risk-register row), so this is implemented as a call-site-embedded,
-`WHERE ... IS NULL`-guarded backfill rather than a standalone migration
-script -- intended to be invoked at the top of every lifecycle read/cascade
-call (S13+, not part of this slice) before any gate decision is made,
-mirroring `ps_service.company_merge.graph_writer.backfill_canonical_embeddings`'s
-own `WHERE n.embedding IS NULL` precedent (its own module docstring: "makes
-a re-run's backfill call against an already-backfilled node a structural
-no-op at the database-engine level").
+`backfill_governance_status` (GH issue #134, D-7/S8; a gateway read-resolve-write since #211):
+the idempotent, self-healing backfill for Standard/Control's `status` property and Policy's
+`version` property. No schema/data-migration mechanism exists in this codebase
+(`docs/architecture/ps-solution-architecture.md`'s own risk-register row), so it runs at the top
+of every lifecycle read/gate call: it READS which of those properties are NULL on the Policy's tree
+and submits ONE gateway group of `MergeProperty` for exactly the nodes that need a fill (no audit
+link: a backfill has no audit row). A tree with nothing to fill submits nothing, not even the
+legacy-edge stamp, so a re-run is a no-op.
 
-Own copy of the `GraphHandle`/`GraphQueryResult` Protocols + `_execute_query`
+Own copy of the `GraphHandle`/`GraphQueryResult` Protocols + `_read_query`
 dependency-health wrapper shape already vendored independently by
 `ps_service.company_merge.graph_writer`, `ps_service.domain_mapper.graph_writer`,
 and `ps_service.ingestion.adapters.internal_seed.persist` (L2's "fully
 decoupled, no shared internal package between components" rule) -- a
 deliberate near-duplicate, not a shared import.
 
-**Cypher shape choice** (PLAN.md S8's own "implementer's choice" note between
-a single `FOREACH`/`CASE`-guarded statement and two-or-more separate
-`WHERE ... IS NULL` statements): this module uses **three** separate
-statements (Policy `version`, Standard `status`, Control `status`) --
-simpler to read, write, and test than one combined multi-clause statement,
-and each one keeps the exact same single-purpose `WHERE ... IS NULL` shape
-`backfill_canonical_embeddings` already established as this codebase's own
-precedent for an idempotent backfill guard. The Control statement matches
-the full `Policy -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control`
-path directly in one `MATCH`, so a Control's backfilled `status` always
-comes from the root Policy's own `status` (D-7's literal requirement),
-never a possibly-different intermediate Standard's status.
-
-**No dedicated `policy_lifecycle` error type exists yet** (issue #134's S9
-error taxonomy, including `PolicyLifecycleGraphUnavailableError`, is a
-later, separate slice -- not part of this one). A FalkorDB failure here is
-still recorded in `dependency_health` (for `/ready`'s live signal, mirroring
-every other graph-writer module's connectivity-health wiring), but is
-re-raised as the original `redis.exceptions.RedisError`, unwrapped, rather
-than invented into a premature one-off domain exception. Whichever slice
-first wraps a lifecycle call in a named error is expected to catch and
-translate this at its own call site, the same way every other lifecycle
-gate/cascade failure is translated (D-9).
+**Reads only.** Since issue #211 no statement in this module writes: every write is a Graph Write
+Gateway group built from primitives and submitted through `policy_lifecycle.graph_submission`. A
+FalkorDB failure on a READ is still recorded in `dependency_health` (for `/ready`'s live signal) and
+re-raised as the original `redis.exceptions.RedisError`, unwrapped; a failed WRITE is the module's
+`PolicyLifecycleGraphUnavailableError` with the `FalkorDB write failed: ` prefix.
 """
 
 from __future__ import annotations
@@ -65,9 +43,32 @@ from typing import TYPE_CHECKING, Protocol, cast
 import redis.exceptions
 
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+from ps_service.graph_gateway.models import (
+    DeleteEdge,
+    ExpectedPosition,
+    MergeProperty,
+    NodeRef,
+    RemoveProperty,
+    UpsertEdge,
+    UpsertNode,
+)
+from ps_service.policy_lifecycle.errors import StaleGroupError
+from ps_service.policy_lifecycle.graph_submission import (
+    GraphWriteTarget,
+    edge_identity,
+    ensure_stamped,
+    read_log_position,
+    refuse_unstorable_values,
+    require_caught_up,
+    single_tenant_graph_name,
+    submit_group,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
+
+    from ps_service.graph_gateway.models import Primitive
+    from ps_service.policy_lifecycle.graph_submission import LifecycleSubmitter
 
 __all__ = [
     "ControlDraft",
@@ -85,6 +86,7 @@ __all__ = [
     "approve_fork_repoint",
     "backfill_governance_status",
     "cascade_status",
+    "create_claimed_policy_draft",
     "create_policy_draft",
     "find_approved_prior",
     "find_control_with_parent",
@@ -103,32 +105,33 @@ __all__ = [
 class GraphQueryResult(Protocol):
     """Structural stand-in for `falkordb.QueryResult`.
 
-    Every statement `backfill_governance_status` issues is a `SET`, never a
-    `RETURN` -- this module never reads `result_set`, but the property is
-    still declared so `GraphHandle.query`'s return type matches the real
-    `falkordb.Graph.query` structurally.
+    Only the rows are used: each read in this module takes them from `result_set`.
     """
 
     @property
     def result_set(self) -> list[object]:
-        """Result rows exactly as returned by `falkordb` (unused by this module)."""
+        """Result rows exactly as returned by `falkordb`."""
         ...
 
 
 class GraphHandle(Protocol):
-    """Structural stand-in for `falkordb.Graph`."""
+    """Structural stand-in for `falkordb.Graph`, used for reads only (not enforced by the type).
+
+    Every lifecycle write is a Graph Write Gateway group (issue #211); the static guard in
+    `tests/policy_lifecycle/test_no_graph_write_path.py` is what keeps write Cypher out.
+    """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
         """Run Cypher `q` (optionally parameterized via `params`) and return the result."""
         ...
 
 
-def _execute_query(
+def _read_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """The one call site every write in this module goes through.
+    """The one call site every graph statement in this module goes through.
 
-    Mirrors every other `graph_writer`-shaped module's own `_execute_query`:
+    Mirrors every other `graph_writer`-shaped module's own `_read_query`:
     records FalkorDB connectivity failures in `dependency_health` for
     `/ready`'s live signal, self-healing on the next successful call.
     """
@@ -141,98 +144,137 @@ def _execute_query(
     return result
 
 
-def backfill_governance_status(graph: GraphHandle, policy_id: str) -> None:
+_READ_BACKFILL_STATE = (
+    "MATCH (p:Policy {id: $policy_id}) "
+    "OPTIONAL MATCH (p)-[:SUPPORTED_BY]->(s:Standard) "
+    "OPTIONAL MATCH (s)-[:IMPLEMENTED_BY]->(c:Control) "
+    "RETURN p.version, p.status, s.id, s.status, c.id, c.status"
+)
+"""What a backfill reads: the Policy's version and status, and each Standard's and Control's."""
+
+
+def backfill_governance_status(
+    graph: GraphHandle, policy_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
+) -> None:
     """Idempotently backfill `policy_id`'s own `version` and its tree's `status` (D-7).
 
-    Three guarded writes, each a structural no-op on a re-run against
-    already-backfilled data:
+    A read-resolve-write (issue #211). One read returns the Policy's `version` and `status` and the
+    `status` of every Standard and Control in its `SUPPORTED_BY`/`IMPLEMENTED_BY` tree; the fills
+    are then resolved in Python and submitted as ONE gateway group with no audit link:
 
     1. `policy_id`'s own `version` -> `"1"`, only if currently `NULL`.
-    2. Every `Standard` in `policy_id`'s `SUPPORTED_BY` tree whose `status`
-       is `NULL` -> the Policy's own current `status`.
-    3. Every `Control` in `policy_id`'s `SUPPORTED_BY`/`IMPLEMENTED_BY` tree
-       whose `status` is `NULL` -> the Policy's own current `status` --
-       always the ROOT Policy's `status`, never an intermediate Standard's,
-       since the `MATCH` below walks the full two-hop path in one statement.
+    2. Every `Standard` whose `status` is `NULL` -> the Policy's own current `status`.
+    3. Every `Control` whose `status` is `NULL` -> the Policy's own current `status` -- always the
+       ROOT Policy's `status`, never an intermediate Standard's.
 
-    A Standard/Control that already carries a non-`NULL` `status` is never
-    touched, even if it differs from the Policy's current `status` -- the
-    guard is a one-time-fill mechanism, not a continuous sync.
-    """
-    _execute_query(
-        graph,
-        "MATCH (p:Policy {id: $policy_id}) SET p.version = coalesce(p.version, '1')",
-        params={"policy_id": policy_id},
-    )
-    _execute_query(
-        graph,
-        "MATCH (p:Policy {id: $policy_id})-[:SUPPORTED_BY]->(s:Standard) "
-        "WHERE s.status IS NULL "
-        "SET s.status = p.status",
-        params={"policy_id": policy_id},
-    )
-    _execute_query(
-        graph,
-        "MATCH (p:Policy {id: $policy_id})-[:SUPPORTED_BY]->(:Standard)"
-        "-[:IMPLEMENTED_BY]->(c:Control) "
-        "WHERE c.status IS NULL "
-        "SET c.status = p.status",
-        params={"policy_id": policy_id},
-    )
+    A Standard/Control that already carries a non-`NULL` `status` is never touched, even if it
+    differs from the Policy's current `status` -- the guard is a one-time-fill mechanism, not a
+    continuous sync. A Policy whose own `status` is `NULL` has nothing to hand its children.
 
-
-def cascade_status(graph: GraphHandle, *, policy_id: str, target_status: str) -> None:
-    """Set `policy_id`'s own `status`, plus every Standard/Control in its tree, to `target_status`.
-
-    Issue #134, S15 -- the shared "cascade to a target status" write every
-    lifecycle transition (`propose`/`approve`/`reject`/`revert`/
-    `auto_deprecate`) needs, so S17/S19/S21/S25 call this directly rather
-    than each re-deriving their own cascading Cypher (D-9's own shared-helper
-    intent applies to the write half immediately -- unlike the
-    audit-then-cascade *orchestration*, which D-9 explicitly defers
-    extracting into `service.py` until Slice 24, this single Cypher `SET` has
-    no per-action branching at all, so there is no "wrong abstraction" risk
-    in sharing it from S15 onward).
-
-    Deliberately **one** Cypher statement, not three separate `MATCH`/`SET`
-    pairs like `backfill_governance_status` above: D-9's atomicity argument
-    ("no partial cascade is left in the graph... FalkorDB executes one
-    Cypher statement atomically") only holds if the whole tree is set in a
-    single statement -- three separate statements could fail between the
-    Policy write and the Standard/Control writes, leaving a partial cascade.
-    The two `OPTIONAL MATCH`es let a Policy with zero Standards (or a
-    Standard with zero Controls) still match and set the Policy's own
-    `status` -- `SET` on a variable `OPTIONAL MATCH` left unbound (`null`) is
-    a documented Cypher no-op, not an error, so the trailing `s`/`c` `SET`
-    clauses are safe even when nothing matched them.
-
-    Unlike `backfill_governance_status`'s `WHERE ... IS NULL` guard (a
-    one-time fill), this always overwrites every `status`, unconditionally
-    -- a lifecycle transition intentionally replaces whatever status was
-    there before.
+    Nothing to fill (the common case) submits no group and stamps no legacy edge (AC-BI-006), and
+    never asks for the submitter: `submitter_source` is called only when there is a group to write,
+    so a read of an already-backfilled tree needs no gateway (D3).
 
     Args:
-        graph: The single-tenant policy graph handle.
-        policy_id: The root Policy id whose tree is being transitioned.
-        target_status: The new `status` value for the Policy and its entire
-            Standard/Control tree (e.g. `"proposed"`, `"approved"`,
-            `"deprecated"`).
+        graph: The single-tenant policy graph handle (read).
+        policy_id: The Policy whose tree is backfilled; an unknown id is a no-op.
+        submitter_source: Resolves the Graph Write Gateway; called only if a fill is needed.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the fill group failed.
     """
-    _execute_query(
-        graph,
-        "MATCH (p:Policy {id: $policy_id}) "
-        "OPTIONAL MATCH (p)-[:SUPPORTED_BY]->(s:Standard) "
-        "OPTIONAL MATCH (s)-[:IMPLEMENTED_BY]->(c:Control) "
-        "SET p.status = $target_status, s.status = $target_status, "
-        "c.status = $target_status",
-        params={"policy_id": policy_id, "target_status": target_status},
+    result = _read_query(graph, _READ_BACKFILL_STATE, params={"policy_id": policy_id})
+    rows = cast("list[list[object]]", result.result_set)
+    if not rows:
+        return
+    version, policy_status = rows[0][0], rows[0][1]
+    primitives: list[Primitive] = []
+    if version is None:
+        primitives.append(MergeProperty(label="Policy", id=policy_id, properties={"version": "1"}))
+    if policy_status is not None:
+        seen: set[tuple[str, str]] = set()
+        for _, _, standard_id, standard_status, control_id, control_status in rows:
+            for label, node_id, status in (
+                ("Standard", standard_id, standard_status),
+                ("Control", control_id, control_status),
+            ):
+                if node_id is None or status is not None or (label, cast("str", node_id)) in seen:
+                    continue
+                seen.add((label, cast("str", node_id)))
+                primitives.append(
+                    MergeProperty(
+                        label=label,
+                        id=cast("str", node_id),
+                        properties={"status": policy_status},
+                    )
+                )
+    if not primitives:
+        return
+    target = GraphWriteTarget(submitter_source(), single_tenant_graph_name())
+    submit_group(target, tuple(primitives), audit_event_id=None)
+
+
+def _cascade_primitives(
+    graph: GraphHandle, *, policy_id: str, target_status: str
+) -> tuple[Primitive, ...]:
+    """A `MergeProperty status` for the Policy and every Standard/Control of its tree, as read now.
+
+    The tree is read at the moment of the call (the caller submits right after), so a Standard
+    added since the transition's gate read is cascaded too -- no lock, as before (AC-BI-003). A
+    Policy that is gone yields nothing, as the former statement matched nothing.
+    """
+    record = read_policy_tree(graph, policy_id)
+    if record is None:
+        return ()
+    nodes: list[tuple[str, str]] = [("Policy", record.id)]
+    for standard in record.standards:
+        nodes.append(("Standard", standard.id))
+        nodes.extend(("Control", control.id) for control in standard.controls)
+    return tuple(
+        MergeProperty(label=label, id=node_id, properties={"status": target_status})
+        for label, node_id in dict.fromkeys(nodes)
     )
+
+
+def cascade_status(
+    graph: GraphHandle,
+    target: GraphWriteTarget,
+    *,
+    policy_id: str,
+    target_status: str,
+    audit_event_id: str,
+) -> None:
+    """Set `policy_id`'s own `status`, plus every Standard/Control in its tree, to `target_status`.
+
+    Issue #134, S15 -- the shared "cascade to a target status" write every lifecycle transition
+    (`propose`/`approve`/`reject`/`revert`/`auto_deprecate`) needs. Since issue #211 it is ONE
+    Graph Write Gateway group of `MergeProperty status` over the tree as read just before the
+    submit (AC-BI-003): atomic like the former single statement, with no precondition and no lock.
+    The gateway skips a node already at `target_status`; a tree entirely at it logs nothing. The
+    group is linked to the `applied` audit row `audit_event_id` names.
+
+    Unlike `backfill_governance_status`'s fill of NULLs, this overwrites every `status`
+    unconditionally -- a lifecycle transition intentionally replaces whatever was there.
+
+    Args:
+        graph: The single-tenant policy graph handle (the tree read).
+        target: The gateway target of the single-tenant policy graph.
+        policy_id: The root Policy id whose tree is being transitioned.
+        target_status: The new `status` value for the Policy and its entire Standard/Control tree
+            (e.g. `"proposed"`, `"approved"`, `"deprecated"`).
+        audit_event_id: The id of the transition's `applied` audit row.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+    """
+    primitives = _cascade_primitives(graph, policy_id=policy_id, target_status=target_status)
+    submit_group(target, primitives, audit_event_id=audit_event_id)
 
 
 def find_approved_prior(graph: GraphHandle, successor_policy_id: str) -> str | None:
     """Find an `approved` Policy that `SUPERSEDED_BY`s `successor_policy_id` (D-10, S24).
 
-    A pure read, issued through the same `_execute_query` health-tracking
+    A pure read, issued through the same `_read_query` health-tracking
     wrapper as every other call in this module -- no write, ever.
 
     No production code anywhere in issue #134 ever CREATES the
@@ -254,7 +296,7 @@ def find_approved_prior(graph: GraphHandle, successor_policy_id: str) -> str | N
         edge to a `draft`/`proposed` prior is deliberately not returned --
         only an already-`approved` prior is ever auto-deprecated).
     """
-    result = _execute_query(
+    result = _read_query(
         graph,
         "MATCH (prior:Policy)-[:SUPERSEDED_BY]->(:Policy {id: $successor_policy_id}) "
         "WHERE prior.status = 'approved' "
@@ -294,7 +336,7 @@ def read_fork_governance(graph: GraphHandle, policy_id: str) -> ForkGovernance |
         `None` when no inbound `SUPERSEDED_BY` edge exists, otherwise the
         prior's id and the ids of Capabilities it governs.
     """
-    result = _execute_query(
+    result = _read_query(
         graph,
         "MATCH (prior:Policy)-[:SUPERSEDED_BY]->(:Policy {id: $policy_id}) "
         "OPTIONAL MATCH (cap:Capability)-[:GOVERNED_BY]->(prior) "
@@ -312,55 +354,88 @@ def read_fork_governance(graph: GraphHandle, policy_id: str) -> ForkGovernance |
 
 def approve_fork_repoint(
     graph: GraphHandle,
+    target: GraphWriteTarget,
     *,
     policy_id: str,
     prior_id: str,
     capability_ids: tuple[str, ...],
     target_status: str,
+    audit_event_id: str,
 ) -> bool:
-    """Move `GOVERNED_BY` edges to `policy_id` and cascade its status, atomically (issue #185).
+    """Move `GOVERNED_BY` edges to `policy_id` and cascade its status, as one guarded group.
 
-    Deliberately ONE Cypher statement: the guard
-    `WHERE size(rels) = $expected` precedes every write, so if the governed
-    set changed since `read_fork_governance` the statement returns no row
-    and writes nothing. Correctness relies on that guard-before-write
-    ordering, not on mid-statement rollback. Edge move and status cascade
-    share the statement so a Capability never has zero or two governors.
+    Issue #185 introduced the move; since issue #211 it is a gateway read-resolve-write in the
+    order of `ingestion/adapters/internal_seed/persist.py` (CHANGES M1): the graph must be caught
+    up, the log position P0 is read, then the prior's governed set is re-read and compared to
+    `capability_ids` in Python -- a set that changed since the caller's read returns `False` with
+    NOTHING logged, not even a legacy-edge stamp -- and only then are legacy edges stamped (a
+    group with no audit link; `GOVERNED_BY` edges written before the gateway have no identity to
+    delete by) and the group submitted with `ExpectedPosition(P0 + stamped)`. A write that landed
+    between the position read and the submit trips that precondition: the same `False`. The
+    position guard is coarser than the former in-statement guard (Decision 2).
+
+    The group deletes each `GOVERNED_BY` edge from the prior, upserts it from the same Capability
+    to the fork, and cascades `target_status` over the fork's tree, so a Capability never has zero
+    or two governors; it is linked to the `applied` audit row `audit_event_id` names.
 
     Args:
-        graph: The single-tenant policy graph handle.
+        graph: The single-tenant policy graph handle (the guard's reads).
+        target: The gateway target of the single-tenant policy graph.
         policy_id: The fork being approved (the new governor).
         prior_id: The superseded Policy that currently governs the Capabilities.
         capability_ids: The Capabilities read from `prior_id` beforehand.
         target_status: The status to cascade over the fork's tree.
+        audit_event_id: The id of the `applied` approval audit row.
 
     Returns:
-        `True` when the move and cascade were applied, `False` when the
-        guard failed (nothing was written).
+        `True` when the move and cascade were applied, `False` when the guard failed (nothing of
+        this group was written).
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
     """
-    result = _execute_query(
-        graph,
-        "MATCH (p:Policy {id: $policy_id}) "
-        "OPTIONAL MATCH (cap:Capability)-[r:GOVERNED_BY]->(:Policy {id: $prior_id}) "
-        "WHERE cap.id IN $capability_ids "
-        "WITH p, collect(cap) AS caps, collect(r) AS rels WHERE size(rels) = $expected "
-        "FOREACH (r IN rels | DELETE r) "
-        "FOREACH (c IN caps | MERGE (c)-[:GOVERNED_BY]->(p)) "
-        "WITH p "
-        "OPTIONAL MATCH (p)-[:SUPPORTED_BY]->(s:Standard) "
-        "OPTIONAL MATCH (s)-[:IMPLEMENTED_BY]->(c2:Control) "
-        "SET p.status = $target_status, s.status = $target_status, "
-        "c2.status = $target_status "
-        "RETURN p.id",
-        params={
-            "policy_id": policy_id,
-            "prior_id": prior_id,
-            "capability_ids": list(capability_ids),
-            "expected": len(capability_ids),
-            "target_status": target_status,
-        },
+    require_caught_up(target)
+    expected_position = read_log_position(target)
+    governance = read_fork_governance(graph, policy_id)
+    if (
+        governance is None
+        or governance.prior_id != prior_id
+        or sorted(governance.capability_ids) != sorted(capability_ids)
+    ):
+        return False
+    stamped = ensure_stamped(target, None)  # housekeeping: no audit link, no data change (A1)
+    fork_ref = NodeRef(label="Policy", id=policy_id)
+    prior_ref = NodeRef(label="Policy", id=prior_id)
+    moved = dict.fromkeys(capability_ids)
+    primitives: list[Primitive] = [
+        DeleteEdge(
+            type="GOVERNED_BY",
+            identity=edge_identity("GOVERNED_BY", capability_id, prior_id),
+            source=NodeRef(label="Capability", id=capability_id),
+            target=prior_ref,
+        )
+        for capability_id in moved
+    ]
+    primitives.extend(
+        UpsertEdge(
+            type="GOVERNED_BY",
+            identity=edge_identity("GOVERNED_BY", capability_id, policy_id),
+            source=NodeRef(label="Capability", id=capability_id),
+            target=fork_ref,
+        )
+        for capability_id in moved
     )
-    return bool(result.result_set)
+    primitives.extend(_cascade_primitives(graph, policy_id=policy_id, target_status=target_status))
+    try:
+        submit_group(
+            target,
+            tuple(primitives),
+            audit_event_id=audit_event_id,
+            preconditions=(ExpectedPosition(position=expected_position + stamped),),
+        )
+    except StaleGroupError:
+        return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,7 +480,7 @@ class StandardDraft:
 def find_existing_policy(graph: GraphHandle, policy_id: str) -> tuple[str, str] | None:
     """Read-check whether a Policy with `policy_id` already exists (AC-BI-022).
 
-    A pure read, issued through the same `_execute_query` health-tracking
+    A pure read, issued through the same `_read_query` health-tracking
     wrapper as every write in this module -- a title-collision check must
     still count towards `/ready`'s FalkorDB connectivity signal.
 
@@ -417,7 +492,7 @@ def find_existing_policy(graph: GraphHandle, policy_id: str) -> tuple[str, str] 
         `(existing_id, existing_title)` if a `Policy` node with this id
         already exists, else `None`.
     """
-    result = _execute_query(
+    result = _read_query(
         graph,
         "MATCH (p:Policy {id: $policy_id}) RETURN p.id, p.title",
         params={"policy_id": policy_id},
@@ -446,7 +521,7 @@ def read_capability_governors(
     Returns:
         `{capability_id: governing_policy_id | None}` for every id that exists.
     """
-    result = _execute_query(
+    result = _read_query(
         graph,
         "MATCH (cap:Capability) WHERE cap.id IN $capability_ids "
         "AND coalesce(cap.status,'active') <> 'merged' "
@@ -463,7 +538,7 @@ def read_capability_governors(
 
 
 def create_policy_draft(
-    graph: GraphHandle,
+    target: GraphWriteTarget,
     *,
     policy_id: str,
     title: str,
@@ -471,130 +546,206 @@ def create_policy_draft(
     standards: tuple[StandardDraft, ...] = (),
     supersedes_policy_id: str | None = None,
     version: str = "1",
-    capability_ids: tuple[str, ...] = (),
-) -> bool:
-    """Mint a new draft Policy, plus any optional Standard/Control children (S11).
+    audit_event_id: str,
+) -> None:
+    """Mint a new draft Policy, plus any optional Standard/Control children, as ONE gateway group.
 
-    The Policy node is written with `status="draft"`, `version=version`
-    (defaults to `"1"`, the pre-#136 literal -- every existing non-fork call
-    site keeps working byte-for-byte unchanged), and the owner pair -- every
-    optional Standard/Control child is written with `status="draft"`
-    unconditionally (D-6), regardless of any status the caller might
-    otherwise have implied. Each node is its own `MERGE` statement (mirrors
-    `ingestion.adapters.internal_seed.persist`'s own per-node
-    `MERGE (n:Label {id: $id}) SET n += $properties` shape) -- this call site
-    is only ever reached after `find_existing_policy` has already confirmed
-    `policy_id` is unused, so `MERGE` here can never collide with a
-    pre-existing node.
+    Without a Capability claim (a claim is `create_claimed_policy_draft` until it migrates). The
+    group, in order, is: an `UpsertNode` for the Policy (`status="draft"`, `version`, the owner
+    pair), the optional `SUPERSEDED_BY:{prior}->{new}` edge, then for each Standard an
+    `UpsertNode` and its `SUPPORTED_BY:{policy}->{standard}` edge and for each of its Controls an
+    `UpsertNode` and its `IMPLEMENTED_BY:{standard}->{control}` edge. It is linked to the `applied`
+    audit row that `audit_event_id` names (AC-BI-008). The group is atomic: a failure leaves no
+    partial draft.
 
-    `supersedes_policy_id` (issue #136, Slice 6): when not `None`, one
-    additional statement links the superseded prior Policy to this new one
-    via a single Policy-level `(prior)-[:SUPERSEDED_BY]->(new)` edge --
-    AC-BI-005's "no per-Standard/Control lineage edges" requirement, so no
-    other edge is ever written for the fork. Each Standard/Control child's
-    own `extra_properties` (when the caller is forking, the source tree's
-    full content minus `id`/`title`/`status`) is spread into that node's
-    `SET` properties BEFORE `title`/`type`/`status` are set, so a stray
-    copied `title`/`status`/`type` in `extra_properties` can never win --
-    every non-fork call site passes `extra_properties={}` (the dataclass
-    default), so this is a strict no-op there.
+    Every child is written with `status="draft"` unconditionally (D-6). A child's
+    `extra_properties` (when the caller is forking, the source tree's full content minus
+    `id`/`title`/`status`) are spread BEFORE `title`/`type`/`status`, so a stray copied
+    `title`/`status`/`type` can never win. A value the gateway cannot store (a reserved key such as
+    `embedding`, an empty list) is refused before anything is written.
+
+    `supersedes_policy_id` links the prior Policy to this new one by a single Policy-level edge --
+    AC-BI-005's "no per-Standard/Control lineage edges" requirement.
 
     Args:
-        graph: The single-tenant policy graph handle.
+        target: The gateway target of the single-tenant policy graph.
         policy_id: The already-computed, collision-checked new Policy id.
         title: The Policy's title.
         owner: The creating actor's `(sub, iss)`.
-        standards: Optional Standard children (each with its own optional
-            Control children), ids already computed by the caller.
-        supersedes_policy_id: The prior Policy id this new draft amends via
-            `SUPERSEDED_BY`, or `None` for an ordinary (non-fork) draft.
-        version: The new Policy's own `version` (string-typed, per
-            `docs/artifacts`'s "version stays a string" decision) --
-            `"1"` for an ordinary draft, or `str(int(prior_version) + 1)`
-            for a fork (computed by the caller, `service.create_policy_draft`).
-        capability_ids: Capabilities a fresh draft claims via `GOVERNED_BY`
-            (issue #185). When non-empty, the Policy node and the edges are
-            written by ONE guarded statement (the guard -- every id exists
-            and is ungoverned -- precedes every write keyword), so a lost
-            claim race writes nothing. The caller never passes these with
-            `supersedes_policy_id`.
+        standards: Optional Standard children (each with its own optional Control children), ids
+            already computed by the caller.
+        supersedes_policy_id: The prior Policy id this new draft amends via `SUPERSEDED_BY`, or
+            `None` for an ordinary (non-fork) draft.
+        version: The new Policy's own `version` (string-typed, per `docs/artifacts`'s "version
+            stays a string" decision): `"1"` for an ordinary draft, or `str(int(prior_version) + 1)`
+            for a fork (computed by the caller).
+        audit_event_id: The id of the `applied` `policy.create_draft` row the group is linked to.
 
-    Returns:
-        `True` when the draft was written; `False` when the guarded claim
-        statement matched nothing (a Capability was claimed concurrently) --
-        in which case no Policy, edge, Standard or Control was written.
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
     """
+    primitives = _create_primitives(
+        policy_id=policy_id,
+        title=title,
+        owner=owner,
+        standards=standards,
+        supersedes_policy_id=supersedes_policy_id,
+        version=version,
+    )
+    submit_group(target, primitives, audit_event_id=audit_event_id)
+
+
+def _create_primitives(
+    *,
+    policy_id: str,
+    title: str,
+    owner: tuple[str, str],
+    standards: tuple[StandardDraft, ...],
+    supersedes_policy_id: str | None,
+    version: str,
+) -> tuple[Primitive, ...]:
+    """The primitives of a create: the Policy, its optional supersede edge, then the children."""
     owner_subject, owner_issuer = owner
-    properties = {
-        "title": title,
-        "status": "draft",
-        "version": version,
-        "owner_subject": owner_subject,
-        "owner_issuer": owner_issuer,
-    }
-    if capability_ids:
-        claimed = _execute_query(
-            graph,
-            "MATCH (cap:Capability) WHERE cap.id IN $capability_ids "
-            "AND coalesce(cap.status,'active') <> 'merged' "
-            "AND NOT (cap)-[:GOVERNED_BY]->(:Policy) "
-            "WITH collect(cap) AS caps WHERE size(caps) = $expected "
-            "MERGE (p:Policy {id: $policy_id}) SET p += $properties "
-            "FOREACH (c IN caps | MERGE (c)-[:GOVERNED_BY]->(p)) "
-            "RETURN p.id",
-            params={
-                "capability_ids": list(capability_ids),
-                "expected": len(capability_ids),
-                "policy_id": policy_id,
-                "properties": properties,
-            },
-        )
-        if not claimed.result_set:
-            return False
-    else:
-        _execute_query(
-            graph,
-            "MERGE (p:Policy {id: $policy_id}) SET p += $properties",
-            params={"policy_id": policy_id, "properties": properties},
-        )
-    if supersedes_policy_id is not None:
-        _execute_query(
-            graph,
-            "MATCH (prior:Policy {id: $prior_id}), (new:Policy {id: $new_id}) "
-            "MERGE (prior)-[:SUPERSEDED_BY]->(new)",
-            params={"prior_id": supersedes_policy_id, "new_id": policy_id},
-        )
-    for standard in standards:
-        standard_properties: dict[str, object] = dict(standard.extra_properties)
-        standard_properties["title"] = standard.title
-        standard_properties["status"] = "draft"
-        _execute_query(
-            graph,
-            "MATCH (p:Policy {id: $policy_id}) "
-            "MERGE (p)-[:SUPPORTED_BY]->(s:Standard {id: $standard_id}) "
-            "SET s += $properties",
-            params={
-                "policy_id": policy_id,
-                "standard_id": standard.id,
-                "properties": standard_properties,
-            },
-        )
-        for control in standard.controls:
-            control_properties: dict[str, object] = dict(control.extra_properties)
-            control_properties["title"] = control.title
-            control_properties["type"] = control.control_type
-            control_properties["status"] = "draft"
-            _execute_query(
-                graph,
-                "MATCH (s:Standard {id: $standard_id}) "
-                "MERGE (s)-[:IMPLEMENTED_BY]->(c:Control {id: $control_id}) "
-                "SET c += $properties",
-                params={
-                    "standard_id": standard.id,
-                    "control_id": control.id,
-                    "properties": control_properties,
+    policy_ref = NodeRef(label="Policy", id=policy_id)
+    primitives: list[Primitive] = []
+    with refuse_unstorable_values():
+        primitives.append(
+            UpsertNode(
+                label="Policy",
+                id=policy_id,
+                properties={
+                    "title": title,
+                    "status": "draft",
+                    "version": version,
+                    "owner_subject": owner_subject,
+                    "owner_issuer": owner_issuer,
                 },
             )
+        )
+        if supersedes_policy_id is not None:
+            primitives.append(
+                UpsertEdge(
+                    type="SUPERSEDED_BY",
+                    identity=edge_identity("SUPERSEDED_BY", supersedes_policy_id, policy_id),
+                    source=NodeRef(label="Policy", id=supersedes_policy_id),
+                    target=policy_ref,
+                )
+            )
+        for standard in standards:
+            standard_properties: dict[str, object] = dict(standard.extra_properties)
+            standard_properties["title"] = standard.title
+            standard_properties["status"] = "draft"
+            primitives.extend(
+                _child_primitives(
+                    parent=policy_ref,
+                    label="Standard",
+                    child_id=standard.id,
+                    properties=standard_properties,
+                    edge_type="SUPPORTED_BY",
+                )
+            )
+            standard_ref = NodeRef(label="Standard", id=standard.id)
+            for control in standard.controls:
+                control_properties: dict[str, object] = dict(control.extra_properties)
+                control_properties["title"] = control.title
+                control_properties["type"] = control.control_type
+                control_properties["status"] = "draft"
+                primitives.extend(
+                    _child_primitives(
+                        parent=standard_ref,
+                        label="Control",
+                        child_id=control.id,
+                        properties=control_properties,
+                        edge_type="IMPLEMENTED_BY",
+                    )
+                )
+    return tuple(primitives)
+
+
+def create_claimed_policy_draft(
+    graph: GraphHandle,
+    target: GraphWriteTarget,
+    *,
+    policy_id: str,
+    title: str,
+    owner: tuple[str, str],
+    standards: tuple[StandardDraft, ...] = (),
+    capability_ids: tuple[str, ...],
+    audit_event_id: str,
+) -> bool:
+    """Mint a draft Policy that CLAIMS `capability_ids` as one guarded gateway group.
+
+    The guard is the one of `ingestion/adapters/internal_seed/persist.py`, in its order (CHANGES
+    M1, `graph_submission` docstring): the graph must be caught up, the log position P0 is read,
+    then `read_capability_governors` re-resolves every claimed Capability in Python (it exists, is
+    not a `merged` tombstone, and has no governing Policy) -- a claim that no longer holds returns
+    `False` here with NOTHING logged, not even a legacy-edge stamp -- and only then are the
+    graph's legacy edges stamped (a group with no audit link) and the group submitted with
+    `ExpectedPosition(P0 + stamped)`. A write that landed between the position read and the
+    submit trips that precondition: the same `False`, nothing of this group logged (a stamp group
+    ahead of it, which carries no audit link and changes no data, may stay in the log). The
+    position guard is coarser than the former in-statement guard: an UNRELATED write in that
+    window also refuses the claim (Decision 2).
+
+    The group holds an `UpsertNode` for the Policy, an `UpsertEdge`
+    `GOVERNED_BY:{capability}->{policy}` per Capability and the Standard/Control children as
+    `create_policy_draft` writes them; it is linked to the `applied` audit row `audit_event_id`
+    names. A claim is a fresh `version` "1" draft, never combined with a supersede fork.
+
+    Args:
+        graph: The single-tenant policy graph handle (the guard's reads).
+        target: The gateway target of the single-tenant policy graph.
+        policy_id: The already-computed, collision-checked new Policy id.
+        title: The Policy's title.
+        owner: The creating actor's `(sub, iss)`.
+        standards: Optional Standard children (each with its own optional Control children).
+        capability_ids: Capabilities the draft claims, de-duplicated, order-preserving.
+        audit_event_id: The id of the `applied` `policy.create_draft` row the group is linked to.
+
+    Returns:
+        `True` when the draft was written; `False` when the claim no longer held (a Capability was
+        governed, merged or removed after the caller's pre-check, or the position moved) -- in which
+        case no Policy, edge, Standard or Control was written.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+    """
+    require_caught_up(target)
+    expected_position = read_log_position(target)
+    governors = read_capability_governors(graph, capability_ids)
+    if any(governors.get(capability_id, "") is not None for capability_id in capability_ids):
+        return False
+    stamped = ensure_stamped(target, None)  # housekeeping: no audit link, no data change (A1)
+    policy_ref = NodeRef(label="Policy", id=policy_id)
+    primitives: list[Primitive] = list(
+        _create_primitives(
+            policy_id=policy_id,
+            title=title,
+            owner=owner,
+            standards=standards,
+            supersedes_policy_id=None,
+            version="1",
+        )
+    )
+    with refuse_unstorable_values():
+        primitives.extend(
+            UpsertEdge(
+                type="GOVERNED_BY",
+                identity=edge_identity("GOVERNED_BY", capability_id, policy_id),
+                source=NodeRef(label="Capability", id=capability_id),
+                target=policy_ref,
+            )
+            for capability_id in capability_ids
+        )
+    try:
+        submit_group(
+            target,
+            tuple(primitives),
+            audit_event_id=audit_event_id,
+            preconditions=(ExpectedPosition(position=expected_position + stamped),),
+        )
+    except StaleGroupError:
+        return False
     return True
 
 
@@ -643,7 +794,7 @@ class _StandardAccumulator:
 def read_policy_tree(graph: GraphHandle, policy_id: str) -> PolicyRecord | None:
     """Read `policy_id`'s own fields plus its full Standard/Control tree (S13).
 
-    A pure read, issued through the same `_execute_query` health-tracking
+    A pure read, issued through the same `_read_query` health-tracking
     wrapper as every other call in this module. Callers are expected to call
     `backfill_governance_status` first (D-7) so `version`/`status` are never
     `NULL` by the time this read happens.
@@ -664,7 +815,7 @@ def read_policy_tree(graph: GraphHandle, policy_id: str) -> PolicyRecord | None:
         `controls`) in the order FalkorDB returned them, or `None` if no
         `Policy` node exists with this id.
     """
-    result = _execute_query(
+    result = _read_query(
         graph,
         "MATCH (p:Policy {id: $policy_id}) "
         "OPTIONAL MATCH (p)-[:SUPPORTED_BY]->(s:Standard) "
@@ -782,7 +933,7 @@ def read_policy_tree_for_fork(
 ) -> tuple[ForkedStandardRecord, ...]:
     """Full-content read of `policy_id`'s Standard/Control tree, for a supersede fork (Slice 6).
 
-    A pure read, issued through the same `_execute_query` health-tracking
+    A pure read, issued through the same `_read_query` health-tracking
     wrapper as every other call in this module. Deliberately separate from
     `read_policy_tree` (G7): that function's `StandardRecord`/`ControlRecord`
     only carry `id`/`title`/`status`(+`control_type`) -- enough for
@@ -815,7 +966,7 @@ def read_policy_tree_for_fork(
         children), in the order FalkorDB returned them. A Policy with zero
         Standards returns `()`.
     """
-    result = _execute_query(
+    result = _read_query(
         graph,
         "MATCH (p:Policy {id: $policy_id})-[:SUPPORTED_BY]->(s:Standard) "
         "OPTIONAL MATCH (s)-[:IMPLEMENTED_BY]->(c:Control) "
@@ -858,61 +1009,80 @@ def read_policy_tree_for_fork(
 
 
 def update_policy_fields(
-    graph: GraphHandle, *, policy_id: str, properties: Mapping[str, object]
+    target: GraphWriteTarget, *, policy_id: str, properties: Mapping[str, object]
 ) -> None:
     """PATCH a subset of an existing Policy's own content fields (issue #136, Slice 1, AC-BI-008).
 
-    An explicit `None` value in `properties` means "clear this field to
-    null" (a legitimate PATCH semantic, distinct from the key being absent
-    entirely, which leaves the existing value untouched -- the caller
-    already only includes keys it means to change). No call site anywhere
-    in this codebase's `graph_writer.py`-shaped modules relies on FalkorDB's
-    `SET n += $map` map-merge operator clearing a property via an explicit
-    `null` value in the map (CHANGES.md finding #6) -- that behavior is not
-    documented as delete-on-null by the underlying Cypher/openCypher
-    semantics this operator follows, unlike a plain `SET n.prop = null`,
-    which unambiguously clears one property. This function therefore splits
-    `properties` into two groups and issues one statement per group: a
-    single `SET p += $set_properties` for every non-`None` value, then one
-    separate `SET p.<key> = null` per explicitly-`None` key.
+    An explicit `None` value in `properties` means "clear this field" (a legitimate PATCH
+    semantic, distinct from the key being absent entirely, which leaves the existing value
+    untouched -- the caller already only includes keys it means to change). Since issue #211 the
+    patch is ONE gateway group with no audit link (a draft edit writes no `audit_events` row): a
+    `MergeProperty` for every non-`None` value, then a `RemoveProperty` for every cleared key.
+    A patch that sets nothing has no merge, one that clears nothing has no remove, and a patch
+    that changes nothing logs nothing.
 
-    Property KEY NAMES are never caller-controlled strings here: `properties`
-    is only ever `mcp_interface.mcp_server._parse_patch_fields`'s already-
-    validated output, whose keys are drawn exclusively from a fixed,
-    code-defined allow-list (`service._POLICY_PATCHABLE_FIELDS`) -- so
-    f-string-interpolating a key into the null-clearing Cypher text below
-    (required because FalkorDB/openCypher does not support parameterized
-    property names) is exactly as safe as `ingestion.adapters.internal_seed
-    .persist`'s own `f"MERGE (n:{node.label} ...)"` dynamic-label
-    precedent, never raw user input. This module issues Cypher only, it
-    does not re-validate `properties`' keys itself (the MCP-boundary parser
-    already did) -- matching this module's own established division of
-    labor.
+    Property KEY NAMES are never caller-controlled strings here: `properties` is only ever
+    `mcp_interface.mcp_server._parse_patch_fields`'s already-validated output, whose keys are
+    drawn exclusively from a fixed, code-defined allow-list (`service._POLICY_PATCHABLE_FIELDS`,
+    derived from `ps_service.domain_schema`); the gateway validates each key again against its
+    identifier pattern before it reaches Cypher.
 
     Args:
-        graph: The single-tenant policy graph handle.
+        target: The gateway target of the single-tenant policy graph.
         policy_id: The existing Policy id to patch.
-        properties: Field name -> new value (or `None` to clear), already
-            restricted to the allowed patchable-field set by the caller.
+        properties: Field name -> new value (or `None` to clear), already restricted to the
+            allowed patchable-field set by the caller.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused
+            the group (for example a value it cannot store), could not reach its stores, or the
+            group was committed but not applied.
     """
+    submit_group(
+        target,
+        _patch_primitives("Policy", policy_id, properties),
+        audit_event_id=None,
+    )
+
+
+def _patch_primitives(
+    label: str, node_id: str, properties: Mapping[str, object]
+) -> tuple[Primitive, ...]:
+    """The primitives of one PATCH: a merge of the set values, then a remove of the cleared keys."""
     set_properties = {key: value for key, value in properties.items() if value is not None}
-    null_keys = [key for key, value in properties.items() if value is None]
-    if set_properties:
-        _execute_query(
-            graph,
-            "MATCH (p:Policy {id: $policy_id}) SET p += $set_properties",
-            params={"policy_id": policy_id, "set_properties": set_properties},
-        )
-    for key in null_keys:
-        _execute_query(
-            graph,
-            f"MATCH (p:Policy {{id: $policy_id}}) SET p.{key} = null",
-            params={"policy_id": policy_id},
+    null_keys = tuple(key for key, value in properties.items() if value is None)
+    primitives: list[Primitive] = []
+    with refuse_unstorable_values():
+        if set_properties:
+            primitives.append(MergeProperty(label=label, id=node_id, properties=set_properties))
+        if null_keys:
+            primitives.append(RemoveProperty(label=label, id=node_id, keys=null_keys))
+    return tuple(primitives)
+
+
+def _child_primitives(
+    *,
+    parent: NodeRef,
+    label: str,
+    child_id: str,
+    properties: Mapping[str, object],
+    edge_type: str,
+) -> tuple[Primitive, ...]:
+    """The primitives that mint a child under `parent`: the node, then the parent's edge to it."""
+    with refuse_unstorable_values():
+        return (
+            UpsertNode(label=label, id=child_id, properties=dict(properties)),
+            UpsertEdge(
+                type=edge_type,
+                identity=edge_identity(edge_type, parent.id, child_id),
+                source=parent,
+                target=NodeRef(label=label, id=child_id),
+            ),
         )
 
 
 def add_standard_to_policy(
-    graph: GraphHandle,
+    target: GraphWriteTarget,
     *,
     policy_id: str,
     standard_id: str,
@@ -921,40 +1091,34 @@ def add_standard_to_policy(
 ) -> None:
     """Mint a new Standard under an existing draft Policy (issue #136, Slice 2, AC-BI-007).
 
-    Unlike `update_policy_fields` (Slice 1), a newly-minted node has no prior
-    value to clear -- an explicit `None` in `extra_properties` (a caller
-    passing `fields={"description": None}` to `add-standard-to-draft`, say)
-    simply means "don't set this field at all", never a `SET s.<key> = null`
-    statement (CHANGES.md finding #6's own carve-out for add/create
-    functions, distinct from every PATCH function's own null-clearing
-    split). `None`-valued keys are filtered out before the merge.
+    Unlike `update_policy_fields`, a newly-minted node has no prior value to clear: an explicit
+    `None` in `extra_properties` (a caller passing `fields={"description": None}` to
+    `add-standard-to-draft`, say) simply means "don't set this field at all". `None`-valued keys
+    are filtered out.
 
-    `status` (governance status) is always forced to `"draft"`,
-    unconditionally, regardless of anything in `extra_properties` --
-    mirrors `create_policy_draft`'s own D-6 discipline. `implementation_status`
-    defaults to `"draft"` (AC-BI-007) unless the caller already supplied it
-    in `extra_properties` (already validated against
-    `service._STANDARD_IMPLEMENTATION_STATUS_VALUES` by the MCP-boundary
-    parser). Both `title` and `status` are set AFTER `extra_properties`'s own
-    values, so neither key -- already excluded from the MCP-boundary
-    allow-list anyway -- could ever be overridden by a caller-supplied value;
-    defence in depth, matching this module's own established convention.
+    `status` (governance status) is always forced to `"draft"`, unconditionally, whatever
+    `extra_properties` holds. `implementation_status` defaults to `"draft"` (AC-BI-007) unless the
+    caller supplied it (already validated against `service._STANDARD_IMPLEMENTATION_STATUS_VALUES`
+    by the MCP-boundary parser). Both `title` and `status` are set AFTER `extra_properties`'s
+    values, so neither could be overridden by a caller-supplied value (defence in depth).
 
-    Property KEY NAMES are never caller-controlled strings here -- this
-    function issues one fully-parameterized statement, no f-string
-    key-interpolation is needed (unlike `update_policy_fields`'s own
-    null-clearing branch).
+    Since issue #211 this is ONE gateway group with no audit link: an `UpsertNode` for the
+    Standard, then the `UpsertEdge` `SUPPORTED_BY:{policy}->{standard}` from its parent. The
+    Standard's id derives from its parent and title (`domain_mapper.identity.standard_id`), so
+    adding the same Standard twice under one parent changes nothing the second time (AC-BI-009).
 
     Args:
-        graph: The single-tenant policy graph handle.
+        target: The gateway target of the single-tenant policy graph.
         policy_id: The existing draft Policy id to attach this Standard to.
         standard_id: The already-computed new Standard id
             (`domain_mapper.identity.standard_id(policy_id, title)`).
         title: The new Standard's title.
-        extra_properties: Any additional patchable content fields the
-            caller supplied at creation time (already restricted to
-            `service._STANDARD_PATCHABLE_FIELDS` by the MCP-boundary
-            parser) -- `None`-valued keys are dropped, never written.
+        extra_properties: Any additional patchable content fields the caller supplied at
+            creation time (already restricted to `service._STANDARD_PATCHABLE_FIELDS` by the
+            MCP-boundary parser); `None`-valued keys are dropped, never written.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
     """
     properties: dict[str, object] = {
         key: value for key, value in extra_properties.items() if value is not None
@@ -962,12 +1126,16 @@ def add_standard_to_policy(
     properties.setdefault("implementation_status", "draft")
     properties["title"] = title
     properties["status"] = "draft"
-    _execute_query(
-        graph,
-        "MATCH (p:Policy {id: $policy_id}) "
-        "MERGE (p)-[:SUPPORTED_BY]->(s:Standard {id: $standard_id}) "
-        "SET s += $properties",
-        params={"policy_id": policy_id, "standard_id": standard_id, "properties": properties},
+    submit_group(
+        target,
+        _child_primitives(
+            parent=NodeRef(label="Policy", id=policy_id),
+            label="Standard",
+            child_id=standard_id,
+            properties=properties,
+            edge_type="SUPPORTED_BY",
+        ),
+        audit_event_id=None,
     )
 
 
@@ -996,7 +1164,7 @@ class StandardWithParent:
 def find_standard_with_parent(graph: GraphHandle, standard_id: str) -> StandardWithParent | None:
     """One-hop transitive-ownership read for an existing Standard (issue #136, Slice 3).
 
-    A pure read, issued through the same `_execute_query` health-tracking
+    A pure read, issued through the same `_read_query` health-tracking
     wrapper as every other call in this module. Callers are expected to
     backfill the parent Policy's tree first (D-7) so `standard_status` is
     never spuriously `NULL` by the time a draft-status gate inspects it --
@@ -1016,7 +1184,7 @@ def find_standard_with_parent(graph: GraphHandle, standard_id: str) -> StandardW
         both are treated as "not found" by this function's own single
         `MATCH`, since every real Standard always has exactly one parent).
     """
-    result = _execute_query(
+    result = _read_query(
         graph,
         "MATCH (p:Policy)-[:SUPPORTED_BY]->(s:Standard {id: $standard_id}) "
         "RETURN p.id, p.owner_subject, p.owner_issuer, p.status, s.status, s.title",
@@ -1037,48 +1205,33 @@ def find_standard_with_parent(graph: GraphHandle, standard_id: str) -> StandardW
 
 
 def update_standard_fields(
-    graph: GraphHandle, *, standard_id: str, properties: Mapping[str, object]
+    target: GraphWriteTarget, *, standard_id: str, properties: Mapping[str, object]
 ) -> None:
     """PATCH a subset of an existing Standard's own content fields (issue #136, Slice 3, AC-BI-008).
 
-    Identical null-clearing split to `update_policy_fields` (CHANGES.md
-    finding #6): a single `SET s += $set_properties` for every non-`None`
-    value, then one separate `SET s.<key> = null` per explicitly-`None` key
-    -- no in-repo precedent exists for FalkorDB's `+=` map-merge clearing a
-    property via an explicit `null` value in the map, so this does not rely
-    on that.
-
-    Property KEY NAMES are never caller-controlled strings here: `properties`
-    is only ever `mcp_interface.mcp_server._parse_patch_fields`'s already-
-    validated output, whose keys are drawn exclusively from a fixed,
-    code-defined allow-list (`service._STANDARD_PATCHABLE_FIELDS`) -- same
-    f-string-interpolation safety argument as `update_policy_fields`'s own
-    docstring.
+    Same split as `update_policy_fields`: one gateway group with no audit link, a `MergeProperty`
+    for every non-`None` value then a `RemoveProperty` for every cleared key; a patch that
+    changes nothing logs nothing. `properties` is only ever
+    `mcp_interface.mcp_server._parse_patch_fields`'s already-validated output, whose keys come
+    from the code-defined allow-list (`service._STANDARD_PATCHABLE_FIELDS`, derived from
+    `ps_service.domain_schema`).
 
     Args:
-        graph: The single-tenant policy graph handle.
+        target: The gateway target of the single-tenant policy graph.
         standard_id: The existing Standard id to patch.
-        properties: Field name -> new value (or `None` to clear), already
-            restricted to the allowed patchable-field set by the caller.
+        properties: Field name -> new value (or `None` to clear), already restricted to the
+            allowed patchable-field set by the caller.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
     """
-    set_properties = {key: value for key, value in properties.items() if value is not None}
-    null_keys = [key for key, value in properties.items() if value is None]
-    if set_properties:
-        _execute_query(
-            graph,
-            "MATCH (s:Standard {id: $standard_id}) SET s += $set_properties",
-            params={"standard_id": standard_id, "set_properties": set_properties},
-        )
-    for key in null_keys:
-        _execute_query(
-            graph,
-            f"MATCH (s:Standard {{id: $standard_id}}) SET s.{key} = null",
-            params={"standard_id": standard_id},
-        )
+    submit_group(
+        target, _patch_primitives("Standard", standard_id, properties), audit_event_id=None
+    )
 
 
 def add_control_to_standard(
-    graph: GraphHandle,
+    target: GraphWriteTarget,
     *,
     standard_id: str,
     control_id: str,
@@ -1088,56 +1241,32 @@ def add_control_to_standard(
 ) -> None:
     """Mint a new Control under an existing draft Standard (issue #136, Slice 4, AC-BI-007).
 
-    Mirrors `add_standard_to_policy` (Slice 2) exactly, one level deeper:
-    ownership/status gating for this call is Slice 3's own **one-hop**
-    `find_standard_with_parent` traversal (the caller supplies a
-    `standard_id`, just like `update-standard-draft` does -- PLAN.md §1.4's
-    own correction: this is NOT the two-hop case, that's `update-control-
-    draft` alone, reached via a `control_id`). This function itself issues
-    no read, only the write.
+    Mirrors `add_standard_to_policy` one level deeper (ownership and status gating for the call
+    is the service's one-hop `find_standard_with_parent`; this function issues no read).
 
-    Like `add_standard_to_policy`, a newly-minted node has no prior value to
-    clear -- an explicit `None` in `extra_properties` simply means "don't set
-    this field at all", never a `SET c.<key> = null` statement (CHANGES.md
-    finding #6's own carve-out for add/create functions). `None`-valued keys
-    are filtered out before the merge.
+    `None`-valued keys of `extra_properties` are dropped. `status` is always forced to `"draft"`.
+    `implementation_status` defaults to `"planned"` (NOT `"draft"` like a Standard's) unless the
+    caller supplied one. `type` is always set from `control_type`, never from `extra_properties`.
+    `title`, `type` and `status` are set AFTER `extra_properties`'s values, so none could be
+    overridden by a caller-supplied value (defence in depth).
 
-    `status` (governance status) is always forced to `"draft"`,
-    unconditionally (D-6 parity, same as every other node-minting path in
-    this module). `implementation_status` defaults to `"planned"` -- NOT
-    `"draft"` like `add_standard_to_policy`'s own default -- matching
-    `ps-domain-concepts.md`'s own "earliest state in status workflow"
-    convention for Control (AC-BI-007's own implementation-decisions text)
-    -- unless the caller already supplied one in `extra_properties` (already
-    validated against `service._CONTROL_IMPLEMENTATION_STATUS_VALUES` by the
-    MCP-boundary parser). `type` is always set from the caller's own
-    `control_type` argument, never from `extra_properties` (CHANGES.md
-    finding #8 -- the MCP-boundary parser already excludes `"type"` from
-    `add-control-to-draft`'s own patchable-field allow-list, so this is
-    belt-and-braces, not the only enforcement). Both `title`/`status`/`type`
-    are set AFTER `extra_properties`'s own values, so none could ever be
-    overridden by a caller-supplied value even if the allow-list exclusion
-    were ever bypassed -- defence in depth, matching this module's own
-    established convention.
-
-    Property KEY NAMES are never caller-controlled strings here -- this
-    function issues one fully-parameterized statement, no f-string
-    key-interpolation is needed.
+    Since issue #211 this is ONE gateway group with no audit link: an `UpsertNode` for the Control,
+    then the `UpsertEdge` `IMPLEMENTED_BY:{standard}->{control}` from its parent.
 
     Args:
-        graph: The single-tenant policy graph handle.
+        target: The gateway target of the single-tenant policy graph.
         standard_id: The existing draft Standard id to attach this Control to.
         control_id: The already-computed new Control id
             (`domain_mapper.identity.control_id(standard_id, title)`).
         title: The new Control's title.
-        control_type: The new Control's `type` (`"automated"` or `"manual"`),
-            already validated against `mcp_interface.mcp_server.
-            _CREATE_POLICY_DRAFT_CONTROL_TYPES` at the MCP boundary.
-        extra_properties: Any additional patchable content fields the
-            caller supplied at creation time (already restricted to
-            `service._CONTROL_PATCHABLE_FIELDS - {"type"}` by the
-            MCP-boundary parser) -- `None`-valued keys are dropped, never
-            written.
+        control_type: The new Control's `type` (`"automated"` or `"manual"`), already validated
+            at the MCP boundary.
+        extra_properties: Any additional patchable content fields the caller supplied at
+            creation time (already restricted to `service._CONTROL_PATCHABLE_FIELDS - {"type"}`
+            by the MCP-boundary parser); `None`-valued keys are dropped, never written.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
     """
     properties: dict[str, object] = {
         key: value for key, value in extra_properties.items() if value is not None
@@ -1146,12 +1275,16 @@ def add_control_to_standard(
     properties["title"] = title
     properties["type"] = control_type
     properties["status"] = "draft"
-    _execute_query(
-        graph,
-        "MATCH (s:Standard {id: $standard_id}) "
-        "MERGE (s)-[:IMPLEMENTED_BY]->(c:Control {id: $control_id}) "
-        "SET c += $properties",
-        params={"standard_id": standard_id, "control_id": control_id, "properties": properties},
+    submit_group(
+        target,
+        _child_primitives(
+            parent=NodeRef(label="Standard", id=standard_id),
+            label="Control",
+            child_id=control_id,
+            properties=properties,
+            edge_type="IMPLEMENTED_BY",
+        ),
+        audit_event_id=None,
     )
 
 
@@ -1184,7 +1317,7 @@ class ControlWithParent:
 def find_control_with_parent(graph: GraphHandle, control_id: str) -> ControlWithParent | None:
     """Two-hop transitive-ownership read for an existing Control (issue #136, Slice 5).
 
-    A pure read, issued through the same `_execute_query` health-tracking
+    A pure read, issued through the same `_read_query` health-tracking
     wrapper as every other call in this module. Callers are expected to
     backfill the root Policy's tree first (D-7) so `control_status` is
     never spuriously `NULL` by the time a draft-status gate inspects it --
@@ -1206,7 +1339,7 @@ def find_control_with_parent(graph: GraphHandle, control_id: str) -> ControlWith
         found" by this function's own single `MATCH`, since every real
         Control always has exactly one parent Standard and one root Policy).
     """
-    result = _execute_query(
+    result = _read_query(
         graph,
         "MATCH (p:Policy)-[:SUPPORTED_BY]->(s:Standard)-[:IMPLEMENTED_BY]->"
         "(c:Control {id: $control_id}) "
@@ -1237,41 +1370,20 @@ def find_control_with_parent(graph: GraphHandle, control_id: str) -> ControlWith
 
 
 def update_control_fields(
-    graph: GraphHandle, *, control_id: str, properties: Mapping[str, object]
+    target: GraphWriteTarget, *, control_id: str, properties: Mapping[str, object]
 ) -> None:
     """PATCH a subset of an existing Control's own content fields (issue #136, Slice 5, AC-BI-008).
 
-    Identical null-clearing split to `update_policy_fields`/
-    `update_standard_fields` (CHANGES.md finding #6): a single
-    `SET c += $set_properties` for every non-`None` value, then one separate
-    `SET c.<key> = null` per explicitly-`None` key -- no in-repo precedent
-    exists for FalkorDB's `+=` map-merge clearing a property via an explicit
-    `null` value in the map, so this does not rely on that.
-
-    Property KEY NAMES are never caller-controlled strings here: `properties`
-    is only ever `mcp_interface.mcp_server._parse_patch_fields`'s already-
-    validated output, whose keys are drawn exclusively from a fixed,
-    code-defined allow-list (`service._CONTROL_PATCHABLE_FIELDS`) -- same
-    f-string-interpolation safety argument as `update_policy_fields`'s own
-    docstring.
+    Identical to `update_standard_fields` for a Control: one gateway group with no audit link,
+    keys from `service._CONTROL_PATCHABLE_FIELDS`.
 
     Args:
-        graph: The single-tenant policy graph handle.
+        target: The gateway target of the single-tenant policy graph.
         control_id: The existing Control id to patch.
-        properties: Field name -> new value (or `None` to clear), already
-            restricted to the allowed patchable-field set by the caller.
+        properties: Field name -> new value (or `None` to clear), already restricted to the
+            allowed patchable-field set by the caller.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
     """
-    set_properties = {key: value for key, value in properties.items() if value is not None}
-    null_keys = [key for key, value in properties.items() if value is None]
-    if set_properties:
-        _execute_query(
-            graph,
-            "MATCH (c:Control {id: $control_id}) SET c += $set_properties",
-            params={"control_id": control_id, "set_properties": set_properties},
-        )
-    for key in null_keys:
-        _execute_query(
-            graph,
-            f"MATCH (c:Control {{id: $control_id}}) SET c.{key} = null",
-            params={"control_id": control_id},
-        )
+    submit_group(target, _patch_primitives("Control", control_id, properties), audit_event_id=None)

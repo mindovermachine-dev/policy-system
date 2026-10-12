@@ -4,10 +4,9 @@ Closes the AC-007 bug at fake level: after a fork of an approved Policy is
 created, proposed and approved through the REAL MCP tools, the skill's own
 branch-detection query (`GOVERNED_BY` + `SUPERSEDED_BY`, SKILL.md step 3) must
 find the new Policy as the Capability's governor -- never "no governing
-Policy". One stateful fake graph holds the `GOVERNED_BY` map, the
-`SUPERSEDED_BY` pairs and the Policy trees; it models the contract of the
-guarded statements per CHANGES.md Appendix A5 (a row and a mutation only when
-the guard holds). The fake cannot validate Cypher text -- that is the
+Policy". Since issue #211 every write of the chain is a Graph Write Gateway group over the
+process gateway rig's graph; the handle the tools read through answers the lifecycle reads and the
+skill's detection queries from that same graph. It cannot validate Cypher text -- that is the
 `falkordb_live` file's job (`policy_lifecycle/test_governed_by_live.py`).
 """
 
@@ -17,9 +16,10 @@ import asyncio
 import contextlib
 import json
 import re
-from dataclasses import dataclass, field
+import uuid
 from typing import TYPE_CHECKING, cast
 
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
     FakeAccessRoleStore,
 )
@@ -27,6 +27,7 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
+from policy_lifecycle._gateway_fakes import PolicyGraphSeeder, PolicyReadGraph, SeedStandard
 
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
@@ -36,9 +37,10 @@ from ps_service.query_engine.cypher_query import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping, Sequence
+    from collections.abc import Generator, Sequence
 
     import pytest
+    from graph_gateway._fakes import InMemoryGraph
 
 _ISSUER = "https://issuer.example.com/"
 _AUTHOR = "policy-author"
@@ -50,16 +52,6 @@ _CAP_ID = "cap_data_protection"
 _PRIOR_ID = "pol_prior"
 
 
-@dataclass
-class _Policy:
-    title: str
-    status: str
-    version: str
-    owner_subject: str
-    owner_issuer: str
-    standards: dict[str, tuple[str, str]] = field(default_factory=dict[str, tuple[str, str]])
-
-
 class _Result:
     def __init__(
         self, header: Sequence[object] | None = None, rows: list[object] | None = None
@@ -68,15 +60,27 @@ class _Result:
         self.result_set = rows or []
 
 
-class _ChainGraph:
-    """In-memory graph honouring the contract of every statement the chain issues."""
+class _ChainGraph(PolicyReadGraph):
+    """The process gateway rig's graph, as the lifecycle tools and the skill's queries read it.
+
+    Every write of the chain is a gateway group on that graph (issue #211). This handle answers
+    the lifecycle reads through the shared read double and the skill's two detection queries from
+    the same graph; it refuses every statement it was not taught.
+    """
 
     def __init__(self) -> None:
-        self.policies: dict[str, _Policy] = {}
-        self.governed: dict[str, str] = {}
-        self.capabilities: dict[str, str] = {_CAP_ID: _CAP_NAME}
-        self.superseded: list[tuple[str, str]] = []
-        self.unmatched: list[str] = []
+        super().__init__(installed_process_gateway().rig.graphs.open("policy_system"))
+
+    @property
+    def graph(self) -> InMemoryGraph:
+        return self._graph
+
+    def governed(self) -> dict[str, str]:
+        """`{capability_id: governing_policy_id}` of the graph's `GOVERNED_BY` edges."""
+        return {key[2]: key[4] for key in self._graph.edges if key[0] == "GOVERNED_BY"}
+
+    def status(self, policy_id: str) -> object:
+        return self._graph.nodes[("Policy", policy_id)]["status"]
 
     # --- skill queries (the cypher tool) ---------------------------------
 
@@ -84,149 +88,38 @@ class _ChainGraph:
         name_match = re.search(r"\{name: '([^']*)'\}", q)
         if name_match is None:
             return None
-        cap_id = next((i for i, n in self.capabilities.items() if n == name_match[1]), None)
+        cap_id = next(
+            (
+                node_id
+                for (label, node_id), props in self._graph.nodes.items()
+                if label == "Capability" and props.get("name") == name_match[1]
+            ),
+            None,
+        )
         if "GOVERNED_BY" not in q:
             rows: list[object] = [[name_match[1], cap_id]] if cap_id else []
             return _Result([[0, "capability_name"], [0, "capability_id"]], rows)
         header = [[0, "policy_id"], [0, "status"], [0, "fork_id"], [0, "fork_status"]]
-        governor = self.governed.get(cap_id or "")
+        governor = self.governed().get(cap_id or "")
         if governor is None:
             return _Result(header, [])
-        forks = [new for prior, new in self.superseded if prior == governor]
-        gov_status = self.policies[governor].status
+        forks = [
+            key[4] for key in self._graph.edges if key[0] == "SUPERSEDED_BY" and key[2] == governor
+        ]
+        gov_status = self.status(governor)
         if not forks:
             return _Result(header, [[governor, gov_status, None, None]])
-        return _Result(header, [[governor, gov_status, f, self.policies[f].status] for f in forks])
+        return _Result(header, [[governor, gov_status, f, self.status(f)] for f in forks])
 
-    # --- policy_lifecycle statements --------------------------------------
-
-    def query(
+    def query(  # type: ignore[override]
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
     ) -> _Result:
-        del timeout
-        p = params or {}
         if q == _SEED_CHECK_QUERY:
             return _Result([[0, "c"]], [[1]])
         skill = self._skill_query(q)
         if skill is not None:
             return skill
-        if "coalesce(p.version" in q or "IS NULL" in q:
-            return _Result()
-        if "DELETE r" in q:
-            return self._repoint(p)
-        if "RETURN prior.id, collect(cap.id)" in q:
-            return self._fork_governance(p)
-        if "WHERE prior.status = 'approved'" in q:
-            return self._approved_prior(p)
-        if "RETURN cap.id, g.id" in q:
-            requested = cast("list[str]", p["capability_ids"])
-            return _Result(
-                rows=[[c, self.governed.get(c)] for c in requested if c in self.capabilities]
-            )
-        if "FOREACH (c IN caps | MERGE (c)-[:GOVERNED_BY]->(p))" in q:
-            return self._guarded_create(p)
-        if q.strip() == "MATCH (p:Policy {id: $policy_id}) RETURN p.id, p.title":
-            policy = self.policies.get(cast("str", p["policy_id"]))
-            return _Result(rows=[[p["policy_id"], policy.title]] if policy else [])
-        if "MERGE (p:Policy {id: $policy_id}) SET p += $properties" in q:
-            self._merge_policy(p)
-            return _Result()
-        if "MERGE (prior)-[:SUPERSEDED_BY]->(new)" in q:
-            self.superseded.append((cast("str", p["prior_id"]), cast("str", p["new_id"])))
-            return _Result()
-        if "RETURN s.id, properties(s), c.id, properties(c)" in q:
-            return self._fork_tree(cast("str", p["policy_id"]))
-        if "SUPPORTED_BY]->(s:Standard {id: $standard_id})" in q:
-            props = cast("dict[str, str]", p["properties"])
-            self.policies[cast("str", p["policy_id"])].standards[cast("str", p["standard_id"])] = (
-                props["title"],
-                props["status"],
-            )
-            return _Result()
-        if "s.id, s.title, s.status, c.id" in q:
-            return self._tree(cast("str", p["policy_id"]))
-        if "SET p.status = $target_status" in q:
-            self._cascade(cast("str", p["policy_id"]), cast("str", p["target_status"]))
-            return _Result()
-        self.unmatched.append(q)
-        return _Result()
-
-    def _merge_policy(self, p: Mapping[str, object]) -> None:
-        props = cast("dict[str, str]", p["properties"])
-        self.policies[cast("str", p["policy_id"])] = _Policy(
-            title=props["title"],
-            status=props["status"],
-            version=props["version"],
-            owner_subject=props["owner_subject"],
-            owner_issuer=props["owner_issuer"],
-        )
-
-    def _guarded_create(self, p: Mapping[str, object]) -> _Result:
-        ids = cast("list[str]", p["capability_ids"])
-        if not all(i in self.capabilities and i not in self.governed for i in ids):
-            return _Result()
-        self._merge_policy(p)
-        for cap_id in ids:
-            self.governed[cap_id] = cast("str", p["policy_id"])
-        return _Result(rows=[[p["policy_id"]]])
-
-    def _fork_governance(self, p: Mapping[str, object]) -> _Result:
-        prior = next((a for a, b in self.superseded if b == p["policy_id"]), None)
-        if prior is None:
-            return _Result()
-        caps = [c for c, g in self.governed.items() if g == prior]
-        return _Result(rows=[[prior, caps]])
-
-    def _approved_prior(self, p: Mapping[str, object]) -> _Result:
-        for prior, new in self.superseded:
-            if new == p["successor_policy_id"] and self.policies[prior].status == "approved":
-                return _Result(rows=[[prior]])
-        return _Result()
-
-    def _repoint(self, p: Mapping[str, object]) -> _Result:
-        ids = cast("list[str]", p["capability_ids"])
-        if sum(self.governed.get(c) == p["prior_id"] for c in ids) != p["expected"]:
-            return _Result()
-        for cap_id in ids:
-            self.governed[cap_id] = cast("str", p["policy_id"])
-        self._cascade(cast("str", p["policy_id"]), cast("str", p["target_status"]))
-        return _Result(rows=[[p["policy_id"]]])
-
-    def _cascade(self, policy_id: str, target: str) -> None:
-        policy = self.policies[policy_id]
-        policy.status = target
-        policy.standards = {i: (t, target) for i, (t, _s) in policy.standards.items()}
-
-    def _fork_tree(self, policy_id: str) -> _Result:
-        policy = self.policies.get(policy_id)
-        if policy is None:
-            return _Result()
-        rows: list[object] = []
-        for std_id, (title, status) in policy.standards.items():
-            props: dict[str, object] = {"id": std_id, "title": title, "status": status}
-            rows.append([std_id, props, None, None])
-        return _Result(rows=rows)
-
-    def _tree(self, policy_id: str) -> _Result:
-        policy = self.policies.get(policy_id)
-        if policy is None:
-            return _Result()
-        head = [
-            policy_id,
-            policy.title,
-            policy.status,
-            policy.version,
-            policy.owner_subject,
-            policy.owner_issuer,
-        ]
-        if not policy.standards:
-            return _Result(rows=[[*head, None, None, None, None, None, None, None]])
-        return _Result(
-            rows=[
-                [*head, std_id, title, status, None, None, None, None]
-                for std_id, (title, status) in policy.standards.items()
-            ]
-        )
+        return cast("_Result", super().query(q, params, timeout))
 
 
 class _FakeFalkorDB:
@@ -244,6 +137,13 @@ class _AuditStore:
 
     def record_standalone(self, **kwargs: object) -> None:
         del kwargs
+
+    def record_standalone_with_event_id(self, **kwargs: object) -> str:
+        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        del kwargs
+        event_id = str(uuid.uuid4())
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+        return event_id
 
     def query(self, *args: object, **kwargs: object) -> object:
         raise NotImplementedError
@@ -299,11 +199,18 @@ def _detect() -> list[list[object]]:
     return cast("list[list[object]]", _call("cypher", {"query": query})["rows"])
 
 
-def _seed_approved_prior(graph: _ChainGraph) -> None:
-    graph.policies[_PRIOR_ID] = _Policy(
-        "Data Protection Policy", "approved", "1", _AUTHOR, _ISSUER, {"std_1": ("Std", "approved")}
+def _seed_approved_prior() -> None:
+    seeder = PolicyGraphSeeder(installed_process_gateway().rig.graphs.open("policy_system"))
+    seeder.seed_policy(
+        _PRIOR_ID,
+        title="Data Protection Policy",
+        status="approved",
+        owner=(_AUTHOR, _ISSUER),
+        standards=(SeedStandard("std_1", "Std", status="approved"),),
+        legacy_edges=False,
     )
-    graph.governed[_CAP_ID] = _PRIOR_ID
+    seeder.seed_capability(_CAP_ID, name=_CAP_NAME)
+    seeder.seed_governs(_CAP_ID, _PRIOR_ID, legacy=False)
 
 
 def test_fork_create_propose_approve_then_detection_finds_the_new_governed_policy(
@@ -312,7 +219,7 @@ def test_fork_create_propose_approve_then_detection_finds_the_new_governed_polic
     """AC-007: the second run no longer re-reports "no governing Policy"."""
     configure()
     graph = _ChainGraph()
-    _seed_approved_prior(graph)
+    _seed_approved_prior()
     _install(monkeypatch, graph)
 
     assert _detect() == [[_PRIOR_ID, "approved", None, None]]
@@ -324,7 +231,7 @@ def test_fork_create_propose_approve_then_detection_finds_the_new_governed_polic
         )
     fork_id = cast("str", fork["policy_id"])
     # Edges stay on the prior while the fork is a draft: skill resumes it.
-    assert graph.governed == {_CAP_ID: _PRIOR_ID}
+    assert graph.governed() == {_CAP_ID: _PRIOR_ID}
     assert _detect() == [[_PRIOR_ID, "approved", fork_id, "draft"]]
 
     with _actor(_AUTHOR):
@@ -335,11 +242,10 @@ def test_fork_create_propose_approve_then_detection_finds_the_new_governed_polic
         approved = _call("approve-policy", {"policy_id": fork_id})
 
     assert approved["governed_capability_ids"] == [_CAP_ID]
-    assert graph.governed == {_CAP_ID: fork_id}
+    assert graph.governed() == {_CAP_ID: fork_id}
     # Detection now names the approved successor as governor -- not "no governing Policy".
     assert _detect() == [[fork_id, "approved", None, None]]
-    assert graph.policies[_PRIOR_ID].status == "deprecated"
-    assert graph.unmatched == []
+    assert graph.status(_PRIOR_ID) == "deprecated"
 
 
 def test_fresh_create_with_capability_ids_is_found_by_detection_as_a_governing_draft(
@@ -348,6 +254,11 @@ def test_fresh_create_with_capability_ids_is_found_by_detection_as_a_governing_d
     configure()
     graph = _ChainGraph()
     _install(monkeypatch, graph)
+    # The claim is a guarded gateway group (issue #211): the Capability exists in the graph the
+    # gateway writes.
+    PolicyGraphSeeder(installed_process_gateway().rig.graphs.open("policy_system")).seed_capability(
+        _CAP_ID, name=_CAP_NAME
+    )
     assert _detect() == []
 
     with _actor(_AUTHOR):
@@ -359,4 +270,3 @@ def test_fresh_create_with_capability_ids_is_found_by_detection_as_a_governing_d
     policy_id = cast("str", created["policy_id"])
     # Second run takes the existing `status == "draft"` GOVERNED_BY branch (resume).
     assert _detect() == [[policy_id, "draft", None, None]]
-    assert graph.unmatched == []

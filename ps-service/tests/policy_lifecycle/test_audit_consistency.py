@@ -26,10 +26,10 @@ share one `reason_code` `Literal` end to end.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pytest
+from audit._fakes import InMemoryAuditStore
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package (has `__init__.py`); mirrors `test_service.py`'s own cross-package import convention
     FakeAccessRoleStore,
 )
@@ -50,10 +50,7 @@ from ps_service.policy_lifecycle.service import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-    from typing import Literal
-
-    from ps_service.audit.models import AuditQueryFilters, AuditQueryPage
+    from policy_lifecycle._gateway_fakes import LifecycleRig, PolicyReadGraph
 
 _OWNER = ("alice", "https://issuer.example")
 _OTHER = ("bob", "https://issuer.example")
@@ -61,83 +58,10 @@ _MANAGER = ("carol", "https://issuer.example")
 _GRANTER = ("system-admin-tool", "https://issuer.example")
 
 
-@dataclass
-class _FakeQueryResult:
-    result_set: list[object] = field(default_factory=list)
-
-
-class _FixedTreeFakeGraph:
-    """A minimal `GraphHandle` double returning one canned, childless Policy tree.
-
-    Every query these tests need is either `read_policy_tree`'s own
-    `RETURN` (answered from the fixed `status`/`owner` this instance was
-    built with) or one of `backfill_governance_status`'s guarded `SET`
-    statements (a no-op) -- no test in this file ever reaches a cascading
-    write, since every one of them exercises a rejection path.
-    """
-
-    def __init__(self, *, status: str, owner: tuple[str, str]) -> None:
-        self._status = status
-        self._owner = owner
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        del params
-        if "s.id, s.title, s.status, c.id" not in q:
-            return _FakeQueryResult()
-        row = [
-            "pol_x",
-            "Title",
-            self._status,
-            "1",
-            self._owner[0],
-            self._owner[1],
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ]
-        return _FakeQueryResult(result_set=[row])
-
-
-@dataclass
-class _RecordedCall:
-    action: str
-    outcome: str
-    details: Mapping[str, object]
-
-
-class _FakeAuditStore:
-    """Records every `record_standalone` call -- these tests only ever read `.calls`."""
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def record(self, *args: object, **kwargs: object) -> str:
-        raise NotImplementedError
-
-    def record_standalone(
-        self,
-        *,
-        actor_subject: str,
-        actor_issuer: str,
-        action: str,
-        resource_type: str,
-        resource_id: str,
-        outcome: Literal["applied", "rejected", "failed"],
-        details: Mapping[str, object],
-    ) -> None:
-        del actor_subject, actor_issuer, resource_type, resource_id
-        self.calls.append(_RecordedCall(action=action, outcome=outcome, details=details))
-
-    def query(
-        self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
-    ) -> AuditQueryPage:
-        """Not exercised here -- present only for `AuditStore` `Protocol` conformance."""
-        del filters, cursor, page_size
-        raise NotImplementedError
+def _tree(rig: LifecycleRig, *, status: str, owner: tuple[str, str]) -> PolicyReadGraph:
+    """A childless Policy `pol_x` at `status` in the rig graph; returns the read handle."""
+    rig.seed_policy("pol_x", title="Title", status=status, owner=owner, legacy_edges=False)
+    return rig.read
 
 
 def _manager_store(*, subject_pair: tuple[str, str] = _MANAGER) -> FakeAccessRoleStore:
@@ -146,103 +70,117 @@ def _manager_store(*, subject_pair: tuple[str, str] = _MANAGER) -> FakeAccessRol
     return store
 
 
-def test_access_denied_reason_code_is_identical_across_propose_and_revert() -> None:
+def test_access_denied_reason_code_is_identical_across_propose_and_revert(
+    lifecycle_rig: LifecycleRig,
+) -> None:
     """`propose`/`revert` are this issue's only two owner-only actions."""
-    propose_audit = _FakeAuditStore()
+    propose_audit = InMemoryAuditStore()
     with pytest.raises(PolicyDraftAccessDeniedError):
         propose_policy(
             actor=_OTHER,
             policy_id="pol_x",
-            graph=_FixedTreeFakeGraph(status="draft", owner=_OWNER),
+            graph=_tree(lifecycle_rig, status="draft", owner=_OWNER),
             audit_store=propose_audit,
+            submitter=lifecycle_rig.gateway,
         )
 
-    revert_audit = _FakeAuditStore()
+    revert_audit = InMemoryAuditStore()
     with pytest.raises(PolicyDraftAccessDeniedError):
         revert_policy_to_draft(
             actor=_OTHER,
             policy_id="pol_x",
-            graph=_FixedTreeFakeGraph(status="proposed", owner=_OWNER),
+            graph=_tree(lifecycle_rig, status="proposed", owner=_OWNER),
             audit_store=revert_audit,
+            submitter=lifecycle_rig.gateway,
         )
 
-    propose_reason = propose_audit.calls[0].details["reason_code"]
-    revert_reason = revert_audit.calls[0].details["reason_code"]
+    propose_reason = propose_audit.rows[0].details["reason_code"]
+    revert_reason = revert_audit.rows[0].details["reason_code"]
     assert propose_reason == revert_reason == "access_denied"
 
 
-def test_self_approval_blocked_reason_code_is_identical_across_approve_and_reject() -> None:
+def test_self_approval_blocked_reason_code_is_identical_across_approve_and_reject(
+    lifecycle_rig: LifecycleRig,
+) -> None:
     """`approve`/`reject` are this issue's only two `PolicyManager`-gated actions."""
-    approve_audit = _FakeAuditStore()
+    approve_audit = InMemoryAuditStore()
     with pytest.raises(PolicySelfApprovalBlockedError):
         approve_policy(
             actor=_OWNER,
             policy_id="pol_x",
-            graph=_FixedTreeFakeGraph(status="proposed", owner=_OWNER),
+            graph=_tree(lifecycle_rig, status="proposed", owner=_OWNER),
             audit_store=approve_audit,
             access_role_store=_manager_store(subject_pair=_OWNER),
+            submitter=lifecycle_rig.gateway,
         )
 
-    reject_audit = _FakeAuditStore()
+    reject_audit = InMemoryAuditStore()
     with pytest.raises(PolicySelfApprovalBlockedError):
         reject_policy(
             actor=_OWNER,
             policy_id="pol_x",
-            graph=_FixedTreeFakeGraph(status="proposed", owner=_OWNER),
+            graph=_tree(lifecycle_rig, status="proposed", owner=_OWNER),
             audit_store=reject_audit,
             access_role_store=_manager_store(subject_pair=_OWNER),
+            submitter=lifecycle_rig.gateway,
         )
 
-    approve_reason = approve_audit.calls[0].details["reason_code"]
-    reject_reason = reject_audit.calls[0].details["reason_code"]
+    approve_reason = approve_audit.rows[0].details["reason_code"]
+    reject_reason = reject_audit.rows[0].details["reason_code"]
     assert approve_reason == reject_reason == "self_approval_blocked"
 
 
-def test_invalid_status_reason_code_is_identical_across_all_four_transitions() -> None:
+def test_invalid_status_reason_code_is_identical_across_all_four_transitions(
+    lifecycle_rig: LifecycleRig,
+) -> None:
     """Every one of the 4 transitions can fail `require_status` -- all 4 must agree."""
-    propose_audit = _FakeAuditStore()
+    propose_audit = InMemoryAuditStore()
     with pytest.raises(PolicyInvalidStatusTransitionError):
         propose_policy(
             actor=_OWNER,
             policy_id="pol_x",
-            graph=_FixedTreeFakeGraph(status="proposed", owner=_OWNER),
+            graph=_tree(lifecycle_rig, status="proposed", owner=_OWNER),
             audit_store=propose_audit,
+            submitter=lifecycle_rig.gateway,
         )
 
-    revert_audit = _FakeAuditStore()
+    revert_audit = InMemoryAuditStore()
     with pytest.raises(PolicyInvalidStatusTransitionError):
         revert_policy_to_draft(
             actor=_OWNER,
             policy_id="pol_x",
-            graph=_FixedTreeFakeGraph(status="draft", owner=_OWNER),
+            graph=_tree(lifecycle_rig, status="draft", owner=_OWNER),
             audit_store=revert_audit,
+            submitter=lifecycle_rig.gateway,
         )
 
-    approve_audit = _FakeAuditStore()
+    approve_audit = InMemoryAuditStore()
     with pytest.raises(PolicyInvalidStatusTransitionError):
         approve_policy(
             actor=_MANAGER,
             policy_id="pol_x",
-            graph=_FixedTreeFakeGraph(status="draft", owner=_OWNER),
+            graph=_tree(lifecycle_rig, status="draft", owner=_OWNER),
             audit_store=approve_audit,
             access_role_store=_manager_store(),
+            submitter=lifecycle_rig.gateway,
         )
 
-    reject_audit = _FakeAuditStore()
+    reject_audit = InMemoryAuditStore()
     with pytest.raises(PolicyInvalidStatusTransitionError):
         reject_policy(
             actor=_MANAGER,
             policy_id="pol_x",
-            graph=_FixedTreeFakeGraph(status="draft", owner=_OWNER),
+            graph=_tree(lifecycle_rig, status="draft", owner=_OWNER),
             audit_store=reject_audit,
             access_role_store=_manager_store(),
+            submitter=lifecycle_rig.gateway,
         )
 
     reasons = {
-        propose_audit.calls[0].details["reason_code"],
-        revert_audit.calls[0].details["reason_code"],
-        approve_audit.calls[0].details["reason_code"],
-        reject_audit.calls[0].details["reason_code"],
+        propose_audit.rows[0].details["reason_code"],
+        revert_audit.rows[0].details["reason_code"],
+        approve_audit.rows[0].details["reason_code"],
+        reject_audit.rows[0].details["reason_code"],
     }
     assert reasons == {"invalid_status"}
 

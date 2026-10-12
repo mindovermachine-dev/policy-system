@@ -127,7 +127,7 @@ class _CountingSubmitter(RigSubmitter):
         return self._caught_up and super().is_caught_up(graph)
 
     def stamp_legacy_edge_identity(
-        self, graph: str, audit_event_id: str
+        self, graph: str, audit_event_id: str | None
     ) -> EdgeIdentityBackfillOutcome:
         self.stamps += 1
         if self._refuse_stamp:

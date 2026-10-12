@@ -108,7 +108,7 @@ class _RecordingSubmitter:
         return self._gateway.is_caught_up(graph)
 
     def stamp_legacy_edge_identity(
-        self, graph: str, audit_event_id: str
+        self, graph: str, audit_event_id: str | None
     ) -> EdgeIdentityBackfillOutcome:
         return self._gateway.stamp_legacy_edge_identity(graph, audit_event_id)
 

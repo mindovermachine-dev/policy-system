@@ -61,6 +61,7 @@ from ps_service.api.errors import (
     ShortNameCollisionError,
     SystemOwnerFloorViolationError,
 )
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.ingestion_orchestration import (
     _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  -- shared failure-reason cap; D-AUDIT-WRAPPER reuses it for `_run_mcp_action`'s own truncation, mirrors change_check_orchestration.py's own cross-module private-import convention
     GraphOpeners,
@@ -185,6 +186,7 @@ from ps_service.policy_lifecycle.errors import (
     PolicySupersedePriorNotApprovedError,
     PolicyTitleAlreadyExistsError,
 )
+from ps_service.policy_lifecycle.graph_submission import lifecycle_submitter
 from ps_service.policy_lifecycle.service import (
     _CONTROL_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 4: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
     _CONTROL_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 4: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
@@ -2621,6 +2623,7 @@ def _parse_patch_fields(
 
 
 _CREATE_POLICY_DRAFT_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyCapabilityAlreadyGovernedError,
     PolicyCapabilityNotFoundError,
     PolicyNotFoundError,
@@ -2795,6 +2798,8 @@ def create_policy_draft(
             return f"error: {exc}"
         audit_store = PsycopgAuditStore(config)
         try:
+            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_create_policy_draft(
                 actor=actor,
                 title=title,
@@ -2803,6 +2808,7 @@ def create_policy_draft(
                 capability_ids=tuple(capability_ids or ()),
                 graph=graph,
                 audit_store=audit_store,
+                submitter=submitter,
             )
         except _CREATE_POLICY_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -2822,6 +2828,7 @@ def create_policy_draft(
 
 
 _UPDATE_POLICY_DRAFT_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyNotFoundError,
     PolicyDraftAccessDeniedError,
     PolicyInvalidStatusTransitionError,
@@ -2884,12 +2891,15 @@ def update_policy_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
+            # Fail closed before any read or write: no gateway, no draft edit (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_update_policy_draft(
                 actor=actor,
                 policy_id=policy_id,
                 fields=parsed_fields,
                 graph=graph,
                 access_role_store=access_role_store,
+                submitter=submitter,
             )
         except _UPDATE_POLICY_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -2902,6 +2912,7 @@ def update_policy_draft(
 
 
 _ADD_STANDARD_TO_DRAFT_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyNotFoundError,
     PolicyDraftAccessDeniedError,
     PolicyInvalidStatusTransitionError,
@@ -2975,6 +2986,8 @@ def add_standard_to_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
+            # Fail closed before any read or write: no gateway, no draft write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_add_standard_to_draft(
                 actor=actor,
                 policy_id=policy_id,
@@ -2982,6 +2995,7 @@ def add_standard_to_draft(
                 fields=parsed_fields,
                 graph=graph,
                 access_role_store=access_role_store,
+                submitter=submitter,
             )
         except _ADD_STANDARD_TO_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -2996,6 +3010,7 @@ def add_standard_to_draft(
 
 
 _UPDATE_STANDARD_DRAFT_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyStandardNotFoundError,
     PolicyDraftAccessDeniedError,
     PolicyInvalidStatusTransitionError,
@@ -3064,12 +3079,15 @@ def update_standard_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
+            # Fail closed before any read or write: no gateway, no draft write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_update_standard_draft(
                 actor=actor,
                 standard_id=standard_id,
                 fields=parsed_fields,
                 graph=graph,
                 access_role_store=access_role_store,
+                submitter=submitter,
             )
         except _UPDATE_STANDARD_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -3084,6 +3102,7 @@ def update_standard_draft(
 
 
 _ADD_CONTROL_TO_DRAFT_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyStandardNotFoundError,
     PolicyDraftAccessDeniedError,
     PolicyInvalidStatusTransitionError,
@@ -3176,6 +3195,8 @@ def add_control_to_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
+            # Fail closed before any read or write: no gateway, no draft write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_add_control_to_draft(
                 actor=actor,
                 standard_id=standard_id,
@@ -3184,6 +3205,7 @@ def add_control_to_draft(
                 fields=parsed_fields,
                 graph=graph,
                 access_role_store=access_role_store,
+                submitter=submitter,
             )
         except _ADD_CONTROL_TO_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -3199,6 +3221,7 @@ def add_control_to_draft(
 
 
 _UPDATE_CONTROL_DRAFT_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyControlNotFoundError,
     PolicyDraftAccessDeniedError,
     PolicyInvalidStatusTransitionError,
@@ -3275,12 +3298,15 @@ def update_control_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
+            # Fail closed before any read or write: no gateway, no draft write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_update_control_draft(
                 actor=actor,
                 control_id=control_id,
                 fields=parsed_fields,
                 graph=graph,
                 access_role_store=access_role_store,
+                submitter=submitter,
             )
         except _UPDATE_CONTROL_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -3295,7 +3321,12 @@ def update_control_draft(
     return _run_mcp_action("update_control_draft", principal, _body, entity_id=control_id)
 
 
-_GET_POLICY_ERRORS = (PolicyNotFoundError, PolicyDraftAccessDeniedError)
+_GET_POLICY_ERRORS = (
+    GraphWriteUnavailableError,
+    PolicyNotFoundError,
+    PolicyDraftAccessDeniedError,
+    PolicyLifecycleGraphUnavailableError,
+)
 
 
 @server.tool(name="get-policy")
@@ -3343,6 +3374,9 @@ def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, obje
                 policy_id=policy_id,
                 graph=graph,
                 access_role_store=access_role_store,
+                # Resolved only if a backfill must be written (a read of a backfilled tree needs
+                # no gateway).
+                submitter_source=lambda: lifecycle_submitter(graph_write_access(config).gateway),
             )
         except _GET_POLICY_ERRORS as exc:
             return f"error: {exc}"
@@ -3376,6 +3410,7 @@ def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, obje
 
 
 _PROPOSE_POLICY_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyNotFoundError,
     PolicyDraftAccessDeniedError,
     PolicyInvalidStatusTransitionError,
@@ -3421,8 +3456,14 @@ def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
             return f"error: {exc}"
         audit_store = PsycopgAuditStore(config)
         try:
+            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_propose_policy(
-                actor=actor, policy_id=policy_id, graph=graph, audit_store=audit_store
+                actor=actor,
+                policy_id=policy_id,
+                graph=graph,
+                audit_store=audit_store,
+                submitter=submitter,
             )
         except _PROPOSE_POLICY_ERRORS as exc:
             return f"error: {exc}"
@@ -3437,6 +3478,7 @@ def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
 
 
 _APPROVE_POLICY_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyNotFoundError,
     AccessDeniedError,
     PolicySelfApprovalBlockedError,
@@ -3500,12 +3542,15 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
         audit_store = PsycopgAuditStore(config)
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
+            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_approve_policy(
                 actor=actor,
                 policy_id=policy_id,
                 graph=graph,
                 audit_store=audit_store,
                 access_role_store=access_role_store,
+                submitter=submitter,
             )
         except _APPROVE_POLICY_ERRORS as exc:
             return f"error: {exc}"
@@ -3522,6 +3567,7 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
 
 
 _REJECT_POLICY_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyNotFoundError,
     AccessDeniedError,
     PolicySelfApprovalBlockedError,
@@ -3571,12 +3617,15 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
         audit_store = PsycopgAuditStore(config)
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
+            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_reject_policy(
                 actor=actor,
                 policy_id=policy_id,
                 graph=graph,
                 audit_store=audit_store,
                 access_role_store=access_role_store,
+                submitter=submitter,
             )
         except _REJECT_POLICY_ERRORS as exc:
             return f"error: {exc}"
@@ -3591,6 +3640,7 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
 
 
 _REVERT_POLICY_TO_DRAFT_ERRORS = (
+    GraphWriteUnavailableError,
     PolicyNotFoundError,
     PolicyDraftAccessDeniedError,
     PolicyInvalidStatusTransitionError,
@@ -3640,8 +3690,14 @@ def revert_policy_to_draft(
             return f"error: {exc}"
         audit_store = PsycopgAuditStore(config)
         try:
+            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_revert_policy_to_draft(
-                actor=actor, policy_id=policy_id, graph=graph, audit_store=audit_store
+                actor=actor,
+                policy_id=policy_id,
+                graph=graph,
+                audit_store=audit_store,
+                submitter=submitter,
             )
         except _REVERT_POLICY_TO_DRAFT_ERRORS as exc:
             return f"error: {exc}"

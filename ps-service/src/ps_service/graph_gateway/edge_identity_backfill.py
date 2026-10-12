@@ -69,7 +69,7 @@ class EdgeIdentityBackfillOutcome(BaseModel):
 def backfill_edge_identity(
     gateway: _GroupSubmitting,
     graph_name: str,
-    audit_event_id: str,
+    audit_event_id: str | None,
     *,
     reader: GraphHandle,
     emitter: LogEmitter | None = None,
@@ -106,14 +106,16 @@ def backfill_edge_identity(
 
 
 def _emit(
-    outcome: str, graph_name: str, count: int, audit_event_id: str, emitter: LogEmitter | None
+    outcome: str,
+    graph_name: str,
+    count: int,
+    audit_event_id: str | None,
+    emitter: LogEmitter | None,
 ) -> None:
-    emit_gateway_event(
-        _ACTION,
-        outcome,
-        {"graph": graph_name, "entry_count": count, "audit_event_id": audit_event_id},
-        emitter=emitter,
-    )
+    fields: dict[str, str | int | float] = {"graph": graph_name, "entry_count": count}
+    if audit_event_id is not None:
+        fields["audit_event_id"] = audit_event_id
+    emit_gateway_event(_ACTION, outcome, fields, emitter=emitter)
 
 
 def _scan(reader: GraphHandle, chunk_rows: int) -> tuple[list[_Stamp], int]:

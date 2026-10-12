@@ -21,21 +21,22 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from authz._fakes import FakeAccessRoleStore
 
+from ps_service.audit.store import PsycopgAuditStore
 from ps_service.authz.models import AccessRole
+from ps_service.config import load_config
 from ps_service.export import catalog_writer
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.policy_lifecycle.errors import PolicySelfApprovalBlockedError
+from ps_service.policy_lifecycle.graph_submission import lifecycle_submitter
 from ps_service.policy_lifecycle.service import approve_policy, propose_policy
 from ps_service.restore.models import RestoreArtifact
 from ps_service.restore.restore_instrument import restore_instrument
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-    from typing import Literal
+    from collections.abc import Callable
 
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
-
-    from ps_service.audit.models import AuditQueryFilters, AuditQueryPage
 
 pytestmark = pytest.mark.falkordb_live
 
@@ -44,33 +45,6 @@ _SIMILARITY_THRESHOLD = 0.9
 _OWNER = ("restorer@example.com", "https://idp.example/")
 _MANAGER = ("manager@example.com", "https://idp.example/")
 _ACTOR = "test-actor"
-
-
-class _FakeAuditStore:
-    """Accepts and discards the lifecycle's audit calls -- this file asserts on graph state."""
-
-    def record(self, *args: object, **kwargs: object) -> str:
-        raise NotImplementedError
-
-    def record_standalone(
-        self,
-        *,
-        actor_subject: str,
-        actor_issuer: str,
-        action: str,
-        resource_type: str,
-        resource_id: str,
-        outcome: Literal["applied", "rejected", "failed"],
-        details: Mapping[str, object],
-    ) -> None:
-        del actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
-
-    def query(
-        self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
-    ) -> AuditQueryPage:
-        """Not exercised here -- present only for `AuditStore` `Protocol` conformance."""
-        del filters, cursor, page_size
-        raise NotImplementedError
 
 
 def _artifact(short_name: str) -> RestoreArtifact:
@@ -125,9 +99,16 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str) -> str:
     store = FakeAccessRoleStore()
     store.grant(actor=_OWNER, target=_OWNER, access_role=AccessRole.POLICY_MANAGER)
     store.grant(actor=_OWNER, target=_MANAGER, access_role=AccessRole.POLICY_MANAGER)
-    audit = _FakeAuditStore()
+    # The lifecycle writes through the real gateway into `graph_name`, and its `applied` rows are
+    # real audit rows (the graph log's audit link is a foreign key into `audit_events`). Not run
+    # in the implementation sandbox.
+    config = load_config()
+    audit = PsycopgAuditStore(config)
+    submitter = lifecycle_submitter(build_default_graph_write_gateway(config))
 
-    propose_policy(actor=_OWNER, policy_id=target, graph=graph, audit_store=audit)
+    propose_policy(
+        actor=_OWNER, policy_id=target, graph=graph, audit_store=audit, submitter=submitter
+    )
     with pytest.raises(PolicySelfApprovalBlockedError):
         approve_policy(
             actor=_OWNER,
@@ -135,6 +116,7 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str) -> str:
             graph=graph,
             audit_store=audit,
             access_role_store=store,
+            submitter=submitter,
         )
     approve_policy(
         actor=_MANAGER,
@@ -142,6 +124,7 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str) -> str:
         graph=graph,
         audit_store=audit,
         access_role_store=store,
+        submitter=submitter,
     )
     return target
 
@@ -166,6 +149,7 @@ def _tree_statuses(db: FalkorDB, graph_name: str, policy_id: str) -> dict[str, s
 
 
 def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
+    monkeypatch: pytest.MonkeyPatch,
     live_falkordb: FalkorDB,
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
@@ -175,6 +159,7 @@ def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
     token = uuid.uuid4().hex[:12]
     short_name = f"ENGPRAC_L{token}"
     graph_name = f"__gh183_single_tenant_{token}__"
+    monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)  # the lifecycle writes to this graph
     targets = (f"{short_name.lower()}_native", f"{short_name.lower()}_baseline", graph_name)
 
     try:
@@ -201,6 +186,7 @@ def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
 
 
 def test_second_restore_after_approval_leaves_the_approved_tree_and_counts_untouched(
+    monkeypatch: pytest.MonkeyPatch,
     live_falkordb: FalkorDB,
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
@@ -210,6 +196,7 @@ def test_second_restore_after_approval_leaves_the_approved_tree_and_counts_untou
     token = uuid.uuid4().hex[:12]
     short_name = f"ENGPRAC_R{token}"
     graph_name = f"__gh183_rerestore_{token}__"
+    monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)  # the lifecycle writes to this graph
     targets = (f"{short_name.lower()}_native", f"{short_name.lower()}_baseline", graph_name)
 
     try:

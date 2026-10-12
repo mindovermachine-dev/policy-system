@@ -197,8 +197,23 @@ class GraphWriteGateway:
             except redis.exceptions.RedisError as exc:
                 raise GraphUnavailableError from exc
 
+    def read_log_position(self, graph: str) -> int:
+        """Read the last log position of `graph`: the narrow accessor behind an `ExpectedPosition`.
+
+        What a guarded group needs, without the node and edge scan `read_persisted_elements`
+        also does (issue #211, CHANGES M3). Read under the graph's lock, retrying while Postgres
+        is unreachable. Reads only the log; writes and logs nothing.
+
+        Raises:
+            GraphReplayGatedError: the graph is closed by a pending or failed replay.
+            GraphLogUnavailableError: Postgres stayed unreachable through the retry budget.
+        """
+        self._gate.require_open(graph)
+        with self._locks.lock_for(graph):
+            return self._read_last_position(graph)
+
     def stamp_legacy_edge_identity(
-        self, graph: str, audit_event_id: str
+        self, graph: str, audit_event_id: str | None
     ) -> EdgeIdentityBackfillOutcome:
         """Give the identity-less edges of `graph` their identity before a writer's first group.
 
@@ -206,8 +221,8 @@ class GraphWriteGateway:
         edges on it, so a write onto such a graph would add parallel edges (issue #208, F1). The
         graph is first caught up with its log (the scan must see what the log wrote), then
         scanned read-only; only if an identity-less edge exists one `StampEdgeIdentity` group is
-        logged under `audit_event_id`. A graph with none (a fresh graph, a stamped one) costs one
-        read and logs nothing. Idempotent.
+        logged under `audit_event_id` (`None`: with no audit link). A graph with none (a fresh
+        graph, a stamped one) costs one read and logs nothing. Idempotent.
 
         Raises:
             GraphUnavailableError: FalkorDB could not be reached for the scan.
@@ -536,7 +551,7 @@ class GraphWriteGateway:
         self,
         appended: AppendedGroup,
         entry_count: int,
-        audit_event_id: str,
+        audit_event_id: str | None,
         *,
         checkpoint_requested: bool,
     ) -> GroupOutcome:
@@ -641,11 +656,7 @@ class GraphWriteGateway:
         emit_gateway_event(
             "apply_group",
             "unchanged",
-            {
-                "graph": group.graph,
-                "entry_count": 0,
-                "audit_event_id": group.audit_event_id,
-            },
+            _with_audit_event_id({"graph": group.graph, "entry_count": 0}, group.audit_event_id),
             emitter=self._emitter,
         )
         return GroupOutcome(
@@ -660,7 +671,7 @@ class GraphWriteGateway:
         self,
         appended: AppendedGroup,
         entry_count: int,
-        audit_event_id: str,
+        audit_event_id: str | None,
         *,
         checkpoint_requested: bool,
     ) -> GroupOutcome:
@@ -763,21 +774,30 @@ class GraphWriteGateway:
         self,
         appended: AppendedGroup,
         entry_count: int,
-        audit_event_id: str,
+        audit_event_id: str | None,
         outcome: str,
         error: BaseException | None = None,
     ) -> None:
         """Log how a group stands: graph and positions only, plus the error class if it is late."""
-        fields: dict[str, str | int | float] = {
-            "graph": appended.graph,
-            "first_position": appended.first_position,
-            "last_position": appended.last_position,
-            "entry_count": entry_count,
-            "audit_event_id": audit_event_id,
-        }
+        fields = _with_audit_event_id(
+            {
+                "graph": appended.graph,
+                "first_position": appended.first_position,
+                "last_position": appended.last_position,
+                "entry_count": entry_count,
+            },
+            audit_event_id,
+        )
         if error is not None:
             fields["error_class"] = type(error.__cause__ or error).__name__
         emit_gateway_event("apply_group", outcome, fields, emitter=self._emitter)
+
+
+def _with_audit_event_id(
+    fields: dict[str, str | int | float], audit_event_id: str | None
+) -> dict[str, str | int | float]:
+    """`fields` plus the audit event id; a group with no audit event omits the key."""
+    return fields if audit_event_id is None else {**fields, "audit_event_id": audit_event_id}
 
 
 def _checkpoint_state(

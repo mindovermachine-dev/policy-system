@@ -179,6 +179,8 @@ class InMemoryGraphLogStore:
     events: list[str] = field(default_factory=list)
     entries: dict[str, list[GraphLogEntry]] = field(default_factory=dict)
     groups: list[GraphLogGroup] = field(default_factory=list)
+    links: dict[uuid.UUID, str | None] = field(default_factory=dict)
+    """The audit link each committed group was appended with (`None`: no link)."""
     markers: dict[str, int] = field(default_factory=dict)
     checkpoints: dict[tuple[str, int], DigestCheckpoint] = field(default_factory=dict)
     audit_rows: set[str] = field(default_factory=set)
@@ -310,6 +312,10 @@ class InMemoryGraphLogStore:
             self.read_fault.trigger()
         return tuple(sorted(graph for graph, entries in self.entries.items() if entries))
 
+    def audit_link_of(self, group: GraphLogGroup) -> str | None:
+        """The audit event id `group` was appended with, `None` when it carries no link."""
+        return self.links[group.group_id]
+
     def read_groups_by_audit_event(self, audit_event_id: str) -> tuple[GraphLogGroup, ...]:
         uuid.UUID(audit_event_id)
         return tuple(g for g in self.groups if g.audit_event_id == audit_event_id)
@@ -429,9 +435,10 @@ class InMemoryTransaction:
     def commit(self) -> None:
         """Publish the audit rows and staged groups together, then release the graph locks."""
         self.store.audit_rows.update(self.audit_rows)
-        for group, _ in self._staged:
+        for group, link in self._staged:
             self.store.entries.setdefault(group.graph, []).extend(group.entries)
             self.store.groups.append(group)
+            self.store.links[group.group_id] = link
         self._finish()
 
     def rollback(self) -> None:

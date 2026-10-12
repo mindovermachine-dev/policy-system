@@ -64,10 +64,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
     FakeAccessRoleStore,
 )
@@ -199,7 +201,7 @@ class _HybridGraph:
         del params, timeout
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
-        if "coalesce(p.version" in q or "IS NULL" in q:
+        if "RETURN p.version, p.status, s.id, s.status, c.id, c.status" in q:
             # `graph_writer.backfill_governance_status`'s three idempotent,
             # already-backfilled-safe `SET` statements -- issued ahead of
             # `read_policy_tree` by `_read_transition_target`. Structural
@@ -275,6 +277,13 @@ class _FakeAuditStore:
 
     def record_standalone(self, **kwargs: object) -> None:
         self.calls.append(kwargs)
+
+    def record_standalone_with_event_id(self, **kwargs: object) -> str:
+        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        self.record_standalone(**kwargs)
+        event_id = str(uuid.uuid4())
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+        return event_id
 
     def query(self, *args: object, **kwargs: object) -> object:
         raise NotImplementedError
@@ -356,6 +365,7 @@ def test_scaffold_then_field_loop_persists_every_field_in_documented_order(
             owner_subject=_ACTOR_SUBJECT,
             owner_issuer=_ACTOR_ISSUER,
         )
+        rig = installed_process_gateway().rig
 
         # Step 2 (AC-BI-002): the scaffold's "1-2 fields" -- P-001's two
         # properties persisted together, displayed before any question.
@@ -388,14 +398,19 @@ def test_scaffold_then_field_loop_persists_every_field_in_documented_order(
         "capability_grouping_rationale",
     ]
 
-    # Exactly 7 writes: the create-policy-draft MERGE, plus 6 update-policy-
-    # draft SET calls (the combined scaffold call + 5 individual loop
-    # fields). Every read-only find_existing_policy/backfill/read_policy_tree
-    # call is routed to its own literal-dispatch branch above, never here.
-    assert len(handle.write_queries) == 7
-    assert "MERGE (p:Policy {id: $policy_id}) SET p += $properties" in handle.write_queries[0]
-    for query in handle.write_queries[1:]:
-        assert "SET p += $set_properties" in query
+    # Exactly 7 writes, every one a gateway group (issue #211): the create-policy-draft group
+    # (linked to its `applied` row), then 6 update-policy-draft groups (the combined scaffold call
+    # + 5 individual loop fields), each one `MergeProperty` with no audit link. Every read-only
+    # find_existing_policy/backfill/read_policy_tree call is routed to its own
+    # literal-dispatch branch above, never here.
+    assert handle.write_queries == []
+    create_group, *update_groups = rig.store.groups
+    assert [entry.content["op"] for entry in create_group.entries] == ["upsert_node"]
+    assert rig.store.audit_link_of(create_group) is not None
+    assert len(update_groups) == 6
+    for group in update_groups:
+        assert [entry.content["op"] for entry in group.entries] == ["merge_property"]
+        assert rig.store.audit_link_of(group) is None
 
 
 # --- (2) pure-function scoring-formula check ------------------------------

@@ -12,7 +12,7 @@ not apply from beyond the one it does (`"approved"`/`"deprecated"` -- see
 `ps_service.policy_lifecycle.rules.require_status`'s own
 `_REQUIRED_STATUS_BY_ACTION` table, D-3): the call is rejected by
 `PolicyInvalidStatusTransitionError` before `graph_writer.cascade_status`'s
-own cascading `SET` is ever issued -- a parametrized, no-mutation regression
+own cascading group is ever submitted -- a parametrized, no-mutation regression
 guard, not new production code.
 
 Forward pointer for #136: when that issue adds its own content-editing
@@ -25,7 +25,7 @@ exist yet.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -43,9 +43,7 @@ from ps_service.policy_lifecycle.service import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-    from typing import Literal
-
+    from policy_lifecycle._gateway_fakes import LifecycleRig, PolicyReadGraph
     from ps_service.audit.models import AuditQueryFilters, AuditQueryPage
 
 _OWNER = ("alice", "https://issuer.example")
@@ -53,76 +51,28 @@ _MANAGER = ("carol", "https://issuer.example")
 _GRANTER = ("system-admin-tool", "https://issuer.example")
 
 
-@dataclass
-class _FakeQueryResult:
-    result_set: list[object] = field(default_factory=list)
+def _tree(rig: LifecycleRig, *, status: str) -> PolicyReadGraph:
+    """One childless Policy `pol_x` at `status`, as the rig graph holds it."""
+    rig.seed_policy("pol_x", title="Title", status=status, owner=_OWNER, legacy_edges=False)
+    return rig.read
 
 
-class _ImmutableTreeFakeGraph:
-    """A `GraphHandle` double for one fixed, childless Policy tree at a given status.
+class _AcceptingAuditStore:
+    """Accepts every row without validating it: this file asserts on the raised error and the log.
 
-    Answers `graph_writer.read_policy_tree`'s single `RETURN` query with a
-    canned row; every other query (each of `backfill_governance_status`'s
-    three guarded `SET ... IS NULL` statements) is a no-op. `write_queries`
-    only ever records `graph_writer.cascade_status`'s own distinguishing
-    `SET p.status = $target_status` statement -- this file's whole point is
-    that this list must stay empty for every case in the matrix below.
-    """
-
-    def __init__(self, *, status: str, owner: tuple[str, str] = _OWNER) -> None:
-        self._status = status
-        self._owner = owner
-        self.write_queries: list[str] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        del params
-        if "SET p.status = $target_status" in q:
-            self.write_queries.append(q)
-            return _FakeQueryResult()
-        if "s.id, s.title, s.status, c.id" in q:
-            row = [
-                "pol_x",
-                "Title",
-                self._status,
-                "1",
-                self._owner[0],
-                self._owner[1],
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ]
-            return _FakeQueryResult(result_set=[row])
-        # `backfill_governance_status`'s own three guarded statements: no-op.
-        return _FakeQueryResult()
-
-
-class _FakeAuditStore:
-    """Records nothing of interest to this file beyond accepting the call.
-
-    Every case below asserts on `PolicyInvalidStatusTransitionError` and
-    `graph.write_queries`, not on the audit trail's own shape (already
-    covered per-action in `test_service.py`).
+    The registry-validating rig store would refuse a rejected row whose `from_status` is
+    `deprecated` (not a value `PolicyTransitionDetails` declares); that is not what is under test.
     """
 
     def record(self, *args: object, **kwargs: object) -> str:
         raise NotImplementedError
 
-    def record_standalone(
-        self,
-        *,
-        actor_subject: str,
-        actor_issuer: str,
-        action: str,
-        resource_type: str,
-        resource_id: str,
-        outcome: Literal["applied", "rejected", "failed"],
-        details: Mapping[str, object],
-    ) -> None:
-        del actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
+    def record_standalone(self, **kwargs: object) -> None:
+        del kwargs
+
+    def record_standalone_with_event_id(self, **kwargs: object) -> str:
+        del kwargs
+        return str(uuid.uuid4())
 
     def query(
         self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
@@ -138,33 +88,45 @@ def _manager_store() -> FakeAccessRoleStore:
     return store
 
 
-def _run_propose(graph: _ImmutableTreeFakeGraph) -> None:
-    propose_policy(actor=_OWNER, policy_id="pol_x", graph=graph, audit_store=_FakeAuditStore())
+def _run_propose(rig: LifecycleRig, graph: PolicyReadGraph) -> None:
+    propose_policy(
+        actor=_OWNER,
+        policy_id="pol_x",
+        graph=graph,
+        audit_store=_AcceptingAuditStore(),
+        submitter=rig.gateway,
+    )
 
 
-def _run_approve(graph: _ImmutableTreeFakeGraph) -> None:
+def _run_approve(rig: LifecycleRig, graph: PolicyReadGraph) -> None:
     approve_policy(
         actor=_MANAGER,
         policy_id="pol_x",
         graph=graph,
-        audit_store=_FakeAuditStore(),
+        audit_store=_AcceptingAuditStore(),
         access_role_store=_manager_store(),
+        submitter=rig.gateway,
     )
 
 
-def _run_reject(graph: _ImmutableTreeFakeGraph) -> None:
+def _run_reject(rig: LifecycleRig, graph: PolicyReadGraph) -> None:
     reject_policy(
         actor=_MANAGER,
         policy_id="pol_x",
         graph=graph,
-        audit_store=_FakeAuditStore(),
+        audit_store=_AcceptingAuditStore(),
         access_role_store=_manager_store(),
+        submitter=rig.gateway,
     )
 
 
-def _run_revert(graph: _ImmutableTreeFakeGraph) -> None:
+def _run_revert(rig: LifecycleRig, graph: PolicyReadGraph) -> None:
     revert_policy_to_draft(
-        actor=_OWNER, policy_id="pol_x", graph=graph, audit_store=_FakeAuditStore()
+        actor=_OWNER,
+        policy_id="pol_x",
+        graph=graph,
+        audit_store=_AcceptingAuditStore(),
+        submitter=rig.gateway,
     )
 
 
@@ -182,7 +144,7 @@ _ACTIONS = {
 @pytest.mark.parametrize("status", ["approved", "deprecated"])
 @pytest.mark.parametrize("action", sorted(_ACTIONS))
 def test_transition_from_immutable_status_is_rejected_with_no_graph_mutation(
-    action: str, status: str
+    lifecycle_rig: LifecycleRig, action: str, status: str
 ) -> None:
     """AC-BI-011: none of the 4 transitions ever cascades from `approved`/`deprecated`.
 
@@ -193,9 +155,11 @@ def test_transition_from_immutable_status_is_rejected_with_no_graph_mutation(
     is ever reached -- proven here by asserting zero cascading writes, not
     just the raised exception type.
     """
-    graph = _ImmutableTreeFakeGraph(status=status)
+    graph = _tree(lifecycle_rig, status=status)
+    position = lifecycle_rig.store.last_position("policy_system")
 
     with pytest.raises(PolicyInvalidStatusTransitionError):
-        _ACTIONS[action](graph)
+        _ACTIONS[action](lifecycle_rig, graph)
 
-    assert graph.write_queries == []
+    assert lifecycle_rig.store.last_position("policy_system") == position
+    assert lifecycle_rig.store.groups == []

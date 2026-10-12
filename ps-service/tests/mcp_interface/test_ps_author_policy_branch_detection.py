@@ -47,9 +47,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
     FakeAccessRoleStore,
 )
@@ -57,6 +59,7 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
+from policy_lifecycle._gateway_fakes import PolicyGraphSeeder
 
 from ps_service.logging import configure
 from ps_service.mcp_interface import mcp_server
@@ -204,7 +207,7 @@ class _HybridGraph:
         del timeout
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
-        if "coalesce(p.version" in q or "IS NULL" in q:
+        if "RETURN p.version, p.status, s.id, s.status, c.id, c.status" in q:
             # `graph_writer.backfill_governance_status`'s three idempotent,
             # already-backfilled-safe `SET` statements -- issued ahead of
             # every `read_policy_tree*` read (D-7). A structural no-op here,
@@ -338,6 +341,13 @@ class _FakeAuditStore:
             )
         )
 
+    def record_standalone_with_event_id(self, **kwargs: object) -> str:
+        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        self.record_standalone(**kwargs)  # pyright: ignore[reportArgumentType]
+        event_id = str(uuid.uuid4())
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+        return event_id
+
     def query(self, *args: object, **kwargs: object) -> object:
         raise NotImplementedError
 
@@ -433,6 +443,10 @@ def test_scenario_2_no_governing_policy_is_the_fresh_branch(
     )
     _install_graph(monkeypatch, handle)
     _install_audit_store(monkeypatch, _FakeAuditStore())
+    # The claim is a guarded gateway group (issue #211): the Capability must exist in the graph
+    # the gateway writes.
+    rig = installed_process_gateway().rig
+    PolicyGraphSeeder(rig.graphs.open("policy_system")).seed_capability(_CAPABILITY_ID)
 
     existence_result = _call_cypher(_capability_existence_query(_CAPABILITY_NAME))
     existence_rows = cast("list[list[str]]", _cypher_body(existence_result)["rows"])
@@ -454,8 +468,10 @@ def test_scenario_2_no_governing_policy_is_the_fresh_branch(
     assert create_result.is_error is False
     body = json.loads(_text(create_result))
     assert body["governed_capability_ids"] == [_CAPABILITY_ID]
-    assert len(handle.write_queries) == 1  # the one guarded claim statement
-    assert handle.claim_params[0]["capability_ids"] == [_CAPABILITY_ID]
+    assert handle.write_queries == []  # no direct write: the claim is one gateway group
+    (group,) = rig.store.groups
+    assert [entry.name for entry in group.entries] == ["Policy", "GOVERNED_BY"]
+    assert group.entries[1].identity == f"GOVERNED_BY:{_CAPABILITY_ID}->{body['policy_id']}"
 
 
 def test_scenario_2b_fresh_create_for_already_governed_capability_names_the_error(
@@ -581,6 +597,16 @@ def test_scenario_5_fork_from_approved_prior_succeeds(monkeypatch: pytest.Monkey
     )
     _install_graph(monkeypatch, handle)
     _install_audit_store(monkeypatch, _FakeAuditStore())
+    # The fork's `SUPERSEDED_BY` edge is a gateway group (issue #211): the approved prior must
+    # exist in the graph the gateway writes.
+    rig = installed_process_gateway().rig
+    PolicyGraphSeeder(rig.graphs.open("policy_system")).seed_policy(
+        _APPROVED_POLICY_ID,
+        title="Data Protection Policy",
+        status="approved",
+        owner=(_OTHER_SUBJECT, _ACTOR_ISSUER),
+        legacy_edges=False,
+    )
 
     _call_cypher(_capability_existence_query(_CAPABILITY_NAME))
     governed_by_result = _call_cypher(_capability_governed_by_query(_CAPABILITY_NAME))
@@ -598,11 +624,11 @@ def test_scenario_5_fork_from_approved_prior_succeeds(monkeypatch: pytest.Monkey
     assert body["status"] == "draft"
     assert body["version"] == "2"
     assert body["superseded_policy_id"] == _APPROVED_POLICY_ID
-    # The new forked draft's own persisted MERGE write, plus the
-    # Policy-level SUPERSEDED_BY lineage edge (D-2's own fork write shape).
-    assert len(handle.write_queries) == 2
-    assert any("SET p += $properties" in q for q in handle.write_queries)
-    assert any("SUPERSEDED_BY" in q for q in handle.write_queries)
+    # The new forked draft's own persisted node, plus the Policy-level SUPERSEDED_BY lineage
+    # edge (D-2's own fork write shape): one gateway group, no direct write.
+    assert handle.write_queries == []
+    (group,) = rig.store.groups
+    assert [entry.name for entry in group.entries] == ["Policy", "SUPERSEDED_BY"]
 
 
 # --- (5b) fork: governing Proposed Policy --------------------------------

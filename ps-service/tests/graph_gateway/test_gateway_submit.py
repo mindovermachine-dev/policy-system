@@ -69,10 +69,9 @@ def test_submit_group_rejects_group_missing_caller_ids(fields: dict[str, object]
         UpsertNode.model_validate(fields)
 
 
-def test_mutation_group_requires_the_causing_command_id() -> None:
+def test_mutation_group_validates_a_given_causing_command_id() -> None:
+    """The id is optional since #211 (`test_gateway_optional_audit_link.py`), never malformed."""
     primitive = _node("cap-1").model_dump()
-    with pytest.raises(ValidationError):
-        MutationGroup.model_validate({"graph": _GRAPH, "primitives": [primitive]})
     with pytest.raises(ValidationError):
         MutationGroup.model_validate(
             {"graph": _GRAPH, "audit_event_id": "not-a-uuid", "primitives": [primitive]}

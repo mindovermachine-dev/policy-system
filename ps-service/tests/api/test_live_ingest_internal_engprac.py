@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 
 from ps_service.api.dependencies import get_principal
 from ps_service.api.graph_write_access import install_graph_write_gateway
+from ps_service.audit.store import PsycopgAuditStore
 from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
 from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
@@ -45,18 +46,17 @@ from ps_service.graph_gateway.default_gateway import build_default_graph_write_g
 from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.logging import facade
 from ps_service.main import create_app
+from ps_service.policy_lifecycle.graph_submission import lifecycle_submitter
 from ps_service.policy_lifecycle.service import approve_policy, propose_policy
 from ps_service.restore.models import RestoreArtifact
 from ps_service.restore.restore_instrument import restore_instrument
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
-    from typing import Literal
+    from collections.abc import Iterator
 
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
 
-    from ps_service.audit.models import AuditQueryFilters, AuditQueryPage
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.logging import LogEmitter
 
@@ -94,33 +94,6 @@ _EXPECTED_EDGES = {
     "OWNS": 11,
     "VERIFIED_BY": 24,
 }
-
-
-class _FakeAuditStore:
-    """Accepts and discards the lifecycle's audit calls -- this file asserts on graph state."""
-
-    def record(self, *args: object, **kwargs: object) -> str:
-        raise NotImplementedError
-
-    def record_standalone(
-        self,
-        *,
-        actor_subject: str,
-        actor_issuer: str,
-        action: str,
-        resource_type: str,
-        resource_id: str,
-        outcome: Literal["applied", "rejected", "failed"],
-        details: Mapping[str, object],
-    ) -> None:
-        del actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
-
-    def query(
-        self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
-    ) -> AuditQueryPage:
-        """Not exercised here -- present only for `AuditStore` `Protocol` conformance."""
-        del filters, cursor, page_size
-        raise NotImplementedError
 
 
 def _rows(graph: GraphHandle, query: str) -> list[list[object]]:
@@ -274,10 +247,22 @@ def test_reingest_after_approval_leaves_the_approved_tree_untouched(
     store = FakeAccessRoleStore()
     store.grant(actor=_OWNER, target=_OWNER, access_role=AccessRole.POLICY_MANAGER)
     store.grant(actor=_OWNER, target=_MANAGER, access_role=AccessRole.POLICY_MANAGER)
-    audit = _FakeAuditStore()
-    propose_policy(actor=_OWNER, policy_id=target, graph=graph, audit_store=audit)
+    # The lifecycle writes through the real gateway, and its `applied` rows are real audit rows
+    # (the graph log's audit link is a foreign key into `audit_events`). Not run in the
+    # implementation sandbox.
+    config = load_config()
+    audit = PsycopgAuditStore(config)
+    submitter = lifecycle_submitter(build_default_graph_write_gateway(config))
+    propose_policy(
+        actor=_OWNER, policy_id=target, graph=graph, audit_store=audit, submitter=submitter
+    )
     approve_policy(
-        actor=_MANAGER, policy_id=target, graph=graph, audit_store=audit, access_role_store=store
+        actor=_MANAGER,
+        policy_id=target,
+        graph=graph,
+        audit_store=audit,
+        access_role_store=store,
+        submitter=submitter,
     )
     before = _governance_state(graph)
 

@@ -1,20 +1,21 @@
-"""Live FalkorDB proof of the `GOVERNED_BY` write paths (issue #185, S10).
+"""Live FalkorDB proof of the `GOVERNED_BY` write paths (issue #185, S10; gateway-backed #211).
 
-The fakes in `test_graph_writer.py`/`test_service.py` prove the statements'
-contracts (one query, guard before every write keyword, no row on mismatch)
-but cannot detect a Cypher syntax or semantic error. These tests run the REAL
-statements against a real FalkorDB at 127.0.0.1:6379 and are therefore the
-only proof that: `NOT (cap)-[:GOVERNED_BY]->(:Policy)` is accepted, a failed
-`WITH ... WHERE` guard filters every downstream write, `DELETE` inside
-`FOREACH` works, and `OPTIONAL MATCH` + `SET` on null after `FOREACH` is a
-no-op rather than an error. If a statement is rejected, use the fallback
-variants in `.orchestrator/tracker/issue-185/CHANGES.md` (A2/A2b) while
-keeping the same one-statement, guard-first invariants.
+The rig tests (`test_claim_create_gateway.py`, `test_fork_repoint_gateway.py`) prove the groups'
+contracts over in-memory fakes but cannot detect a difference between the in-memory graph and a
+real FalkorDB. These tests run the REAL gateway (in-memory log) against a real FalkorDB graph and
+are therefore the only proof that: a claim group lands every `GOVERNED_BY` edge, a refused claim
+leaves the real graph untouched, and an approval's `DeleteEdge`/`UpsertEdge` pair moves each
+Capability from the prior to the fork with exactly one governor, after the legacy, identity-less
+edges were stamped.
 
 Run with:
 `uv run pytest ps-service/tests/policy_lifecycle/test_governed_by_live.py -m falkordb_live -q`
-(deselected by default). Uses a dedicated throwaway graph, deleted before
-and after each test.
+(deselected by default). Uses a uniquely named throwaway graph, deleted afterwards.
+
+Issue #211 (S9): the claim create and the fork repoint are gateway groups. The graph is SEEDED
+with the frozen legacy writer (`legacy_create_policy_draft`, `_legacy_reference.py`) and direct
+statements, as a pre-gateway writer left it (identity-less edges); every write under test goes
+through the gateway. Written, not run in the implementation sandbox (no FalkorDB).
 """
 
 from __future__ import annotations
@@ -22,13 +23,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_graphs import AUDIT_EVENT_ID, LiveGraph, LiveGraphs
 
-from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
+from policy_lifecycle._legacy_reference import legacy_create_policy_draft
+from ps_service.ingestion.falkordb_client import connect
+from ps_service.policy_lifecycle.graph_submission import GraphWriteTarget, lifecycle_submitter
 from ps_service.policy_lifecycle.graph_writer import (
     ControlDraft,
     StandardDraft,
     approve_fork_repoint,
-    create_policy_draft,
+    create_claimed_policy_draft,
     read_capability_governors,
     read_fork_governance,
 )
@@ -40,27 +45,27 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.falkordb_live
 
-_LIVE_TEST_GRAPH_NAME = "policy_lifecycle_governed_by_live_test"
 _OWNER = ("live-owner", "https://issuer.example.com/")
 _CAPS = ("cap_live_a", "cap_live_b")
 
 
-def _delete_graph_if_exists(db: FalkorDB, name: str) -> None:
-    if name in db.list_graphs():
-        db.select_graph(name).delete()
-
-
 @pytest.fixture
-def graph() -> Iterator[GraphHandle]:
-    db = connect(host="127.0.0.1", port=6379)
-    _delete_graph_if_exists(db, _LIVE_TEST_GRAPH_NAME)
-    handle = select_graph(db, _LIVE_TEST_GRAPH_NAME)
+def live() -> Iterator[LiveGraph]:
+    """A throwaway real graph, with the gateway in front of it and three Capabilities."""
+    host, port = falkordb_endpoint()
+    graphs = LiveGraphs(connect(host=host, port=port))
+    graph = graphs.new()
+    graph.store.audit_rows.add(AUDIT_EVENT_ID)
     for cap_id in (*_CAPS, "cap_live_c"):
-        handle.query("MERGE (:Capability {id: $id})", params={"id": cap_id})
+        graph.handle.query("MERGE (:Capability {id: $id})", params={"id": cap_id})
     try:
-        yield handle
+        yield graph
     finally:
-        _delete_graph_if_exists(db, _LIVE_TEST_GRAPH_NAME)
+        graphs.close()
+
+
+def _target(live: LiveGraph) -> GraphWriteTarget:
+    return GraphWriteTarget(lifecycle_submitter(live.gateway), live.name)
 
 
 def _rows(graph: GraphHandle, query: str, **params: object) -> list[list[object]]:
@@ -91,7 +96,7 @@ def _statuses(graph: GraphHandle, policy_id: str) -> list[str]:
 
 
 def _seed_approved_prior(graph: GraphHandle, policy_id: str, caps: tuple[str, ...]) -> None:
-    create_policy_draft(graph, policy_id=policy_id, title="Prior", owner=_OWNER)
+    legacy_create_policy_draft(graph, policy_id=policy_id, title="Prior", owner=_OWNER)
     graph.query("MATCH (p:Policy {id: $id}) SET p.status = 'approved'", params={"id": policy_id})
     for cap_id in caps:
         graph.query(
@@ -101,7 +106,7 @@ def _seed_approved_prior(graph: GraphHandle, policy_id: str, caps: tuple[str, ..
 
 
 def _create_proposed_fork(graph: GraphHandle, fork_id: str, prior_id: str) -> None:
-    create_policy_draft(
+    legacy_create_policy_draft(
         graph,
         policy_id=fork_id,
         title="Fork",
@@ -123,13 +128,24 @@ def _create_proposed_fork(graph: GraphHandle, fork_id: str, prior_id: str) -> No
     )
 
 
-def test_fresh_create_with_two_capabilities_writes_one_governed_by_edge_each(
-    graph: GraphHandle,
-) -> None:
-    written = create_policy_draft(
-        graph, policy_id="pol_fresh", title="Fresh", owner=_OWNER, capability_ids=_CAPS
+def _claim(live: LiveGraph, policy_id: str, title: str) -> bool:
+    return create_claimed_policy_draft(
+        live.handle,
+        _target(live),
+        policy_id=policy_id,
+        title=title,
+        owner=_OWNER,
+        capability_ids=_CAPS,
+        audit_event_id=AUDIT_EVENT_ID,
     )
 
+
+def test_fresh_create_with_two_capabilities_writes_one_governed_by_edge_each(
+    live: LiveGraph,
+) -> None:
+    written = _claim(live, "pol_fresh", "Fresh")
+
+    graph = live.handle
     assert written is True
     assert _governors(graph) == {
         "cap_live_a": ["pol_fresh"],
@@ -148,14 +164,13 @@ def test_fresh_create_with_two_capabilities_writes_one_governed_by_edge_each(
 
 
 def test_fresh_create_with_an_already_governed_capability_writes_nothing(
-    graph: GraphHandle,
+    live: LiveGraph,
 ) -> None:
-    _seed_approved_prior(graph, "pol_existing", ("cap_live_b",))
+    _seed_approved_prior(live.handle, "pol_existing", ("cap_live_b",))
 
-    written = create_policy_draft(
-        graph, policy_id="pol_loser", title="Loser", owner=_OWNER, capability_ids=_CAPS
-    )
+    written = _claim(live, "pol_loser", "Loser")
 
+    graph = live.handle
     assert written is False
     assert _rows(graph, "MATCH (p:Policy {id: 'pol_loser'}) RETURN p.id") == []
     assert _governors(graph) == {
@@ -166,8 +181,9 @@ def test_fresh_create_with_an_already_governed_capability_writes_nothing(
 
 
 def test_approving_a_fork_moves_both_edges_and_cascades_the_whole_tree(
-    graph: GraphHandle,
+    live: LiveGraph,
 ) -> None:
+    graph = live.handle
     _seed_approved_prior(graph, "pol_prior", _CAPS)
     _create_proposed_fork(graph, "pol_fork", "pol_prior")
     fork_governance = read_fork_governance(graph, "pol_fork")
@@ -177,10 +193,12 @@ def test_approving_a_fork_moves_both_edges_and_cascades_the_whole_tree(
 
     applied = approve_fork_repoint(
         graph,
+        _target(live),
         policy_id="pol_fork",
         prior_id=fork_governance.prior_id,
         capability_ids=fork_governance.capability_ids,
         target_status="approved",
+        audit_event_id=AUDIT_EVENT_ID,
     )
 
     assert applied is True
@@ -194,7 +212,8 @@ def test_approving_a_fork_moves_both_edges_and_cascades_the_whole_tree(
     assert _statuses(graph, "pol_prior") == ["approved"]
 
 
-def test_a_stale_governed_set_makes_the_repoint_write_nothing(graph: GraphHandle) -> None:
+def test_a_stale_governed_set_makes_the_repoint_write_nothing(live: LiveGraph) -> None:
+    graph = live.handle
     _seed_approved_prior(graph, "pol_prior", _CAPS)
     _seed_approved_prior(graph, "pol_third", ())
     _create_proposed_fork(graph, "pol_fork", "pol_prior")
@@ -212,10 +231,12 @@ def test_a_stale_governed_set_makes_the_repoint_write_nothing(graph: GraphHandle
 
     applied = approve_fork_repoint(
         graph,
+        _target(live),
         policy_id="pol_fork",
         prior_id="pol_prior",
         capability_ids=stale_ids,
         target_status="approved",
+        audit_event_id=AUDIT_EVENT_ID,
     )
 
     assert applied is False
@@ -224,10 +245,11 @@ def test_a_stale_governed_set_makes_the_repoint_write_nothing(graph: GraphHandle
 
 
 def test_repoint_of_a_policy_with_no_standards_still_sets_its_status(
-    graph: GraphHandle,
+    live: LiveGraph,
 ) -> None:
+    graph = live.handle
     _seed_approved_prior(graph, "pol_prior", ("cap_live_a",))
-    create_policy_draft(
+    legacy_create_policy_draft(
         graph,
         policy_id="pol_bare_fork",
         title="Bare fork",
@@ -239,10 +261,12 @@ def test_repoint_of_a_policy_with_no_standards_still_sets_its_status(
 
     applied = approve_fork_repoint(
         graph,
+        _target(live),
         policy_id="pol_bare_fork",
         prior_id="pol_prior",
         capability_ids=("cap_live_a",),
         target_status="approved",
+        audit_event_id=AUDIT_EVENT_ID,
     )
 
     assert applied is True
@@ -251,14 +275,13 @@ def test_repoint_of_a_policy_with_no_standards_still_sets_its_status(
 
 
 def test_fresh_create_naming_a_merged_tombstone_writes_nothing_and_reads_it_as_absent(
-    graph: GraphHandle,
+    live: LiveGraph,
 ) -> None:
+    graph = live.handle
     graph.query("MATCH (c:Capability {id: 'cap_live_a'}) SET c.status = 'merged'")
 
     assert read_capability_governors(graph, _CAPS) == {"cap_live_b": None}
-    written = create_policy_draft(
-        graph, policy_id="pol_tomb", title="Tomb", owner=_OWNER, capability_ids=_CAPS
-    )
+    written = _claim(live, "pol_tomb", "Tomb")
 
     assert written is False
     assert _rows(graph, "MATCH (p:Policy {id: 'pol_tomb'}) RETURN p.id") == []

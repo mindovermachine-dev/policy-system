@@ -256,7 +256,7 @@ class UnusedSubmitter:
         raise AssertionError(f"the gateway was asked about {graph!r} where no write was expected")
 
     def stamp_legacy_edge_identity(
-        self, graph: str, audit_event_id: str
+        self, graph: str, audit_event_id: str | None
     ) -> EdgeIdentityBackfillOutcome:
         raise AssertionError(f"edges of {graph!r} were stamped where no write was expected")
 
@@ -277,7 +277,7 @@ class RigSubmitter:
         return self._rig.gateway.is_caught_up(graph)
 
     def stamp_legacy_edge_identity(
-        self, graph: str, audit_event_id: str
+        self, graph: str, audit_event_id: str | None
     ) -> EdgeIdentityBackfillOutcome:
         return self._rig.gateway.stamp_legacy_edge_identity(graph, audit_event_id)
 

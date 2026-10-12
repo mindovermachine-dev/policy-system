@@ -243,15 +243,38 @@ class PolicyGovernanceConflictError(Exception):
 
 
 class PolicyLifecycleGraphUnavailableError(Exception):
-    """The FalkorDB-backed policy graph could not be acquired for a lifecycle call.
+    """The FalkorDB-backed policy graph could not be read or written for a lifecycle call.
 
     Covers unreachable, refused, a driver I/O failure, or invalid
-    `PS_FALKORDB_*` configuration. The message is deliberately generic:
-    host/port/driver/env-var detail must never cross this component's
-    boundary, mirroring `ps_service.mcp_interface.errors.
+    `PS_FALKORDB_*` configuration on a read, and (issue #211) every gateway
+    failure on a write: a refused group, an unreachable graph log or graph,
+    a group committed but not yet applied. The message is deliberately
+    generic: host/port/driver/env-var detail must never cross this
+    component's boundary, mirroring `ps_service.mcp_interface.errors.
     McpGraphUnavailableError`'s own discipline (AC-BI-024).
+
+    With no argument the message is the fixed text below, so every read-side
+    raise site stays byte-identical (AC-BI-015). A write-side raise passes
+    `FalkorDB write failed: <sanitized gateway text>` (the gateway's texts are
+    fixed and carry no host, port or content), with the gateway error chained.
+    """
+
+    def __init__(self, message: str | None = None) -> None:
+        """Carry `message`, or the fixed text when none is given (AC-BI-015)."""
+        super().__init__(
+            "the policy graph database is not reachable" if message is None else message
+        )
+
+
+class StaleGroupError(Exception):
+    """A guarded group was refused because the graph log moved after its guard was read.
+
+    Internal to `policy_lifecycle`: raised by `graph_submission.submit_group` when the gateway
+    refuses a group's `ExpectedPosition` (`StaleGraphStateError`, chained as `__cause__`), so
+    each guarded caller (fork repoint, capability-claim create) can translate it into its own
+    named error. Not part of the component's public surface.
     """
 
     def __init__(self) -> None:
-        """Fix the message so every raise site is byte-identical (AC-BI-015)."""
-        super().__init__("the policy graph database is not reachable")
+        """Carry a fixed message; nothing of the group or the graph is named."""
+        super().__init__("the policy graph changed after the guard was read")

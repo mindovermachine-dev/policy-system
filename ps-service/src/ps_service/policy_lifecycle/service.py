@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, cast
 import redis.exceptions
 
 import ps_service.policy_lifecycle.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers this component's own audit actions (issue #134) before any create/propose/approve/... call can reach AuditStore.record
+from ps_service.audit.store import EventIdAuditStore
 from ps_service.authz.models import AccessRole
 from ps_service.authz.service import require_role, resolve_active_roles
 from ps_service.domain_mapper.identity import control_id, standard_id
@@ -56,6 +57,10 @@ from ps_service.policy_lifecycle.errors import (
     PolicySupersedePriorNotApprovedError,
     PolicyTitleAlreadyExistsError,
 )
+from ps_service.policy_lifecycle.graph_submission import (
+    GraphWriteTarget,
+    single_tenant_graph_name,
+)
 from ps_service.policy_lifecycle.rules import (
     PolicyLifecycleRuleContext,
     block_self_approval,
@@ -64,11 +69,12 @@ from ps_service.policy_lifecycle.rules import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from typing import Literal
 
     from ps_service.audit.store import AuditStore
     from ps_service.authz.store import AccessRoleStore
+    from ps_service.policy_lifecycle.graph_submission import LifecycleSubmitter
     from ps_service.policy_lifecycle.graph_writer import GraphHandle
 
     PolicyStatus = Literal["draft", "proposed", "approved", "deprecated"]
@@ -341,6 +347,119 @@ def _record_create_draft(
     )
 
 
+def _record_applied_with_event_id(
+    audit_store: AuditStore,
+    *,
+    actor: tuple[str, str],
+    action: str,
+    resource_id: str,
+    details: Mapping[str, object],
+) -> str:
+    """Record an `applied` `policy.*` event and return its id (the gateway group's anchor).
+
+    The row is written BEFORE any graph write exactly as before (AC-BI-008) and an audit write
+    error propagates unchanged; the id lets the gateway group name the row it belongs to.
+
+    Raises:
+        TypeError: `audit_store` cannot report the id of the row it wrote (a wiring error).
+    """
+    if not isinstance(audit_store, EventIdAuditStore):
+        message = f"{type(audit_store).__name__} cannot report an audit event id"
+        raise TypeError(message)
+    return audit_store.record_standalone_with_event_id(
+        actor_subject=actor[0],
+        actor_issuer=actor[1],
+        action=action,
+        resource_type=_POLICY_RESOURCE_TYPE,
+        resource_id=resource_id,
+        outcome="applied",
+        details=details,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _NewPolicy:
+    """What `_write_new_policy` writes: the Policy's identity, content and audit details."""
+
+    policy_id: str
+    title: str
+    standard_drafts: tuple[graph_writer.StandardDraft, ...]
+    supersedes_policy_id: str | None
+    version: str
+    capability_ids: tuple[str, ...]
+    details: Mapping[str, object]
+
+
+def _write_new_policy(
+    *,
+    graph: GraphHandle,
+    audit_store: AuditStore,
+    submitter: LifecycleSubmitter,
+    actor: tuple[str, str],
+    new: _NewPolicy,
+) -> bool:
+    """Record `applied`, write the new Policy, and record `failed` if the write fails.
+
+    The `applied` row is written BEFORE any graph write (AC-BI-008); its id anchors the one gateway
+    group. A Capability claim is a guarded group (`graph_writer.create_claimed_policy_draft`).
+    Returns `False` only when the claim no longer held at write time (nothing was written).
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: the write failed; a `failed` event with the same
+            `details` was recorded first (AC-BI-024). Gateway failures carry the
+            `FalkorDB write failed: ` prefix.
+    """
+    try:
+        audit_event_id = _record_applied_with_event_id(
+            audit_store,
+            actor=actor,
+            action=_CREATE_DRAFT_ACTION,
+            resource_id=new.policy_id,
+            details=new.details,
+        )
+        target = GraphWriteTarget(submitter, single_tenant_graph_name())
+        if new.capability_ids:
+            return graph_writer.create_claimed_policy_draft(
+                graph,
+                target,
+                policy_id=new.policy_id,
+                title=new.title,
+                owner=actor,
+                standards=new.standard_drafts,
+                capability_ids=new.capability_ids,
+                audit_event_id=audit_event_id,
+            )
+        graph_writer.create_policy_draft(
+            target,
+            policy_id=new.policy_id,
+            title=new.title,
+            owner=actor,
+            standards=new.standard_drafts,
+            supersedes_policy_id=new.supersedes_policy_id,
+            version=new.version,
+            audit_event_id=audit_event_id,
+        )
+    except redis.exceptions.RedisError as exc:
+        _record_create_draft(
+            audit_store,
+            actor=actor,
+            resource_id=new.policy_id,
+            outcome="failed",
+            details=new.details,
+        )
+        raise PolicyLifecycleGraphUnavailableError from exc
+    except PolicyLifecycleGraphUnavailableError:
+        _record_create_draft(
+            audit_store,
+            actor=actor,
+            resource_id=new.policy_id,
+            outcome="failed",
+            details=new.details,
+        )
+        raise
+    return True
+
+
 def create_policy_draft(
     *,
     actor: tuple[str, str],
@@ -350,6 +469,7 @@ def create_policy_draft(
     capability_ids: tuple[str, ...] = (),
     graph: GraphHandle,
     audit_store: AuditStore,
+    submitter: LifecycleSubmitter,
 ) -> PolicyDraftResult:
     """Create a new draft Policy owned by `actor` (AC-BI-001/009/015/016/022/024).
 
@@ -398,6 +518,8 @@ def create_policy_draft(
         audit_store: Where every `policy.create_draft` audit event is
             recorded, via `record_standalone` -- this call has no
             surrounding state-changing transaction to join.
+        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
+            #211); only used if some node of the tree needs a fill.
 
     Returns:
         A `PolicyDraftResult` describing the newly-minted Policy.
@@ -424,7 +546,9 @@ def create_policy_draft(
 
     new_version = "1"
     if supersedes_policy_id is not None:
-        prior_record = _read_transition_target(graph, supersedes_policy_id)
+        prior_record = _read_transition_target(
+            graph, supersedes_policy_id, submitter_source=_eager(submitter)
+        )
         if prior_record.status != "approved":
             raise PolicySupersedePriorNotApprovedError(supersedes_policy_id, prior_record.status)
         new_version = str(int(prior_record.version) + 1)
@@ -469,44 +593,27 @@ def create_policy_draft(
     )
     affected_node_ids = (new_policy_id, *new_standard_ids, *new_control_ids)
 
-    _record_create_draft(
-        audit_store,
+    details: Mapping[str, object] = {
+        "affected_node_ids": affected_node_ids,
+        "to_status": "draft",
+        "supersedes_policy_id": supersedes_policy_id,
+        "capability_ids": claimed_capability_ids,
+    }
+    created = _write_new_policy(
+        graph=graph,
+        audit_store=audit_store,
+        submitter=submitter,
         actor=actor,
-        resource_id=new_policy_id,
-        outcome="applied",
-        details={
-            "affected_node_ids": affected_node_ids,
-            "to_status": "draft",
-            "supersedes_policy_id": supersedes_policy_id,
-            "capability_ids": claimed_capability_ids,
-        },
-    )
-
-    try:
-        created = graph_writer.create_policy_draft(
-            graph,
+        new=_NewPolicy(
             policy_id=new_policy_id,
             title=title,
-            owner=actor,
-            standards=standard_drafts,
+            standard_drafts=standard_drafts,
             supersedes_policy_id=supersedes_policy_id,
             version=new_version,
             capability_ids=claimed_capability_ids,
-        )
-    except redis.exceptions.RedisError as exc:
-        _record_create_draft(
-            audit_store,
-            actor=actor,
-            resource_id=new_policy_id,
-            outcome="failed",
-            details={
-                "affected_node_ids": affected_node_ids,
-                "to_status": "draft",
-                "supersedes_policy_id": supersedes_policy_id,
-                "capability_ids": claimed_capability_ids,
-            },
-        )
-        raise PolicyLifecycleGraphUnavailableError from exc
+            details=details,
+        ),
+    )
 
     if not created:
         _record_create_draft(
@@ -612,6 +719,7 @@ def get_policy(
     policy_id: str,
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
+    submitter_source: Callable[[], LifecycleSubmitter],
 ) -> PolicyView:
     """Read `policy_id` plus its full Standard/Control tree (AC-BI-002/AC-BI-020).
 
@@ -638,6 +746,9 @@ def get_policy(
         access_role_store: Where `actor`'s active `AccessRole`s are resolved
             from, only ever consulted when `policy_id`'s Policy is a Draft
             and `actor` is not its owner.
+        submitter_source: Resolves the Graph Write Gateway for the backfill; called ONLY when
+            some node of the tree needs a fill (issue #211, D3), so a read of an already
+            backfilled Policy works with no gateway installed.
 
     Returns:
         A `PolicyView` describing the Policy and its full Standard/Control
@@ -649,8 +760,10 @@ def get_policy(
             `actor` is neither its owner nor a `SystemOwner`/`SystemAdmin`.
             No audit event is recorded for this denial -- AC-BI-016 only
             mandates an audit trail for the six write transitions, not reads.
+        PolicyLifecycleGraphUnavailableError: a needed backfill could not be written
+            (`FalkorDB write failed: ...`).
     """
-    graph_writer.backfill_governance_status(graph, policy_id)
+    graph_writer.backfill_governance_status(graph, policy_id, submitter_source=submitter_source)
     record = graph_writer.read_policy_tree(graph, policy_id)
     if record is None:
         raise PolicyNotFoundError(policy_id)
@@ -688,6 +801,7 @@ def propose_policy(
     policy_id: str,
     graph: GraphHandle,
     audit_store: AuditStore,
+    submitter: LifecycleSubmitter,
 ) -> PolicyProposeResult:
     """Propose `policy_id`, cascading its whole tree to `status="proposed"` (S15).
 
@@ -702,10 +816,10 @@ def propose_policy(
     raised; (6) on all checks passing, the `outcome="applied"` audit event is
     recorded BEFORE the graph write (AC-BI-016); (7)
     `graph_writer.cascade_status` sets the Policy and its entire tree to
-    `"proposed"` in one Cypher statement; (8) on a graph failure, a
+    `"proposed"` in one gateway group; (8) on a graph failure, a
     `outcome="failed"` follow-up event is recorded for the same
     action/resource_id, then `PolicyLifecycleGraphUnavailableError` is raised
-    (AC-BI-024), the original `redis.exceptions.RedisError` chained.
+    (AC-BI-024), the gateway error chained.
 
     Args:
         actor: The calling caller's verified `(sub, iss)` identity.
@@ -714,6 +828,8 @@ def propose_policy(
         audit_store: Where every `policy.propose` audit event is recorded,
             via `record_standalone` -- this call has no surrounding
             state-changing transaction to join.
+        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
+            #211); only used if some node of the tree needs a fill.
 
     Returns:
         A `PolicyProposeResult` describing the now-`"proposed"` Policy and
@@ -731,7 +847,7 @@ def propose_policy(
             follow-up event is recorded for the same action/resource_id
             before this is raised (AC-BI-024).
     """
-    record = _read_transition_target(graph, policy_id)
+    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
 
     owner = (record.owner_subject, record.owner_issuer)
     current_status = cast("PolicyStatus", record.status)
@@ -773,6 +889,7 @@ def propose_policy(
         gates=gates,
         graph=graph,
         audit_store=audit_store,
+        submitter=submitter,
     )
 
     return PolicyProposeResult(
@@ -810,18 +927,33 @@ class _Repoint:
 
 
 def _write_cascade(
-    graph: GraphHandle, *, policy_id: str, target_status: str, repoint: _Repoint | None
+    graph: GraphHandle,
+    submitter: LifecycleSubmitter,
+    *,
+    policy_id: str,
+    target_status: str,
+    repoint: _Repoint | None,
+    audit_event_id: str,
 ) -> bool:
-    """Issue the one status-cascade write; `False` only when a re-point guard failed."""
+    """Submit the one status-cascade group; `False` only when a re-point guard failed."""
+    target = GraphWriteTarget(submitter, single_tenant_graph_name())
     if repoint is None:
-        graph_writer.cascade_status(graph, policy_id=policy_id, target_status=target_status)
+        graph_writer.cascade_status(
+            graph,
+            target,
+            policy_id=policy_id,
+            target_status=target_status,
+            audit_event_id=audit_event_id,
+        )
         return True
     return graph_writer.approve_fork_repoint(
         graph,
+        target,
         policy_id=policy_id,
         prior_id=repoint.prior_id,
         capability_ids=repoint.capability_ids,
         target_status=target_status,
+        audit_event_id=audit_event_id,
     )
 
 
@@ -833,9 +965,10 @@ def _cascade_with_audit(
     affected_node_ids: tuple[str, ...],
     graph: GraphHandle,
     audit_store: AuditStore,
+    submitter: LifecycleSubmitter,
     repoint: _Repoint | None = None,
 ) -> None:
-    """D-9's audit-then-cascade tail: `applied` audit, cascade, `failed` audit on failure.
+    """D-9's audit-then-cascade tail: `applied` audit, cascade group, `failed` audit on failure.
 
     Shared by `approve_policy`'s two calls (the successor's own transition to
     `"approved"`, and the auto-deprecated prior's own separate transition to
@@ -847,19 +980,19 @@ def _cascade_with_audit(
     own at all -- every gate has already run by the time either caller
     reaches this point).
 
-    When `repoint` is given (issue #185: approving a fork whose prior governs
-    Capabilities) the cascade is the single guarded re-point statement and the
-    `applied` event carries the intended `capability_ids`. A guard mismatch
-    records a `failed` event (`reason_code="governance_conflict"`,
-    `capability_ids=()` -- nothing moved) and raises
-    `PolicyGovernanceConflictError`.
+    Since issue #211 the cascade is one Graph Write Gateway group linked to the `applied` row
+    (written first, with its id read back). When `repoint` is given (issue #185: approving a fork
+    whose prior governs Capabilities) the group also moves the `GOVERNED_BY` edges, guarded by the
+    log position, and the `applied` event carries the intended `capability_ids`. A guard mismatch
+    records a `failed` event (`reason_code="governance_conflict"`, `capability_ids=()` -- nothing
+    moved) and raises `PolicyGovernanceConflictError`.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: the graph write failed after
-            the `applied` audit event was already recorded -- a `failed`
-            follow-up event is recorded for the same action/resource_id
-            before this is raised (AC-BI-024), the original
-            `redis.exceptions.RedisError` chained.
+        PolicyLifecycleGraphUnavailableError: the graph write failed after the `applied` audit
+            event was already recorded -- a `failed` follow-up event is recorded for the same
+            action/resource_id before this is raised (AC-BI-024). A gateway failure carries the
+            `FalkorDB write failed: ` prefix; a failed read of the tree chains the
+            `redis.exceptions.RedisError`.
         PolicyGovernanceConflictError: `repoint` was given and the governed
             set no longer matched at write time; nothing was written.
     """
@@ -873,34 +1006,52 @@ def _cascade_with_audit(
     if repoint is not None:
         applied_details["capability_ids"] = repoint.capability_ids
 
-    def _record(outcome: Literal["applied", "failed"], details: dict[str, object]) -> None:
+    def _record_failed(details: dict[str, object]) -> None:
         audit_store.record_standalone(
             actor_subject=actor_subject,
             actor_issuer=actor_issuer,
             action=spec.action,
             resource_type=_POLICY_RESOURCE_TYPE,
             resource_id=policy_id,
-            outcome=outcome,
+            outcome="failed",
             details=details,
         )
 
-    _record("applied", applied_details)
+    audit_event_id = _record_applied_with_event_id(
+        audit_store,
+        actor=actor,
+        action=spec.action,
+        resource_id=policy_id,
+        details=applied_details,
+    )
     try:
         moved = _write_cascade(
-            graph, policy_id=policy_id, target_status=spec.target_status, repoint=repoint
+            graph,
+            submitter,
+            policy_id=policy_id,
+            target_status=spec.target_status,
+            repoint=repoint,
+            audit_event_id=audit_event_id,
         )
     except redis.exceptions.RedisError as exc:
-        _record("failed", base_details)
+        _record_failed(base_details)
         raise PolicyLifecycleGraphUnavailableError from exc
+    except PolicyLifecycleGraphUnavailableError:
+        _record_failed(base_details)
+        raise
     if not moved:
-        _record(
-            "failed",
-            {**base_details, "reason_code": "governance_conflict", "capability_ids": ()},
-        )
+        _record_failed({**base_details, "reason_code": "governance_conflict", "capability_ids": ()})
         raise PolicyGovernanceConflictError(policy_id)
 
 
-def _read_transition_target(graph: GraphHandle, policy_id: str) -> graph_writer.PolicyRecord:
+def _eager(submitter: LifecycleSubmitter) -> Callable[[], LifecycleSubmitter]:
+    """A submitter source for a caller that already holds its gateway (issue #211, M4)."""
+    return lambda: submitter
+
+
+def _read_transition_target(
+    graph: GraphHandle, policy_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
+) -> graph_writer.PolicyRecord:
     """The (backfill, read, not-found) preamble shared by all 4 transition functions (S26).
 
     Before this refactor, `propose_policy`/`approve_policy`/`reject_policy`/
@@ -912,8 +1063,11 @@ def _read_transition_target(graph: GraphHandle, policy_id: str) -> graph_writer.
     transition, and PLAN.md's own S26 scope names only the 4 transition
     functions (`create_policy_draft` likewise stays untouched: it has no
     prior tree to read at all).
+
+    Since issue #211 the backfill is a gateway read-resolve-write: `submitter_source` is called
+    only if some node of the tree needs a fill.
     """
-    graph_writer.backfill_governance_status(graph, policy_id)
+    graph_writer.backfill_governance_status(graph, policy_id, submitter_source=submitter_source)
     record = graph_writer.read_policy_tree(graph, policy_id)
     if record is None:
         raise PolicyNotFoundError(policy_id)
@@ -961,6 +1115,7 @@ def _apply_transition(
     gates: Sequence[_TransitionGate],
     graph: GraphHandle,
     audit_store: AuditStore,
+    submitter: LifecycleSubmitter,
 ) -> None:
     """Run `_check_gates`, then `_cascade_with_audit` -- see `_check_gates` for the gate rules."""
     _check_gates(actor=actor, policy_id=policy_id, spec=spec, gates=gates, audit_store=audit_store)
@@ -971,6 +1126,7 @@ def _apply_transition(
         affected_node_ids=affected_node_ids,
         graph=graph,
         audit_store=audit_store,
+        submitter=submitter,
     )
 
 
@@ -1075,6 +1231,7 @@ def approve_policy(
     graph: GraphHandle,
     audit_store: AuditStore,
     access_role_store: AccessRoleStore,
+    submitter: LifecycleSubmitter,
 ) -> PolicyApproveResult:
     """Approve `policy_id`, cascading its whole tree to `status="approved"` (S17).
 
@@ -1117,6 +1274,8 @@ def approve_policy(
             no surrounding state-changing transaction to join.
         access_role_store: Where `actor`'s active `AccessRole`s are resolved
             from, for the `PolicyManager` RBAC gate.
+        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
+            #211); only used if some node of the tree needs a fill.
 
     Returns:
         A `PolicyApproveResult` describing the now-`"approved"` Policy, its
@@ -1141,7 +1300,7 @@ def approve_policy(
             follow-up event is recorded for that same action/resource_id
             before this is raised (AC-BI-024).
     """
-    record = _read_transition_target(graph, policy_id)
+    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
 
     owner = (record.owner_subject, record.owner_issuer)
     current_status = cast("PolicyStatus", record.status)
@@ -1181,6 +1340,7 @@ def approve_policy(
         affected_node_ids=affected_node_ids,
         graph=graph,
         audit_store=audit_store,
+        submitter=submitter,
         repoint=repoint,
     )
 
@@ -1200,6 +1360,7 @@ def approve_policy(
                 affected_node_ids=_tree_node_ids(prior_record),
                 graph=graph,
                 audit_store=audit_store,
+                submitter=submitter,
             )
             auto_deprecated_policy_id = prior_id
 
@@ -1232,6 +1393,7 @@ def reject_policy(
     graph: GraphHandle,
     audit_store: AuditStore,
     access_role_store: AccessRoleStore,
+    submitter: LifecycleSubmitter,
 ) -> PolicyRejectResult:
     """Reject `policy_id`, cascading its whole tree back to `status="draft"` (S19).
 
@@ -1268,6 +1430,8 @@ def reject_policy(
             state-changing transaction to join.
         access_role_store: Where `actor`'s active `AccessRole`s are resolved
             from, for the `PolicyManager` RBAC gate.
+        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
+            #211); only used if some node of the tree needs a fill.
 
     Returns:
         A `PolicyRejectResult` describing the now-`"draft"` Policy and its
@@ -1286,7 +1450,7 @@ def reject_policy(
             follow-up event is recorded for that same action/resource_id
             before this is raised (AC-BI-024).
     """
-    record = _read_transition_target(graph, policy_id)
+    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
 
     owner = (record.owner_subject, record.owner_issuer)
     current_status = cast("PolicyStatus", record.status)
@@ -1324,6 +1488,7 @@ def reject_policy(
         gates=gates,
         graph=graph,
         audit_store=audit_store,
+        submitter=submitter,
     )
 
     return PolicyRejectResult(
@@ -1352,6 +1517,7 @@ def revert_policy_to_draft(
     policy_id: str,
     graph: GraphHandle,
     audit_store: AuditStore,
+    submitter: LifecycleSubmitter,
 ) -> PolicyRevertResult:
     """Revert `policy_id`, cascading its whole tree back to `status="draft"` (S21).
 
@@ -1382,6 +1548,8 @@ def revert_policy_to_draft(
         audit_store: Where every `policy.revert` audit event is recorded, via
             `record_standalone` -- this call has no surrounding
             state-changing transaction to join.
+        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
+            #211); only used if some node of the tree needs a fill.
 
     Returns:
         A `PolicyRevertResult` describing the now-`"draft"` Policy and its
@@ -1399,7 +1567,7 @@ def revert_policy_to_draft(
             follow-up event is recorded for that same action/resource_id
             before this is raised (AC-BI-024).
     """
-    record = _read_transition_target(graph, policy_id)
+    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
 
     owner = (record.owner_subject, record.owner_issuer)
     current_status = cast("PolicyStatus", record.status)
@@ -1432,6 +1600,7 @@ def revert_policy_to_draft(
         gates=gates,
         graph=graph,
         audit_store=audit_store,
+        submitter=submitter,
     )
 
     return PolicyRevertResult(
@@ -1492,6 +1661,7 @@ def update_policy_draft(
     fields: Mapping[str, object],
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
+    submitter: LifecycleSubmitter,
 ) -> PolicyDraftUpdateResult:
     """PATCH a subset of a draft Policy's own content fields (issue #136, Slice 1).
 
@@ -1513,10 +1683,12 @@ def update_policy_draft(
         fields: Field name -> new value (or `None` to clear), already
             restricted to `_POLICY_PATCHABLE_FIELDS` by the MCP-boundary
             parser -- this function does not re-validate keys.
-        graph: The single-tenant policy graph handle.
+        graph: The single-tenant policy graph handle (reads only).
         access_role_store: Where `actor`'s active `AccessRole`s are resolved
             from, only ever consulted when `actor` is not the Policy's
             owner.
+        submitter: The Graph Write Gateway the patch is submitted through
+            (issue #211).
 
     Returns:
         A `PolicyDraftUpdateResult` naming the Policy id and the fields
@@ -1529,12 +1701,12 @@ def update_policy_draft(
         PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
             currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            (AC-BI-013's "graph unavailable" failure mode) -- the original
-            `redis.exceptions.RedisError` is chained, never leaked to the
-            caller. No audit event is recorded either way (§1.1 -- this
-            tool never touches `audit_events` at all).
+            (AC-BI-013's "graph unavailable" failure mode): `FalkorDB write
+            failed: ...` with the gateway error chained (issue #211), never a
+            raw driver error. No audit event is recorded either way (§1.1 --
+            this tool never touches `audit_events` at all).
     """
-    record = _read_transition_target(graph, policy_id)
+    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
     context = PolicyLifecycleRuleContext(
         actor=actor,
         owner=(record.owner_subject, record.owner_issuer),
@@ -1542,10 +1714,11 @@ def update_policy_draft(
         current_status=cast("PolicyStatus", record.status),
     )
     _authorize_draft_edit(context, access_role_store=access_role_store)
-    try:
-        graph_writer.update_policy_fields(graph, policy_id=policy_id, properties=fields)
-    except redis.exceptions.RedisError as exc:
-        raise PolicyLifecycleGraphUnavailableError from exc
+    graph_writer.update_policy_fields(
+        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        policy_id=policy_id,
+        properties=fields,
+    )
     return PolicyDraftUpdateResult(policy_id=policy_id, updated_fields=tuple(sorted(fields)))
 
 
@@ -1567,6 +1740,7 @@ def add_standard_to_draft(
     fields: Mapping[str, object],
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
+    submitter: LifecycleSubmitter,
 ) -> StandardDraftResult:
     """Add a new Standard under a draft Policy (issue #136, Slice 2).
 
@@ -1600,6 +1774,8 @@ def add_standard_to_draft(
         access_role_store: Where `actor`'s active `AccessRole`s are resolved
             from, only ever consulted when `actor` is not the parent
             Policy's owner.
+        submitter: The Graph Write Gateway the write is submitted through
+            (issue #211).
 
     Returns:
         A `StandardDraftResult` naming the new Standard's id (usable
@@ -1613,10 +1789,10 @@ def add_standard_to_draft(
         PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
             currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            -- the original `redis.exceptions.RedisError` is chained, never
-            leaked to the caller.
+            -- `FalkorDB write failed: ...` with the gateway error chained
+            (issue #211), never a raw driver error.
     """
-    record = _read_transition_target(graph, policy_id)
+    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
     context = PolicyLifecycleRuleContext(
         actor=actor,
         owner=(record.owner_subject, record.owner_issuer),
@@ -1625,23 +1801,20 @@ def add_standard_to_draft(
     )
     _authorize_draft_edit(context, access_role_store=access_role_store)
     new_standard_id = standard_id(policy_id, title)
-    try:
-        graph_writer.add_standard_to_policy(
-            graph,
-            policy_id=policy_id,
-            standard_id=new_standard_id,
-            title=title,
-            extra_properties=fields,
-        )
-    except redis.exceptions.RedisError as exc:
-        raise PolicyLifecycleGraphUnavailableError from exc
+    graph_writer.add_standard_to_policy(
+        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        policy_id=policy_id,
+        standard_id=new_standard_id,
+        title=title,
+        extra_properties=fields,
+    )
     return StandardDraftResult(
         standard_id=new_standard_id, policy_id=policy_id, title=title, status="draft"
     )
 
 
 def _read_standard_with_parent_backfilled(
-    graph: GraphHandle, standard_id: str
+    graph: GraphHandle, standard_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
 ) -> graph_writer.StandardWithParent:
     """Backfill-then-reread wrapper around `find_standard_with_parent` (issue #136, Slice 3).
 
@@ -1661,6 +1834,7 @@ def _read_standard_with_parent_backfilled(
         graph: The single-tenant policy graph handle.
         standard_id: The Standard id to read, plus its parent Policy's
             owner/status.
+        submitter_source: Resolves the gateway for the backfill, if one is needed (issue #211).
 
     Returns:
         The freshly-reread `StandardWithParent` row, post-backfill.
@@ -1672,7 +1846,7 @@ def _read_standard_with_parent_backfilled(
     row = graph_writer.find_standard_with_parent(graph, standard_id)
     if row is None:
         raise PolicyStandardNotFoundError(standard_id)
-    graph_writer.backfill_governance_status(graph, row.policy_id)
+    graph_writer.backfill_governance_status(graph, row.policy_id, submitter_source=submitter_source)
     # Node cannot vanish between these two reads in this service's own
     # single-request flow.
     refreshed = graph_writer.find_standard_with_parent(graph, standard_id)
@@ -1688,6 +1862,7 @@ def update_standard_draft(
     fields: Mapping[str, object],
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
+    submitter: LifecycleSubmitter,
 ) -> StandardDraftResult:
     """PATCH a subset of a draft Standard's own content fields (issue #136, Slice 3).
 
@@ -1717,6 +1892,8 @@ def update_standard_draft(
         access_role_store: Where `actor`'s active `AccessRole`s are resolved
             from, only ever consulted when `actor` is not the parent
             Policy's owner.
+        submitter: The Graph Write Gateway the write is submitted through
+            (issue #211).
 
     Returns:
         A `StandardDraftResult` naming the Standard id, its parent Policy id,
@@ -1731,10 +1908,12 @@ def update_standard_draft(
         PolicyInvalidStatusTransitionError: `standard_id`'s Standard is not
             currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            -- the original `redis.exceptions.RedisError` is chained, never
-            leaked to the caller.
+            -- `FalkorDB write failed: ...` with the gateway error chained
+            (issue #211), never a raw driver error.
     """
-    row = _read_standard_with_parent_backfilled(graph, standard_id)
+    row = _read_standard_with_parent_backfilled(
+        graph, standard_id, submitter_source=_eager(submitter)
+    )
     context = PolicyLifecycleRuleContext(
         actor=actor,
         owner=(row.policy_owner_subject, row.policy_owner_issuer),
@@ -1742,10 +1921,11 @@ def update_standard_draft(
         current_status=cast("PolicyStatus", row.standard_status),
     )
     _authorize_draft_edit(context, access_role_store=access_role_store)
-    try:
-        graph_writer.update_standard_fields(graph, standard_id=standard_id, properties=fields)
-    except redis.exceptions.RedisError as exc:
-        raise PolicyLifecycleGraphUnavailableError from exc
+    graph_writer.update_standard_fields(
+        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        standard_id=standard_id,
+        properties=fields,
+    )
     return StandardDraftResult(
         standard_id=standard_id, policy_id=row.policy_id, title=row.standard_title, status="draft"
     )
@@ -1771,6 +1951,7 @@ def add_control_to_draft(
     fields: Mapping[str, object],
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
+    submitter: LifecycleSubmitter,
 ) -> ControlDraftResult:
     """Add a new Control under a draft Standard (issue #136, Slice 4).
 
@@ -1816,6 +1997,8 @@ def add_control_to_draft(
         access_role_store: Where `actor`'s active `AccessRole`s are resolved
             from, only ever consulted when `actor` is not the parent
             Policy's owner.
+        submitter: The Graph Write Gateway the write is submitted through
+            (issue #211).
 
     Returns:
         A `ControlDraftResult` naming the new Control's id (usable
@@ -1830,10 +2013,12 @@ def add_control_to_draft(
         PolicyInvalidStatusTransitionError: `standard_id`'s Standard is not
             currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            -- the original `redis.exceptions.RedisError` is chained, never
-            leaked to the caller.
+            -- `FalkorDB write failed: ...` with the gateway error chained
+            (issue #211), never a raw driver error.
     """
-    row = _read_standard_with_parent_backfilled(graph, standard_id)
+    row = _read_standard_with_parent_backfilled(
+        graph, standard_id, submitter_source=_eager(submitter)
+    )
     context = PolicyLifecycleRuleContext(
         actor=actor,
         owner=(row.policy_owner_subject, row.policy_owner_issuer),
@@ -1842,17 +2027,14 @@ def add_control_to_draft(
     )
     _authorize_draft_edit(context, access_role_store=access_role_store)
     new_control_id = control_id(standard_id, title)
-    try:
-        graph_writer.add_control_to_standard(
-            graph,
-            standard_id=standard_id,
-            control_id=new_control_id,
-            title=title,
-            control_type=control_type,
-            extra_properties=fields,
-        )
-    except redis.exceptions.RedisError as exc:
-        raise PolicyLifecycleGraphUnavailableError from exc
+    graph_writer.add_control_to_standard(
+        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        standard_id=standard_id,
+        control_id=new_control_id,
+        title=title,
+        control_type=control_type,
+        extra_properties=fields,
+    )
     return ControlDraftResult(
         control_id=new_control_id,
         standard_id=standard_id,
@@ -1863,7 +2045,7 @@ def add_control_to_draft(
 
 
 def _read_control_with_parent_backfilled(
-    graph: GraphHandle, control_id: str
+    graph: GraphHandle, control_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
 ) -> graph_writer.ControlWithParent:
     """Backfill-then-reread wrapper around `find_control_with_parent` (issue #136, Slice 5).
 
@@ -1881,6 +2063,7 @@ def _read_control_with_parent_backfilled(
         graph: The single-tenant policy graph handle.
         control_id: The Control id to read, plus its parent Standard id and
             root Policy's owner/status.
+        submitter_source: Resolves the gateway for the backfill, if one is needed (issue #211).
 
     Returns:
         The freshly-reread `ControlWithParent` row, post-backfill.
@@ -1893,7 +2076,7 @@ def _read_control_with_parent_backfilled(
     row = graph_writer.find_control_with_parent(graph, control_id)
     if row is None:
         raise PolicyControlNotFoundError(control_id)
-    graph_writer.backfill_governance_status(graph, row.policy_id)
+    graph_writer.backfill_governance_status(graph, row.policy_id, submitter_source=submitter_source)
     # Node cannot vanish between these two reads in this service's own
     # single-request flow.
     refreshed = graph_writer.find_control_with_parent(graph, control_id)
@@ -1909,6 +2092,7 @@ def update_control_draft(
     fields: Mapping[str, object],
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
+    submitter: LifecycleSubmitter,
 ) -> ControlDraftResult:
     """PATCH a subset of a draft Control's own content fields (issue #136, Slice 5).
 
@@ -1941,6 +2125,8 @@ def update_control_draft(
         access_role_store: Where `actor`'s active `AccessRole`s are resolved
             from, only ever consulted when `actor` is not the root Policy's
             owner.
+        submitter: The Graph Write Gateway the write is submitted through
+            (issue #211).
 
     Returns:
         A `ControlDraftResult` naming the Control id, its parent Standard and
@@ -1955,10 +2141,12 @@ def update_control_draft(
         PolicyInvalidStatusTransitionError: `control_id`'s Control is not
             currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            -- the original `redis.exceptions.RedisError` is chained, never
-            leaked to the caller.
+            -- `FalkorDB write failed: ...` with the gateway error chained
+            (issue #211), never a raw driver error.
     """
-    row = _read_control_with_parent_backfilled(graph, control_id)
+    row = _read_control_with_parent_backfilled(
+        graph, control_id, submitter_source=_eager(submitter)
+    )
     context = PolicyLifecycleRuleContext(
         actor=actor,
         owner=(row.policy_owner_subject, row.policy_owner_issuer),
@@ -1966,10 +2154,11 @@ def update_control_draft(
         current_status=cast("PolicyStatus", row.control_status),
     )
     _authorize_draft_edit(context, access_role_store=access_role_store)
-    try:
-        graph_writer.update_control_fields(graph, control_id=control_id, properties=fields)
-    except redis.exceptions.RedisError as exc:
-        raise PolicyLifecycleGraphUnavailableError from exc
+    graph_writer.update_control_fields(
+        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        control_id=control_id,
+        properties=fields,
+    )
     return ControlDraftResult(
         control_id=control_id,
         standard_id=row.standard_id,

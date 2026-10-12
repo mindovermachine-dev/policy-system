@@ -104,10 +104,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
     FakeAccessRoleStore,
 )
@@ -304,7 +306,7 @@ class _HybridGraph:
         p = params or {}
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
-        if "coalesce(p.version" in q or "IS NULL" in q:
+        if "RETURN p.version, p.status, s.id, s.status, c.id, c.status" in q:
             # `graph_writer.backfill_governance_status`'s three idempotent,
             # already-backfilled-safe `SET` statements -- issued ahead of
             # `read_policy_tree`, `find_standard_with_parent`, AND
@@ -415,6 +417,13 @@ class _FakeAuditStore:
 
     def record_standalone(self, **kwargs: object) -> None:
         self.calls.append(kwargs)
+
+    def record_standalone_with_event_id(self, **kwargs: object) -> str:
+        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        self.record_standalone(**kwargs)
+        event_id = str(uuid.uuid4())
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+        return event_id
 
     def query(self, *args: object, **kwargs: object) -> object:
         raise NotImplementedError
@@ -570,42 +579,44 @@ def test_add_control_then_field_loop_persists_every_field_in_documented_order(
             control_type=_CONTROL_TYPE,
         )
 
-    del control_id  # only needed to drive the sequence above
+    # Every write is a gateway group (issue #211): group 0 is create-policy-draft, group 1
+    # add-standard-to-draft, group 2 add-control-to-draft, and the groups after them are the
+    # update-control-draft calls, one per `_LOOP_CALLS` entry that changes something.
+    assert handle.write_queries == []
 
-    # write_queries[0] = create-policy-draft's MERGE; [1] = add-standard-to-
-    # draft's MERGE; [2] = add-control-to-draft's MERGE; [3:] = the 6
-    # update-control-draft SETs, one per `_LOOP_CALLS` entry, in order.
-    assert len(handle.write_queries) == 3 + len(_LOOP_CALLS)
-    assert "MERGE (p:Policy {id: $policy_id}) SET p += $properties" in handle.write_queries[0]
-    assert "SUPPORTED_BY]->(s:Standard {id: $standard_id})" in handle.write_queries[1]
-
-    assert "IMPLEMENTED_BY]->(c:Control {id: $control_id})" in handle.write_queries[2]
-    assert "SET c += $properties" in handle.write_queries[2]
-    # `graph_writer.add_control_to_standard`'s own server-forced defaults
-    # (graph_writer.py:979-985): `implementation_status` defaults to
-    # `"planned"` -- NOT `"draft"` (Control's own workflow starts one step
-    # later than Standard's, ps-domain-concepts.md's "earliest state"
-    # convention) -- since `add-control-to-draft`'s own call never includes
-    # content fields (D-3-style). `title`/`type`/`status` are always forced,
-    # never caller-controlled through `fields`.
-    assert handle.write_params[2]["properties"] == {
+    rig = installed_process_gateway().rig
+    create_group, standard_group, add_group, *update_groups = rig.store.groups
+    assert [e.content["op"] for e in create_group.entries] == ["upsert_node"]
+    assert [e.content["op"] for e in standard_group.entries] == ["upsert_node", "upsert_edge"]
+    assert [e.content["op"] for e in add_group.entries] == ["upsert_node", "upsert_edge"]
+    assert rig.store.audit_link_of(add_group) is None
+    # `graph_writer.add_control_to_standard`'s own server-forced defaults:
+    # `implementation_status` defaults to `"planned"` -- NOT `"draft"` (Control's own workflow
+    # starts one step later than Standard's, ps-domain-concepts.md's "earliest state"
+    # convention) -- since `add-control-to-draft`'s own call never includes content fields
+    # (D-3-style). `title`/`type`/`status` are always forced, never caller-controlled through
+    # `fields`.
+    assert add_group.entries[0].content["properties"] == {
         "implementation_status": "planned",
         "title": _CONTROL_TITLE,
         "type": _CONTROL_TYPE,
         "status": "draft",
     }
 
-    for query in handle.write_queries[3:]:
-        assert "MATCH (c:Control {id: $control_id}) SET c += $set_properties" in query
+    # The last `_LOOP_CALLS` entry restates the default `implementation_status` ("planned"), so
+    # it changes nothing and the gateway logs no group for it.
+    assert len(update_groups) == len(_LOOP_CALLS) - 1
+    for group in update_groups:
+        assert [e.content["op"] for e in group.entries] == ["merge_property"]
+        assert rig.store.audit_link_of(group) is None
 
-    # Persisted VALUES, verified via the fake's recorded params -- same as
-    # Slice 3's own `update-standard-draft` finding: `update-control-draft`'s
-    # JSON response never echoes back `updated_fields`.
-    persisted = [wp["set_properties"] for wp in handle.write_params[3:]]
-    assert persisted == [dict(fields) for fields in _LOOP_CALLS]
-    # The C-006 Lifecycle Honesty answer persisted is "planned", never
-    # "draft" -- the last loop call's own set_properties.
-    assert persisted[-1] == {"implementation_status": "planned"}
+    # Persisted VALUES, verified via the logged entries: `update-control-draft`'s JSON response
+    # never echoes back `updated_fields`.
+    persisted = [group.entries[0].content["properties"] for group in update_groups]
+    assert persisted == [dict(fields) for fields in _LOOP_CALLS[:-1]]
+    # The C-006 Lifecycle Honesty answer persisted is "planned", never "draft".
+    node = rig.graphs.open("policy_system").nodes[("Control", control_id)]
+    assert node["implementation_status"] == "planned"
 
 
 # --- (2) `type` patchable at update time, rejected at creation time --------
@@ -633,9 +644,10 @@ def test_control_type_patchable_via_update_but_rejected_as_creation_field(
         )
         assert rejected.is_error is False
         assert _text(rejected) == "error: fields.type is not a patchable field"
-        # Rejected before any graph write -- only the create-policy-draft/
-        # add-standard-to-draft writes from the setup above exist so far.
-        assert len(handle.write_queries) == 2
+        # Rejected before any graph write -- only the create-policy-draft write and the
+        # add-standard-to-draft group from the setup above exist so far.
+        assert handle.write_queries == []
+        assert len(installed_process_gateway().rig.store.groups) == 2
 
         # The real creation call, `type="manual"` via `control_type` only.
         add_result = _call_add_control_to_draft(
@@ -656,9 +668,9 @@ def test_control_type_patchable_via_update_but_rejected_as_creation_field(
         body = json.loads(_text(update_result))
         assert body["control_id"] == control_id
 
-    write_query = handle.write_queries[-1]
-    assert "MATCH (c:Control {id: $control_id}) SET c += $set_properties" in write_query
-    assert handle.write_params[-1]["set_properties"] == {"type": "automated"}
+    last_group = installed_process_gateway().rig.store.groups[-1]
+    assert [e.content["op"] for e in last_group.entries] == ["merge_property"]
+    assert last_group.entries[0].content["properties"] == {"type": "automated"}
 
 
 # --- (3) "add another Control" ----------------------------------------------
@@ -715,10 +727,16 @@ def test_decline_to_add_a_control_is_a_valid_zero_call_outcome(
     # AC-BI-008's own extra trigger clause: "or the user declines to add
     # one". Zero `add-control-to-draft` calls for this Standard is itself
     # the correct outcome, never a missing step -- this is asserted
-    # structurally: exactly the 2 writes from `create-policy-draft`/
-    # `add-standard-to-draft`, no Control-creation write of any kind.
-    assert len(handle.write_queries) == 2
-    assert not any("Control" in q for q in handle.write_queries)
+    # structurally: exactly the write from `create-policy-draft` and the one gateway
+    # group from `add-standard-to-draft`, no Control-creation write of any kind.
+    assert handle.write_queries == []
+    rig = installed_process_gateway().rig
+    create_group, standard_group = rig.store.groups
+    assert [e.name for e in (*create_group.entries, *standard_group.entries)] == [
+        "Policy",
+        "Standard",
+        "SUPPORTED_BY",
+    ]
 
     # And it is a genuinely valid terminal state per the schema's own
     # cardinality (`scoring-model.md` Section 1: `IMPLEMENTED_BY` requires

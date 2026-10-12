@@ -146,11 +146,12 @@ def test_ca_container_diagram_lists_startup_verification_edge() -> None:
     )
 
 
-def test_ca_states_the_command_link_is_optional_at_the_store_and_required_at_the_gateway() -> None:
+def test_ca_states_the_command_link_is_optional_at_the_store_and_the_gateway() -> None:
+    """Since #211 the gateway no longer requires the link either (it was required until then)."""
     gateway = _section(_read(_CA), "### Graph Write Gateway")
 
-    assert "optional at the store" in gateway
-    assert "required at the gateway" in gateway
+    assert "optional at both the store and the gateway" in gateway
+    assert "required at the gateway" not in gateway
 
 
 @pytest.mark.parametrize("needle", ["owner role", "admin-credential"])
@@ -713,3 +714,142 @@ def test_domain_concepts_and_operations_guide_name_company_merge_as_a_gateway_wr
     assert "#210-#214" not in section
     assert "Company Merge" in ops
     assert "the approval stays pending" in ops
+
+
+# --- issue #211: Policy Lifecycle writes through the gateway -------------------------------------
+
+
+def _policy_lifecycle_section() -> str:
+    return _section(_read(_CA), "### Policy Lifecycle")
+
+
+def _policy_lifecycle_guidance() -> str:
+    return _policy_lifecycle_section().split("#### Implementation Registration")[0]
+
+
+def test_architecture_policy_lifecycle_says_its_writes_go_through_the_gateway() -> None:
+    ca = _read(_CA)
+    guidance = _policy_lifecycle_guidance()
+
+    assert "Target design (not yet implemented" not in guidance
+    for needle in (
+        "Implemented (#211)",
+        "test_no_graph_write_path.py",
+        "record_standalone_with_event_id",
+        "one gateway group",
+        "PolicyLifecycleGraphUnavailableError",
+        "AC-BI-002",
+    ):
+        assert needle in guidance, needle
+    assert "#211" in _ca_row("| Graph Write Gateway | `ps.")
+    assert "#211-#214" not in ca
+    assert "#212-#214" in ca
+
+
+def test_architecture_policy_lifecycle_cascade_is_one_gateway_group_not_one_cypher_statement() -> (
+    None
+):
+    section = _policy_lifecycle_section()
+
+    assert "one gateway group" in section.split("###### Constraints")[1].split("#### ")[0]
+    assert "in one Cypher statement" not in section
+
+
+def test_architecture_policy_lifecycle_keeps_both_halves_of_the_persistence_error_line() -> None:
+    guidance = _policy_lifecycle_guidance()
+
+    assert "`redis.exceptions.RedisError`" in guidance  # reads still wrap the driver error
+    assert "`FalkorDB write failed: `" in guidance  # writes map the gateway failure
+
+
+def test_architecture_policy_lifecycle_lists_the_observable_differences() -> None:
+    guidance = _policy_lifecycle_guidance()
+    differences = guidance.split("Observable differences from the direct writes (#211)")[1]
+    differences = differences.split("\n- ")[0]
+
+    for needle in (
+        "`identity` property",
+        "AC-BI-002",
+        "fails closed",
+        "`get-policy`",
+        "`FalkorDB write failed: `",
+        "committed but not yet applied",
+        "unrelated write",
+        "full governed set",  # the repoint guard compares the prior's complete governed set
+        "no audit link",
+        "one atomic group",  # create is one group: no partial draft
+        "no longer creates a second node",
+        "full-edge scan",
+        "`MutationGroup.audit_event_id` is optional",
+    ):
+        assert needle in differences, needle
+
+
+def test_architecture_policy_lifecycle_actions_submit_groups_and_adds_are_idempotent() -> None:
+    section = _policy_lifecycle_section()
+    actions = section.split("#### Actions")[1].split("\n---")[0]
+    rows = {
+        line.split("|")[1].strip(): line for line in actions.splitlines() if line.startswith("| ")
+    }
+
+    assert "Writes FalkorDB" not in actions
+    for name in ("CreatePolicyDraft", "ProposePolicy", "UpdatePolicyDraft", "AddControlToDraft"):
+        assert "gateway group" in rows[name], name
+    for name in ("AddStandardToDraft", "AddControlToDraft"):
+        idempotent = rows[name].split("|")[-3]
+        assert idempotent.strip().startswith("Yes"), name
+        assert "one node" in idempotent, name
+        assert "each call mints" not in rows[name]
+
+
+def test_architecture_policy_lifecycle_registry_lists_the_submission_module() -> None:
+    section = _policy_lifecycle_section()
+    registration = section.split("#### Implementation Registration")[1].split("#### Actions")[0]
+    paths = re.findall(r"^\| `([^`]+)` \|", registration, flags=re.MULTILINE)
+
+    for path in paths:
+        assert (_REPO / path).exists(), path
+    assert "ps-service/src/ps_service/policy_lifecycle/graph_submission.py" in paths
+    graph_writer = next(line for line in registration.splitlines() if "graph_writer.py" in line)
+    assert "read layer and primitive builders" in graph_writer
+    assert "read/write layer" not in graph_writer
+
+
+def test_architecture_audit_event_id_is_optional_on_a_mutation_group() -> None:
+    ca = _read(_CA)
+
+    assert "`audit_event_id` is mandatory on a `MutationGroup`" not in ca
+    assert "`audit_event_id` is optional on a `MutationGroup`" in ca
+    assert "draft edits, governance backfills" in ca
+
+
+def test_solution_architecture_and_domain_concepts_name_policy_lifecycle_as_a_gateway_writer() -> (
+    None
+):
+    sa = _read(_SA)
+    section = _section(_read(_DOMAIN_CONCEPTS), "## Graph Write Gateway and Mutation Log")
+
+    assert "Policy Lifecycle (#211)" in sa
+    assert "#211-#214" not in sa
+    assert "(target)" not in sa.split("Cypher: read knowledge graph")[1].split("\n")[0]
+    assert (
+        "Policy Lifecycle (creation, edits, transitions and governance backfills) since #211"
+        in section
+    )
+    assert "#211-#214" not in section
+    assert "#212-#214" in section
+
+
+def test_both_copies_of_the_domain_concepts_are_identical() -> None:
+    copy = _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "ps-domain-concepts.md"
+
+    assert _read(copy) == _read(_DOMAIN_CONCEPTS)
+    assert "since #211" in _read(copy)
+
+
+def test_operations_guide_says_policy_lifecycle_tools_answer_an_error_without_a_gateway() -> None:
+    ops = _section(_read(_OPS), "## Troubleshooting / FAQ")
+
+    assert "Policy Lifecycle" in ops
+    assert "answer `error: ...`" in ops
+    assert "record no audit row" in ops

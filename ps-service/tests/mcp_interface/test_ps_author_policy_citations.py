@@ -51,9 +51,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
     FakeAccessRoleStore,
 )
@@ -207,7 +209,7 @@ class _HybridGraph:
         p = params or {}
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
-        if "coalesce(p.version" in q or "IS NULL" in q:
+        if "RETURN p.version, p.status, s.id, s.status, c.id, c.status" in q:
             # `graph_writer.backfill_governance_status`'s idempotent no-op --
             # issued ahead of every read branch below. Structural no-op,
             # same as Slices 1-4.
@@ -312,6 +314,13 @@ class _FakeAuditStore:
 
     def record_standalone(self, **kwargs: object) -> None:
         self.calls.append(kwargs)
+
+    def record_standalone_with_event_id(self, **kwargs: object) -> str:
+        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        self.record_standalone(**kwargs)
+        event_id = str(uuid.uuid4())
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+        return event_id
 
     def query(self, *args: object, **kwargs: object) -> object:
         raise NotImplementedError
@@ -454,13 +463,14 @@ def test_update_standard_draft_persists_procedure_with_sources_suffix(
     assert body["standard_id"] == standard_id
     assert body["policy_id"] == policy_id
 
-    # write_queries[0] = create-policy-draft's MERGE; [1] = add-standard-to-
-    # draft's MERGE; [2] = this update-standard-draft's SET.
-    assert len(handle.write_queries) == 3
-    write_query = handle.write_queries[-1]
-    assert "MATCH (s:Standard {id: $standard_id}) SET s += $set_properties" in write_query
+    # Every write is a gateway group: create-policy-draft's, add-standard-to-draft's, then this
+    # update-standard-draft's merge.
+    assert handle.write_queries == []
+    groups = installed_process_gateway().rig.store.groups
+    assert len(groups) == 3
+    assert [e.content["op"] for e in groups[-1].entries] == ["merge_property"]
 
-    persisted_procedure = cast("str", handle.write_params[-1]["set_properties"]["procedure"])  # type: ignore[index]
+    persisted_procedure = cast("str", groups[-1].entries[0].content["properties"]["procedure"])  # type: ignore[index]
     assert persisted_procedure == _PROCEDURE_WITH_SOURCE
     assert persisted_procedure.endswith(f"Sources: {_SOURCE_URL}")
 
@@ -499,16 +509,16 @@ def test_update_control_draft_persists_execution_method_with_sources_suffix(
     assert body["standard_id"] == standard_id
     assert body["policy_id"] == policy_id
 
-    # write_queries[0] = create-policy-draft's MERGE; [1] = add-standard-to-
-    # draft's MERGE; [2] = add-control-to-draft's MERGE; [3] = this
-    # update-control-draft's SET.
-    assert len(handle.write_queries) == 4
-    write_query = handle.write_queries[-1]
-    assert "MATCH (c:Control {id: $control_id}) SET c += $set_properties" in write_query
+    # Every write is a gateway group: create-policy-draft's, the add-standard and add-control
+    # groups, then this update-control-draft's merge.
+    assert handle.write_queries == []
+    groups = installed_process_gateway().rig.store.groups
+    assert len(groups) == 4
+    assert [e.content["op"] for e in groups[-1].entries] == ["merge_property"]
 
     persisted_method = cast(
         "str",
-        handle.write_params[-1]["set_properties"]["execution_method"],  # type: ignore[index]
+        groups[-1].entries[0].content["properties"]["execution_method"],  # type: ignore[index]
     )
     assert persisted_method == _EXECUTION_METHOD_WITH_SOURCE
     assert persisted_method.endswith(f"Sources: {_SOURCE_URL}")
@@ -540,6 +550,7 @@ def test_update_standard_draft_without_sources_suffix_round_trips(
     assert body["standard_id"] == standard_id
     assert body["policy_id"] == policy_id
 
-    persisted_procedure = cast("str", handle.write_params[-1]["set_properties"]["procedure"])  # type: ignore[index]
+    groups = installed_process_gateway().rig.store.groups
+    persisted_procedure = cast("str", groups[-1].entries[0].content["properties"]["procedure"])  # type: ignore[index]
     assert persisted_procedure == _PROCEDURE_WITHOUT_SOURCE
     assert "Sources:" not in persisted_procedure

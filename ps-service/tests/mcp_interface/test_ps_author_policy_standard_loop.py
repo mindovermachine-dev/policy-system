@@ -82,10 +82,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
     FakeAccessRoleStore,
 )
@@ -251,7 +253,7 @@ class _HybridGraph:
         p = params or {}
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
-        if "coalesce(p.version" in q or "IS NULL" in q:
+        if "RETURN p.version, p.status, s.id, s.status, c.id, c.status" in q:
             # `graph_writer.backfill_governance_status`'s three idempotent,
             # already-backfilled-safe `SET` statements -- issued ahead of
             # both `read_policy_tree` (via `_read_transition_target`, for
@@ -347,6 +349,13 @@ class _FakeAuditStore:
 
     def record_standalone(self, **kwargs: object) -> None:
         self.calls.append(kwargs)
+
+    def record_standalone_with_event_id(self, **kwargs: object) -> str:
+        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        self.record_standalone(**kwargs)
+        event_id = str(uuid.uuid4())
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+        return event_id
 
     def query(self, *args: object, **kwargs: object) -> object:
         raise NotImplementedError
@@ -459,38 +468,41 @@ def test_add_standard_then_field_loop_persists_every_field_in_documented_order(
         policy_id = _new_policy(monkeypatch, handle)
         standard_id = _complete_one_standard(handle, policy_id=policy_id, title=_STANDARD_TITLE)
 
-    del standard_id  # only needed to drive the sequence above
+    # Every write is a gateway group (issue #211): group 0 is create-policy-draft, group 1
+    # add-standard-to-draft, and the groups after them are the update-standard-draft calls, one per
+    # `_LOOP_CALLS` entry that changes something, in order.
+    assert handle.write_queries == []
 
-    # write_queries[0] = create-policy-draft's MERGE; [1] = add-standard-to-
-    # draft's MERGE; [2:] = the 6 update-standard-draft SETs, one per
-    # `_LOOP_CALLS` entry, in order.
-    assert len(handle.write_queries) == 2 + len(_LOOP_CALLS)
-    assert "MERGE (p:Policy {id: $policy_id}) SET p += $properties" in handle.write_queries[0]
-
-    assert "SUPPORTED_BY]->(s:Standard {id: $standard_id})" in handle.write_queries[1]
-    assert "SET s += $properties" in handle.write_queries[1]
-    # `graph_writer.add_standard_to_policy`'s own server-forced defaults
-    # (graph_writer.py:799-801): `implementation_status` defaults to
-    # `"draft"` (fields=None was sent -- add-standard-to-draft's own call
-    # never includes content fields, D-3-style, mirrors Policy's
-    # title-only creation), `title`/`status` are always forced, never
-    # caller-controlled (the tool doesn't even expose them as settable).
-    assert handle.write_params[1]["properties"] == {
+    rig = installed_process_gateway().rig
+    create_group, add_group, *update_groups = rig.store.groups
+    assert [entry.content["op"] for entry in create_group.entries] == ["upsert_node"]
+    assert rig.store.audit_link_of(create_group) is not None  # linked to the `applied` row
+    assert [entry.content["op"] for entry in add_group.entries] == ["upsert_node", "upsert_edge"]
+    assert rig.store.audit_link_of(add_group) is None
+    # `graph_writer.add_standard_to_policy`'s own server-forced defaults: `implementation_status`
+    # defaults to `"draft"` (the call never sends content fields, mirrors Policy's title-only
+    # creation), `title`/`status` are always forced, never caller-controlled.
+    assert add_group.entries[0].content["properties"] == {
         "implementation_status": "draft",
         "title": _STANDARD_TITLE,
         "status": "draft",
     }
 
-    for query in handle.write_queries[2:]:
-        assert "MATCH (s:Standard {id: $standard_id}) SET s += $set_properties" in query
+    # The last `_LOOP_CALLS` entry restates the default `implementation_status`, so it changes
+    # nothing and the gateway logs no group for it.
+    assert len(update_groups) == len(_LOOP_CALLS) - 1
+    for group in update_groups:
+        assert [entry.content["op"] for entry in group.entries] == ["merge_property"]
+        assert rig.store.audit_link_of(group) is None
 
-    # Persisted VALUES, verified via the fake's recorded params -- unlike
-    # Slice 2's Policy-loop test, `update-standard-draft`'s own JSON response
-    # never echoes back `updated_fields` (module docstring's second finding),
-    # so params captured at the fake-graph boundary are the only place this
-    # is still observable, in the exact order each call sent them.
-    persisted = [wp["set_properties"] for wp in handle.write_params[2:]]
-    assert persisted == [dict(fields) for fields in _LOOP_CALLS]
+    # Persisted VALUES, verified via the logged entries: `update-standard-draft`'s own JSON
+    # response never echoes back `updated_fields` (module docstring's second finding), so the
+    # log is the place this is observable, in the exact order each call sent them.
+    persisted = [group.entries[0].content["properties"] for group in update_groups]
+    assert persisted == [dict(fields) for fields in _LOOP_CALLS[:-1]]
+    node = rig.graphs.open("policy_system").nodes[("Standard", standard_id)]
+    assert node["procedure"] == _PROCEDURE
+    assert node["implementation_status"] == "draft"
 
 
 # --- (2) "add another Standard" -------------------------------------------
@@ -535,7 +547,12 @@ def test_finish_after_one_completed_standard_needs_no_further_call(
     # tool call -- the sequence built above is already complete and
     # well-formed exactly as it stands: no further `add-standard-to-draft`/
     # `update-standard-draft` call happened or is needed.
-    assert len(handle.write_queries) == 2 + len(_LOOP_CALLS)
+    assert handle.write_queries == []
+
+    # The create group, one add group plus one group per `_LOOP_CALLS` entry that changes
+    # something (the last one restates the default `implementation_status`).
+    rig = installed_process_gateway().rig
+    assert len(rig.store.groups) == 2 + len(_LOOP_CALLS) - 1
 
     # And it is a genuinely valid terminal state, not merely an unfinished
     # one the skill gave up on early: an all-Pass vector for this Standard's

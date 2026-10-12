@@ -49,9 +49,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
     FakeAccessRoleStore,
 )
@@ -272,7 +274,7 @@ class _HybridGraph:
         p = params or {}
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
-        if "coalesce(p.version" in q or "IS NULL" in q:
+        if "RETURN p.version, p.status, s.id, s.status, c.id, c.status" in q:
             # `graph_writer.backfill_governance_status`'s idempotent no-op --
             # issued ahead of every `find_*_with_parent`/`read_policy_tree`
             # read. Structural no-op, same as every earlier slice.
@@ -386,6 +388,13 @@ class _FakeAuditStore:
     def record_standalone(self, **kwargs: object) -> None:
         self.calls.append(kwargs)
 
+    def record_standalone_with_event_id(self, **kwargs: object) -> str:
+        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        self.record_standalone(**kwargs)
+        event_id = str(uuid.uuid4())
+        installed_process_gateway().rig.store.audit_rows.add(event_id)
+        return event_id
+
     def query(self, *args: object, **kwargs: object) -> object:
         raise NotImplementedError
 
@@ -463,6 +472,7 @@ def test_full_session_creates_full_tree_never_calls_a_status_transition_tool(
         created = json.loads(_text(create_result))
         policy_id = cast("str", created["policy_id"])
         handle.policy = _PolicyFixture(id=policy_id, title=_POLICY_TITLE)
+        rig = installed_process_gateway().rig
 
         scaffold_result = _call_tool(
             "update-policy-draft",
@@ -551,22 +561,37 @@ def test_full_session_creates_full_tree_never_calls_a_status_transition_tool(
     assert control_body["control_type"] == _CONTROL_TYPE
 
     # --- (b) persisted content matches what was written, verified two ways:
-    # directly via the fake's own recorded `write_params` (the only place
-    # update-standard-draft's/update-control-draft's persisted VALUES are
+    # directly via the gateway log (the only place the update tools' persisted VALUES are
     # observable, Slices 3/4's own finding)...
-    scaffold_params = handle.write_params[1]["set_properties"]
-    assert scaffold_params == {"scope_in": _SCOPE_IN, "scope_out": _SCOPE_OUT}
-    policy_loop_params = [wp["set_properties"] for wp in handle.write_params[2:7]]
-    assert policy_loop_params == [{key: value} for key, value in _POLICY_LOOP_FIELDS]
+    # Since issue #211 every Policy, Standard and Control write went through the gateway. Group
+    # order: [0] create-policy-draft, [1:7] the six Policy updates, [7] add-standard, [8:14] the
+    # Standard updates (the sixth restates the default `implementation_status`, so it logs
+    # nothing), then add-control and the Control updates (the last restates the default as well).
+    groups = rig.store.groups
+    assert [e.content["op"] for e in groups[0].entries] == ["upsert_node"]
+    policy_groups = [
+        cast("dict[str, object]", group.entries[0].content["properties"]) for group in groups[1:7]
+    ]
+    assert policy_groups[0] == {"scope_in": _SCOPE_IN, "scope_out": _SCOPE_OUT}
+    assert policy_groups[1:] == [{key: value} for key, value in _POLICY_LOOP_FIELDS]
+    assert [e.content["op"] for e in groups[7].entries] == ["upsert_node", "upsert_edge"]
 
-    standard_loop_params = [wp["set_properties"] for wp in handle.write_params[8:14]]
-    assert standard_loop_params == [dict(fields) for fields in _STANDARD_LOOP_CALLS]
-    first_standard_params = cast("dict[str, object]", standard_loop_params[0])
-    persisted_procedure = cast("str", first_standard_params["procedure"])
+    standard_loop_params = [
+        cast("dict[str, object]", group.entries[0].content["properties"])
+        for group in groups[8 : 8 + len(_STANDARD_LOOP_CALLS) - 1]
+    ]
+    assert standard_loop_params == [dict(fields) for fields in _STANDARD_LOOP_CALLS[:-1]]
+    persisted_procedure = cast("str", standard_loop_params[0]["procedure"])
     assert persisted_procedure.endswith(f"Sources: {_SOURCE_URL}")
 
-    control_loop_params = [wp["set_properties"] for wp in handle.write_params[15:21]]
-    assert control_loop_params == [dict(fields) for fields in _CONTROL_LOOP_CALLS]
+    control_add = 8 + len(_STANDARD_LOOP_CALLS) - 1
+    assert [e.content["op"] for e in groups[control_add].entries] == ["upsert_node", "upsert_edge"]
+    control_loop_params = [
+        cast("dict[str, object]", group.entries[0].content["properties"])
+        for group in groups[control_add + 1 :]
+    ]
+    assert control_loop_params == [dict(fields) for fields in _CONTROL_LOOP_CALLS[:-1]]
+    assert handle.write_queries == []  # no direct write is left
 
     # ...and via the final `cypher` call's own scripted-but-consistent
     # response, proving the Process's "re-read via cypher" step is a real,
