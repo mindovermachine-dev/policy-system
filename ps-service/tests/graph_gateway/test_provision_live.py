@@ -36,7 +36,10 @@ pytestmark = pytest.mark.postgres_live
 
 _TABLES = ("groups", "entries", "payloads", "checkpoints", "applied_markers")
 _IMMUTABLE_TABLES = ("groups", "entries", "payloads", "checkpoints")
-_MIGRATION_ROW = ("graph_gateway", "0001_graph_mutation_log.sql")
+_MIGRATION_ROWS = [
+    ("graph_gateway", "0001_graph_mutation_log.sql"),
+    ("graph_gateway", "0002_group_swap_set.sql"),
+]
 _HASH_ABC = "sha256:" + "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 _HASH_EMPTY = "sha256:" + "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -99,7 +102,7 @@ def test_provisioning_on_empty_ps_state_creates_five_tables_and_records_migratio
 
     applied = provision_graph_log(fresh_provisioned)
 
-    assert applied.graph_gateway_applied == [_MIGRATION_ROW[1]]
+    assert applied.graph_gateway_applied == [name for _, name in _MIGRATION_ROWS]
     with fresh_provisioned.as_state() as conn:
         tables = conn.execute(
             "SELECT table_name FROM information_schema.tables "
@@ -109,7 +112,7 @@ def test_provisioning_on_empty_ps_state_creates_five_tables_and_records_migratio
             "SELECT component, filename FROM ps_schema_migrations WHERE component = 'graph_gateway'"
         ).fetchall()
     assert [row[0] for row in tables] == sorted(_TABLES)
-    assert recorded == [_MIGRATION_ROW]
+    assert recorded == _MIGRATION_ROWS
 
 
 def test_second_provisioning_run_applies_nothing(fresh_provisioned: Provisioned) -> None:

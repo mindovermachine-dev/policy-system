@@ -39,6 +39,7 @@ from ps_service.graph_gateway.models import (
     DigestCheckpoint,
     GraphLogEntry,
     GraphLogGroup,
+    SwapGroupRef,
 )
 from ps_service.graph_gateway.payloads import (
     decode_embedding,
@@ -75,8 +76,10 @@ _LOCK_GRAPH = "SELECT pg_advisory_xact_lock(hashtext(%s))"
 _CURRENT_ISOLATION = "SELECT current_setting('transaction_isolation')"
 _LAST_POSITION = "SELECT coalesce(max(position), 0) FROM graph_log.entries WHERE graph = %s"
 _INSERT_GROUP = """
-INSERT INTO graph_log.groups (graph, first_position, last_position, audit_event_id)
-VALUES (%(graph)s, %(first_position)s, %(last_position)s, %(audit_event_id)s)
+INSERT INTO graph_log.groups (graph, first_position, last_position, audit_event_id, swap_set_id)
+VALUES (
+    %(graph)s, %(first_position)s, %(last_position)s, %(audit_event_id)s, %(swap_set_id)s
+)
 RETURNING group_id
 """
 _INSERT_PAYLOAD = """
@@ -139,10 +142,23 @@ ORDER BY position DESC
 LIMIT 1
 """
 _SELECT_GROUPS_BY_AUDIT_EVENT = """
-SELECT group_id, graph, first_position, last_position
+SELECT group_id, graph, first_position, last_position, swap_set_id
 FROM graph_log.groups
 WHERE audit_event_id = %s
 ORDER BY graph, first_position
+"""
+_SELECT_SWAP_SET = """
+SELECT group_id, graph, first_position, last_position, swap_set_id
+FROM graph_log.groups
+WHERE swap_set_id = %s
+ORDER BY graph
+"""
+_SELECT_PENDING_SWAP_GROUP = """
+SELECT group_id, graph, first_position, last_position, swap_set_id
+FROM graph_log.groups
+WHERE graph = %s AND swap_set_id IS NOT NULL AND last_position > %s
+ORDER BY first_position
+LIMIT 1
 """
 _SELECT_ENTRIES_OF_GROUPS = (
     _ENTRY_SELECT + "WHERE e.group_id = ANY(%s) ORDER BY e.graph, e.position"
@@ -188,6 +204,30 @@ class GraphLogStore(Protocol):
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached (sanitized message).
             GraphLogPersistenceError: the append or the commit failed; nothing was committed.
+        """
+        ...
+
+    def append_groups_standalone(
+        self,
+        groups: tuple[GraphLogGroupDraft, ...],
+        *,
+        audit_event_id: str | None = None,
+        as_swap_set: bool = False,
+    ) -> tuple[AppendedGroup, ...]:
+        """Open a connection, append one group per graph in ONE transaction and commit.
+
+        All of the groups are linked to `audit_event_id` and commit together or not at all (a
+        failure on any group rolls every group back). `as_swap_set` makes the store mint one
+        `swap_set_id` and record it on every group (each returned `AppendedGroup` carries it),
+        which is what lets recovery find the legs of a swap set again. `groups` must name distinct
+        graphs in ascending name order: the per-graph advisory locks are taken in that order,
+        which is what keeps two overlapping sets from deadlocking. The appended groups come back
+        in that order.
+
+        Raises:
+            ValueError: `groups` is empty, names a graph twice or is not in ascending order.
+            GraphLogUnavailableError: `ps_state` could not be reached (sanitized message).
+            GraphLogPersistenceError: an append or the commit failed; nothing was committed.
         """
         ...
 
@@ -242,6 +282,27 @@ class GraphLogStore(Protocol):
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
             ValueError: `audit_event_id` is not a UUID string.
+        """
+        ...
+
+    def read_swap_set(self, swap_set_id: uuid.UUID) -> tuple[SwapGroupRef, ...]:
+        """Return the groups that were appended as legs of one swap set, ordered by graph.
+
+        Empty when no group carries the id. Read-only: it is what recovery asks to learn which
+        graphs a pending swap group belongs with.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+        """
+        ...
+
+    def read_pending_swap_group(self, graph: str, applied_position: int) -> SwapGroupRef | None:
+        """Return the first swap-set group of `graph` not applied through `applied_position`.
+
+        `None` when every swap group of the graph is applied (or it has none). Read-only.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
         """
         ...
 
@@ -360,6 +421,18 @@ def _entry_from_record(record: tuple[object, ...]) -> GraphLogEntry:
     )
 
 
+def _swap_ref_from_record(record: tuple[object, ...]) -> SwapGroupRef:
+    """Map one swap-set group row (fixed column order) to a model."""
+    group_id, graph, first_position, last_position, swap_set_id = record
+    return SwapGroupRef(
+        group_id=cast("uuid.UUID", group_id),
+        graph=cast("str", graph),
+        first_position=cast("int", first_position),
+        last_position=cast("int", last_position),
+        swap_set_id=cast("uuid.UUID", swap_set_id),
+    )
+
+
 def _stored_applied_position(cur: psycopg.Cursor[TupleRow], graph: str) -> int:
     """Read the graph's stored applied position on `cur`; 0 when it has no marker."""
     cur.execute(_SELECT_APPLIED_POSITION, (graph,))
@@ -428,6 +501,43 @@ class PsycopgGraphLogStore:
         self._emit_append(group, linked_event, outcome="success", appended=appended, writes=writes)
         return appended
 
+    def append_groups_standalone(
+        self,
+        groups: tuple[GraphLogGroupDraft, ...],
+        *,
+        audit_event_id: str | None = None,
+        as_swap_set: bool = False,
+    ) -> tuple[AppendedGroup, ...]:
+        """Append one group per graph in one transaction (see `GraphLogStore`)."""
+        graphs = [group.graph for group in groups]
+        if not groups or graphs != sorted(set(graphs)):
+            message = "groups must name distinct graphs in ascending name order"
+            raise ValueError(message)
+        linked_event = _parse_audit_event_id(audit_event_id)
+        swap_set_id = uuid.uuid4() if as_swap_set else None
+        conn = self._connect()
+        appended: list[tuple[AppendedGroup, _PayloadWrites]] = []
+        failing = groups[0]
+        try:
+            with conn, conn.cursor() as cur:
+                for group in groups:
+                    failing = group
+                    appended.append(
+                        self._append_in_transaction(cur, group, linked_event, swap_set_id)
+                    )
+        except GraphLogPersistenceError as exc:
+            self._emit_append(failing, linked_event, outcome="failure", error=exc)
+            raise
+        except psycopg.Error as exc:  # raised by the commit itself (deferred database checks)
+            failure = GraphLogPersistenceError(_APPEND_FAILED_MESSAGE)
+            failure.__cause__ = exc
+            self._emit_append(failing, linked_event, outcome="failure", error=failure)
+            raise failure from exc
+        mark_healthy(STATE_POSTGRES)
+        for group, (done, writes) in zip(groups, appended, strict=True):
+            self._emit_append(group, linked_event, outcome="success", appended=done, writes=writes)
+        return tuple(done for done, _ in appended)
+
     def read_entries(
         self, graph: str, *, after_position: int = 0, limit: int | None = None
     ) -> tuple[GraphLogEntry, ...]:
@@ -487,11 +597,31 @@ class PsycopgGraphLogStore:
                     last_position=cast("int", last_position),
                     audit_event_id=audit_event_id,
                     entries=tuple(entries_by_group.get(cast("uuid.UUID", group_id), ())),
+                    swap_set_id=cast("uuid.UUID | None", swap_set_id),
                 )
-                for group_id, graph, first_position, last_position in group_records
+                for group_id, graph, first_position, last_position, swap_set_id in group_records
             )
 
         return self._read(select_groups)
+
+    def read_swap_set(self, swap_set_id: uuid.UUID) -> tuple[SwapGroupRef, ...]:
+        """Read the legs of one swap set (see `GraphLogStore.read_swap_set`)."""
+
+        def select_legs(cur: psycopg.Cursor[TupleRow]) -> tuple[SwapGroupRef, ...]:
+            cur.execute(_SELECT_SWAP_SET, (swap_set_id,))
+            return tuple(_swap_ref_from_record(record) for record in cur.fetchall())
+
+        return self._read(select_legs)
+
+    def read_pending_swap_group(self, graph: str, applied_position: int) -> SwapGroupRef | None:
+        """Read the first unapplied swap group of `graph` (see `GraphLogStore`)."""
+
+        def select_group(cur: psycopg.Cursor[TupleRow]) -> SwapGroupRef | None:
+            cur.execute(_SELECT_PENDING_SWAP_GROUP, (graph, applied_position))
+            record = cur.fetchone()
+            return None if record is None else _swap_ref_from_record(record)
+
+        return self._read(select_group)
 
     def read_applied_position(self, graph: str) -> int:
         """Read the graph's applied position (see `GraphLogStore.read_applied_position`)."""
@@ -619,13 +749,14 @@ class PsycopgGraphLogStore:
         cur: psycopg.Cursor[TupleRow],
         group: GraphLogGroupDraft,
         audit_event_id: uuid.UUID | None,
+        swap_set_id: uuid.UUID | None = None,
     ) -> tuple[AppendedGroup, _PayloadWrites]:
         """Build the payloads, take the graph lock, then insert everything under a savepoint."""
         prepared = tuple(_prepare_entry(entry) for entry in group.entries)
         try:
             self._lock_graph_in_read_committed_transaction(cur, group.graph)
             with cur.connection.transaction():
-                return self._insert_group(cur, group.graph, prepared, audit_event_id)
+                return self._insert_group(cur, group.graph, prepared, audit_event_id, swap_set_id)
         except psycopg.Error as exc:
             raise GraphLogPersistenceError(_APPEND_FAILED_MESSAGE) from exc
 
@@ -647,6 +778,7 @@ class PsycopgGraphLogStore:
         graph: str,
         entries: tuple[_PreparedEntry, ...],
         audit_event_id: uuid.UUID | None,
+        swap_set_id: uuid.UUID | None,
     ) -> tuple[AppendedGroup, _PayloadWrites]:
         """Insert the group row, then its entries at the graph's next contiguous positions."""
         cur.execute(_LAST_POSITION, (graph,))
@@ -660,6 +792,7 @@ class PsycopgGraphLogStore:
                 "first_position": first_position,
                 "last_position": last_position,
                 "audit_event_id": audit_event_id,
+                "swap_set_id": swap_set_id,
             },
         )
         group_id = cast("uuid.UUID", cast("TupleRow", cur.fetchone())[0])
@@ -673,6 +806,7 @@ class PsycopgGraphLogStore:
             graph=graph,
             first_position=first_position,
             last_position=last_position,
+            swap_set_id=swap_set_id,
         )
         writes = _PayloadWrites(
             referenced=len(newly_stored), deduplicated=newly_stored.count(False)

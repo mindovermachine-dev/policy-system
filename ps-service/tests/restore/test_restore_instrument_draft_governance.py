@@ -1,20 +1,17 @@
-"""Tests for `restore_instrument`'s draft-governance import (issue #183).
+"""Tests for the restore's draft-governance import (issue #183).
 
-Restoring an internal curated instrument imports its Policy/Standard/Control
-tree as `draft`, owned by the restoring caller. This replaces the restore
-path's earlier Policy *convergence* (issue #54, S6, AC-BI-021): a draft must
-never converge onto an existing canonical Policy, because its draft
-Standards/Controls would then hang under a possibly-approved parent. Since
-issue #227 the live ingestion-to-merge path (`merge_baseline_graph`) imports
-through the same shared function (`governance_import.import_draft_governance`);
-that it does is proven in `tests/restore/test_restore_merge_governance_parity.py`
-and `tests/company_merge/test_merge_internal_seed_draft_governance.py`.
+Restoring an internal curated instrument imports its Policy/Standard/Control tree as `draft`,
+owned by the restoring caller. This replaces the restore path's earlier Policy *convergence*
+(issue #54, S6, AC-BI-021): a draft must never converge onto an existing canonical Policy,
+because its draft Standards/Controls would then hang under a possibly-approved parent. Since issue
+#227 the live ingestion-to-merge path (`merge_baseline_graph`) imports through the same shared
+function (`governance_import.import_draft_governance`); that it does is proven in
+`tests/restore/test_restore_merge_governance_parity.py` and
+`tests/company_merge/test_merge_internal_seed_draft_governance.py`.
 
-`_run_baseline_merge` is driven directly against scripted fakes mirroring
-`tests/company_merge/test_merge_baseline_graph.py`'s conventions (duplicated
-rather than imported cross-directory, matching this suite's per-component fake
-convention -- see `tests/restore/conftest.py`'s own docstring), plus a
-`_FakeDb` satisfying `_run_baseline_merge`'s `db.select_graph(name)` call.
+Since #214 the restore's `policy_system` leg is a tuple of gateway primitives built from reads of
+the live graph (`merge_primitives.build_policy_system_leg`), so the expectations are asserted on
+primitives. The live graph is a hand-written fake satisfying `GraphHandle` structurally.
 """
 
 from __future__ import annotations
@@ -23,195 +20,88 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from ps_service.company_merge.governance_import import GovernanceImport
+from ps_service.domain_mapper.identity import policy_id
+from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
+from ps_service.graph_gateway.models import UpsertEdge, UpsertNode
+from ps_service.restore.errors import RestoreOwnerRequiredError
+from ps_service.restore.merge_primitives import PolicySystemLeg, build_policy_system_leg
+from ps_service.restore.restore_instrument import restore_instrument
+from restore._fixtures import build_restore_artifact
+from restore._gateway_fakes import UNUSED_EVENT_ID, ScriptedLive, never_open_gateway
+
 if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
-
-    from ps_service.company_merge.falkordb_client import GraphHandle
-    from ps_service.logging.emitter import LogEmitter
-
-from dataclasses import dataclass
-
-import ps_service.restore.restore_instrument as restore_instrument_module
-from ps_service.domain_mapper.identity import policy_id
-from ps_service.export.models import SerializedGraph, SerializedNode
-from ps_service.restore.errors import RestoreOwnerRequiredError
-from restore._fixtures import build_restore_artifact
 
 _THRESHOLD = 0.85
 _OWNER = ("alice@example.com", "https://idp.example/")
 
 
-class _FakeQueryResult:
-    """Satisfies `GraphQueryResult` structurally."""
-
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
-
-
-@dataclass
-class _FakeNode:
-    properties: dict[str, object]
-
-
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
-class _FakeBaselineGraph:
-    """Answers every `read_baseline_graph` query; only governance content is scripted.
-
-    Policy/Standard/Control are answered for the restore path's unfiltered
-    `MATCH (n:<Label>) RETURN n` read with full-property node objects.
-    """
-
-    def __init__(
-        self,
-        *,
-        regulatory_instrument_properties: dict[str, object],
-        capability_rows: list[object],
-        policy_nodes: list[dict[str, object]],
-        standard_nodes: list[dict[str, object]],
-        control_nodes: list[dict[str, object]],
-        governed_by_rows: list[object],
-        supported_by_rows: list[object],
-        implemented_by_rows: list[object],
-    ) -> None:
-        self._regulatory_instrument_properties = regulatory_instrument_properties
-        self._capability_rows: list[object] = [
-            [*cast("list[object]", row), None] if len(cast("list[object]", row)) == 4 else row
-            for row in capability_rows
-        ]
-        self._nodes = {
-            "Policy": policy_nodes,
-            "Standard": standard_nodes,
-            "Control": control_nodes,
-        }
-        self._governed_by_rows = governed_by_rows
-        self._supported_by_rows = supported_by_rows
-        self._implemented_by_rows = implemented_by_rows
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        del params
-        for label, nodes in self._nodes.items():
-            if q == f"MATCH (n:{label}) RETURN n":
-                return _FakeQueryResult([[_FakeNode(dict(node))] for node in nodes])
-        if "[e:DEFINES]" in q or "[e:EXPRESSES]" in q:
-            return _FakeQueryResult([])
-        if "[:HAS]" in q or "[:SATISFIED_BY]" in q or "[:REQUIRES]" in q:
-            return _FakeQueryResult([])
-        if "[:GOVERNED_BY]" in q:
-            return _FakeQueryResult(self._governed_by_rows)
-        if "[:SUPPORTED_BY]" in q:
-            return _FakeQueryResult(self._supported_by_rows)
-        if "[:IMPLEMENTED_BY]" in q:
-            return _FakeQueryResult(self._implemented_by_rows)
-        if "(n:PracticeArea) RETURN" in q or "(n:RiskPath) RETURN" in q:
-            return _FakeQueryResult([])
-        if "[:COVERS]" in q or "[:OWNS]" in q or "[:MITIGATED_BY]" in q or "[:VERIFIED_BY]" in q:
-            return _FakeQueryResult([])
-        if "n.role_id" in q:
-            return _FakeQueryResult([])  # Requirement
-        if "n.description" in q:
-            return _FakeQueryResult(self._capability_rows)
-        if "n.name, n.confidence" in q:
-            return _FakeQueryResult([])  # Role
-        if "(n:Obligation) RETURN" in q:
-            return _FakeQueryResult([])
-        if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
-            return _FakeQueryResult([[_FakeNode(self._regulatory_instrument_properties)]])
-        raise AssertionError(f"unexpected query issued: {q!r}")
-
-
-class _FakeSingleTenantGraph:
-    """Answers the Capability/Policy index reads from pre-seeded rows; records every call."""
-
-    def __init__(
-        self,
-        *,
-        capability_rows: list[object] | None = None,
-        policy_rows: list[object] | None = None,
-    ) -> None:
-        self._capability_rows = capability_rows or []
-        self._policy_rows = policy_rows or []
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        if "MERGED_INTO" in q or "MergedObligation" in q:  # issue #190: no tombstones/markers
-            return _FakeQueryResult([])
-        if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
-            return _FakeQueryResult([list(cast("list[object]", r)) for r in self._capability_rows])
-        if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
-            return _FakeQueryResult([list(cast("list[object]", r)) for r in self._policy_rows])
-        return _FakeQueryResult([[0]])  # any write
-
-    def calls_matching(self, substring: str) -> list[_RecordedCall]:
-        return [call for call in self.calls if substring in call.query]
-
-    def writes(self) -> list[_RecordedCall]:
-        read_markers = ("RETURN n.id, n.name, n.embedding", "RETURN n.id, n.title, n.embedding")
-        return [c for c in self.calls if not any(m in c.query for m in read_markers)]
-
-
-class _FakeDb:
-    """A plain name -> `GraphHandle` lookup for `_run_baseline_merge`'s `select_graph` calls."""
-
-    def __init__(self, graphs: dict[str, GraphHandle]) -> None:
-        self._graphs = graphs
-
-    def select_graph(self, name: str) -> GraphHandle:
-        return self._graphs[name]
-
-
 def _governance_baseline(
     *, instrument_id: str, capability_id_value: str, policy_id_value: str, policy_title: str
-) -> _FakeBaselineGraph:
+) -> SerializedGraph:
     """One Capability, one Policy, one Standard, one Control, fully wired (internal-sourced)."""
     standard_id_value = f"std_{policy_id_value}_v1"
     control_id_value = f"ctrl_{standard_id_value}_manual"
-    return _FakeBaselineGraph(
-        regulatory_instrument_properties={"id": instrument_id, "title": "Engineering Practices"},
-        capability_rows=[[capability_id_value, "Engineering Review Capability", 0.8, None]],
-        policy_nodes=[{"id": policy_id_value, "title": policy_title, "status": "draft"}],
-        standard_nodes=[{"id": standard_id_value, "title": "Code Review Standard"}],
-        control_nodes=[{"id": control_id_value, "title": "Peer Review", "type": "manual"}],
-        governed_by_rows=[[capability_id_value, policy_id_value]],
-        supported_by_rows=[[policy_id_value, standard_id_value]],
-        implemented_by_rows=[[standard_id_value, control_id_value]],
-    )
 
+    def edge(kind: str, source: tuple[str, str], target: tuple[str, str]) -> SerializedEdge:
+        return SerializedEdge(kind, source[0], source[1], target[0], target[1], {})
 
-def _run_merge(
-    baseline: _FakeBaselineGraph,
-    snapshot: _FakeSingleTenantGraph,
-    *,
-    instrument_id: str,
-    emitter: LogEmitter,
-    policy_embeddings: dict[str, tuple[float, ...]] | None = None,
-    owner: tuple[str, str] | None,
-) -> dict[str, int]:
-    baseline_staged_name = "engprac_baseline__restoring__token"
-    snapshot_name = "policy_system__restoring__token"
-    fake_db = cast("FalkorDB", _FakeDb({baseline_staged_name: baseline, snapshot_name: snapshot}))
-    return restore_instrument_module._run_baseline_merge(  # pyright: ignore[reportPrivateUsage]
-        fake_db,
-        baseline_staged_name,
-        instrument_id,
-        {},
-        _THRESHOLD,
-        snapshot_name,
-        emitter,
-        restore_instrument_module.GovernanceImport(
-            owner=owner, policy_embeddings=policy_embeddings or {}
+    return SerializedGraph(
+        nodes=(
+            SerializedNode(
+                "RegulatoryInstrument", {"id": instrument_id, "title": "Engineering Practices"}
+            ),
+            SerializedNode(
+                "Capability",
+                {
+                    "id": capability_id_value,
+                    "name": "Engineering Review Capability",
+                    "confidence": 0.8,
+                },
+            ),
+            SerializedNode(
+                "Policy", {"id": policy_id_value, "title": policy_title, "status": "draft"}
+            ),
+            SerializedNode("Standard", {"id": standard_id_value, "title": "Code Review Standard"}),
+            SerializedNode(
+                "Control", {"id": control_id_value, "title": "Peer Review", "type": "manual"}
+            ),
+        ),
+        edges=(
+            edge("GOVERNED_BY", ("Capability", capability_id_value), ("Policy", policy_id_value)),
+            edge("SUPPORTED_BY", ("Policy", policy_id_value), ("Standard", standard_id_value)),
+            edge("IMPLEMENTED_BY", ("Standard", standard_id_value), ("Control", control_id_value)),
         ),
     )
+
+
+def _build(
+    baseline: SerializedGraph,
+    live: ScriptedLive,
+    *,
+    instrument_id: str,
+    emitter: object,
+    policy_embeddings: dict[str, tuple[float, ...]] | None = None,
+    owner: tuple[str, str] | None,
+) -> PolicySystemLeg:
+    return build_policy_system_leg(
+        baseline,
+        instrument_id=instrument_id,
+        live=live,
+        governance=GovernanceImport(owner=owner, policy_embeddings=policy_embeddings or {}),
+        similarity_threshold=_THRESHOLD,
+        emitter=emitter,  # pyright: ignore[reportArgumentType] -- the make_emitter fixture's emitter
+    )
+
+
+def _nodes(leg: PolicySystemLeg, label: str) -> list[UpsertNode]:
+    return [p for p in leg.primitives if isinstance(p, UpsertNode) and p.label == label]
+
+
+def _edges(leg: PolicySystemLeg, edge_type: str) -> list[UpsertEdge]:
+    return [p for p in leg.primitives if isinstance(p, UpsertEdge) and p.type == edge_type]
 
 
 def test_restore_mints_draft_policy_owned_by_the_caller_instead_of_converging(
@@ -235,35 +125,34 @@ def test_restore_mints_draft_policy_owned_by_the_caller_instead_of_converging(
     )
     # An existing Policy carrying the SAME vector as the incoming one -- under the old
     # convergence path this would have resolved the incoming Policy onto it.
-    snapshot = _FakeSingleTenantGraph(
-        policy_rows=[[existing_policy_id, "Engineering Practices Policy", [1.0, 0.0]]]
+    live = ScriptedLive(
+        existing={"Policy": {existing_policy_id}},
+        answer=lambda q, _params: (
+            [[existing_policy_id, "Engineering Practices Policy", [1.0, 0.0]]]
+            if "(n:Policy) RETURN n.id, n.title, n.embedding" in q
+            else None
+        ),
     )
 
-    _run_merge(
+    leg = _build(
         baseline,
-        snapshot,
+        live,
         instrument_id=instrument_id,
         emitter=emitter,
         policy_embeddings={incoming_policy_id: (1.0, 0.0)},
         owner=_OWNER,
     )
 
-    policy_mints = snapshot.calls_matching("MERGE (n:Policy {id: $id}) ON CREATE SET")
-    assert len(policy_mints) == 1
-    assert policy_mints[0].params is not None
-    assert policy_mints[0].params["id"] == incoming_policy_id
-    properties = cast("dict[str, object]", policy_mints[0].params["properties"])
-    assert properties["status"] == "draft"
-    assert properties["owner_subject"] == _OWNER[0]
-    assert properties["owner_issuer"] == _OWNER[1]
-
-    governed_by = snapshot.calls_matching("[:GOVERNED_BY]")
-    assert len(governed_by) == 1
-    assert governed_by[0].params is not None
-    assert governed_by[0].params["target_id"] == incoming_policy_id, (
+    (policy,) = _nodes(leg, "Policy")
+    assert policy.id == incoming_policy_id
+    assert policy.properties["status"] == "draft"
+    assert policy.properties["owner_subject"] == _OWNER[0]
+    assert policy.properties["owner_issuer"] == _OWNER[1]
+    (governed_by,) = _edges(leg, "GOVERNED_BY")
+    assert governed_by.target.id == incoming_policy_id, (
         "the governance edge must target the draft Policy, not the existing one it resembles"
     )
-    assert not snapshot.calls_matching("(n:Policy) RETURN n.id, n.title, n.embedding"), (
+    assert not [q for q in live.queries if "(n:Policy) RETURN n.id, n.title, n.embedding" in q], (
         "restore must not read the Policy index at all -- there is no Policy dedup"
     )
 
@@ -274,24 +163,22 @@ def test_restore_writes_standard_and_control_as_draft_and_wires_their_edges(
     """AC-BI-003/006: the whole tree lands as draft with its SUPPORTED_BY/IMPLEMENTED_BY edges."""
     emitter, _log_path = make_emitter()
     instrument_id = "ENGPRAC-3.0"
-    pol = policy_id("Access Policy")
     baseline = _governance_baseline(
         instrument_id=instrument_id,
         capability_id_value="cap_access",
-        policy_id_value=pol,
+        policy_id_value=policy_id("Access Policy"),
         policy_title="Access Policy",
     )
-    snapshot = _FakeSingleTenantGraph()
 
-    _run_merge(baseline, snapshot, instrument_id=instrument_id, emitter=emitter, owner=_OWNER)
+    leg = _build(
+        baseline, ScriptedLive(), instrument_id=instrument_id, emitter=emitter, owner=_OWNER
+    )
 
     for label in ("Standard", "Control"):
-        mints = snapshot.calls_matching(f"MERGE (n:{label} {{id: $id}}) ON CREATE SET")
-        assert len(mints) == 1
-        assert mints[0].params is not None
-        assert cast("dict[str, object]", mints[0].params["properties"])["status"] == "draft"
-    assert len(snapshot.calls_matching("[:SUPPORTED_BY]")) == 1
-    assert len(snapshot.calls_matching("[:IMPLEMENTED_BY]")) == 1
+        (node,) = _nodes(leg, label)
+        assert node.properties["status"] == "draft"
+    assert len(_edges(leg, "SUPPORTED_BY")) == 1
+    assert len(_edges(leg, "IMPLEMENTED_BY")) == 1
 
 
 def test_restore_returns_governance_counts_for_the_audit_entry(make_emitter: MakeEmitter) -> None:
@@ -305,24 +192,20 @@ def test_restore_returns_governance_counts_for_the_audit_entry(make_emitter: Mak
         policy_title="Access Policy",
     )
 
-    counts = _run_merge(
-        baseline,
-        _FakeSingleTenantGraph(),
-        instrument_id=instrument_id,
-        emitter=emitter,
-        owner=_OWNER,
+    leg = _build(
+        baseline, ScriptedLive(), instrument_id=instrument_id, emitter=emitter, owner=_OWNER
     )
 
-    assert counts["governance_policies"] == 1
-    assert counts["governance_standards"] == 1
-    assert counts["governance_controls"] == 1
-    assert counts["governance_status_overridden"] == 0
+    assert leg.counts["governance_policies"] == 1
+    assert leg.counts["governance_standards"] == 1
+    assert leg.counts["governance_controls"] == 1
+    assert leg.counts["governance_status_overridden"] == 0
 
 
-def test_restore_with_governance_content_and_no_owner_is_refused_before_any_write(
+def test_restore_with_governance_content_and_no_owner_is_refused_before_any_read(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Ownerless drafts are never created: the merge refuses before touching the snapshot."""
+    """Ownerless drafts are never created: the build refuses before reading the live graph."""
     emitter, _log_path = make_emitter()
     instrument_id = "ENGPRAC-3.0"
     baseline = _governance_baseline(
@@ -331,12 +214,12 @@ def test_restore_with_governance_content_and_no_owner_is_refused_before_any_writ
         policy_id_value=policy_id("Access Policy"),
         policy_title="Access Policy",
     )
-    snapshot = _FakeSingleTenantGraph()
+    live = ScriptedLive()
 
     with pytest.raises(RestoreOwnerRequiredError):
-        _run_merge(baseline, snapshot, instrument_id=instrument_id, emitter=emitter, owner=None)
+        _build(baseline, live, instrument_id=instrument_id, emitter=emitter, owner=None)
 
-    assert snapshot.calls == []
+    assert live.queries == []
 
 
 def test_external_baseline_restore_needs_no_owner_and_writes_no_governance(
@@ -345,33 +228,30 @@ def test_external_baseline_restore_needs_no_owner_and_writes_no_governance(
     """AC-BI-007: an external-sourced restore (no Policy nodes) is a no-op for the whole pass."""
     emitter, _log_path = make_emitter()
     instrument_id = "RT60-1.0"
-    baseline = _FakeBaselineGraph(
-        regulatory_instrument_properties={"id": instrument_id, "title": "RT60"},
-        capability_rows=[["cap_no_governance", "Some Capability", 0.8, None]],
-        policy_nodes=[],
-        standard_nodes=[],
-        control_nodes=[],
-        governed_by_rows=[],
-        supported_by_rows=[],
-        implemented_by_rows=[],
+    baseline = SerializedGraph(
+        nodes=(
+            SerializedNode("RegulatoryInstrument", {"id": instrument_id, "title": "RT60"}),
+            SerializedNode(
+                "Capability",
+                {"id": "cap_no_governance", "name": "Some Capability", "confidence": 0.8},
+            ),
+        ),
+        edges=(),
     )
-    snapshot = _FakeSingleTenantGraph()
 
-    counts = _run_merge(
-        baseline, snapshot, instrument_id=instrument_id, emitter=emitter, owner=None
-    )
+    leg = _build(baseline, ScriptedLive(), instrument_id=instrument_id, emitter=emitter, owner=None)
 
     assert not any(
-        "Policy" in c.query or "Standard" in c.query or "Control" in c.query
-        for c in snapshot.writes()
+        isinstance(p, UpsertNode) and p.label in {"Policy", "Standard", "Control"}
+        for p in leg.primitives
     )
-    assert counts["governance_policies"] == 0
+    assert leg.counts["governance_policies"] == 0
 
 
 def test_restore_instrument_refuses_governance_content_without_an_owner_before_the_graph(
     make_emitter: MakeEmitter,
 ) -> None:
-    """The owner check runs before staging: a rejected restore never touches FalkorDB."""
+    """The owner check runs before the gateway is opened: a rejected restore touches no graph."""
     baseline = SerializedGraph(
         nodes=(
             SerializedNode(label="RegulatoryInstrument", properties={"id": "ENGPRAC-1.0"}),
@@ -393,12 +273,14 @@ def test_restore_instrument_refuses_governance_content_without_an_owner_before_t
             raise AssertionError(f"the graph must not be touched, but .{name} was accessed")
 
     with pytest.raises(RestoreOwnerRequiredError):
-        restore_instrument_module.restore_instrument(
+        restore_instrument(
             artifact,
             db=cast("FalkorDB", _UntouchableDb()),
             single_tenant_graph_name="policy_system",
             similarity_threshold=_THRESHOLD,
             actor="tester",
+            open_gateway=never_open_gateway,
+            audit_event_id=UNUSED_EVENT_ID,
             emitter=emitter,
             owner=None,
         )

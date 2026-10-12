@@ -19,11 +19,13 @@ from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.catalog import CuratedInstrumentEntry
 from ps_service.api.errors import (
     CuratedSourceUnavailableError,
+    GraphWriteUnavailableError,
     RestoreArtifactRejectedError,
     RestoreInstrumentIdAmbiguousError,
     RestoreInstrumentIdNotFoundError,
     RestoreStageFailedError,
 )
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.models import (
     CatalogRestorationRequest,
     RestorationManifestPayload,
@@ -46,10 +48,19 @@ from ps_service.curated_source.artifact_client import FetchedArtifact
 from ps_service.curated_source.errors import CuratedSourceFetchError
 from ps_service.curated_source.resolve import EffectiveCatalogSource
 from ps_service.export.models import InstrumentManifest
-from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
+from ps_service.restore.errors import (
+    ArtifactIntegrityError,
+    ArtifactSchemaVersionMismatchError,
+    RestoreApplyPendingError,
+    RestoreConcurrencyConflictError,
+    RestoreGraphWriteFailedError,
+    RestoreGroupRejectedError,
+)
 from ps_service.restore.models import RestoreOutcome
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from company_merge._fakes import MakeEmitter, ReadLines
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
@@ -106,6 +117,8 @@ class _Delegate:
         self._store = store
         self._error = error
         self.calls = 0
+        self.audit_event_ids: list[str] = []
+        self.opened_gateways: list[object] = []
 
     def __call__(
         self,
@@ -115,12 +128,17 @@ class _Delegate:
         single_tenant_graph_name: str,
         similarity_threshold: float,
         actor: str,
+        open_gateway: Callable[[], object] | None = None,
+        audit_event_id: str = "",
         emitter: object | None = None,
         source: str | None = None,
         owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
         del db, single_tenant_graph_name, similarity_threshold, actor, emitter, source, owner
         self.calls += 1
+        self.audit_event_ids.append(audit_event_id)
+        if open_gateway is not None:
+            self.opened_gateways.append(open_gateway())
         self._store.events.append("restore")
         if self._error is not None:
             raise self._error
@@ -155,6 +173,7 @@ def _catalog_deps(
         open_db=lambda _config: cast("FalkorDB", _Db()),
         single_tenant_graph_name=lambda _config: "policy_system",
         restore=delegate,
+        graph_write_access=graph_write_access,
     )
 
 
@@ -279,17 +298,19 @@ def test_from_catalog_restore_result_unchanged_when_the_terminal_row_cannot_be_w
 ) -> None:
     emitter, log_path = make_emitter()
     store = InMemoryAuditStore()
-    original_write = store.record_standalone
+    original_write = store.record_standalone_with_event_id
     writes = 0
 
-    def _flaky(**kwargs: object) -> None:
+    def _flaky(**kwargs: object) -> str:
         nonlocal writes
         writes += 1
         if writes == 2:
             raise AuditPostgresUnavailableError("host=db.internal")
-        original_write(**kwargs)  # pyright: ignore[reportArgumentType]
+        return original_write(**kwargs)  # pyright: ignore[reportArgumentType]
 
-    store.record_standalone = _flaky  # type: ignore[method-assign]  # pyright: ignore[reportAttributeAccessIssue]
+    # the opening row is written through this method directly, the terminal row through
+    # `record_standalone`, which delegates to it
+    store.record_standalone_with_event_id = _flaky  # type: ignore[method-assign]  # pyright: ignore[reportAttributeAccessIssue]
 
     result = _run_catalog(store, _Delegate(store), emitter=emitter)
 
@@ -388,6 +409,7 @@ def _upload_deps(delegate: _Delegate) -> RestoreDependencies:
         open_db=lambda _config: cast("FalkorDB", _Db()),
         single_tenant_graph_name=lambda _config: "policy_system",
         restore=delegate,
+        graph_write_access=graph_write_access,
     )
 
 
@@ -478,3 +500,124 @@ def test_upload_restore_stage_failure_writes_failed_row_with_a_reason_code_only(
 
     assert _statuses(store)[-1] == ("failed", "failed", "restore_failed")
     assert "/var/secret" not in json.dumps([row.details for row in store.rows])
+
+
+# --- issue #214: the audit linkage and the graph-write outcomes -----------------------------
+
+
+def test_the_opening_rows_event_id_reaches_the_restore_as_its_groups_anchor() -> None:
+    """AC-BI-012: the restore's graph groups are logged under the opening row's event id."""
+    store = InMemoryAuditStore()
+    delegate = _Delegate(store)
+
+    _run_upload(store, delegate)
+
+    assert delegate.audit_event_ids == [store.event_ids[0]]
+
+
+def test_the_restore_is_handed_the_process_gateway_to_open_lazily() -> None:
+    store = InMemoryAuditStore()
+    delegate = _Delegate(store)
+
+    _run_upload(store, delegate)
+
+    assert len(delegate.opened_gateways) == 1  # resolved by the restore, after verification
+
+
+@pytest.mark.parametrize("run", [_run_upload, _run_catalog], ids=["upload", "catalog"])
+def test_a_group_the_gateway_refused_is_audited_rejected_with_group_rejected(
+    run: Callable[..., object], make_emitter: MakeEmitter
+) -> None:
+    emitter, _ = make_emitter()
+    store = InMemoryAuditStore()
+
+    with pytest.raises(RestoreStageFailedError) as raised:
+        run(
+            store,
+            _Delegate(store, error=RestoreGroupRejectedError("FalkorDB write failed: no")),
+            emitter=emitter,
+        )
+
+    assert raised.value.stage == "graph_write"
+    assert _statuses(store) == [
+        ("applied", "started", None),
+        ("rejected", "rejected", "group_rejected"),
+    ]
+
+
+@pytest.mark.parametrize("run", [_run_upload, _run_catalog], ids=["upload", "catalog"])
+def test_a_commit_not_yet_applied_is_audited_applied_with_committed_apply_pending(
+    run: Callable[..., object], make_emitter: MakeEmitter
+) -> None:
+    emitter, _ = make_emitter()
+    store = InMemoryAuditStore()
+
+    with pytest.raises(RestoreStageFailedError) as raised:
+        run(store, _Delegate(store, error=RestoreApplyPendingError("committed")), emitter=emitter)
+
+    assert raised.value.stage == "graph_write"
+    assert _statuses(store) == [
+        ("applied", "started", None),
+        ("applied", "committed_apply_pending", None),
+    ]
+
+
+def test_an_unreachable_store_is_audited_failed_graph_unavailable(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+    store = InMemoryAuditStore()
+
+    with pytest.raises(RestoreStageFailedError):
+        _run_upload(
+            store, _Delegate(store, error=RestoreGraphWriteFailedError("down")), emitter=emitter
+        )
+
+    assert _statuses(store)[-1] == ("failed", "failed", "graph_unavailable")
+
+
+def test_no_gateway_installed_is_a_503_error_audited_failed_graph_unavailable() -> None:
+    store = InMemoryAuditStore()
+
+    with pytest.raises(GraphWriteUnavailableError):
+        _run_upload(
+            store, _Delegate(store, error=GraphWriteUnavailableError("graph writes unavailable"))
+        )
+
+    assert _statuses(store) == [
+        ("applied", "started", None),
+        ("failed", "failed", "graph_unavailable"),
+    ]
+
+
+def test_the_concurrency_conflict_is_still_audited_failed_concurrent_restore(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+    store = InMemoryAuditStore()
+
+    with pytest.raises(RestoreStageFailedError):
+        _run_upload(
+            store,
+            _Delegate(store, error=RestoreConcurrencyConflictError("3 attempts")),
+            emitter=emitter,
+        )
+
+    assert _statuses(store)[-1] == ("failed", "failed", "concurrent_restore")
+
+
+def test_the_rejected_and_pending_rows_hold_no_message_or_gateway_detail(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+    store = InMemoryAuditStore()
+    detail = "FalkorDB write failed: host db.internal:6379 label Evil"
+
+    with pytest.raises(RestoreStageFailedError):
+        _run_upload(
+            store, _Delegate(store, error=RestoreGroupRejectedError(detail)), emitter=emitter
+        )
+
+    dumped = json.dumps([row.details for row in store.rows])
+    for leak in ("db.internal", "6379", "Evil", "FalkorDB"):
+        assert leak not in dumped

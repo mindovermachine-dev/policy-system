@@ -19,6 +19,7 @@ import pytest
 
 from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.errors import RestoreArtifactRejectedError, RestoreStageFailedError
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.models import RestorationManifestPayload, RestorationRequest
 from ps_service.api.restore_orchestration import (
     _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  # test pins the cap this module applies
@@ -37,6 +38,8 @@ from ps_service.restore.errors import (
 from ps_service.restore.models import RestoreOutcome
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from company_merge._fakes import MakeEmitter, ReadLines
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
@@ -132,6 +135,8 @@ class _FakeRestoreStage:
         single_tenant_graph_name: str,
         similarity_threshold: float,
         actor: str,
+        open_gateway: Callable[[], object] | None = None,
+        audit_event_id: str = "",
         emitter: object | None = None,
         owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
@@ -152,6 +157,7 @@ def _build_dependencies(stage: _FakeRestoreStage) -> RestoreDependencies:
         open_db=lambda config: cast("FalkorDB", _FakeDb()),
         single_tenant_graph_name=lambda config: "policy_system",
         restore=stage,
+        graph_write_access=graph_write_access,
     )
 
 

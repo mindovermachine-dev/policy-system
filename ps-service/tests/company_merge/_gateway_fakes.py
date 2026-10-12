@@ -161,8 +161,8 @@ class RigReadHandle(SingleTenantStore):
 class MergeRig(GatewayRig):
     """A gateway rig that also hands out `policy_system`, its read handle and an audit id."""
 
-    def __init__(self, baseline_graph_name: str = BASELINE) -> None:
-        super().__init__()
+    def __init__(self, baseline_graph_name: str = BASELINE, *, swap: bool = False) -> None:
+        super().__init__(swap=swap)
         self.baseline_graph_name = baseline_graph_name
         self.audit_event_id = str(uuid.uuid4())
         self.store.audit_rows.add(self.audit_event_id)

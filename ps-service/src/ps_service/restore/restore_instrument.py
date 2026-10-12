@@ -1,75 +1,77 @@
 """ps_service.restore.restore_instrument -- D8's restore orchestration entry point.
 
-PLAN.md D5/D6/D8/D20, CHANGES.md B1/MA2, CHANGES2.md §3.7. `restore_instrument`
-verifies a `RestoreArtifact` before doing anything else with it: D9's checksum
-check, then D10's `schema_version` check -- both with zero FalkorDB calls (D8
-step 1's "zero graph calls before this passes"), in that order, so a
-corrupted or version-mismatched artifact is refused before any staged key is
-ever created.
+PLAN.md D5/D6/D8/D20, CHANGES.md B1/MA2, CHANGES2.md §3.7; issue #214 moved the writes onto
+the Graph Write Gateway. `restore_instrument` verifies a `RestoreArtifact` before doing
+anything else with it: D9's checksum check, then D10's `schema_version` check -- both with zero
+graph calls, in that order, so a corrupted or version-mismatched artifact is refused before the
+gateway is opened or any graph is read.
 
-Once verification passes, the remainder of D8's staged-write sequence runs
-(CHANGES2.md §3.7's parse step inserted between D10 and D8 step 2):
+Once verification passes:
 
-1. Parse both blobs (`export.serialize.parse_serialized_graph_json`) -- only
-   now, after checksum/schema_version have already passed -- then
-   content-validate BOTH parsed graphs (`_validate_content`, GH #104) before
-   either is staged, still with zero FalkorDB calls.
-2. Stage the native blob (`staging.stage_graph`, schema-allow-listed via
-   `schema_allowlist.NATIVE_ALLOWED_*`) into a fresh `{short}_native__
-   restoring__{token}` key -- D20: no dedup step for this leg at all.
-3. Stage the baseline blob likewise (`schema_allowlist.BASELINE_ALLOWED_*`).
-4-7. `staging.stage_and_finalize_policy_system_leg` (CHANGES.md B1) runs D8
-   steps 4 (`GRAPH.COPY` snapshot), 5 (the offline dedup merge, this
-   module's own `_run_baseline_merge`, injected as `run_offline_merge`), and
-   7 (the atomic three-way `RENAME` finalize) inside its own WATCH-guarded
-   optimistic-concurrency retry loop -- discarding every staged key and
-   re-raising on any non-`WatchError` exception (D8 step 6's all-or-nothing
-   guarantee), or raising `RestoreConcurrencyConflictError` after exhausting
-   its retries.
+1. Parse both blobs (`export.serialize.parse_serialized_graph_json`), content-validate BOTH
+   parsed graphs (`_validate_content`, GH #104) and require an owner for governance content,
+   still with zero graph calls.
+2. Open the gateway (`open_gateway`; none installed fails the request closed) and build the
+   native and baseline legs as upserts (`leg_primitives`).
+3. Read `policy_system` at a known log position and build its leg
+   (`merge_primitives.build_policy_system_leg`: the offline Company Merge as primitives over the
+   live graph plus an overlay of the leg's own writes, D-1 Option A).
+4. Submit ONE multi-graph group of the three legs under the restore's opening audit event: the
+   native and baseline legs replace their graphs, the `policy_system` leg is guarded by
+   `ExpectedPosition`. A refusal because `policy_system` moved (another writer) re-reads and
+   rebuilds, up to `MAX_POLICY_SYSTEM_ATTEMPTS` times, then raises
+   `RestoreConcurrencyConflictError`. Every other refusal raises a `RestoreGraphWriteError`.
 
-D14/AC-BI-016's audit log entry (MA2's exact call shape) is emitted at
-`"started"` (once verification has passed), `"succeeded"` (after the whole
-sequence above completes), and `"failed"` (whenever anything after
-`"started"` raises -- no `"succeeded"` entry follows a `"failed"` one).
+D14/AC-BI-016's audit log entry (MA2's exact call shape) is emitted at `"started"` (once
+verification has passed), `"succeeded"` (after the group took effect) and `"failed"` (whenever
+anything after `"started"` raises -- no `"succeeded"` entry follows a `"failed"` one).
 """
 
 from __future__ import annotations
 
-import uuid
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING
 
-from ps_service.company_merge import graph_reader, obligation_redirect
-from ps_service.company_merge.dedup import resolve_capability_convergence_offline
 from ps_service.company_merge.falkordb_client import (
     select_graph as select_company_merge_graph,
 )
-from ps_service.company_merge.governance_import import (
-    GovernanceImport,
-    governance_count_fields,
-    import_draft_governance,
-)
+from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
-from ps_service.export.falkordb_connection import raw_connection
 from ps_service.export.serialize import checksum_bytes, parse_serialized_graph_json
+from ps_service.graph_gateway.errors import StaleGraphStateError
+from ps_service.graph_gateway.models import (
+    ExpectedPosition,
+    GraphLeg,
+    MultiGraphGroup,
+    MutationGroup,
+)
 from ps_service.logging.facade import emit_log_entry
-from ps_service.restore import schema_allowlist, snapshot_merge_writer
+from ps_service.restore import schema_allowlist
 from ps_service.restore.errors import (
-    ArtifactContentRejectedError,
     ArtifactIntegrityError,
     ArtifactSchemaVersionMismatchError,
+    RestoreConcurrencyConflictError,
     RestoreOwnerRequiredError,
 )
-from ps_service.restore.models import RestoreOutcome
-from ps_service.restore.staging import (
-    StagedLegNames,
-    stage_and_finalize_policy_system_leg,
-    stage_graph,
+from ps_service.restore.graph_submission import (
+    MAX_POLICY_SYSTEM_ATTEMPTS,
+    RestoreGateway,
+    as_restore_gateway,
+    ensure_caught_up,
+    read_log_position,
+    submit_restore,
 )
+from ps_service.restore.leg_primitives import embeddings_by_label, leg_primitives
+from ps_service.restore.merge_primitives import build_policy_system_leg
+from ps_service.restore.models import RestoreOutcome
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from falkordb import FalkorDB
 
+    from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.export.models import SerializedGraph
+    from ps_service.graph_gateway.models import Primitive
     from ps_service.logging.emitter import LogEmitter
     from ps_service.restore.models import RestoreArtifact
 
@@ -77,6 +79,7 @@ __all__ = ["restore_instrument"]
 
 _COMPONENT = "restore"
 _ACTION = "restore_instrument"
+_RETRY_ACTION = "retry_policy_system_leg"
 
 
 def _verify_checksums(artifact: RestoreArtifact) -> None:
@@ -119,13 +122,9 @@ def _verify_schema_version(artifact: RestoreArtifact) -> None:
 def _validate_content(native_graph: SerializedGraph, baseline_graph: SerializedGraph) -> None:
     """Raise `ArtifactContentRejectedError` if EITHER parsed leg violates its allow-list.
 
-    GH #104 / AC-BI-006: both legs are content-validated here, before either
-    is staged, still with zero FalkorDB calls -- so a violation in the
-    baseline leg can never follow the native leg's staged-key write (which
-    `stage_graph`'s own per-leg validation alone could not prevent: it ran
-    after `{short}_native__restoring__{token}` had already been populated).
-    `stage_graph` re-validates its own leg -- idempotent, defense in depth.
-    Native first, then baseline, matching the staging order.
+    GH #104 / AC-BI-006: both legs are content-validated here, before the gateway
+    is opened or any graph is read, so a violation in either leg writes nothing.
+    Native first, then baseline.
     """
     schema_allowlist.validate_serialized_graph(
         native_graph,
@@ -161,7 +160,7 @@ def _emit_restore_log(
 
     Issue #106/AC-BI-011: the `"succeeded"` call site folds in the six
     PracticeArea/RiskPath/classification-edge write counts
-    (`snapshot_merge_writer.classification_write_counts`) via `extra=`, merged
+    (`graph_writer.classification_write_counts`) via `extra=`, merged
     alongside `caller`/`schema_version` rather than replacing them --
     mirroring `company_merge/merge.py`'s own `"succeeded"` entry so the
     requirement holds regardless of which of the two entry points (live
@@ -191,259 +190,168 @@ def _emit_restore_log(
     )
 
 
-def _embeddings_by_label(
-    baseline_graph: SerializedGraph, label: Literal["Capability", "Policy"]
-) -> dict[str, tuple[float, ...]]:
-    """Extract every `label` node's artifact-supplied embedding (D7), keyed by id.
-
-    Read directly off the already-parsed baseline `SerializedGraph` --
-    `graph_reader.read_baseline_graph`'s own Capability/Policy queries never
-    read `n.embedding` (a live baseline graph never carries one, PLAN.md
-    §0.3), so this is the only place a restore ever recovers D7's
-    artifact-supplied vectors. A `label` node with no `embedding` property
-    (never backfilled at export time) is simply absent from the returned
-    mapping -- `resolve_capability_convergence_offline`'s own
-    `incoming_embeddings.get(node.id)` already treats a missing entry as "no
-    artifact embedding." Shared by `_capability_embeddings`/
-    `_policy_embeddings` (issue #54, S6) -- one extraction shape, dispatched
-    by `label`, mirroring `dedup.py`'s own `_TEXT_PROPERTY_BY_LABEL` pattern.
-    """
-    embeddings: dict[str, tuple[float, ...]] = {}
-    for node in baseline_graph.nodes:
-        if node.label != label:
-            continue
-        raw_embedding = node.properties.get("embedding")
-        if raw_embedding is None:
-            continue
-        node_id = cast("str", node.properties["id"])
-        embeddings[node_id] = tuple(cast("list[float]", raw_embedding))
-    return embeddings
-
-
-def _capability_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[float, ...]]:
-    """Extract every Capability node's artifact-supplied embedding (D7), keyed by id.
-
-    See `_embeddings_by_label`.
-    """
-    return _embeddings_by_label(baseline_graph, "Capability")
-
-
-def _policy_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[float, ...]]:
-    """Extract every Policy node's artifact-supplied embedding (D7), keyed by id.
-
-    The vectors stored on the imported draft Policies (issue #183), the
-    counterpart to `_capability_embeddings`. See `_embeddings_by_label`.
-    """
-    return _embeddings_by_label(baseline_graph, "Policy")
-
-
-def _run_baseline_merge(
-    db: FalkorDB,
-    baseline_staged_name: str,
-    regulatory_instrument_id: str,
-    incoming_embeddings: dict[str, tuple[float, ...]],
-    similarity_threshold: float,
-    snapshot_name: str,
-    emitter: LogEmitter | None,
-    governance: GovernanceImport | None = None,
-) -> dict[str, int]:
-    """D8 step 5 / D6: dedupe and merge the staged baseline graph into `snapshot_name`.
-
-    Reads the already-staged baseline graph back via the EXISTING, unmodified
-    `graph_reader.read_baseline_graph` (never reimplemented); dedupes its
-    Capability nodes via `resolve_capability_convergence_offline` (Slices
-    5.3/5.4, D6) against `snapshot_name`'s own existing canonical index; then
-    persists via `snapshot_merge_writer.persist_*` (the verbatim interim copy of the
-    pre-#210 Company Merge writers, retired by #214), in the same
-    write order `merge.py::merge_baseline_graph` itself uses: role/
-    requirement passthrough, obligation passthrough, canonical Capability
-    mints, (issue #183/#227) the shared draft-governance import
-    (`governance_import.import_draft_governance`) when the baseline carries a
-    Policy/Standard/Control tree, rewired edges (regulatory-spine +
-    governance), then Capability embedding backfill.
-
-    `governance` (issue #183) carries the restoring caller's `owner` and the
-    artifact-supplied Policy embeddings; it defaults to `None` (an empty
-    `GovernanceImport`) so callers that never restore an internal-sourced
-    instrument (no Policy content in the artifact) need not pass it.
-
-    Issue #106: after the governance import, persists PracticeArea/RiskPath nodes
-    (exact-identity passthrough, no dedup call of any kind) and validates
-    every COVERS/OWNS/MITIGATED_BY/VERIFIED_BY edge endpoint exists before
-    any classification edge is written (AC-BI-008), then folds
-    `baseline.classification_edges` into the same `persist_rewired_edges`
-    call -- mirroring `merge.py::merge_baseline_graph`'s live-path placement
-    exactly (§5 of PLAN.md). Returns the six-key
-    `snapshot_merge_writer.classification_write_counts(baseline)` dict (AC-BI-011)
-    for the caller to attach to its own `"succeeded"` audit log entry.
-
-    This function is passed as `stage_and_finalize_policy_system_leg`'s
-    `run_offline_merge` argument -- it writes only into `snapshot_name`
-    (a staged `GRAPH.COPY` of the live single-tenant graph), never the live
-    graph itself, and may run more than once across that function's own
-    WATCH-guarded retry attempts.
-    """
-    baseline_staged_graph = select_company_merge_graph(db, baseline_staged_name)
-    baseline = graph_reader.read_baseline_graph(baseline_staged_graph, regulatory_instrument_id)
-    governance = governance or GovernanceImport()
-    if governance.owner is None and (
-        baseline.policy_nodes or baseline.standard_nodes or baseline.control_nodes
-    ):
-        # Backstop for direct callers: refuse BEFORE any snapshot read or write.
-        raise RestoreOwnerRequiredError
-    if not baseline.regulatory_instrument_properties:
-        # graph_reader._read_regulatory_instrument_properties looks up
-        # `MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id})` and
-        # returns {} rather than raising when nothing matches (that reader's
-        # own documented contract leaves "should a miss abort the merge" to
-        # its caller). A baseline graph with no RegulatoryInstrument node at
-        # all is a legitimate no-op leg (D20 precedent: native-only test
-        # fixtures use a wholly empty baseline) -- only a graph that HAS a
-        # RegulatoryInstrument node, just not under the id the manifest
-        # named, is the real problem. Confirmed empirically: a
-        # manifest.instrument_id that doesn't equal the staged baseline
-        # graph's own RegulatoryInstrument.id (e.g. the raw CELEX instead of
-        # the real "{SHORT}-{VERSION}" id) used to merge silently with every
-        # RegulatoryInstrument property (celex, title, ...) blanked out, with
-        # no error anywhere in the pipeline -- export "succeeds", restore
-        # reports all three stages "succeeded", and the corruption only
-        # surfaces later to whoever queries the data. Fail loud here instead.
-        any_regulatory_instrument = baseline_staged_graph.query(
-            "MATCH (n:RegulatoryInstrument) RETURN count(n) AS c"
-        )
-        rows = cast("list[list[object]]", any_regulatory_instrument.result_set)
-        if rows and cast("int", rows[0][0]) > 0:
-            raise ArtifactContentRejectedError(
-                f"no RegulatoryInstrument node with id {regulatory_instrument_id!r} found in "
-                f"the staged baseline graph -- the manifest's instrument_id must match the "
-                f"source graph's actual RegulatoryInstrument.id"
-            )
-
-    snapshot_graph = select_company_merge_graph(db, snapshot_name)
-    dedup_result = resolve_capability_convergence_offline(
-        baseline.capability_nodes,
-        incoming_embeddings=incoming_embeddings,
-        single_tenant_graph=snapshot_graph,
-        threshold=similarity_threshold,
-        emitter=emitter,
-    )
-
-    # issue #190 (H1): drop Obligations a cleanup merge absorbed, before any write, and map
-    # them to their terminal survivor so the rewiring below re-targets their edges.
-    baseline, obligation_redirects = obligation_redirect.resolve_obligation_redirects(
-        snapshot_graph, baseline, emitter=emitter
-    )
-
-    snapshot_merge_writer.persist_role_and_requirement_passthrough(
-        snapshot_graph,
-        baseline.regulatory_instrument_id,
-        baseline.regulatory_instrument_properties,
-        baseline.role_nodes,
-        baseline.requirement_nodes,
-        baseline.provenance_edges,
-    )
-    snapshot_merge_writer.persist_obligation_passthrough(snapshot_graph, baseline.obligation_nodes)
-    snapshot_merge_writer.persist_canonical_nodes(
-        snapshot_graph, baseline.capability_nodes, dedup_result.resolutions, kind="Capability"
-    )
-    canonical_id_by_incoming_id = {
-        resolution.incoming_id: resolution.canonical_id for resolution in dedup_result.resolutions
-    }
-    canonical_id_by_incoming_id.update(obligation_redirects)
-
-    # issue #183 -- the draft-governance import: Policy/Standard/Control written `draft`,
-    # owned by the restoring caller, never converged (replaces issue #54 S6/B6's
-    # Policy convergence pass for restore). A structural no-op for an external-sourced
-    # restore (no governance content).
-    governance_counts = governance_count_fields(
-        import_draft_governance(
-            baseline,
-            single_tenant_graph=snapshot_graph,
-            governance=governance,
-            canonical_id_by_incoming_id=canonical_id_by_incoming_id,
-            write_drafts=snapshot_merge_writer.persist_governance_drafts,
-        )
-    )
-
-    # issue #106 -- PracticeArea/RiskPath node passthrough, a structural
-    # no-op for a baseline with no classification-layer content. Runs after
-    # Capability dedup and the governance import complete and before the edge rewiring
-    # call below, mirroring merge.py's own live-path placement exactly: no
-    # dedup, no embedding call (AC-BI-006) -- identity convergence is
-    # structural (content-hashed ids minted upstream by `internal_seed`).
-    snapshot_merge_writer.persist_practice_area_and_risk_path_passthrough(
-        snapshot_graph, baseline.practice_area_nodes, baseline.risk_path_nodes
-    )
-    snapshot_merge_writer.validate_classification_edge_endpoints(
-        snapshot_graph, baseline.classification_edges, canonical_id_by_incoming_id
-    )
-
-    # One rewiring call over the regulatory-spine edges, the governance
-    # edges, and the classification edges -- governance_edges/
-    # classification_edges are empty for an external-sourced restore, so
-    # this is unchanged from before S6/#106 in that case.
-    snapshot_merge_writer.persist_rewired_edges(
-        snapshot_graph,
-        baseline.bare_edges + baseline.governance_edges + baseline.classification_edges,
-        canonical_id_by_incoming_id,
-    )
-    snapshot_merge_writer.backfill_canonical_embeddings(
-        snapshot_graph, kind="Capability", embeddings=dedup_result.embedding_backfills
-    )
-
-    return {**snapshot_merge_writer.classification_write_counts(baseline), **governance_counts}
-
-
 def _require_owner_for_governance(baseline_graph: SerializedGraph, owner: object | None) -> None:
-    """Fail fast, before any staged key exists: a restored Policy needs an owner (issue #183)."""
+    """Fail fast, before any graph is touched: a restored Policy needs an owner (issue #183)."""
     if owner is None and any(node.label == "Policy" for node in baseline_graph.nodes):
         raise RestoreOwnerRequiredError
 
 
-def restore_instrument(
+def _restore_group(
+    audit_event_id: str,
+    legs: tuple[GraphLeg, ...],
+) -> MultiGraphGroup | MutationGroup | None:
+    """The one group a restore submits: its non-empty legs, or `None` when there are none.
+
+    An empty leg cannot be a leg (a leg needs a primitive), so a leg with no content is left
+    out. A restore of two or three non-empty legs is one multi-graph group. A single remaining
+    leg (an artifact whose other legs are empty) is submitted as a plain group on its graph.
+    """
+    if len(legs) >= 2:  # noqa: PLR2004 -- a multi-graph group needs at least two legs
+        return MultiGraphGroup(audit_event_id=audit_event_id, legs=legs, apply="swap")
+    if legs:
+        leg = legs[0]
+        return MutationGroup(
+            graph=leg.graph,
+            audit_event_id=audit_event_id,
+            primitives=leg.primitives,
+            preconditions=leg.preconditions,
+        )
+    return None
+
+
+def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural grouping
+    gateway: RestoreGateway,
+    *,
+    live: GraphHandle,
+    single_tenant_graph_name: str,
+    baseline_graph: SerializedGraph,
+    content_legs: tuple[GraphLeg, ...],
+    instrument_id: str,
+    governance: GovernanceImport,
+    similarity_threshold: float,
+    audit_event_id: str,
+    emitter: LogEmitter | None,
+) -> dict[str, int]:
+    """Read `policy_system` at its log position, build its leg and submit the restore's group.
+
+    The graph is made caught up with its log, its position read, and the leg built from reads of
+    the live graph; the leg is guarded by that position, so a write landing in between makes the
+    gateway refuse the whole group (nothing logged) and the next attempt reads again. After
+    `MAX_POLICY_SYSTEM_ATTEMPTS` refused attempts the existing conflict error is raised.
+
+    Returns:
+        The classification and governance counts of the built `policy_system` leg.
+    """
+    last_stale: StaleGraphStateError | None = None
+    for attempt in range(1, MAX_POLICY_SYSTEM_ATTEMPTS + 1):
+        ensure_caught_up(gateway, single_tenant_graph_name, emitter=emitter)
+        position = read_log_position(gateway, single_tenant_graph_name)
+        policy_system = build_policy_system_leg(
+            baseline_graph,
+            instrument_id=instrument_id,
+            live=live,
+            governance=governance,
+            similarity_threshold=similarity_threshold,
+            emitter=emitter,
+        )
+        legs = content_legs
+        if policy_system.primitives:
+            legs = (
+                *legs,
+                GraphLeg(
+                    graph=single_tenant_graph_name,
+                    primitives=policy_system.primitives,
+                    preconditions=(ExpectedPosition(position=position),),
+                ),
+            )
+        group = _restore_group(audit_event_id, legs)
+        try:
+            if group is not None:
+                submit_restore(gateway, group)
+        except StaleGraphStateError as exc:
+            last_stale = exc
+            emit_log_entry(
+                component=_COMPONENT,
+                action=_RETRY_ACTION,
+                entity_id=instrument_id,
+                outcome="stale",
+                extra={"attempt": attempt, "max_attempts": MAX_POLICY_SYSTEM_ATTEMPTS},
+                emitter=emitter,
+            )
+            continue
+        return policy_system.counts
+    raise RestoreConcurrencyConflictError(
+        f"restore merge into {single_tenant_graph_name!r} aborted after "
+        f"{MAX_POLICY_SYSTEM_ATTEMPTS} attempts due to a concurrent writer; "
+        "no changes were made to the live graph"
+    ) from last_stale
+
+
+def _content_legs(
+    short: str, native_graph: SerializedGraph, baseline_graph: SerializedGraph
+) -> tuple[GraphLeg, ...]:
+    """The native and baseline legs: each graph is replaced by its artifact's content."""
+    legs: list[GraphLeg] = []
+    for graph, serialized in (
+        (f"{short}_native", native_graph),
+        (f"{short}_baseline", baseline_graph),
+    ):
+        primitives: tuple[Primitive, ...] = leg_primitives(serialized)
+        if primitives:
+            legs.append(GraphLeg(graph=graph, primitives=primitives, replace=True))
+    return tuple(legs)
+
+
+def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natural grouping
     artifact: RestoreArtifact,
     *,
     db: FalkorDB,
     single_tenant_graph_name: str,
     similarity_threshold: float,
     actor: str,
+    open_gateway: Callable[[], object],
+    audit_event_id: str,
     emitter: LogEmitter | None = None,
     source: str | None = None,
     owner: tuple[str, str] | None = None,
 ) -> RestoreOutcome:
-    """Restore one curated instrument's artifact end to end (D8's full staged-write sequence).
+    """Restore one curated instrument's artifact end to end as one gateway group.
 
-    Verification (D9 checksum, D10 schema_version) runs first and
-    unconditionally, with zero FalkorDB calls of any kind -- a rejected
-    artifact never reaches `db`, `single_tenant_graph_name`, or the audit
-    log at all. Once verification passes, one `outcome="started"` audit log
-    entry is emitted, then both blobs are parsed, content-validated (both
-    legs, before either is staged -- GH #104) and staged (D20: the native
-    leg is a straight load, no dedup), then `staging.stage_and_finalize_
-    policy_system_leg` (CHANGES.md B1) runs the baseline merge and the
-    atomic three-way finalize under WATCH-guarded optimistic concurrency.
+    Verification (D9 checksum, D10 schema_version) runs first and unconditionally, with zero
+    graph calls of any kind -- a rejected artifact never reaches `db`, the gateway or the audit
+    log at all. Once verification passes, one `outcome="started"` audit log entry is emitted,
+    then both blobs are parsed and content-validated (both legs, before the gateway is opened --
+    GH #104), the gateway is opened and the three legs are submitted as one multi-graph group
+    (see the module docstring).
 
-    On success, one `outcome="succeeded"` audit log entry is emitted and a
-    `RestoreOutcome` is returned. On any exception raised after `"started"`
-    (a merge-step failure, D8 step 6's discard-and-reraise, or `staging.
-    stage_and_finalize_policy_system_leg` exhausting its retries and raising
-    `RestoreConcurrencyConflictError`), one `outcome="failed"` audit log
-    entry is emitted and the exception is re-raised unchanged -- no
-    `"succeeded"` entry ever follows a `"failed"` one.
+    On success, one `outcome="succeeded"` audit log entry is emitted and a `RestoreOutcome` is
+    returned. On any exception raised after `"started"` one `outcome="failed"` entry is emitted
+    and the exception is re-raised unchanged -- no `"succeeded"` entry ever follows a `"failed"`
+    one.
 
-    `source` (issue #125, D-AUDIT) is `None` by default -- the existing
-    `POST /restorations` (upload) call site never passes it, so its audit
-    log entries are unaffected by this parameter. `run_restoration_from_
-    catalog_source` passes the resolved effective curated-content source
-    URL, which is folded into every emitted audit log entry's `"source"`
-    key (AC-BI-011, mirrors #66 AC-BI-016).
+    `audit_event_id` is the id of the restore's opening `instrument.restore` audit row (issue
+    #195): every log group of the restore carries it (AC-BI-012). `open_gateway` returns the
+    process's Graph Write Gateway, or raises when there is none; it is called after
+    verification, parsing and content validation, before the first read of a live graph.
+    `db` is used only to read `policy_system`.
 
-    `owner` (issue #183) is the restoring caller's verified `(sub, iss)` pair.
-    An internal-sourced artifact's Policy/Standard/Control tree is imported as
-    `draft`, owned by `owner` (`snapshot_merge_writer.persist_governance_drafts`); an
-    artifact with a Policy and no `owner` raises `RestoreOwnerRequiredError`
-    before any staged key exists. An external-sourced artifact carries no such
-    content, so `owner` is never read and may be `None`.
+    `source` (issue #125, D-AUDIT) is `None` by default and is folded into every emitted audit
+    log entry's `"source"` key when given.
+
+    `owner` (issue #183) is the restoring caller's verified `(sub, iss)` pair. An
+    internal-sourced artifact's Policy/Standard/Control tree is imported as `draft`, owned by
+    `owner`, and never converged onto an existing Policy; an artifact with a Policy and no
+    `owner` raises `RestoreOwnerRequiredError` before the gateway is opened.
+
+    Raises:
+        ArtifactIntegrityError: a blob does not match its manifest digest.
+        ArtifactSchemaVersionMismatchError: the manifest's schema_version is not this service's.
+        ArtifactContentRejectedError: an artifact leg violates its allow-list or cannot be stored.
+        RestoreOwnerRequiredError: governance content and no `owner`.
+        RestoreConcurrencyConflictError: `policy_system` kept changing for every attempt.
+        RestoreGroupRejectedError: the gateway refused the group; nothing was logged.
+        RestoreGraphWriteFailedError: the log or FalkorDB failed; the restore did not complete.
+        RestoreApplyPendingError: committed to the log, applied on recovery.
     """
     _verify_checksums(artifact)
     _verify_schema_version(artifact)
@@ -453,11 +361,6 @@ def restore_instrument(
     # Lowercased to match ingestion.falkordb_client.native_graph_name/
     # domain_mapper.falkordb_client.baseline_graph_name's own documented
     # `{short_name.lower()}_native`/`{short_name.lower()}_baseline` convention.
-    # Confirmed empirically: restoring a manifest with a mixed-case short_name
-    # (e.g. "NIS2", the real value every curated instrument actually carries)
-    # used to create separate `NIS2_native`/`NIS2_baseline` graphs alongside
-    # ingestion's own `nis2_native`/`nis2_baseline` -- two disconnected copies
-    # of the same instrument under different FalkorDB graph keys.
     short = manifest.short_name.lower()
 
     _emit_restore_log(
@@ -469,59 +372,27 @@ def restore_instrument(
         source=source,
     )
 
-    # Issue #106/AC-BI-011: populated by `_run_offline_merge` below (via
-    # `_run_baseline_merge`'s own return value) once the offline merge
-    # completes -- default `{}` covers the (unreachable in practice, since
-    # `_run_baseline_merge` always returns the six-key dict, all-zero for an
-    # external-sourced restore) case where the merge step never ran at all.
-    classification_counts: dict[str, int] = {}
-
     try:
         native_graph = parse_serialized_graph_json(artifact.native_blob)
         baseline_graph = parse_serialized_graph_json(artifact.baseline_blob)
         _validate_content(native_graph, baseline_graph)
         _require_owner_for_governance(baseline_graph, owner)
+        content_legs = _content_legs(short, native_graph, baseline_graph)
 
-        native_staged_name = stage_graph(
-            db,
-            native_graph,
-            f"{short}_native",
-            allowed_labels=schema_allowlist.NATIVE_ALLOWED_LABELS,
-            allowed_relationship_types=schema_allowlist.NATIVE_ALLOWED_RELATIONSHIP_TYPES,
-        )
-        baseline_staged_name = stage_graph(
-            db,
-            baseline_graph,
-            f"{short}_baseline",
-            allowed_labels=schema_allowlist.BASELINE_ALLOWED_LABELS,
-            allowed_relationship_types=schema_allowlist.BASELINE_ALLOWED_RELATIONSHIP_TYPES,
-        )
-
-        incoming_embeddings = _capability_embeddings(baseline_graph)
-        policy_incoming_embeddings = _policy_embeddings(baseline_graph)
-        token = uuid.uuid4().hex
-
-        def _run_offline_merge(snapshot_name: str) -> None:
-            nonlocal classification_counts
-            classification_counts = _run_baseline_merge(
-                db,
-                baseline_staged_name,
-                instrument_id,
-                incoming_embeddings,
-                similarity_threshold,
-                snapshot_name,
-                emitter,
-                GovernanceImport(owner=owner, policy_embeddings=policy_incoming_embeddings),
-            )
-
-        stage_and_finalize_policy_system_leg(
-            db,
-            raw_connection(db),
-            single_tenant_graph_name,
-            token,
-            _run_offline_merge,
-            StagedLegNames(staged_name=native_staged_name, target_name=f"{short}_native"),
-            StagedLegNames(staged_name=baseline_staged_name, target_name=f"{short}_baseline"),
+        gateway = as_restore_gateway(open_gateway())
+        classification_counts = _commit_restore(
+            gateway,
+            live=select_company_merge_graph(db, single_tenant_graph_name),
+            single_tenant_graph_name=single_tenant_graph_name,
+            baseline_graph=baseline_graph,
+            content_legs=content_legs,
+            instrument_id=instrument_id,
+            governance=GovernanceImport(
+                owner=owner, policy_embeddings=embeddings_by_label(baseline_graph, "Policy")
+            ),
+            similarity_threshold=similarity_threshold,
+            audit_event_id=audit_event_id,
+            emitter=emitter,
         )
     except Exception:
         _emit_restore_log(

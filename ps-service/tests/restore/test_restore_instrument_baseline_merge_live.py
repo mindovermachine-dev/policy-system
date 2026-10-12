@@ -24,12 +24,14 @@ from ps_service.export.models import SerializedEdge, SerializedGraph, Serialized
 from ps_service.restore.errors import ArtifactContentRejectedError
 from ps_service.restore.restore_instrument import restore_instrument
 from restore._fixtures import build_restore_artifact
+from restore.live_gateway import live_restore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
 _ACTOR = "test-actor"
 _SIMILARITY_THRESHOLD = 0.9
@@ -132,8 +134,10 @@ def _empty_native_graph() -> SerializedGraph:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_restore_instrument_merges_new_capability_and_rewires_edges(
     live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
 ) -> None:
@@ -160,14 +164,17 @@ def test_restore_instrument_merges_new_capability_and_rewires_edges(
     )
 
     try:
-        restore_instrument(
-            artifact,
-            db=live_falkordb,
-            single_tenant_graph_name=single_tenant_graph_name,
-            similarity_threshold=_SIMILARITY_THRESHOLD,
-            actor=_ACTOR,
-            emitter=emitter,
-        )
+        with live_restore(provisioned_graph_log, live_falkordb) as live:
+            restore_instrument(
+                artifact,
+                db=live_falkordb,
+                single_tenant_graph_name=single_tenant_graph_name,
+                similarity_threshold=_SIMILARITY_THRESHOLD,
+                actor=_ACTOR,
+                open_gateway=live.open_gateway,
+                audit_event_id=live.audit_event_id,
+                emitter=emitter,
+            )
 
         capability_rows = query_result_rows(
             live_falkordb,
@@ -214,8 +221,10 @@ def test_restore_instrument_merges_new_capability_and_rewires_edges(
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_restore_instrument_rejects_manifest_instrument_id_not_matching_baseline_graph(
     live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
     make_emitter: MakeEmitter,
 ) -> None:
     """Regression, found via manual end-to-end testing: a `manifest.instrument_id`
@@ -244,13 +253,18 @@ def test_restore_instrument_rejects_manifest_instrument_id_not_matching_baseline
     )
 
     try:
-        with pytest.raises(ArtifactContentRejectedError, match=wrong_instrument_id):
+        with (
+            live_restore(provisioned_graph_log, live_falkordb) as live,
+            pytest.raises(ArtifactContentRejectedError, match=wrong_instrument_id),
+        ):
             restore_instrument(
                 artifact,
                 db=live_falkordb,
                 single_tenant_graph_name=single_tenant_graph_name,
                 similarity_threshold=_SIMILARITY_THRESHOLD,
                 actor=_ACTOR,
+                open_gateway=live.open_gateway,
+                audit_event_id=live.audit_event_id,
                 emitter=emitter,
             )
     finally:

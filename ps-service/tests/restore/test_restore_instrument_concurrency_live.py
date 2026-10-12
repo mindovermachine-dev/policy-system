@@ -1,108 +1,90 @@
-"""Live FalkorDB proof for CHANGES.md B1's concurrency scenario, run through
-the REAL `restore_instrument` orchestration (New Slice 5.6b -- alongside
-Slice 5.7, "the single most important proof in the whole plan").
+"""Live proof of the restore's optimistic concurrency on `policy_system` (issue #214, AC-BI-004).
 
-`tests/restore/test_staging_policy_system_leg_live.py` already proves the
-underlying `staging.stage_and_finalize_policy_system_leg` WATCH/MULTI/EXEC
-retry mechanism in isolation, with a bare `calls.append` spy standing in for
-`run_offline_merge`. This file proves the SAME mechanism survives
-integration with `restore_instrument`'s real offline dedup+merge callback
-(`resolve_capability_convergence_offline` + the interim
-`snapshot_merge_writer.persist_*` functions) -- not a fake-graph unit test, and not merely a retry
-of the lower-level proof: the merge callback under test here is the real
-one `restore_instrument` builds, reading/writing real staged FalkorDB keys.
+The REAL `restore_instrument` runs against the real gateway (Postgres graph log, FalkorDB). The
+pre-#214 version of this file raced a Redis `WATCH` with a second connection; the guard is now
+the log position the `policy_system` leg is built at (`ExpectedPosition`), so the race is a
+second WRITER going through the gateway between the restore's position read and its submit. The
+two scenarios and their assertions are those of CHANGES.md B1 (D-6):
 
-CHANGES.md B1's exact scenario: seed the single-tenant graph with one node.
-Start a restore's baseline-leg merge; after the merge callback's first
-invocation begins (the snapshot for attempt 1 has already been taken) but
-before `stage_and_finalize_policy_system_leg` reaches `pipe.execute()`, a
-SECOND, independent `FalkorDB` connection runs a plain `CREATE (:Test
-{id:'concurrent'})` against the live single-tenant graph -- simulating a
-concurrent live ingestion write. `restore_instrument._run_baseline_merge`
-only ever runs as that function's `run_offline_merge` argument -- called
-strictly after `WATCH` and the attempt's `GRAPH.COPY` snapshot, strictly
-before `pipe.multi()`/`pipe.execute()` -- so wrapping it with a spy that
-fires the concurrent write on its first call lands the race deterministically
-in the exact window CHANGES.md B1 describes, no timing/sleep guesswork
-needed. Two variants:
+(a) A rival group lands once, in that window -- the first set is refused (nothing logged on any
+    graph), the restore reads again and completes carrying BOTH the rival's node and its own
+    merged Capability (AC-BI-006's additive, never-clobber invariant).
+(b) A rival group lands in that window on EVERY attempt -- after `MAX_POLICY_SYSTEM_ATTEMPTS` the
+    restore raises `RestoreConcurrencyConflictError`, no `{short}_native`/`{short}_baseline` graph
+    was created and `policy_system` holds ONLY the pre-existing seed and the rival's own writes.
 
-(a) The concurrent write fires only on the merge callback's first
-    invocation -- attempt 1 aborts on `WatchError`, attempt 2's snapshot
-    (taken AFTER the concurrent write landed) carries it, and restore
-    completes successfully carrying BOTH the concurrent writer's node AND
-    the restore's own merged Capability -- AC-BI-006's additive/never-
-    clobber invariant, proven empirically.
-(b) The concurrent write fires on EVERY invocation, never letting `EXEC`
-    win -- `restore_instrument` raises `RestoreConcurrencyConflictError`
-    after exhausting its retries, and the live single-tenant graph
-    afterward holds ONLY the concurrent writer's own writes (plus the
-    original seed) -- AC-BI-008's all-or-nothing holds even on exhausted
-    retries, not only on a caught merge-step exception (Slice 5.7) or a
-    simulated hard-kill (Slice 5.8).
+Not run in the implementation sandbox (no FalkorDB, no Postgres); the fast twin is
+`test_restore_concurrency.py`.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 from typing import TYPE_CHECKING
 
 import pytest
-import redis.exceptions
-from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker
-    FalkorDB,
-)
 
-import ps_service.restore.restore_instrument as restore_instrument_module
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
+from ps_service.graph_gateway.models import MutationGroup, UpsertNode
 from ps_service.restore.errors import RestoreConcurrencyConflictError
+from ps_service.restore.graph_submission import MAX_POLICY_SYSTEM_ATTEMPTS
 from ps_service.restore.restore_instrument import restore_instrument
 from restore._fixtures import build_restore_artifact
+from restore.live_gateway import live_restore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from company_merge._fakes import MakeEmitter
+    from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
+
+    from ps_service.graph_gateway.gateway import GraphWriteGateway
 
 _ACTOR = "test-actor"
 _SIMILARITY_THRESHOLD = 0.9
 _CAPABILITY_ID = "cap_concurrency_proof"
 
-_REAL_RUN_BASELINE_MERGE = restore_instrument_module._run_baseline_merge  # pyright: ignore[reportPrivateUsage]
 
+class _RivalGateway:
+    """The live gateway, except a rival group lands right after the restore's position reads.
 
-def _spy_on_run_baseline_merge[**P, R](
-    real: Callable[P, R], before_each_call: Callable[[int], None]
-) -> Callable[P, R]:
-    """Wrap `real` so `before_each_call(n)` fires before its n-th invocation (1-based).
-
-    A PEP 612 `ParamSpec` forward: the spy accepts exactly `real`'s own
-    signature, so it cannot rot when `_run_baseline_merge` gains a parameter
-    (it did -- `policy_incoming_embeddings` -- and the previous hand-copied
-    7-parameter spies broke with `TypeError: ... 8 were given`), and
-    basedpyright still verifies the call through end to end. The return
-    type is generic (`R`), not hard-coded `None`: issue #106 made
-    `_run_baseline_merge`'s return value load-bearing (`restore_instrument`'s
-    `_run_offline_merge` closure captures it into `classification_counts` for
-    the AC-BI-011 audit log entry) -- a spy that swallowed it would silently
-    corrupt that log entry every time this file's tests run.
+    `rivals` is how many reads are followed by one (the first N). The rival writes through the
+    same gateway, so it moves the log position, which is exactly what `ExpectedPosition` guards.
     """
-    call_count = 0
 
-    def spy(*args: P.args, **kwargs: P.kwargs) -> R:
-        nonlocal call_count
-        call_count += 1
-        before_each_call(call_count)
-        return real(*args, **kwargs)
+    def __init__(
+        self, inner: GraphWriteGateway, graph: str, audit_event_id: str, rivals: int
+    ) -> None:
+        self._inner = inner
+        self._graph = graph
+        self._audit_event_id = audit_event_id
+        self._rivals = rivals
+        self.reads = 0
+        self.submit_multi_graph_group = inner.submit_multi_graph_group
+        self.submit_group = inner.submit_group
+        self.is_caught_up = inner.is_caught_up
+        self.catch_up = inner.catch_up
 
-    return spy
-
-
-def _second_connection() -> FalkorDB:
-    """A genuinely independent `FalkorDB` connection, standing in for a concurrent writer."""
-    host = os.environ.get("PS_FALKORDB_HOST", "127.0.0.1")
-    port = int(os.environ.get("PS_FALKORDB_PORT", "6379"))
-    return FalkorDB(host=host, port=port)
+    def read_log_position(self, graph: str) -> int:
+        position = self._inner.read_log_position(graph)
+        if graph == self._graph:
+            self.reads += 1
+            if self.reads <= self._rivals:
+                self._inner.submit_group(
+                    MutationGroup(
+                        graph=self._graph,
+                        audit_event_id=self._audit_event_id,
+                        primitives=(
+                            UpsertNode(
+                                label="Capability",
+                                id=f"concurrent-{self.reads}",
+                                properties={"name": f"concurrent {self.reads}"},
+                            ),
+                        ),
+                    )
+                )
+        return position
 
 
 def _baseline_graph(instrument_id: str) -> SerializedGraph:
@@ -186,11 +168,12 @@ def _empty_native_graph() -> SerializedGraph:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
     live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     emitter, _log_path = make_emitter()
     token = uuid.uuid4().hex[:12]
@@ -203,8 +186,9 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
     baseline_target = f"{short_name.lower()}_baseline"
     instrument_id = f"RT56B-{token}"
 
-    live_falkordb.select_graph(single_tenant_graph_name).query("CREATE (:Seed {id: 'seed'})")
-
+    live_falkordb.select_graph(single_tenant_graph_name).query(
+        "CREATE (:Capability {id: 'seed', name: 'Seed'})"
+    )
     artifact = build_restore_artifact(
         instrument_id=instrument_id,
         short_name=short_name,
@@ -212,48 +196,29 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
         baseline_graph=_baseline_graph(instrument_id),
     )
 
-    merge_calls: list[int] = []
-    concurrent_writer = _second_connection()
-
-    def _fire_concurrent_write_on_first_call(call_number: int) -> None:
-        merge_calls.append(call_number)
-        if call_number == 1:
-            # Lands deterministically after WATCH + the attempt-1 snapshot
-            # (this callback only ever runs strictly after both, and
-            # strictly before pipe.multi()/pipe.execute()) but before
-            # stage_and_finalize_policy_system_leg finalizes.
-            concurrent_writer.select_graph(single_tenant_graph_name).query(
-                "CREATE (:Test {id: 'concurrent'})"
+    try:
+        with live_restore(provisioned_graph_log, live_falkordb) as live:
+            rival = _RivalGateway(
+                live.gateway, single_tenant_graph_name, live.audit_event_id, rivals=1
+            )
+            restore_instrument(
+                artifact,
+                db=live_falkordb,
+                single_tenant_graph_name=single_tenant_graph_name,
+                similarity_threshold=_SIMILARITY_THRESHOLD,
+                actor=_ACTOR,
+                open_gateway=lambda: rival,
+                audit_event_id=live.audit_event_id,
+                emitter=emitter,
             )
 
-    # Spy wraps and delegates to the real function -- only used to inject a
-    # real concurrent write at the exact WATCH/EXEC race window and to count
-    # retries (CHANGES.md B1).
-    # detroit-exception: retry count IS the specified behavior (issue #163 §2 case 2)
-    monkeypatch.setattr(
-        restore_instrument_module,
-        "_run_baseline_merge",
-        _spy_on_run_baseline_merge(_REAL_RUN_BASELINE_MERGE, _fire_concurrent_write_on_first_call),
-    )
-
-    try:
-        restore_instrument(
-            artifact,
-            db=live_falkordb,
-            single_tenant_graph_name=single_tenant_graph_name,
-            similarity_threshold=_SIMILARITY_THRESHOLD,
-            actor=_ACTOR,
-            emitter=emitter,
-        )
-
-        assert merge_calls == [1, 2]  # attempt 1 aborted on WatchError, attempt 2 retried+succeeded
+        assert rival.reads == 2  # attempt 1 was refused (stale), attempt 2 took effect
 
         node_ids = query_result_rows(
             live_falkordb, single_tenant_graph_name, "MATCH (n) RETURN n.id ORDER BY n.id"
         )
-        # Both the concurrent writer's node AND the restore's own merged
-        # content survive -- no lost update (AC-BI-006).
-        assert ["concurrent"] in node_ids
+        # Both the rival writer's node AND the restore's own merged content survive.
+        assert ["concurrent-1"] in node_ids
         assert ["seed"] in node_ids
         assert [_CAPABILITY_ID] in node_ids
     finally:
@@ -261,25 +226,24 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_restore_instrument_raises_after_exhausting_retries_leaving_only_concurrent_writes(
     live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     emitter, _log_path = make_emitter()
     token = uuid.uuid4().hex[:12]
     short_name = f"RT56Bx{token}"
     single_tenant_graph_name = f"__ac66_slice56b_exhausted_{token}__"
-    # restore_instrument lowercases short_name to match ingestion/domain_mapper's
-    # own {short_name.lower()}_native/_baseline convention -- mirrored here so
-    # this test's expected target names match the real, fixed graph keys.
     native_target = f"{short_name.lower()}_native"
     baseline_target = f"{short_name.lower()}_baseline"
     instrument_id = f"RT56Bx-{token}"
 
-    live_falkordb.select_graph(single_tenant_graph_name).query("CREATE (:Seed {id: 'seed'})")
-
+    live_falkordb.select_graph(single_tenant_graph_name).query(
+        "CREATE (:Capability {id: 'seed', name: 'Seed'})"
+    )
     artifact = build_restore_artifact(
         instrument_id=instrument_id,
         short_name=short_name,
@@ -287,43 +251,30 @@ def test_restore_instrument_raises_after_exhausting_retries_leaving_only_concurr
         baseline_graph=_baseline_graph(instrument_id),
     )
 
-    merge_calls: list[int] = []
-    concurrent_writer = _second_connection()
-
-    def _fire_concurrent_write_on_every_call(call_number: int) -> None:
-        merge_calls.append(call_number)
-        # A concurrent writer races EVERY attempt -- never lets EXEC win.
-        concurrent_writer.select_graph(single_tenant_graph_name).query(
-            "CREATE (:Test {id: $id})", {"id": f"concurrent-{call_number}"}
-        )
-
-    # Spy wraps and delegates to the real function -- only used to inject a
-    # real concurrent write on every attempt and to count retries (CHANGES.md B1).
-    # detroit-exception: retry count IS the specified behavior (issue #163 §2 case 2)
-    monkeypatch.setattr(
-        restore_instrument_module,
-        "_run_baseline_merge",
-        _spy_on_run_baseline_merge(_REAL_RUN_BASELINE_MERGE, _fire_concurrent_write_on_every_call),
-    )
-
     try:
-        with pytest.raises(RestoreConcurrencyConflictError) as exc_info:
-            restore_instrument(
-                artifact,
-                db=live_falkordb,
-                single_tenant_graph_name=single_tenant_graph_name,
-                similarity_threshold=_SIMILARITY_THRESHOLD,
-                actor=_ACTOR,
-                emitter=emitter,
+        with live_restore(provisioned_graph_log, live_falkordb) as live:
+            rival = _RivalGateway(
+                live.gateway,
+                single_tenant_graph_name,
+                live.audit_event_id,
+                rivals=MAX_POLICY_SYSTEM_ATTEMPTS,
             )
+            with pytest.raises(RestoreConcurrencyConflictError):
+                restore_instrument(
+                    artifact,
+                    db=live_falkordb,
+                    single_tenant_graph_name=single_tenant_graph_name,
+                    similarity_threshold=_SIMILARITY_THRESHOLD,
+                    actor=_ACTOR,
+                    open_gateway=lambda: rival,
+                    audit_event_id=live.audit_event_id,
+                    emitter=emitter,
+                )
 
-        assert isinstance(exc_info.value.__cause__, redis.exceptions.WatchError)
-        assert merge_calls == [1, 2, 3]  # _MAX_POLICY_SYSTEM_MERGE_ATTEMPTS, then give up
+        assert rival.reads == MAX_POLICY_SYSTEM_ATTEMPTS  # then give up
 
-        # All-or-nothing on exhausted retries: no {short}_native/{short}_baseline
-        # target was ever created, and the live single-tenant graph holds ONLY
-        # the concurrent writer's own writes (plus the pre-existing seed) --
-        # never any of the restore's own merged Capability/Role/Requirement content.
+        # All-or-nothing on exhausted retries: no {short}_native/{short}_baseline graph was ever
+        # created, and policy_system holds ONLY the pre-existing seed and the rival's own writes.
         assert live_falkordb.connection.exists(native_target) == 0
         assert live_falkordb.connection.exists(baseline_target) == 0
         node_ids = {

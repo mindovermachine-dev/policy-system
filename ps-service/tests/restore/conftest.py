@@ -16,9 +16,13 @@ import pytest
 from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker; this is the one boundary import
     FalkorDB,
 )
+from graph_gateway._fakes import close_all_rigs
+
+from ps_service.logging import configure
+from restore._gateway_fakes import RestoreRig
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 _DEFAULT_FALKORDB_HOST = "127.0.0.1"
 _DEFAULT_FALKORDB_PORT = "6379"
@@ -47,3 +51,12 @@ def query_result_rows() -> Callable[[FalkorDB, str, str], list[list[object]]]:
         return cast("list[list[object]]", result.result_set)
 
     return _query
+
+
+@pytest.fixture
+def restore_rig() -> Iterator[RestoreRig]:
+    """The real gateway over in-memory log and graph fakes, with `restore_instrument` wired in."""
+    configure()  # the gateway and the restore log through the process default emitter
+    rig = RestoreRig()
+    yield rig
+    close_all_rigs()

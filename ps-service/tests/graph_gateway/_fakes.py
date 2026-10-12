@@ -16,6 +16,8 @@ Import as `from graph_gateway._fakes import ...` (the cross-package idiom of `au
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import json
 import math
 import re
@@ -27,7 +29,11 @@ from typing import TYPE_CHECKING, cast
 import redis.exceptions
 
 from ps_service.graph_gateway import cypher
-from ps_service.graph_gateway.errors import GraphLogPersistenceError, GraphLogUnavailableError
+from ps_service.graph_gateway.errors import (
+    GraphLogPersistenceError,
+    GraphLogUnavailableError,
+    SwapConflictError,
+)
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.models import (
     AppendedGroup,
@@ -35,10 +41,11 @@ from ps_service.graph_gateway.models import (
     DigestCheckpoint,
     GraphLogEntry,
     GraphLogGroup,
+    SwapGroupRef,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Generator, Sequence
 
     import psycopg
     from psycopg.rows import TupleRow
@@ -95,8 +102,9 @@ def property_columns(properties: dict[str, object]) -> list[object]:
     Mirror of `exact_floats.PROPERTY_COLUMNS`: a list of floats travels only as exact integers;
     every other property travels as a lossy `[key, value]` pair.
     """
+    float_list_keys = {key for key, value in properties.items() if _is_float_list(value)}
     pairs = [
-        [key, lossy_reply(value)] for key, value in properties.items() if not _is_float_list(value)
+        [key, lossy_reply(value)] for key, value in properties.items() if key not in float_list_keys
     ]
     scalars = [
         [key, _encode_exact_float(cast("float", value))]
@@ -106,13 +114,13 @@ def property_columns(properties: dict[str, object]) -> list[object]:
     float_lists = [
         _list_column(key, cast("list[object]", value))
         for key, value in properties.items()
-        if _is_float_list(value)
+        if key in float_list_keys
     ]
     mixed_lists = [
         _list_column(key, cast("list[object]", value))
         for key, value in properties.items()
-        if isinstance(value, list)
-        and not _is_float_list(cast("list[object]", value))
+        if key not in float_list_keys
+        and isinstance(value, list)
         and any(_is_nonzero_float(item) for item in cast("list[object]", value))
     ]
     return [pairs, scalars, float_lists, mixed_lists]
@@ -129,7 +137,7 @@ def _is_float_list(value: object) -> bool:
     if not isinstance(value, list):
         return False
     items = cast("list[object]", value)
-    return bool(items) and all(isinstance(item, float) for item in items)
+    return bool(items) and set(map(type, items)) == {float}
 
 
 def _is_nonzero_float(value: object) -> bool:
@@ -142,15 +150,44 @@ def _aligned_integers(items: list[object]) -> tuple[list[int], list[int]]:
     A position that holds no non-zero float is `0` in the integers; a negative zero is `1` in
     the scales (a positive zero and anything else is `0`).
     """
+    memo = _ALIGNED_MEMO.get(id(items))
+    if memo is not None and memo.saved == items and 0.0 not in items:
+        return list(memo.scales), list(memo.integers)
+    scales, integers = _encode_aligned(items)
+    if 0.0 not in items:  # a zero's sign is invisible to `==`, so lists holding one never memoise
+        if len(_ALIGNED_MEMO) >= _ALIGNED_MEMO_LIMIT:
+            _ALIGNED_MEMO.clear()
+        _ALIGNED_MEMO[id(items)] = _Aligned(list(items), tuple(scales), tuple(integers))
+    return scales, integers
+
+
+@dataclass(frozen=True)
+class _Aligned:
+    saved: list[object]
+    scales: tuple[int, ...]
+    integers: tuple[int, ...]
+
+
+_ALIGNED_MEMO: dict[int, _Aligned] = {}
+"""Digest scans re-encode every 3,072-double embedding on every scan; the encoding is pure.
+
+Keyed by the list's identity and validated by equality with a saved copy, so a list mutated in
+place is encoded again.
+"""
+_ALIGNED_MEMO_LIMIT = 4096
+
+
+def _encode_aligned(items: list[object]) -> tuple[list[int], list[int]]:
     scales: list[int] = []
     integers: list[int] = []
+    frexp, ldexp, copysign = math.frexp, math.ldexp, math.copysign
     for item in items:
-        if _is_nonzero_float(item):
-            scale = 54 - math.frexp(cast("float", item))[1]
+        if isinstance(item, float) and item != 0.0:
+            scale = 54 - frexp(item)[1]
             scales.append(scale)
-            integers.append(int(math.ldexp(cast("float", item), scale)))
+            integers.append(int(ldexp(item, scale)))
         else:
-            negative_zero = isinstance(item, float) and math.copysign(1.0, item) < 0
+            negative_zero = isinstance(item, float) and copysign(1.0, item) < 0
             scales.append(1 if negative_zero else 0)
             integers.append(0)
     return scales, integers
@@ -207,6 +244,16 @@ class InMemoryGraphLogStore:
     """Called after each paged `read_entries` (a test's way to act while a replay is mid-flight)."""
     marker_history: list[tuple[str, int]] = field(default_factory=list)
     """`(graph, position)` of every `advance_applied_position` call, in call order."""
+    leg_append_faults: dict[str, Fault] = field(default_factory=dict)
+    """Raised when a multi-graph append stages the leg of that graph (a failure mid-transaction)."""
+    multi_appends: list[tuple[str, ...]] = field(default_factory=list)
+    """Graphs of each committed multi-graph append (one entry per transaction)."""
+    lock_orders: list[tuple[str, ...]] = field(default_factory=list)
+    """Graphs each finished transaction locked, in the order it took the locks."""
+    after_pending_swap_read: Callable[[], None] | None = None
+    """Called once, right after the first `read_pending_swap_group` read (a set may land now)."""
+    on_advance: Callable[[str, int], None] | None = None
+    """Called with `(graph, position)` just after an applied marker moved (a crash point)."""
 
     def fail_reads(self, times: int | None = None) -> None:
         """Make `read_entries`, `last_position` and `read_applied_position` report Postgres down."""
@@ -264,6 +311,39 @@ class InMemoryGraphLogStore:
         appended = transaction.stage(group, audit_event_id)
         transaction.commit()
         return appended
+
+    def append_groups_standalone(
+        self,
+        groups: tuple[GraphLogGroupDraft, ...],
+        *,
+        audit_event_id: str | None = None,
+        as_swap_set: bool = False,
+    ) -> tuple[AppendedGroup, ...]:
+        """Stage every group on one transaction and commit them together, or none of them."""
+        graphs = tuple(group.graph for group in groups)
+        assert graphs == tuple(sorted(set(graphs))), "legs must be distinct and ascending"
+        if audit_event_id is not None:
+            uuid.UUID(audit_event_id)
+        self.append_attempts += 1
+        if self.append_fault is not None:
+            self.append_fault.trigger()
+        if self.append_gate is not None:
+            self.append_gate(groups[0].graph)
+        swap_set_id = uuid.uuid4() if as_swap_set else None
+        transaction = self.begin()
+        try:
+            appended: list[AppendedGroup] = []
+            for group in groups:
+                fault = self.leg_append_faults.get(group.graph)
+                if fault is not None:
+                    fault.trigger()
+                appended.append(transaction.stage(group, audit_event_id, swap_set_id))
+        except BaseException:
+            transaction.rollback()
+            raise
+        transaction.commit()
+        self.multi_appends.append(graphs)
+        return tuple(appended)
 
     def read_entries(
         self, graph: str, *, after_position: int = 0, limit: int | None = None
@@ -332,7 +412,54 @@ class InMemoryGraphLogStore:
         self.marker_history.append((graph, position))
         self.marker_advanced.set()
         self.markers[graph] = max(self.markers.get(graph, 0), position)
+        if self.on_advance is not None:
+            self.on_advance(graph, position)
         return AppliedMarker(graph=graph, applied_position=self.markers[graph])
+
+    def read_swap_set(self, swap_set_id: uuid.UUID) -> tuple[SwapGroupRef, ...]:
+        if self.read_fault is not None:
+            self.read_fault.trigger()
+        return tuple(
+            sorted(
+                (
+                    SwapGroupRef(
+                        group_id=group.group_id,
+                        graph=group.graph,
+                        first_position=group.first_position,
+                        last_position=group.last_position,
+                        swap_set_id=swap_set_id,
+                    )
+                    for group in self.groups
+                    if group.swap_set_id == swap_set_id
+                ),
+                key=lambda ref: ref.graph,
+            )
+        )
+
+    def read_pending_swap_group(self, graph: str, applied_position: int) -> SwapGroupRef | None:
+        if self.read_fault is not None:
+            self.read_fault.trigger()
+        pending = [
+            group
+            for group in self.groups
+            if group.graph == graph
+            and group.swap_set_id is not None
+            and group.last_position > applied_position
+        ]
+        if self.after_pending_swap_read is not None:
+            hook, self.after_pending_swap_read = self.after_pending_swap_read, None
+            hook()
+        if not pending:
+            return None
+        first = min(pending, key=lambda group: group.first_position)
+        assert first.swap_set_id is not None
+        return SwapGroupRef(
+            group_id=first.group_id,
+            graph=graph,
+            first_position=first.first_position,
+            last_position=first.last_position,
+            swap_set_id=first.swap_set_id,
+        )
 
     def record_digest_checkpoint(
         self, graph: str, position: int, canonical_digest: str
@@ -388,7 +515,12 @@ class InMemoryTransaction:
         self.audit_rows.append(audit_event_id)
         return audit_event_id
 
-    def stage(self, group: GraphLogGroupDraft, audit_event_id: str | None) -> AppendedGroup:
+    def stage(
+        self,
+        group: GraphLogGroupDraft,
+        audit_event_id: str | None,
+        swap_set_id: uuid.UUID | None = None,
+    ) -> AppendedGroup:
         """Take the graph's transaction lock and assign the group the next contiguous positions."""
         graph = group.graph
         if graph not in self._held:
@@ -420,6 +552,7 @@ class InMemoryTransaction:
                     last_position=last_position,
                     audit_event_id="" if audit_event_id is None else audit_event_id,
                     entries=recorded,
+                    swap_set_id=swap_set_id,
                 ),
                 audit_event_id,
             )
@@ -430,6 +563,7 @@ class InMemoryTransaction:
             graph=graph,
             first_position=first_position,
             last_position=last_position,
+            swap_set_id=swap_set_id,
         )
 
     def commit(self) -> None:
@@ -446,6 +580,8 @@ class InMemoryTransaction:
         self._finish()
 
     def _finish(self) -> None:
+        if self._held:
+            self.store.lock_orders.append(tuple(self._held))
         self.audit_rows = []
         self._staged = []
         for lock in self._held.values():
@@ -526,6 +662,8 @@ class InMemoryGraph:
     Its queries are of kind `state`: bookkeeping that is neither a data write (no write fault, no
     event, not counted in a statement budget) nor a data read.
     """
+    on_write: Callable[[], None] | None = None
+    """Called before every data write (a test's observation point on a staged copy)."""
     writes_before_failure: int | None = None
     """When set, this many more writes succeed and every later write raises `write_error`."""
     write_error: Exception | None = None
@@ -581,7 +719,22 @@ class InMemoryGraph:
         self.write_fault = None
         self.index_fault = None
 
+    def clone(self) -> InMemoryGraph:
+        """A copy of this graph's data and indexes (as `GRAPH.COPY` makes it), with no faults."""
+        twin = InMemoryGraph(events=self.events)
+        twin.nodes = copy.deepcopy(self.nodes)
+        twin.edges = copy.deepcopy(self.edges)
+        twin.indexes = set(self.indexes)
+        twin._internal_ids = dict(self._internal_ids)
+        twin._next_internal_id = self._next_internal_id
+        twin._extra_labels = dict(self._extra_labels)
+        twin._edge_internal_ids = dict(self._edge_internal_ids)
+        twin._next_edge_internal_id = self._next_edge_internal_id
+        return twin
+
     def _raise_if_write_fails(self) -> None:
+        if self.on_write is not None:
+            self.on_write()
         if self.write_fault is not None:
             self.write_fault.trigger()
         if self.writes_before_failure is None:
@@ -948,6 +1101,116 @@ class InMemoryGraphs:
         return self.graphs.setdefault(name, InMemoryGraph(events=self.events))
 
 
+type Keys = frozenset[tuple[str, str]]
+"""The `(label, id)` keys of the nodes of one graph."""
+
+
+class InMemoryKeyPort:
+    """In-memory `GraphKeyPort` over an `InMemoryGraphs` key space, with observation hooks.
+
+    `copy` clones a graph (an absent source becomes an empty one), `discard` drops keys and the
+    swap renames staged keys over live ones under one mutex, which is what makes the flip atomic
+    for `observe`. Hooks run at the points a reader or a dying process could be at; faults
+    (`copy_fault`, `swap_conflicts`) are the engine failing.
+    """
+
+    def __init__(self, graphs: InMemoryGraphs) -> None:
+        self.graphs = graphs
+        self.copies: list[tuple[str, str]] = []
+        """`(source, destination)` of every copy, in order."""
+        self.discards: list[tuple[str, ...]] = []
+        """The names of every `discard` call that dropped something."""
+        self.swaps: list[tuple[tuple[str, str], ...]] = []
+        """The `(staged, live)` pairs of every swap that went through."""
+        self.watches: list[tuple[str, ...]] = []
+        """The live keys of every watch, in order."""
+        self.on_staged_write: Callable[[], None] | None = None
+        """Called before every write to a staged copy."""
+        self.before_copy: Callable[[str, str], None] | None = None
+        """Called with `(source, destination)` before a copy."""
+        self.after_copy: Callable[[str, str], None] | None = None
+        """Called with `(source, destination)` after a copy."""
+        self.before_swap: Callable[[], None] | None = None
+        """Called inside the watch, just before the rename."""
+        self.after_swap: Callable[[], None] | None = None
+        """Called just after the rename."""
+        self.copy_fault: Fault | None = None
+        self.swap_conflicts = 0
+        """How many of the next swaps the watch refuses."""
+        self.swap_fault: Fault | None = None
+        self.mutex = threading.Lock()
+
+    def copy(self, source: str, destination: str) -> None:
+        if self.before_copy is not None:
+            self.before_copy(source, destination)
+        if self.copy_fault is not None:
+            self.copy_fault.trigger()
+        with self.mutex:
+            twin = self.graphs.graphs[source].clone() if source in self.graphs.graphs else None
+            staged = twin if twin is not None else InMemoryGraph(events=self.graphs.events)
+            staged.on_write = self._staged_write
+            self.graphs.graphs[destination] = staged
+        self.copies.append((source, destination))
+        if self.after_copy is not None:
+            self.after_copy(source, destination)
+
+    def _staged_write(self) -> None:
+        if self.on_staged_write is not None:
+            self.on_staged_write()
+
+    def discard(self, *names: str) -> None:
+        with self.mutex:
+            dropped = tuple(name for name in names if name in self.graphs.graphs)
+            for name in dropped:
+                del self.graphs.graphs[name]
+        if dropped:
+            self.discards.append(dropped)
+
+    @contextlib.contextmanager
+    def watching(self, names: Sequence[str]) -> Generator[_InMemorySwapper]:
+        self.watches.append(tuple(names))
+        yield _InMemorySwapper(self)
+
+    def observe(self, *graphs: str) -> tuple[Keys, ...]:
+        """The node keys of each live graph, read as one consistent snapshot (a reader)."""
+        with self.mutex:
+            return tuple(
+                frozenset(self.graphs.graphs[name].nodes)
+                if name in self.graphs.graphs
+                else frozenset()
+                for name in graphs
+            )
+
+    def staged_names(self) -> list[str]:
+        """The staged keys the key space holds now."""
+        with self.mutex:
+            return sorted(name for name in self.graphs.graphs if "__swap__" in name)
+
+
+class _InMemorySwapper:
+    """The swap offered inside a `watching` block."""
+
+    def __init__(self, port: InMemoryKeyPort) -> None:
+        self._port = port
+
+    def swap_in(self, pairs: Sequence[tuple[str, str]]) -> None:
+        port = self._port
+        if port.before_swap is not None:
+            port.before_swap()
+        if port.swap_fault is not None:
+            port.swap_fault.trigger()
+        if port.swap_conflicts > 0:
+            port.swap_conflicts -= 1
+            raise SwapConflictError
+        with port.mutex:
+            for staged, live in pairs:
+                port.graphs.graphs[live] = port.graphs.graphs.pop(staged)
+                port.graphs.graphs[live].on_write = None
+        port.swaps.append(tuple(pairs))
+        if port.after_swap is not None:
+            port.after_swap()
+
+
 class SteppedWait:
     """A reconciler `wait` the test steps through: each backoff wait blocks until `resume()`.
 
@@ -1002,10 +1265,14 @@ class GatewayRig:
         reconciler_wait: Callable[[float], bool] | None = None,
         *,
         real_reconciler_wait: bool = False,
+        swap: bool = False,
     ) -> None:
         self.events: list[str] = []
         self.store = InMemoryGraphLogStore(events=self.events)
         self.graphs = InMemoryGraphs(events=self.events)
+        self.key_port = InMemoryKeyPort(self.graphs)
+        """The in-memory key space; only wired into the gateway when `swap` is set."""
+        self._swap = swap
         self._settings = settings
         self._emitter = emitter
         self._released = threading.Event()
@@ -1035,9 +1302,15 @@ class GatewayRig:
             emitter=self._emitter,
             sleep=self.sleeps.append,
             reconciler_wait=self._reconciler_wait,
+            key_port=self.key_port if self._swap else None,
         )
 
-    def restart(self) -> GraphWriteGateway:
-        """Replace the gateway by a fresh one over the same log and graphs (a process restart)."""
+    def restart(self, *, with_port: bool | None = None) -> GraphWriteGateway:
+        """Replace the gateway by a fresh one over the same log and graphs (a process restart).
+
+        `with_port` changes whether the new gateway has the key port (default: as before).
+        """
+        if with_port is not None:
+            self._swap = with_port
         self.gateway = self._new_gateway()
         return self.gateway

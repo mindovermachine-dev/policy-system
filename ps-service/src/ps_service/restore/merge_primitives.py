@@ -1,0 +1,349 @@
+"""The `policy_system` leg of a restore as gateway primitives (issue #214, D-1 Option A).
+
+The pre-#214 restore ran the offline baseline merge inside a `GRAPH.COPY` snapshot of
+`policy_system` (`restore_instrument._run_baseline_merge` over `snapshot_merge_writer`), because
+later steps read what earlier steps had written. The D-1 classification of that merge found that
+the only reads of its own writes are node existence by id (the provenance edges' endpoints, the
+classification edge endpoints, the rewired edges' endpoints). So the merge is rebuilt here from
+reads of the live graph and an overlay:
+
+- every decision that depends on graph content (Capability convergence, `MergedObligation`
+  redirects, which ids already exist) is read from `live` and made before anything is built;
+- an id counts as existing when `live` holds it or an earlier primitive of this same leg creates
+  it (`_Overlay`), which is exactly what the snapshot answered;
+- nothing is written: the result is a tuple of primitives, in the old write order, for one
+  `GraphLeg` that the caller submits with `ExpectedPosition(P)`, where P is the log position at
+  which `live` was read. The caller makes the graph caught up and reads that position first.
+
+The builders are the post-#210 pure builders of `company_merge.graph_writer`, so a restore and a
+live merge decide create-only, set-if-null and edge rewiring identically.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+
+from ps_service.company_merge import graph_reader
+from ps_service.company_merge.dedup import resolve_capability_convergence_offline
+from ps_service.company_merge.errors import CompanyMergePersistenceError
+from ps_service.company_merge.generated_values import SYSTEM_VALUES
+from ps_service.company_merge.governance_import import (
+    governance_count_fields,
+    import_draft_governance,
+)
+from ps_service.company_merge.graph_submission import read_rows
+from ps_service.company_merge.graph_writer import (
+    build_canonical_node_primitives,
+    build_draft_governance_primitives,
+    build_obligation_primitives,
+    build_practice_area_and_risk_path_primitives,
+    build_rewired_edge_primitives,
+    build_role_and_requirement_primitives,
+    classification_write_counts,
+    missing_classification_endpoints,
+    read_existing_ids,
+    rewired_edge_endpoint_ids,
+    unresolved_classification_endpoint_ids,
+)
+from ps_service.company_merge.models import GovernanceDraftCounts
+from ps_service.company_merge.obligation_redirect import resolve_obligation_redirects
+from ps_service.graph_gateway.models import UpsertNode
+from ps_service.logging.facade import emit_log_entry
+from ps_service.restore.baseline_reader import SerializedGraphReader
+from ps_service.restore.errors import ArtifactContentRejectedError, RestoreOwnerRequiredError
+from ps_service.restore.leg_primitives import embeddings_by_label
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.generated_values import ValueSource
+    from ps_service.company_merge.governance_import import GovernanceImport
+    from ps_service.company_merge.models import BaselineGraph, BaselineNode
+    from ps_service.export.models import SerializedGraph
+    from ps_service.graph_gateway.models import Primitive
+    from ps_service.logging.emitter import LogEmitter
+
+__all__ = ["PolicySystemLeg", "build_policy_system_leg"]
+
+_COMPONENT = "restore"
+_ACTION = "build_policy_system_leg"
+_ANY_LABEL_EXISTENCE_READ = "UNWIND $ids AS id MATCH (n {id: id}) RETURN id"
+_NODE_LABELS = (
+    "Role",
+    "Requirement",
+    "Obligation",
+    "Capability",
+    "Policy",
+    "Standard",
+    "Control",
+    "PracticeArea",
+    "RiskPath",
+)
+
+
+@dataclass(frozen=True)
+class PolicySystemLeg:
+    """What one restore does to `policy_system`, as primitives, and its audit counts."""
+
+    primitives: tuple[Primitive, ...]
+    counts: dict[str, int]
+    """The six classification keys and the three governance keys of the `succeeded` audit entry."""
+
+
+class _Overlay:
+    """The ids `live` held at the read position, plus the ids of the primitives built so far."""
+
+    def __init__(self, existing: dict[str, set[str]]) -> None:
+        self.existing = existing
+        self._created: dict[str, set[str]] = defaultdict(set)
+        self.primitives: list[Primitive] = []
+
+    def add(self, primitives: tuple[Primitive, ...]) -> None:
+        for primitive in primitives:
+            if isinstance(primitive, UpsertNode):
+                self._created[primitive.label].add(primitive.id)
+        self.primitives.extend(primitives)
+
+    def known(self, label: str) -> set[str]:
+        return self.existing.get(label, set()) | self._created.get(label, set())
+
+    def created_ids(self) -> set[str]:
+        return {node_id for ids in self._created.values() for node_id in ids}
+
+
+def _check_instrument(
+    baseline_graph: SerializedGraph, read: BaselineGraph, instrument_id: str
+) -> None:
+    """Refuse a manifest id that names no instrument of an artifact that holds some.
+
+    A baseline with no RegulatoryInstrument node at all is a legitimate no-op leg (native-only
+    fixtures). One that has an instrument under another id used to merge silently with every
+    instrument property blanked out.
+    """
+    if read.regulatory_instrument_properties:
+        return
+    if any(node.label == "RegulatoryInstrument" for node in baseline_graph.nodes):
+        raise ArtifactContentRejectedError(
+            f"no RegulatoryInstrument node with id {instrument_id!r} found in the baseline "
+            "graph -- the manifest's instrument_id must match the source graph's actual "
+            "RegulatoryInstrument.id"
+        )
+
+
+def _candidate_ids(
+    read: BaselineGraph,
+    new_capability_ids: set[str],
+    endpoint_ids: dict[str, set[str]],
+) -> dict[str, set[str]]:
+    """Per label, every id whose existence the build needs: nodes it may create, edge ends."""
+    nodes: dict[str, tuple[BaselineNode, ...]] = {
+        "Role": read.role_nodes,
+        "Requirement": read.requirement_nodes,
+        "Obligation": read.obligation_nodes,
+        "Policy": read.policy_nodes,
+        "Standard": read.standard_nodes,
+        "Control": read.control_nodes,
+        "PracticeArea": read.practice_area_nodes,
+        "RiskPath": read.risk_path_nodes,
+    }
+    candidates: dict[str, set[str]] = {
+        label: {n.id for n in found} for label, found in nodes.items()
+    }
+    candidates["Capability"] = set(new_capability_ids)
+    for label, ids in endpoint_ids.items():
+        candidates.setdefault(label, set()).update(ids)
+    return candidates
+
+
+def _read_known_ids_of_unresolved_endpoints(live: GraphHandle, unresolved: set[str]) -> set[str]:
+    if not unresolved:
+        return set()
+    rows = read_rows(live, _ANY_LABEL_EXISTENCE_READ, {"ids": sorted(unresolved)})
+    return {cast("str", row[0]) for row in rows}
+
+
+def build_policy_system_leg(
+    baseline_graph: SerializedGraph,
+    *,
+    instrument_id: str,
+    live: GraphHandle,
+    governance: GovernanceImport,
+    similarity_threshold: float,
+    emitter: LogEmitter | None,
+    values: ValueSource = SYSTEM_VALUES,
+) -> PolicySystemLeg:
+    """Build `baseline_graph`'s effect on `policy_system` as primitives, reading `live` only.
+
+    The caller reads `live` at a known log position P (graph caught up, position read, then this
+    call) and submits `primitives` as one leg with `ExpectedPosition(P)`; any write in between
+    moves the position and the gateway refuses the leg. Primitives come in the old write order:
+    instrument, Roles, Requirements, provenance edges, Obligations, Capability mints, draft
+    governance, PracticeArea and RiskPath nodes, then the rewired edges (regulatory spine,
+    governance and classification).
+
+    `governance` carries the restoring caller's owner and the artifact's Policy embeddings; an
+    artifact with a Policy and no owner is refused before `live` is read.
+
+    Raises:
+        RestoreOwnerRequiredError: the baseline carries governance content and `governance.owner`
+            is `None`.
+        ArtifactContentRejectedError: `instrument_id` matches no instrument of an artifact that
+            holds some.
+        CompanyMergeValidationError: an Obligation redirect's survivor no longer exists.
+        CompanyMergePersistenceError: a node carries a property the gateway cannot store, a
+            classification edge endpoint exists nowhere, an edge endpoint has no mapping entry,
+            or a read of `live` failed.
+    """
+    read = graph_reader.read_baseline_graph(SerializedGraphReader(baseline_graph), instrument_id)
+    if governance.owner is None and (
+        read.policy_nodes or read.standard_nodes or read.control_nodes
+    ):
+        raise RestoreOwnerRequiredError
+    _check_instrument(baseline_graph, read, instrument_id)
+
+    dedup_result = resolve_capability_convergence_offline(
+        read.capability_nodes,
+        incoming_embeddings=embeddings_by_label(baseline_graph, "Capability"),
+        single_tenant_graph=live,
+        threshold=similarity_threshold,
+        emitter=emitter,
+    )
+    # issue #190 (H1): drop Obligations a cleanup merge absorbed, before any build, and map them
+    # to their terminal survivor so the rewiring below re-targets their edges.
+    read, obligation_redirects = resolve_obligation_redirects(live, read, emitter=emitter)
+    canonical_id_by_incoming_id = {r.incoming_id: r.canonical_id for r in dedup_result.resolutions}
+    canonical_id_by_incoming_id.update(obligation_redirects)
+    for policy in read.policy_nodes:
+        canonical_id_by_incoming_id[policy.id] = policy.id  # a draft never converges (issue #183)
+
+    edges = read.bare_edges + read.governance_edges + read.classification_edges
+    endpoint_ids = rewired_edge_endpoint_ids(edges, canonical_id_by_incoming_id)
+    candidates = _candidate_ids(
+        read,
+        {r.canonical_id for r in dedup_result.resolutions if r.match_kind == "new"},
+        endpoint_ids,
+    )
+    overlay = _Overlay(
+        {label: read_existing_ids(live, label, ids) for label, ids in candidates.items()}
+    )
+    existing = overlay.existing
+
+    overlay.add(
+        build_role_and_requirement_primitives(
+            existing.get("Role", set()),
+            existing.get("Requirement", set()),
+            read.regulatory_instrument_id,
+            read.regulatory_instrument_properties,
+            read.role_nodes,
+            read.requirement_nodes,
+            read.provenance_edges,
+        )
+    )
+    overlay.add(
+        build_obligation_primitives(existing.get("Obligation", set()), read.obligation_nodes)
+    )
+    overlay.add(
+        build_canonical_node_primitives(
+            existing.get("Capability", set()),
+            read.capability_nodes,
+            dedup_result.resolutions,
+            kind="Capability",
+            values=values,
+        )
+    )
+    governance_counts = _add_draft_governance(
+        overlay, read, live, governance, canonical_id_by_incoming_id, values
+    )
+    overlay.add(
+        build_practice_area_and_risk_path_primitives(
+            existing.get("PracticeArea", set()),
+            existing.get("RiskPath", set()),
+            read.practice_area_nodes,
+            read.risk_path_nodes,
+        )
+    )
+    _check_classification_endpoints(overlay, live, read, canonical_id_by_incoming_id)
+    overlay.add(
+        build_rewired_edge_primitives(
+            {label: overlay.known(label) for label in endpoint_ids},
+            edges,
+            canonical_id_by_incoming_id,
+        )
+    )
+
+    counts = {**classification_write_counts(read), **governance_count_fields(governance_counts)}
+    emit_log_entry(
+        component=_COMPONENT,
+        action=_ACTION,
+        entity_id=instrument_id,
+        outcome="success",
+        extra={"primitive_count": len(overlay.primitives)},
+        emitter=emitter,
+    )
+    return PolicySystemLeg(primitives=tuple(overlay.primitives), counts=counts)
+
+
+def _add_draft_governance(
+    overlay: _Overlay,
+    read: BaselineGraph,
+    live: GraphHandle,
+    governance: GovernanceImport,
+    canonical_id_by_incoming_id: dict[str, str],
+    values: ValueSource,
+) -> GovernanceDraftCounts | None:
+    """Add the Policy/Standard/Control drafts (issue #183): create-only, `draft`, caller-owned."""
+    created_at = values.now().isoformat()
+
+    def collect(
+        _graph: GraphHandle,
+        policies: tuple[BaselineNode, ...],
+        standards: tuple[BaselineNode, ...],
+        controls: tuple[BaselineNode, ...],
+        /,
+        *,
+        owner: tuple[str, str],
+        policy_embeddings: Mapping[str, tuple[float, ...]] | None,
+    ) -> GovernanceDraftCounts:
+        nodes, overridden = build_draft_governance_primitives(
+            overlay.existing,
+            policies,
+            standards,
+            controls,
+            owner=owner,
+            policy_embeddings=policy_embeddings,
+            created_at=created_at,
+        )
+        overlay.add(nodes)
+        return GovernanceDraftCounts(len(policies), len(standards), len(controls), overridden)
+
+    return import_draft_governance(
+        read,
+        single_tenant_graph=live,
+        governance=governance,
+        canonical_id_by_incoming_id=canonical_id_by_incoming_id,
+        write_drafts=collect,
+    )
+
+
+def _check_classification_endpoints(
+    overlay: _Overlay,
+    live: GraphHandle,
+    read: BaselineGraph,
+    canonical_id_by_incoming_id: dict[str, str],
+) -> None:
+    """AC-BI-008: every classification edge endpoint must exist, in `live` or in this leg."""
+    unresolved = unresolved_classification_endpoint_ids(
+        read.classification_edges, canonical_id_by_incoming_id
+    )
+    known = _read_known_ids_of_unresolved_endpoints(live, unresolved) | overlay.created_ids()
+    missing = missing_classification_endpoints(
+        known, read.classification_edges, canonical_id_by_incoming_id
+    )
+    if missing:
+        raise CompanyMergePersistenceError(
+            f"classification edge endpoint(s) {sorted(missing)!r} not found in "
+            "the single-tenant graph"
+        )

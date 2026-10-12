@@ -98,6 +98,47 @@ def read_persisted_elements(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class GraphShape:
+    """What one graph holds, by key and by property NAMES only: no property value is kept.
+
+    What a replacing write needs to tell an element that already matches from one that holds
+    something the new content lacks, without keeping a 3,072-double embedding per node in memory.
+    A node's names exclude `id`; an edge's exclude `identity`, and an edge with no identity sits
+    under the `UNIDENTIFIED` slot of its key.
+    """
+
+    nodes: dict[NodeKey, frozenset[str]]
+    edges: dict[EdgeKey, frozenset[str]]
+
+
+def read_graph_shape(graph: GraphHandle, *, settings: DigestSettings | None = None) -> GraphShape:
+    """Read the key and property names of every node and edge of `graph` (read-only, chunked).
+
+    Raises:
+        UnexpectedGraphReplyError: a row has an unexpected shape, or names a node that carries
+            no string `id` or more or fewer than one label.
+    """
+    chosen = settings if settings is not None else DigestSettings()
+    return GraphShape(
+        nodes=dict(_scan(graph, DIGEST_NODE_SCAN, chosen.node_chunk_rows, _node_shape)),
+        edges=dict(_scan(graph, DIGEST_EDGE_SCAN, chosen.edge_chunk_rows, _edge_shape)),
+    )
+
+
+def _node_shape(row: object) -> tuple[int, tuple[NodeKey, frozenset[str]]]:
+    cursor, labels, *columns = _row(row, _SCAN_NODE_WIDTH)
+    properties = _properties(columns, drop="")
+    names = frozenset(properties) - {_ID}
+    return _cursor(cursor), ((_single_label(labels), _text(properties.get(_ID))), names)
+
+
+def _edge_shape(row: object) -> tuple[int, tuple[EdgeKey, frozenset[str]]]:
+    cursor, key = _edge_key(row)
+    columns = _row(row, _SCAN_EDGE_WIDTH)[-PROPERTY_COLUMN_COUNT:]
+    return cursor, (key, frozenset(_properties(columns, drop="")) - {_IDENTITY})
+
+
 def _legacy(key: EdgeKey) -> LegacyEdgeKey:
     return (key[0], key[1], key[2], key[3], key[4])
 

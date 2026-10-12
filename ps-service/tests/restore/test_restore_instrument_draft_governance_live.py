@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
 
-pytestmark = pytest.mark.falkordb_live
+pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
 _INSTRUMENT_DIR = Path(__file__).resolve().parents[3] / "curated-content" / "ENGPRAC-1.0"
 _SIMILARITY_THRESHOLD = 0.9
@@ -74,12 +74,28 @@ def _graph_counts(
 
 
 def _restore(db: FalkorDB, emitter: object, short_name: str, graph_name: str) -> None:
+    # The restore writes through the real gateway; its groups are anchored to a real
+    # `instrument.restore` audit row (the graph log's audit link is a foreign key into
+    # `audit_events`). Not run in the implementation sandbox.
+    config = load_config()
+    audit_event_id = PsycopgAuditStore(config).record_standalone_with_event_id(
+        actor_subject=_OWNER[0],
+        actor_issuer=_OWNER[1],
+        action="instrument.restore",
+        resource_type="instrument",
+        resource_id="ENGPRAC-1.0",
+        outcome="applied",
+        details={"instrument_id": "ENGPRAC-1.0", "status": "started", "source": "catalog"},
+    )
+    gateway = build_default_graph_write_gateway(config)
     restore_instrument(
         _artifact(short_name),
         db=db,
         single_tenant_graph_name=graph_name,
         similarity_threshold=_SIMILARITY_THRESHOLD,
         actor=_ACTOR,
+        open_gateway=lambda: gateway,
+        audit_event_id=audit_event_id,
         emitter=emitter,  # type: ignore[arg-type]
         owner=_OWNER,
     )

@@ -63,13 +63,19 @@ if TYPE_CHECKING:
 
 __all__ = [
     "backfill_canonical_embeddings",
+    "build_obligation_primitives",
+    "build_practice_area_and_risk_path_primitives",
     "classification_write_counts",
+    "missing_classification_endpoints",
     "persist_canonical_nodes",
     "persist_governance_drafts",
     "persist_obligation_passthrough",
     "persist_practice_area_and_risk_path_passthrough",
     "persist_rewired_edges",
     "persist_role_and_requirement_passthrough",
+    "read_existing_ids",
+    "rewired_edge_endpoint_ids",
+    "unresolved_classification_endpoint_ids",
     "validate_classification_edge_endpoints",
 ]
 
@@ -132,7 +138,7 @@ _EDGE_LABELS = tuple(sorted({label for pair in _EDGE_ENDPOINT_LABELS.values() fo
 """Every node label an edge endpoint can carry, sorted: the endpoint reads run in this order."""
 
 
-def _read_existing_ids(graph: GraphHandle, label: str, node_ids: Iterable[str]) -> set[str]:
+def read_existing_ids(graph: GraphHandle, label: str, node_ids: Iterable[str]) -> set[str]:
     """Which of `node_ids` are `label` nodes of `graph`: one batched read, ids via `params`.
 
     `label` is always one of this module's fixed label literals, never baseline- or LLM-sourced,
@@ -265,7 +271,7 @@ def persist_role_and_requirement_passthrough(
         CompanyMergePersistenceError: the existing-node read failed (`FalkorDB query failed:`), or
             the gateway did not take the group (`FalkorDB write failed:`).
     """
-    existing_roles = _read_existing_ids(
+    existing_roles = read_existing_ids(
         graph,
         _ROLE_LABEL,
         (
@@ -273,7 +279,7 @@ def persist_role_and_requirement_passthrough(
             *(e.target_id for e in provenance_edges if e.relationship_type == "DEFINES"),
         ),
     )
-    existing_requirements = _read_existing_ids(
+    existing_requirements = read_existing_ids(
         graph,
         _REQUIREMENT_LABEL,
         (
@@ -312,6 +318,20 @@ def count_new_obligations(single_tenant_graph: GraphHandle, obligation_ids: tupl
     return len(set(unique_ids) - {cast("str", row[0]) for row in rows})
 
 
+def build_obligation_primitives(
+    existing: set[str], obligation_nodes: tuple[BaselineNode, ...]
+) -> tuple[UpsertNode, ...]:
+    """One create-only `Obligation` primitive per id `existing` lacks, the first occurrence kept.
+
+    Pure: nothing is read or submitted. An Obligation the graph holds keeps every property and is
+    left out of the group.
+
+    Raises:
+        CompanyMergePersistenceError: a node carries a property the gateway cannot store.
+    """
+    return _create_only_nodes(_OBLIGATION_LABEL, obligation_nodes, existing)
+
+
 def persist_obligation_passthrough(
     target: GraphWriteTarget,
     single_tenant_graph: GraphHandle,
@@ -337,10 +357,10 @@ def persist_obligation_passthrough(
             node carries a property the gateway cannot store, or the gateway did not take the
             group (`FalkorDB write failed:`).
     """
-    existing = _read_existing_ids(
+    existing = read_existing_ids(
         single_tenant_graph, _OBLIGATION_LABEL, (node.id for node in obligation_nodes)
     )
-    submit_group(target, _create_only_nodes(_OBLIGATION_LABEL, obligation_nodes, existing))
+    submit_group(target, build_obligation_primitives(existing, obligation_nodes))
 
 
 def build_draft_governance_primitives(
@@ -451,7 +471,7 @@ def persist_governance_drafts(
     """
     created_at = values.now().isoformat()
     existing = {
-        label: _read_existing_ids(single_tenant_graph, label, (node.id for node in nodes))
+        label: read_existing_ids(single_tenant_graph, label, (node.id for node in nodes))
         for label, nodes in (
             (_POLICY_LABEL, policy_nodes),
             (_STANDARD_LABEL, standard_nodes),
@@ -480,6 +500,26 @@ def _status_override_count(properties: dict[str, object]) -> int:
     """Return 1 when the artifact authored a `status` other than `draft`, else 0."""
     authored = properties.get("status")
     return 1 if authored is not None and authored != _DRAFT_STATUS else 0
+
+
+def build_practice_area_and_risk_path_primitives(
+    existing_practice_areas: set[str],
+    existing_risk_paths: set[str],
+    practice_area_nodes: tuple[BaselineNode, ...],
+    risk_path_nodes: tuple[BaselineNode, ...],
+) -> tuple[UpsertNode, ...]:
+    """The create-only PracticeArea primitives, then the create-only RiskPath primitives.
+
+    Pure: nothing is read or submitted. An id the graph holds is left out; for a repeated id the
+    first occurrence wins; every PracticeArea precedes every RiskPath.
+
+    Raises:
+        CompanyMergePersistenceError: a node carries a property the gateway cannot store.
+    """
+    return (
+        *_create_only_nodes(_PRACTICE_AREA_LABEL, practice_area_nodes, existing_practice_areas),
+        *_create_only_nodes(_RISK_PATH_LABEL, risk_path_nodes, existing_risk_paths),
+    )
 
 
 def persist_practice_area_and_risk_path_passthrough(
@@ -515,18 +555,50 @@ def persist_practice_area_and_risk_path_passthrough(
             node carries a property the gateway cannot store, or the gateway did not take the
             group (`FalkorDB write failed:`).
     """
-    existing_practice_areas = _read_existing_ids(
+    existing_practice_areas = read_existing_ids(
         single_tenant_graph, _PRACTICE_AREA_LABEL, (node.id for node in practice_area_nodes)
     )
-    existing_risk_paths = _read_existing_ids(
+    existing_risk_paths = read_existing_ids(
         single_tenant_graph, _RISK_PATH_LABEL, (node.id for node in risk_path_nodes)
     )
     submit_group(
         target,
-        (
-            *_create_only_nodes(_PRACTICE_AREA_LABEL, practice_area_nodes, existing_practice_areas),
-            *_create_only_nodes(_RISK_PATH_LABEL, risk_path_nodes, existing_risk_paths),
+        build_practice_area_and_risk_path_primitives(
+            existing_practice_areas, existing_risk_paths, practice_area_nodes, risk_path_nodes
         ),
+    )
+
+
+def unresolved_classification_endpoint_ids(
+    classification_edges: tuple[BareEdge, ...], canonical_id_by_incoming_id: dict[str, str]
+) -> set[str]:
+    """The endpoint ids of `classification_edges` that have no canonical-map entry (pure).
+
+    These are the endpoints whose existence must be known before a classification edge is
+    written: PracticeArea/RiskPath sources and `VERIFIED_BY`'s Control target.
+    """
+    return {
+        endpoint_id
+        for edge in classification_edges
+        for endpoint_id in (edge.source_id, edge.target_id)
+        if endpoint_id not in canonical_id_by_incoming_id
+    }
+
+
+def missing_classification_endpoints(
+    known_ids: set[str],
+    classification_edges: tuple[BareEdge, ...],
+    canonical_id_by_incoming_id: dict[str, str],
+) -> set[str]:
+    """The unresolved endpoint ids of `classification_edges` that `known_ids` does not hold (pure).
+
+    `known_ids` is every node id the graph holds (or will hold once the group is applied). The
+    live check (`validate_classification_edge_endpoints`) and the in-memory one Restore makes over
+    its primitives so far share this decision.
+    """
+    return (
+        unresolved_classification_endpoint_ids(classification_edges, canonical_id_by_incoming_id)
+        - known_ids
     )
 
 
@@ -565,11 +637,9 @@ def validate_classification_edge_endpoints(
     endpoint absent from `canonical_id_by_incoming_id` is also absent from
     `single_tenant_graph`.
     """
-    unresolved_ids: set[str] = set()
-    for edge in classification_edges:
-        for endpoint_id in (edge.source_id, edge.target_id):
-            if endpoint_id not in canonical_id_by_incoming_id:
-                unresolved_ids.add(endpoint_id)
+    unresolved_ids = unresolved_classification_endpoint_ids(
+        classification_edges, canonical_id_by_incoming_id
+    )
     if not unresolved_ids:
         return
     rows = read_rows(
@@ -578,7 +648,9 @@ def validate_classification_edge_endpoints(
         {"ids": sorted(unresolved_ids)},
     )
     existing_ids = {cast("str", row[0]) for row in rows}
-    missing = unresolved_ids - existing_ids
+    missing = missing_classification_endpoints(
+        existing_ids, classification_edges, canonical_id_by_incoming_id
+    )
     if missing:
         raise CompanyMergePersistenceError(
             f"classification edge endpoint(s) {sorted(missing)!r} not found in "
@@ -694,7 +766,7 @@ def persist_canonical_nodes(
             node carries a property the gateway cannot store, or the gateway did not take the
             group (`FalkorDB write failed:`).
     """
-    existing = _read_existing_ids(
+    existing = read_existing_ids(
         single_tenant_graph,
         kind,
         (r.canonical_id for r in resolutions if r.match_kind == "new"),
@@ -905,6 +977,31 @@ def build_rewired_edge_primitives(
     return tuple(edges.values())
 
 
+def rewired_edge_endpoint_ids(
+    bare_edges: tuple[BareEdge, ...], canonical_id_by_incoming_id: dict[str, str]
+) -> dict[str, set[str]]:
+    """The node ids `bare_edges` will touch after the rewrite, per endpoint label (pure).
+
+    Validates first (`_validate_rewired_edge_endpoints`): a dedupe-eligible endpoint without a
+    mapping entry raises before anything is read. Every label of the Edge Catalog is a key, so a
+    caller can read the existing ids of each label in one batched read per label.
+
+    Raises:
+        CompanyMergePersistenceError: a dedupe-eligible endpoint has no mapping entry.
+    """
+    _validate_rewired_edge_endpoints(bare_edges, canonical_id_by_incoming_id)
+    endpoint_ids: dict[str, set[str]] = {label: set() for label in _EDGE_LABELS}
+    for edge in bare_edges:
+        source_label, target_label = _EDGE_ENDPOINT_LABELS[edge.relationship_type]
+        endpoint_ids[source_label].add(
+            canonical_id_by_incoming_id.get(edge.source_id, edge.source_id)
+        )
+        endpoint_ids[target_label].add(
+            canonical_id_by_incoming_id.get(edge.target_id, edge.target_id)
+        )
+    return endpoint_ids
+
+
 def persist_rewired_edges(
     target: GraphWriteTarget,
     single_tenant_graph: GraphHandle,
@@ -939,18 +1036,9 @@ def persist_rewired_edges(
             writes nothing), an endpoint read failed (`FalkorDB query failed:`), or the gateway
             did not take the group (`FalkorDB write failed:`).
     """
-    _validate_rewired_edge_endpoints(bare_edges, canonical_id_by_incoming_id)
-    endpoint_ids: dict[str, set[str]] = {label: set() for label in _EDGE_LABELS}
-    for edge in bare_edges:
-        source_label, target_label = _EDGE_ENDPOINT_LABELS[edge.relationship_type]
-        endpoint_ids[source_label].add(
-            canonical_id_by_incoming_id.get(edge.source_id, edge.source_id)
-        )
-        endpoint_ids[target_label].add(
-            canonical_id_by_incoming_id.get(edge.target_id, edge.target_id)
-        )
+    endpoint_ids = rewired_edge_endpoint_ids(bare_edges, canonical_id_by_incoming_id)
     existing = {
-        label: _read_existing_ids(single_tenant_graph, label, ids)
+        label: read_existing_ids(single_tenant_graph, label, ids)
         for label, ids in endpoint_ids.items()
     }
     submit_group(

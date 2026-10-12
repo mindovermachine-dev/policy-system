@@ -1,133 +1,123 @@
 """Offline restore follows `MERGED_INTO` tombstone redirects (issue #190, AC-BI-008/009).
 
-A restored baseline artifact regenerates a Capability whose id is a `merged`
-tombstone in the target deployment. The offline Company Merge pass resolves it
-through `MERGED_INTO` to the survivor: the incoming `REQUIRES` edge attaches to
-the survivor and no Capability node is minted. Fakes are hand-written and
-satisfy `GraphHandle` structurally, mirroring the sibling restore tests.
+A restored baseline artifact regenerates a Capability whose id is a `merged` tombstone in the
+target deployment. The restore resolves it through `MERGED_INTO` to the survivor: the incoming
+`REQUIRES` edge attaches to the survivor and no Capability node is minted. Since #214 the
+`policy_system` leg is a tuple of gateway primitives built from reads of the live graph, so the
+expectations are asserted on primitives. The live graph is a hand-written fake satisfying
+`GraphHandle` structurally, mirroring the sibling restore tests.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+import pytest
 
-import ps_service.restore.restore_instrument as restore_instrument_module
+from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.domain_mapper.identity import capability_id, obligation_id
-
-if TYPE_CHECKING:
-    from falkordb import FalkorDB
-
-    from ps_service.company_merge.falkordb_client import GraphHandle
+from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
+from ps_service.graph_gateway.models import UpsertEdge, UpsertNode
+from ps_service.logging import configure
+from ps_service.restore.merge_primitives import build_policy_system_leg
+from restore._gateway_fakes import ScriptedLive
 
 _THRESHOLD = 0.85
 _INSTRUMENT_ID = "REG-R-1.0"
 
 
-class _FakeQueryResult:
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
+@pytest.fixture(autouse=True)
+def logging_configured() -> None:
+    configure()
 
 
-class _FakeRegulatoryInstrumentNode:
-    def __init__(self, properties: dict[str, object]) -> None:
-        self.properties = properties
+def _baseline(
+    *, capability_id_value: str, obligation_id_value: str, embedding: list[float]
+) -> SerializedGraph:
+    """One Obligation requiring one Capability (which carries the artifact's embedding)."""
+    return SerializedGraph(
+        nodes=(
+            SerializedNode("RegulatoryInstrument", {"id": _INSTRUMENT_ID, "title": "R"}),
+            SerializedNode(
+                "Obligation",
+                {"id": obligation_id_value, "text": "Do the thing.", "confidence": 0.9},
+            ),
+            SerializedNode(
+                "Capability",
+                {
+                    "id": capability_id_value,
+                    "name": "Absorbed",
+                    "confidence": 0.8,
+                    "embedding": embedding,
+                },
+            ),
+        ),
+        edges=(
+            SerializedEdge(
+                "REQUIRES",
+                "Obligation",
+                obligation_id_value,
+                "Capability",
+                capability_id_value,
+                {},
+            ),
+        ),
+    )
 
 
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
+def _live(*, absorbed_id: str, survivor_id: str) -> ScriptedLive:
+    """The live `policy_system`: two Capabilities, one of them a tombstone of the other."""
 
-
-class _FakeBaselineGraph:
-    """One Obligation requiring one Capability; every other `read_baseline_graph` read is empty."""
-
-    def __init__(self, *, capability_id_value: str, obligation_id_value: str) -> None:
-        self._capability_id = capability_id_value
-        self._obligation_id = obligation_id_value
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        if "[:REQUIRES]" in q:
-            return _FakeQueryResult([[self._obligation_id, self._capability_id]])
-        if "(n:PracticeArea)" in q or "(n:RiskPath)" in q:
-            return _FakeQueryResult([])
-        if "n.description" in q:
-            return _FakeQueryResult([[self._capability_id, "Absorbed", 0.8, None, None]])
-        if "(n:Obligation) RETURN" in q:
-            return _FakeQueryResult([[self._obligation_id, "Do the thing.", 0.9]])
-        if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
-            return _FakeQueryResult(
-                [[_FakeRegulatoryInstrumentNode({"id": _INSTRUMENT_ID, "title": "R"})]]
-            )
-        return _FakeQueryResult([])
-
-
-class _FakeSnapshotGraph:
-    """The restore snapshot copy of the single-tenant graph: two Capabilities, one tombstoned."""
-
-    def __init__(self, *, absorbed_id: str, survivor_id: str) -> None:
-        self._absorbed_id = absorbed_id
-        self._survivor_id = survivor_id
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
+    def answer(q: str, params: dict[str, object] | None) -> list[object] | None:
+        del params
         if "MergedObligation" in q:
-            return _FakeQueryResult([])
+            return []
         if "MERGED_INTO" in q:
-            return _FakeQueryResult([[self._absorbed_id, self._survivor_id]])
+            return [[absorbed_id, survivor_id]]
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
-            return _FakeQueryResult(
-                [
-                    [self._absorbed_id, "Absorbed", [1.0, 0.0]],
-                    [self._survivor_id, "Survivor", [0.0, 1.0]],
-                ]
-            )
-        if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
-            return _FakeQueryResult([])
-        return _FakeQueryResult([[0]])
+            return [
+                [absorbed_id, "Absorbed", [1.0, 0.0]],
+                [survivor_id, "Survivor", [0.0, 1.0]],
+            ]
+        return None
 
-    def matching(self, substring: str) -> list[_RecordedCall]:
-        return [c for c in self.calls if substring in c.query]
+    return ScriptedLive(existing={"Capability": {absorbed_id, survivor_id}}, answer=answer)
 
 
-class _FakeDb:
-    def __init__(self, graphs: dict[str, GraphHandle]) -> None:
-        self._graphs = graphs
+def _build(baseline: SerializedGraph, live: ScriptedLive) -> tuple[UpsertNode | UpsertEdge, ...]:
+    leg = build_policy_system_leg(
+        baseline,
+        instrument_id=_INSTRUMENT_ID,
+        live=live,
+        governance=GovernanceImport(),
+        similarity_threshold=_THRESHOLD,
+        emitter=None,
+    )
+    return tuple(p for p in leg.primitives if isinstance(p, UpsertNode | UpsertEdge))
 
-    def select_graph(self, name: str) -> GraphHandle:
-        return self._graphs[name]
+
+def _requires(primitives: tuple[UpsertNode | UpsertEdge, ...]) -> list[tuple[str, str]]:
+    return [
+        (p.source.id, p.target.id)
+        for p in primitives
+        if isinstance(p, UpsertEdge) and p.type == "REQUIRES"
+    ]
+
+
+def _capabilities(primitives: tuple[UpsertNode | UpsertEdge, ...]) -> list[UpsertNode]:
+    return [p for p in primitives if isinstance(p, UpsertNode) and p.label == "Capability"]
 
 
 def test_restore_attaches_requires_to_survivor_and_mints_no_capability() -> None:
     absorbed_id = capability_id("Absorbed")
     survivor_id = capability_id("Survivor")
     obl_id = obligation_id("role_r", "Do the thing.")
-    baseline = _FakeBaselineGraph(capability_id_value=absorbed_id, obligation_id_value=obl_id)
-    snapshot = _FakeSnapshotGraph(absorbed_id=absorbed_id, survivor_id=survivor_id)
-    fake_db = cast(
-        "FalkorDB",
-        _FakeDb({"baseline__restoring__t": baseline, "policy_system__restoring__t": snapshot}),
+    baseline = _baseline(
+        capability_id_value=absorbed_id, obligation_id_value=obl_id, embedding=[1.0, 0.0]
     )
 
-    restore_instrument_module._run_baseline_merge(  # pyright: ignore[reportPrivateUsage]
-        fake_db,
-        "baseline__restoring__t",
-        _INSTRUMENT_ID,
-        {absorbed_id: (1.0, 0.0)},
-        _THRESHOLD,
-        "policy_system__restoring__t",
-        None,
-    )
+    primitives = _build(baseline, _live(absorbed_id=absorbed_id, survivor_id=survivor_id))
 
-    assert snapshot.matching("MERGE (n:Capability {id: $id}) ON CREATE SET") == []
-    requires_writes = snapshot.matching("[:REQUIRES]")
-    assert [c.params for c in requires_writes] == [{"source_id": obl_id, "target_id": survivor_id}]
+    assert _capabilities(primitives) == []
+    assert _requires(primitives) == [(obl_id, survivor_id)]
 
 
 def test_restore_never_scores_a_tombstone_as_a_semantic_candidate() -> None:
@@ -136,24 +126,12 @@ def test_restore_never_scores_a_tombstone_as_a_semantic_candidate() -> None:
     survivor_id = capability_id("Survivor")
     new_id = capability_id("Brand New")
     obl_id = obligation_id("role_r", "Do the thing.")
-    baseline = _FakeBaselineGraph(capability_id_value=new_id, obligation_id_value=obl_id)
-    snapshot = _FakeSnapshotGraph(absorbed_id=tomb_id, survivor_id=survivor_id)
-    fake_db = cast(
-        "FalkorDB",
-        _FakeDb({"baseline__restoring__t": baseline, "policy_system__restoring__t": snapshot}),
-    )
-
     # Identical to the tombstone's vector: would semantic-merge onto it if it were a candidate.
-    restore_instrument_module._run_baseline_merge(  # pyright: ignore[reportPrivateUsage]
-        fake_db,
-        "baseline__restoring__t",
-        _INSTRUMENT_ID,
-        {new_id: (1.0, 0.0)},
-        _THRESHOLD,
-        "policy_system__restoring__t",
-        None,
+    baseline = _baseline(
+        capability_id_value=new_id, obligation_id_value=obl_id, embedding=[1.0, 0.0]
     )
 
-    requires_writes = snapshot.matching("[:REQUIRES]")
-    assert [c.params for c in requires_writes] == [{"source_id": obl_id, "target_id": new_id}]
-    assert len(snapshot.matching("MERGE (n:Capability {id: $id}) ON CREATE SET")) == 1
+    primitives = _build(baseline, _live(absorbed_id=tomb_id, survivor_id=survivor_id))
+
+    assert _requires(primitives) == [(obl_id, new_id)]
+    assert len(_capabilities(primitives)) == 1

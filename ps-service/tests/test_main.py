@@ -1576,6 +1576,7 @@ def test_startup_after_the_provisioning_cli_on_an_empty_database_applies_nothing
         ("runtime_config", "0001_runtime_config.sql"),
         ("ingestion_runs", "0001_ingestion_runs.sql"),
         ("graph_gateway", "0001_graph_mutation_log.sql"),
+        ("graph_gateway", "0002_group_swap_set.sql"),
     } <= tracked
 
 

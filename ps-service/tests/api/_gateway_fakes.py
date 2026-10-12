@@ -103,7 +103,7 @@ def process_gateway_installed() -> Generator[ProcessGateway]:
     The state the app lifespan creates in production, for the catalog pipeline, the MCP tools
     and the amendment sweep, which run outside a request and cannot be injected.
     """
-    rig = GatewayRig()
+    rig = GatewayRig(swap=True)  # a restore is applied by swap (issue #214)
     system_audit = RecordingSystemAudit(rig)
     install_process_gateway(rig, system_audit)
     installed = ProcessGateway(rig, system_audit)

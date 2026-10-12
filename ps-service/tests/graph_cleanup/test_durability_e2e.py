@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from authz._fakes import FakeAccessRoleStore
 
-import ps_service.restore.restore_instrument as restore_instrument_module
 from graph_cleanup._fakes import (
     ABSORBED,
     OBL_ABSORBED,
@@ -28,9 +27,11 @@ from graph_cleanup._fakes import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
+from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.company_merge.models import BaselineGraph, BaselineNode
 from ps_service.company_merge.obligation_redirect import resolve_obligation_redirects
 from ps_service.config import ServiceConfig
+from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 from ps_service.graph_cleanup.executors import (
     TOOL_MERGE_CAPABILITIES,
     TOOL_MERGE_OBLIGATIONS,
@@ -45,12 +46,12 @@ from ps_service.graph_cleanup.graph_reader import (
 )
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
 from ps_service.graph_cleanup.obligation_planner import plan_obligation_merge
+from ps_service.graph_gateway.models import UpsertEdge, UpsertNode
 from ps_service.logging import configure
 from ps_service.passkey_signing.models import PendingApprovalRow
+from ps_service.restore.merge_primitives import PolicySystemLeg, build_policy_system_leg
 
 if TYPE_CHECKING:
-    from falkordb import FalkorDB
-
     from graph_cleanup._gateway_fakes import CleanupRig
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
@@ -81,11 +82,6 @@ class _Result:
         self.result_set = result_set
 
 
-class _Node:
-    def __init__(self, properties: dict[str, object]) -> None:
-        self.properties = properties
-
-
 @dataclass
 class _Persisted:
     """What the single-tenant graph holds after the merge, read back from the rig graph."""
@@ -108,12 +104,10 @@ class _Persisted:
             rows: list[object] = [[s, "Survivor", [0.0, 1.0]] for s in sorted(self.survivors)]
             rows += [[t, "Absorbed", [1.0, 0.0]] for t in self.tombstones]
             return _Result(rows)
-        if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
-            return _Result([])
-        return _Result([[0]])
-
-    def writes(self, fragment: str) -> list[dict[str, object] | None]:
-        return [p for q, p in self.calls if fragment in q]
+        if "WHERE n.id IN $ids RETURN n.id" in q:  # the restore's batched existence reads
+            ids = cast("list[str]", (params or {})["ids"])
+            return _Result([[i] for i in ids if i in self.survivors])
+        return _Result([])
 
 
 def _roles() -> FakeAccessRoleStore:
@@ -223,74 +217,78 @@ def test_live_ingest_after_a_capability_merge_resolves_to_the_survivor_and_mints
     assert result.near_misses == ()
 
 
-class _CapabilityBaseline:
+def _edge(kind: str, source: tuple[str, str], target: tuple[str, str]) -> SerializedEdge:
+    return SerializedEdge(kind, source[0], source[1], target[0], target[1], {})
+
+
+def _capability_baseline(embedding: list[float]) -> SerializedGraph:
     """The baseline artifact regenerates the absorbed Capability, required by one Obligation."""
+    return SerializedGraph(
+        nodes=(
+            SerializedNode("RegulatoryInstrument", {"id": _INSTRUMENT_ID, "title": "R"}),
+            SerializedNode(
+                "Obligation", {"id": _OBLIGATION, "text": "Do the thing.", "confidence": 0.9}
+            ),
+            SerializedNode(
+                "Capability",
+                {"id": ABSORBED, "name": "Absorbed", "confidence": 0.8, "embedding": embedding},
+            ),
+        ),
+        edges=(_edge("REQUIRES", ("Obligation", _OBLIGATION), ("Capability", ABSORBED)),),
+    )
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
-        del params
-        if "[:REQUIRES]" in q:
-            return _Result([[_OBLIGATION, ABSORBED]])
-        if "(n:PracticeArea)" in q or "(n:RiskPath)" in q:
-            return _Result([])
-        if "n.description" in q:
-            return _Result([[ABSORBED, "Absorbed", 0.8, None, None]])
-        if "(n:Obligation) RETURN" in q:
-            return _Result([[_OBLIGATION, "Do the thing.", 0.9]])
-        if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
-            return _Result([[_Node({"id": _INSTRUMENT_ID, "title": "R"})]])
-        return _Result([])
 
-
-class _ObligationBaseline:
+def _obligation_baseline() -> SerializedGraph:
     """The baseline artifact regenerates the absorbed Obligation under its Role."""
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
-        del params
-        if "[:HAS]" in q:
-            return _Result([[_ROLE, OBL_ABSORBED]])
-        if "[:SATISFIED_BY]" in q:
-            return _Result([[_REQUIREMENT, OBL_ABSORBED]])
-        if "[:REQUIRES]" in q:
-            return _Result([[OBL_ABSORBED, "cap_1"]])
-        if any(f"(n:{label})" in q for label in ("PracticeArea", "RiskPath")):
-            return _Result([])
-        if "n.description" in q:
-            return _Result([["cap_1", "Thing Doing", 0.8, None, None]])
-        if "(n:Obligation) RETURN" in q:
-            return _Result([[OBL_ABSORBED, "Report  incidents.", 0.9]])
-        if "n.role_id" in q:
-            return _Result([[_REQUIREMENT, "Must do.", "requirement", 0.9, _ROLE]])
-        if "n.name, n.confidence" in q:
-            return _Result([[_ROLE, "Operator", 0.9]])
-        if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
-            return _Result([[_Node({"id": _INSTRUMENT_ID, "title": "R"})]])
-        return _Result([])
-
-
-class _Db:
-    def __init__(self, graphs: dict[str, object]) -> None:
-        self._graphs = graphs
-
-    def select_graph(self, name: str) -> object:
-        return self._graphs[name]
-
-
-def _restore(
-    baseline: object, persisted: _Persisted, embeddings: dict[str, tuple[float, ...]]
-) -> None:
-    db = cast(
-        "FalkorDB",
-        _Db({"baseline__restoring__t": baseline, "policy_system__restoring__t": persisted}),
+    return SerializedGraph(
+        nodes=(
+            SerializedNode("RegulatoryInstrument", {"id": _INSTRUMENT_ID, "title": "R"}),
+            SerializedNode("Role", {"id": _ROLE, "name": "Operator", "confidence": 0.9}),
+            SerializedNode(
+                "Requirement",
+                {
+                    "id": _REQUIREMENT,
+                    "text": "Must do.",
+                    "type": "requirement",
+                    "confidence": 0.9,
+                    "role_id": _ROLE,
+                },
+            ),
+            SerializedNode(
+                "Obligation", {"id": OBL_ABSORBED, "text": "Report  incidents.", "confidence": 0.9}
+            ),
+            SerializedNode("Capability", {"id": "cap_1", "name": "Thing Doing", "confidence": 0.8}),
+        ),
+        edges=(
+            _edge("HAS", ("Role", _ROLE), ("Obligation", OBL_ABSORBED)),
+            _edge("SATISFIED_BY", ("Requirement", _REQUIREMENT), ("Obligation", OBL_ABSORBED)),
+            _edge("REQUIRES", ("Obligation", OBL_ABSORBED), ("Capability", "cap_1")),
+        ),
     )
-    restore_instrument_module._run_baseline_merge(  # pyright: ignore[reportPrivateUsage]
-        db,
-        "baseline__restoring__t",
-        _INSTRUMENT_ID,
-        embeddings,
-        _THRESHOLD,
-        "policy_system__restoring__t",
-        None,
+
+
+def _restore(baseline: SerializedGraph, persisted: _Persisted) -> PolicySystemLeg:
+    """The `policy_system` leg of a restore of `baseline`, built over what the merge persisted."""
+    return build_policy_system_leg(
+        baseline,
+        instrument_id=_INSTRUMENT_ID,
+        live=cast("GraphHandle", persisted),
+        governance=GovernanceImport(),
+        similarity_threshold=_THRESHOLD,
+        emitter=None,
     )
+
+
+def _nodes(leg: PolicySystemLeg, label: str) -> list[UpsertNode]:
+    return [p for p in leg.primitives if isinstance(p, UpsertNode) and p.label == label]
+
+
+def _edges(leg: PolicySystemLeg, edge_type: str) -> list[tuple[str, str]]:
+    return [
+        (p.source.id, p.target.id)
+        for p in leg.primitives
+        if isinstance(p, UpsertEdge) and p.type == edge_type
+    ]
 
 
 def test_offline_restore_after_a_capability_merge_attaches_to_the_survivor_and_mints_nothing(
@@ -298,10 +296,10 @@ def test_offline_restore_after_a_capability_merge_attaches_to_the_survivor_and_m
 ) -> None:
     persisted = _merge_capabilities(cleanup_rig)
 
-    _restore(_CapabilityBaseline(), persisted, {ABSORBED: (1.0, 0.0)})
+    leg = _restore(_capability_baseline([1.0, 0.0]), persisted)
 
-    assert persisted.writes("MERGE (n:Capability {id: $id}) ON CREATE SET") == []
-    assert persisted.writes("[:REQUIRES]") == [{"source_id": _OBLIGATION, "target_id": SURVIVOR}]
+    assert _nodes(leg, "Capability") == []
+    assert _edges(leg, "REQUIRES") == [(_OBLIGATION, SURVIVOR)]
 
 
 def _obligation_baseline_graph() -> BaselineGraph:
@@ -339,11 +337,9 @@ def test_offline_restore_after_an_obligation_merge_re_targets_onto_the_survivor(
 ) -> None:
     persisted = _merge_obligations(cleanup_rig)
 
-    _restore(_ObligationBaseline(), persisted, {})
+    leg = _restore(_obligation_baseline(), persisted)
 
-    assert persisted.writes("MERGE (n:Obligation {id: $id}) ON CREATE SET") == []
-    assert persisted.writes("[:SATISFIED_BY]") == [
-        {"source_id": _REQUIREMENT, "target_id": OBL_SURVIVOR}
-    ]
-    assert persisted.writes("[:REQUIRES]") == [{"source_id": OBL_SURVIVOR, "target_id": "cap_1"}]
-    assert persisted.writes("[:HAS]") == [{"source_id": _ROLE, "target_id": OBL_SURVIVOR}]
+    assert _nodes(leg, "Obligation") == []
+    assert _edges(leg, "SATISFIED_BY") == [(_REQUIREMENT, OBL_SURVIVOR)]
+    assert _edges(leg, "REQUIRES") == [(OBL_SURVIVOR, "cap_1")]
+    assert _edges(leg, "HAS") == [(_ROLE, OBL_SURVIVOR)]

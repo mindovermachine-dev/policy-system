@@ -35,6 +35,7 @@ from ps_service.api.dependencies import (
     provide_audit_store,
     provide_restore_from_catalog_dependencies,
 )
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.restore_orchestration import CatalogRestoreDependencies
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth.models import Principal
@@ -50,6 +51,7 @@ from ps_service.runtime_config import RuntimeConfigUnavailableError
 
 if TYPE_CHECKING:
     import urllib.request
+    from collections.abc import Callable
     from pathlib import Path
 
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
@@ -136,6 +138,8 @@ class _FakeCatalogRestoreStage:
         single_tenant_graph_name: str,
         similarity_threshold: float,
         actor: str,
+        open_gateway: Callable[[], object] | None = None,
+        audit_event_id: str = "",
         emitter: object | None = None,
         source: str | None = None,
         owner: tuple[str, str] | None = None,
@@ -186,6 +190,7 @@ def _fake_dependencies(
         open_db=lambda config: cast("FalkorDB", _FakeDb()),
         single_tenant_graph_name=lambda config: "policy_system",
         restore=stage,
+        graph_write_access=graph_write_access,
     )
 
 

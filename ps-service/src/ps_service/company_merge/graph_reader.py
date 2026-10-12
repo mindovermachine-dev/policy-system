@@ -132,6 +132,37 @@ _OWNS_QUERY = "MATCH (s:PracticeArea)-[:OWNS]->(t:Policy) RETURN s.id, t.id"
 _MITIGATED_BY_QUERY = "MATCH (s:RiskPath)-[:MITIGATED_BY]->(t:Capability) RETURN s.id, t.id"
 _VERIFIED_BY_QUERY = "MATCH (s:RiskPath)-[:VERIFIED_BY]->(t:Control) RETURN s.id, t.id"
 
+BASELINE_QUERIES: dict[str, str] = {
+    "regulatory_instrument": _REGULATORY_INSTRUMENT_QUERY,
+    "role": _ROLE_QUERY,
+    "requirement": _REQUIREMENT_QUERY,
+    "obligation": _OBLIGATION_QUERY,
+    "capability": _CAPABILITY_QUERY,
+    "defines": _DEFINES_QUERY,
+    "expresses": _EXPRESSES_QUERY,
+    "has": _HAS_QUERY,
+    "satisfied_by": _SATISFIED_BY_QUERY,
+    "requires": _REQUIRES_QUERY,
+    "policy": _POLICY_ALL_QUERY,
+    "standard": _STANDARD_ALL_QUERY,
+    "control": _CONTROL_ALL_QUERY,
+    "governed_by": _GOVERNED_BY_QUERY,
+    "supported_by": _SUPPORTED_BY_QUERY,
+    "implemented_by": _IMPLEMENTED_BY_QUERY,
+    "practice_area": _PRACTICE_AREA_QUERY,
+    "risk_path": _RISK_PATH_QUERY,
+    "covers": _COVERS_QUERY,
+    "owns": _OWNS_QUERY,
+    "mitigated_by": _MITIGATED_BY_QUERY,
+    "verified_by": _VERIFIED_BY_QUERY,
+}
+"""Every fixed query `read_baseline_graph` issues, by a short name.
+
+A reader that answers them from something other than a live graph (Restore reads a parsed
+artifact) is keyed by these; `tests/restore/test_baseline_reader.py` pins that the dict is
+complete against this module's own `_*_QUERY` constants.
+"""
+
 # AC-BI-001's drift guard (issue #106): a second, independent,
 # hand-maintained record of exactly which labels/edge types this module
 # reads, compared directly against internal_seed.models.NodeLabel/EdgeType

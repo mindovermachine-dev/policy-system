@@ -42,6 +42,10 @@ _ORDINARY_FILES = [
     ("runtime_config", "0001_runtime_config.sql"),
     ("ingestion_runs", "0001_ingestion_runs.sql"),
 ]
+_GATEWAY_FILES = [
+    ("graph_gateway", "0001_graph_mutation_log.sql"),
+    ("graph_gateway", "0002_group_swap_set.sql"),
+]
 _GRAPH_LOG_TABLES = ["applied_markers", "checkpoints", "entries", "groups", "payloads"]
 ADMIN_PASSWORD = "admin-pw-" + uuid.uuid4().hex
 
@@ -89,11 +93,9 @@ def test_cli_on_empty_ps_state_applies_ordinary_then_graph_gateway_and_exits_zer
 
     captured = capsys.readouterr()
     assert exit_code == 0, captured.err
-    assert _tracking_rows(fresh_provisioned) == sorted(
-        [*_ORDINARY_FILES, ("graph_gateway", "0001_graph_mutation_log.sql")]
-    )
+    assert _tracking_rows(fresh_provisioned) == sorted([*_ORDINARY_FILES, *_GATEWAY_FILES])
     assert _graph_log_tables(fresh_provisioned) == _GRAPH_LOG_TABLES
-    assert "applied 5 ordinary + 1 graph_gateway migration(s)" in captured.out
+    assert "applied 5 ordinary + 2 graph_gateway migration(s)" in captured.out
     assert ADMIN_PASSWORD not in captured.out + captured.err
 
 
@@ -120,7 +122,7 @@ def test_provision_returns_component_qualified_ordinary_names_and_bare_graph_gat
 
     assert result == ProvisionResult(
         ordinary_applied=[f"{component}/{name}" for component, name in _ORDINARY_FILES],
-        graph_gateway_applied=["0001_graph_mutation_log.sql"],
+        graph_gateway_applied=[name for _, name in _GATEWAY_FILES],
     )
 
 
@@ -152,7 +154,7 @@ def test_cli_on_already_migrated_database_keeps_rows_and_applies_only_missing(
     result = provision(fresh_provisioned.provisioning_target())
 
     assert result.ordinary_applied == ["audit/0002_audit_events_details_indexes.sql"]
-    assert result.graph_gateway_applied == ["0001_graph_mutation_log.sql"]
+    assert result.graph_gateway_applied == [name for _, name in _GATEWAY_FILES]
     with fresh_provisioned.as_state() as conn:
         assert (
             conn.execute(
@@ -285,6 +287,4 @@ def test_service_style_and_cli_style_runs_on_one_empty_database_both_succeed(
         thread.join(timeout=120)
 
     assert failures == []
-    assert _tracking_rows(racing_cluster) == sorted(
-        [*_ORDINARY_FILES, ("graph_gateway", "0001_graph_mutation_log.sql")]
-    )
+    assert _tracking_rows(racing_cluster) == sorted([*_ORDINARY_FILES, *_GATEWAY_FILES])

@@ -30,6 +30,7 @@ from ps_service.export.serialize import checksum_bytes
 from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreArtifact
 from ps_service.restore.restore_instrument import restore_instrument
+from restore._gateway_fakes import UNUSED_EVENT_ID, never_open_gateway
 
 if TYPE_CHECKING:
     from falkordb import FalkorDB
@@ -71,6 +72,8 @@ def _restore(artifact: RestoreArtifact) -> None:
         single_tenant_graph_name="__never_touched_single_tenant_graph__",
         similarity_threshold=0.9,
         actor="test",
+        open_gateway=never_open_gateway,
+        audit_event_id=UNUSED_EVENT_ID,
     )
 
 

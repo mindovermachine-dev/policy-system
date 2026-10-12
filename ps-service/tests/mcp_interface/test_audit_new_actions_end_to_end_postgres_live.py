@@ -113,6 +113,34 @@ def _seed(store: PsycopgAuditStore) -> None:
         outcome="applied",
         details={"instrument_id": "CRA-1.0", "status": "started", "source": "catalog"},
     )
+    # issue #214: the two outcomes a restore group can end in besides success and failure
+    store.record_standalone(
+        actor_subject=_ACTOR[0],
+        actor_issuer=_ACTOR[1],
+        action="instrument.restore",
+        resource_type="instrument",
+        resource_id="DORA-1.0",
+        outcome="rejected",
+        details={
+            "instrument_id": "DORA-1.0",
+            "status": "rejected",
+            "source": "upload",
+            "reason_code": "group_rejected",
+        },
+    )
+    store.record_standalone(
+        actor_subject=_ACTOR[0],
+        actor_issuer=_ACTOR[1],
+        action="instrument.restore",
+        resource_type="instrument",
+        resource_id="NIS2-1.0",
+        outcome="applied",
+        details={
+            "instrument_id": "NIS2-1.0",
+            "status": "committed_apply_pending",
+            "source": "catalog",
+        },
+    )
     store.record_standalone(
         actor_subject=_ACTOR[0],
         actor_issuer=_ACTOR[1],
@@ -162,7 +190,7 @@ def test_every_new_action_row_round_trips_through_list_audit_events_with_typed_d
     for action, expected in (
         ("ingestion_run.submit", 1),
         ("ingestion_run.complete", 2),
-        ("instrument.restore", 1),
+        ("instrument.restore", 3),
         ("near_miss.resolve", 1),
         ("user.invite", 1),
     ):
@@ -186,6 +214,24 @@ def test_who_ingested_instrument_x_is_answerable_by_celex_and_by_instrument_id(
     assert len(by_celex) == 2
     assert [e.action for e in by_instrument] == ["ingestion_run.complete"]
     assert [e.action for e in restores] == ["instrument.restore"]
+
+
+@pytest.mark.postgres_live
+def test_a_rejected_and_a_committed_apply_pending_restore_round_trip_with_their_status(
+    live_config: ServiceConfig,
+) -> None:
+    store = PsycopgAuditStore(live_config)
+    _seed(store)
+
+    (rejected,) = _list(store, AuditQueryFilters(details={"instrument_id": "DORA-1.0"}))
+    (pending,) = _list(store, AuditQueryFilters(details={"instrument_id": "NIS2-1.0"}))
+
+    assert (rejected.outcome, rejected.details["status"], rejected.details["reason_code"]) == (
+        "rejected",
+        "rejected",
+        "group_rejected",
+    )
+    assert (pending.outcome, pending.details["status"]) == ("applied", "committed_apply_pending")
 
 
 @pytest.mark.postgres_live

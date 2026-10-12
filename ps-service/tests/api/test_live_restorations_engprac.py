@@ -1,6 +1,7 @@
 """GH #104 AC-BI-004 -- restore the shipped ENGPRAC-1.0 artifact over ``POST /restorations``.
 
-``falkordb_live`` against the dev-container FalkorDB only (``PS_FALKORDB_HOST``/``_PORT``).
+``falkordb_live`` + ``postgres_live`` against the dev-container FalkorDB and PS Postgres (the
+graph log): the restore writes through the Graph Write Gateway.
 The real ``RestoreDependencies`` bundle is used with exactly one seam swapped -- the single-tenant
 graph name (precedent: ``test_live_capstone_export.py``'s embedding seam) -- and the manifest's
 ``short_name`` is tokened, so every key the run writes is unique to this test and the permanent
@@ -31,12 +32,14 @@ from fastapi.testclient import TestClient
 
 from api._fakes import install_compliance_officer_grant
 from ps_service.api.dependencies import get_principal, provide_restore_dependencies
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.restore_orchestration import build_default_restore_dependencies
 from ps_service.auth.models import Principal
 from ps_service.company_merge.falkordb_client import connect_from_config
 from ps_service.config import load_config
 from ps_service.export import catalog_writer
 from ps_service.export.serialize import parse_serialized_graph_json
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
@@ -45,7 +48,7 @@ if TYPE_CHECKING:
     from ps_service.api.restore_orchestration import RestoreDependencies
     from ps_service.config import ServiceConfig
 
-pytestmark = pytest.mark.falkordb_live
+pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
 _INSTRUMENT_DIR = Path(__file__).resolve().parents[3] / "curated-content" / "ENGPRAC-1.0"
 _INSTRUMENT_ID = "ENGPRAC-1.0"
@@ -169,6 +172,10 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
     )
     client = TestClient(app, raise_server_exceptions=False)
     body, native_blob = _restoration_body(short_name)
+    # The restore writes through the Graph Write Gateway (#214). `TestClient` is not entered, so
+    # the app lifespan never installs it: install the real one the way a deployed service does.
+    # Not run in the implementation sandbox.
+    install_graph_write_gateway(build_default_graph_write_gateway(config))
 
     try:
         response = client.post(_RESTORATIONS_ENDPOINT, json=body)
@@ -219,9 +226,11 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
                 == expected
             )
 
-        # No staged key leaked past the finalize step.
+        # A restore stages nothing in FalkorDB: no staging or swap key of any kind exists.
         assert _graph_keys(db, f"*{token}*__restoring__*") == []
+        assert _graph_keys(db, f"*{token}*__swap__*") == []
     finally:
+        install_graph_write_gateway(None)
         _delete_everything_created_for(
             db, token, (native_target, baseline_target, single_tenant_graph_name)
         )

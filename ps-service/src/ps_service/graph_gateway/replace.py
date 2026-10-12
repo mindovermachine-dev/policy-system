@@ -1,0 +1,138 @@
+"""Expand a leg of a multi-graph group into the logged primitives that make it exact (issue #214).
+
+A leg that merges into its graph needs only one thing ahead of its own primitives: a graph written
+before the gateway holds edges with no `identity`, and the gateway merges edges on it, so a write
+onto such a graph would add parallel edges. Those edges are stamped inside the same set (never in
+a group of their own: a rejected set must leave no entry behind).
+
+A leg that REPLACES its graph also has to remove whatever the leg does not contain, and an upsert
+can only add or overwrite. The replacement is therefore expressed with the primitives that already
+exist, so the log, the applier, the digest and replay stay as they are:
+
+1. `StampEdgeIdentity` for every identity-less edge that survives (the identity is what
+   `DeleteEdge` and a later upsert address it by);
+2. `DeleteEdge` for every surviving edge the leg does not upsert, and for one that holds a property
+   name the leg's edge lacks (an edge has no property-removal primitive: it is recreated);
+3. `DeleteNode` for every live node the leg does not upsert, and for one that holds a property
+   name the leg's node lacks (`RemoveProperty` cannot remove `id` or `embedding`: it is
+   recreated). The delete takes the node's edges with it, so an edge at a deleted node needs
+   neither a stamp nor a delete, and the leg's own `UpsertEdge` brings back the ones it keeps.
+
+Everything else is left to the caller's upserts, which the no-op filter then drops where the graph
+already matches: replacing a graph by its own content logs nothing. Values are never compared
+here, only property names, so a changed value is simply overwritten by its upsert.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from ps_service.graph_gateway.edge_identity_backfill import (
+    legacy_edge_stamp,
+    scan_unidentified_edges,
+)
+from ps_service.graph_gateway.graph_reader import UNIDENTIFIED, read_graph_shape
+from ps_service.graph_gateway.models import (
+    DeleteEdge,
+    DeleteNode,
+    MutationGroup,
+    NodeRef,
+    StampEdgeIdentity,
+    UpsertEdge,
+    UpsertNode,
+)
+
+if TYPE_CHECKING:
+    from ps_service.graph_gateway.graph_reader import EdgeKey, GraphShape, NodeKey
+    from ps_service.graph_gateway.models import Primitive
+    from ps_service.ingestion.falkordb_client import GraphHandle
+
+_EMBEDDING = "embedding"
+
+
+def expand_leg(graph: GraphHandle, group: MutationGroup, *, replace: bool) -> MutationGroup:
+    """Return `group` with the stamps (and, when replacing, the deletes) placed before its own.
+
+    Reads `graph` (read-only); the caller holds the graph's lock, so what is read is what the
+    group is logged against. The group is returned as it is when nothing is to be added.
+    """
+    added = (
+        _replacement(read_graph_shape(graph), group)
+        if replace
+        else tuple(legacy_edge_stamp(*edge) for edge in scan_unidentified_edges(graph)[0])
+    )
+    if not added:
+        return group
+    return MutationGroup(
+        graph=group.graph,
+        audit_event_id=group.audit_event_id,
+        primitives=(*added, *group.primitives),
+        preconditions=group.preconditions,
+        checkpoint_requested=group.checkpoint_requested,
+    )
+
+
+def added_count(original: MutationGroup, expanded: MutationGroup) -> int:
+    """Return how many primitives the expansion put ahead of the caller's."""
+    return len(expanded.primitives) - len(original.primitives)
+
+
+def _replacement(live: GraphShape, group: MutationGroup) -> tuple[Primitive, ...]:
+    """Return the primitives that bring `live` to the point where only `group`'s upserts remain."""
+    wanted_nodes = _wanted_node_names(group)
+    wanted_edges = _wanted_edge_names(group)
+    dropped = {
+        key
+        for key, names in live.nodes.items()
+        if key not in wanted_nodes or not names <= wanted_nodes[key]
+    }
+    stamps: list[StampEdgeIdentity] = []
+    edge_deletes: list[DeleteEdge] = []
+    for key, names in sorted(live.edges.items()):
+        kind, source_label, source_id, target_label, target_id, identity = key
+        if (source_label, source_id) in dropped or (target_label, target_id) in dropped:
+            continue  # goes with its node
+        source, target = (
+            NodeRef(label=source_label, id=source_id),
+            NodeRef(label=target_label, id=target_id),
+        )
+        if identity == UNIDENTIFIED:
+            stamp = legacy_edge_stamp(kind, source, target)
+            stamps.append(stamp)
+            identity = stamp.identity
+        keeps = wanted_edges.get((kind, source_label, source_id, target_label, target_id, identity))
+        if keeps is None or not names <= keeps:
+            edge_deletes.append(
+                DeleteEdge(type=kind, identity=identity, source=source, target=target)
+            )
+    node_deletes = [DeleteNode(label=label, id=node_id) for label, node_id in sorted(dropped)]
+    return (*stamps, *edge_deletes, *node_deletes)
+
+
+def _wanted_node_names(group: MutationGroup) -> dict[NodeKey, frozenset[str]]:
+    """Property names the leg gives each upserted node (`embedding` counts if the node has one)."""
+    wanted: dict[NodeKey, set[str]] = {}
+    for primitive in group.primitives:
+        if isinstance(primitive, UpsertNode):
+            names = wanted.setdefault((primitive.label, primitive.id), set())
+            names.update(primitive.properties)
+            if primitive.embedding is not None:
+                names.add(_EMBEDDING)
+    return {key: frozenset(names) for key, names in wanted.items()}
+
+
+def _wanted_edge_names(group: MutationGroup) -> dict[EdgeKey, frozenset[str]]:
+    """Property names the leg gives each edge it upserts."""
+    wanted: dict[EdgeKey, set[str]] = {}
+    for primitive in group.primitives:
+        if isinstance(primitive, UpsertEdge):
+            key = (
+                primitive.type,
+                primitive.source.label,
+                primitive.source.id,
+                primitive.target.label,
+                primitive.target.id,
+                primitive.identity,
+            )
+            wanted.setdefault(key, set()).update(primitive.properties)
+    return {key: frozenset(names) for key, names in wanted.items()}

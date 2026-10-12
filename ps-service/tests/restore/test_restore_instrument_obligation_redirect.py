@@ -1,27 +1,25 @@
 """Offline restore follows `MergedObligation` markers (issue #190, H1 / CHANGES.md A7).
 
 Re-restoring an artifact that regenerates an Obligation a Compliance Officer cleanup merge
-absorbed must not mint it again: the offline merge drops it, re-targets its `SATISFIED_BY` /
-`REQUIRES` edges onto the survivor, and re-MERGEs `HAS` onto the survivor (idempotent).
-Fakes are hand-written and satisfy `GraphHandle` structurally.
+absorbed must not mint it again: the restore drops it, re-targets its `SATISFIED_BY` / `REQUIRES`
+edges onto the survivor, and upserts `HAS` onto the survivor (idempotent). Since #214 the
+`policy_system` leg is a tuple of gateway primitives built from reads of the live graph, so the
+expectations are asserted on primitives. The live graph is a hand-written fake satisfying
+`GraphHandle` structurally.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
-
 import pytest
 
-import ps_service.restore.restore_instrument as restore_instrument_module
 from ps_service.company_merge.errors import CompanyMergeValidationError
+from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.domain_mapper.identity import capability_id, obligation_id
+from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
+from ps_service.graph_gateway.models import UpsertEdge, UpsertNode
 from ps_service.logging import configure
-
-if TYPE_CHECKING:
-    from falkordb import FalkorDB
-
-    from ps_service.company_merge.falkordb_client import GraphHandle
+from ps_service.restore.merge_primitives import build_policy_system_leg
+from restore._gateway_fakes import ScriptedLive
 
 _THRESHOLD = 0.85
 _INSTRUMENT_ID = "REG-R-1.0"
@@ -37,142 +35,102 @@ def logging_configured() -> None:
     configure()
 
 
-class _FakeQueryResult:
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
-
-
-class _FakeRegulatoryInstrumentNode:
-    def __init__(self, properties: dict[str, object]) -> None:
-        self.properties = properties
-
-
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
-
-
-class _FakeBaselineGraph:
+def _baseline() -> SerializedGraph:
     """One Role, one Requirement, the regenerated (absorbed) Obligation requiring one Capability."""
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        del params
-        if "[:HAS]" in q:
-            return _FakeQueryResult([[_ROLE, _ABSORBED]])
-        if "[:SATISFIED_BY]" in q:
-            return _FakeQueryResult([[_REQUIREMENT, _ABSORBED]])
-        if "[:REQUIRES]" in q:
-            return _FakeQueryResult([[_ABSORBED, _CAP]])
-        if any(f"(n:{label})" in q for label in ("PracticeArea", "RiskPath")):
-            return _FakeQueryResult([])
-        if "n.description" in q:
-            return _FakeQueryResult([[_CAP, "Thing Doing", 0.8, None, None]])
-        if "(n:Obligation) RETURN" in q:
-            return _FakeQueryResult([[_ABSORBED, "Do the thing.", 0.9]])
-        if "n.role_id" in q:
-            return _FakeQueryResult([[_REQUIREMENT, "Must do.", "requirement", 0.9, _ROLE]])
-        if "n.name, n.confidence" in q:
-            return _FakeQueryResult([[_ROLE, "Operator", 0.9]])
-        if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
-            return _FakeQueryResult(
-                [[_FakeRegulatoryInstrumentNode({"id": _INSTRUMENT_ID, "title": "R"})]]
-            )
-        return _FakeQueryResult([])
+    def edge(kind: str, src: tuple[str, str], tgt: tuple[str, str]) -> SerializedEdge:
+        return SerializedEdge(kind, src[0], src[1], tgt[0], tgt[1], {})
 
-
-class _FakeSnapshotGraph:
-    """The restore snapshot copy of the single-tenant graph, with a `MergedObligation` marker."""
-
-    def __init__(self, *, survivor_exists: bool = True) -> None:
-        self._survivor_exists = survivor_exists
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        if "MergedObligation" in q:
-            return _FakeQueryResult([[_ABSORBED, _SURVIVOR]])
-        if "MATCH (o:Obligation) WHERE o.id IN $ids" in q:
-            return _FakeQueryResult([[_SURVIVOR]] if self._survivor_exists else [])
-        if "MERGED_INTO" in q or "(n:Capability) RETURN" in q:
-            return _FakeQueryResult([])
-        if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
-            return _FakeQueryResult([])
-        return _FakeQueryResult([[0]])
-
-    def matching(self, substring: str) -> list[_RecordedCall]:
-        return [c for c in self.calls if substring in c.query]
-
-
-class _FakeDb:
-    def __init__(self, graphs: dict[str, GraphHandle]) -> None:
-        self._graphs = graphs
-
-    def select_graph(self, name: str) -> GraphHandle:
-        return self._graphs[name]
-
-
-def _restore(snapshot: _FakeSnapshotGraph) -> None:
-    fake_db = cast(
-        "FalkorDB",
-        _FakeDb(
-            {
-                "baseline__restoring__t": _FakeBaselineGraph(),
-                "policy_system__restoring__t": snapshot,
-            }
+    return SerializedGraph(
+        nodes=(
+            SerializedNode("RegulatoryInstrument", {"id": _INSTRUMENT_ID, "title": "R"}),
+            SerializedNode("Role", {"id": _ROLE, "name": "Operator", "confidence": 0.9}),
+            SerializedNode(
+                "Requirement",
+                {
+                    "id": _REQUIREMENT,
+                    "text": "Must do.",
+                    "type": "requirement",
+                    "confidence": 0.9,
+                    "role_id": _ROLE,
+                },
+            ),
+            SerializedNode(
+                "Obligation", {"id": _ABSORBED, "text": "Do the thing.", "confidence": 0.9}
+            ),
+            SerializedNode("Capability", {"id": _CAP, "name": "Thing Doing", "confidence": 0.8}),
+        ),
+        edges=(
+            edge("HAS", ("Role", _ROLE), ("Obligation", _ABSORBED)),
+            edge("SATISFIED_BY", ("Requirement", _REQUIREMENT), ("Obligation", _ABSORBED)),
+            edge("REQUIRES", ("Obligation", _ABSORBED), ("Capability", _CAP)),
         ),
     )
-    restore_instrument_module._run_baseline_merge(  # pyright: ignore[reportPrivateUsage]
-        fake_db,
-        "baseline__restoring__t",
-        _INSTRUMENT_ID,
-        {},
-        _THRESHOLD,
-        "policy_system__restoring__t",
-        None,
+
+
+def _live(*, survivor_exists: bool = True) -> ScriptedLive:
+    """The live `policy_system`: the survivor Obligation, with a `MergedObligation` marker."""
+
+    def answer(q: str, params: dict[str, object] | None) -> list[object] | None:
+        del params
+        if "MergedObligation" in q:
+            return [[_ABSORBED, _SURVIVOR]]
+        if "MATCH (o:Obligation) WHERE o.id IN $ids" in q:
+            return [[_SURVIVOR]] if survivor_exists else []
+        return None
+
+    return ScriptedLive(
+        existing={"Obligation": {_SURVIVOR}} if survivor_exists else {}, answer=answer
     )
+
+
+def _build(live: ScriptedLive) -> tuple[UpsertNode | UpsertEdge, ...]:
+    leg = build_policy_system_leg(
+        _baseline(),
+        instrument_id=_INSTRUMENT_ID,
+        live=live,
+        governance=GovernanceImport(),
+        similarity_threshold=_THRESHOLD,
+        emitter=None,
+    )
+    return tuple(p for p in leg.primitives if isinstance(p, UpsertNode | UpsertEdge))
+
+
+def _edges(primitives: tuple[UpsertNode | UpsertEdge, ...], edge_type: str) -> list[UpsertEdge]:
+    return [p for p in primitives if isinstance(p, UpsertEdge) and p.type == edge_type]
 
 
 def test_restore_never_mints_the_absorbed_obligation() -> None:
-    snapshot = _FakeSnapshotGraph()
+    primitives = _build(_live())
 
-    _restore(snapshot)
-
-    mints = snapshot.matching("MERGE (n:Obligation {id: $id}) ON CREATE SET")
-    assert mints == []
-    written = [c.params for c in snapshot.calls if c.params is not None and "MERGE (" in c.query]
-    assert not any(_ABSORBED in map(str, p.values()) for p in written)
+    assert [p for p in primitives if isinstance(p, UpsertNode) and p.label == "Obligation"] == []
+    referenced = {
+        endpoint.id
+        for p in primitives
+        for endpoint in ((p.source, p.target) if isinstance(p, UpsertEdge) else ())
+    } | {p.id for p in primitives if isinstance(p, UpsertNode)}
+    assert _ABSORBED not in referenced
 
 
 def test_restore_lands_satisfied_by_and_requires_on_the_survivor() -> None:
-    snapshot = _FakeSnapshotGraph()
+    primitives = _build(_live())
 
-    _restore(snapshot)
-
-    satisfied = [c.params for c in snapshot.matching("[:SATISFIED_BY]")]
-    requires = [c.params for c in snapshot.matching("[:REQUIRES]")]
-    assert satisfied == [{"source_id": _REQUIREMENT, "target_id": _SURVIVOR}]
-    assert requires == [{"source_id": _SURVIVOR, "target_id": _CAP}]
+    satisfied = _edges(primitives, "SATISFIED_BY")
+    requires = _edges(primitives, "REQUIRES")
+    assert [(e.source.id, e.target.id) for e in satisfied] == [(_REQUIREMENT, _SURVIVOR)]
+    assert [(e.source.id, e.target.id) for e in requires] == [(_SURVIVOR, _CAP)]
 
 
 def test_restore_re_merges_the_has_edge_onto_the_survivor_without_a_duplicate() -> None:
-    snapshot = _FakeSnapshotGraph()
+    primitives = _build(_live())
 
-    _restore(snapshot)
-
-    has_writes = snapshot.matching("[:HAS]")
-    assert [c.params for c in has_writes] == [{"source_id": _ROLE, "target_id": _SURVIVOR}]
-    assert all("MERGE (s)-[:HAS]->(t)" in c.query for c in has_writes)
+    has = _edges(primitives, "HAS")
+    assert [(e.source.id, e.target.id) for e in has] == [(_ROLE, _SURVIVOR)]
+    assert [e.identity for e in has] == [f"HAS:{_ROLE}->{_SURVIVOR}"]
 
 
 def test_restore_fails_closed_when_the_survivor_no_longer_exists() -> None:
-    snapshot = _FakeSnapshotGraph(survivor_exists=False)
+    live = _live(survivor_exists=False)
 
     with pytest.raises(CompanyMergeValidationError):
-        _restore(snapshot)
-
-    assert [c for c in snapshot.calls if "MERGE (" in c.query] == []
+        _build(live)

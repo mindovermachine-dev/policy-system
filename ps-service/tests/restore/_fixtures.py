@@ -9,15 +9,15 @@ importable test package" convention.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
-from ps_service.export.models import InstrumentManifest
+from ps_service.export.models import (
+    InstrumentManifest,
+    SerializedEdge,
+    SerializedGraph,
+    SerializedNode,
+)
 from ps_service.export.serialize import checksum_bytes, to_json_bytes
 from ps_service.restore.models import RestoreArtifact
-
-if TYPE_CHECKING:
-    from ps_service.export.models import SerializedGraph
 
 _EXPORTED_AT = "2026-09-04T00:00:00Z"
 
@@ -54,3 +54,63 @@ def build_restore_artifact(
         native_sha256=checksum_bytes(native_blob),
     )
     return RestoreArtifact(manifest=manifest, baseline_blob=baseline_blob, native_blob=native_blob)
+
+
+def small_graphs(
+    *, instrument_id: str = "GW214-1.0", capability_name: str = "Keep Logs"
+) -> tuple[SerializedGraph, SerializedGraph]:
+    """A small external instrument as `(native, baseline)`: enough to reach every leg and edge kind.
+
+    Native: the instrument and one article. Baseline: the instrument, a Role it defines, a
+    Requirement it expresses, an Obligation the Role has and the Requirement is satisfied by, and
+    a Capability the Obligation requires.
+    """
+
+    def edge(
+        kind: str, source: tuple[str, str], target: tuple[str, str], **properties: str
+    ) -> SerializedEdge:
+        return SerializedEdge(kind, source[0], source[1], target[0], target[1], dict(properties))
+
+    instrument = SerializedNode("RegulatoryInstrument", {"id": instrument_id, "title": "GW214"})
+    native = SerializedGraph(
+        nodes=(instrument, SerializedNode("ARTICLE", {"id": "art_1", "text": "Article 1"})),
+        edges=(edge("HAS", ("RegulatoryInstrument", instrument_id), ("ARTICLE", "art_1")),),
+    )
+    baseline = SerializedGraph(
+        nodes=(
+            instrument,
+            SerializedNode("Role", {"id": "role_1", "name": "Operator", "confidence": 0.9}),
+            SerializedNode(
+                "Requirement",
+                {
+                    "id": "req_1",
+                    "text": "Must log.",
+                    "type": "requirement",
+                    "confidence": 0.9,
+                    "role_id": "role_1",
+                },
+            ),
+            SerializedNode("Obligation", {"id": "obl_1", "text": "Log it.", "confidence": 0.9}),
+            SerializedNode(
+                "Capability", {"id": "cap_1", "name": capability_name, "confidence": 0.8}
+            ),
+        ),
+        edges=(
+            edge(
+                "DEFINES",
+                ("RegulatoryInstrument", instrument_id),
+                ("Role", "role_1"),
+                source_ref="Art. 1",
+            ),
+            edge(
+                "EXPRESSES",
+                ("RegulatoryInstrument", instrument_id),
+                ("Requirement", "req_1"),
+                source_ref="Art. 1",
+            ),
+            edge("HAS", ("Role", "role_1"), ("Obligation", "obl_1")),
+            edge("SATISFIED_BY", ("Requirement", "req_1"), ("Obligation", "obl_1")),
+            edge("REQUIRES", ("Obligation", "obl_1"), ("Capability", "cap_1")),
+        ),
+    )
+    return native, baseline

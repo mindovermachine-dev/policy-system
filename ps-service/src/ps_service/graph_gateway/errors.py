@@ -146,6 +146,22 @@ class StaleGraphStateError(GraphWriteRejectedError):
         self.actual_position = actual_position
 
 
+class SwapNotConfiguredError(GraphWriteRejectedError):
+    """A group asked to be applied by swap, but this gateway has no way to copy and swap graphs.
+
+    Refused before anything is logged: the caller can submit the group to be applied in place, or
+    the service can be given a gateway that was built with a key port.
+    """
+
+
+class SwapConflictError(Exception):
+    """A watched live graph changed while a swap was being prepared, so the swap was not made.
+
+    Raised by a key port when the atomic rename detects a writer that did not go through the
+    gateway. The gateway starts the swap again from a fresh copy; the message names nothing.
+    """
+
+
 class UnexpectedGraphReplyError(Exception):
     """A read answered by the graph does not have the shape the gateway's query promises.
 

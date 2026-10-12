@@ -24,7 +24,7 @@ graph.
 4. Call the REAL `restore_instrument()` against a fresh, empty, dedicated
    single-tenant graph name (never `policy_system`) and the SAME
    `curated_rt_native`/`curated_rt_baseline` key names the source graphs
-   used -- `RENAME`'s overwrite-destination semantics (D8 step 7) installs
+   used -- the gateway's replace semantics (issue #214) install
    the round-tripped content over the originals, exactly like a real
    re-restore. The original native content is captured in memory (via
    `serialize_graph`) before export/restore ever runs, since restore
@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import random
 import uuid
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -50,9 +51,11 @@ from litellm.types.utils import Embedding, EmbeddingResponse
 from ps_service.export import catalog_writer
 from ps_service.export.export_instrument import InstrumentDescriptor, export_instrument
 from ps_service.export.falkordb_connection import graph_query_handle
+from ps_service.export.models import SerializedGraph
 from ps_service.export.serialize import serialize_graph, to_json_bytes
 from ps_service.restore.models import RestoreArtifact
 from ps_service.restore.restore_instrument import restore_instrument
+from restore.live_gateway import live_restore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -93,6 +96,17 @@ class _FakeEmbeddingCaller:
         return EmbeddingResponse(
             model=model, data=[Embedding(embedding=vector, index=0, object="embedding")]
         )
+
+
+def _without_edge_identity(graph: SerializedGraph) -> SerializedGraph:
+    """`graph` with the gateway's `identity` property removed from every edge."""
+    return SerializedGraph(
+        nodes=graph.nodes,
+        edges=tuple(
+            replace(edge, properties={k: v for k, v in edge.properties.items() if k != "identity"})
+            for edge in graph.edges
+        ),
+    )
 
 
 def _seed_curated_graphs(live_falkordb: FalkorDB, instrument_id: str) -> None:
@@ -210,8 +224,8 @@ def test_export_then_restore_reproduces_native_exactly_and_baseline_correctly(
     live_falkordb.connection.delete(_BASELINE_GRAPH_NAME, _NATIVE_GRAPH_NAME)
     _seed_curated_graphs(live_falkordb, instrument_id)
 
-    # Captured BEFORE export/restore run, since restore's finalize step
-    # RENAMEs its own restored content over these same live keys.
+    # Captured BEFORE export/restore run, since restore's replace
+    # semantics overwrite these same live keys with its own restored content.
     original_native = serialize_graph(graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME))
 
     descriptor = InstrumentDescriptor(
@@ -255,19 +269,26 @@ def test_export_then_restore_reproduces_native_exactly_and_baseline_correctly(
 
         # Step 4: restore against a fresh single-tenant graph; native/baseline
         # targets are the SAME curated_rt_native/curated_rt_baseline keys the
-        # source graphs used -- RENAME overwrites them, a real re-restore.
-        restore_instrument(
-            artifact,
-            db=live_falkordb,
-            single_tenant_graph_name=single_tenant_graph_name,
-            similarity_threshold=_SIMILARITY_THRESHOLD,
-            actor=_ACTOR,
-            emitter=emitter,
-        )
+        # source graphs used -- the replacing legs overwrite them, a real re-restore.
+        with live_restore(provisioned_graph_log, live_falkordb) as live:
+            restore_instrument(
+                artifact,
+                db=live_falkordb,
+                single_tenant_graph_name=single_tenant_graph_name,
+                similarity_threshold=_SIMILARITY_THRESHOLD,
+                actor=_ACTOR,
+                open_gateway=live.open_gateway,
+                audit_event_id=live.audit_event_id,
+                emitter=emitter,
+            )
 
         # Step 5a: native is an exact structural match -- no dedup (D20).
         restored_native = serialize_graph(graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME))
-        assert to_json_bytes(restored_native) == to_json_bytes(original_native)
+        # Compared modulo edge identity: the gateway stamps `identity` on every edge it writes
+        # or merges into, and the hand-seeded originals carry none (the #210 convention).
+        assert to_json_bytes(_without_edge_identity(restored_native)) == to_json_bytes(
+            _without_edge_identity(original_native)
+        )
 
         # Step 5b: every Role/Requirement/Obligation is present, unchanged.
         role_rows = query_result_rows(

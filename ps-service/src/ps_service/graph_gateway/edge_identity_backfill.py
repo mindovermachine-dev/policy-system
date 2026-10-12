@@ -49,7 +49,7 @@ class _GroupSubmitting(Protocol):
         ...
 
 
-type _Stamp = tuple[str, NodeRef, NodeRef]
+type UnidentifiedEdge = tuple[str, NodeRef, NodeRef]
 """`(type, source, target)` of an identity-less edge."""
 
 
@@ -81,7 +81,7 @@ def backfill_edge_identity(
         UnexpectedGraphReplyError: the scan reply has a shape the gateway does not recognise.
         GraphWriteRejectedError: the gateway refused the group (its subclasses say why).
     """
-    found, skipped = _scan(reader, chunk_rows)
+    found, skipped = scan_unidentified_edges(reader, chunk_rows)
     if not found:
         outcome = EdgeIdentityBackfillOutcome(status="unchanged", stamped=0, skipped=skipped)
         _emit("unchanged", graph_name, 0, audit_event_id, emitter)
@@ -91,13 +91,7 @@ def backfill_edge_identity(
             graph=graph_name,
             audit_event_id=audit_event_id,
             primitives=tuple(
-                StampEdgeIdentity(
-                    type=edge_type,
-                    identity=f"{edge_type}:{source.id}->{target.id}",
-                    source=source,
-                    target=target,
-                )
-                for edge_type, source, target in found
+                legacy_edge_stamp(edge_type, source, target) for edge_type, source, target in found
             ),
         )
     )
@@ -118,9 +112,25 @@ def _emit(
     emit_gateway_event(_ACTION, outcome, fields, emitter=emitter)
 
 
-def _scan(reader: GraphHandle, chunk_rows: int) -> tuple[list[_Stamp], int]:
-    """Return the distinct identity-less edges, in scan order, and how many were unnameable."""
-    found: dict[_Stamp, None] = {}
+def legacy_edge_stamp(edge_type: str, source: NodeRef, target: NodeRef) -> StampEdgeIdentity:
+    """Return the stamp giving the identity-less edge the identity `{type}:{source}->{target}`."""
+    return StampEdgeIdentity(
+        type=edge_type,
+        identity=f"{edge_type}:{source.id}->{target.id}",
+        source=source,
+        target=target,
+    )
+
+
+def scan_unidentified_edges(
+    reader: GraphHandle, chunk_rows: int = SCAN_CHUNK_ROWS
+) -> tuple[list[UnidentifiedEdge], int]:
+    """Return the distinct identity-less edges, in scan order, and how many were unnameable.
+
+    Read-only. An edge whose type or end-point label the gateway may not name is counted, not
+    returned.
+    """
+    found: dict[UnidentifiedEdge, None] = {}
     skipped = 0
     after = -1
     while True:
@@ -168,7 +178,7 @@ def _stamp(
     source_id: str,
     target_labels: list[str],
     target_id: str,
-) -> _Stamp | None:
+) -> UnidentifiedEdge | None:
     """Name the edge to the gateway, or return None if its type or a label is not allowed."""
     source_label, target_label = _allowed_label(source_labels), _allowed_label(target_labels)
     if edge_type not in ALLOWED_RELATIONSHIP_TYPES or source_label is None or target_label is None:

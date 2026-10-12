@@ -48,14 +48,20 @@ from ps_service.api.error_handlers import (
 from ps_service.api.errors import (
     CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
+    GraphWriteUnavailableError,
     RestoreArtifactRejectedError,
     RestoreInstrumentIdAmbiguousError,
     RestoreInstrumentIdNotFoundError,
     RestoreStageFailedError,
 )
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.models import RestorationAcceptedResponse, RestorationStageOutcome
 from ps_service.audit import AuditContext, PsycopgAuditStore
-from ps_service.audit.emit import AuditTarget, record_follow_up_row, record_opening_row
+from ps_service.audit.emit import (
+    AuditTarget,
+    record_follow_up_row,
+    record_opening_row_with_event_id,
+)
 from ps_service.curated_source.artifact_client import FetchArtifactCall, fetch_artifact
 from ps_service.curated_source.catalog_client import FetchCatalogCall, fetch_catalog
 from ps_service.curated_source.errors import (
@@ -71,7 +77,7 @@ from ps_service.logging.run_context import bind_run_context, current_run_id
 from ps_service.restore.audit_actions import (
     INSTRUMENT_RESOURCE_TYPE,
     INSTRUMENT_RESTORE_ACTION,
-    classify_restore_failure_reason,
+    classify_restore_terminal_row,
 )
 from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreArtifact
@@ -84,6 +90,7 @@ if TYPE_CHECKING:
         FalkorDB,  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker
     )
 
+    from ps_service.api.graph_write_access import GraphWriteAccess
     from ps_service.api.models import (
         CatalogRestorationRequest,
         RestorationManifestPayload,
@@ -100,12 +107,13 @@ _ACTION = "restore_instrument"
 _STAGE_REASON_MAX_LEN = 300
 _CONFIGURATION_STAGE = "configuration"
 _DEFAULT_STAGE = "restore"
+_GRAPH_WRITE_STAGE = "graph_write"
 
 
 class RestoreStage(Protocol):
     """Call shape of ``ps_service.restore.restore_instrument.restore_instrument``."""
 
-    def __call__(
+    def __call__(  # noqa: PLR0913 -- mirrors restore_instrument's keyword-only call shape
         self,
         artifact: RestoreArtifact,
         *,
@@ -113,6 +121,8 @@ class RestoreStage(Protocol):
         single_tenant_graph_name: str,
         similarity_threshold: float,
         actor: str,
+        open_gateway: Callable[[], object],
+        audit_event_id: str,
         emitter: LogEmitter | None = None,
         owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
@@ -127,6 +137,7 @@ class RestoreDependencies:
     open_db: Callable[[ServiceConfig], FalkorDB]
     single_tenant_graph_name: Callable[[ServiceConfig], str]
     restore: RestoreStage
+    graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
 
 
 class CatalogRestoreStage(Protocol):
@@ -141,7 +152,7 @@ class CatalogRestoreStage(Protocol):
     unaffected).
     """
 
-    def __call__(
+    def __call__(  # noqa: PLR0913 -- mirrors restore_instrument's keyword-only call shape
         self,
         artifact: RestoreArtifact,
         *,
@@ -149,6 +160,8 @@ class CatalogRestoreStage(Protocol):
         single_tenant_graph_name: str,
         similarity_threshold: float,
         actor: str,
+        open_gateway: Callable[[], object],
+        audit_event_id: str,
         emitter: LogEmitter | None = None,
         source: str | None = None,
         owner: tuple[str, str] | None = None,
@@ -176,6 +189,7 @@ class CatalogRestoreDependencies:
     open_db: Callable[[ServiceConfig], FalkorDB]
     single_tenant_graph_name: Callable[[ServiceConfig], str]
     restore: CatalogRestoreStage
+    graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +312,9 @@ def _classify_restore_failure(
     stage = {
         "ArtifactContentRejectedError": "content_validation",
         "RestoreConcurrencyConflictError": "concurrency",
+        "RestoreGroupRejectedError": _GRAPH_WRITE_STAGE,
+        "RestoreApplyPendingError": _GRAPH_WRITE_STAGE,
+        "RestoreGraphWriteFailedError": _GRAPH_WRITE_STAGE,
     }.get(exc_type_name, _DEFAULT_STAGE)
     if is_safe_verbatim(exc):
         reason = _scrub_text(f"{exc_type_name}: {exc}")[:_STAGE_REASON_MAX_LEN]
@@ -346,6 +363,11 @@ class _RestoreInfra(Protocol):
         """Return the single-tenant graph name for the config."""
         ...
 
+    @property
+    def graph_write_access(self) -> Callable[[ServiceConfig], GraphWriteAccess]:
+        """Return the Graph Write Gateway access for the config (fails closed with none)."""
+        ...
+
 
 def _perform_restore(
     *,
@@ -353,22 +375,32 @@ def _perform_restore(
     config: ServiceConfig,
     actor: str,
     dependencies: _RestoreInfra,
-    invoke: Callable[[float, FalkorDB, str], RestoreOutcome],
+    audit_event_id: str,
+    invoke: Callable[[float, FalkorDB, str, Callable[[], object], str], RestoreOutcome],
     emitter: LogEmitter | None,
 ) -> RestorationAcceptedResponse:
     """Run the restore delegate (via ``invoke``) and translate its failures to API errors.
 
     Shared by the upload and catalog paths (the artifact differs, the failure translation does
-    not). ``invoke`` receives ``(similarity_threshold, db, single_tenant_graph_name)`` and calls
-    the path's own delegate shape.
+    not). ``invoke`` receives ``(similarity_threshold, db, single_tenant_graph_name,
+    open_gateway, audit_event_id)`` and calls the path's own delegate shape. ``open_gateway``
+    resolves the process's Graph Write Gateway lazily, inside the delegate and after the
+    artifact verified, so a corrupt artifact is still a 422 when no gateway is installed; with
+    none installed the request fails closed (503, ``GraphWriteUnavailableError``).
     """
     threshold = _require_similarity_threshold(config)
     db = dependencies.open_db(config)
     graph_name = dependencies.single_tenant_graph_name(config)
+
+    def open_gateway() -> object:
+        return dependencies.graph_write_access(config).gateway
+
     try:
-        outcome = invoke(threshold, db, graph_name)
+        outcome = invoke(threshold, db, graph_name, open_gateway, audit_event_id)
     except (ArtifactIntegrityError, ArtifactSchemaVersionMismatchError) as exc:
         raise RestoreArtifactRejectedError(str(exc)) from exc
+    except GraphWriteUnavailableError:
+        raise
     except Exception as exc:
         raise _classify_restore_failure(
             exc, instrument_id=instrument_id, actor=actor, emitter=emitter
@@ -385,22 +417,25 @@ def _audited_restore(
     source: RestoreAuditSource,
     audit: AuditContext,
     emitter: LogEmitter | None,
-    restore: Callable[[], RestorationAcceptedResponse],
+    restore: Callable[[str], RestorationAcceptedResponse],
 ) -> RestorationAcceptedResponse:
     """Run ``restore`` between an ``instrument.restore`` opening row and a terminal row.
 
     The opening row (``applied``, ``status=started``) is FAIL-CLOSED: if it cannot be written the
-    restore does not start and ``AuditTrailUnavailableError`` propagates (AC-BI-011). The terminal
-    row is BEST-EFFORT: ``succeeded`` (``applied``) or ``failed`` (``failed``, enumerated
-    ``reason_code``); a write failure is logged with the instrument id and run id and never changes
-    the restore's result or error (AC-BI-015). ``resource_id`` is the canonical instrument id.
-    A run id is bound for the call when none is, so those failure logs always carry one.
+    restore does not start and ``AuditTrailUnavailableError`` propagates (AC-BI-011). Its event id
+    is handed to ``restore``: it anchors every log group of the restore (issue #214, D-5). The
+    terminal row is BEST-EFFORT: ``succeeded`` (``applied``), ``rejected`` (the gateway refused the
+    group), ``committed_apply_pending`` (``applied``: committed to the graph log, applied on
+    recovery) or ``failed`` (``failed``, enumerated ``reason_code``); a write failure is logged
+    with the instrument id and run id and never changes the restore's result or error
+    (AC-BI-015). ``resource_id`` is the canonical instrument id. A run id is bound for the call
+    when none is, so those failure logs always carry one.
     """
     target = AuditTarget(INSTRUMENT_RESTORE_ACTION, INSTRUMENT_RESOURCE_TYPE, instrument_id)
     base = {"instrument_id": instrument_id, "source": source}
     run_scope = bind_run_context() if current_run_id() is None else contextlib.nullcontext()
     with run_scope:
-        record_opening_row(
+        audit_event_id = record_opening_row_with_event_id(
             audit,
             target,
             component=_COMPONENT,
@@ -408,18 +443,18 @@ def _audited_restore(
             emitter=emitter,
         )
         try:
-            response = restore()
+            response = restore(audit_event_id)
         except Exception as exc:
+            terminal = classify_restore_terminal_row(exc)
+            details: dict[str, object] = {**base, "status": terminal.status}
+            if terminal.reason_code is not None:
+                details["reason_code"] = terminal.reason_code
             record_follow_up_row(
                 audit,
                 target,
                 component=_COMPONENT,
-                outcome="failed",
-                details={
-                    **base,
-                    "status": "failed",
-                    "reason_code": classify_restore_failure_reason(exc),
-                },
+                outcome=terminal.outcome,
+                details=details,
                 emitter=emitter,
             )
             raise
@@ -476,23 +511,29 @@ def run_restoration(
             restored.
         RestoreArtifactRejectedError: The artifact is malformed, or fails
             checksum (D9) / schema_version (D10) verification (422).
+        GraphWriteUnavailableError: The artifact verified but the process has no Graph Write
+            Gateway (503); nothing was written. The opening audit row closes ``failed``.
         RestoreStageFailedError: Any other failure, including a missing
-            similarity-threshold configuration value (502).
+            similarity-threshold configuration value (502); a gateway refusal, an unreachable
+            store or a commit not yet applied is stage ``graph_write``.
     """
     artifact = _to_restore_artifact(request_body)
 
-    def _restore() -> RestorationAcceptedResponse:
+    def _restore(audit_event_id: str) -> RestorationAcceptedResponse:
         return _perform_restore(
             instrument_id=request_body.instrument_id,
             config=config,
             actor=actor,
             dependencies=dependencies,
-            invoke=lambda threshold, db, graph_name: dependencies.restore(
+            audit_event_id=audit_event_id,
+            invoke=lambda threshold, db, graph_name, open_gateway, event_id: dependencies.restore(
                 artifact,
                 db=db,
                 single_tenant_graph_name=graph_name,
                 similarity_threshold=threshold,
                 actor=actor,
+                open_gateway=open_gateway,
+                audit_event_id=event_id,
                 owner=owner,
             ),
             emitter=emitter,
@@ -583,8 +624,11 @@ def run_restoration_from_catalog_source(
             requested id and the closest candidate ids; nothing is fetched.
         RestoreArtifactRejectedError: The fetched artifact fails checksum
             (D9) / schema_version (D10) verification (422, AC-BI-007/009).
+        GraphWriteUnavailableError: The artifact verified but the process has no Graph Write
+            Gateway (503); nothing was written.
         RestoreStageFailedError: Any other restore failure, including a
-            missing similarity-threshold configuration value (502).
+            missing similarity-threshold configuration value (502); a gateway refusal, an
+            unreachable store or a commit not yet applied is stage ``graph_write``.
     """
     try:
         effective_source = dependencies.resolve_effective_source(config)
@@ -606,18 +650,21 @@ def run_restoration_from_catalog_source(
         native_blob=fetched.native_blob,
     )
 
-    def _restore() -> RestorationAcceptedResponse:
+    def _restore(audit_event_id: str) -> RestorationAcceptedResponse:
         return _perform_restore(
             instrument_id=canonical_id,
             config=config,
             actor=actor,
             dependencies=dependencies,
-            invoke=lambda threshold, db, graph_name: dependencies.restore(
+            audit_event_id=audit_event_id,
+            invoke=lambda threshold, db, graph_name, open_gateway, event_id: dependencies.restore(
                 artifact,
                 db=db,
                 single_tenant_graph_name=graph_name,
                 similarity_threshold=threshold,
                 actor=actor,
+                open_gateway=open_gateway,
+                audit_event_id=event_id,
                 source=effective_source.url,
                 owner=owner,
             ),
@@ -672,6 +719,7 @@ def build_default_restore_dependencies() -> RestoreDependencies:
         open_db=_default_open_db,
         single_tenant_graph_name=_default_single_tenant_graph_name,
         restore=restore_instrument,
+        graph_write_access=graph_write_access,
     )
 
 
@@ -766,4 +814,5 @@ def build_default_restore_from_catalog_dependencies(
         open_db=resolved_infra.open_db,
         single_tenant_graph_name=_default_single_tenant_graph_name,
         restore=restore_instrument,
+        graph_write_access=graph_write_access,
     )

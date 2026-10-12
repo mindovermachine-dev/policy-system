@@ -26,6 +26,7 @@ from ps_service.api.dependencies import (
     provide_audit_store,
     provide_restore_dependencies,
 )
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.restore_orchestration import RestoreDependencies
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth.models import Principal
@@ -36,6 +37,7 @@ from ps_service.restore.errors import ArtifactContentRejectedError, ArtifactInte
 from ps_service.restore.models import RestoreOutcome
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
@@ -88,6 +90,8 @@ class _FakeRestoreStage:
         single_tenant_graph_name: str,
         similarity_threshold: float,
         actor: str,
+        open_gateway: Callable[[], object] | None = None,
+        audit_event_id: str = "",
         emitter: object | None = None,
         owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
@@ -107,6 +111,7 @@ def _fake_dependencies(stage: _FakeRestoreStage) -> RestoreDependencies:
         open_db=lambda config: cast("FalkorDB", _FakeDb()),
         single_tenant_graph_name=lambda config: "policy_system",
         restore=stage,
+        graph_write_access=graph_write_access,
     )
 
 
@@ -392,3 +397,116 @@ def test_post_restorations_checksum_rejection_audits_a_failed_row() -> None:
         ("applied", None),
         ("failed", "artifact_rejected"),
     ]
+
+
+# --- issue #214: the real restore through the route, down to the graph log and back -----------
+
+
+def _real_restore_dependencies() -> RestoreDependencies:
+    """The real `restore_instrument` over the process gateway rig; only `policy_system` is read."""
+    from company_merge._gateway_fakes import RigReadHandle
+    from restore._gateway_fakes import RigDb
+
+    from api._gateway_fakes import installed_process_gateway
+    from ps_service.restore.restore_instrument import restore_instrument
+
+    rig = installed_process_gateway().rig
+    return RestoreDependencies(
+        open_db=lambda config: cast(
+            "FalkorDB", RigDb(lambda: RigReadHandle(rig.graphs.open("policy_system")))
+        ),
+        single_tenant_graph_name=lambda config: "policy_system",
+        restore=restore_instrument,
+        graph_write_access=graph_write_access,
+    )
+
+
+def _real_body() -> dict[str, object]:
+    from dataclasses import asdict
+
+    from restore._fixtures import build_restore_artifact, small_graphs
+
+    native, baseline = small_graphs()
+    artifact = build_restore_artifact(
+        instrument_id="GW214-1.0", short_name="GW214", native_graph=native, baseline_graph=baseline
+    )
+    return {
+        "instrument_id": "GW214-1.0",
+        "manifest": asdict(artifact.manifest),
+        "baseline_blob_base64": base64.b64encode(artifact.baseline_blob).decode("ascii"),
+        "native_blob_base64": base64.b64encode(artifact.native_blob).decode("ascii"),
+    }
+
+
+def _client_with_real_restore(store: InMemoryAuditStore) -> TestClient:
+    app = create_app(_app_config())
+    app.dependency_overrides[provide_audit_store] = lambda: store
+    app.dependency_overrides[provide_restore_dependencies] = _real_restore_dependencies
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_post_restorations_logs_one_group_per_graph_under_the_opening_rows_event_id(
+    configured_logging: Path,
+) -> None:
+    _ = configured_logging
+    from api._gateway_fakes import installed_process_gateway
+
+    store = InMemoryAuditStore()
+    client = _client_with_real_restore(store)
+
+    response = client.post("/restorations", json=_real_body())
+
+    assert response.status_code == 200
+    assert [s["stage"] for s in response.json()["stages"]] == [
+        "verified",
+        "staged",
+        "merged_and_finalized",
+    ]
+    rig = installed_process_gateway().rig
+    assert {g.graph for g in rig.store.groups} == {
+        "gw214_native",
+        "gw214_baseline",
+        "policy_system",
+    }
+    assert {g.audit_event_id for g in rig.store.groups} == {store.event_ids[0]}
+    assert rig.store.multi_appends == [("gw214_baseline", "gw214_native", "policy_system")]
+    assert [(r.outcome, r.details["status"]) for r in store.rows] == [
+        ("applied", "started"),
+        ("applied", "succeeded"),
+    ]
+
+
+def test_post_restorations_returns_503_and_audits_graph_unavailable_when_no_gateway_is_installed(
+    configured_logging: Path,
+) -> None:
+    _ = configured_logging
+    from api._gateway_fakes import installed_process_gateway
+    from ps_service.api.graph_write_access import install_graph_write_gateway
+
+    store = InMemoryAuditStore()
+    client = _client_with_real_restore(store)
+    rig = installed_process_gateway().rig
+    install_graph_write_gateway(None)
+
+    response = client.post("/restorations", json=_real_body())
+
+    assert response.status_code == 503
+    assert rig.store.groups == []
+    assert [(r.outcome, r.details.get("reason_code")) for r in store.rows] == [
+        ("applied", None),
+        ("failed", "graph_unavailable"),
+    ]
+
+
+def test_post_restorations_corrupt_artifact_is_422_even_with_no_gateway_installed() -> None:
+    from ps_service.api.graph_write_access import install_graph_write_gateway
+
+    store = InMemoryAuditStore()
+    client = _client_with_real_restore(store)
+    install_graph_write_gateway(None)
+    body = _real_body()
+    body["baseline_blob_base64"] = base64.b64encode(b'{"nodes": [], "edges": []} ').decode("ascii")
+
+    response = client.post("/restorations", json=body)
+
+    assert response.status_code == 422

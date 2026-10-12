@@ -687,7 +687,7 @@ These structured fields pair with `ps-skills/ps-plugin/rubrics/control-rubric.md
 
 ## Graph Write Gateway and Mutation Log
 
-Implemented by #205-#207 for the gateway, its log, replay and digest; Ingestion writes through it since #208, the Domain Mapper since #209 Company Merge (the merge stage and the near-miss resolution) since #210 Policy Lifecycle (creation, edits, transitions and governance backfills) since #211, Graph Cleanup (merge, release and unmerge) since #212, and the Regulatory Change Monitor (re-ingest succession) and Export (embedding backfill) since #213. Restore moves onto it in #214, until then its direct writes are not in the log.
+Implemented by #205-#207 for the gateway, its log, replay and digest; Ingestion writes through it since #208, the Domain Mapper since #209 Company Merge (the merge stage and the near-miss resolution) since #210 Policy Lifecycle (creation, edits, transitions and governance backfills) since #211, Graph Cleanup (merge, release and unmerge) since #212, and the Regulatory Change Monitor (re-ingest succession) and Export (embedding backfill) since #213, and Restore (the native, baseline and single-tenant graphs of a restore, as one transaction group applied by swap) since #214.
 
 The entities in this section are **not graph nodes**. They are not part of the compliance-graph vocabulary, are not defined in `ps_service.domain_schema`, and so have no generated Properties or Relationships tables. They describe how every write to the compliance graph is recorded, so that the graph can be rebuilt and checked from that record.
 
@@ -703,7 +703,7 @@ One resolved primitive graph mutation: the graph it applies to, the node label o
 
 ### Transaction group
 
-An ordered set of log entries that are committed together as one unit. Either the whole group is recorded in the mutation log or none of it is. A group is the unit a writer submits to the Graph Write Gateway.
+An ordered set of log entries that are committed together as one unit. Either the whole group is recorded in the mutation log or none of it is. A group is the unit a writer submits to the Graph Write Gateway. A group may name more than one graph (a restore commits its native, baseline and single-tenant graphs together); it is then recorded on every graph it names or on none, and each graph's entries keep that graph's own per-graph sequence.
 
 ### Per-graph sequence
 

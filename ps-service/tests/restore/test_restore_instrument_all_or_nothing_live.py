@@ -1,16 +1,15 @@
-"""Live FalkorDB proof for AC-BI-008: a baseline-leg merge failure leaves the
-live target untouched (PLAN.md Slice 5.7, critical -- "the single most
-important proof in the whole plan" alongside Slice 5.6b; do not relax to a
-fake-graph unit test).
+"""Live proof for AC-BI-002/008: a failure while building the restore leaves everything untouched.
 
-Injects a fake `snapshot_merge_writer.persist_canonical_nodes` that raises partway
-through the merge step (D8 step 5). Asserts AFTER the call: the live
-single-tenant graph is byte-for-byte unchanged from before the call
-(compared as `SerializedGraph`s via `export.serialize.serialize_graph`, not
-a raw byte comparison, since the artifact format is JSON now, not a DUMP
-blob); `{short}_native` does NOT exist -- the native leg's staged key was
-never finalized either, even though it staged successfully first (D8's
-"neither graph" requirement, proven across legs, not just within one).
+The REAL `restore_instrument` runs against the real gateway (Postgres graph log, FalkorDB). A
+failure injected partway through the `policy_system` leg's build (after the native and baseline
+legs were already built) must leave: the graph log empty for the restore's audit event, the live
+single-tenant graph byte-for-byte unchanged (compared as `SerializedGraph`s via
+`export.serialize.serialize_graph`), and `{short}_native`/`{short}_baseline` NOT existing -- the
+"neither graph" requirement across legs, now because nothing is submitted until every leg is
+built, not because staged keys are discarded (there are none).
+
+Not run in the implementation sandbox (no FalkorDB, no Postgres); the fast twin is
+`test_restore_gateway.py`.
 """
 
 from __future__ import annotations
@@ -20,23 +19,25 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import ps_service.restore.snapshot_merge_writer as snapshot_merge_writer_module
+import ps_service.restore.merge_primitives as merge_primitives_module
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 from ps_service.export.serialize import serialize_graph
 from ps_service.restore.restore_instrument import restore_instrument
 from restore._fixtures import build_restore_artifact
+from restore.live_gateway import live_restore
 
 if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
 _ACTOR = "test-actor"
 _SIMILARITY_THRESHOLD = 0.9
 
 
 class _ForcedMergeFailureError(Exception):
-    """The merge-step failure this test deliberately injects."""
+    """The build-step failure this test deliberately injects."""
 
 
 def _native_graph(instrument_id: str) -> SerializedGraph:
@@ -78,8 +79,12 @@ def _baseline_graph(instrument_id: str) -> SerializedGraph:
 
 
 @pytest.mark.falkordb_live
-def test_merge_step_failure_leaves_single_tenant_and_native_untouched(
-    live_falkordb: FalkorDB, make_emitter: MakeEmitter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.postgres_live
+def test_build_step_failure_leaves_the_log_and_every_graph_untouched(
+    live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
+    make_emitter: MakeEmitter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     emitter, _log_path = make_emitter()
     token = uuid.uuid4().hex[:12]
@@ -107,48 +112,38 @@ def test_merge_step_failure_leaves_single_tenant_and_native_untouched(
     )
 
     def _raise(*_args: object, **_kwargs: object) -> None:
-        raise _ForcedMergeFailureError("forced failure partway through the merge step")
+        raise _ForcedMergeFailureError("forced failure partway through the build step")
 
-    # Fault-injection seam proving D8's all-or-nothing rollback guarantee
-    # against real, live FalkorDB state (issue #163 §2 case 1).
-    # detroit-exception: fault seam proving the all-or-nothing rollback guarantee
-    monkeypatch.setattr(snapshot_merge_writer_module, "persist_canonical_nodes", _raise)
+    # Fault-injection seam proving the all-or-nothing guarantee against real, live state
+    # (issue #163 §2 case 1).
+    # detroit-exception: fault seam proving the all-or-nothing guarantee
+    monkeypatch.setattr(merge_primitives_module, "build_canonical_node_primitives", _raise)
 
     try:
-        with pytest.raises(_ForcedMergeFailureError):
-            restore_instrument(
-                artifact,
-                db=live_falkordb,
-                single_tenant_graph_name=single_tenant_graph_name,
-                similarity_threshold=_SIMILARITY_THRESHOLD,
-                actor=_ACTOR,
-                emitter=emitter,
-            )
+        with live_restore(provisioned_graph_log, live_falkordb) as live:
+            with pytest.raises(_ForcedMergeFailureError):
+                restore_instrument(
+                    artifact,
+                    db=live_falkordb,
+                    single_tenant_graph_name=single_tenant_graph_name,
+                    similarity_threshold=_SIMILARITY_THRESHOLD,
+                    actor=_ACTOR,
+                    open_gateway=live.open_gateway,
+                    audit_event_id=live.audit_event_id,
+                    emitter=emitter,
+                )
 
-        # The live single-tenant graph is byte-for-byte unchanged (compared as
-        # SerializedGraphs, since the artifact format is JSON now, not a raw
-        # DUMP blob).
+            # AC-BI-002: no log entries exist under the restore's audit event.
+            assert live.gateway.read_log_position(single_tenant_graph_name) == 0
+            assert live.gateway.read_log_position(native_target) == 0
+            assert live.gateway.read_log_position(baseline_target) == 0
+
+        # The live single-tenant graph is byte-for-byte unchanged (compared as SerializedGraphs).
         after = serialize_graph(graph_query_handle(live_falkordb, single_tenant_graph_name))
         assert after == before
 
-        # D8's "neither graph": the native leg's staged key was never
-        # finalized either, even though it staged successfully first.
+        # "Neither graph": the native and baseline legs were never written either.
         assert live_falkordb.connection.exists(native_target) == 0
         assert live_falkordb.connection.exists(baseline_target) == 0
-
-        # No orphaned staged keys left behind (all discarded on the raise).
-        # Patterns are built from the lowercased targets: `stage_graph` names
-        # staged keys `{short_name.lower()}_{leg}__restoring__{token}` and Redis
-        # `KEYS` globbing is case-sensitive, so a mixed-case `*{short_name}*`
-        # pattern could never observe a leaked key (GH #104 latent assertion).
-        for target in (native_target, baseline_target):
-            staged_keys = live_falkordb.connection.keys(  # pyright: ignore[reportUnknownMemberType] -- redis-py: `.keys()`'s own stub signature carries an Unknown `**kwargs`
-                f"{target}__restoring__*"
-            )
-            assert staged_keys == [], target
-        snapshot_keys = live_falkordb.connection.keys(  # pyright: ignore[reportUnknownMemberType]
-            f"{single_tenant_graph_name}__restoring__*"
-        )
-        assert snapshot_keys == []
     finally:
         live_falkordb.connection.delete(native_target, baseline_target, single_tenant_graph_name)

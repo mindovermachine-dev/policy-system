@@ -66,6 +66,8 @@ class AppendedGroup(BaseModel):
     graph: str
     first_position: int = Field(ge=1)
     last_position: int = Field(ge=1)
+    swap_set_id: uuid.UUID | None = None
+    """The swap set the group was appended as a leg of (`None`: not part of a swap set)."""
 
 
 class GraphLogEntry(BaseModel):
@@ -93,6 +95,24 @@ class GraphLogGroup(BaseModel):
     last_position: int = Field(ge=1)
     audit_event_id: str
     entries: tuple[GraphLogEntry, ...]
+    swap_set_id: uuid.UUID | None = None
+    """The swap set the group belongs to (`None`: it was applied entry by entry)."""
+
+
+type SwapSetId = uuid.UUID
+"""The id of a swap set: shared by the logged groups that were applied together by swap."""
+
+
+class SwapGroupRef(BaseModel):
+    """A logged group that belongs to a swap set: where it sits in its graph's log."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    group_id: uuid.UUID
+    graph: str
+    first_position: int = Field(ge=1)
+    last_position: int = Field(ge=1)
+    swap_set_id: uuid.UUID
 
 
 class AppliedMarker(BaseModel):
@@ -333,6 +353,84 @@ class MutationGroup(BaseModel):
         return audit_event_id
 
 
+class GraphLeg(BaseModel):
+    """One graph's share of a `MultiGraphGroup`: primitives, preconditions, checkpoint request."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    graph: str = Field(min_length=1, pattern=_NON_BLANK)
+    primitives: tuple[Primitive, ...] = Field(min_length=1)
+    """The mutations of this graph, in submission order."""
+    preconditions: tuple[Precondition, ...] = ()
+    """Conditions the caller needs to hold on this graph when the set is logged."""
+    replace: bool = False
+    """Leave the graph holding exactly this leg's content: what the leg does not upsert is deleted.
+
+    Only upserts may be given (the leg IS the content). The gateway expands the replacement under
+    the graph's lock, at the set's position, into ordinary logged deletes ahead of the upserts, so
+    replay rebuilds the same graph. Off: the leg merges into what the graph holds.
+    """
+    checkpoint_requested: bool = False
+    """Record this graph's canonical digest at its last position once the leg is applied."""
+
+    @model_validator(mode="after")
+    def _replace_holds_only_upserts(self) -> GraphLeg:
+        """A replacing leg is the content itself, so it can carry nothing but upserts."""
+        if self.replace and not all(
+            isinstance(p, UpsertNode | UpsertEdge) for p in self.primitives
+        ):
+            message = "a replacing leg holds only UpsertNode and UpsertEdge primitives"
+            raise ValueError(message)
+        return self
+
+    def as_group(self, audit_event_id: str) -> MutationGroup:
+        """Return this leg as the single-graph group it is checked and logged as."""
+        return MutationGroup(
+            graph=self.graph,
+            audit_event_id=audit_event_id,
+            primitives=self.primitives,
+            preconditions=self.preconditions,
+            checkpoint_requested=self.checkpoint_requested,
+        )
+
+
+class MultiGraphGroup(BaseModel):
+    """A transaction group over two or more graphs: one command, one log transaction.
+
+    Every leg is checked before anything is logged and all legs are logged together or none is.
+    The causing command's audit event id is required: a set is always one command's effect.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    audit_event_id: str
+    """The id of the audit event of the command that caused the set (a UUID string)."""
+    legs: tuple[GraphLeg, ...] = Field(min_length=2)
+    """One leg per distinct graph; the gateway handles them in ascending graph-name order."""
+    apply: Literal["in_place", "swap"] = "in_place"
+    """How the logged entries reach FalkorDB.
+
+    `in_place`: leg by leg, in ascending graph order. `swap`: each leg is built on a staged copy
+    of its graph and all copies replace the live graphs together, so a reader sees none or all of
+    the set. A swap needs a gateway built with a key port.
+    """
+
+    @field_validator("audit_event_id")
+    @classmethod
+    def _check_audit_event_id(cls, audit_event_id: str) -> str:
+        uuid.UUID(audit_event_id)
+        return audit_event_id
+
+    @model_validator(mode="after")
+    def _graphs_are_distinct(self) -> MultiGraphGroup:
+        """Name each graph once, so one command never writes a graph twice in one transaction."""
+        graphs = [leg.graph for leg in self.legs]
+        if len(set(graphs)) != len(graphs):
+            message = "a multi-graph group names each graph once"
+            raise ValueError(message)
+        return self
+
+
 class GroupOutcome(BaseModel):
     """What the caller learns about a submitted group."""
 
@@ -372,6 +470,20 @@ class GroupOutcome(BaseModel):
             message = "a checkpoint position is set exactly when a checkpoint was recorded"
             raise ValueError(message)
         return self
+
+
+class MultiGraphOutcome(BaseModel):
+    """What the caller learns about a submitted `MultiGraphGroup`: one outcome per graph."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    audit_event_id: str
+    legs: tuple[GroupOutcome, ...]
+    """Per-graph outcomes, ordered by graph name (positions and status of each graph)."""
+    status: Literal["applied", "committed_apply_pending", "unchanged"]
+    """`unchanged`: no leg changed its graph, nothing logged. `committed_apply_pending`: logged, and
+    at least one leg is still to be applied (it is, on recovery). Otherwise `applied`.
+    """
 
 
 class CatchUpResult(BaseModel):

@@ -2096,6 +2096,7 @@ def restore_instrument(
             CuratedSourceUnavailableError,
             RestoreInstrumentIdAmbiguousError,
             RestoreInstrumentIdNotFoundError,
+            GraphWriteUnavailableError,
             RestoreArtifactRejectedError,
             RestoreStageFailedError,
         ) as exc:

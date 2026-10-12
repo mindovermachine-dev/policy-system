@@ -13,6 +13,7 @@ _FORBIDDEN_NAME_PARTS = ("update", "delete", "remove", "truncate", "drop", "over
 _ALLOWED_MUTATIONS = {
     "append_group",
     "append_group_standalone",
+    "append_groups_standalone",
     "advance_applied_position",
     "record_digest_checkpoint",
 }
@@ -42,6 +43,7 @@ def test_protocol_and_implementation_expose_the_same_public_methods() -> None:
 _EXPECTED_PUBLIC_SURFACE = {
     "append_group",
     "append_group_standalone",
+    "append_groups_standalone",
     "read_entries",
     "last_position",
     "read_groups_by_audit_event",
@@ -52,6 +54,8 @@ _EXPECTED_PUBLIC_SURFACE = {
     "record_digest_checkpoint",
     "graphs_with_pending_entries",
     "logged_graphs",
+    "read_swap_set",
+    "read_pending_swap_group",
 }
 
 

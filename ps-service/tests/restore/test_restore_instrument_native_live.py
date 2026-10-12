@@ -22,10 +22,12 @@ from ps_service.export.models import SerializedEdge, SerializedGraph, Serialized
 from ps_service.export.serialize import serialize_graph, to_json_bytes
 from ps_service.restore.restore_instrument import restore_instrument
 from restore._fixtures import build_restore_artifact
+from restore.live_gateway import live_restore
 
 if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
 _ACTOR = "test-actor"
 _SIMILARITY_THRESHOLD = 0.9
@@ -59,8 +61,9 @@ def _empty_baseline_graph() -> SerializedGraph:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_restore_instrument_installs_native_leg_with_original_content(
-    live_falkordb: FalkorDB, make_emitter: MakeEmitter
+    live_falkordb: FalkorDB, provisioned_graph_log: Provisioned, make_emitter: MakeEmitter
 ) -> None:
     emitter, _log_path = make_emitter()
     token = uuid.uuid4().hex[:12]
@@ -80,14 +83,17 @@ def test_restore_instrument_installs_native_leg_with_original_content(
     )
 
     try:
-        outcome = restore_instrument(
-            artifact,
-            db=live_falkordb,
-            single_tenant_graph_name=single_tenant_graph_name,
-            similarity_threshold=_SIMILARITY_THRESHOLD,
-            actor=_ACTOR,
-            emitter=emitter,
-        )
+        with live_restore(provisioned_graph_log, live_falkordb) as live:
+            outcome = restore_instrument(
+                artifact,
+                db=live_falkordb,
+                single_tenant_graph_name=single_tenant_graph_name,
+                similarity_threshold=_SIMILARITY_THRESHOLD,
+                actor=_ACTOR,
+                open_gateway=live.open_gateway,
+                audit_event_id=live.audit_event_id,
+                emitter=emitter,
+            )
 
         assert outcome.instrument_id == artifact.manifest.instrument_id
         assert live_falkordb.connection.exists(native_target) == 1

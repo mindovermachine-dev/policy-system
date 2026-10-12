@@ -64,6 +64,24 @@ def test_operations_guide_documents_the_graph_log_upgrade_step() -> None:
     assert "fails" in section
 
 
+def test_operations_guide_says_the_job_also_applies_the_swap_set_migration() -> None:
+    section = _section(_read(_OPS), "### Upgrading to the graph mutation log")
+
+    assert "0002_group_swap_set.sql" in section
+    assert "swap_set_id" in section
+    assert "image" in section.split("0002_group_swap_set.sql", 1)[1]  # rollback leaves the column
+
+
+def test_architecture_registration_lists_the_swap_set_migration_and_the_swap_modules() -> None:
+    rows = _registration_rows()
+    base = "ps-service/src/ps_service/graph_gateway/"
+
+    migration = rows[f"{base}migrations/0002_group_swap_set.sql"]
+    assert "swap_set_id" in migration
+    assert "GraphKeyPort" in rows[f"{base}swap_port.py"]
+    assert "staged" in rows[f"{base}swap.py"]
+
+
 def test_operations_guide_names_the_missing_migration_remedy_command() -> None:
     section = _section(_read(_OPS), "### Upgrading to the graph mutation log")
 
@@ -683,12 +701,47 @@ def test_architecture_company_merge_lists_the_observable_differences() -> None:
         assert needle in differences, needle
 
 
-def test_architecture_restore_documents_the_interim_snapshot_writer_retired_by_214() -> None:
+def test_architecture_restore_lists_the_interim_snapshot_writer_as_legacy_and_unreferenced() -> (
+    None
+):
     restore = _section(_read(_CA), "### Restore")
+    registration = restore.split("#### Implementation Registration")[1].split("#### Actions")[0]
 
-    assert "restore/snapshot_merge_writer.py" in restore
-    assert "retired by #214" in restore
-    assert "test_restore_has_its_own_snapshot_writer.py" in restore
+    for module in ("populate", "staging", "snapshot_merge_writer"):
+        row = next(
+            line
+            for line in registration.splitlines()
+            if line.startswith(f"| `ps-service/src/ps_service/restore/{module}.py`")
+        )
+        assert "Legacy: Restore no longer calls it" in row, module
+    assert "test_no_graph_write_path.py" in restore
+    assert "retired by #214" not in restore
+    assert "Interim snapshot writer (#210)" not in restore
+    assert "WATCH`/`MULTI`/`EXEC` optimistic-concurrency retry loop" not in restore
+
+
+def test_architecture_restore_d6_states_the_status_at_delivery() -> None:
+    decisions = _restore_decisions()
+
+    assert "Status at delivery." in decisions
+    assert "live comparison" in decisions
+    assert (
+        _MECHANISM_WORDS.findall(decisions.split("Status at delivery.")[1].split("\n\n")[0]) == []
+    )
+
+
+def test_no_target_design_marker_of_issue_214_is_left_in_the_architecture_documents() -> None:
+    ca = _read(_CA)
+    sa = _read(_SA)
+
+    assert "(target design, #214)" not in ca
+    assert "#214 target design" not in ca
+    assert "Target design (#214)" not in ca
+    assert "Target design delivered by #214" not in ca
+    assert "Restore is target" not in sa
+    assert "Restore's move onto it (#214) is target design" not in ca
+    assert "Restore's move onto it (#214) is target design" not in sa
+    assert "Restore's edge is target design" not in ca
 
 
 def test_company_merge_registration_lists_the_gateway_modules_and_a_read_only_client() -> None:
@@ -1185,7 +1238,7 @@ def test_architecture_names_change_monitor_and_export_as_gateway_writers() -> No
     )
 
 
-def test_domain_concepts_name_only_restore_as_not_yet_on_the_gateway() -> None:
+def test_domain_concepts_name_restore_as_a_gateway_writer_since_214() -> None:
     section = _section(_read(_DOMAIN_CONCEPTS), "## Graph Write Gateway and Mutation Log")
 
     assert "Regulatory Change Monitor (re-ingest succession) and Export (embedding backfill)" in (
@@ -1194,6 +1247,8 @@ def test_domain_concepts_name_only_restore_as_not_yet_on_the_gateway() -> None:
     assert "since #213" in section
     assert "#213-#214" not in section
     assert "Restore" in section.split("since #213")[1].split("\n")[0]
+    assert "since #214" in section
+    assert "until then its direct writes are not in the log" not in section
     assert _read(_MCP_COPY) == _read(_DOMAIN_CONCEPTS)
 
 
@@ -1221,3 +1276,191 @@ def test_curated_content_readme_says_the_export_cli_needs_the_ps_state_database(
     assert "PS state Postgres" in text
     assert "Graph Write Gateway" in text
     assert "system audit row" in text
+
+
+# --- issue #214: Restore commits each restore as one gateway group (stage 1: design record) ------
+
+_RESTORE_DECISIONS = "#### Design decisions (#214)"
+_RESTORE_C0 = "#### C-0 exceptions (#214)"
+_GROUP_R_TESTS = (
+    "test_restore_has_its_own_snapshot_writer.py",
+    "test_snapshot_merge_writer.py",
+    "test_staging_stage_graph_live.py",
+    "test_staging_finalize_live.py",
+    "test_staging_discard_live.py",
+    "test_staging_snapshot_live.py",
+    "test_staging_policy_system_leg_live.py",
+    "test_restore_instrument_concurrency_live.py",
+    "test_restore_instrument_interruption_live.py",
+    "test_restore_instrument_all_or_nothing_live.py",
+)
+_GROUP_S_TESTS = (
+    "test_restore_instrument_obligation_redirect.py",
+    "test_restore_instrument_merged_redirect.py",
+    "test_restore_instrument_classification_passthrough.py",
+    "test_restore_instrument_draft_governance.py",
+    "test_restore_merge_governance_parity.py",
+    "test_restore_instrument_audit_log.py",
+    "test_durability_e2e.py",
+    "test_restore_instrument_tool.py",
+    "test_restore_orchestration",
+    "test_live_restorations_engprac.py",
+    "test_live_ingest_internal_engprac.py",
+    "test_restore_instrument_baseline_merge_live.py",
+    "test_restore_instrument_native_live.py",
+    "test_export_restore_roundtrip_live.py",
+    "test_restore_instrument_draft_governance_live.py",
+)
+
+
+def _restore_decisions() -> str:
+    return _section(_section(_read(_CA), "### Restore"), _RESTORE_DECISIONS)
+
+
+def test_architecture_restore_records_the_six_design_decisions() -> None:
+    decisions = _restore_decisions()
+
+    for decision in ("D-1", "D-2", "D-3", "D-4", "D-5", "D-6"):
+        assert f"**{decision}" in decisions, decision
+    assert "Option A" in decisions
+    assert "Option B" in decisions
+
+
+def test_architecture_restore_d1_cites_a_fourteen_step_read_classification() -> None:
+    decisions = _restore_decisions()
+    rows = re.findall(r"^\| (\d+) \|.*$", decisions, flags=re.MULTILINE)
+
+    assert [int(step) for step in rows] == list(range(1, 15))
+    assert "own write" in decisions.lower()
+    assert "pre-existing" in decisions.lower()
+    assert (
+        "overlay sufficiency shown with test-local builders; production builders re-proved "
+        "with digest equality in slice 7 (AC-BI-007)"
+    ) in decisions
+
+
+def test_architecture_restore_d5_maps_every_outcome_to_a_terminal_audit_row() -> None:
+    decisions = _restore_decisions()
+
+    for needle in (
+        "RestoreConcurrencyConflictError",
+        "RestoreGroupRejectedError",
+        "RestoreApplyPendingError",
+        "group_rejected",
+        "committed_apply_pending",
+        "opening row",
+    ):
+        assert needle in decisions, needle
+
+
+def test_architecture_restore_d6_lists_retired_and_rewritten_tests_including_group_s() -> None:
+    decisions = _restore_decisions()
+
+    for name in (*_GROUP_R_TESTS, *_GROUP_S_TESTS):
+        assert name in decisions, name
+    assert "Group S" in decisions
+    assert "rewritten from Cypher text to primitives" in decisions
+    assert "AC-BI-008" in decisions
+
+
+def test_architecture_restore_decisions_state_contracts_without_mechanism_words() -> None:
+    decisions = _restore_decisions()
+    prose = "\n".join(line for line in decisions.splitlines() if not line.startswith("| "))
+
+    assert _MECHANISM_WORDS.findall(prose) == []
+    assert "(replaces" not in decisions
+    assert "Stage-1 review" not in decisions
+    assert "NOT done" not in decisions
+
+
+def test_architecture_restore_c0_exceptions_state_the_seven_differences() -> None:
+    restore = _section(_read(_CA), "### Restore")
+    exceptions = _section(restore, _RESTORE_C0)
+
+    assert len(re.findall(r"^\d+\. \*\*", exceptions, flags=re.MULTILINE)) == 7
+    for needle in (
+        "committed, apply pending",
+        "scales with the total size of the single-tenant graph",
+        "mutation log",
+        "carry an identity",
+        "no graph is created",
+        "ArtifactContentRejectedError",
+        "503",
+    ):
+        assert needle in exceptions, needle
+    assert _MECHANISM_WORDS.findall(exceptions) == []
+
+
+def test_architecture_gateway_records_the_multi_graph_group_swap_and_replace_guarantees() -> None:
+    gateway = _section(_read(_CA), "### Graph Write Gateway")
+    concepts = _section(gateway, "#### Domain Concepts")
+    invariants = _gateway_section("#### Invariants")
+    outcomes = _gateway_section("#### Outcomes")
+    exceptions = _gateway_section("#### C-0 exceptions")
+    actions = _gateway_section("#### Actions")
+
+    assert "more than one graph" in concepts
+    for name in ("Set atomicity", "Swap none-or-all", "Replace exactness"):
+        assert f"**{name}:**" in invariants, name
+    assert "per-graph" in outcomes.lower()
+    assert "waits" in exceptions
+    assert "| SubmitMultiGraphGroup |" in actions
+    assert "CaughtUp" in next(line for line in actions.splitlines() if "| CaughtUp |" in line)
+    assert "whole set" in next(line for line in actions.splitlines() if "| CaughtUp |" in line)
+
+
+def test_architecture_gateway_guidance_holds_the_multi_graph_mechanics() -> None:
+    guidance = _gateway_section("#### Kind")
+    line = next(
+        row for row in guidance.splitlines() if row.startswith("- Multi-graph group mechanics")
+    )
+
+    for needle in ("ascending graph name", "swap_set_id", "in-process", "advisory"):
+        assert needle in line, needle
+    replace = next(row for row in guidance.splitlines() if row.startswith("- Replace expansion"))
+    assert "DeleteNode" in replace
+    assert "StampEdgeIdentity" in replace
+
+
+def test_architecture_sequence_diagrams_the_multi_graph_path() -> None:
+    text = _read(_CA)
+    heading = "### Graph Write Gateway: SubmitMultiGraphGroup, one transaction, swap apply"
+    section = _section(text, heading)
+
+    assert "```mermaid" in section
+    assert "SubmitMultiGraphGroup" in section
+
+
+def test_domain_concepts_say_a_transaction_group_may_span_graphs() -> None:
+    section = _section(_read(_DOMAIN_CONCEPTS), "### Transaction group")
+
+    assert "more than one graph" in section
+    assert _read(_MCP_COPY) == _read(_DOMAIN_CONCEPTS)
+
+
+def test_architecture_restore_registration_lists_the_primitive_builders_and_they_exist() -> None:
+    restore = _section(_read(_CA), "### Restore")
+    registration = restore.split("#### Implementation Registration")[1].split("#### Actions")[0]
+
+    for module in ("baseline_reader", "leg_primitives", "merge_primitives", "graph_submission"):
+        path = f"ps-service/src/ps_service/restore/{module}.py"
+        assert f"| `{path}` |" in registration, path
+        assert (_REPO / path).is_file(), path
+
+
+def test_operations_guide_503_row_names_restore_and_a_blocked_swap_has_its_own_row() -> None:
+    ops = _section(_read(_OPS), _OPS_FAQ_HEADING)
+    row = next(line for line in ops.splitlines() if "graph writes are unavailable" in line)
+    swap = next(line for line in ops.splitlines() if "committed_apply_pending" in line)
+
+    for needle in (
+        "`POST /restorations`",
+        "`POST /restorations/from-catalog`",
+        "`restore_instrument`",
+    ):
+        assert needle in row, needle
+    for needle in ("restart `ps-service`", "ascending graph-name order", "different states"):
+        assert needle in swap, needle
+    assert "no partial state is read" not in swap
+    assert "no partial state is read" not in _read(_OPS)
+    assert "hold_seconds" in _read(_OPS)

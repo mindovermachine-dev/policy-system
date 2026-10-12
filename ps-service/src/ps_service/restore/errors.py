@@ -15,15 +15,46 @@ from __future__ import annotations
 
 
 class RestoreConcurrencyConflictError(Exception):
-    """`policy_system` was modified by another writer on every retry attempt.
+    """`policy_system` was modified by another writer on every attempt.
 
-    Raised by `staging.stage_and_finalize_policy_system_leg` after
-    `_MAX_POLICY_SYSTEM_MERGE_ATTEMPTS` consecutive `redis.exceptions.
-    WatchError`s (CHANGES.md B1's optimistic-concurrency retry loop) --
-    chained via `raise ... from <the last WatchError>`. By the time this is
-    raised, every staged key for this restore attempt has already been
-    discarded and the live `policy_system`/`{short}_native`/
-    `{short}_baseline` graphs are untouched.
+    Raised by `restore_instrument` after `MAX_POLICY_SYSTEM_ATTEMPTS` consecutive
+    attempts whose group the gateway refused because `policy_system` had moved since it
+    was read (issue #214: the expected log position replaces the pre-#214 WATCH guard).
+    Chained via `raise ... from <the last StaleGraphStateError>`. Nothing was logged, so
+    the live `policy_system`/`{short}_native`/`{short}_baseline` graphs are untouched.
+    """
+
+
+class RestoreGraphWriteError(Exception):
+    """A restore's graph write did not take effect through the Graph Write Gateway (issue #214).
+
+    Base of the three failures `restore_instrument` raises for its one multi-graph group. The
+    message is fixed and sanitized (no host, query or content), so it is safe to carry; the
+    gateway's own error, if any, is chained as `__cause__`.
+    """
+
+
+class RestoreGroupRejectedError(RestoreGraphWriteError):
+    """The gateway refused the restore's group (off the allow-list, a missing target).
+
+    Nothing was logged on any of the three graphs.
+    """
+
+
+class RestoreApplyPendingError(RestoreGraphWriteError):
+    """The restore is committed to the graph log but not yet applied to every graph.
+
+    The log holds the whole restore and the gateway applies it on recovery (or `catch_up`);
+    a re-run is idempotent. Raised, not returned, as the earlier migrated writers do, so a
+    restore never reports success for a graph that does not yet hold the instrument.
+    """
+
+
+class RestoreGraphWriteFailedError(RestoreGraphWriteError):
+    """The gateway could not reach a store or FalkorDB refused an entry; nothing took effect.
+
+    A group the log did commit but FalkorDB refused is blocked and awaits operator action;
+    the message does not say which, only that the restore did not complete.
     """
 
 
@@ -31,13 +62,13 @@ class RestoreOwnerRequiredError(Exception):
     """An artifact carries Policy/Standard/Control content but no restoring owner was supplied.
 
     Raised by `restore_instrument.restore_instrument` (and, as a backstop, by
-    `_run_baseline_merge`) when an internal-sourced artifact's baseline holds a
-    Policy and the caller's verified `(sub, iss)` identity was not passed
-    (issue #183). A restored tree is imported as `draft`, owned by whoever
-    restored it; an ownerless draft would be unreachable by the normal
+    `merge_primitives.build_policy_system_leg`) when an internal-sourced artifact's
+    baseline holds a Policy and the caller's verified `(sub, iss)` identity was
+    not passed (issue #183). A restored tree is imported as `draft`, owned by
+    whoever restored it; an ownerless draft would be unreachable by the normal
     propose/edit flow, so the restore is refused instead. For the restore
-    entry points this is raised before any staged key exists, so the graph is
-    untouched.
+    entry points this is raised before the gateway is opened, so no graph is
+    touched.
     """
 
     def __init__(self) -> None:
@@ -56,13 +87,12 @@ class ArtifactContentRejectedError(Exception):
     - `schema_allowlist.validate_serialized_graph` (CHANGES2.md §2.4's Query
       Safety guard), when a node/edge label or relationship_type falls
       outside its allow-list, or a node's `properties["id"]` is missing or
-      not a string. Raised before `staging.stage_graph` creates any staged
-      key at all -- a rejected artifact never causes even a staged-key write.
-    - `restore_instrument._run_baseline_merge`, when the manifest's
+      not a string. Raised before the gateway is opened -- a rejected artifact writes nothing.
+    - `merge_primitives.build_policy_system_leg`, when the manifest's
       `instrument_id` does not match any `RegulatoryInstrument.id` actually
-      present in the staged baseline graph -- without this check, the merge
-      would silently persist every RegulatoryInstrument property (celex,
-      title, ...) blanked out instead of failing (confirmed empirically).
+      present in the baseline graph -- without this check, the merge would
+      silently persist every RegulatoryInstrument property (celex, title,
+      ...) blanked out instead of failing (confirmed empirically).
     """
 
 

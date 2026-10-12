@@ -160,6 +160,20 @@ def _restore_into(db: FalkorDB, graph_name: str, emitter: LogEmitter) -> None:
     """Restore the shipped curated `ENGPRAC-1.0` artifact into the scratch graph `graph_name`."""
     short_name = f"ENGPRAC_P{uuid.uuid4().hex[:8]}"
     manifest = replace(catalog_writer.read_manifest(_INSTRUMENT_DIR), short_name=short_name)
+    # The restore writes through the real gateway, its groups anchored to a real
+    # `instrument.restore` audit row (the graph log's audit link is a foreign key into
+    # `audit_events`). Not run in the implementation sandbox.
+    config = load_config()
+    audit_event_id = PsycopgAuditStore(config).record_standalone_with_event_id(
+        actor_subject=_OWNER[0],
+        actor_issuer=_OWNER[1],
+        action="instrument.restore",
+        resource_type="instrument",
+        resource_id="ENGPRAC-1.0",
+        outcome="applied",
+        details={"instrument_id": "ENGPRAC-1.0", "status": "started", "source": "catalog"},
+    )
+    gateway = build_default_graph_write_gateway(config)
     restore_instrument(
         RestoreArtifact(
             manifest=manifest,
@@ -170,6 +184,8 @@ def _restore_into(db: FalkorDB, graph_name: str, emitter: LogEmitter) -> None:
         single_tenant_graph_name=graph_name,
         similarity_threshold=0.9,
         actor="test-actor",
+        open_gateway=lambda: gateway,
+        audit_event_id=audit_event_id,
         emitter=emitter,
         owner=_OWNER,
     )

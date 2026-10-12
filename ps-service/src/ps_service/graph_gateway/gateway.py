@@ -35,6 +35,8 @@ from ps_service.graph_gateway.errors import (
     GraphUnavailableError,
     GraphWriteRejectedError,
     StagedGroupNotCommittedError,
+    SwapConflictError,
+    SwapNotConfiguredError,
     UnexpectedGraphReplyError,
 )
 from ps_service.graph_gateway.gateway_log import emit_gateway_event
@@ -44,17 +46,21 @@ from ps_service.graph_gateway.models import (
     CatchUpResult,
     GraphLogGroupDraft,
     GroupOutcome,
+    MultiGraphOutcome,
     RecoveryResult,
     ReplayReport,
     StartupReplayReport,
+    SwapGroupRef,
 )
 from ps_service.graph_gateway.noop_filter import select_effective_primitives
 from ps_service.graph_gateway.reconciler import DEFAULT_STOP_TIMEOUT_SECONDS, GraphReconciler
+from ps_service.graph_gateway.replace import added_count, expand_leg
 from ps_service.graph_gateway.replay import GraphReplayer
 from ps_service.graph_gateway.replay_gate import ReplayGate
 from ps_service.graph_gateway.retry import GraphCallGuard, system_sleep
 from ps_service.graph_gateway.staged_submission import StagedSubmission
 from ps_service.graph_gateway.startup_retry import retry_through_outage
+from ps_service.graph_gateway.swap import SwapApplier
 from ps_service.graph_gateway.validation import require_preconditions, validate_group
 
 if TYPE_CHECKING:
@@ -64,8 +70,17 @@ if TYPE_CHECKING:
     from psycopg.rows import TupleRow
 
     from ps_service.graph_gateway.graph_reader import PersistedElements
-    from ps_service.graph_gateway.models import AppendedGroup, MutationGroup, Primitive
+    from ps_service.graph_gateway.models import (
+        AppendedGroup,
+        GraphLeg,
+        MultiGraphGroup,
+        MutationGroup,
+        Primitive,
+        SwapSetId,
+    )
+    from ps_service.graph_gateway.replay import StartupAction
     from ps_service.graph_gateway.store import GraphLogStore
+    from ps_service.graph_gateway.swap_port import GraphKeyPort
     from ps_service.ingestion.falkordb_client import GraphHandle
     from ps_service.logging import LogEmitter
 
@@ -77,6 +92,9 @@ _CHECKPOINT_FAILURES = (
     redis.exceptions.RedisError,
 )
 """What taking or storing a checkpoint may raise without failing the committed group."""
+
+_UNIT_ATTEMPTS = 3
+"""Times a unit is resolved again before an apply gives up and leaves it to the reconciler."""
 
 DEFAULT_BATCH_SIZE = 500
 DEFAULT_REPLAY_PAGE_SIZE = 5000
@@ -139,12 +157,14 @@ class GraphWriteGateway:
         emitter: LogEmitter | None = None,
         sleep: Callable[[float], None] | None = None,
         reconciler_wait: Callable[[float], bool] | None = None,
+        key_port: GraphKeyPort | None = None,
     ) -> None:
         """Take the log store, a graph opener (graph name to handle) and optional tunables.
 
         `sleep` waits out a retry backoff and `reconciler_wait` the pause between background
         reconciler passes (it returns True to stop the reconciler); tests inject both,
-        production uses the real clock and an interruptible `Event.wait`.
+        production uses the real clock and an interruptible `Event.wait`. `key_port` copies and
+        swaps whole graphs: without it a group that asks to be applied by swap is refused.
         """
         self._log_store = log_store
         self._graph_opener = graph_opener
@@ -155,6 +175,8 @@ class GraphWriteGateway:
         )
         self._locks = GraphLockRegistry()
         self._blocked: set[str] = set()
+        self._blocked_units: dict[str, tuple[str, ...]] = {}
+        """For a graph blocked as a leg of a swap set: the legs it is blocked together with."""
         self._gate = ReplayGate()
         self._stop_replay = threading.Event()
         self._replayer = GraphReplayer(
@@ -167,6 +189,18 @@ class GraphWriteGateway:
         self._reconciler = GraphReconciler(
             self.catch_up, settings=self._settings, emitter=emitter, wait=reconciler_wait
         )
+        self._swap = (
+            None
+            if key_port is None
+            else SwapApplier(
+                log_store=log_store,
+                graph_opener=graph_opener,
+                key_port=key_port,
+                settings=self._settings,
+                guard=self._guard,
+                emitter=emitter,
+            )
+        )
 
     def submit_group(self, group: MutationGroup) -> GroupOutcome:
         """Log what `group` changes, apply it to its graph and return what happened to it.
@@ -178,6 +212,37 @@ class GraphWriteGateway:
         self._gate.require_open(group.graph)
         with self._locks.lock_for(group.graph), self._failure_logged(group.graph):
             return self._submit_locked(group)
+
+    def submit_multi_graph_group(self, group: MultiGraphGroup) -> MultiGraphOutcome:
+        """Log what `group` changes on every graph in ONE transaction, apply it, report per graph.
+
+        Every leg is gated, checked against its own graph (blocked, caught up, allow-list,
+        preconditions, missing targets, no-ops) before anything is logged: a refusal on any leg
+        rejects the whole set with nothing logged. The in-process locks of all legs are taken in
+        ascending graph name (`GraphLockRegistry.lock_all`) and the store takes the advisory locks
+        in the same order, so two overlapping sets, or a set and a single-graph writer, cannot
+        deadlock. A leg that changes nothing is reported `unchanged` and not logged; a set where
+        no leg changes anything logs nothing. After the commit the legs are applied in ascending
+        graph order, and a leg whose graph cannot be reached is `committed_apply_pending`.
+
+        Raises:
+            GraphWriteRejectedError: a leg was refused (nothing logged on any graph).
+            GraphUnavailableError: FalkorDB could not be reached for a check (nothing logged).
+            GraphLogUnavailableError: the log could not be reached (nothing logged).
+            GraphLogPersistenceError: the transaction failed (nothing logged).
+            SwapNotConfiguredError: the group asks for a swap and this gateway has no key port
+                (nothing logged).
+            GraphApplyError: FalkorDB refused an entry after the commit; that graph is blocked
+                and the legs not yet applied wait for `catch_up`.
+        """
+        if group.apply == "swap" and self._swap is None:
+            raise SwapNotConfiguredError
+        legs = tuple(sorted(group.legs, key=lambda leg: leg.graph))
+        graphs = tuple(leg.graph for leg in legs)
+        for graph in graphs:
+            self._gate.require_open(graph)
+        with self._locks.lock_all(graphs), self._failure_logged(",".join(graphs)):
+            return self._submit_multi_locked(group.audit_event_id, legs, group.apply)
 
     def read_persisted_elements(self, graph: str) -> PersistedElements:
         """Read the node keys, edge keys and log position of `graph`; writes and logs nothing.
@@ -284,18 +349,29 @@ class GraphWriteGateway:
         return self._catch_up(graph, honour_gate=True)
 
     def _catch_up(self, graph: str, *, honour_gate: bool) -> CatchUpResult:
-        """Apply the pending entries of `graph` under its lock (startup replay is not gated)."""
-        with self._locks.lock_for(graph), self._failure_logged(graph, "catch_up"):
-            if honour_gate:
-                self._gate.require_open(graph)
-            try:
-                self._apply_pending(graph)
-            except GraphUnavailableError as exc:
-                self._reconciler.register(graph)
-                self._log_catch_up(graph, "pending", exc)
-            else:
-                self._log_catch_up(graph, "success")
-            return self._standing(graph)
+        """Apply what `graph` still owes, as one unit with the swap set it belongs to, if any.
+
+        The unit is resolved before any lock is taken (see `_with_unit`); startup replay is not
+        gated.
+        """
+        with self._failure_logged(graph, "catch_up"):
+            return self._with_unit(
+                graph, lambda unit: self._catch_up_unit(graph, unit, honour_gate=honour_gate)
+            )
+
+    def _catch_up_unit(self, graph: str, unit: _Unit, *, honour_gate: bool) -> CatchUpResult:
+        """Apply `unit` under its locks and report where `graph` stands."""
+        if honour_gate:
+            self._gate.require_open(graph)
+        try:
+            complete = self._apply_unit(unit)
+        except GraphUnavailableError as exc:
+            for member in unit.graphs:
+                self._reconciler.register(member)
+            self._log_catch_up(graph, "pending", exc)
+        else:
+            self._log_catch_up(graph, "success" if complete else "pending")
+        return self._standing(graph)
 
     def replay_graph(self, graph: str) -> ReplayReport:
         """Rebuild `graph` from its log, in sequence order, and verify it against a checkpoint.
@@ -329,6 +405,7 @@ class GraphWriteGateway:
             )
             raise
         self._gate.complete(graph)
+        self._release_replayed_leg(graph)
         fields: dict[str, str | int | float] = {
             "graph": graph,
             "last_position": report.head,
@@ -381,8 +458,14 @@ class GraphWriteGateway:
             "untouched": [],
             "gated": [],
         }
-        for graph in self._log_store.logged_graphs():
-            outcome = self._startup_graph(graph)
+        graphs = self._log_store.logged_graphs()
+        actions: dict[str, StartupAction] = {
+            graph: self._replayer.classify(graph) for graph in graphs
+        }
+        # A graph that must be rebuilt goes first: a pending swap set that names it is then
+        # completed for the other legs only, never staged from a graph that lost its key.
+        for graph in sorted(graphs, key=lambda name: actions[name] not in {"replay", "resume"}):
+            outcome = self._startup_graph(graph, actions[graph])
             buckets[outcome].append(graph)
             if outcome != "gated":
                 self._gate.release(graph)
@@ -431,9 +514,8 @@ class GraphWriteGateway:
         """
         return tuple(sorted(self._gate.failed_graphs() | self._blocked))
 
-    def _startup_graph(self, graph: str) -> str:
+    def _startup_graph(self, graph: str, action: StartupAction) -> str:
         """Deal with one logged graph; return the `StartupReplayReport` list it belongs in."""
-        action = self._replayer.classify(graph)
         if action == "untouched":
             return "untouched"
         if action == "catch_up":
@@ -583,10 +665,131 @@ class GraphWriteGateway:
             checkpoint_requested=group.checkpoint_requested,
         )
 
-    def _stage(self, group: MutationGroup) -> tuple[Primitive, ...]:
+    def _submit_multi_locked(
+        self, audit_event_id: str, legs: tuple[GraphLeg, ...], apply: Literal["in_place", "swap"]
+    ) -> MultiGraphOutcome:
+        """Stage every leg, log the changing ones in one transaction, apply them."""
+        staged = tuple(
+            (leg, self._stage(leg.as_group(audit_event_id), replace=leg.replace)) for leg in legs
+        )
+        changing = tuple((leg, effective) for leg, effective in staged if effective)
+        if not changing:
+            outcomes = tuple(self._unchanged(leg.as_group(audit_event_id)) for leg in legs)
+            return self._reported(_multi_outcome(audit_event_id, outcomes), 0)
+        drafts = tuple(_draft(leg.graph, effective) for leg, effective in changing)
+        appended = self._guard.call(
+            drafts[0].graph,
+            lambda: self._log_store.append_groups_standalone(
+                drafts, audit_event_id=audit_event_id, as_swap_set=apply == "swap"
+            ),
+        )
+        done = _CommittedSet(
+            audit_event_id=audit_event_id,
+            legs=legs,
+            appended={group.graph: group for group in appended},
+            entry_counts={leg.graph: len(effective) for leg, effective in changing},
+        )
+        swap_set_id = appended[0].swap_set_id
+        applied = (
+            self._apply_legs_in_place(done)
+            if swap_set_id is None
+            else self._apply_legs_by_swap(done, swap_set_id)
+        )
+        return self._reported(
+            _multi_outcome(audit_event_id, applied), sum(done.entry_counts.values())
+        )
+
+    def _apply_legs_in_place(self, done: _CommittedSet) -> tuple[GroupOutcome, ...]:
+        """Apply the committed legs of a set one graph at a time, in ascending graph order."""
+        applied: list[GroupOutcome] = []
+        try:
+            for leg in done.legs:
+                group = done.appended.get(leg.graph)
+                applied.append(
+                    self._unchanged(leg.as_group(done.audit_event_id))
+                    if group is None
+                    else self._apply_leg(
+                        group, done.entry_counts[leg.graph], done.audit_event_id, leg
+                    )
+                )
+        except GraphApplyError:
+            for rest in done.legs[len(applied) + 1 :]:
+                if rest.graph in done.appended:
+                    self._reconciler.register(rest.graph)
+            raise
+        return tuple(applied)
+
+    def _apply_legs_by_swap(
+        self, done: _CommittedSet, swap_set_id: SwapSetId
+    ) -> tuple[GroupOutcome, ...]:
+        """Swap the committed legs in together; every logged leg ends applied or pending as one."""
+        logged = tuple(leg for leg in done.legs if leg.graph in done.appended)
+        refs = tuple(
+            SwapGroupRef(
+                group_id=done.appended[leg.graph].group_id,
+                graph=leg.graph,
+                first_position=done.appended[leg.graph].first_position,
+                last_position=done.appended[leg.graph].last_position,
+                swap_set_id=swap_set_id,
+            )
+            for leg in logged
+        )
+        status = self._swap_unit(swap_set_id, refs, done.audit_event_id)
+        recorded = {
+            leg.graph
+            for leg in logged
+            if leg.checkpoint_requested
+            and status == "applied"
+            and self._record_checkpoint(done.appended[leg.graph])
+        }
+        outcomes: list[GroupOutcome] = []
+        for leg in done.legs:
+            group = done.appended.get(leg.graph)
+            if group is None:
+                outcomes.append(self._unchanged(leg.as_group(done.audit_event_id)))
+                continue
+            self._log_group(
+                group,
+                done.entry_counts[leg.graph],
+                done.audit_event_id,
+                "success" if status == "applied" else "pending",
+            )
+            outcomes.append(
+                _leg_outcome(group, status, leg.checkpoint_requested, leg.graph in recorded)
+            )
+        return tuple(outcomes)
+
+    def _reported(self, outcome: MultiGraphOutcome, entry_count: int) -> MultiGraphOutcome:
+        """Log how a whole set stands (command id and total entry count only) and return it."""
+        emit_gateway_event(
+            "apply_multi_graph_group",
+            {"applied": "success", "committed_apply_pending": "pending", "unchanged": "unchanged"}[
+                outcome.status
+            ],
+            {"audit_event_id": outcome.audit_event_id, "entry_count": entry_count},
+            emitter=self._emitter,
+        )
+        return outcome
+
+    def _apply_leg(
+        self, appended: AppendedGroup, entry_count: int, audit_event_id: str, leg: GraphLeg
+    ) -> GroupOutcome:
+        """Apply one committed leg of a set in place; its graph's lock is held by the caller."""
+        with self._failure_logged(appended.graph):
+            return self._apply_committed(
+                appended,
+                entry_count,
+                audit_event_id,
+                checkpoint_requested=leg.checkpoint_requested,
+            )
+
+    def _stage(self, group: MutationGroup, *, replace: bool | None = None) -> tuple[Primitive, ...]:
         """Reject `group` before anything is logged, else return its effective primitives.
 
-        A rejection is recorded with the error class only.
+        `replace` is None for a group of its own and a flag for a leg of a multi-graph group: a
+        leg is expanded (legacy-edge stamps, and the deletes of a replacement) under the graph's
+        lock, after the preconditions hold, before the no-op filter. A rejection is recorded with
+        the error class only.
         """
         try:
             self._gate.require_open(group.graph)
@@ -594,6 +797,8 @@ class GraphWriteGateway:
             self._catch_up_before_write(group.graph)
             validate_group(group)
             require_preconditions(group, self._read_last_position)
+            if replace is not None:
+                group = self._expanded(group, replace=replace)
             return self._guard.call(
                 group.graph,
                 lambda: select_effective_primitives(
@@ -610,6 +815,25 @@ class GraphWriteGateway:
                 emitter=self._emitter,
             )
             raise
+
+    def _expanded(self, group: MutationGroup, *, replace: bool) -> MutationGroup:
+        """Put a leg's stamps and replacement deletes ahead of its primitives and vet them."""
+        expanded = self._guard.call(
+            group.graph,
+            lambda: expand_leg(self._graph_opener(group.graph), group, replace=replace),
+        )
+        added = added_count(group, expanded)
+        if added:
+            validate_group(expanded)
+            emit_gateway_event(
+                "expand_leg",
+                "success",
+                _with_audit_event_id(
+                    {"graph": group.graph, "entry_count": added}, group.audit_event_id
+                ),
+                emitter=self._emitter,
+            )
+        return expanded
 
     @contextlib.contextmanager
     def _failure_logged(self, graph: str, action: str = "apply_group") -> Generator[None]:
@@ -641,11 +865,32 @@ class GraphWriteGateway:
         )
         if not lagging:
             return
+        self._refuse_pending_swap(graph)
         try:
             self._apply_pending(graph)
         except GraphUnavailableError:
             self._reconciler.register(graph)
             raise
+
+    def _refuse_pending_swap(self, graph: str) -> None:
+        """Refuse a write while `graph` owes a swap group, without taking any further lock.
+
+        A swap set is completed as one unit by `catch_up` and the reconciler, which hold every
+        leg's lock; this single-lock guard must not escalate, so it only declines. Nothing is
+        logged and the graph goes to the reconciler.
+
+        Raises:
+            GraphUnavailableError: the graph's log holds a swap group that is not applied yet.
+        """
+        pending = self._guard.call(
+            graph,
+            lambda: self._log_store.read_pending_swap_group(
+                graph, self._log_store.read_applied_position(graph)
+            ),
+        )
+        if pending is not None:
+            self._reconciler.register(graph)
+            raise GraphUnavailableError
 
     def _read_last_position(self, graph: str) -> int:
         """Read the log's last position for `graph`, retrying while Postgres is unreachable."""
@@ -723,11 +968,162 @@ class GraphWriteGateway:
         emit_gateway_event("checkpoint", "success", fields, emitter=self._emitter)
         return True
 
-    def _apply_pending(self, graph: str) -> None:
+    def _with_unit[T](self, graph: str, body: Callable[[_Unit], T]) -> T:
+        """Run `body` on the unit `graph` belongs to, holding every one of the unit's locks.
+
+        The unit is resolved with reads only, then its locks are taken in ascending graph order
+        and it is resolved again: a set that landed meanwhile and names a graph that is not locked
+        releases everything and starts over, at most `_UNIT_ATTEMPTS` times. A new set needs this
+        graph's lock to commit, and a set never gains legs, so the loop ends. When it does not
+        settle the reconciler is asked to retry.
+
+        Raises:
+            GraphUnavailableError: the unit would not settle (the reconciler retries).
+        """
+        for _ in range(_UNIT_ATTEMPTS):
+            unit = self._resolve_unit(graph)
+            with self._locks.lock_all(unit.graphs):
+                current = self._resolve_unit(graph)
+                if set(current.graphs) <= set(unit.graphs):
+                    return body(current)
+        self._reconciler.register(graph)
+        raise GraphUnavailableError
+
+    def _resolve_unit(self, graph: str) -> _Unit:
+        """Name what an apply of `graph` must hold together; reads the log, takes no lock."""
+
+        def read_unit() -> _Unit:
+            applied = self._log_store.read_applied_position(graph)
+            first = self._log_store.read_pending_swap_group(graph, applied)
+            if first is None:
+                return _Unit(graphs=(graph,))
+            legs = tuple(
+                ref
+                for ref in self._log_store.read_swap_set(first.swap_set_id)
+                if self._log_store.read_applied_position(ref.graph) < ref.last_position
+            )
+            return _Unit(
+                graphs=tuple(ref.graph for ref in legs), swap_set_id=first.swap_set_id, legs=legs
+            )
+
+        return self._guard.call(graph, read_unit)
+
+    def _apply_unit(self, unit: _Unit) -> bool:
+        """Apply a resolved unit; True when every graph of it is now applied.
+
+        A lone graph is applied in place. A swap set first applies in place what lies ahead of
+        each leg's swap group (nothing, in practice), then swaps the pending legs in together.
+        """
+        if unit.swap_set_id is None:
+            self._apply_pending(unit.graphs[0])
+            return True
+        for ref in unit.legs:
+            self._apply_pending(ref.graph, before=ref.first_position)
+        return self._swap_unit(unit.swap_set_id, unit.legs, None) == "applied"
+
+    def _block_unit(self, graphs: tuple[str, ...]) -> None:
+        """Block every leg of a swap set: writers get `GraphApplyBlockedError` until it ends."""
+        self._blocked.update(graphs)
+        for graph in graphs:
+            self._blocked_units[graph] = graphs
+
+    def _unblock_unit(self, graphs: tuple[str, ...]) -> None:
+        self._blocked.difference_update(graphs)
+        for graph in graphs:
+            self._blocked_units.pop(graph, None)
+
+    def _release_replayed_leg(self, graph: str) -> None:
+        """After a replay of `graph`, end the block of its swap set once every leg is at its head.
+
+        The operator's fallback for a swap the graph store cannot do is to replay each leg in
+        ascending order; a leg replayed early stays blocked until the last one has caught up, so
+        no writer sees the set half done. If the log cannot be read the block stays and
+        `catch_up` ends it.
+        """
+        unit = self._blocked_units.get(graph)
+        if unit is None:
+            return
+        with contextlib.suppress(GraphLogUnavailableError):
+            if all(
+                self._log_store.read_applied_position(member)
+                == self._log_store.last_position(member)
+                for member in unit
+            ):
+                self._unblock_unit(unit)
+
+    def _swap_unit(
+        self, swap_set_id: SwapSetId, refs: tuple[SwapGroupRef, ...], audit_event_id: str | None
+    ) -> Literal["applied", "committed_apply_pending"]:
+        """Swap the pending legs `refs` in together and move their markers (the locks are held).
+
+        Applied: the legs are visible and their markers stand at the legs' last positions. A swap
+        the watch keeps refusing blocks every leg (writers get `GraphApplyBlockedError`) and the
+        set stays committed, apply pending until `catch_up` retries it. A graph store or log that
+        cannot be reached leaves the set pending for the reconciler.
+
+        Raises:
+            GraphApplyError: the graph store refused a copy or an entry; every leg is now blocked.
+        """
+        graphs = tuple(ref.graph for ref in refs)
+        fields: dict[str, str | int | float] = {
+            "leg_count": len(refs),
+            "swap_set_id": str(swap_set_id),
+        }
+        try:
+            hold_seconds = self._swap_and_advance(swap_set_id, refs)
+        except SwapConflictError as exc:
+            self._block_unit(graphs)
+            self._log_swap("failure", fields, audit_event_id, error=exc)
+            return "committed_apply_pending"
+        except GraphApplyError as exc:
+            self._block_unit(graphs)
+            self._log_swap("failure", fields, audit_event_id, error=exc)
+            raise
+        except (GraphUnavailableError, GraphLogUnavailableError) as exc:
+            for graph in graphs:
+                self._reconciler.register(graph)
+            self._log_swap("pending", fields, audit_event_id, error=exc)
+            return "committed_apply_pending"
+        self._unblock_unit(graphs)
+        mark_healthy(FALKORDB)
+        self._log_swap("success", {**fields, "hold_seconds": hold_seconds}, audit_event_id)
+        return "applied"
+
+    def _swap_and_advance(self, swap_set_id: SwapSetId, refs: tuple[SwapGroupRef, ...]) -> float:
+        """Stage and flip the legs, then advance each marker; return the seconds the swap took."""
+        if self._swap is None:
+            raise GraphApplyError(refs[0].graph, refs[0].first_position)
+        hold_seconds = self._swap.apply(swap_set_id, refs)
+        for ref in refs:
+            self._guard.call(
+                ref.graph,
+                lambda ref=ref: self._log_store.advance_applied_position(
+                    ref.graph, ref.last_position
+                ),
+            )
+        return hold_seconds
+
+    def _log_swap(
+        self,
+        outcome: str,
+        fields: dict[str, str | int | float],
+        audit_event_id: str | None,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        """Log how a swap set stands: ids, counts and the hold time, plus the error class."""
+        entry = _with_audit_event_id(dict(fields), audit_event_id)
+        if error is not None:
+            entry["error_class"] = type(error.__cause__ or error).__name__
+        emit_gateway_event("swap_set", outcome, entry, emitter=self._emitter)
+
+    def _apply_pending(self, graph: str, *, before: int | None = None) -> None:
         """Apply every logged entry beyond the graph's applied marker, advancing the marker.
 
-        Transient failures are retried, each attempt resuming from the marker. A permanent
-        failure blocks the graph (see `_require_not_blocked`).
+        In place only, and lock-agnostic: the caller holds the graph's lock. `before` stops the
+        apply ahead of that log position (the first position of a swap group, which only a swap
+        applies). Transient failures are retried, each attempt resuming from the marker. A
+        permanent failure blocks the graph (see `_require_not_blocked`).
 
         Raises:
             GraphUnavailableError: FalkorDB stayed unreachable through the retry budget.
@@ -740,6 +1136,8 @@ class GraphWriteGateway:
             nonlocal applied_through
             applied_through = self._log_store.read_applied_position(graph)
             pending = self._log_store.read_entries(graph, after_position=applied_through)
+            if before is not None:
+                pending = tuple(entry for entry in pending if entry.position < before)
 
             def advance_marker(position: int) -> None:
                 nonlocal applied_through
@@ -793,11 +1191,62 @@ class GraphWriteGateway:
         emit_gateway_event("apply_group", outcome, fields, emitter=self._emitter)
 
 
+@dataclass(frozen=True)
+class _Unit:
+    """What one apply must hold together: a lone graph, or the pending legs of a swap set."""
+
+    graphs: tuple[str, ...]
+    """Ascending graph names whose locks the apply holds."""
+    swap_set_id: SwapSetId | None = None
+    legs: tuple[SwapGroupRef, ...] = ()
+    """The swap set's legs that are not applied yet (empty for a lone graph)."""
+
+
+@dataclass(frozen=True)
+class _CommittedSet:
+    """A multi-graph group after its commit: what was logged for each leg."""
+
+    audit_event_id: str
+    legs: tuple[GraphLeg, ...]
+    appended: dict[str, AppendedGroup]
+    entry_counts: dict[str, int]
+
+
+def _leg_outcome(
+    group: AppendedGroup,
+    status: Literal["applied", "committed_apply_pending"],
+    checkpoint_requested: bool,  # noqa: FBT001  (a plain flag read from the leg)
+    recorded: bool,  # noqa: FBT001
+) -> GroupOutcome:
+    """Report one logged leg of a swap set."""
+    return GroupOutcome(
+        graph=group.graph,
+        first_position=group.first_position,
+        last_position=group.last_position,
+        status=status,
+        checkpoint=_checkpoint_state(requested=checkpoint_requested, recorded=recorded),
+        checkpoint_position=group.last_position if recorded else None,
+    )
+
+
 def _with_audit_event_id(
     fields: dict[str, str | int | float], audit_event_id: str | None
 ) -> dict[str, str | int | float]:
     """`fields` plus the audit event id; a group with no audit event omits the key."""
     return fields if audit_event_id is None else {**fields, "audit_event_id": audit_event_id}
+
+
+def _multi_outcome(audit_event_id: str, outcomes: tuple[GroupOutcome, ...]) -> MultiGraphOutcome:
+    """Fold the per-graph outcomes of a set into the set's own status."""
+    statuses = {outcome.status for outcome in outcomes}
+    status: Literal["applied", "committed_apply_pending", "unchanged"] = (
+        "unchanged"
+        if statuses == {"unchanged"}
+        else "committed_apply_pending"
+        if "committed_apply_pending" in statuses
+        else "applied"
+    )
+    return MultiGraphOutcome(audit_event_id=audit_event_id, legs=outcomes, status=status)
 
 
 def _checkpoint_state(

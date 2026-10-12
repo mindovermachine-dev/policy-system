@@ -68,6 +68,7 @@ from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
 from api._fakes import FakeCuratedArtifactTransport, FakeFailingCuratedSourceTransport
+from api._gateway_fakes import installed_process_gateway
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- issue #145: same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own real-token success test can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
@@ -80,6 +81,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 from starlette.applications import Starlette
 
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.restore_orchestration import CatalogRestoreInfra
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth.models import AuthContext
@@ -1208,17 +1210,16 @@ def _internal_policy_transport() -> FakeCuratedArtifactTransport:
     )
 
 
-def _restored_policy_owner(db: _FakeStagingFalkorDB) -> tuple[object, object]:
-    """The `(owner_subject, owner_issuer)` the restore wrote onto the Policy in `policy_system`."""
-    graph = cast("_FakeSingleTenantGraph", db.select_graph(single_tenant_graph_name()))
-    mints = [
-        params
-        for q, params in cast("list[tuple[str, dict[str, object] | None]]", graph.calls)
-        if "MERGE (n:Policy {id: $id}) ON CREATE SET" in q and params is not None
-    ]
-    assert len(mints) == 1
-    properties = cast("dict[str, object]", mints[0]["properties"])
-    return properties["owner_subject"], properties["owner_issuer"]
+def _restored_policy_owner() -> tuple[object, object]:
+    """The `(owner_subject, owner_issuer)` the restore wrote onto the Policy in `policy_system`.
+
+    Read from the process gateway's `policy_system` graph (what the restore's group applied), not
+    from any statement text.
+    """
+    graph = installed_process_gateway().rig.graphs.open(single_tenant_graph_name())
+    policies = [props for (label, _node_id), props in graph.nodes.items() if label == "Policy"]
+    assert len(policies) == 1
+    return policies[0]["owner_subject"], policies[0]["owner_issuer"]
 
 
 def test_verified_token_caller_becomes_the_owner_of_restored_drafts(
@@ -1231,19 +1232,12 @@ def test_verified_token_caller_becomes_the_owner_of_restored_drafts(
     token_sub = "user-restore-owner"
     token = mock_oidc_provider.mint_token(sub=token_sub)
     _grant_compliance_officer(monkeypatch, subject=token_sub, issuer=auth_context.issuer)
-    opened: list[_FakeStagingFalkorDB] = []
-
-    def _open_db(config: ServiceConfig) -> FalkorDB:
-        del config
-        opened.append(_FakeStagingFalkorDB(single_tenant_graph_name()))
-        return cast("FalkorDB", opened[-1])
-
-    _use_fake_restore_infra(monkeypatch, _internal_policy_transport(), open_db=_open_db)
+    _use_fake_restore_infra(monkeypatch, _internal_policy_transport())
 
     with _authenticated_test_client(auth_context=auth_context) as client:
         _call_restore_instrument_over_http(client, token=token)
 
-    assert _restored_policy_owner(opened[0]) == (token_sub, auth_context.issuer)
+    assert _restored_policy_owner() == (token_sub, auth_context.issuer)
 
 
 def test_local_test_bypass_caller_owns_restored_drafts_as_the_bypass_identity(
@@ -1253,19 +1247,12 @@ def test_local_test_bypass_caller_owns_restored_drafts_as_the_bypass_identity(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
-    opened: list[_FakeStagingFalkorDB] = []
-
-    def _open_db(config: ServiceConfig) -> FalkorDB:
-        del config
-        opened.append(_FakeStagingFalkorDB(single_tenant_graph_name()))
-        return cast("FalkorDB", opened[-1])
-
-    _use_fake_restore_infra(monkeypatch, _internal_policy_transport(), open_db=_open_db)
+    _use_fake_restore_infra(monkeypatch, _internal_policy_transport())
 
     result = _call_restore_instrument()
 
     assert result.is_error is False
-    assert _restored_policy_owner(opened[0]) == (LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)
+    assert _restored_policy_owner() == (LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)
 
 
 def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(
@@ -1649,3 +1636,64 @@ def test_restore_instrument_rows_are_returned_by_list_audit_events_by_instrument
         page_size=10,
     )
     assert [e.details["status"] for e in page.events] == ["succeeded", "started"]  # newest first
+
+
+# --- issue #214: a restore is one multi-graph group, anchored to its opening audit row ---------
+
+
+def test_restore_instrument_logs_one_group_per_graph_under_the_opening_rows_event_id(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """AC-BI-001/012 down to the log: the groups carry the id of the `started` audit row."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    _use_fake_restore_infra(monkeypatch, _internal_policy_transport())
+
+    result = _call_restore_instrument()
+
+    assert result.is_error is False
+    rig = installed_process_gateway().rig
+    assert len(audit_store.event_ids) == 2  # the opening row and the terminal row
+    assert {g.audit_event_id for g in rig.store.groups} == {audit_store.event_ids[0]}
+    assert len(rig.store.groups) == 3  # native, baseline, policy_system
+    assert len(rig.store.multi_appends) == 1  # in ONE log transaction
+
+
+def test_restore_instrument_without_a_gateway_fails_closed_and_audits_graph_unavailable(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """No gateway installed: the restore stops after the artifact verifies, nothing is written."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
+    rig = installed_process_gateway().rig
+    install_graph_write_gateway(None)
+
+    result = _call_restore_instrument()
+
+    assert _text(result).startswith("error: graph writes are unavailable")
+    assert rig.store.groups == []
+    assert [
+        (r.outcome, r.details["status"], r.details.get("reason_code")) for r in audit_store.rows
+    ] == [
+        ("applied", "started", None),
+        ("failed", "failed", "graph_unavailable"),
+    ]
+
+
+def test_a_corrupt_artifact_is_still_rejected_when_no_gateway_is_installed(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """AC-BI-005 ordering: verification comes before the gateway is looked for."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    _use_fake_restore_infra(monkeypatch, _transport_with(baseline_sha256="0" * 64))
+    install_graph_write_gateway(None)
+
+    result = _call_restore_instrument()
+
+    assert "checksum" in _text(result)
+    assert audit_store.rows[-1].details["reason_code"] == "artifact_rejected"

@@ -18,6 +18,7 @@ from ps_service.export.models import SerializedGraph, SerializedNode
 from ps_service.restore.errors import ArtifactContentRejectedError
 from ps_service.restore.restore_instrument import restore_instrument
 from restore._fixtures import build_restore_artifact
+from restore._gateway_fakes import UNUSED_EVENT_ID, never_open_gateway
 
 if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter, ReadLines
@@ -90,6 +91,8 @@ def test_baseline_only_content_violation_is_rejected_before_any_db_call(
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
             similarity_threshold=0.9,
             actor=_ACTOR,
+            open_gateway=never_open_gateway,
+            audit_event_id=UNUSED_EVENT_ID,
             emitter=emitter,
         )
 
@@ -108,6 +111,8 @@ def test_content_violation_emits_started_then_failed_audit_entries(
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
             similarity_threshold=0.9,
             actor=_ACTOR,
+            open_gateway=never_open_gateway,
+            audit_event_id=UNUSED_EVENT_ID,
             emitter=emitter,
         )
     emitter.flush()
@@ -145,6 +150,8 @@ def test_baseline_with_a_merged_capability_is_rejected_before_any_db_call(
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
             similarity_threshold=0.9,
             actor=_ACTOR,
+            open_gateway=never_open_gateway,
+            audit_event_id=UNUSED_EVENT_ID,
             emitter=emitter,
         )
 
