@@ -4,8 +4,16 @@ r"""Maintainer CLI shim: curate one already-ingested instrument (issue #66, D4).
 Thin wrapper over `ps_service.export.export_instrument.export_instrument` --
 the real orchestration (embed -> serialize -> checksum -> manifest ->
 catalog.json) lives there; this script only parses arguments, resolves a
-real FalkorDB connection and a real embedding transport, and reports the
-outcome. Same CLI-shim shape as `tools/graph-ingestion/load_graph.py`:
+real FalkorDB connection, a real embedding transport and (since issue #213)
+a Graph Write Gateway and a system audit recorder, and reports the outcome.
+
+The embedding backfill is written through the gateway, never directly: the
+script builds its own gateway from the service configuration (so it needs the
+PS state Postgres, `PS_STATE_POSTGRES_*`, reachable, like the service), with
+`--host`/`--port` applied to the gateway's FalkorDB as well so reads and
+writes hit the same server. It records one `export.instrument` system audit
+row first (fail-closed: no row, no embedding, no write) and anchors the
+backfill group to it. Same CLI-shim shape as `tools/graph-ingestion/load_graph.py`:
 argparse, `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` env-driven connection
 defaults, a top-level connection guard printing a hint and exiting non-zero.
 
@@ -30,6 +38,7 @@ passed explicitly) plus that provider's own credentials (e.g.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import sys
 from pathlib import Path
@@ -37,19 +46,32 @@ from typing import TYPE_CHECKING, cast
 
 from falkordb import FalkorDB
 
+from ps_service.api.export_audit_actions import (
+    EXPORT_INSTRUMENT_ACTION,
+    EXPORT_INSTRUMENT_RESOURCE_TYPE,
+    ExportInstrumentDetails,
+)
+from ps_service.audit.errors import AuditTrailUnavailableError
+from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
-from ps_service.export.errors import ExportSourceGraphError
+from ps_service.export.errors import ExportGraphWriteError, ExportSourceGraphError
 from ps_service.export.export_instrument import InstrumentDescriptor, export_instrument
 from ps_service.export.falkordb_connection import graph_query_handle
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.llm_interface.client import default_embedding_caller
 from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging.facade import configure as configure_logging
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from typing import Literal
 
+    from ps_service.config import ServiceConfig
+    from ps_service.graph_gateway.gateway import GraphWriteGateway
+    from ps_service.graph_gateway.system_audit import SystemAuditRecorder
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import EmbeddingCaller
 
 # Connection defaults, env-driven -- same PS_FALKORDB_HOST/PS_FALKORDB_PORT ps-service and
@@ -125,14 +147,22 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(
-    argv: Sequence[str] | None = None, *, call_embedding: EmbeddingCaller | None = None
+    argv: Sequence[str] | None = None,
+    *,
+    call_embedding: EmbeddingCaller | None = None,
+    load_service_config: Callable[[], ServiceConfig] = load_config,
+    build_gateway: Callable[[ServiceConfig], GraphWriteGateway] = build_default_graph_write_gateway,
+    build_audit: Callable[[ServiceConfig], SystemAuditRecorder] = build_system_audit_recorder,
 ) -> int:
     """Parse args, connect to real FalkorDB, and run `export_instrument` for real.
 
     `call_embedding` is a test-only injection seam (no CLI flag exposes it --
     there is no way to serialize a fake Python callable through argv): left
     `None`, a real invocation always calls the real `default_embedding_caller`
-    (real LiteLLM/provider traffic). Returns a process exit code.
+    (real LiteLLM/provider traffic). `load_service_config`, `build_gateway` and `build_audit`
+    are the same kind of seam for the service-configuration, graph-write-gateway and
+    audit-recorder composition: left at their defaults a real invocation wires the real ones.
+    Returns a process exit code.
     """
     # This script is its own process composition root (like `main.py`): `RouteEmbedding`'s
     # own `log()` call requires a configured default emitter before any `emit_log_entry`
@@ -186,6 +216,56 @@ def main(
         f"embedding via '{args.embed_model}'..."
     )
 
+    # The gateway writes the same FalkorDB the reads above hit (--host/--port), and its log is the
+    # PS state Postgres of the service configuration. Contacts neither until first used.
+    config = dataclasses.replace(
+        load_service_config(), falkordb_host=args.host, falkordb_port=args.port
+    )
+    gateway = build_gateway(config)
+    try:
+        return _export_through_gateway(
+            args,
+            descriptor,
+            db=db,
+            gateway=gateway,
+            record_audit=build_audit(config),
+            call_embedding=call_embedding,
+        )
+    finally:
+        gateway.stop_reconciler()
+
+
+def _export_through_gateway(
+    args: argparse.Namespace,
+    descriptor: InstrumentDescriptor,
+    *,
+    db: FalkorDB,
+    gateway: GroupSubmitter,
+    record_audit: SystemAuditRecorder,
+    call_embedding: EmbeddingCaller | None,
+) -> int:
+    """Record the Export audit row, run `export_instrument` and report; return the exit code."""
+    baseline_name = baseline_graph_name(args.short_name)
+    native_name = native_graph_name(args.short_name)
+    try:
+        # Fail-closed (issue #213, AC-BI-010): without the row there is no id to anchor the
+        # group to, so nothing is embedded or written.
+        audit_event_id = record_audit(
+            action=EXPORT_INSTRUMENT_ACTION,
+            resource_type=EXPORT_INSTRUMENT_RESOURCE_TYPE,
+            resource_id=descriptor.instrument_id,
+            details=ExportInstrumentDetails(
+                instrument_id=descriptor.instrument_id, status="started"
+            ).model_dump(),
+        )
+    except AuditTrailUnavailableError as exc:
+        print(
+            f"The audit trail is unavailable ({exc}). Nothing was embedded or written. "
+            "Is the PS state Postgres (PS_STATE_POSTGRES_*) reachable?",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         manifest = export_instrument(
             descriptor,
@@ -194,10 +274,16 @@ def main(
             embed_model=args.embed_model,
             repo_root=args.repo_root,
             packaged_copy_path=args.packaged_copy_path,
+            submitter=gateway,
+            audit_event_id=audit_event_id,
+            baseline_graph_name=baseline_name,
             call_embedding=(
                 call_embedding if call_embedding is not None else default_embedding_caller
             ),
         )
+    except ExportGraphWriteError as exc:
+        print(f"The embedding backfill could not be written: {exc}", file=sys.stderr)
+        return 1
     except LlmProviderError as exc:
         print(f"LLM provider error while backfilling embeddings: {exc}", file=sys.stderr)
         print(

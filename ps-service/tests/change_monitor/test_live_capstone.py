@@ -189,7 +189,9 @@ def test_ac001_live_consolidated_version_detection() -> None:
     assert info.latest_celex == _LATEST_CONSOLIDATED_CELEX
 
 
-def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFactory) -> None:
+def test_consolidated_reingestion_end_to_end(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Seed a throwaway `{short}_native` graph with a real base-act ingest,
     then run a real `trigger_reingestion` of the *consolidated expression*
     and assert the full re-ingestion outcome (PLAN_A.md §1.5).
@@ -216,6 +218,9 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)
 
     graph_name = native_graph_name(_CAPSTONE_SHORT)
+    # The `policy_system` step of the succession is not part of this capstone: pointing the
+    # single-tenant graph name at the throwaway native graph makes it write the same RI nodes.
+    monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)
     log_path = tmp_path_factory.mktemp("capstone_live") / "capstone_live.jsonl"
     emitter = LogEmitter(EmitterConfig(log_path=log_path))
     adapter = CellarEliAdapter()
@@ -249,7 +254,8 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
             _NEW_VERSION,
             adapter=adapter,
             graph=graph,
-            single_tenant=graph,  # the same RI nodes; policy_system is not part of this capstone
+            submitter=gateway,
+            audit_anchor=lambda: _audit_event_id("capstone-trigger"),
             emitter=emitter,
             run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway),
         )
@@ -305,7 +311,8 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
             _NEW_VERSION,
             adapter=adapter,
             graph=graph,
-            single_tenant=graph,  # the same RI nodes; policy_system is not part of this capstone
+            submitter=gateway,
+            audit_anchor=lambda: _audit_event_id("capstone-trigger"),
             emitter=emitter,
             run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway),
         )

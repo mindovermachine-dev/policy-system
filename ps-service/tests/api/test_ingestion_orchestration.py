@@ -531,7 +531,7 @@ def test_ingestion_run_log_without_a_trigger_is_unchanged(
         (PipelineStageError(stage="merge", reason="boom /Users/x"), "pipeline_stage_failed"),
         (ChangeMonitorStateError("no single active prior"), "inconsistent_graph_state"),
         (
-            SuccessionPersistenceError("FalkorDB succession write failed: 10.0.0.1"),
+            SuccessionPersistenceError("FalkorDB write failed: 10.0.0.1"),
             "graph_unavailable",
         ),
         (RuntimeError("boom"), "unexpected_error"),

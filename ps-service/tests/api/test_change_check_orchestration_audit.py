@@ -325,7 +325,7 @@ def test_reingest_failure_records_failed_with_classified_reason_code_and_sweep_c
             "inconsistent_graph_state",
         ),
         (
-            SuccessionPersistenceError("FalkorDB succession write failed: 10.0.0.1:6379"),
+            SuccessionPersistenceError("FalkorDB write failed: 10.0.0.1:6379"),
             "graph_unavailable",
         ),
         (RuntimeError("boom 10.0.0.1:6379 /srv/x"), "unexpected_error"),
@@ -414,17 +414,17 @@ def test_sweep_abort_keeps_the_pairs_of_earlier_instruments_and_emits_a_failed_s
     emitter, log_path = make_emitter()
     store = InMemoryAuditStore()
     fake = _fake(results=[_outcome("a"), _outcome("b")], tracked=(_node("CRA-1"), _node("CRA-2")))
-    inner_record = store.record_standalone
+    inner_record = store.record_standalone_with_event_id
     submits: list[str] = []
 
-    def _second_submit_fails(**kwargs: object) -> None:
+    def _second_submit_fails(**kwargs: object) -> str:
         if kwargs["action"] == "ingestion_run.submit":
             submits.append(str(kwargs["resource_id"]))
             if len(submits) == 2:
                 raise AuditPersistenceError("db down")
-        inner_record(**kwargs)  # pyright: ignore[reportArgumentType]
+        return inner_record(**kwargs)  # pyright: ignore[reportArgumentType]
 
-    store.record_standalone = _second_submit_fails  # type: ignore[method-assign]  # pyright: ignore[reportAttributeAccessIssue]
+    store.record_standalone_with_event_id = _second_submit_fails  # type: ignore[method-assign]  # pyright: ignore[reportAttributeAccessIssue]
 
     with pytest.raises(AuditTrailUnavailableError):
         _sweep(app_config, fake, store, emitter)

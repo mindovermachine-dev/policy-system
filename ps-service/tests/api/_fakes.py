@@ -31,6 +31,7 @@ from starlette.requests import (
 
 from ps_service.api import dependencies
 from ps_service.api.change_check_orchestration import ChangeCheckDependencies
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.ingestion_orchestration import (
     _CELEX_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage] -- query-text dispatch key
     _MERGED_INSTRUMENT_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage] -- query-text dispatch key, mirrors this module's own precedent for cross-module private reuse
@@ -865,7 +866,8 @@ def _never_trigger_reingestion(
     *,
     adapter: IngestionAdapter,
     graph: GraphHandle,
-    single_tenant: GraphHandle,
+    submitter: GroupSubmitter,
+    audit_anchor: Callable[[], str],
     emitter: LogEmitter | None = None,
     run_id: str | None = None,
     run_pipeline: PipelineRunner | None = None,
@@ -879,7 +881,7 @@ def _never_trigger_reingestion(
     D5 "no curated catalog entry" test (the missing-entry short-circuit
     happens before `trigger_reingestion` would ever be called).
     """
-    _ = (adapter, graph, single_tenant, emitter, run_id, run_pipeline)
+    _ = (adapter, graph, submitter, audit_anchor, emitter, run_id, run_pipeline)
     message = (
         "trigger_reingestion must not be called in this test "
         f"(identifier={identifier!r}, short_name={short_name!r}, new_version={new_version!r})"
@@ -1082,12 +1084,13 @@ def build_fake_change_check_dependencies(
             *,
             adapter: IngestionAdapter,
             graph: GraphHandle,
-            single_tenant: GraphHandle,
+            submitter: GroupSubmitter,
+            audit_anchor: Callable[[], str],
             emitter: LogEmitter | None = None,
             run_id: str | None = None,
             run_pipeline: PipelineRunner | None = None,
         ) -> ReingestionOutcome:
-            _ = (emitter, single_tenant)
+            _ = (emitter, submitter, audit_anchor)
             trigger_reingestion_calls.append(
                 TriggerReingestionCallRecord(
                     identifier, short_name, new_version, adapter, graph, run_id, run_pipeline
@@ -1128,6 +1131,7 @@ def build_fake_change_check_dependencies(
         default_adapter=default_adapter,
         find_catalog_entry=find_catalog_entry,
         will_reingest=_will_reingest,
+        graph_write_access=graph_write_access,
     )
     return FakeChangeCheckDependencies(
         dependencies=dependencies,

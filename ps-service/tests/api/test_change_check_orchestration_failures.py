@@ -17,17 +17,18 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 import pytest
-from change_monitor._fakes import FakeAdapter, LedgerNativeGraph, LedgerSingleTenantGraph
+from change_monitor._fakes import FakeAdapter
+from change_monitor._gateway_fakes import RigKeyedGraph, SuccessionRig
 from change_monitor.test_trigger import (
     _structure,  # pyright: ignore[reportPrivateUsage]  -- reuse the trigger tests' canned metadata
 )
 
-from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
     LedgerStageRecorder,
     build_fake_change_check_dependencies,
     build_fake_pipeline_dependencies,
 )
+from api._gateway_fakes import installed_process_gateway
 from ps_service.api.catalog import CatalogEntry
 from ps_service.api.change_check_orchestration import ChangeCheckResult, run_change_check_sweep
 from ps_service.audit import AuditContext
@@ -67,7 +68,7 @@ def _prior_id(instrument: tuple[str, str, str]) -> str:
 
 
 class _World:
-    """Ledger doubles for each instrument's native graph and for `policy_system`."""
+    """The gateway rig's native graph of each instrument and its shared `policy_system` graph."""
 
     def __init__(
         self,
@@ -77,15 +78,20 @@ class _World:
         self.instruments = instruments
         self.config = _CONFIG  # a test may swap in an incomplete config before `sweep`
         self.fetched_type: InstrumentType = "regulation"  # what the Cellar metadata fetch reports
-        self.native = {short: LedgerNativeGraph() for short, _, _ in instruments}
-        self.single_tenant = LedgerSingleTenantGraph()
+        rig = installed_process_gateway().rig
+        self.rig = rig
+        self.rigs = {short: SuccessionRig(rig, short_name=short) for short, _, _ in instruments}
+        self.native = {short: RigKeyedGraph(self.rigs[short].native) for short in self.rigs}
+        shared = next(iter(self.rigs.values()))
+        self.single_tenant = RigKeyedGraph(shared.single_tenant)
         for instrument in instruments:
-            self.native[instrument[0]].seed_instrument(_prior_id(instrument))
-            self.single_tenant.seed_instrument(_prior_id(instrument))
-        self.store = InMemoryAuditStore()
+            short = instrument[0]
+            self.rigs[short].seed_instrument(self.rigs[short].native, _prior_id(instrument))
+            shared.seed_instrument(shared.single_tenant, _prior_id(instrument))
+        self.store = shared.audit_store()
         self.pipeline: FakePipeline = build_fake_pipeline_dependencies(
             rid=None,
-            recorder=LedgerStageRecorder(self.native[instruments[0][0]].events, self._on_ingest),
+            recorder=LedgerStageRecorder(rig.events, self._on_ingest),
             **pipeline,  # pyright: ignore[reportArgumentType]
         )
 
@@ -93,8 +99,9 @@ class _World:
         """The real Ingestion stage registers the new node; Company Merge later lands it."""
         kwargs = call.kwargs  # pyright: ignore[reportAttributeAccessIssue,reportUnknownVariableType,reportUnknownMemberType]
         short, version = str(kwargs["short_name"]), str(kwargs["version"])  # pyright: ignore[reportUnknownArgumentType]
-        self.native[short].seed_instrument(f"{short}-{version}")
-        self.single_tenant.seed_instrument(f"{short}-{version}")
+        rig = self.rigs[short]
+        rig.seed_instrument(rig.native, f"{short}-{version}")
+        rig.seed_instrument(rig.single_tenant, f"{short}-{version}")
 
     def sweep(self, emitter: LogEmitter) -> ChangeCheckResult:
         tracked = tuple(
@@ -126,11 +133,11 @@ class _World:
         )
 
         def _open_native(_config: ServiceConfig, short_name: str) -> GraphHandle:
-            return self.native[short_name]
+            return self.rigs[short_name].read_native()
 
         deps = dataclasses.replace(
             fake.dependencies,
-            open_single_tenant=lambda _config: self.single_tenant,  # pyright: ignore[reportUnknownLambdaType]
+            open_single_tenant=lambda _config: next(iter(self.rigs.values())).read_single_tenant(),  # pyright: ignore[reportUnknownLambdaType]
             open_native=_open_native,
             default_adapter=lambda: FakeAdapter(
                 {i[1]: _structure(self.fetched_type) for i in self.instruments}
@@ -269,13 +276,12 @@ def test_a_second_sweep_after_a_completed_retry_runs_nothing(make_emitter: MakeE
 
 
 def _writes(world: _World, short: str) -> list[object]:
-    """Every mutating statement the instrument's graphs received (`policy_system` is shared)."""
+    """Every group the gateway logged for the instrument's graphs, and every call a stage made."""
     return [
-        *world.native[short].writes,
         *(
-            call
-            for call in world.single_tenant.writes
-            if str((call.params or {}).get("prior_id", "")).startswith(f"{short}-")
+            group
+            for group in world.rig.store.groups
+            if group.graph in {f"{short.lower()}_native", "policy_system"}
         ),
         *world.pipeline.native.calls,
         *world.pipeline.baseline.calls,
@@ -294,10 +300,10 @@ def test_missing_pipeline_config_reports_reingest_failed_before_any_graph_write(
     world = _World((_CRA, _GDPR))
     world.config = dataclasses.replace(_CONFIG, **{unset: None})
     # GDPR was fully absorbed by an earlier sweep: it needs no stage, so no config either.
-    gdpr = world.native["GDPR"]
-    gdpr.seed_instrument(_new_id(_GDPR))
-    gdpr.seed_edge(_prior_id(_GDPR), _new_id(_GDPR), absorbed=True)
-    gdpr.nodes[("RegulatoryInstrument", _prior_id(_GDPR))]["status"] = "superseded"
+    gdpr = world.rigs["GDPR"]
+    gdpr.seed_instrument(gdpr.native, _new_id(_GDPR))
+    gdpr.seed_edge(gdpr.native, _prior_id(_GDPR), _new_id(_GDPR), absorbed=True)
+    gdpr.native.nodes[("RegulatoryInstrument", _prior_id(_GDPR))]["status"] = "superseded"
 
     result = world.sweep(emitter)
 
@@ -329,9 +335,8 @@ def test_national_transposition_is_skipped_and_nothing_is_written_including_stag
     if config_state == "unset":
         world.config = dataclasses.replace(_CONFIG, llm_interface_model=None)
     if limb == "prior_type":
-        world.native["CRA"].seed_instrument(
-            _prior_id(_CRA), instrument_type="national_transposition"
-        )
+        cra = world.rigs["CRA"]
+        cra.seed_instrument(cra.native, _prior_id(_CRA), instrument_type="national_transposition")
     else:  # the fetched-metadata limb: an ordinary prior whose amendment reports a different type
         world.fetched_type = "national_transposition"
 

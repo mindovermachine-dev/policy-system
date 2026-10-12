@@ -21,7 +21,10 @@ see
 for the mechanism, and
 [`ps-service-container-architecture.md`'s Restore section](../docs/architecture/ps-service-container-architecture.md#restore)
 for how `ps-cli restore instrument <instrument_id>` loads one back into a target
-deployment. `catalog.json` is always regenerated wholesale by that same tooling —
+deployment. The export CLI needs more than FalkorDB and an LLM provider: it writes the
+embedding backfill through the Graph Write Gateway, so the PS state Postgres (the graph
+mutation log and the audit trail) must be configured and reachable, and each run records one
+system audit row before any embedding is computed. `catalog.json` is always regenerated wholesale by that same tooling —
 never hand-edited.
 
 **Licensing:** see [`LICENSING.md`](./LICENSING.md) for the one-time confirmation that

@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 import pytest
 from litellm.types.utils import Embedding, EmbeddingResponse
 
+from export.live_gateway import live_write_target
 from ps_service.company_merge.falkordb_client import select_graph as select_company_merge_graph
 from ps_service.company_merge.graph_reader import read_baseline_graph
 from ps_service.export.export_instrument import InstrumentDescriptor, export_instrument
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
 _BASELINE_GRAPH_NAME = "engprac_baseline"
 _NATIVE_GRAPH_NAME = "engprac_native"
@@ -117,8 +119,12 @@ def test_engprac_baseline_passes_company_merges_own_baseline_graph_shape_asserti
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
-    live_falkordb: FalkorDB, tmp_path: Path, make_emitter: MakeEmitter
+    live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
+    tmp_path: Path,
+    make_emitter: MakeEmitter,
 ) -> None:
     """The real `export_instrument()` orchestration (Slice 3.5), run against
     the real `engprac_baseline`/`engprac_native` graphs -- a real-content
@@ -141,16 +147,18 @@ def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
         jurisdiction=None,
     )
 
-    manifest = export_instrument(
-        descriptor,
-        baseline_graph=graph_query_handle(live_falkordb, _BASELINE_GRAPH_NAME),
-        native_graph=graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME),
-        embed_model="fake-embed-model",
-        repo_root=repo_root,
-        packaged_copy_path=packaged_copy_path,
-        call_embedding=embedding_caller,
-        emitter=emitter,
-    )
+    with live_write_target(provisioned_graph_log, live_falkordb, _BASELINE_GRAPH_NAME) as target:
+        manifest = export_instrument(
+            descriptor,
+            baseline_graph=graph_query_handle(live_falkordb, _BASELINE_GRAPH_NAME),
+            native_graph=graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME),
+            embed_model="fake-embed-model",
+            repo_root=repo_root,
+            packaged_copy_path=packaged_copy_path,
+            call_embedding=embedding_caller,
+            emitter=emitter,
+            **target,  # pyright: ignore[reportArgumentType]
+        )
 
     assert manifest.instrument_id == _REGULATORY_INSTRUMENT_ID
     assert manifest.source_type == "internal"

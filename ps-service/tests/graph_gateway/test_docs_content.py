@@ -745,7 +745,8 @@ def test_architecture_policy_lifecycle_says_its_writes_go_through_the_gateway() 
     assert "#211" in _ca_row("| Graph Write Gateway | `ps.")
     assert "#211-#214" not in ca
     assert "#212-#214" not in ca
-    assert "#213-#214" in ca
+    assert "#213-#214" not in ca
+    assert "#214" in ca
 
 
 def test_architecture_policy_lifecycle_cascade_is_one_gateway_group_not_one_cypher_statement() -> (
@@ -841,7 +842,8 @@ def test_solution_architecture_and_domain_concepts_name_policy_lifecycle_as_a_ga
     )
     assert "#211-#214" not in section
     assert "#212-#214" not in section
-    assert "#213-#214" in section
+    assert "#213-#214" not in section
+    assert "#214" in section
 
 
 def test_both_copies_of_the_domain_concepts_are_identical() -> None:
@@ -897,7 +899,8 @@ def test_architecture_graph_cleanup_says_its_writes_go_through_the_gateway() -> 
     assert "#212" in _ca_row("| Graph Write Gateway | `ps.")
     assert "Graph Cleanup is its fifth" in ca
     assert "#212-#214" not in ca
-    assert "#213-#214" in ca
+    assert "#213-#214" not in ca
+    assert "#214" in ca
 
 
 def test_architecture_graph_cleanup_lists_the_observable_differences() -> None:
@@ -966,10 +969,12 @@ def test_solution_architecture_and_domain_concepts_name_graph_cleanup_as_a_gatew
 
     assert "Graph Cleanup (#212)" in sa
     assert "#212-#214" not in sa
-    assert "#213-#214" in sa
+    assert "#213-#214" not in sa
+    assert "#214" in sa
     assert "Graph Cleanup (merge, release and unmerge) since #212" in section
     assert "#212-#214" not in section
-    assert "#213-#214" in section
+    assert "#213-#214" not in section
+    assert "#214" in section
     assert "since #212" in _read(
         _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "ps-domain-concepts.md"
     )
@@ -1020,3 +1025,199 @@ def test_no_cleanup_source_or_doc_describes_a_direct_cleanup_write() -> None:
     for text in texts:
         assert "one guarded statement" not in text
         assert "one guarded, all-or-nothing statement" not in text
+
+
+# --- issue #213: Change Monitor and Export write through the gateway -----------------------------
+
+_OPS_FAQ_HEADING = "## Troubleshooting / FAQ"
+_CURATED_README = _REPO / "curated-content" / "README.md"
+_MCP_COPY = _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "ps-domain-concepts.md"
+
+
+def _export_guidance() -> str:
+    return _section(_read(_CA), "### Export").split("#### Implementation Registration")[0]
+
+
+def _change_monitor_guidance() -> str:
+    section = _section(_read(_CA), "### Regulatory Change Monitor")
+    return section.split("#### Implementation Registration")[0]
+
+
+def _registry_paths(heading: str) -> list[str]:
+    section = _section(_read(_CA), heading)
+    registration = section.split("#### Implementation Registration")[1].split("#### Actions")[0]
+    return re.findall(r"^\| `([^`]+)`", registration, flags=re.MULTILINE)
+
+
+def test_architecture_export_says_its_backfill_goes_through_the_gateway() -> None:
+    guidance = _export_guidance()
+
+    assert "Target design (not yet implemented" not in guidance
+    for needle in (
+        "Implemented (#213)",
+        "test_no_graph_write_path.py",
+        "before any is submitted",
+        "one gateway group",
+        "system audit row",
+        "SystemAuditRecorder",
+        "ExportGraphWriteError",
+        "GraphWriteUnavailableError",
+        "AC-BI-004",
+    ):
+        assert needle in guidance, needle
+    assert "#213" in _ca_row("| Graph Write Gateway | `ps.")
+
+
+def test_architecture_change_monitor_says_its_succession_goes_through_the_gateway() -> None:
+    guidance = _change_monitor_guidance()
+
+    assert "Target design (not yet implemented" not in guidance
+    for needle in (
+        "Implemented (#213)",
+        "test_no_graph_write_path.py",
+        "GraphWriteUnavailableError",
+        "audit_event_id",
+        "ingestion_run.submit",
+        "SuccessionPersistenceError",
+        "`linked`",
+        "AC-BI-002",
+    ):
+        assert needle in guidance, needle
+
+
+def test_architecture_change_monitor_lists_the_observable_differences() -> None:
+    guidance = _change_monitor_guidance()
+    differences = guidance.split("Observable differences from the direct writes (#213)")[1]
+    differences = differences.split("\n- ")[0]
+
+    for needle in (
+        "identity",
+        "SUPERSEDED_BY:<prior>-><new>",
+        "ChangeMonitorStateError",
+        "committed_apply_pending",
+        "SuccessionPersistenceError",
+        "system audit row",
+        "mid-run",
+        "link-only",
+        "`finalize`",
+        "submit",
+        "gateway first",
+        "FalkorDB write failed:",
+        "StampEdgeIdentity",
+        "`policy_system`",
+    ):
+        assert needle in differences, needle
+    assert "null audit link" not in differences
+    assert "audit_event_id=None" not in differences
+
+
+@pytest.mark.parametrize("heading", ["### Export", "### Regulatory Change Monitor"])
+def test_architecture_registry_paths_exist_and_name_no_removed_writer(heading: str) -> None:
+    paths = _registry_paths(heading)
+
+    assert paths
+    for path in paths:
+        for single in re.findall(r"(?:ps-service|tools)/\S+?\.(?:py|md)", path):
+            assert (_REPO / single).exists(), single
+
+
+def test_architecture_change_monitor_registry_lists_the_gateway_seam() -> None:
+    section = _section(_read(_CA), "### Regulatory Change Monitor")
+    registration = section.split("#### Implementation Registration")[1].split("#### Actions")[0]
+    succession = next(line for line in registration.splitlines() if "succession.py" in line)
+
+    assert "change_monitor/graph_submission.py" in registration
+    assert "one fused Cypher statement" not in registration
+    assert "Cypher" not in succession
+    assert "gateway group" in succession
+
+
+def test_architecture_export_registry_lists_the_audit_module_and_gateway_backfill() -> None:
+    section = _section(_read(_CA), "### Export")
+    registration = section.split("#### Implementation Registration")[1].split("#### Actions")[0]
+    embeddings = next(line for line in registration.splitlines() if "export/embeddings.py" in line)
+
+    assert "gateway group" in embeddings
+    assert "export/errors.py" in registration
+    assert "ExportGraphWriteError" in registration
+    assert "api/export_audit_actions.py" in registration
+
+
+def test_architecture_actions_describe_gateway_groups_not_cypher_statements() -> None:
+    cm = _section(_read(_CA), "### Regulatory Change Monitor").split("#### Actions")[1]
+    trigger = next(line for line in cm.splitlines() if line.startswith("| TriggerReingestion"))
+    export = _section(_read(_CA), "### Export").split("#### Actions")[1]
+    export_row = next(line for line in export.splitlines() if line.startswith("| ExportInstrument"))
+
+    assert "gateway group" in trigger
+    assert "GraphWriteUnavailableError" in trigger
+    assert "gateway group" in export_row
+    assert "system audit row" in export_row
+    assert "Writes embeddings onto the source FalkorDB" not in export_row
+
+
+def test_architecture_check_regulations_row_says_link_only_runs_write_the_audit_pair() -> None:
+    row = next(
+        line for line in _read(_CA).splitlines() if line.startswith("| CheckRegulations | Accept")
+    )
+
+    assert "a link-only completion that runs no stage, writes nothing" not in row
+    assert "`already_processed` outcome writes nothing" in row
+    assert "link-only" in row
+    assert "`finalize`" in row
+
+
+def test_architecture_names_change_monitor_and_export_as_gateway_writers() -> None:
+    ca = _read(_CA)
+    gateway = _section(ca, "### Graph Write Gateway")
+    sa = _read(_SA)
+
+    assert "Regulatory Change Monitor (re-ingest succession) is its sixth" in gateway
+    assert "Export (embedding backfill) is its seventh" in gateway
+    assert "Graph Cleanup is its fifth" in gateway
+    assert "Restore" in gateway.split("seventh")[1].split("A test-side harness")[0]
+    assert "#213-#214" not in ca
+    assert "Change Monitor (#213)" in sa
+    assert "Export (#213)" in sa
+    assert "#213-#214" not in sa
+    assert "(#213-#214)" not in _section(
+        ca, "### Graph Write Gateway: SubmitGroup, commit-then-apply, apply pending (C-0)"
+    )
+
+
+def test_domain_concepts_name_only_restore_as_not_yet_on_the_gateway() -> None:
+    section = _section(_read(_DOMAIN_CONCEPTS), "## Graph Write Gateway and Mutation Log")
+
+    assert "Regulatory Change Monitor (re-ingest succession) and Export (embedding backfill)" in (
+        section
+    )
+    assert "since #213" in section
+    assert "#213-#214" not in section
+    assert "Restore" in section.split("since #213")[1].split("\n")[0]
+    assert _read(_MCP_COPY) == _read(_DOMAIN_CONCEPTS)
+
+
+def test_operations_guide_503_row_names_the_amendment_check_and_exports() -> None:
+    ops = _section(_read(_OPS), _OPS_FAQ_HEADING)
+    row = next(line for line in ops.splitlines() if "graph writes are unavailable" in line)
+
+    for needle in (
+        "Regulatory Change Monitor",
+        "`check regulations`",
+        "`POST /change-checks`",
+        "`finalize`",
+        "link-only",
+        "Export",
+        "`POST /exports`",
+        "PS state database",
+        "curated-export",
+    ):
+        assert needle in row, needle
+
+
+def test_curated_content_readme_says_the_export_cli_needs_the_ps_state_database() -> None:
+    text = " ".join(_read(_CURATED_README).split())
+
+    assert "PS state Postgres" in text
+    assert "Graph Write Gateway" in text
+    assert "system audit row" in text

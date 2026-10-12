@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from api._gateway_fakes import process_gateway_installed
 from ps_service.api import export_orchestration
 from ps_service.api.errors import (
     ExportConfigIncompleteError,
@@ -26,6 +27,7 @@ from ps_service.api.errors import (
     ExportStageFailedError,
 )
 from ps_service.api.export_orchestration import ExportDependencies, run_export
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.models import ExportRequest
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
@@ -33,7 +35,7 @@ from ps_service.export.models import InstrumentManifest
 from ps_service.export.serialize import checksum_bytes
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from company_merge._fakes import MakeEmitter, ReadLines
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
@@ -54,6 +56,13 @@ _PROPERTIES: dict[str, object] = {
 }
 _BASELINE_BYTES = b'{"nodes": [], "edges": []}'
 _NATIVE_BYTES = b'{"nodes": [], "edges": []}'
+
+
+@pytest.fixture(autouse=True)
+def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture
+    """The gateway and system audit recorder the app lifespan installs (issue #213)."""
+    with process_gateway_installed():
+        yield
 
 
 def _request() -> ExportRequest:
@@ -113,10 +122,14 @@ class _FakeExportStage:
         embed_model: str,
         repo_root: Path,
         packaged_copy_path: Path,
+        submitter: object,
+        audit_event_id: str,
+        baseline_graph_name: str,
         call_embedding: object | None = None,
         emitter: object | None = None,
     ) -> InstrumentManifest:
         _ = baseline_graph, native_graph, call_embedding, emitter
+        _ = submitter, audit_event_id, baseline_graph_name
         self.calls.append(_ExportCall(descriptor, repo_root, packaged_copy_path, embed_model))
         if self._error is not None:
             raise self._error
@@ -164,6 +177,7 @@ def _build_dependencies(
         open_native_graph=cast("Callable[[FalkorDB, str], object]", _open_native),  # pyright: ignore[reportArgumentType]
         export=stage,
         call_embedding=None,
+        graph_write_access=graph_write_access,
     )
     return dependencies, open_baseline_calls, open_native_calls
 

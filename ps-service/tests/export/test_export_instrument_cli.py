@@ -1,15 +1,14 @@
-"""Real-wiring proof for `tools/curated-export/export_instrument.py` (issue #66, D4).
+"""Real-wiring proof for `tools/curated-export/export_instrument.py` (issue #66, D4; #213).
 
-This suite never touches a real FalkorDB instance and never calls a real LLM
-provider, but it *does* exercise the real `ps_service.export.export_instrument.
-export_instrument` orchestrator (embed -> serialize -> checksum -> manifest ->
-catalog.json) end to end: a small, generic in-memory Cypher engine
-(`_StatefulFakeGraph`) stands in for FalkorDB at the true `_GraphQueryHandle`
-boundary (mirrors `test_restore_instrument_audit_log.py`'s
-`_FakeStagedGraph` regex-dispatcher convention, `IMPL_SLICE_8.md`), and a
-fake `EmbeddingCaller` stands in for the LLM Provider (D7) -- so every
-assertion below is against real written files/catalog state, never a
-captured-kwargs stub.
+This suite never touches a real FalkorDB or Postgres and never calls a real LLM provider, but it
+*does* exercise the real `ps_service.export.export_instrument.export_instrument` orchestrator
+(embed -> serialize -> checksum -> manifest -> catalog.json) end to end. The Graph Write Gateway
+rig (in-memory log and FalkorDB, the true boundaries) is what the CLI's gateway, read handles and
+system audit recorder are; a fake `EmbeddingCaller` stands in for the LLM Provider (D7) -- so every
+assertion below is against real written files and what the rig's graph, log and audit recorder
+hold, never a captured-kwargs stub. Since issue #213 the CLI writes the embedding backfill through
+a gateway it builds from the configuration (with `--host`/`--port` applied), after recording the
+Export system audit row.
 
 `tools/` is outside pytest's `testpaths` (root `pyproject.toml`) and carries
 no `__init__.py` (a standalone script, not a package member) -- the CLI
@@ -25,18 +24,21 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from api._gateway_fakes import RecordingSystemAudit
+from graph_gateway._fakes import GatewayRig
 from litellm.types.utils import Embedding, EmbeddingResponse
 
+from export._gateway_fakes import ExportReadGraph, ExportRig
+from ps_service.audit.errors import AuditTrailUnavailableError
+from ps_service.config import ServiceConfig
 from ps_service.logging import facade
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Callable, Iterator
     from types import ModuleType
 
 _SCRIPT_PATH = (
@@ -90,111 +92,18 @@ def cli_module() -> ModuleType:
     return _load_cli_module()
 
 
-class _FakeQueryResult:
-    """Structural stand-in for `falkordb.QueryResult` -- the one field read anywhere."""
-
-    def __init__(self, result_set: list[list[object]]) -> None:
-        self.result_set = result_set
-
-
-@dataclass
-class _FakeNode:
-    label: str
-    properties: dict[str, object]
-
-
-# The fixed query shapes `ps_service.export.serialize.serialize_graph` and
-# `ps_service.export.embeddings.backfill_capability_embeddings` issue against an
-# already-selected graph -- the only two real collaborators `export_instrument`
-# talks to through `_GraphQueryHandle`. No edge-query pattern: none of this
-# file's fixtures create any relationship, and `CALL db.relationshipTypes()`
-# returning `[]` means `serialize_graph` never issues an edge query at all.
-_NODE_ROWS_PATTERN = re.compile(
-    r"\AMATCH \(n:(?P<label>\w+)\) RETURN labels\(n\), properties\(n\)\Z"
-)
-_MISSING_EMBEDDING_PATTERN = re.compile(
-    r"\AMATCH \(n:(?P<label>\w+)\) WHERE n\.embedding IS NULL RETURN n\.id, n\.(?P<prop>\w+)\Z"
-)
-_WRITE_EMBEDDING_PATTERN = re.compile(
-    r"\AMATCH \(n:(?P<label>\w+) \{id: \$id\}\) SET n\.embedding = \$embedding\Z"
-)
-
-
-class _StatefulFakeGraph:
-    """A tiny in-memory FalkorDB-shaped Cypher engine.
-
-    One small, generic dispatcher recognizing exactly the query shapes the
-    real orchestrator issues, instead of per-label hardcoding -- mirrors
-    `test_restore_instrument_audit_log.py`'s `_FakeStagedGraph` regex-
-    dispatcher convention (`IMPL_SLICE_8.md`). Real `export_instrument` code
-    runs against this: `serialize_graph`'s label/count enumeration and
-    per-label `MATCH`, and `backfill_capability_embeddings`'s missing-
-    embedding read plus embedding write, all execute for real.
-    """
-
-    def __init__(self, name: str, *, nodes: Sequence[_FakeNode] = ()) -> None:
-        self.name = name
-        self._nodes = list(nodes)
-
-    def properties_of(self, label: str, node_id: str) -> dict[str, object]:
-        """Test-assertion helper: the current (possibly since-mutated) properties
-        of one node, by label + id.
-        """
-        for node in self._nodes:
-            if node.label == label and node.properties.get("id") == node_id:
-                return node.properties
-        message = f"no {label} node with id={node_id!r}"
-        raise AssertionError(message)
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        params = params or {}
-        if q == "RETURN 1":
-            return _FakeQueryResult([[1]])
-        if q == "CALL db.labels()":
-            return _FakeQueryResult([[label] for label in sorted({n.label for n in self._nodes})])
-        if q == "CALL db.relationshipTypes()":
-            return _FakeQueryResult([])
-        if q == "MATCH (n) RETURN count(n)":
-            return _FakeQueryResult([[len(self._nodes)]])
-        if match := _NODE_ROWS_PATTERN.match(q):
-            label = match["label"]
-            return _FakeQueryResult(
-                [[[n.label], dict(n.properties)] for n in self._nodes if n.label == label]
-            )
-        if match := _MISSING_EMBEDDING_PATTERN.match(q):
-            label, prop = match["label"], match["prop"]
-            return _FakeQueryResult(
-                [
-                    [n.properties["id"], n.properties.get(prop)]
-                    for n in self._nodes
-                    if n.label == label and "embedding" not in n.properties
-                ]
-            )
-        if match := _WRITE_EMBEDDING_PATTERN.match(q):
-            label = match["label"]
-            node_id = params["id"]
-            for n in self._nodes:
-                if n.label == label and n.properties.get("id") == node_id:
-                    n.properties["embedding"] = params["embedding"]
-            return _FakeQueryResult([])
-        message = f"_StatefulFakeGraph: unrecognized query {q!r}"
-        raise AssertionError(message)
-
-
 class _FakeFalkorDB:
-    """Records `select_graph` calls; each name maps to one real, stateful in-memory graph."""
+    """Records `select_graph` calls; each name is a read handle over that rig graph."""
 
-    def __init__(
-        self, *, host: str, port: int, graphs: dict[str, _StatefulFakeGraph] | None = None
-    ) -> None:
+    def __init__(self, *, rig: GatewayRig, host: str, port: int) -> None:
         self.host = host
         self.port = port
         self.selected: list[str] = []
-        self._graphs = dict(graphs) if graphs is not None else {}
+        self._rig = rig
 
-    def select_graph(self, name: str) -> _StatefulFakeGraph:
+    def select_graph(self, name: str) -> ExportReadGraph:
         self.selected.append(name)
-        return self._graphs.setdefault(name, _StatefulFakeGraph(name))
+        return ExportReadGraph(self._rig.graphs.open(name))
 
 
 def _constant_falkordb_ctor(fake_db: _FakeFalkorDB) -> Callable[..., _FakeFalkorDB]:
@@ -209,15 +118,61 @@ def _constant_falkordb_ctor(fake_db: _FakeFalkorDB) -> Callable[..., _FakeFalkor
     return _ctor
 
 
-def _regulatory_instrument_node(instrument_id: str, *, source_type: str | None = None) -> _FakeNode:
-    properties: dict[str, object] = {"id": instrument_id}
+class _Wiring:
+    """What the CLI's composition root is patched to: the rig's gateway and an audit recorder."""
+
+    def __init__(self, rig: ExportRig, system_audit: RecordingSystemAudit) -> None:
+        self.rig = rig
+        self.system_audit = system_audit
+        self.gateway_configs: list[ServiceConfig] = []
+        self.fake_db = _FakeFalkorDB(rig=rig.rig, host="fake-host", port=1234)
+
+    def load_config(self) -> ServiceConfig:
+        """Stand-in for `load_config`: a fixed configuration, no environment read."""
+        return ServiceConfig(
+            host="127.0.0.1", port=8000, graceful_shutdown_seconds=10, logging_dir=None
+        )
+
+    def main(self, cli_module: ModuleType, argv: list[str], **kwargs: object) -> int:
+        """Run the CLI's `main()` with this rig injected at its composition seams."""
+        return int(
+            cli_module.main(
+                argv,
+                load_service_config=self.load_config,
+                build_gateway=self.build_gateway,
+                build_audit=self.build_audit,
+                **kwargs,
+            )
+        )
+
+    def build_gateway(self, config: ServiceConfig) -> object:
+        """Stand-in for `build_default_graph_write_gateway`: records the config it was given."""
+        self.gateway_configs.append(config)
+        return self.rig.rig.gateway
+
+    def build_audit(self, config: ServiceConfig) -> RecordingSystemAudit:
+        """Stand-in for `build_system_audit_recorder`."""
+        del config
+        return self.system_audit
+
+
+@pytest.fixture
+def wiring(cli_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Wiring]:
+    """A `cra_*` rig, with the CLI's FalkorDB patched to it."""
+    gateway_rig = GatewayRig()
+    export_rig = ExportRig(gateway_rig, short_name="CRA")
+    wired = _Wiring(export_rig, RecordingSystemAudit(gateway_rig))
+    monkeypatch.setattr(cli_module, "FalkorDB", _constant_falkordb_ctor(wired.fake_db))
+    yield wired
+    gateway_rig.close()
+
+
+def _seed_instrument(rig: ExportRig, instrument_id: str, *, source_type: str | None) -> None:
+    properties: dict[str, object] = {}
     if source_type is not None:
         properties["source_type"] = source_type
-    return _FakeNode(label="RegulatoryInstrument", properties=properties)
-
-
-def _capability_node(node_id: str, name: str) -> _FakeNode:
-    return _FakeNode(label="Capability", properties={"id": node_id, "name": name})
+    rig.seed_node(rig.baseline, "RegulatoryInstrument", instrument_id, properties)
+    rig.seed_node(rig.native, "RegulatoryInstrument", instrument_id, {})
 
 
 class _FakeEmbeddingCaller:
@@ -275,7 +230,7 @@ _BASE_ARGV = [
 
 
 def test_main_wires_cli_args_into_export_instrument(
-    cli_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    cli_module: ModuleType, wiring: _Wiring, tmp_path: Path
 ) -> None:
     """Every descriptor field, both graph selections, and every passthrough kwarg
     reach the real `export_instrument` orchestrator -- proven by its real written
@@ -286,22 +241,9 @@ def test_main_wires_cli_args_into_export_instrument(
     flags is plain `argparse` wiring, not this orchestrator-focused test's concern.
     """
     instrument_id = "32024R2847"
-    baseline = _StatefulFakeGraph(
-        "cra_baseline",
-        nodes=[
-            _regulatory_instrument_node(instrument_id, source_type="external"),
-            _capability_node("cap1", "Cap One"),
-        ],
-    )
-    native = _StatefulFakeGraph("cra_native", nodes=[_regulatory_instrument_node(instrument_id)])
-    fake_db = _FakeFalkorDB(
-        host="fake-host", port=1234, graphs={"cra_baseline": baseline, "cra_native": native}
-    )
-    # This CLI shim's own top-level infra-connection boundary (PLAN.md §1.4
-    # thin-FalkorDB-wrapper rule; `falkordb.FalkorDB` itself is an approved-mock-boundaries.yaml
-    # entry -- see its `falkordb:` section -- covering this raw-import call site.
-    monkeypatch.setattr(cli_module, "FalkorDB", _constant_falkordb_ctor(fake_db))
-
+    rig = wiring.rig
+    _seed_instrument(rig, instrument_id, source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
     fake_caller = _FakeEmbeddingCaller()
@@ -313,13 +255,13 @@ def test_main_wires_cli_args_into_export_instrument(
         "--packaged-copy-path",
         str(packaged_copy_path),
     ]
-    exit_code = cli_module.main(argv, call_embedding=fake_caller)
+    exit_code = wiring.main(cli_module, argv, call_embedding=fake_caller)
 
     assert exit_code == 0
 
     # `select_graph("cra_baseline")` is called twice: once for the connectivity probe,
     # once to build `baseline_graph` -- then once more for `native_graph`.
-    assert fake_db.selected == ["cra_baseline", "cra_baseline", "cra_native"]
+    assert wiring.fake_db.selected == ["cra_baseline", "cra_baseline", "cra_native"]
     assert fake_caller.calls == [("azure/text-embedding-3-large", "Cap One")]
 
     instrument_dir = repo_root / "curated-content" / instrument_id
@@ -347,18 +289,139 @@ def test_main_wires_cli_args_into_export_instrument(
     assert any(entry["instrument_id"] == instrument_id for entry in root_catalog)
 
 
+def test_main_writes_the_backfill_as_one_gateway_group_anchored_to_the_audit_row(
+    cli_module: ModuleType, wiring: _Wiring, tmp_path: Path
+) -> None:
+    """AC-BI-001/AC-BI-010: no direct write; one `cra_baseline` group, anchored to the row the
+    CLI recorded first (the read handle refuses any write statement).
+    """
+    instrument_id = "32024R2847"
+    rig = wiring.rig
+    _seed_instrument(rig, instrument_id, source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
+
+    exit_code = wiring.main(
+        cli_module,
+        [
+            *_BASE_ARGV,
+            "--repo-root",
+            str(tmp_path / "repo"),
+            "--packaged-copy-path",
+            str(tmp_path / "p.json"),
+        ],
+        call_embedding=_FakeEmbeddingCaller(),
+    )
+
+    assert exit_code == 0
+    assert len(wiring.system_audit.rows) == 1
+    row = wiring.system_audit.rows[0]
+    assert (row["action"], row["resource_type"], row["resource_id"]) == (
+        "export.instrument",
+        "instrument",
+        instrument_id,
+    )
+    groups = rig.baseline_groups()
+    assert len(groups) == 1
+    assert groups[0].audit_event_id == wiring.system_audit.ids[0]
+    assert [(e.name, e.identity) for e in groups[0].entries] == [("Capability", "cap1")]
+    assert rig.rig.store.groups == groups  # the native graph is never written
+
+
+def test_main_builds_its_gateway_for_the_host_and_port_it_reads(
+    cli_module: ModuleType, wiring: _Wiring, tmp_path: Path
+) -> None:
+    """`--host`/`--port` reach the gateway's FalkorDB too, so reads and writes hit one server."""
+    _seed_instrument(wiring.rig, "32024R2847", source_type="external")
+
+    exit_code = wiring.main(
+        cli_module,
+        [
+            *_BASE_ARGV,
+            "--repo-root",
+            str(tmp_path / "repo"),
+            "--packaged-copy-path",
+            str(tmp_path / "p.json"),
+        ],
+        call_embedding=_FakeEmbeddingCaller(),
+    )
+
+    assert exit_code == 0
+    assert [(c.falkordb_host, c.falkordb_port) for c in wiring.gateway_configs] == [
+        ("fake-host", 1234)
+    ]
+
+
+def test_main_exits_non_zero_and_writes_nothing_when_the_audit_row_cannot_be_written(
+    cli_module: ModuleType,
+    wiring: _Wiring,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-010: fail-closed -- no embedding is computed, no group is submitted."""
+    instrument_id = "32024R2847"
+    rig = wiring.rig
+    _seed_instrument(rig, instrument_id, source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
+    wiring.system_audit = RecordingSystemAudit(
+        rig.rig, error=AuditTrailUnavailableError("The audit trail is temporarily unavailable.")
+    )
+    caller = _FakeEmbeddingCaller()
+
+    exit_code = wiring.main(
+        cli_module,
+        [
+            *_BASE_ARGV,
+            "--repo-root",
+            str(tmp_path / "repo"),
+            "--packaged-copy-path",
+            str(tmp_path / "p.json"),
+        ],
+        call_embedding=caller,
+    )
+
+    assert exit_code == 1
+    assert "audit" in capsys.readouterr().err.lower()
+    assert caller.calls == []
+    assert rig.rig.store.groups == []
+    assert not (tmp_path / "repo").exists()
+
+
+def test_main_exits_non_zero_when_the_gateway_cannot_write_the_group(
+    cli_module: ModuleType,
+    wiring: _Wiring,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A gateway failure (here the log) is reported and exits non-zero; no artifact is written."""
+    instrument_id = "32024R2847"
+    rig = wiring.rig
+    _seed_instrument(rig, instrument_id, source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
+    rig.rig.store.fail_appends()
+
+    exit_code = wiring.main(
+        cli_module,
+        [
+            *_BASE_ARGV,
+            "--repo-root",
+            str(tmp_path / "repo"),
+            "--packaged-copy-path",
+            str(tmp_path / "p.json"),
+        ],
+        call_embedding=_FakeEmbeddingCaller(),
+    )
+
+    assert exit_code == 1
+    assert "write" in capsys.readouterr().err.lower()
+    assert rig.embedding_of("Capability", "cap1") is None
+    assert not (tmp_path / "repo").exists()
+
+
 def test_main_honors_explicit_repo_root_and_packaged_copy_path(
-    cli_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    cli_module: ModuleType, wiring: _Wiring, tmp_path: Path
 ) -> None:
     instrument_id = "32024R2847"
-    baseline = _StatefulFakeGraph(
-        "cra_baseline", nodes=[_regulatory_instrument_node(instrument_id)]
-    )
-    native = _StatefulFakeGraph("cra_native", nodes=[_regulatory_instrument_node(instrument_id)])
-    fake_db = _FakeFalkorDB(
-        host="fake-host", port=1234, graphs={"cra_baseline": baseline, "cra_native": native}
-    )
-    monkeypatch.setattr(cli_module, "FalkorDB", _constant_falkordb_ctor(fake_db))
+    _seed_instrument(wiring.rig, instrument_id, source_type=None)
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
 
@@ -371,7 +434,7 @@ def test_main_honors_explicit_repo_root_and_packaged_copy_path(
     # No Capability node exists in this fixture, so the embedding backfill finds
     # nothing to embed and `call_embedding` is never invoked -- a non-callable
     # `object()` sentinel proves that directly (calling it would raise).
-    exit_code = cli_module.main([*_BASE_ARGV, *extra_argv], call_embedding=object())
+    exit_code = wiring.main(cli_module, [*_BASE_ARGV, *extra_argv], call_embedding=object())
 
     assert exit_code == 0
     instrument_dir = repo_root / "curated-content" / instrument_id
@@ -380,6 +443,7 @@ def test_main_honors_explicit_repo_root_and_packaged_copy_path(
     assert (instrument_dir / "native.json").is_file()
     assert packaged_copy_path.is_file()
     assert (repo_root / "curated-content" / "catalog.json").is_file()
+    assert wiring.rig.rig.store.groups == []  # nothing to embed -> no group
 
 
 def test_main_fails_loudly_without_an_embed_model(
@@ -435,7 +499,7 @@ def test_main_fails_loudly_on_a_falkordb_connection_error(
 
 
 def test_main_reports_an_llm_provider_error_and_exits_non_zero(
-    cli_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    cli_module: ModuleType, wiring: _Wiring, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A malformed embedding response (`data=[]`) makes `route_embedding`'s own
     `_to_embedding_result` raise `LlmProviderError` for real -- `export_instrument`
@@ -443,22 +507,14 @@ def test_main_reports_an_llm_provider_error_and_exits_non_zero(
     the CLI's own documented `call_embedding` test seam (module docstring).
     """
     instrument_id = "32024R2847"
-    baseline = _StatefulFakeGraph(
-        "cra_baseline",
-        nodes=[
-            _regulatory_instrument_node(instrument_id, source_type="external"),
-            _capability_node("cap1", "Cap One"),
-        ],
-    )
-    native = _StatefulFakeGraph("cra_native", nodes=[_regulatory_instrument_node(instrument_id)])
-    fake_db = _FakeFalkorDB(
-        host="fake-host", port=1234, graphs={"cra_baseline": baseline, "cra_native": native}
-    )
-    monkeypatch.setattr(cli_module, "FalkorDB", _constant_falkordb_ctor(fake_db))
+    rig = wiring.rig
+    _seed_instrument(rig, instrument_id, source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
 
-    exit_code = cli_module.main(_BASE_ARGV, call_embedding=_EmptyEmbeddingResponseCaller())
+    exit_code = wiring.main(cli_module, _BASE_ARGV, call_embedding=_EmptyEmbeddingResponseCaller())
 
     assert exit_code == 1
     assert "llm provider error" in capsys.readouterr().err.lower()
     # The backfill never got far enough to write anything back onto the node.
-    assert "embedding" not in baseline.properties_of("Capability", "cap1")
+    assert rig.embedding_of("Capability", "cap1") is None
+    assert rig.rig.store.groups == []

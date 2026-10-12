@@ -166,7 +166,7 @@ graph TB
         PSPostgres[(PS Postgres: ps_state, ps_signing<br/>Always-on, deployed as a separate container)]
         Authentik[Authentik<br/>Bundled identity provider + its own Postgres<br/>Production/opt-in]
 
-        PSService -->|"Cypher: read knowledge graph; writes via Graph Write Gateway (Ingestion, Domain Mapper, Company Merge, Policy Lifecycle (#211) and Graph Cleanup (#212); the others are target)"| FalkorDB
+        PSService -->|"Cypher: read knowledge graph; writes via Graph Write Gateway (Ingestion, Domain Mapper, Company Merge, Policy Lifecycle (#211), Graph Cleanup (#212), Regulatory Change Monitor (#213) and Export (#213); Restore is target)"| FalkorDB
         PSService -->|"read/write ps_state (incl. mutation log, target), ps_signing"| PSPostgres
         Authentik -->|"validates bearer tokens issued by"| PSService
         PSService -->|"Invitations: create invitation"| Authentik
@@ -256,7 +256,7 @@ graph TB
 | Ingestion Runs | Tracks catalog ingestion runs submitted asynchronously over MCP, so a caller can poll a long run instead of blocking on it | Persist each submitted run's status and terminal result/error in the ingestion_runs table of the PS state Postgres; run each submission on a background thread under a configured cap on concurrently in-flight runs; record submission and completion through Audit | ps.service.ingestionruns |
 | Process Harness | The process composition root that starts PS Service and exposes its liveness/readiness surface | Expose `/health` (liveness) and `/ready` (readiness); probe FalkorDB, LLM Interface, and Cellar/ELI once at startup; confirm every ingestion-required configuration field resolved; own `load_config()`/`uvicorn.run()` | ps.service.main |
 
-*Graph Write Gateway rows: the gateway is implemented (#205-#207) and Ingestion (#208), Domain Mapper (#209), Company Merge (#210), Policy Lifecycle (#211) and Graph Cleanup (#212) write through it; the other writers' moves onto it (#213-#214) are target design.*
+*Graph Write Gateway rows: the gateway is implemented (#205-#207) and Ingestion (#208), Domain Mapper (#209), Company Merge (#210), Policy Lifecycle (#211), Graph Cleanup (#212), the Regulatory Change Monitor (#213, the re-ingest succession) and Export (#213, the embedding backfill) write through it; Restore's move onto it (#214) is target design.*
 
 ---
 

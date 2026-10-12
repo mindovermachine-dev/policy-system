@@ -44,6 +44,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
+from export.live_gateway import live_write_target
 from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.export import catalog_writer
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
 
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
 _ACTOR = "test-actor-5-10"
 _SIMILARITY_THRESHOLD = 0.9
@@ -192,8 +194,10 @@ def _seed_curated_graphs(live_falkordb: FalkorDB, instrument_id: str) -> None:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_export_then_restore_reproduces_native_exactly_and_baseline_correctly(
     live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
     tmp_path: Path,
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
@@ -223,16 +227,20 @@ def test_export_then_restore_reproduces_native_exactly_and_baseline_correctly(
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
 
     try:
-        export_instrument(
-            descriptor,
-            baseline_graph=graph_query_handle(live_falkordb, _BASELINE_GRAPH_NAME),
-            native_graph=graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME),
-            embed_model="fake-embed-model",
-            repo_root=repo_root,
-            packaged_copy_path=packaged_copy_path,
-            call_embedding=_FakeEmbeddingCaller(),
-            emitter=emitter,
-        )
+        with live_write_target(
+            provisioned_graph_log, live_falkordb, _BASELINE_GRAPH_NAME
+        ) as target:
+            export_instrument(
+                descriptor,
+                baseline_graph=graph_query_handle(live_falkordb, _BASELINE_GRAPH_NAME),
+                native_graph=graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME),
+                embed_model="fake-embed-model",
+                repo_root=repo_root,
+                packaged_copy_path=packaged_copy_path,
+                call_embedding=_FakeEmbeddingCaller(),
+                emitter=emitter,
+                **target,  # pyright: ignore[reportArgumentType]
+            )
 
         # Step 3: read the artifact back off disk exactly as ps-cli's future
         # catalog_repo.read_artifact would -- raw file reads.

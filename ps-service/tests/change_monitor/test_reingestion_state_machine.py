@@ -1,19 +1,22 @@
 """Truth table for `classify_reingestion` (#201 S1b, PLAN 3.4 + CHANGES A4 `finalize`).
 
-Each row builds a `{short}_native` ledger state, runs the REAL `classify_reingestion` and
-`succession` over the `LedgerNativeGraph` boundary double, and asserts the state, the
-stages still to run and where the prior id came from. Classification is read-only.
+Each row seeds a `{short}_native` state on the gateway rig, runs the REAL `classify_reingestion` and
+`succession` reads over `SuccessionReadGraph`, and asserts the state, the stages still to run
+and where the prior id came from. Classification is read-only: the rig log stays empty.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import pytest
 
-from change_monitor._fakes import LedgerNativeGraph, MakeEmitter, ReadLines
 from ps_service.change_monitor.errors import ChangeMonitorStateError
 from ps_service.change_monitor.trigger import classify_reingestion
+
+if TYPE_CHECKING:
+    from change_monitor._fakes import MakeEmitter, ReadLines
+    from change_monitor._gateway_fakes import SuccessionReadGraph, SuccessionRig
 
 _PRIOR = "CRA-1.0"
 _NEW = "CRA-2.0"
@@ -24,67 +27,67 @@ _AFTER_DERIVE = _ALL[3:]
 
 
 def _graph(
+    rig: SuccessionRig,
     *,
     node: bool = True,
     edge: Literal["none"] | bool | None = "none",
     marker: str | None = None,
     prior_status: str | None = None,
     prior_type: str = "regulation",
-) -> LedgerNativeGraph:
-    """Build the ledger state; `edge` is "none" (no edge), or the edge's `absorbed` value."""
+) -> SuccessionReadGraph:
+    """Seed the rig's native graph and return its read handle.
+
+    `edge` is "none" (no edge), or the edge's `absorbed` value (an edge as the pre-gateway code
+    wrote it, without an `identity`).
+    """
     if prior_status is None:
         prior_status = "active" if edge == "none" else "superseded"
-    graph = LedgerNativeGraph()
-    graph.seed_instrument(_PRIOR, status=prior_status, instrument_type=prior_type)
+    rig.seed_instrument(rig.native, _PRIOR, status=prior_status, instrument_type=prior_type)
     if node:
-        graph.seed_instrument(_NEW)
+        rig.seed_instrument(rig.native, _NEW)
     if edge != "none":
-        graph.seed_edge(_PRIOR, _NEW, absorbed=edge)
+        rig.seed_edge(rig.native, _PRIOR, _NEW, absorbed=edge)
     if marker is not None:
-        graph.seed_marker(_NEW, marker)
-    return graph
+        rig.seed_marker(rig.native, _NEW, marker)
+    return rig.read_native()
 
 
 @pytest.mark.parametrize(
-    ("graph", "state", "stages"),
+    ("world", "state", "stages"),
     [
-        pytest.param(_graph(node=False), "fresh", _ALL, id="fresh-node-absent"),
-        pytest.param(_graph(), "resume", _ALL, id="resume-no-marker-reruns-all-four"),
-        pytest.param(_graph(marker="ingestion"), "resume", _AFTER_INGEST, id="resume-after-ingest"),
+        pytest.param({"node": False}, "fresh", _ALL, id="fresh-node-absent"),
+        pytest.param({}, "resume", _ALL, id="resume-no-marker-reruns-all-four"),
+        pytest.param({"marker": "ingestion"}, "resume", _AFTER_INGEST, id="resume-after-ingest"),
+        pytest.param({"marker": "extraction"}, "resume", _AFTER_EXTRACT, id="resume-after-extract"),
+        pytest.param({"marker": "derivation"}, "resume", _AFTER_DERIVE, id="resume-after-derive"),
+        pytest.param({"marker": "merge"}, "resume", (), id="resume-link-only"),
         pytest.param(
-            _graph(marker="extraction"), "resume", _AFTER_EXTRACT, id="resume-after-extract"
+            {"marker": "linked"}, "resume", (), id="resume-linked-marker-no-edge-links-only"
+        ),
+        pytest.param({"edge": True}, "already_processed", (), id="already-processed"),
+        pytest.param(
+            {"edge": True, "marker": "linked"}, "finalize", (), id="finalize-after-native-link"
         ),
         pytest.param(
-            _graph(marker="derivation"), "resume", _AFTER_DERIVE, id="resume-after-derive"
-        ),
-        pytest.param(_graph(marker="merge"), "resume", (), id="resume-link-only"),
-        pytest.param(
-            _graph(marker="linked"), "resume", (), id="resume-linked-marker-no-edge-links-only"
-        ),
-        pytest.param(_graph(edge=True), "already_processed", (), id="already-processed"),
-        pytest.param(
-            _graph(edge=True, marker="linked"), "finalize", (), id="finalize-after-native-link"
-        ),
-        pytest.param(
-            _graph(edge=None, prior_status="superseded"),
+            {"edge": None, "prior_status": "superseded"},
             "repair",
             _AFTER_INGEST,
             id="repair-legacy-no-marker",
         ),
         pytest.param(
-            _graph(edge=None, prior_status="superseded", marker="extraction"),
+            {"edge": None, "prior_status": "superseded", "marker": "extraction"},
             "repair",
             _AFTER_EXTRACT,
             id="repair-after-extract",
         ),
         pytest.param(
-            _graph(edge=None, prior_status="superseded", marker="derivation"),
+            {"edge": None, "prior_status": "superseded", "marker": "derivation"},
             "repair",
             _AFTER_DERIVE,
             id="repair-after-derive",
         ),
         pytest.param(
-            _graph(edge=None, prior_status="superseded", marker="merge"),
+            {"edge": None, "prior_status": "superseded", "marker": "merge"},
             "repair",
             (),
             id="repair-link-only",
@@ -92,9 +95,14 @@ def _graph(
     ],
 )
 def test_classify_reingestion_truth_table(
-    graph: LedgerNativeGraph, state: str, stages: tuple[str, ...], make_emitter: MakeEmitter
+    world: dict[str, object],
+    state: str,
+    stages: tuple[str, ...],
+    succession_rig: SuccessionRig,
+    make_emitter: MakeEmitter,
 ) -> None:
     emitter, _ = make_emitter()
+    graph = _graph(succession_rig, **world)  # pyright: ignore[reportArgumentType]
 
     pre = classify_reingestion(graph, _NEW, emitter=emitter)
 
@@ -102,50 +110,54 @@ def test_classify_reingestion_truth_table(
     assert pre.stages_to_run == stages
     assert pre.prior_id == _PRIOR
     assert pre.prior_instrument_type == "regulation"
-    assert graph.writes == []
+    assert succession_rig.rig.store.groups == []
+    assert graph.legacy_statements == []
 
 
 def test_classify_reingestion_carries_the_prior_instrument_type_for_the_guard(
-    make_emitter: MakeEmitter,
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     emitter, _ = make_emitter()
 
-    pre = classify_reingestion(_graph(prior_type="national_transposition"), _NEW, emitter=emitter)
+    pre = classify_reingestion(
+        _graph(succession_rig, prior_type="national_transposition"), _NEW, emitter=emitter
+    )
 
     assert pre.prior_instrument_type == "national_transposition"
 
 
 @pytest.mark.parametrize(
-    "graph",
+    "world",
     [
-        pytest.param(_graph(edge=True, prior_status="active"), id="edge-but-prior-not-superseded"),
-        pytest.param(_graph(marker="bogus"), id="unknown-marker-stage"),
+        pytest.param({"edge": True, "prior_status": "active"}, id="edge-but-prior-not-superseded"),
+        pytest.param({"marker": "bogus"}, id="unknown-marker-stage"),
     ],
 )
 def test_classify_reingestion_rejects_an_inconsistent_graph(
-    graph: LedgerNativeGraph, make_emitter: MakeEmitter
+    world: dict[str, object], succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     emitter, _ = make_emitter()
+    graph = _graph(succession_rig, **world)  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(ChangeMonitorStateError):
         classify_reingestion(graph, _NEW, emitter=emitter)
 
 
 def test_classify_reingestion_with_no_active_prior_raises_for_fresh(
-    make_emitter: MakeEmitter,
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     emitter, _ = make_emitter()
 
     with pytest.raises(ChangeMonitorStateError):
-        classify_reingestion(LedgerNativeGraph(), _NEW, emitter=emitter)
+        classify_reingestion(succession_rig.read_native(), _NEW, emitter=emitter)
 
 
 def test_classify_reingestion_logs_state_stages_and_prior(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     emitter, path = make_emitter()
 
-    classify_reingestion(_graph(marker="extraction"), _NEW, emitter=emitter)
+    classify_reingestion(_graph(succession_rig, marker="extraction"), _NEW, emitter=emitter)
     emitter.flush()
 
     [entry] = [e for e in read_lines(path) if e["action"] == "classify_reingestion"]

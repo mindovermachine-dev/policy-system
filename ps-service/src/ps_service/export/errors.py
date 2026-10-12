@@ -30,3 +30,15 @@ class ExportInstrumentIdMismatchError(Exception):
     load (`content_validation` failure). Caught here, at export time,
     instead of silently writing a broken artifact to disk.
     """
+
+
+class ExportGraphWriteError(Exception):
+    """The embedding backfill's gateway group did not take effect (issue #213).
+
+    Raised when the baseline graph is behind its log, the Graph Write Gateway refused the group
+    or could not reach Postgres or FalkorDB, the group was committed but could not be applied yet,
+    or an embedding holds a value the graph cannot store. The message is the gateway's sanitized
+    text (`FalkorDB write failed: ...`) and the gateway error, if any, is the `__cause__`. Nothing
+    is lost on a pending apply: the group is in the log, the gateway applies it on recovery and a
+    re-run is idempotent (a node that now has an embedding is not embedded again).
+    """

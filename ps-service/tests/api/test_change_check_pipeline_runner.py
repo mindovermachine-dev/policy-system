@@ -31,7 +31,7 @@ from ps_service.api.errors import (
     IngestionConfigIncompleteError,
     PipelineStageError,
 )
-from ps_service.api.graph_write_access import install_graph_write_gateway
+from ps_service.api.graph_write_access import graph_write_access, install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import build_default_pipeline_dependencies
 from ps_service.config import ServiceConfig
 
@@ -95,6 +95,7 @@ def _runner(
         native=pipeline.native,
         single_tenant=pipeline.single_tenant,
         dependencies=dependencies,
+        access=graph_write_access(config),
         emitter=emitter,
     )
 

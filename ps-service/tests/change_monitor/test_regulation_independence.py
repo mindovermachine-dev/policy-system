@@ -27,6 +27,7 @@ _EXPECTED_MODULES = {
     "cellar_consolidated.py",
     "falkordb_client.py",
     "graph_reader.py",
+    "graph_submission.py",
     "succession.py",
     "poll.py",
     "trigger.py",

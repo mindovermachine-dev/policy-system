@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         _GraphQueryHandle,  # pyright: ignore[reportPrivateUsage]
     )
     from ps_service.export.models import SerializedGraph
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import EmbeddingCaller
     from ps_service.logging.emitter import LogEmitter
 
@@ -108,7 +109,7 @@ def _validate_instrument_id(
         )
 
 
-def export_instrument(
+def export_instrument(  # noqa: PLR0913 -- the two graphs, the gateway seam and the output paths; no natural grouping
     descriptor: InstrumentDescriptor,
     *,
     baseline_graph: _GraphQueryHandle,
@@ -116,6 +117,9 @@ def export_instrument(
     embed_model: str,
     repo_root: Path,
     packaged_copy_path: Path,
+    submitter: GroupSubmitter,
+    audit_event_id: str,
+    baseline_graph_name: str,
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> InstrumentManifest:
@@ -123,7 +127,11 @@ def export_instrument(
 
     Caller has already selected `baseline_graph`/`native_graph` (the live
     `{short}_baseline`/`{short}_native` graphs on an already-ingested source
-    FalkorDB instance) -- this function does no graph selection of its own.
+    FalkorDB instance) -- this function does no graph selection of its own. The
+    embedding backfill is written through `submitter` (the Graph Write Gateway) as one group on
+    `baseline_graph_name`, anchored to `audit_event_id` (the system audit row the caller
+    recorded first); the name is passed in, not derived from `descriptor.short_name`, because the
+    CLI names its source graph from `--short-name`.
     Writes `curated-content/{descriptor.instrument_id}/{manifest.json,
     baseline.json,native.json}` under `repo_root`, and regenerates
     `catalog.json` at both `repo_root / "curated-content" / "catalog.json"`
@@ -133,6 +141,9 @@ def export_instrument(
     """
     backfill_capability_embeddings(
         baseline_graph,
+        baseline_graph_name=baseline_graph_name,
+        submitter=submitter,
+        audit_event_id=audit_event_id,
         source_type=descriptor.source_type,
         model=embed_model,
         call_embedding=call_embedding,

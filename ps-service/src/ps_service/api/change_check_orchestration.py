@@ -67,7 +67,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from ps_service.api.catalog import CatalogEntry, find_by_celex
 from ps_service.api.errors import PipelineStageError
-from ps_service.api.graph_write_access import graph_write_access
+from ps_service.api.graph_write_access import GraphWriteAccess, graph_write_access
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     _default_ingestion_adapter,  # pyright: ignore[reportPrivateUsage]  -- shared graph/adapter factory; reused per PLAN.md §0.4/D9's main.py:22-25 precedent
@@ -80,8 +80,13 @@ from ps_service.api.ingestion_orchestration import (
     classify_ingestion_failure,
 )
 from ps_service.api.run_status import clear_stage
-from ps_service.audit.emit import AuditTarget, record_follow_up_row, record_opening_row
+from ps_service.audit.emit import (
+    AuditTarget,
+    record_follow_up_row,
+    record_opening_row_with_event_id,
+)
 from ps_service.audit.errors import AuditTrailUnavailableError
+from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.ingestion_runs.audit_actions import (
     INGESTION_RUN_COMPLETE_ACTION,
     INGESTION_RUN_RESOURCE_TYPE,
@@ -107,6 +112,7 @@ if TYPE_CHECKING:
     )
     from ps_service.change_monitor.trigger import MetadataFetchingAdapter
     from ps_service.config import ServiceConfig
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.logging import LogEmitter
 
 # D8: mirrors ingestion_orchestration.py's own `_COMPONENT`/action-constant shape.
@@ -187,7 +193,8 @@ class TriggerReingestionCall(Protocol):
         *,
         adapter: MetadataFetchingAdapter,
         graph: GraphHandle,
-        single_tenant: GraphHandle,
+        submitter: GroupSubmitter,
+        audit_anchor: Callable[[], str],
         emitter: LogEmitter | None = None,
         run_id: str | None = None,
         run_pipeline: PipelineRunner | None = None,
@@ -223,6 +230,7 @@ class ChangeCheckDependencies:
     find_catalog_entry: Callable[[str], CatalogEntry | None]
     will_reingest: WillReingestCall
     pipeline: PipelineDependencies
+    graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
 
 
 def _emit_sweep(
@@ -344,9 +352,14 @@ def run_change_check_sweep(
         ``read_tracked_instruments``'s own returned order.
 
     Raises:
+        GraphWriteUnavailableError: no Graph Write Gateway is installed (issue #213); nothing was
+            opened, logged or written.
         AuditTrailUnavailableError: An opening audit row could not be written; the sweep
             stopped before that instrument's re-ingest.
     """
+    # Resolved first and unconditionally (issue #213): the succession of even a `finalize` or
+    # link-only re-ingest is written through the gateway, so without one nothing may start.
+    access = dependencies.graph_write_access(config)
     started = time.perf_counter()
     _emit_sweep(outcome="started", run_id=run_id, emitter=emitter)
     single_tenant = dependencies.open_single_tenant(config)
@@ -370,6 +383,7 @@ def run_change_check_sweep(
                     single_tenant=single_tenant,
                     dependencies=dependencies,
                     audit=audit,
+                    access=access,
                     emitter=emitter,
                 )
             except AuditTrailUnavailableError:
@@ -415,6 +429,7 @@ def _reingest_one(
     single_tenant: GraphHandle,
     dependencies: ChangeCheckDependencies,
     audit: AuditContext,
+    access: GraphWriteAccess,
     emitter: LogEmitter | None,
 ) -> InstrumentCheckOutcome:
     """Re-ingest one detected amendment (PLAN.md §1 D2-D7's full call contract).
@@ -468,9 +483,12 @@ def _reingest_one(
         single_tenant: The already-opened merged `policy_system` graph (Company Merge writes to it).
         dependencies: The injected dependency bundle.
         audit: Who triggered the sweep and where the audit rows go (issue #195). A pair is
-            written only when ``dependencies.will_reingest`` says a real re-ingest will run
-            (``fresh``) and a catalog entry resolved (D-G); the opening row's
-            ``AuditTrailUnavailableError`` propagates out of this function (CHANGES F-5).
+            written for a re-ingest that runs stages and, since issue #213, for a link-only /
+            ``finalize`` one that writes its succession (``already_processed`` writes nothing); the
+            opening row's ``AuditTrailUnavailableError`` propagates out of this function
+            (CHANGES F-5).
+        access: The Graph Write Gateway the sweep resolved first; the succession's groups go
+            through its gateway.
         emitter: Optional explicit log emitter.
 
     Returns:
@@ -497,7 +515,14 @@ def _reingest_one(
     adapter = dependencies.default_adapter()
     graph = dependencies.open_native(config, entry.short_name)
     new_version = finding.detected_consolidated_celex
+    from ps_service.change_monitor.graph_submission import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
+        ensure_caught_up,
+    )
+
     try:
+        # A group committed on an earlier sweep but not yet applied is applied before the graph is
+        # classified, so a resume starts at the stage the marker names (issue #213, AC-BI-009).
+        ensure_caught_up(access.gateway, native_graph_name(entry.short_name), emitter=emitter)
         runs_stages = dependencies.will_reingest(graph, entry.short_name, new_version)
     except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary, AC-BI-006/007
         return _failed_outcome(instrument_id, exc)
@@ -509,25 +534,9 @@ def _reingest_one(
         native=graph,
         single_tenant=single_tenant,
         dependencies=dependencies,
+        access=access,
         emitter=emitter,
     )
-    if not runs_stages:
-        # No pipeline stage will run (`already_processed`, or a link-only resume), so there is
-        # no ingestion to audit (CHANGES F-4); the supersession log entry covers the link.
-        try:
-            outcome = dependencies.trigger_reingestion(
-                celex,
-                entry.short_name,
-                new_version,
-                adapter=adapter,
-                graph=graph,
-                single_tenant=single_tenant,
-                emitter=emitter,
-                run_pipeline=run_pipeline,
-            )
-        except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary
-            return _failed_outcome(instrument_id, exc)
-        return _reingested_outcome(instrument_id, outcome)
     return _audited_reingest(
         finding,
         celex,
@@ -535,15 +544,16 @@ def _reingest_one(
         new_version,
         adapter=adapter,
         graph=graph,
-        single_tenant=single_tenant,
         run_pipeline=run_pipeline,
         dependencies=dependencies,
         audit=audit,
+        access=access,
+        eager_opening_row=runs_stages,
         emitter=emitter,
     )
 
 
-def _build_pipeline_runner(
+def _build_pipeline_runner(  # noqa: PLR0913 -- one runner's collaborators; no natural grouping
     entry: CatalogEntry,
     new_version: str,
     *,
@@ -552,6 +562,7 @@ def _build_pipeline_runner(
     native: GraphHandle,
     single_tenant: GraphHandle,
     dependencies: ChangeCheckDependencies,
+    access: GraphWriteAccess,
     emitter: LogEmitter | None,
 ) -> PipelineRunner:
     """Build the `PipelineRunner` `trigger_reingestion` runs its stages through.
@@ -561,12 +572,11 @@ def _build_pipeline_runner(
     handed to it as this callable. The runner checks the pipeline config FIRST, before the
     baseline graph is opened or any stage runs (AC-BI-006), runs exactly the requested
     stage subset for `new_version`'s instrument id, reports each completed stage to
-    `on_stage_complete`, and always clears the `run_status` entry. When any stage that writes a
-    graph (ingestion, extraction, derivation or merge, issues #208, #209 and #210) is among the
-    requested ones,
-    the process's Graph Write Gateway is resolved up front: without one the run fails closed,
-    before the baseline graph is opened. Nothing is caught:
-    a `PipelineStageError`, `IngestionConfigIncompleteError`, `GraphWriteUnavailableError` or
+    `on_stage_complete`, and always clears the `run_status` entry. The stages that write a graph
+    (ingestion, extraction, derivation and merge, issues #208, #209 and #210) write through the
+    Graph Write Gateway `access` the sweep already resolved (issue #213: it is resolved once, first
+    and unconditionally, because even a link-only re-ingest writes its succession through it).
+    Nothing is caught: a `PipelineStageError`, `IngestionConfigIncompleteError` or
     `AuditTrailUnavailableError` propagates to the sweep's per-instrument boundary.
     """
     from ps_service.change_monitor.models import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
@@ -578,11 +588,6 @@ def _build_pipeline_runner(
         *, stages: tuple[str, ...], run_id: str, on_stage_complete: Callable[[str], None]
     ) -> PipelineRunResult:
         resolved = _require_ingestion_config(config)
-        graph_writes = (
-            graph_write_access(config)
-            if {"ingestion", "extraction", "derivation", "merge"} & set(stages)
-            else None
-        )
         graphs = _OpenGraphs(
             native=native,
             baseline=dependencies.pipeline.graphs.baseline(config, entry.short_name),
@@ -600,7 +605,7 @@ def _build_pipeline_runner(
                 ingestion_adapter=adapter,
                 stages_to_run=stages,
                 on_stage_complete=on_stage_complete,
-                graph_writes=graph_writes,
+                graph_writes=access,
                 trigger="amendment_check",
             )
         finally:
@@ -671,6 +676,65 @@ def _audit_reason_code(exc: Exception) -> IngestionReasonCode:
     return classify_ingestion_failure(exc)
 
 
+class _OpeningRow:
+    """The re-ingest's `ingestion_run.submit` row, recorded once, on first use (issue #213).
+
+    The succession's groups are anchored to this row's event id. A re-ingest that runs stages
+    records it up front (:meth:`__call__` is invoked before `trigger_reingestion`); one that only
+    writes the succession (`finalize`, link-only) records it lazily, just before its first group,
+    so `already_processed`, which writes nothing, records nothing. Memoised: every group of the
+    re-ingest carries the same id.
+    """
+
+    def __init__(
+        self,
+        audit: AuditContext,
+        celex: str,
+        entry: CatalogEntry,
+        reingest_run_id: str,
+        emitter: LogEmitter | None,
+    ) -> None:
+        self._audit = audit
+        self._celex = celex
+        self._entry = entry
+        self._run_id = reingest_run_id
+        self._emitter = emitter
+        self._event_id: str | None = None
+        self.failure: AuditTrailUnavailableError | None = None
+        """The fail-closed error a lazy first use raised (so the sweep can tell it from others)."""
+
+    @property
+    def recorded(self) -> bool:
+        """Whether the row was written."""
+        return self._event_id is not None
+
+    def __call__(self) -> str:
+        """Record the row if it is not recorded yet; return its audit event id.
+
+        Raises:
+            AuditTrailUnavailableError: the row could not be written (fail-closed, AC-BI-011).
+        """
+        if self._event_id is None:
+            try:
+                self._event_id = record_opening_row_with_event_id(
+                    self._audit,
+                    AuditTarget(
+                        INGESTION_RUN_SUBMIT_ACTION, INGESTION_RUN_RESOURCE_TYPE, self._run_id
+                    ),
+                    component=_COMPONENT,
+                    details=submission_audit_entry(
+                        celex=self._celex,
+                        short_name=self._entry.short_name,  # raw: never normalized (#193)
+                        trigger="amendment_check",
+                    ).details,
+                    emitter=self._emitter,
+                )
+            except AuditTrailUnavailableError as exc:
+                self.failure = exc
+                raise
+        return self._event_id
+
+
 def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no natural grouping
     finding: AmendmentFinding,
     celex: str,
@@ -679,33 +743,31 @@ def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no nat
     *,
     adapter: MetadataFetchingAdapter,
     graph: GraphHandle,
-    single_tenant: GraphHandle,
     run_pipeline: PipelineRunner,
     dependencies: ChangeCheckDependencies,
     audit: AuditContext,
+    access: GraphWriteAccess,
+    eager_opening_row: bool,
     emitter: LogEmitter | None,
 ) -> InstrumentCheckOutcome:
-    """Re-ingest one instrument between its `ingestion_run.submit` / `.complete` audit rows.
+    """Re-ingest one instrument, bracketed by its `ingestion_run.submit` / `.complete` audit rows.
 
     The re-ingest's own run id is minted here, passed to ``trigger_reingestion`` and used as both
-    rows' ``resource_id`` (AC-BI-007). The opening row sits OUTSIDE the isolation ``try`` so its
-    ``AuditTrailUnavailableError`` aborts the sweep (CHANGES F-5, AC-BI-011); the terminal row is
-    best-effort (AC-BI-015).
+    rows' ``resource_id`` (AC-BI-007). The opening row is also the audit anchor of every group of
+    the succession (issue #213, AC-BI-010). When stages run (``eager_opening_row``) it is
+    recorded before ``trigger_reingestion`` and sits OUTSIDE the isolation ``try`` so its
+    ``AuditTrailUnavailableError`` aborts the sweep (CHANGES F-5, AC-BI-011). A re-ingest that
+    runs no stage records it lazily, just before its first succession group: ``already_processed``
+    writes nothing, so records nothing; any other writes the pair (``stages: []``). The lazy row's
+    ``AuditTrailUnavailableError`` aborts the sweep too, with nothing of that group written. The
+    terminal row is best-effort (AC-BI-015).
     """
     instrument_id = finding.regulatory_instrument_id
     reingest_run_id = str(uuid.uuid4())
     with bind_run_context(reingest_run_id):
-        record_opening_row(
-            audit,
-            AuditTarget(INGESTION_RUN_SUBMIT_ACTION, INGESTION_RUN_RESOURCE_TYPE, reingest_run_id),
-            component=_COMPONENT,
-            details=submission_audit_entry(
-                celex=celex,
-                short_name=entry.short_name,  # raw catalog value: the sweep never normalizes (#193)
-                trigger="amendment_check",
-            ).details,
-            emitter=emitter,
-        )
+        opening = _OpeningRow(audit, celex, entry, reingest_run_id, emitter)
+        if eager_opening_row:
+            opening()
         try:
             outcome = dependencies.trigger_reingestion(
                 celex,
@@ -713,24 +775,29 @@ def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no nat
                 new_version,
                 adapter=adapter,
                 graph=graph,
-                single_tenant=single_tenant,
+                submitter=access.gateway,
+                audit_anchor=opening,
                 emitter=emitter,
-                run_id=reingest_run_id,
+                run_id=reingest_run_id if eager_opening_row else None,
                 run_pipeline=run_pipeline,
             )
-        except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary, AC-BI-006/007
-            reason = _audit_reason_code(exc)
-            _record_terminal_row(audit, reingest_run_id, celex, None, reason, emitter)
+        except Exception as exc:
+            if exc is opening.failure:
+                raise
+            if opening.recorded:
+                reason = _audit_reason_code(exc)
+                _record_terminal_row(audit, reingest_run_id, celex, None, reason, emitter)
             return _failed_outcome(instrument_id, exc)
-        result: dict[str, object] = {
-            "regulatory_instrument_id": outcome.new_regulatory_instrument_id,
-            "outcome": "fresh",
-            "stages": [
-                {"stage": stage.stage, "summary": stage.summary}
-                for stage in outcome.stage_summaries
-            ],
-        }
-        _record_terminal_row(audit, reingest_run_id, celex, result, None, emitter)
+        if opening.recorded:
+            result: dict[str, object] = {
+                "regulatory_instrument_id": outcome.new_regulatory_instrument_id,
+                "outcome": "fresh",
+                "stages": [
+                    {"stage": stage.stage, "summary": stage.summary}
+                    for stage in outcome.stage_summaries
+                ],
+            }
+            _record_terminal_row(audit, reingest_run_id, celex, result, None, emitter)
     return _reingested_outcome(instrument_id, outcome)
 
 
@@ -802,4 +869,5 @@ def build_default_change_check_dependencies() -> ChangeCheckDependencies:
         default_adapter=_default_ingestion_adapter,
         find_catalog_entry=find_by_celex,
         will_reingest=will_reingest,
+        graph_write_access=graph_write_access,
     )

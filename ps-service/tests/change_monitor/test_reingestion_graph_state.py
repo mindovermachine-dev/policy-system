@@ -20,7 +20,6 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 import pytest
-from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
     FakeDomainMappingAdapter,
     FakeIngestionAdapter,
@@ -32,6 +31,7 @@ from api._gateway_fakes import (
     install_process_gateway,
     installed_process_gateway,
 )
+from graph_gateway._fakes import GatewayRig
 
 from change_monitor._fakes import (
     FakeAdapter,
@@ -39,6 +39,7 @@ from change_monitor._fakes import (
     StatefulStages,
     VersionContent,
 )
+from change_monitor._gateway_fakes import SuccessionRig
 from change_monitor.test_trigger import (
     _structure,  # pyright: ignore[reportPrivateUsage]  -- reuse the trigger tests' canned metadata
 )
@@ -60,6 +61,7 @@ from ps_service.change_monitor.trigger import trigger_reingestion, will_reingest
 from ps_service.config import ServiceConfig
 
 if TYPE_CHECKING:
+    from api._audit_fakes import InMemoryAuditStore
     from api._fakes import MakeEmitter
 
     from change_monitor._fakes import GraphSnapshot
@@ -84,9 +86,16 @@ _CONTENT = {
 }
 
 
-def _seeded() -> tuple[StatefulGraphSet, StatefulStages]:
+def _second_world() -> SuccessionRig:
+    """A second, independent gateway rig installed as the process's (for a clean-run baseline)."""
+    rig = GatewayRig()
+    install_process_gateway(rig, RecordingSystemAudit(rig))
+    return SuccessionRig(rig)
+
+
+def _seeded(rig: SuccessionRig) -> tuple[StatefulGraphSet, StatefulStages]:
     """The three graphs holding the fully mapped and merged prior version `CRA-1.0`."""
-    graphs = StatefulGraphSet()
+    graphs = StatefulGraphSet(rig)
     stages = StatefulStages(graphs, _CONTENT)
     stages.run_all(_CELEX, "CRA", "1.0")
     graphs.events.clear()
@@ -132,9 +141,9 @@ def _sweep(
         fake.dependencies,
         pipeline=PipelineDependencies(
             graphs=GraphOpeners(
-                native=lambda _config, _short: graphs.native,  # pyright: ignore[reportUnknownLambdaType]
+                native=lambda _config, _short: graphs.rig.read_native(),  # pyright: ignore[reportUnknownLambdaType]
                 baseline=lambda _config, _short: graphs.baseline,  # pyright: ignore[reportUnknownLambdaType]
-                single_tenant=lambda _config: graphs.single_tenant,  # pyright: ignore[reportUnknownLambdaType]
+                single_tenant=lambda _config: graphs.rig.read_single_tenant(),  # pyright: ignore[reportUnknownLambdaType]
             ),
             stages=stages.pipeline_stages(),
             adapters=PipelineAdapters(
@@ -143,8 +152,8 @@ def _sweep(
                 internal_seed=FakeInternalSeedAdapter,
             ),
         ),
-        open_single_tenant=lambda _config: graphs.single_tenant,  # pyright: ignore[reportUnknownLambdaType]
-        open_native=lambda _config, _short: graphs.native,  # pyright: ignore[reportUnknownLambdaType]
+        open_single_tenant=lambda _config: graphs.rig.read_single_tenant(),  # pyright: ignore[reportUnknownLambdaType]
+        open_native=lambda _config, _short: graphs.rig.read_native(),  # pyright: ignore[reportUnknownLambdaType]
         default_adapter=lambda: FakeAdapter({_CELEX: _structure()}),
         trigger_reingestion=trigger_reingestion,  # pyright: ignore[reportArgumentType]
         will_reingest=will_reingest,  # pyright: ignore[reportArgumentType]
@@ -154,7 +163,7 @@ def _sweep(
         run_id="sweep",
         dependencies=deps,
         audit=AuditContext(
-            ("caller", "https://issuer.example.com/"), store or InMemoryAuditStore()
+            ("caller", "https://issuer.example.com/"), store or graphs.rig.audit_store()
         ),
         emitter=emitter,  # pyright: ignore[reportArgumentType]
     )
@@ -165,14 +174,14 @@ def _all_snapshots(graphs: StatefulGraphSet) -> tuple[GraphSnapshot, GraphSnapsh
 
 
 def test_amendment_adds_new_obligation_and_capability_to_single_tenant_graph(
-    make_emitter: MakeEmitter,
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     """AC-BI-002 (+ AC-BI-001 order, AC-BI-003 succession after merge, AC-BI-011 counts)."""
     emitter, _ = make_emitter()
-    graphs, stages = _seeded()
+    graphs, stages = _seeded(succession_rig)
     assert graphs.single_tenant.count_nodes("Obligation") == 1
     assert graphs.single_tenant.count_nodes("Capability") == 0
-    store = InMemoryAuditStore()
+    store = graphs.rig.audit_store()
 
     result = _sweep(graphs, stages, emitter, store)
 
@@ -188,10 +197,12 @@ def test_amendment_adds_new_obligation_and_capability_to_single_tenant_graph(
     }
     assert {node_id for label, node_id in tenant.nodes if label == "Capability"} == {"CAP-C"}
     # AC-BI-001 / AC-BI-003: the four stages in order, and no succession write before merge.
-    stage_and_link = [e for e in graphs.events if e.startswith("stage:") or "SUPERSEDED_BY" in e]
+    stage_and_link = [
+        e for e in graphs.rig.timeline() if e.startswith("stage:") or "SUPERSEDED_BY" in e
+    ]
     assert stage_and_link == [f"stage:{stage}" for stage in _ALL] + [
-        "write:SUPERSEDED_BY",
-        "write:policy_system:SUPERSEDED_BY",
+        "group:cra_native:SUPERSEDED_BY",
+        "group:policy_system:SUPERSEDED_BY",
     ]
     assert graphs.native.edges[("SUPERSEDED_BY", _PRIOR, _NEW)] == {"absorbed": True}
     assert graphs.native.marker_stage(_NEW) is None
@@ -201,7 +212,7 @@ def test_amendment_adds_new_obligation_and_capability_to_single_tenant_graph(
 
 
 def test_prior_version_nodes_edges_and_properties_unchanged_except_status_and_succession_edge(
-    make_emitter: MakeEmitter,
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     """AC-BI-004: nothing the prior version owns is modified or deleted.
 
@@ -211,7 +222,7 @@ def test_prior_version_nodes_edges_and_properties_unchanged_except_status_and_su
     and property present before the sweep is equal afterwards, in all three graphs.
     """
     emitter, _ = make_emitter()
-    graphs, stages = _seeded()
+    graphs, stages = _seeded(succession_rig)
     before = _all_snapshots(graphs)
 
     _sweep(graphs, stages, emitter)
@@ -235,17 +246,17 @@ def test_prior_version_nodes_edges_and_properties_unchanged_except_status_and_su
 
 @pytest.mark.parametrize("stage", _ALL)
 def test_retry_after_partial_failure_creates_no_duplicates(
-    stage: str, make_emitter: MakeEmitter
+    stage: str, succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     """AC-BI-008: a stage that wrote half its nodes then raised leaves the prior active, and the
     next sweep re-runs it without duplicating anything: the three graphs end exactly as a run
     that never failed (node and edge counts included).
     """
     emitter, _ = make_emitter()
-    clean_graphs, clean_stages = _seeded()
+    clean_graphs, clean_stages = _seeded(succession_rig)
     _sweep(clean_graphs, clean_stages, emitter)
 
-    graphs, stages = _seeded()
+    graphs, stages = _seeded(_second_world())
     stages.arm_failure(stage, partial=True)
     first = _sweep(graphs, stages, emitter)
 
@@ -266,15 +277,17 @@ def test_retry_after_partial_failure_creates_no_duplicates(
     assert graphs.single_tenant.count_nodes("Obligation") == 2
 
 
-def test_already_processed_sweep_touches_no_graph(make_emitter: MakeEmitter) -> None:
+def test_already_processed_sweep_touches_no_graph(
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
+) -> None:
     """AC-BI-009: once absorbed, a further sweep issues no stage and no graph write at all."""
     emitter, _ = make_emitter()
-    graphs, stages = _seeded()
+    graphs, stages = _seeded(succession_rig)
     _sweep(graphs, stages, emitter)
     settled = _all_snapshots(graphs)
     graphs.events.clear()
-    native_writes, tenant_writes = len(graphs.native.writes), len(graphs.single_tenant.writes)
-    store = InMemoryAuditStore()
+    logged = len(graphs.rig.rig.store.groups)
+    store = graphs.rig.audit_store()
 
     result = _sweep(graphs, stages, emitter, store)
 
@@ -285,10 +298,7 @@ def test_already_processed_sweep_touches_no_graph(make_emitter: MakeEmitter) -> 
     )
     assert graphs.events == []
     assert store.rows == []
-    assert (len(graphs.native.writes), len(graphs.single_tenant.writes)) == (
-        native_writes,
-        tenant_writes,
-    )
+    assert len(graphs.rig.rig.store.groups) == logged
     for got, want in zip(_all_snapshots(graphs), settled, strict=True):
         assert got.nodes == want.nodes
         assert got.edges == want.edges
@@ -303,19 +313,19 @@ def _legacy_ingestion_only_state(graphs: StatefulGraphSet, stages: StatefulStage
     prior as active.
     """
     stages.ingest(_CELEX, "CRA", version=_NEW_CELEX)
-    graphs.native.merge_edge("SUPERSEDED_BY", _PRIOR, _NEW)
+    graphs.rig.seed_edge(graphs.rig.native, _PRIOR, _NEW, absorbed=None)
     graphs.native.nodes[("RegulatoryInstrument", _PRIOR)]["status"] = "superseded"
     graphs.events.clear()
 
 
 def test_repair_runs_extract_derive_merge_once_for_legacy_edge_and_second_sweep_runs_nothing(
-    make_emitter: MakeEmitter,
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     """AC-BI-010: a legacy-linked new version is mapped and merged once, then left alone."""
     emitter, _ = make_emitter()
-    graphs, stages = _seeded()
+    graphs, stages = _seeded(succession_rig)
     _legacy_ingestion_only_state(graphs, stages)
-    store = InMemoryAuditStore()
+    store = graphs.rig.audit_store()
 
     first = _sweep(graphs, stages, emitter, store)
 
@@ -339,7 +349,7 @@ def test_repair_runs_extract_derive_merge_once_for_legacy_edge_and_second_sweep_
     assert [row.action for row in store.rows] == ["ingestion_run.submit", "ingestion_run.complete"]
     settled = _all_snapshots(graphs)
     graphs.events.clear()
-    second_store = InMemoryAuditStore()
+    second_store = graphs.rig.audit_store()
 
     second = _sweep(graphs, stages, emitter, second_store)
 
@@ -352,10 +362,10 @@ def test_repair_runs_extract_derive_merge_once_for_legacy_edge_and_second_sweep_
 
 
 def test_repair_that_fails_at_derive_resumes_at_derive_and_ends_as_a_clean_repair(
-    make_emitter: MakeEmitter,
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     emitter, _ = make_emitter()
-    graphs, stages = _seeded()
+    graphs, stages = _seeded(succession_rig)
     _legacy_ingestion_only_state(graphs, stages)
     stages.arm_failure("derivation", partial=True)
 
@@ -379,7 +389,7 @@ def test_repair_that_fails_at_derive_resumes_at_derive_and_ends_as_a_clean_repai
 
 
 def test_an_audit_outage_blocks_a_merge_only_resume_and_the_next_sweep_resumes_it(
-    make_emitter: MakeEmitter,
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
     """Issue #210 (CHANGES F4 difference 3): a merge-only resume needs its one audit row.
 
@@ -388,7 +398,7 @@ def test_an_audit_outage_blocks_a_merge_only_resume_and_the_next_sweep_resumes_i
     stage run); once the trail is back the next sweep resumes at merge alone.
     """
     emitter, _ = make_emitter()
-    graphs, stages = _seeded()
+    graphs, stages = _seeded(succession_rig)
     stages.arm_failure("merge", partial=False)
     first = _sweep(graphs, stages, emitter)
     assert [o.outcome for o in first.instruments] == ["reingest_failed"]

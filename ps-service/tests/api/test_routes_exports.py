@@ -19,19 +19,28 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api._fakes import install_compliance_officer_grant, install_no_principal
+from api._gateway_fakes import (
+    RecordingSystemAudit,
+    install_process_gateway,
+    installed_process_gateway,
+    process_gateway_installed,
+)
 from ps_service.api import export_orchestration
 from ps_service.api.dependencies import provide_export_dependencies
 from ps_service.api.export_orchestration import ExportDependencies, ExportStage
+from ps_service.api.graph_write_access import graph_write_access, install_graph_write_gateway
+from ps_service.audit.errors import AuditTrailUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
+from ps_service.export.errors import ExportGraphWriteError
 from ps_service.export.models import InstrumentManifest
 from ps_service.export.serialize import checksum_bytes
 from ps_service.logging import facade
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
@@ -41,6 +50,13 @@ if TYPE_CHECKING:
 _INSTRUMENT_ID = "CRA-1.0"
 _BASELINE_BYTES = b'{"nodes": [], "edges": []}'
 _NATIVE_BYTES = b'{"nodes": [], "edges": []}'
+
+
+@pytest.fixture(autouse=True)
+def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture
+    """The gateway and system audit recorder the app lifespan installs (issue #213)."""
+    with process_gateway_installed():
+        yield
 
 
 def _valid_body() -> dict[str, object]:
@@ -99,10 +115,14 @@ class _FakeExportStage:
         embed_model: str,
         repo_root: Path,
         packaged_copy_path: Path,
+        submitter: object,
+        audit_event_id: str,
+        baseline_graph_name: str,
         call_embedding: object | None = None,
         emitter: object | None = None,
     ) -> InstrumentManifest:
         _ = baseline_graph, native_graph, embed_model, packaged_copy_path, call_embedding, emitter
+        _ = submitter, audit_event_id, baseline_graph_name
         self.call_count += 1
         if self._error is not None:
             raise self._error
@@ -140,10 +160,14 @@ class _PartialWriteExportStage:
         embed_model: str,
         repo_root: Path,
         packaged_copy_path: Path,
+        submitter: object,
+        audit_event_id: str,
+        baseline_graph_name: str,
         call_embedding: object | None = None,
         emitter: object | None = None,
     ) -> InstrumentManifest:
         _ = baseline_graph, native_graph, embed_model, packaged_copy_path, call_embedding, emitter
+        _ = submitter, audit_event_id, baseline_graph_name
         self.call_count += 1
         instrument_dir = repo_root / "curated-content" / descriptor.instrument_id
         instrument_dir.mkdir(parents=True, exist_ok=True)
@@ -171,6 +195,7 @@ def _fake_dependencies(
         open_native_graph=cast("Callable[[FalkorDB, str], object]", _open_native),  # pyright: ignore[reportArgumentType]
         export=stage,
         call_embedding=None,
+        graph_write_access=graph_write_access,
     )
 
 
@@ -278,6 +303,50 @@ def test_config_incomplete_returns_503() -> None:
     body = response.json()
     assert body["error"]["code"] == "export_config_incomplete"
     assert stage.call_count == 0
+
+
+@pytest.mark.usefixtures("_stub_export_log")
+def test_no_gateway_returns_503_and_never_calls_the_delegate() -> None:
+    """AC-BI-008 (issue #213): without a gateway Export fails closed before any graph is opened."""
+    install_graph_write_gateway(None)
+    stage = _FakeExportStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "graph_write_unavailable"
+    assert stage.call_count == 0
+
+
+@pytest.mark.usefixtures("_stub_export_log")
+def test_unwritable_system_audit_row_returns_503_and_never_calls_the_delegate() -> None:
+    """AC-BI-010 (issue #213): the Export audit row is fail-closed; nothing is computed."""
+    rig = installed_process_gateway().rig
+    install_process_gateway(
+        rig,
+        RecordingSystemAudit(rig, error=AuditTrailUnavailableError("The audit trail is down.")),
+    )
+    stage = _FakeExportStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "audit_trail_unavailable"
+    assert stage.call_count == 0
+
+
+@pytest.mark.usefixtures("_stub_export_log")
+def test_export_graph_write_failure_returns_502_naming_the_embedding_stage() -> None:
+    """A gateway failure of the embedding backfill is an `embedding` stage failure (issue #213)."""
+    stage = _FakeExportStage(error=ExportGraphWriteError("FalkorDB write failed: down"))
+    client = _client_with_fake(stage)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 502
+    assert response.json()["error"]["failing_stage"] == "embedding"
 
 
 @pytest.mark.usefixtures("_stub_export_log")

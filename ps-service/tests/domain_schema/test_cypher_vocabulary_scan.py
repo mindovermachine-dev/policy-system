@@ -221,7 +221,7 @@ _DYNAMIC_SITES: dict[str, int] = {
     "company_merge/dedup.py": 2,
     "company_merge/graph_writer.py": 2,  # the existing-id and embedding-state reads (#210)
     "domain_mapper/graph_writer.py": 1,  # the existing-node read, fixed labels only (#209)
-    "export/embeddings.py": 3,
+    "export/embeddings.py": 2,  # the missing-embedding read; the write is the gateway (#213)
     "export/serialize.py": 2,
     "graph_gateway/cypher.py": 5,
     "ingestion/graph_writer.py": 3,

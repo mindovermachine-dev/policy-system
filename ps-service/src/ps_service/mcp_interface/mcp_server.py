@@ -1415,7 +1415,7 @@ def _run_audited_change_check(
         )
     except McpGraphUnavailableError:
         return _GRAPH_UNAVAILABLE_MESSAGE
-    except AuditTrailUnavailableError as exc:
+    except (AuditTrailUnavailableError, GraphWriteUnavailableError) as exc:
         return f"error: {exc}"
     return _to_change_check_response(result).model_dump()
 

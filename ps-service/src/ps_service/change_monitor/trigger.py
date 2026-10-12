@@ -35,6 +35,8 @@ from ps_service.change_monitor.errors import (
     ChangeMonitorStateError,
     NationalTranspositionNotSupportedError,
 )
+from ps_service.change_monitor.falkordb_client import native_graph_name, single_tenant_graph_name
+from ps_service.change_monitor.graph_submission import SuccessionTarget
 from ps_service.change_monitor.models import LINKED, PIPELINE_STAGES, ReingestionOutcome
 from ps_service.change_monitor.succession import (
     clear_marker,
@@ -49,9 +51,12 @@ from ps_service.ingestion.adapters.base import IngestionAdapter
 from ps_service.logging import emit_log_entry
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ps_service.change_monitor.falkordb_client import GraphHandle
     from ps_service.change_monitor.models import PipelineRunner
     from ps_service.change_monitor.succession import ReingestionFacts
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.ingestion.models import RegulatoryInstrumentMetadata
     from ps_service.logging import LogEmitter
 
@@ -224,20 +229,23 @@ def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no n
     *,
     adapter: MetadataFetchingAdapter,
     graph: GraphHandle,
-    single_tenant: GraphHandle,
+    submitter: GroupSubmitter,
+    audit_anchor: Callable[[], str],
     emitter: LogEmitter | None = None,
     run_id: str | None = None,
     run_pipeline: PipelineRunner | None = None,
 ) -> ReingestionOutcome:
     """Re-ingest `identifier` as `new_version` through the full pipeline and record its succession.
 
-    `graph` is the `{short_name}_native` handle: the `ReingestProgress` markers, `new.version`
-    and the native succession write land there. `single_tenant` is the merged `policy_system`
-    handle: the succession is mirrored there so the tracked set and `ps-list-ingested` see the
-    prior as `superseded`. `identifier` is whatever the injected `adapter`
-    expects (a base-act CELEX for `CellarEliAdapter`). `run_pipeline` runs a subset of the
-    stages (Ingestion, Domain Mapper extract, derive, Company Merge) for the new version; it is
-    needed only when stages are outstanding and its absence then raises
+    `graph` is the `{short_name}_native` read handle (the classification reads). Every write goes
+    through `submitter`, the Graph Write Gateway (issue #213): the `ReingestProgress` markers,
+    `new.version` and the native succession land on the `{short_name}_native` graph, and the
+    succession is mirrored on the merged `policy_system` graph so the tracked set and
+    `ps-list-ingested` see the prior as `superseded`. Each group carries the audit event id
+    `audit_anchor()` returns (the re-ingest's `ingestion_run.submit` row). `identifier` is whatever
+    the injected `adapter` expects (a base-act CELEX for `CellarEliAdapter`). `run_pipeline` runs a
+    subset of the stages (Ingestion, Domain Mapper extract, derive, Company Merge) for the new
+    version; it is needed only when stages are outstanding and its absence then raises
     `ChangeMonitorStateError` before any write.
 
     States (see :func:`classify_reingestion`): `fresh` runs all four stages; `resume` and
@@ -249,16 +257,23 @@ def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no n
     the native fused write (`SUPERSEDED_BY` edge + `absorbed` + `prior.status='superseded'` +
     marker `linked`), the `policy_system` write (edge + status), then the marker is cleared. A
     crash between steps leaves the `linked` marker, which classifies as `finalize` and resumes
-    at step 2 on the next call. Then one
-    `link_superseded_by` entry is emitted carrying the pipeline's `run_id`. `run_id` (issue
-    #195) lets a caller that audits the run know its id up front; `None` mints one. The
-    returned `run_id` is `None` when no stage ran.
+    at step 2 on the next call. Each step is one gateway group; a group committed but not yet
+    applied raises `SuccessionPersistenceError`. Then one `link_superseded_by` entry is emitted
+    carrying the pipeline's `run_id`. `run_id` (issue #195) lets a caller that audits the run know
+    its id up front; `None` mints one. The returned `run_id` is `None` when no stage ran.
 
     Raises `NationalTranspositionNotSupportedError` (AC-010, before any write),
     `ChangeMonitorStateError` (inconsistent graph, or no runner for outstanding stages), or
     whatever the runner raises (a stage failure; nothing is written for the link).
     """
     new_id = f"{short_name}-{new_version}"
+    target = SuccessionTarget(
+        submitter,
+        native_graph_name(short_name),
+        single_tenant_graph_name(),
+        audit_anchor,
+        emitter,
+    )
     pre = classify_reingestion(graph, new_id, emitter=emitter)
     prior_id = pre.prior_id
     if prior_id is None:  # unreachable: every classification carries a prior id
@@ -280,13 +295,13 @@ def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no n
             stages=pre.stages_to_run,
             run_id=pipeline_run_id,
             on_stage_complete=lambda stage: _record_stage(
-                graph, new_id, new_version, stage, emitter
+                target, new_id, new_version, stage, emitter
             ),
         ).stages
 
-    link_and_supersede(graph, prior_id, new_id)
-    supersede_in_single_tenant(single_tenant, prior_id, new_id)
-    clear_marker(graph, new_id)
+    link_and_supersede(target, prior_id, new_id)
+    supersede_in_single_tenant(target, prior_id, new_id)
+    clear_marker(target, new_id)
     _emit_link(prior_id, new_id, run_id=pipeline_run_id, emitter=emitter)
     return ReingestionOutcome(
         prior_id, new_id, pipeline_run_id, "superseded", pre.state, stage_summaries
@@ -294,7 +309,11 @@ def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no n
 
 
 def _record_stage(
-    graph: GraphHandle, new_id: str, new_version: str, stage: str, emitter: LogEmitter | None
+    target: SuccessionTarget,
+    new_id: str,
+    new_version: str,
+    stage: str,
+    emitter: LogEmitter | None,
 ) -> None:
     """Persist that `stage` returned: the version after ingestion, then the progress marker.
 
@@ -303,8 +322,8 @@ def _record_stage(
     extract copies the node's properties into the baseline graph.
     """
     if stage == PIPELINE_STAGES[0]:
-        set_new_version_property(graph, new_id, new_version)
-    mark_stage_complete(graph, new_id, stage)
+        set_new_version_property(target, new_id, new_version)
+    mark_stage_complete(target, new_id, stage)
     emit_log_entry(
         component=_COMPONENT,
         action=_STAGE_ACTION,

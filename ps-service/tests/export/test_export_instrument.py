@@ -1,38 +1,34 @@
 """Tests for `ps_service.export.export_instrument.export_instrument`
-(PLAN.md Slice 3.5, full orchestration, CHANGES2.md §3.9's amended
-fake-collaborator shape).
+(PLAN.md Slice 3.5, full orchestration; migrated to the gateway rig by issue #213).
 
-Every collaborator here is a fake `_GraphQueryHandle` (CHANGES2.md §3.9) --
-no real FalkorDB/LLM call in this slice (that proof belongs to
-`test_serialize_live.py`/`test_serialize_roundtrip_live.py` and Slice 3.6's
-`test_engineering_practices_migration_live.py`). `_FakeInstrumentGraph`
-dispatches by exact query text, mirroring `tests/export/test_serialize.py`'s
-`_ScriptedFakeGraphQueryHandle`/`tests/export/test_embeddings.py`'s
-`_FakeBaselineGraph` conventions, extended to answer BOTH
-`embeddings.backfill_capability_embeddings`'s and `serialize.
-serialize_graph`'s query shapes against the same handle -- exactly what
-`export_instrument` passes the same `baseline_graph` object to both of, in
-that order.
+The graphs are the Graph Write Gateway rig's in-memory FalkorDB (a true boundary), read through
+`ExportReadGraph` (a `_GraphQueryHandle`); the embedding backfill is written through the rig's
+gateway, so `serialize_graph` reads back what the gateway applied. No real FalkorDB, Postgres or
+LLM call here (that proof belongs to `test_serialize_live.py` and
+`test_engineering_practices_migration_live.py`).
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import pytest
+from graph_gateway._fakes import GatewayRig
 from litellm.types.utils import Embedding, EmbeddingResponse
 
+from export._gateway_fakes import ExportRig
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.export_instrument import InstrumentDescriptor, export_instrument
 from ps_service.export.models import InstrumentManifest
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
     from company_merge._fakes import MakeEmitter
 
-_EMBEDDING_TEXT_PROPERTY_BY_LABEL = {"Capability": "name", "Policy": "title"}
+    from ps_service.logging import LogEmitter
 
 _CRA_DESCRIPTOR = InstrumentDescriptor(
     short_name="CRA",
@@ -55,111 +51,6 @@ _ENGPRAC_DESCRIPTOR = InstrumentDescriptor(
 )
 
 
-@dataclass
-class _FakeNode:
-    label: str
-    properties: dict[str, object]
-
-
-@dataclass
-class _FakeEdge:
-    relationship_type: str
-    source_label: str
-    source_id: str
-    target_label: str
-    target_id: str
-    properties: dict[str, object]
-
-
-class _FakeQueryResult:
-    def __init__(self, result_set: list[list[object]]) -> None:
-        self._result_set = result_set
-
-    @property
-    def result_set(self) -> list[list[object]]:
-        return self._result_set
-
-
-@dataclass
-class _FakeInstrumentGraph:
-    """Satisfies `_GraphQueryHandle` for both embeddings backfill and serialize."""
-
-    name: str
-    nodes: list[_FakeNode]
-    edges: list[_FakeEdge] = field(default_factory=list)
-    call_log: list[str] = field(default_factory=list)
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.call_log.append(f"{self.name}:{q}")
-        result = self._dispatch(q, params)
-        if result is None:
-            raise AssertionError(f"unexpected query for graph {self.name!r}: {q!r}")
-        return result
-
-    def _dispatch(self, q: str, params: dict[str, object] | None) -> _FakeQueryResult | None:
-        labels = sorted({node.label for node in self.nodes})
-        relationship_types = sorted({edge.relationship_type for edge in self.edges})
-
-        if q == "CALL db.labels()":
-            return _FakeQueryResult([[label] for label in labels])
-        if q == "CALL db.relationshipTypes()":
-            return _FakeQueryResult([[rel] for rel in relationship_types])
-        if q == "MATCH (n) RETURN count(n)":
-            return _FakeQueryResult([[len(self.nodes)]])
-
-        for label in labels:
-            if q == f"MATCH (n:{label}) RETURN labels(n), properties(n)":
-                rows: list[list[object]] = [
-                    [[node.label], dict(node.properties)]
-                    for node in self.nodes
-                    if node.label == label
-                ]
-                return _FakeQueryResult(rows)
-
-        embedding_result = self._dispatch_embedding_query(q, params)
-        if embedding_result is not None:
-            return embedding_result
-
-        for relationship_type in relationship_types:
-            if f"[r:{relationship_type}]" in q:
-                return _FakeQueryResult(
-                    [
-                        [
-                            [edge.source_label],
-                            edge.source_id,
-                            [edge.target_label],
-                            edge.target_id,
-                            dict(edge.properties),
-                        ]
-                        for edge in self.edges
-                        if edge.relationship_type == relationship_type
-                    ]
-                )
-        return None
-
-    def _dispatch_embedding_query(
-        self, q: str, params: dict[str, object] | None
-    ) -> _FakeQueryResult | None:
-        # Embeddings backfill queries for a fixed set of labels (Capability/Policy)
-        # regardless of whether this graph happens to hold any nodes of that label.
-        for label, text_property in _EMBEDDING_TEXT_PROPERTY_BY_LABEL.items():
-            if q == f"MATCH (n:{label}) WHERE n.embedding IS NULL RETURN n.id, n.{text_property}":
-                rows = [
-                    [node.properties["id"], node.properties[text_property]]
-                    for node in self.nodes
-                    if node.label == label and "embedding" not in node.properties
-                ]
-                return _FakeQueryResult(rows)
-            if q == f"MATCH (n:{label} {{id: $id}}) SET n.embedding = $embedding":
-                assert params is not None
-                node = next(
-                    n for n in self.nodes if n.label == label and n.properties["id"] == params["id"]
-                )
-                node.properties["embedding"] = params["embedding"]
-                return _FakeQueryResult([])
-        return None
-
-
 class _FakeEmbeddingCaller:
     def __init__(self, vector: list[float]) -> None:
         self._vector = vector
@@ -173,50 +64,63 @@ class _FakeEmbeddingCaller:
         )
 
 
-def _baseline_graph() -> _FakeInstrumentGraph:
-    return _FakeInstrumentGraph(
-        name="baseline",
-        nodes=[
-            _FakeNode(
-                label="RegulatoryInstrument",
-                properties={"id": "CRA-1.0", "title": "Cyber Resilience Act"},
-            ),
-            _FakeNode(
-                label="Capability",
-                properties={"id": "cap_1", "name": "Data Encryption", "confidence": 0.9},
-            ),
-        ],
+@pytest.fixture
+def rig() -> Iterator[ExportRig]:
+    """The gateway rig with a `cra_baseline` / `cra_native` pair (the true boundaries faked)."""
+    gateway_rig = GatewayRig()
+    export_rig = ExportRig(gateway_rig, short_name="CRA")
+    export_rig.seed_node(
+        export_rig.baseline, "RegulatoryInstrument", "CRA-1.0", {"title": "Cyber Resilience Act"}
     )
+    export_rig.seed_node(
+        export_rig.baseline,
+        "Capability",
+        "cap_1",
+        {"name": "Data Encryption", "confidence": 0.9},
+    )
+    export_rig.seed_node(
+        export_rig.native, "RegulatoryInstrument", "CRA-1.0", {"title": "Cyber Resilience Act"}
+    )
+    yield export_rig
+    gateway_rig.close()
 
 
-def _native_graph() -> _FakeInstrumentGraph:
-    return _FakeInstrumentGraph(
-        name="native",
-        nodes=[
-            _FakeNode(
-                label="RegulatoryInstrument",
-                properties={"id": "CRA-1.0", "title": "Cyber Resilience Act"},
-            )
-        ],
+def _export(
+    rig: ExportRig,
+    descriptor: InstrumentDescriptor,
+    repo_root: Path,
+    packaged_copy_path: Path,
+    caller: _FakeEmbeddingCaller,
+    emitter: LogEmitter,
+) -> InstrumentManifest:
+    """Run the real `export_instrument` over `rig`, writing the backfill through its gateway."""
+    return export_instrument(
+        descriptor,
+        baseline_graph=rig.baseline_reader(),  # pyright: ignore[reportArgumentType]
+        native_graph=rig.native_reader(),  # pyright: ignore[reportArgumentType]
+        embed_model="fake-embed-model",
+        repo_root=repo_root,
+        packaged_copy_path=packaged_copy_path,
+        call_embedding=caller,
+        emitter=emitter,
+        **rig.write_target(),  # pyright: ignore[reportArgumentType]
     )
 
 
 def test_export_instrument_writes_manifest_and_both_graph_files(
-    tmp_path: Path, make_emitter: MakeEmitter
+    tmp_path: Path, make_emitter: MakeEmitter, rig: ExportRig
 ) -> None:
     emitter, _log_path = make_emitter()
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
 
-    manifest = export_instrument(
+    manifest = _export(
+        rig,
         _CRA_DESCRIPTOR,
-        baseline_graph=_baseline_graph(),
-        native_graph=_native_graph(),
-        embed_model="fake-embed-model",
-        repo_root=repo_root,
-        packaged_copy_path=packaged_copy_path,
-        call_embedding=_FakeEmbeddingCaller([0.1, 0.2]),
-        emitter=emitter,
+        repo_root,
+        packaged_copy_path,
+        _FakeEmbeddingCaller([0.1, 0.2]),
+        emitter,
     )
 
     instrument_dir = repo_root / "curated-content" / "CRA-1.0"
@@ -233,21 +137,19 @@ def test_export_instrument_writes_manifest_and_both_graph_files(
 
 
 def test_export_instrument_persisted_baseline_json_contains_the_backfilled_embedding(
-    tmp_path: Path, make_emitter: MakeEmitter
+    tmp_path: Path, make_emitter: MakeEmitter, rig: ExportRig
 ) -> None:
     emitter, _log_path = make_emitter()
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
 
-    export_instrument(
+    _export(
+        rig,
         _CRA_DESCRIPTOR,
-        baseline_graph=_baseline_graph(),
-        native_graph=_native_graph(),
-        embed_model="fake-embed-model",
-        repo_root=repo_root,
-        packaged_copy_path=packaged_copy_path,
-        call_embedding=_FakeEmbeddingCaller([0.1, 0.2]),
-        emitter=emitter,
+        repo_root,
+        packaged_copy_path,
+        _FakeEmbeddingCaller([0.1, 0.2]),
+        emitter,
     )
 
     baseline_path = repo_root / "curated-content" / "CRA-1.0" / "baseline.json"
@@ -258,21 +160,19 @@ def test_export_instrument_persisted_baseline_json_contains_the_backfilled_embed
 
 
 def test_export_instrument_updates_catalog_json_in_both_locations(
-    tmp_path: Path, make_emitter: MakeEmitter
+    tmp_path: Path, make_emitter: MakeEmitter, rig: ExportRig
 ) -> None:
     emitter, _log_path = make_emitter()
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
 
-    export_instrument(
+    _export(
+        rig,
         _CRA_DESCRIPTOR,
-        baseline_graph=_baseline_graph(),
-        native_graph=_native_graph(),
-        embed_model="fake-embed-model",
-        repo_root=repo_root,
-        packaged_copy_path=packaged_copy_path,
-        call_embedding=_FakeEmbeddingCaller([0.1, 0.2]),
-        emitter=emitter,
+        repo_root,
+        packaged_copy_path,
+        _FakeEmbeddingCaller([0.1, 0.2]),
+        emitter,
     )
 
     repo_catalog = json.loads(
@@ -294,35 +194,35 @@ def test_export_instrument_updates_catalog_json_in_both_locations(
 
 
 def test_export_instrument_second_export_preserves_the_first_instruments_catalog_entry(
-    tmp_path: Path, make_emitter: MakeEmitter
+    tmp_path: Path, make_emitter: MakeEmitter, rig: ExportRig
 ) -> None:
     emitter, _log_path = make_emitter()
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
-    export_instrument(
+    _export(
+        rig,
         _CRA_DESCRIPTOR,
-        baseline_graph=_baseline_graph(),
-        native_graph=_native_graph(),
-        embed_model="fake-embed-model",
-        repo_root=repo_root,
-        packaged_copy_path=packaged_copy_path,
-        call_embedding=_FakeEmbeddingCaller([0.1, 0.2]),
-        emitter=emitter,
+        repo_root,
+        packaged_copy_path,
+        _FakeEmbeddingCaller([0.1, 0.2]),
+        emitter,
     )
-    engprac_node = _FakeNode(
-        label="RegulatoryInstrument",
-        properties={"id": "ENGPRAC-2.1", "title": "Engineering Practices Standard"},
-    )
+    engprac = ExportRig(rig.rig, short_name="ENGPRAC")
+    for graph in (engprac.baseline, engprac.native):
+        engprac.seed_node(
+            graph,
+            "RegulatoryInstrument",
+            "ENGPRAC-2.1",
+            {"title": "Engineering Practices Standard"},
+        )
 
-    export_instrument(
+    _export(
+        engprac,
         _ENGPRAC_DESCRIPTOR,
-        baseline_graph=_FakeInstrumentGraph(name="engprac_baseline", nodes=[engprac_node]),
-        native_graph=_FakeInstrumentGraph(name="engprac_native", nodes=[engprac_node]),
-        embed_model="fake-embed-model",
-        repo_root=repo_root,
-        packaged_copy_path=packaged_copy_path,
-        call_embedding=_FakeEmbeddingCaller([0.3]),
-        emitter=emitter,
+        repo_root,
+        packaged_copy_path,
+        _FakeEmbeddingCaller([0.3]),
+        emitter,
     )
 
     catalog = json.loads(
@@ -332,54 +232,39 @@ def test_export_instrument_second_export_preserves_the_first_instruments_catalog
 
 
 def test_export_instrument_backfills_embeddings_before_serializing_the_baseline_graph(
-    tmp_path: Path, make_emitter: MakeEmitter
+    tmp_path: Path, make_emitter: MakeEmitter, rig: ExportRig
 ) -> None:
     emitter, _log_path = make_emitter()
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
-    baseline_graph = _baseline_graph()
     embedding_caller = _FakeEmbeddingCaller([0.1, 0.2])
 
-    export_instrument(
-        _CRA_DESCRIPTOR,
-        baseline_graph=baseline_graph,
-        native_graph=_native_graph(),
-        embed_model="fake-embed-model",
-        repo_root=repo_root,
-        packaged_copy_path=packaged_copy_path,
-        call_embedding=embedding_caller,
-        emitter=emitter,
-    )
+    _export(rig, _CRA_DESCRIPTOR, repo_root, packaged_copy_path, embedding_caller, emitter)
 
-    embedding_write_index = next(
-        i
-        for i, entry in enumerate(baseline_graph.call_log)
-        if "SET n.embedding = $embedding" in entry
-    )
-    serialize_start_index = next(
-        i for i, entry in enumerate(baseline_graph.call_log) if entry.endswith("CALL db.labels()")
-    )
-    assert embedding_write_index < serialize_start_index
-    # The embedding call itself happened before the write that used its result.
+    statements = rig.baseline_reader().statements
+    embedding_read_index = next(i for i, q in enumerate(statements) if "embedding IS NULL" in q)
+    serialize_start_index = next(i for i, q in enumerate(statements) if q == "CALL db.labels()")
+    assert embedding_read_index < serialize_start_index
+    # The embedding went through the gateway as one logged group before serialization began.
+    assert len(rig.baseline_groups()) == 1
+    # The embedding was computed before the group that carried it was submitted.
     assert embedding_caller.calls == ["Data Encryption"]
 
 
 def test_export_instrument_returns_the_manifest_matching_the_written_file(
-    tmp_path: Path, make_emitter: MakeEmitter
+    tmp_path: Path, make_emitter: MakeEmitter, rig: ExportRig
 ) -> None:
     emitter, _log_path = make_emitter()
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
 
-    manifest = export_instrument(
+    manifest = _export(
+        rig,
         _CRA_DESCRIPTOR,
-        baseline_graph=_baseline_graph(),
-        native_graph=_native_graph(),
-        embed_model="fake-embed-model",
-        repo_root=repo_root,
-        packaged_copy_path=packaged_copy_path,
-        call_embedding=_FakeEmbeddingCaller([0.1, 0.2]),
-        emitter=emitter,
+        repo_root,
+        packaged_copy_path,
+        _FakeEmbeddingCaller([0.1, 0.2]),
+        emitter,
     )
 
     instrument_dir = repo_root / "curated-content" / "CRA-1.0"

@@ -1,17 +1,17 @@
 """Live FalkorDB proof of the full-pipeline amendment re-ingest (issue #201, AC-BI-002/004/008).
 
 Entry is the REAL `run_change_check_sweep`; everything below it is real: `read_tracked_instruments`,
-`will_reingest` / `trigger_reingestion` / `classify_reingestion`, the succession Cypher, the shared
-stage sequence and the REAL Ingestion, Domain Mapper (extract, derive) and Company Merge stages with
-the REAL Cellar/ELI Domain Mapping Adapter, over three disposable FalkorDB graphs
+`will_reingest` / `trigger_reingestion` / `classify_reingestion`, the succession's gateway groups,
+the shared stage sequence and the REAL Ingestion, Domain Mapper (extract, derive) and Company Merge
+stages with the REAL Cellar/ELI Domain Mapping Adapter, over three disposable FalkorDB graphs
 (`live201_native`, `live201_baseline` and a single-tenant graph named by `PS_FALKORDB_GRAPH`).
 `policy_system` itself is never touched.
 
 Stubbed boundaries (all on `approved-mock-boundaries.yaml`): the Cellar fetch (a scripted
 `IngestionAdapter` returning a v1 structure with one Article, then the amendment structure with
-that Article plus a new one), the poll (a scripted `PollReport`; Cellar again), the audit store, and
-the LLM (`litellm.completion` / `litellm.embedding`, answering deterministically from the prompt's
-own text). The LLM stub counts its calls so "a settled sweep runs no stage" is observable.
+that Article plus a new one), the poll (a scripted `PollReport`; Cellar again) and the LLM
+(`litellm.completion` / `litellm.embedding`, answering deterministically from the prompt's own
+text). The LLM stub counts its calls so "a settled sweep runs no stage" is observable.
 
 What the real run proves that the hermetic `test_reingestion_graph_state.py` cannot:
 
@@ -22,8 +22,9 @@ What the real run proves that the hermetic `test_reingestion_graph_state.py` can
   the graph delta (AC-BI-002, AC-BI-011);
 - a derive failure followed by a retry re-runs only the missing stages and ends exactly like a clean
   run, with no duplicate node or edge (AC-BI-008);
-- the succession statements run on real FalkorDB: edge with `absorbed`, prior `superseded` in the
-  native and single-tenant graphs, no marker left behind.
+- the succession groups run on real FalkorDB and the real graph log, anchored to the sweep's real
+  `ingestion_run.submit` audit row: edge with `absorbed`, prior `superseded` in the native and
+  single-tenant graphs, no marker left behind.
 
 Run explicitly (needs a reachable FalkorDB; set `PS_FALKORDB_HOST` / `PS_FALKORDB_PORT` if it is not
 on the default):
@@ -37,10 +38,10 @@ from __future__ import annotations
 import dataclasses
 import json
 from datetime import date
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
-from api._audit_fakes import InMemoryAuditStore
+from api._audit_fakes import RecordedAuditRow
 from litellm.types.utils import Choices, Embedding, EmbeddingResponse, Message, ModelResponse
 
 from ps_service.api.catalog import CatalogEntry
@@ -55,6 +56,7 @@ from ps_service.api.ingestion_orchestration import (
     build_default_pipeline_dependencies,
 )
 from ps_service.audit import AuditContext
+from ps_service.audit.store import PsycopgAuditStore
 from ps_service.change_monitor.falkordb_client import (
     GraphHandle,
     check_connectivity,
@@ -80,12 +82,13 @@ from ps_service.ingestion.models import (
 from ps_service.logging import facade
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
     from pathlib import Path
 
     from falkordb import FalkorDB
 
     from change_monitor._fakes import MakeEmitter
+    from ps_service.audit.models import AuditQueryPage
 
 
 pytestmark = pytest.mark.falkordb_live
@@ -286,6 +289,63 @@ def _ids(graph: GraphHandle, label: str) -> set[str]:
     return {cast("str", row[0]) for row in rows}
 
 
+class _LiveAuditStore:
+    """The REAL Postgres audit store, mirroring each row it wrote for the test to read back.
+
+    The succession's graph groups are anchored to the sweep's `ingestion_run.submit` audit row, and
+    the real graph log's foreign key accepts only a row that exists in PS state Postgres (issue
+    #213); an in-memory store's ids would be refused.
+    """
+
+    def __init__(self, config: ServiceConfig) -> None:
+        self._inner = PsycopgAuditStore(config)
+        self.rows: list[RecordedAuditRow] = []
+
+    def record(self, cur: object, **kwargs: object) -> str:
+        del cur, kwargs
+        raise NotImplementedError
+
+    def query(self, **kwargs: object) -> AuditQueryPage:
+        del kwargs
+        raise NotImplementedError
+
+    def record_standalone(self, **kwargs: Any) -> None:  # noqa: ANN401 -- forwards the store's keywords
+        self.record_standalone_with_event_id(**kwargs)
+
+    def record_standalone_with_event_id(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: Literal["applied", "rejected", "failed"],
+        details: Mapping[str, object],
+    ) -> str:
+        event_id = self._inner.record_standalone_with_event_id(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            details=details,
+        )
+        self.rows.append(
+            RecordedAuditRow(
+                actor_subject,
+                actor_issuer,
+                action,
+                resource_type,
+                resource_id,
+                outcome,
+                dict(details),
+            )
+        )
+        return event_id
+
+
 @dataclasses.dataclass
 class _World:
     """The three disposable graphs plus the boundary doubles for one test."""
@@ -309,7 +369,7 @@ class _World:
     def sweep(
         self,
         emitter: object,
-        store: InMemoryAuditStore,
+        store: _LiveAuditStore,
         *,
         force_tracked: tuple[TrackedInstrumentNode, ...] | None = None,
         amend: bool = True,
@@ -475,7 +535,7 @@ def test_amendment_runs_the_real_stages_and_absorbs_without_touching_the_prior_v
     before = world.snapshots()
     obligations_before = _ids(world.single_tenant, "Obligation")
     capabilities_before = _ids(world.single_tenant, "Capability")
-    store = InMemoryAuditStore()
+    store = _LiveAuditStore(world.config)
 
     result = world.sweep(emitter, store)
 
@@ -562,11 +622,11 @@ def test_second_sweep_polls_the_new_version_current_and_a_lagging_poll_runs_noth
 ) -> None:
     """After absorption the prior leaves the tracked set; re-flagging it is `already_processed`."""
     emitter, _ = make_emitter(filename="sweep2.jsonl")
-    world.sweep(emitter, InMemoryAuditStore())
+    world.sweep(emitter, _LiveAuditStore(world.config))
     settled = world.snapshots()
     completions, embeddings = world.llm.completions, world.llm.embeddings
 
-    second_store = InMemoryAuditStore()
+    second_store = _LiveAuditStore(world.config)
     second = world.sweep(emitter, second_store, amend=False)
 
     assert [(o.instrument_id, o.outcome) for o in second.instruments] == [(_NEW, "current")]
@@ -578,7 +638,7 @@ def test_second_sweep_polls_the_new_version_current_and_a_lagging_poll_runs_noth
         instrument_type="regulation",
         effective_date="2099-01-01",
     )
-    third_store = InMemoryAuditStore()
+    third_store = _LiveAuditStore(world.config)
     third = world.sweep(emitter, third_store, force_tracked=(prior_node,))
 
     [outcome] = third.instruments
@@ -599,7 +659,7 @@ def test_derive_failure_then_retry_reruns_only_missing_stages_and_creates_no_dup
     emitter, _ = make_emitter(filename="retry.jsonl")
     world.llm.fail_derivation_once = True
 
-    first = world.sweep(emitter, InMemoryAuditStore())
+    first = world.sweep(emitter, _LiveAuditStore(world.config))
 
     [failed] = first.instruments
     assert failed.outcome == "reingest_failed"
@@ -621,7 +681,7 @@ def test_derive_failure_then_retry_reruns_only_missing_stages_and_creates_no_dup
     assert marker == [[_NEW, "extraction"]]
     fetches_after_failure = world.adapter.calls
 
-    second = world.sweep(emitter, InMemoryAuditStore())
+    second = world.sweep(emitter, _LiveAuditStore(world.config))
 
     assert [o.outcome for o in second.instruments] == ["amendment_reingested"]
     assert world.adapter.calls == fetches_after_failure  # ingestion was not re-run
@@ -653,5 +713,5 @@ def _clean_run_snapshot(world: _World, emitter: object) -> tuple[Snapshot, Snaps
     )
     world.adapter.rid = _NEW
     world.adapter.articles = (_ART_1, _ART_2)
-    world.sweep(emitter, InMemoryAuditStore())
+    world.sweep(emitter, _LiveAuditStore(world.config))
     return world.snapshots()

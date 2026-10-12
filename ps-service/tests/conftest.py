@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+    from change_monitor._gateway_fakes import SuccessionRig
+
     from ps_service.logging.emitter import TextSink
 
 
@@ -106,3 +108,20 @@ def read_lines():
 
 
 __all__ = ["fresh_provisioned", "provisioned", "provisioned_graph_log"]
+
+
+@pytest.fixture
+def succession_rig() -> SuccessionRig:
+    """The process gateway rig, with the succession's native and `policy_system` graphs.
+
+    For the tests whose package installs a process gateway (`tests/api`, `tests/change_monitor`);
+    the imports are lazy because those packages are importable only once pytest collected them.
+    """
+    from api._gateway_fakes import (
+        installed_process_gateway,
+    )
+    from change_monitor._gateway_fakes import (
+        SuccessionRig,
+    )
+
+    return SuccessionRig(installed_process_gateway().rig)

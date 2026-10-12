@@ -14,7 +14,10 @@ load (M6 / the Process Harness decoupling guarantee).
    :class:`~ps_service.api.errors.ExportInstrumentNotFoundError` immediately.
 2. Requires a configured embedding model (D3) -- raises
    :class:`~ps_service.api.errors.ExportConfigIncompleteError` before any
-   FalkorDB call if unset.
+   FalkorDB call if unset -- then resolves the Graph Write Gateway
+   (``graph_write_access``, issue #213; ``GraphWriteUnavailableError`` if none
+   is installed) before any graph is opened. The embedding backfill is written
+   through it, never directly.
 3. Safely probes whether the derived ``{short}_baseline`` graph key exists at
    all via ``db.list_graphs()`` -- **before** opening it or issuing any
    ``MATCH`` (issue #71 CHANGES.md Appendix A1's fix: querying a
@@ -28,7 +31,10 @@ load (M6 / the Process Harness decoupling guarantee).
    raises ``ExportInstrumentNotFoundError`` (the key is real, but this exact
    ``instrument_id`` was never written to it). This second query is safe:
    the key's existence is already confirmed, so it cannot vivify anything.
-5. Calls the injected ``export`` delegate inside a per-request scratch
+5. Records one ``export.instrument`` system audit row (fail-closed:
+   ``AuditTrailUnavailableError``, nothing computed or written), then calls the
+   injected ``export`` delegate with the gateway, the row's id and the baseline
+   graph name inside a per-request scratch
    directory (``tempfile.mkdtemp(prefix="ps-export-")`` as ``repo_root``,
    D1) so the delegate's own real file writes (``curated-content/...``,
    a regenerated ``catalog.json``) never touch the real checkout. Reads
@@ -59,6 +65,12 @@ from ps_service.api.errors import (
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
 )
+from ps_service.api.export_audit_actions import (
+    EXPORT_INSTRUMENT_ACTION,
+    EXPORT_INSTRUMENT_RESOURCE_TYPE,
+    ExportInstrumentDetails,
+)
+from ps_service.api.graph_write_access import GraphWriteAccess, graph_write_access
 from ps_service.api.models import ExportAcceptedResponse, ExportManifestPayload, ExportStageOutcome
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.logging.facade import emit_log_entry
@@ -77,6 +89,7 @@ if TYPE_CHECKING:
         _GraphQueryHandle,  # pyright: ignore[reportPrivateUsage]
     )
     from ps_service.export.models import InstrumentManifest
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import EmbeddingCaller
     from ps_service.logging import LogEmitter
 
@@ -102,7 +115,7 @@ _EXPORT_STAGES: tuple[str, ...] = ("embedded", "serialized", "cataloged")
 class ExportStage(Protocol):
     """Call shape of ``ps_service.export.export_instrument.export_instrument``."""
 
-    def __call__(
+    def __call__(  # noqa: PLR0913 -- mirrors export_instrument(), the delegate this Protocol types
         self,
         descriptor: InstrumentDescriptor,
         *,
@@ -111,6 +124,9 @@ class ExportStage(Protocol):
         embed_model: str,
         repo_root: Path,
         packaged_copy_path: Path,
+        submitter: GroupSubmitter,
+        audit_event_id: str,
+        baseline_graph_name: str,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> InstrumentManifest:
@@ -137,6 +153,7 @@ class ExportDependencies:
     open_native_graph: Callable[[FalkorDB, str], _GraphQueryHandle]
     export: ExportStage
     call_embedding: EmbeddingCaller | None
+    graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
 
 
 # --- instrument_id -> short_name (D2, zero graph access) -------------------
@@ -232,6 +249,7 @@ def _to_descriptor(
 _STAGE_BY_EXCEPTION_NAME: dict[str, str] = {
     "ExportSourceGraphError": "serialization",
     "ExportInstrumentIdMismatchError": "serialization",
+    "ExportGraphWriteError": "embedding",
 }
 
 
@@ -341,6 +359,9 @@ def run_export(
     instrument_id = request_body.instrument_id
     short_name = _derive_short_name(instrument_id)
     embed_model = _require_embed_model(config)
+    # Resolved before any graph is opened (issue #213): the embedding backfill is written through
+    # the gateway, so without one nothing may start. There is no direct-write fallback.
+    access = dependencies.graph_write_access(config)
 
     db = dependencies.open_db(config)
 
@@ -366,6 +387,16 @@ def run_export(
         short_name=short_name, instrument_id=instrument_id, properties=properties
     )
 
+    # The group of the embedding backfill is anchored to this row (issue #213, AC-BI-010). It is
+    # recorded outside the try below, before anything is computed: if it cannot be written the
+    # AuditTrailUnavailableError (503) propagates and nothing was computed or written.
+    audit_event_id = access.system_audit(
+        action=EXPORT_INSTRUMENT_ACTION,
+        resource_type=EXPORT_INSTRUMENT_RESOURCE_TYPE,
+        resource_id=instrument_id,
+        details=ExportInstrumentDetails(instrument_id=instrument_id, status="started").model_dump(),
+    )
+
     _emit_export_log(
         instrument_id=instrument_id,
         outcome="started",
@@ -384,6 +415,9 @@ def run_export(
             embed_model=embed_model,
             repo_root=scratch_root,
             packaged_copy_path=scratch_root / "packaged" / "catalog.json",
+            submitter=access.gateway,
+            audit_event_id=audit_event_id,
+            baseline_graph_name=baseline_name,
             call_embedding=dependencies.call_embedding,
             emitter=emitter,
         )
@@ -481,4 +515,5 @@ def build_default_export_dependencies() -> ExportDependencies:
         open_native_graph=_default_open_native_graph,
         export=export_instrument,
         call_embedding=default_embedding_caller,
+        graph_write_access=graph_write_access,
     )

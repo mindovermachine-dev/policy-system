@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[3] / "tools" / "curated-export" / "export_instrument.py"
@@ -67,8 +68,11 @@ class _FakeEmbeddingCaller:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_export_instrument_cli_runs_end_to_end_against_a_real_throwaway_graph_pair(
-    live_falkordb: FalkorDB, tmp_path: Path
+    live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
+    tmp_path: Path,
 ) -> None:
     token = uuid.uuid4().hex[:10]
     short_name = f"AC66CLI{token}".upper()
@@ -86,6 +90,8 @@ def test_export_instrument_cli_runs_end_to_end_against_a_real_throwaway_graph_pa
     )
 
     cli_module = _load_cli_module()
+    # The CLI builds its gateway and audit recorder from the service configuration (issue #213):
+    # point that at the scratch PS Postgres. `--host`/`--port` keep deciding the FalkorDB.
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"
     fake_caller = _FakeEmbeddingCaller()
@@ -114,7 +120,11 @@ def test_export_instrument_cli_runs_end_to_end_against_a_real_throwaway_graph_pa
             str(packaged_copy_path),
         ]
 
-        exit_code = cli_module.main(argv, call_embedding=fake_caller)
+        exit_code = cli_module.main(
+            argv,
+            call_embedding=fake_caller,
+            load_service_config=provisioned_graph_log.state_config,
+        )
 
         assert exit_code == 0
         assert fake_caller.calls == ["Cap One"]

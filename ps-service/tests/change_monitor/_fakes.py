@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, NoReturn, Protocol
 
 import redis.exceptions
 
+from change_monitor._gateway_fakes import GraphSnapshot, RigKeyedGraph
 from ps_service.api.ingestion_orchestration import PipelineStages
 from ps_service.company_merge.models import MergeResult
 from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from pathlib import Path
 
-    from ps_service.change_monitor.models import PipelineRunResult
+    from change_monitor._gateway_fakes import SuccessionRig
     from ps_service.company_merge.governance_import import GovernanceImport
     from ps_service.ingestion.models import (
         FetchedRegulatoryInstrumentStructure,
@@ -219,270 +220,6 @@ class KeyedGraph:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class GraphSnapshot:
-    """A frozen copy of a `KeyedGraph`'s nodes and edges."""
-
-    nodes: dict[tuple[str, str], dict[str, object]]
-    edges: dict[tuple[str, str, str], dict[str, object]]
-
-
-class LedgerNativeGraph(KeyedGraph):
-    """A stateful `GraphHandle` double holding a `{short}_native` graph in memory.
-
-    It understands exactly the statements `change_monitor.succession` issues
-    (recognised by their distinctive clauses) and applies them with real
-    MERGE-by-key / SET / DELETE semantics over a node dict keyed by
-    `(label, id)` and an edge dict keyed by `(type, src, dst)`. It is the
-    FalkorDB-client boundary double; the code under test is the real
-    `succession` / `trigger` modules. Every call is recorded in `calls`;
-    `writes` lists the mutating ones. An unrecognised statement raises, so a
-    new query cannot silently go unmodelled.
-    """
-
-    def __init__(self, events: list[str] | None = None) -> None:
-        """Start with an empty graph, optionally logging writes onto a shared `events` list."""
-        super().__init__(events)
-
-    # --- seeding helpers -------------------------------------------------
-
-    def seed_instrument(
-        self, node_id: str, *, status: str = "active", instrument_type: str = "regulation"
-    ) -> None:
-        """Create a `RegulatoryInstrument` node."""
-        self.nodes[("RegulatoryInstrument", node_id)] = {
-            "id": node_id,
-            "status": status,
-            "instrument_type": instrument_type,
-        }
-
-    def seed_edge(self, prior_id: str, new_id: str, *, absorbed: bool | None) -> None:
-        """Create a `SUPERSEDED_BY` edge; `absorbed=None` leaves the property unset (legacy)."""
-        props: dict[str, object] = {} if absorbed is None else {"absorbed": absorbed}
-        self.edges[("SUPERSEDED_BY", prior_id, new_id)] = props
-
-    def seed_marker(self, new_id: str, stage: str) -> None:
-        """Create a `ReingestProgress` marker node."""
-        self.nodes[("ReingestProgress", new_id)] = {"id": new_id, "stage": stage}
-
-    # --- inspection helpers ----------------------------------------------
-
-    def marker_stage(self, new_id: str) -> object:
-        """The marker's `stage`, or `None` when there is no marker."""
-        return self.nodes.get(("ReingestProgress", new_id), {}).get("stage")
-
-    def status_of(self, node_id: str) -> object:
-        """A `RegulatoryInstrument`'s `status`, or `None` when absent."""
-        return self.nodes.get(("RegulatoryInstrument", node_id), {}).get("status")
-
-    @property
-    def writes(self) -> list[RecordedQuery]:
-        """Recorded calls whose Cypher contains a write clause."""
-        return [call for call in self.calls if _is_write(call.query)]
-
-    # --- the GraphHandle surface -------------------------------------------
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> FakeQueryResult:
-        """Record the call and apply the recognised statement to the in-memory graph."""
-        self.calls.append(RecordedQuery(q, params))
-        p = params or {}
-        if "DELETE m" in q:
-            self.events.append("write:clear_marker")
-            self.nodes.pop(("ReingestProgress", str(p["new_id"])), None)
-            return FakeQueryResult([])
-        if "SET e.absorbed" in q:
-            self.events.append("write:SUPERSEDED_BY")
-            return self._link(q, p)
-        if "MERGE (m:ReingestProgress" in q:
-            self.events.append(f"write:marker:{p['stage']}")
-            self.seed_marker(str(p["new_id"]), str(p["stage"]))
-            return FakeQueryResult([])
-        if "OPTIONAL MATCH (p:RegulatoryInstrument)-[e:SUPERSEDED_BY]->(n)" in q:
-            return self._facts(str(p["new_id"]))
-        if "WHERE n.status = 'active'" in q:
-            return self._find_prior(str(p["new_id"]))
-        if "SET n.version" in q:
-            self.events.append("write:version")
-            node = self.nodes.get(("RegulatoryInstrument", str(p["new_id"])))
-            if node is not None:
-                node["version"] = p["new_version"]
-            return FakeQueryResult([])
-        raise AssertionError(f"LedgerNativeGraph does not model this statement:\n{q}")
-
-    def _link(self, q: str, p: dict[str, object]) -> FakeQueryResult:
-        prior = self.nodes.get(("RegulatoryInstrument", str(p["prior_id"])))
-        new = self.nodes.get(("RegulatoryInstrument", str(p["new_id"])))
-        if prior is None or new is None:
-            return FakeQueryResult([])
-        edge = self.edges.setdefault(("SUPERSEDED_BY", str(p["prior_id"]), str(p["new_id"])), {})
-        edge["absorbed"] = True
-        prior["status"] = "superseded"
-        if "ReingestProgress" in q:
-            self.seed_marker(str(p["new_id"]), "linked")
-        return FakeQueryResult([])
-
-    def _facts(self, new_id: str) -> FakeQueryResult:
-        if ("RegulatoryInstrument", new_id) not in self.nodes:
-            return FakeQueryResult([])
-        stage = self.marker_stage(new_id)
-        incoming = [key for key in self.edges if key[0] == "SUPERSEDED_BY" and key[2] == new_id]
-        if not incoming:
-            return FakeQueryResult([[None, None, None, None, stage]])
-        rows: list[list[object]] = []
-        for key in incoming:
-            prior = self.nodes[("RegulatoryInstrument", key[1])]
-            rows.append(
-                [
-                    prior["id"],
-                    prior["instrument_type"],
-                    prior["status"],
-                    self.edges[key].get("absorbed"),
-                    stage,
-                ]
-            )
-        return FakeQueryResult(rows)
-
-    def _find_prior(self, new_id: str) -> FakeQueryResult:
-        rows: list[list[object]] = []
-        for (label, node_id), props in self.nodes.items():
-            if label != "RegulatoryInstrument" or props["status"] != "active" or node_id == new_id:
-                continue
-            if ("SUPERSEDED_BY", node_id, new_id) in self.edges:
-                continue
-            rows.append([node_id, props["instrument_type"]])
-        return FakeQueryResult(rows)
-
-
-class LedgerSingleTenantGraph:
-    """A stateful `GraphHandle` double for the `policy_system` side of the succession.
-
-    It models exactly the one statement `succession.supersede_in_single_tenant` issues
-    (`MERGE (prior)-[:SUPERSEDED_BY]->(new) SET prior.status = 'superseded' RETURN prior.id`)
-    over `RegulatoryInstrument` nodes keyed by id. Any other statement raises, so an unmodelled
-    query cannot slip through. `events` may be shared with a native ledger's event log.
-    """
-
-    def __init__(self, events: list[str] | None = None) -> None:
-        """Start empty, optionally logging writes onto a shared `events` list."""
-        self.nodes: dict[str, dict[str, object]] = {}
-        self.edges: set[tuple[str, str]] = set()
-        self.calls: list[RecordedQuery] = []
-        self.events: list[str] = events if events is not None else []
-
-    def seed_instrument(self, node_id: str, *, status: str = "active") -> None:
-        """Create a `RegulatoryInstrument` node."""
-        self.nodes[node_id] = {"id": node_id, "status": status}
-
-    def status_of(self, node_id: str) -> object:
-        """A `RegulatoryInstrument`'s `status`, or `None` when absent."""
-        return self.nodes.get(node_id, {}).get("status")
-
-    @property
-    def writes(self) -> list[RecordedQuery]:
-        """Recorded calls whose Cypher contains a write clause."""
-        return [call for call in self.calls if _is_write(call.query)]
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> FakeQueryResult:
-        """Record the call and apply the one recognised statement."""
-        self.calls.append(RecordedQuery(q, params))
-        p = params or {}
-        if "SET prior.status = 'superseded'" not in q or "e.absorbed" in q:
-            raise AssertionError(f"LedgerSingleTenantGraph does not model this statement:\n{q}")
-        prior_id, new_id = str(p["prior_id"]), str(p["new_id"])
-        if prior_id not in self.nodes or new_id not in self.nodes:
-            return FakeQueryResult([])
-        self.events.append("write:policy_system:SUPERSEDED_BY")
-        self.edges.add((prior_id, new_id))
-        self.nodes[prior_id]["status"] = "superseded"
-        return FakeQueryResult([[prior_id]])
-
-
-@dataclass(frozen=True, slots=True)
-class RunnerCall:
-    """One recorded `PipelineRunner` invocation."""
-
-    stages: tuple[str, ...]
-    run_id: str
-
-
-class RecordingRunner:
-    """A hand-written `PipelineRunner` double that works over a `LedgerNativeGraph`.
-
-    Running `stages` reports each to `on_stage_complete` after it "returns" (appending
-    `stage:<name>` to the ledger's shared event log first), and a completed `ingestion` creates
-    the new `RegulatoryInstrument` node, as the real Ingestion stage's register write does.
-    `fail_at` makes the named stage raise `RuntimeError` instead of returning, after the stages
-    before it completed. This is the injection seam, not the code under test.
-    """
-
-    def __init__(
-        self, ledger: LedgerNativeGraph, new_id: str, *, fail_at: str | None = None
-    ) -> None:
-        """Prime the ledger, the new version's id and an optional failing stage."""
-        self._ledger = ledger
-        self._new_id = new_id
-        self._fail_at = fail_at
-        self.calls: list[RunnerCall] = []
-
-    def __call__(
-        self,
-        *,
-        stages: tuple[str, ...],
-        run_id: str,
-        on_stage_complete: Callable[[str], None],
-    ) -> PipelineRunResult:
-        """Record the call, run `stages` against the ledger and report each completion."""
-        from ps_service.change_monitor.models import PipelineRunResult, StageSummary
-
-        self.calls.append(RunnerCall(stages, run_id))
-        done: list[StageSummary] = []
-        for stage in stages:
-            if stage == self._fail_at:
-                raise RuntimeError(f"{stage} blew up")
-            self._ledger.events.append(f"stage:{stage}")
-            if (
-                stage == "ingestion"
-                and ("RegulatoryInstrument", self._new_id) not in self._ledger.nodes
-            ):
-                self._ledger.seed_instrument(self._new_id)
-            done.append(StageSummary(stage, {}))
-            on_stage_complete(stage)
-        return PipelineRunResult(stages=tuple(done))
-
-
-class StatefulPolicySystemGraph(KeyedGraph):
-    """The `policy_system` side of a `StatefulGraphSet`: keyed content plus the succession write.
-
-    `query()` models exactly the one statement `succession.supersede_in_single_tenant` issues;
-    the merge double writes its content through `merge_node` / `merge_edge`. Any other statement
-    raises, so an unmodelled query cannot slip through.
-    """
-
-    def status_of(self, node_id: str) -> object:
-        """A `RegulatoryInstrument`'s `status`, or `None` when absent."""
-        return self.nodes.get(("RegulatoryInstrument", node_id), {}).get("status")
-
-    @property
-    def writes(self) -> list[RecordedQuery]:
-        """Recorded calls whose Cypher contains a write clause."""
-        return [call for call in self.calls if _is_write(call.query)]
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> FakeQueryResult:
-        """Record the call and apply the one recognised statement."""
-        self.calls.append(RecordedQuery(q, params))
-        p = params or {}
-        if "SET prior.status = 'superseded'" not in q or "e.absorbed" in q:
-            raise AssertionError(f"StatefulPolicySystemGraph does not model this statement:\n{q}")
-        prior = self.nodes.get(("RegulatoryInstrument", str(p["prior_id"])))
-        new = self.nodes.get(("RegulatoryInstrument", str(p["new_id"])))
-        if prior is None or new is None:
-            return FakeQueryResult([])
-        self.events.append("write:policy_system:SUPERSEDED_BY")
-        self.merge_edge("SUPERSEDED_BY", str(p["prior_id"]), str(p["new_id"]))
-        prior["status"] = "superseded"
-        return FakeQueryResult([[p["prior_id"]]])
-
-
 class StatefulBaselineGraph(KeyedGraph):
     """The `{short}_baseline` graph of a `StatefulGraphSet`: written and read by the stage doubles
     through the keyed API only, never through Cypher (a `query()` call is a test failure).
@@ -498,21 +235,25 @@ class StatefulBaselineGraph(KeyedGraph):
 class StatefulGraphSet:
     """The three graphs of one instrument family, with one shared ordered `events` timeline.
 
-    `native` is the real-succession `LedgerNativeGraph`, `baseline` the Domain Mapper output,
-    `single_tenant` the merged `policy_system` graph. All three apply MERGE-by-(label, id)
-    semantics, so a repeated stage write never duplicates a node or edge.
+    `native` and `single_tenant` are the process gateway rig's `{short}_native` and `policy_system`
+    graphs, written by the stage doubles the way the stage components leave them (the succession
+    itself writes them through the gateway); `baseline` is the Domain Mapper output. All three
+    apply MERGE-by-(label, id) semantics, so a repeated stage write never duplicates a node or
+    edge. `events` is the rig's own ordered event list (stage calls and log appends).
     """
 
-    events: list[str] = field(default_factory=list)
-    native: LedgerNativeGraph = field(init=False)
+    rig: SuccessionRig
+    events: list[str] = field(init=False)
+    native: RigKeyedGraph = field(init=False)
     baseline: StatefulBaselineGraph = field(init=False)
-    single_tenant: StatefulPolicySystemGraph = field(init=False)
+    single_tenant: RigKeyedGraph = field(init=False)
 
     def __post_init__(self) -> None:
-        """Build the three graphs around the shared timeline."""
-        self.native = LedgerNativeGraph(self.events)
+        """Build the three graphs around the rig's timeline."""
+        self.events = self.rig.rig.events
+        self.native = RigKeyedGraph(self.rig.native)
         self.baseline = StatefulBaselineGraph(self.events)
-        self.single_tenant = StatefulPolicySystemGraph(self.events)
+        self.single_tenant = RigKeyedGraph(self.rig.single_tenant)
 
 
 @dataclass(frozen=True, slots=True)

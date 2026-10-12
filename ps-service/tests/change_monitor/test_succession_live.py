@@ -1,8 +1,10 @@
-"""Live FalkorDB smoke for the #201 succession statements (CHANGES F9).
+"""Live FalkorDB anchor for the #201 succession statements (CHANGES F9, kept by #213).
 
-Runs the REAL `read_reingestion_facts`, `mark_stage_complete`, `link_and_supersede` and
-`clear_marker` against a throwaway graph so the Cypher the in-memory ledger double only
-models is proven to parse and behave on FalkorDB (notably `MERGE ... SET ... WITH new MERGE`).
+Since #213 the succession's writes are gateway groups; the pre-migration statements live in
+`_legacy_reference` and are run raw here, against a throwaway graph, so the semantics the
+reference's interpreter models (and the equivalence tests compare against) stay anchored on a real
+FalkorDB (notably `MERGE ... SET ... WITH new MERGE`). The REAL `read_reingestion_facts` and
+`read_tracked_instruments` read the result back.
 
     uv run pytest ps-service/tests/change_monitor/test_succession_live.py -m falkordb_live -q
 """
@@ -13,7 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.change_monitor.errors import ChangeMonitorStateError
+from change_monitor._legacy_reference import FROZEN_STATEMENTS
 from ps_service.change_monitor.falkordb_client import (
     check_connectivity,
     connect_from_config,
@@ -22,13 +24,7 @@ from ps_service.change_monitor.falkordb_client import (
     single_tenant_graph_name,
 )
 from ps_service.change_monitor.graph_reader import read_tracked_instruments
-from ps_service.change_monitor.succession import (
-    clear_marker,
-    link_and_supersede,
-    mark_stage_complete,
-    read_reingestion_facts,
-    supersede_in_single_tenant,
-)
+from ps_service.change_monitor.succession import read_reingestion_facts
 from ps_service.config import load_config
 
 if TYPE_CHECKING:
@@ -46,6 +42,11 @@ def _rows(graph: GraphHandle, query: str, params: dict[str, object]) -> list[lis
     return cast("list[list[object]]", graph.query(query, params=params).result_set)
 
 
+def _frozen(graph: GraphHandle, name: str, **params: object) -> list[list[object]]:
+    """Run one FROZEN pre-#213 succession statement raw on `graph`."""
+    return _rows(graph, FROZEN_STATEMENTS[name], params)
+
+
 def test_link_and_supersede_marker_and_facts_round_trip_on_real_falkordb() -> None:
     config = load_config()
     db = connect_from_config(config)
@@ -61,15 +62,15 @@ def test_link_and_supersede_marker_and_facts_round_trip_on_real_falkordb() -> No
             params={"p": _PRIOR, "n": _NEW},
         )
 
-        mark_stage_complete(graph, _NEW, "extraction")
-        mark_stage_complete(graph, _NEW, "derivation")
+        _frozen(graph, "mark_stage", new_id=_NEW, stage="extraction")
+        _frozen(graph, "mark_stage", new_id=_NEW, stage="derivation")
         before = read_reingestion_facts(graph, _NEW)
         assert before.node_exists is True
         assert before.prior_id is None
         assert before.marker_stage == "derivation"
 
-        link_and_supersede(graph, _PRIOR, _NEW)
-        link_and_supersede(graph, _PRIOR, _NEW)
+        _frozen(graph, "link_and_supersede", prior_id=_PRIOR, new_id=_NEW)
+        _frozen(graph, "link_and_supersede", prior_id=_PRIOR, new_id=_NEW)
 
         linked = read_reingestion_facts(graph, _NEW)
         assert linked.prior_id == _PRIOR
@@ -84,8 +85,8 @@ def test_link_and_supersede_marker_and_facts_round_trip_on_real_falkordb() -> No
         )
         assert edges == [[1]]
 
-        clear_marker(graph, _NEW)
-        clear_marker(graph, _NEW)
+        _frozen(graph, "clear_marker", new_id=_NEW)
+        _frozen(graph, "clear_marker", new_id=_NEW)
         done = read_reingestion_facts(graph, _NEW)
         assert done.marker_stage is None
         assert done.absorbed is True
@@ -101,7 +102,7 @@ _LIST_INGESTED_QUERY = (
 
 
 def test_policy_system_succession_drops_the_prior_from_the_tracked_set_on_real_falkordb() -> None:
-    """Step 2 of the 3-step succession: the merged graph shows the prior superseded."""
+    """Step 2 of the 3-step succession (frozen): the merged graph shows the prior superseded."""
     config = load_config()
     db = connect_from_config(config)
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)
@@ -122,16 +123,19 @@ def test_policy_system_succession_drops_the_prior_from_the_tracked_set_on_real_f
             _NEW,
         }
 
-        supersede_in_single_tenant(graph, _PRIOR, _NEW)
-        supersede_in_single_tenant(graph, _PRIOR, _NEW)
+        assert _frozen(graph, "supersede_in_single_tenant", prior_id=_PRIOR, new_id=_NEW) == [
+            [_PRIOR]
+        ]
+        _frozen(graph, "supersede_in_single_tenant", prior_id=_PRIOR, new_id=_NEW)
 
         assert {node.regulatory_instrument_id for node in read_tracked_instruments(graph)} == {_NEW}
         assert _rows(graph, _LIST_INGESTED_QUERY, {}) == [
             [_PRIOR, "superseded", _NEW],
             [_NEW, "active", None],
         ]
-        with pytest.raises(ChangeMonitorStateError):
-            supersede_in_single_tenant(graph, _PRIOR, "SUCCLIVE-missing")
+        # a missing node matches no row: the old writer raised on exactly this
+        missing = "SUCCLIVE-missing"
+        assert _frozen(graph, "supersede_in_single_tenant", prior_id=_PRIOR, new_id=missing) == []
     finally:
         if graph_name in set(db.list_graphs()):
             db.select_graph(graph_name).delete()

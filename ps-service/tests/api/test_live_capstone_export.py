@@ -71,6 +71,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.api.dependencies import provide_export_dependencies, provide_pipeline_dependencies
 from ps_service.api.export_orchestration import build_default_export_dependencies
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import build_default_pipeline_dependencies
 from ps_service.company_merge.falkordb_client import connect_from_config
 from ps_service.config import load_config
@@ -78,6 +79,7 @@ from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.serialize import parse_serialized_graph_json
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.logging import facade
 from ps_service.main import create_app
 
@@ -119,6 +121,7 @@ _INTERNAL_DEPTH_LABELS = {"Policy", "Standard", "Control"}
 
 pytestmark = [
     pytest.mark.falkordb_live,
+    pytest.mark.postgres_live,
     pytest.mark.llm_live,
     pytest.mark.skipif(
         not _CHAT_MODEL or not _EMBED_MODEL,
@@ -276,6 +279,10 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
     facade.configure(log_path=log_path)
 
     app = create_app(load_config())
+    # The ingestion pre-step and both exports write through the Graph Write Gateway (#208-#213).
+    # `TestClient` is not entered, so the app lifespan never installs it: install the real one
+    # (PS state Postgres and FalkorDB) the way a deployed service does. Not run in the sandbox.
+    install_graph_write_gateway(build_default_graph_write_gateway(load_config()))
     app.dependency_overrides[provide_pipeline_dependencies] = _limited_pipeline_dependencies
     app.dependency_overrides[provide_export_dependencies] = _fake_export_dependencies
 
@@ -316,6 +323,7 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
             log_lines=log_lines,
         )
     finally:
+        install_graph_write_gateway(None)
         monkeypatch.undo()
         with contextlib.suppress(Exception):
             db.select_graph(_DISPOSABLE_GRAPH).delete()
