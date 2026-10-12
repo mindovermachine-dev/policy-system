@@ -4,6 +4,10 @@ Decision 4 ordering, fail-closed: re-check the actor's role; re-read and re-vali
 the previewed state digest; record the `applied` audit row; only then write; a guard miss or
 graph failure records a `failed` row with the same `approval_id` and returns a generic error.
 AC-BI-006 (executor path), AC-BI-017 (drift), AC-BI-018, AC-BI-021, AC-BI-022.
+
+Since #212 the merge is written by one gateway group (`CleanupRig`, the gateway over in-memory log
+and graph fakes); the assertions on outcomes, messages and audit rows are the ones from before
+that change, only the write-shape ones (Cypher call recorded) now name the group.
 """
 
 from __future__ import annotations
@@ -13,19 +17,12 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 import pytest
-import redis.exceptions
 from authz._fakes import FakeAccessRoleStore, RaisingAccessRoleStore
 
-from graph_cleanup._fakes import (
-    ABSORBED,
-    SURVIVOR,
-    OrderedGraph,
-    RecordingAuditStore,
-)
+from graph_cleanup._fakes import ABSORBED, SURVIVOR
 from ps_service.audit.errors import AuditPersistenceError, AuditPostgresUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
-from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 from ps_service.graph_cleanup.executors import (
     TOOL_MERGE_CAPABILITIES,
     execute_capability_merge,
@@ -33,11 +30,16 @@ from ps_service.graph_cleanup.executors import (
 )
 from ps_service.graph_cleanup.graph_reader import read_capability_merge_state
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
+from ps_service.graph_gateway.errors import GraphWriteRejectedError
 from ps_service.logging import configure
 from ps_service.passkey_signing.models import PendingApprovalRow
 
 if TYPE_CHECKING:
+    from graph_cleanup._gateway_fakes import CleanupRig
     from ps_service.authz.store import AccessRoleStore
+    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
+
+_NODE_READ = "RETURN c.id, c.name"
 
 _OWNER = ("owner", "https://issuer.example.com/")
 _OFFICER = ("officer", "https://issuer.example.com/")
@@ -63,18 +65,18 @@ def _roles(*, officer: bool = True) -> FakeAccessRoleStore:
     return store
 
 
-def _digest(graph: OrderedGraph) -> str:
-    state = read_capability_merge_state(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
+def _digest(rig: CleanupRig) -> str:
+    state = read_capability_merge_state(rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
     return plan_capability_merge(state).state_digest
 
 
-def _row(graph: OrderedGraph, **args: object) -> PendingApprovalRow:
+def _row(rig: CleanupRig, **args: object) -> PendingApprovalRow:
     now = datetime.now(UTC)
     normalized: dict[str, object] = {
         "survivor_id": SURVIVOR,
         "absorbed_id": ABSORBED,
         "acknowledge_governance_change": False,
-        "state_digest": _digest(graph),
+        "state_digest": _digest(rig),
         **args,
     }
     return PendingApprovalRow(
@@ -93,32 +95,31 @@ def _row(graph: OrderedGraph, **args: object) -> PendingApprovalRow:
     )
 
 
-def _deps(
-    graph: OrderedGraph, audit: RecordingAuditStore, roles: AccessRoleStore | None = None
-) -> GraphCleanupDependencies:
-    role_store = roles if roles is not None else _roles()
-    return GraphCleanupDependencies(
-        open_single_tenant_graph=lambda _config: graph,
-        audit_store=lambda _config: audit,
-        access_role_store=lambda _config: role_store,
-    )
+def _deps(rig: CleanupRig, roles: AccessRoleStore | None = None) -> GraphCleanupDependencies:
+    return rig.dependencies(roles if roles is not None else _roles())
 
 
-def _world() -> tuple[OrderedGraph, RecordingAuditStore]:
-    events: list[str] = []
-    return OrderedGraph(events=events), RecordingAuditStore(events=events)
+def _world(rig: CleanupRig) -> CleanupRig:
+    rig.seed_capability_merge_world()
+    return rig
 
 
-def test_happy_path_audits_first_then_writes_once_and_reports_the_merge() -> None:
-    graph, audit = _world()
-    row = _row(graph)
+def _add_requirer(rig: CleanupRig, obligation_id: str) -> None:
+    rig.seed_endpoint("Obligation", obligation_id)
+    rig.seed_edge(("REQUIRES", "Obligation", obligation_id, "Capability", ABSORBED), legacy=False)
 
-    outcome = execute_capability_merge(row, _CONFIG, _deps(graph, audit))
+
+def test_happy_path_audits_first_then_writes_once_and_reports_the_merge(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+
+    outcome = execute_capability_merge(_row(rig), _CONFIG, _deps(rig))
 
     assert outcome == {"survivor_id": SURVIVOR, "absorbed_id": ABSORBED, "merged": True}
-    assert audit.events == ["audit:applied", "graph_write"]
-    assert len(graph.write_calls) == 1
-    [recorded] = audit.rows
+    assert rig.order() == ["audit:applied", "log_append"]
+    assert len(rig.hooked.groups) == 1
+    [recorded] = rig.audit.rows
     assert recorded.action == "capability.merge"
     assert recorded.resource_type == "capability"
     assert recorded.resource_id == ABSORBED
@@ -138,12 +139,14 @@ def _edge_keys(snapshot: object) -> set[tuple[str, str, str]]:
     return {(e["rel_type"], e["source_id"], e["target_id"]) for e in edges}
 
 
-def test_the_audit_row_snapshots_are_sufficient_to_reverse_the_merge() -> None:
-    graph, audit = _world()
+def test_the_audit_row_snapshots_are_sufficient_to_reverse_the_merge(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
 
-    execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    execute_capability_merge(_row(rig), _CONFIG, _deps(rig))
 
-    details = audit.rows[0].details
+    details = rig.audit.rows[0].details
     before_edges = _edge_keys(details["before"])
     after_edges = _edge_keys(details["after"])
     assert ("REQUIRES", "obl_1", ABSORBED) in before_edges
@@ -151,38 +154,39 @@ def test_the_audit_row_snapshots_are_sufficient_to_reverse_the_merge() -> None:
     assert ("MERGED_INTO", ABSORBED, SURVIVOR) in after_edges
 
 
-def test_audit_failure_means_no_graph_write_at_all() -> None:
-    graph, audit = _world()
-    audit.raise_on_outcome["applied"] = AuditPostgresUnavailableError("db host 10.1.2.3 down")
+def test_audit_failure_means_no_graph_write_at_all(cleanup_rig: CleanupRig) -> None:
+    rig = _world(cleanup_rig)
+    rig.audit.raise_on_outcome["applied"] = AuditPostgresUnavailableError("db host 10.1.2.3 down")
 
-    outcome = execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(_row(rig), _CONFIG, _deps(rig))
 
-    assert graph.write_calls == []
-    assert audit.rows == []
+    assert rig.logged_groups == []
+    assert rig.audit.rows == []
     assert "10.1.2.3" not in str(outcome)
     assert outcome["error"]
 
 
-def test_audit_persistence_failure_also_blocks_the_write() -> None:
-    graph, audit = _world()
-    audit.raise_on_outcome["applied"] = AuditPersistenceError("insert failed: relation x")
+def test_audit_persistence_failure_also_blocks_the_write(cleanup_rig: CleanupRig) -> None:
+    rig = _world(cleanup_rig)
+    rig.audit.raise_on_outcome["applied"] = AuditPersistenceError("insert failed: relation x")
 
-    outcome = execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(_row(rig), _CONFIG, _deps(rig))
 
-    assert graph.write_calls == []
+    assert rig.logged_groups == []
     assert "relation" not in str(outcome)
 
 
-def test_a_graph_failure_records_a_failed_row_with_the_same_approval_id_and_a_generic_error() -> (
-    None
-):
-    graph, audit = _world()
-    graph.write_error = redis.exceptions.ConnectionError("host=10.1.2.3 port=6379 refused")
+def test_a_graph_failure_records_a_failed_row_with_the_same_approval_id_and_a_generic_error(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
+    rig.store.fail_appends(error=GraphWriteRejectedError("host=10.1.2.3 port=6379 refused"))
 
-    outcome = execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
-    assert [r.outcome for r in audit.rows] == ["applied", "failed"]
-    failed = audit.rows[1]
+    assert [r.outcome for r in rig.audit.rows] == ["applied", "failed"]
+    failed = rig.audit.rows[1]
     assert failed.details["approval_id"] == "approval-1"
     assert failed.details["reason_code"] == "graph_write_failed"
     text = str(outcome)
@@ -192,84 +196,94 @@ def test_a_graph_failure_records_a_failed_row_with_the_same_approval_id_and_a_ge
     assert "error" in outcome
 
 
-def test_a_guard_miss_records_a_failed_row_and_reports_a_stale_graph() -> None:
-    graph, audit = _world()
-    graph.write_rows = []
+def test_a_guard_miss_records_a_failed_row_and_reports_a_stale_graph(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
+    rig.read.flip_before(_NODE_READ, 2, lambda: _add_requirer(rig, "obl_new"))
 
-    outcome = execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
-    assert [r.outcome for r in audit.rows] == ["applied", "failed"]
-    assert audit.rows[1].details["reason_code"] == "graph_guard_missed"
+    assert [r.outcome for r in rig.audit.rows] == ["applied", "failed"]
+    assert rig.audit.rows[1].details["reason_code"] == "graph_guard_missed"
+    assert "changed" in str(outcome["error"])
+    assert rig.logged_groups == []
+
+
+def test_a_failed_row_that_cannot_be_recorded_does_not_mask_the_error(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
+    rig.store.fail_appends()
+    rig.audit.raise_on_outcome["failed"] = AuditPostgresUnavailableError("down")
+
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
+
+    assert "error" in outcome
+    assert [r.outcome for r in rig.audit.rows] == ["applied"]
+
+
+def test_graph_drift_since_the_preview_is_rejected_before_any_audit_or_write(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
+    _add_requirer(rig, "obl_new")
+
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
+
+    assert rig.logged_groups == []
+    assert rig.audit.rows == []
     assert "changed" in str(outcome["error"])
 
 
-def test_a_failed_row_that_cannot_be_recorded_does_not_mask_the_error() -> None:
-    graph, audit = _world()
-    graph.write_error = redis.exceptions.ConnectionError("down")
-    audit.raise_on_outcome["failed"] = AuditPostgresUnavailableError("down")
+def test_a_revoked_compliance_officer_cannot_execute(cleanup_rig: CleanupRig) -> None:
+    rig = _world(cleanup_rig)
 
-    outcome = execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(_row(rig), _CONFIG, _deps(rig, _roles(officer=False)))
 
-    assert "error" in outcome
-    assert [r.outcome for r in audit.rows] == ["applied"]
-
-
-def test_graph_drift_since_the_preview_is_rejected_before_any_audit_or_write() -> None:
-    graph, audit = _world()
-    row = _row(graph)
-    graph.requires.append(["obl_new", ABSORBED])
-
-    outcome = execute_capability_merge(row, _CONFIG, _deps(graph, audit))
-
-    assert graph.write_calls == []
-    assert audit.rows == []
-    assert "changed" in str(outcome["error"])
-
-
-def test_a_revoked_compliance_officer_cannot_execute() -> None:
-    graph, audit = _world()
-
-    outcome = execute_capability_merge(
-        _row(graph), _CONFIG, _deps(graph, audit, _roles(officer=False))
-    )
-
-    assert graph.write_calls == []
-    assert audit.rows == []
+    assert rig.logged_groups == []
+    assert rig.audit.rows == []
     assert "error" in outcome
 
 
-def test_an_authorization_store_outage_fails_closed() -> None:
-    graph, audit = _world()
+def test_an_authorization_store_outage_fails_closed(cleanup_rig: CleanupRig) -> None:
+    rig = _world(cleanup_rig)
 
-    outcome = execute_capability_merge(
-        _row(graph), _CONFIG, _deps(graph, audit, RaisingAccessRoleStore())
-    )
+    outcome = execute_capability_merge(_row(rig), _CONFIG, _deps(rig, RaisingAccessRoleStore()))
 
-    assert graph.write_calls == []
-    assert audit.rows == []
+    assert rig.logged_groups == []
+    assert rig.audit.rows == []
     assert "error" in outcome
 
 
-def test_two_governed_capabilities_are_rejected_at_execution_too() -> None:
-    graph, audit = _world()
-    row = _row(graph)
-    graph.governors = [[ABSORBED, "pol_1", "P", "draft"], [SURVIVOR, "pol_2", "Q", "draft"]]
+def test_two_governed_capabilities_are_rejected_at_execution_too(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
+    rig.seed_policy("pol_1", title="P", status="draft")
+    rig.seed_policy("pol_2", title="Q", status="draft")
+    rig.seed_governs(ABSORBED, "pol_1")
+    rig.seed_governs(SURVIVOR, "pol_2")
 
-    outcome = execute_capability_merge(row, _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
-    assert graph.write_calls == []
-    assert audit.rows == []
+    assert rig.logged_groups == []
+    assert rig.audit.rows == []
     assert "release-capability-governance" in str(outcome["error"])
 
 
-def test_a_tombstoned_side_at_execution_is_rejected() -> None:
-    graph, audit = _world()
-    row = _row(graph)
-    graph.nodes[1][2] = "merged"
+def test_a_tombstoned_side_at_execution_is_rejected(cleanup_rig: CleanupRig) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
+    rig.graph.nodes[("Capability", ABSORBED)]["status"] = "merged"
 
-    outcome = execute_capability_merge(row, _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
-    assert graph.write_calls == []
+    assert rig.logged_groups == []
     assert "merged" in str(outcome["error"])
 
 
@@ -278,24 +292,23 @@ def test_a_tombstoned_side_at_execution_is_rejected() -> None:
     [{"survivor_id": 1}, {"absorbed_id": None}, {"state_digest": 3}],
 )
 def test_malformed_normalized_args_are_a_generic_error_with_no_work_done(
-    bad_args: dict[str, object],
+    cleanup_rig: CleanupRig, bad_args: dict[str, object]
 ) -> None:
-    graph, audit = _world()
-    row = _row(graph)
+    rig = _world(cleanup_rig)
+    row = _row(rig)
     row = replace(row, normalized_args={**row.normalized_args, **bad_args})
 
-    outcome = execute_capability_merge(row, _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
     assert "error" in outcome
-    assert graph.write_calls == []
-    assert audit.rows == []
+    assert rig.logged_groups == []
+    assert rig.audit.rows == []
 
 
-def test_the_effect_verifier_sees_a_tombstone() -> None:
-    graph, _audit = _world()
-    row = _row(graph)
+def test_the_effect_verifier_sees_a_tombstone(cleanup_rig: CleanupRig) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
 
-    graph.tombstone_count = 0
-    assert verify_capability_merge_effect(row, graph) is False
-    graph.tombstone_count = 1
-    assert verify_capability_merge_effect(row, graph) is True
+    assert verify_capability_merge_effect(row, rig.read) is False
+    execute_capability_merge(row, _CONFIG, _deps(rig))
+    assert verify_capability_merge_effect(row, rig.read) is True

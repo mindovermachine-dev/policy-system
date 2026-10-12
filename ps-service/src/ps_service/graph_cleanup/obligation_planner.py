@@ -1,7 +1,7 @@
 """Pure planning and validation for `merge-obligations` (issue #190, AC-BI-005/007/015/016).
 
 No I/O: takes the `ObligationMergeState` the reader produced and returns the preview, the
-guard counts for the writer statement, the before/after snapshots and a state digest. The
+guard counts the writer pins, the before/after snapshots and a state digest. The
 digest binds a passkey approval to the exact state that was previewed.
 
 Both sides must be borne by the same single Role (an Obligation is a Role-scoped weak

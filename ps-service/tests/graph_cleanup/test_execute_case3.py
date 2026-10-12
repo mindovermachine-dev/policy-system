@@ -2,26 +2,30 @@
 
 No acknowledgment is needed; the audit row records policy case 3 with `acknowledged` false,
 the policy id/status and the before/after governed set; the snapshots show the absorbed
-`GOVERNED_BY` edge deleted and the survivor's kept; the writer pins both sides to the policy.
+`GOVERNED_BY` edge deleted and the survivor's kept; the guard pins both sides to the policy.
+Since #212 the merge is one gateway group (`CleanupRig`).
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
 
-from graph_cleanup._fakes import ABSORBED, SURVIVOR, OrderedGraph, RecordingAuditStore
+from graph_cleanup._fakes import ABSORBED, SURVIVOR
+from graph_cleanup._gateway_fakes import POLICY, CleanupRig
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
-from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 from ps_service.graph_cleanup.executors import TOOL_MERGE_CAPABILITIES, execute_capability_merge
 from ps_service.graph_cleanup.graph_reader import read_capability_merge_state
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
 from ps_service.logging import configure
 from ps_service.passkey_signing.models import PendingApprovalRow
+
+if TYPE_CHECKING:
+    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 
 _OWNER = ("owner", "https://issuer.example.com/")
 _OFFICER = ("officer", "https://issuer.example.com/")
@@ -46,21 +50,18 @@ def _roles() -> FakeAccessRoleStore:
     return store
 
 
-def _world(status: str = "approved") -> tuple[OrderedGraph, RecordingAuditStore]:
-    events: list[str] = []
-    graph = OrderedGraph(
-        events=events,
-        governors=[
-            [SURVIVOR, "pol_1", "Incident Policy", status],
-            [ABSORBED, "pol_1", "Incident Policy", status],
-        ],
-        governed_sets=[["pol_1", SURVIVOR], ["pol_1", ABSORBED], ["pol_1", "cap_other"]],
+_NODE_READ = "RETURN c.id, c.name"
+
+
+def _world(rig: CleanupRig, status: str = "approved") -> CleanupRig:
+    rig.seed_capability_merge_world(
+        governed=((SURVIVOR, POLICY, status), (ABSORBED, POLICY, status))
     )
-    return graph, RecordingAuditStore(events=events)
+    return rig
 
 
-def _row(graph: OrderedGraph, *, acknowledged: bool = False) -> PendingApprovalRow:
-    state = read_capability_merge_state(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
+def _row(rig: CleanupRig, *, acknowledged: bool = False) -> PendingApprovalRow:
+    state = read_capability_merge_state(rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
     digest = plan_capability_merge(state).state_digest
     now = datetime.now(UTC)
     return PendingApprovalRow(
@@ -84,12 +85,8 @@ def _row(graph: OrderedGraph, *, acknowledged: bool = False) -> PendingApprovalR
     )
 
 
-def _deps(graph: OrderedGraph, audit: RecordingAuditStore) -> GraphCleanupDependencies:
-    return GraphCleanupDependencies(
-        open_single_tenant_graph=lambda _config: graph,
-        audit_store=lambda _config: audit,
-        access_role_store=lambda _config: _roles(),
-    )
+def _deps(rig: CleanupRig) -> GraphCleanupDependencies:
+    return rig.dependencies(_roles())
 
 
 def _edge_keys(snapshot: object) -> set[tuple[str, str, str]]:
@@ -97,24 +94,26 @@ def _edge_keys(snapshot: object) -> set[tuple[str, str, str]]:
     return {(e["rel_type"], e["source_id"], e["target_id"]) for e in edges}
 
 
-def test_a_same_policy_merge_runs_without_an_acknowledgment_audit_first() -> None:
-    graph, audit = _world()
+def test_a_same_policy_merge_runs_without_an_acknowledgment_audit_first(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
 
-    outcome = execute_capability_merge(
-        _row(graph, acknowledged=False), _CONFIG, _deps(graph, audit)
-    )
+    outcome = execute_capability_merge(_row(rig, acknowledged=False), _CONFIG, _deps(rig))
 
     assert outcome == {"survivor_id": SURVIVOR, "absorbed_id": ABSORBED, "merged": True}
-    assert audit.events == ["audit:applied", "graph_write"]
-    assert len(graph.write_calls) == 1
+    assert rig.order() == ["audit:applied", "log_append"]
+    assert len(rig.hooked.groups) == 1
 
 
-def test_the_audit_row_records_case_three_not_acknowledged_policy_and_governed_sets() -> None:
-    graph, audit = _world()
+def test_the_audit_row_records_case_three_not_acknowledged_policy_and_governed_sets(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
 
-    execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    execute_capability_merge(_row(rig), _CONFIG, _deps(rig))
 
-    details = audit.rows[0].details
+    details = rig.audit.rows[0].details
     assert details["policy_case"] == 3
     assert details["acknowledged"] is False
     assert details["policy_id"] == "pol_1"
@@ -123,54 +122,74 @@ def test_the_audit_row_records_case_three_not_acknowledged_policy_and_governed_s
     assert details["governed_set_after"] == ["cap_other", SURVIVOR]
 
 
-def test_the_snapshots_show_the_absorbed_edge_deleted_and_the_survivors_kept() -> None:
-    graph, audit = _world()
+def test_the_snapshots_show_the_absorbed_edge_deleted_and_the_survivors_kept(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
 
-    execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    execute_capability_merge(_row(rig), _CONFIG, _deps(rig))
 
-    details = audit.rows[0].details
+    details = rig.audit.rows[0].details
     assert ("GOVERNED_BY", ABSORBED, "pol_1") in _edge_keys(details["before"])
     assert ("GOVERNED_BY", SURVIVOR, "pol_1") in _edge_keys(details["before"])
     assert ("GOVERNED_BY", ABSORBED, "pol_1") not in _edge_keys(details["after"])
     assert ("GOVERNED_BY", SURVIVOR, "pol_1") in _edge_keys(details["after"])
 
 
-def test_the_write_pins_both_sides_to_the_one_policy_and_its_status() -> None:
-    graph, audit = _world(status="draft")
+def test_the_plan_the_write_is_guarded_by_pins_both_sides_to_the_one_policy_and_its_status(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig, status="draft")
 
-    execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    expected = plan_capability_merge(
+        read_capability_merge_state(rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
+    ).expected
 
-    params = graph.write_calls[0][1]
-    assert params is not None
-    assert params["expected_absorbed_governed"] == 1
-    assert params["expected_survivor_governed"] == 1
-    assert params["expected_absorbed_policy_id"] == params["expected_survivor_policy_id"] == "pol_1"
-    assert params["expected_absorbed_policy_status"] == "draft"
-    assert params["expected_survivor_policy_status"] == "draft"
+    assert expected.absorbed_governed == 1
+    assert expected.survivor_governed == 1
+    assert expected.absorbed_policy_id == expected.survivor_policy_id == "pol_1"
+    assert expected.absorbed_policy_status == "draft"
+    assert expected.survivor_policy_status == "draft"
 
 
-def test_a_policy_swapped_for_a_different_one_since_the_preview_is_rejected_unaudited() -> None:
-    graph, audit = _world()
-    row = _row(graph)
-    graph.governors = [
-        [SURVIVOR, "pol_1", "Incident Policy", "approved"],
-        [ABSORBED, "pol_2", "Other Policy", "approved"],
-    ]
+def test_the_absorbed_edge_is_deleted_and_the_survivors_is_kept_in_the_graph(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
 
-    outcome = execute_capability_merge(row, _CONFIG, _deps(graph, audit))
+    execute_capability_merge(_row(rig), _CONFIG, _deps(rig))
 
-    assert graph.write_calls == []
-    assert audit.rows == []
+    governed = {(k[2], k[4]) for k in rig.graph.edges if k[0] == "GOVERNED_BY"}
+    assert governed == {(SURVIVOR, POLICY), ("cap_other", POLICY)}
+
+
+def test_a_policy_swapped_for_a_different_one_since_the_preview_is_rejected_unaudited(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
+    for key in [k for k in rig.graph.edges if k[:3] == ("GOVERNED_BY", "Capability", ABSORBED)]:
+        del rig.graph.edges[key]
+    rig.seed_policy("pol_2", title="Other Policy", status="approved")
+    rig.seed_governs(ABSORBED, "pol_2")
+
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
+
+    assert rig.logged_groups == []
+    assert rig.audit.rows == []
     assert "release-capability-governance" in str(outcome["error"])
 
 
-def test_a_guard_miss_records_a_failed_row_that_keeps_case_three() -> None:
-    graph, audit = _world()
-    graph.write_rows = []
+def test_a_guard_miss_records_a_failed_row_that_keeps_case_three(cleanup_rig: CleanupRig) -> None:
+    rig = _world(cleanup_rig)
+    row = _row(rig)
+    rig.read.flip_before(
+        _NODE_READ, 2, lambda: rig.graph.nodes[("Policy", POLICY)].update(status="deprecated")
+    )
 
-    execute_capability_merge(_row(graph), _CONFIG, _deps(graph, audit))
+    execute_capability_merge(row, _CONFIG, _deps(rig))
 
-    failed = audit.rows[1]
+    failed = rig.audit.rows[1]
     assert failed.outcome == "failed"
     assert failed.details["policy_case"] == 3
     assert failed.details["acknowledged"] is False

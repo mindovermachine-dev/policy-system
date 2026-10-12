@@ -1,4 +1,4 @@
-"""Live FalkorDB proof of the obligation-merge writer A2 (issue #190, slice 11).
+"""Live FalkorDB proof of the FROZEN obligation-merge statement (issue #190 A2, kept by #212).
 
 Scripted fakes prove only call shape; this is the proof the statement is valid Cypher and
 that its semantics hold: SATISFIED_BY / REQUIRES union onto the survivor with no duplicate,
@@ -6,6 +6,10 @@ the survivor keeps its single HAS, the absorbed node and its edges are gone, a
 `MergedObligation` marker remains, a cross-role pair writes nothing, and a guard miss leaves
 the graph identical. UNVERIFIED where no FalkorDB is available (collected, deselected by
 default).
+
+Since #212 an obligation merge is a gateway group; the pre-migration statement lives in
+`_legacy_reference` and is run raw here, so the semantics the reference's interpreter models
+(and the equivalence tests compare against) stay anchored on a real FalkorDB.
 
 Run with:
 `uv run pytest ps-service/tests/graph_cleanup/test_graph_writer_obligation_merge_live.py \
@@ -19,8 +23,8 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from graph_cleanup._legacy_reference import run_frozen_merge_obligations
 from ps_service.graph_cleanup.errors import GraphCleanupStaleStateError
-from ps_service.graph_cleanup.graph_writer import merge_obligations
 from ps_service.graph_cleanup.models import ObligationExpectedCounts
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 
@@ -32,6 +36,17 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.falkordb_live
 
 _GRAPH = "graph_cleanup_obligation_merge_live_test"
+
+
+def _frozen_merge_obligations(
+    graph: GraphHandle, *, survivor_id: str, absorbed_id: str, expected: ObligationExpectedCounts
+) -> None:
+    """Run the FROZEN pre-#212 merge statement raw; no row is a guard miss (issue #212)."""
+    if not run_frozen_merge_obligations(
+        graph, survivor_id=survivor_id, absorbed_id=absorbed_id, expected=expected
+    ):
+        message = "the obligations changed since the preview; nothing was written"
+        raise GraphCleanupStaleStateError(message)
 
 
 def _delete(db: FalkorDB) -> None:
@@ -80,7 +95,7 @@ _SNAPSHOT_QUERY = (
 def test_edges_union_onto_the_survivor_and_the_absorbed_node_is_deleted_with_a_marker(
     graph: GraphHandle,
 ) -> None:
-    merge_obligations(graph, survivor_id="s", absorbed_id="a", expected=_EXPECTED)
+    _frozen_merge_obligations(graph, survivor_id="s", absorbed_id="a", expected=_EXPECTED)
 
     satisfied = _rows(graph, "MATCH (q)-[:SATISFIED_BY]->(:Obligation {id:'s'}) RETURN q.id")
     required = _rows(graph, "MATCH (:Obligation {id:'s'})-[:REQUIRES]->(c) RETURN c.id")
@@ -96,7 +111,7 @@ def test_a_cross_role_pair_writes_nothing(graph: GraphHandle) -> None:
     before = _rows(graph, _SNAPSHOT_QUERY)
 
     with pytest.raises(GraphCleanupStaleStateError):
-        merge_obligations(
+        _frozen_merge_obligations(
             graph,
             survivor_id="s",
             absorbed_id="x",
@@ -110,7 +125,7 @@ def test_a_self_merge_writes_nothing(graph: GraphHandle) -> None:
     before = _rows(graph, _SNAPSHOT_QUERY)
 
     with pytest.raises(GraphCleanupStaleStateError):
-        merge_obligations(graph, survivor_id="s", absorbed_id="s", expected=_EXPECTED)
+        _frozen_merge_obligations(graph, survivor_id="s", absorbed_id="s", expected=_EXPECTED)
 
     assert _rows(graph, _SNAPSHOT_QUERY) == before
 
@@ -128,7 +143,7 @@ def test_a_guard_miss_leaves_the_graph_identical(
     before = _rows(graph, _SNAPSHOT_QUERY)
 
     with pytest.raises(GraphCleanupStaleStateError):
-        merge_obligations(graph, survivor_id="s", absorbed_id="a", expected=expected)
+        _frozen_merge_obligations(graph, survivor_id="s", absorbed_id="a", expected=expected)
 
     assert _rows(graph, _SNAPSHOT_QUERY) == before
     assert _rows(graph, "MATCH (m:MergedObligation) RETURN count(m)") == [[0]]

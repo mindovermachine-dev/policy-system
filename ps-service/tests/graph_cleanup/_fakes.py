@@ -8,19 +8,21 @@ the failures it raises) are canned. Queries are dispatched by their text.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
-from ps_service.graph_cleanup.graph_writer import MERGE_CAPABILITIES_QUERY, RELEASE_GOVERNANCE_QUERY
 from ps_service.passkey_signing.models import PendingApprovalRow
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from ps_service.audit.models import AuditEventRow, AuditQueryFilters, AuditQueryPage
+
+_WRITE_KEYWORD = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|DETACH|DROP)\b")
 
 SURVIVOR = "cap_survivor"
 ABSORBED = "cap_absorbed"
@@ -51,21 +53,19 @@ class ScriptedMergeGraph:
     # unrelated `cap_other` per policy, so the policy's governed set is never just the pair.
     governed_sets: list[list[object]] | None = None
     tombstone_count: int = 0
-    write_rows: list[list[object]] = field(default_factory=lambda: [[SURVIVOR, ABSORBED]])
-    write_error: Exception | None = None
     read_error: Exception | None = None
     queries: list[tuple[str, dict[str, object] | None]] = field(default_factory=list)
 
     @property
     def write_calls(self) -> list[tuple[str, dict[str, object] | None]]:
-        return [call for call in self.queries if call[0] == MERGE_CAPABILITIES_QUERY]
+        """Always empty for correct code: since #212 a merge writes through the gateway."""
+        return [call for call in self.queries if _WRITE_KEYWORD.search(call[0])]
 
     def query(self, q: str, params: Mapping[str, object] | None = None) -> QueryResult:
         self.queries.append((q, dict(params) if params is not None else None))
-        if q == MERGE_CAPABILITIES_QUERY:
-            if self.write_error is not None:
-                raise self.write_error
-            return QueryResult(list(self.write_rows))
+        if _WRITE_KEYWORD.search(q):
+            message = f"the merge double is read-only: {q}"
+            raise AssertionError(message)
         if self.read_error is not None:
             raise self.read_error
         if "RETURN count(a)" in q:
@@ -116,6 +116,10 @@ class RecordingAuditStore:
     history: list[AuditEventRow] = field(default_factory=list)
     query_error: Exception | None = None
     query_calls: int = 0
+    event_ids: list[str] = field(default_factory=list)
+    """The id `record_standalone_with_event_id` handed out for each row, in order (#212)."""
+    event_id_sink: Callable[[str], None] | None = None
+    """Called with each new event id (a test's way to register it with the graph log)."""
 
     def record(self, cur: object, **kwargs: object) -> str:
         del cur, kwargs
@@ -132,6 +136,28 @@ class RecordingAuditStore:
         outcome: str,
         details: Mapping[str, object],
     ) -> None:
+        self.record_standalone_with_event_id(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            details=details,
+        )
+
+    def record_standalone_with_event_id(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: str,
+        details: Mapping[str, object],
+    ) -> str:
+        """Record the row as `record_standalone` does and return its fresh event id (#212)."""
         from ps_service.audit.models import resolve_details_model
 
         error = self.raise_on_outcome.get(outcome)
@@ -140,6 +166,10 @@ class RecordingAuditStore:
         model = resolve_details_model(action)
         assert model is not None, f"unregistered audit action {action!r}"
         validated = model.model_validate(dict(details))
+        event_id = str(uuid.uuid4())
+        self.event_ids.append(event_id)
+        if self.event_id_sink is not None:
+            self.event_id_sink(event_id)
         self.events.append(f"audit:{outcome}")
         self.rows.append(
             RecordedAudit(
@@ -152,6 +182,7 @@ class RecordingAuditStore:
                 details=validated.model_dump(mode="json", exclude_none=True),
             )
         )
+        return event_id
 
     def query(
         self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
@@ -174,18 +205,6 @@ class RecordingAuditStore:
         return AuditQueryPage(
             events=tuple(page), next_cursor=str(start + page_size) if more else None
         )
-
-
-@dataclass
-class OrderedGraph(ScriptedMergeGraph):
-    """`ScriptedMergeGraph` that appends "graph_write" to a shared event log on each write."""
-
-    events: list[str] = field(default_factory=list)
-
-    def query(self, q: str, params: Mapping[str, object] | None = None) -> QueryResult:
-        if q == MERGE_CAPABILITIES_QUERY:
-            self.events.append("graph_write")
-        return super().query(q, params)
 
 
 def approval_row_count(store: FakeApprovalStore) -> int:
@@ -273,8 +292,9 @@ ROLE_ID = "role_1"
 class ScriptedObligationGraph:
     """Obligation-merge graph: two Obligations under one Role, a few edges on the absorbed one.
 
-    Queries are dispatched by their text; `write_calls` are the guarded merge statements
-    (`MergedObligation` in the text).
+    Queries are dispatched by their text. READ-ONLY: since #212 an obligation merge writes
+    through the gateway (`CleanupRig`); `write_calls` lists any write statement it was handed
+    (always empty for correct production code).
     """
 
     nodes: list[list[object]] = field(
@@ -304,23 +324,18 @@ class ScriptedObligationGraph:
     )
     marker_count: int = 0
     absorbed_count: int = 1
-    write_rows: list[list[object]] = field(default_factory=lambda: [[OBL_SURVIVOR, OBL_ABSORBED]])
-    write_error: Exception | None = None
     read_error: Exception | None = None
     queries: list[tuple[str, dict[str, object] | None]] = field(default_factory=list)
-    events: list[str] = field(default_factory=list)
 
     @property
     def write_calls(self) -> list[tuple[str, dict[str, object] | None]]:
-        return [call for call in self.queries if "MergedObligation" in call[0]]
+        return [call for call in self.queries if _WRITE_KEYWORD.search(call[0])]
 
     def query(self, q: str, params: Mapping[str, object] | None = None) -> QueryResult:
         self.queries.append((q, dict(params) if params is not None else None))
-        if "MergedObligation" in q and "DETACH DELETE" in q:
-            self.events.append("graph_write")
-            if self.write_error is not None:
-                raise self.write_error
-            return QueryResult(list(self.write_rows))
+        if _WRITE_KEYWORD.search(q):
+            message = f"the obligation merge double is read-only: {q}"
+            raise AssertionError(message)
         if self.read_error is not None:
             raise self.read_error
         if "RETURN count(m)" in q:
@@ -344,32 +359,29 @@ class ScriptedObligationGraph:
 
 @dataclass
 class ScriptedReleaseGraph(ScriptedMergeGraph):
-    """Graph for `release-capability-governance`: `SURVIVOR` is governed by a draft policy.
+    """READ-ONLY graph for the `release-capability-governance` preview and verifier reads.
 
-    The release statement returns `release_rows`; the verifier's edge count is `edge_count`.
-    Every release write appends "graph_write" to the shared `events` log.
+    `SURVIVOR` is governed by a draft policy; the verifier's edge count is `edge_count`. Since
+    #212 release writes go through the gateway (`CleanupRig`), so this double has no write path:
+    `write_statements` lists any statement carrying a write keyword it was handed (always empty
+    for correct production code).
     """
 
-    release_rows: list[list[object]] = field(default_factory=lambda: [[SURVIVOR]])
-    release_error: Exception | None = None
     edge_count: int = 1
-    events: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.governors:
             self.governors = [[SURVIVOR, "pol_1", "Incident Policy", "draft"]]
 
     @property
-    def release_calls(self) -> list[tuple[str, dict[str, object] | None]]:
-        return [call for call in self.queries if call[0] == RELEASE_GOVERNANCE_QUERY]
+    def write_statements(self) -> list[tuple[str, dict[str, object] | None]]:
+        return [call for call in self.queries if _WRITE_KEYWORD.search(call[0])]
 
     def query(self, q: str, params: Mapping[str, object] | None = None) -> QueryResult:
-        if q == RELEASE_GOVERNANCE_QUERY:
+        if _WRITE_KEYWORD.search(q):
             self.queries.append((q, dict(params) if params is not None else None))
-            self.events.append("graph_write")
-            if self.release_error is not None:
-                raise self.release_error
-            return QueryResult(list(self.release_rows))
+            message = f"the release double is read-only: {q}"
+            raise AssertionError(message)
         if "RETURN count(r)" in q:
             self.queries.append((q, dict(params) if params is not None else None))
             if self.read_error is not None:
@@ -382,8 +394,8 @@ class ScriptedReleaseGraph(ScriptedMergeGraph):
 class ScriptedUnmergeGraph:
     """Graph for capability `unmerge`: `ABSORBED` is a tombstone of `SURVIVOR`.
 
-    Queries are dispatched by their text. The unmerge statement (`UNMERGE_CAPABILITY_QUERY`)
-    returns `write_rows` and appends "graph_write" to the shared `events` log.
+    Queries are dispatched by their text. Read-only since #212: an unmerge writes through the
+    gateway (`CleanupRig`), so a write statement here is a failure of the test.
     """
 
     nodes: list[list[object]] = field(
@@ -408,27 +420,20 @@ class ScriptedUnmergeGraph:
     )
     policy_rows: list[list[object]] = field(default_factory=lambda: [["pol_1"]])
     unmerged_row: list[object] = field(default_factory=lambda: [1, 0])
-    write_rows: list[list[object]] = field(default_factory=lambda: [[ABSORBED]])
-    write_error: Exception | None = None
     read_error: Exception | None = None
     queries: list[tuple[str, dict[str, object] | None]] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
 
     @property
     def write_calls(self) -> list[tuple[str, dict[str, object] | None]]:
-        from ps_service.graph_cleanup.graph_writer import UNMERGE_CAPABILITY_QUERY
-
-        return [call for call in self.queries if call[0] == UNMERGE_CAPABILITY_QUERY]
+        """Always empty for correct code: since #212 an unmerge writes through the gateway."""
+        return [call for call in self.queries if _WRITE_KEYWORD.search(call[0])]
 
     def query(self, q: str, params: Mapping[str, object] | None = None) -> QueryResult:
-        from ps_service.graph_cleanup.graph_writer import UNMERGE_CAPABILITY_QUERY
-
         self.queries.append((q, dict(params) if params is not None else None))
-        if q == UNMERGE_CAPABILITY_QUERY:
-            self.events.append("graph_write")
-            if self.write_error is not None:
-                raise self.write_error
-            return QueryResult(list(self.write_rows))
+        if _WRITE_KEYWORD.search(q):
+            message = f"the unmerge double is read-only: {q}"
+            raise AssertionError(message)
         if self.read_error is not None:
             raise self.read_error
         ids = cast("list[str]", (params or {}).get("ids", []))
@@ -460,6 +465,7 @@ def capability_merge_history(
     *,
     approval_id: str = "merge-approval-1",
     absorbed_policy: tuple[str, str] | None = None,
+    survivor_also_governed: bool = False,
 ) -> list[AuditEventRow]:
     """A one-row (newest first) audit history holding the REAL planner's snapshot of a merge.
 
@@ -500,13 +506,21 @@ def capability_merge_history(
             edge("COVERS", "PracticeArea", "pa_1", ABSORBED),
             edge("MITIGATED_BY", "RiskPath", "rp_1", ABSORBED),
         ),
-        survivor_policies=(),
+        survivor_policies=(
+            (GoverningPolicy(id=absorbed_policy[0], title=absorbed_policy[1], status="approved"),)
+            if absorbed_policy and survivor_also_governed
+            else ()
+        ),
         absorbed_policies=(
             (GoverningPolicy(id=absorbed_policy[0], title=absorbed_policy[1], status="approved"),)
             if absorbed_policy
             else ()
         ),
-        governed_sets={absorbed_policy[0]: (ABSORBED,)} if absorbed_policy else {},
+        governed_sets=(
+            {absorbed_policy[0]: (ABSORBED, SURVIVOR) if survivor_also_governed else (ABSORBED,)}
+            if absorbed_policy
+            else {}
+        ),
     )
     plan = plan_capability_merge(state)
     details = CapabilityMergeDetails(
@@ -537,8 +551,8 @@ def capability_merge_history(
 class ScriptedObligationUnmergeGraph:
     """Graph for obligation `unmerge`: `OBL_ABSORBED` is deleted and marked as merged.
 
-    Queries are dispatched by their text. The unmerge statement (`UNMERGE_OBLIGATION_QUERY`)
-    returns `write_rows` and appends "graph_write" to the shared `events` log.
+    Queries are dispatched by their text. Read-only since #212: an unmerge writes through the
+    gateway (`CleanupRig`), so a write statement here is a failure of the test.
     """
 
     nodes: list[list[object]] = field(
@@ -554,27 +568,20 @@ class ScriptedObligationUnmergeGraph:
     requires: list[list[object]] = field(default_factory=lambda: [[OBL_SURVIVOR, "cap_1"]])
     marker_count: int = 0
     absorbed_count: int = 1
-    write_rows: list[list[object]] = field(default_factory=lambda: [[OBL_ABSORBED]])
-    write_error: Exception | None = None
     read_error: Exception | None = None
     queries: list[tuple[str, dict[str, object] | None]] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
 
     @property
     def write_calls(self) -> list[tuple[str, dict[str, object] | None]]:
-        from ps_service.graph_cleanup.graph_writer import UNMERGE_OBLIGATION_QUERY
-
-        return [call for call in self.queries if call[0] == UNMERGE_OBLIGATION_QUERY]
+        """Always empty for correct code: since #212 an unmerge writes through the gateway."""
+        return [call for call in self.queries if _WRITE_KEYWORD.search(call[0])]
 
     def query(self, q: str, params: Mapping[str, object] | None = None) -> QueryResult:
-        from ps_service.graph_cleanup.graph_writer import UNMERGE_OBLIGATION_QUERY
-
         self.queries.append((q, dict(params) if params is not None else None))
-        if q == UNMERGE_OBLIGATION_QUERY:
-            self.events.append("graph_write")
-            if self.write_error is not None:
-                raise self.write_error
-            return QueryResult(list(self.write_rows))
+        if _WRITE_KEYWORD.search(q):
+            message = f"the unmerge double is read-only: {q}"
+            raise AssertionError(message)
         if self.read_error is not None:
             raise self.read_error
         ids = set(cast("list[str]", (params or {}).get("ids", [])))

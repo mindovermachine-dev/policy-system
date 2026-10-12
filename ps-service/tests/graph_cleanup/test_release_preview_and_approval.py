@@ -21,6 +21,7 @@ from graph_cleanup._fakes import (
     approval_row_count,
     expire_approval,
 )
+from graph_cleanup._gateway_fakes import caught_up_gateway
 from ps_service.config import ServiceConfig
 from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 from ps_service.graph_cleanup.errors import GraphCleanupValidationError
@@ -72,7 +73,7 @@ def test_preview_names_the_capability_the_policy_and_changes_nothing() -> None:
         "Incident Policy",
         "draft",
     )
-    assert graph.release_calls == []
+    assert graph.write_statements == []
 
 
 def test_a_draft_policy_creates_an_approval_bound_to_capability_policy_and_state() -> None:
@@ -94,7 +95,7 @@ def test_a_draft_policy_creates_an_approval_bound_to_capability_policy_and_state
     assert approval.approval_url.startswith(
         f"https://ps.example.com/approvals/{approval.pending_approval_id}#"
     )
-    assert graph.release_calls == []
+    assert graph.write_statements == []
 
 
 @pytest.mark.parametrize("status", ["approved", "deprecated", "proposed"])
@@ -106,7 +107,7 @@ def test_a_non_draft_policy_is_rejected_with_no_approval(status: str) -> None:
         _create(graph, store)
 
     assert approval_row_count(store) == 0
-    assert graph.release_calls == []
+    assert graph.write_statements == []
 
 
 def test_an_ungoverned_nonexistent_or_tombstoned_capability_creates_no_approval() -> None:
@@ -155,6 +156,7 @@ def _check(
         dependencies=GraphCleanupDependencies(
             open_single_tenant_graph=lambda _config: graph,
             audit_store=lambda _config: audit,
+            graph_write_gateway=caught_up_gateway,
         ),
     )
 

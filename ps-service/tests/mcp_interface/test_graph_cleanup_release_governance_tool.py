@@ -127,7 +127,7 @@ def test_a_draft_policy_returns_the_preview_and_a_pending_approval_and_writes_no
         "policy_id": "pol_1",
         "state_digest": preview["state_digest"],
     }
-    assert env.graph.release_calls == []
+    assert env.graph.write_statements == []
 
 
 @pytest.mark.parametrize("status", ["approved", "deprecated"])
@@ -144,7 +144,7 @@ def test_an_approved_or_deprecated_policy_is_rejected_with_a_lifecycle_pointer_a
     assert "policy lifecycle" in text
     assert "fork carries the whole governed set" in text
     assert approval_row_count(env.pending) == 0
-    assert env.graph.release_calls == []
+    assert env.graph.write_statements == []
 
 
 def test_a_proposed_policy_points_at_revert_policy_to_draft(env: _Env) -> None:

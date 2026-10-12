@@ -84,6 +84,10 @@ class _Response(Protocol):
 
 
 def _fail_graph_write(world: _World, error: Exception) -> None:
+    fail = getattr(world, "fail_graph_write", None)  # the gateway-backed worlds (since #212)
+    if fail is not None:
+        fail(error)
+        return
     attribute = "release_error" if hasattr(world.graph, "release_error") else "write_error"
     setattr(world.graph, attribute, error)
 
@@ -104,7 +108,7 @@ def test_audit_outage_means_no_graph_write_and_no_leak(flow: tuple[_World, str])
 
     response = world.sign(row, code)
 
-    assert "graph_write" not in world.audit.events
+    assert not {"graph_write", "log_append"} & set(world.audit.events)
     assert world.audit.rows == []
     assert "error" in response.json()
     assert not any(leak in response.text for leak in _LEAKS)

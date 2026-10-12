@@ -22,6 +22,7 @@ from graph_cleanup._fakes import (
     approval_row_count,
     expire_approval,
 )
+from graph_cleanup._gateway_fakes import caught_up_gateway
 from ps_service.config import ServiceConfig
 from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 from ps_service.graph_cleanup.errors import GraphCleanupValidationError
@@ -198,6 +199,7 @@ def _check(
         dependencies=GraphCleanupDependencies(
             open_single_tenant_graph=lambda _config: graph,
             audit_store=lambda _config: audit,
+            graph_write_gateway=caught_up_gateway,
         ),
     )
 

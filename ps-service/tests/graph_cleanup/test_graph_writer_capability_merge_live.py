@@ -1,10 +1,14 @@
-"""Live FalkorDB proof of the capability-merge writer A1 (issue #190, slice 10).
+"""Live FalkorDB proof of the FROZEN capability-merge statement (issue #190 A1, kept by #212).
 
 Scripted fakes prove only call shape; this is the proof the statement is valid Cypher
 and that its semantics hold: edges move with no duplicate, the absorbed node is kept as a
 `merged` tombstone with `MERGED_INTO`, an active-status filter no longer matches it, and a
 guard miss leaves the graph identical. UNVERIFIED where no FalkorDB is available (collected,
 deselected by default).
+
+Since #212 a capability merge is a gateway group; the pre-migration statement lives in
+`_legacy_reference` and is run raw here, so the semantics the reference's interpreter models
+(and the equivalence tests compare against) stay anchored on a real FalkorDB.
 
 Run with:
 `uv run pytest ps-service/tests/graph_cleanup/test_graph_writer_capability_merge_live.py \
@@ -18,8 +22,8 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from graph_cleanup._legacy_reference import FROZEN_STATEMENTS, run_frozen_merge_capabilities
 from ps_service.graph_cleanup.errors import GraphCleanupStaleStateError
-from ps_service.graph_cleanup.graph_writer import merge_capabilities
 from ps_service.graph_cleanup.models import ExpectedCounts
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 
@@ -31,6 +35,17 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.falkordb_live
 
 _GRAPH = "graph_cleanup_capability_merge_live_test"
+
+
+def _frozen_merge_capabilities(
+    graph: GraphHandle, *, survivor_id: str, absorbed_id: str, expected: ExpectedCounts
+) -> None:
+    """Run the FROZEN pre-#212 merge statement raw; no row is a guard miss (issue #212)."""
+    if not run_frozen_merge_capabilities(
+        graph, survivor_id=survivor_id, absorbed_id=absorbed_id, expected=expected
+    ):
+        message = "the capabilities changed since the preview; nothing was written"
+        raise GraphCleanupStaleStateError(message)
 
 
 def _delete(db: FalkorDB) -> None:
@@ -79,7 +94,7 @@ _SNAPSHOT_QUERY = (
 def test_edges_move_without_duplicates_and_the_absorbed_node_becomes_a_tombstone(
     graph: GraphHandle,
 ) -> None:
-    merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=_EXPECTED)
+    _frozen_merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=_EXPECTED)
 
     on_survivor = _rows(
         graph,
@@ -124,7 +139,7 @@ def test_a_guard_miss_leaves_the_graph_identical(
     )
 
     with pytest.raises(GraphCleanupStaleStateError):
-        merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=expected)
+        _frozen_merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=expected)
 
     assert before == _rows(
         graph,
@@ -136,7 +151,7 @@ def test_a_status_change_of_either_node_is_a_guard_miss(graph: GraphHandle) -> N
     graph.query("MATCH (c:Capability {id:'s'}) SET c.status = 'deprecated'")
 
     with pytest.raises(GraphCleanupStaleStateError):
-        merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=_EXPECTED)
+        _frozen_merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=_EXPECTED)
 
 
 def _add_policy(graph: GraphHandle, *, capability: str, status: str = "approved") -> None:
@@ -176,7 +191,9 @@ def test_case_two_an_absorbed_governed_capability_hands_its_governed_by_to_the_s
 ) -> None:
     _add_policy(graph, capability="a")
 
-    merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=_case2(absorbed=True))
+    _frozen_merge_capabilities(
+        graph, survivor_id="s", absorbed_id="a", expected=_case2(absorbed=True)
+    )
 
     assert _governors(graph) == [["s", "p1"]]
 
@@ -186,7 +203,9 @@ def test_case_two_a_governed_survivor_keeps_its_governed_by_and_the_absorbed_has
 ) -> None:
     _add_policy(graph, capability="s")
 
-    merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=_case2(absorbed=False))
+    _frozen_merge_capabilities(
+        graph, survivor_id="s", absorbed_id="a", expected=_case2(absorbed=False)
+    )
 
     assert _governors(graph) == [["s", "p1"]]
 
@@ -198,7 +217,9 @@ def test_case_two_a_policy_status_change_since_the_preview_is_a_guard_miss(
     before = _rows(graph, _SNAPSHOT_QUERY)
 
     with pytest.raises(GraphCleanupStaleStateError):
-        merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=_case2(absorbed=True))
+        _frozen_merge_capabilities(
+            graph, survivor_id="s", absorbed_id="a", expected=_case2(absorbed=True)
+        )
 
     assert _rows(graph, _SNAPSHOT_QUERY) == before
 
@@ -222,7 +243,7 @@ def test_case_three_the_same_policy_deletes_only_the_absorbed_governed_by(
         survivor_policy_status="approved",
     )
 
-    merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=expected)
+    _frozen_merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=expected)
 
     assert _governors(graph) == [["s", "p1"]]
 
@@ -247,17 +268,27 @@ def test_case_three_different_policies_are_a_guard_miss(graph: GraphHandle) -> N
     before = _rows(graph, _SNAPSHOT_QUERY)
 
     with pytest.raises(GraphCleanupStaleStateError):
-        merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=expected)
+        _frozen_merge_capabilities(graph, survivor_id="s", absorbed_id="a", expected=expected)
 
     assert _rows(graph, _SNAPSHOT_QUERY) == before
 
 
-def test_release_governance_deletes_the_edge_of_a_draft_policy(graph: GraphHandle) -> None:
-    from ps_service.graph_cleanup.graph_writer import release_governance
+def _frozen_release(graph: GraphHandle, *, capability_id: str, policy_id: str) -> bool:
+    """Run the FROZEN pre-#212 release statement raw; `True` when it matched (issue #212).
 
+    Since #212 a release is a gateway group; the statement is kept in `_legacy_reference` as the
+    reference the equivalence tests compare against, and these live tests anchor the semantics
+    the reference's interpreter models.
+    """
+    params: dict[str, object] = {"capability_id": capability_id, "policy_id": policy_id}
+    rows = graph.query(FROZEN_STATEMENTS["release_governance"], params).result_set
+    return bool(rows)
+
+
+def test_release_governance_deletes_the_edge_of_a_draft_policy(graph: GraphHandle) -> None:
     _add_policy(graph, capability="s", status="draft")
 
-    release_governance(graph, capability_id="s", policy_id="p1")
+    assert _frozen_release(graph, capability_id="s", policy_id="p1") is True
 
     assert _governors(graph) == []
     assert _rows(graph, "MATCH (p:Policy {id: 'p1'}) RETURN count(p)") == [[1]]
@@ -267,12 +298,9 @@ def test_release_governance_deletes_the_edge_of_a_draft_policy(graph: GraphHandl
 def test_release_governance_on_a_non_draft_policy_is_a_guard_miss(
     graph: GraphHandle, status: str
 ) -> None:
-    from ps_service.graph_cleanup.graph_writer import release_governance
-
     _add_policy(graph, capability="s", status=status)
 
-    with pytest.raises(GraphCleanupStaleStateError):
-        release_governance(graph, capability_id="s", policy_id="p1")
+    assert _frozen_release(graph, capability_id="s", policy_id="p1") is False
 
     assert _governors(graph) == [["s", "p1"]]
 
@@ -280,13 +308,11 @@ def test_release_governance_on_a_non_draft_policy_is_a_guard_miss(
 def test_release_governance_leaves_other_capabilities_of_the_policy_alone(
     graph: GraphHandle,
 ) -> None:
-    from ps_service.graph_cleanup.graph_writer import release_governance
-
     _add_policy(graph, capability="s", status="draft")
     graph.query(
         "MATCH (c:Capability {id: 'a'}), (p:Policy {id: 'p1'}) CREATE (c)-[:GOVERNED_BY]->(p)"
     )
 
-    release_governance(graph, capability_id="s", policy_id="p1")
+    assert _frozen_release(graph, capability_id="s", policy_id="p1") is True
 
     assert _governors(graph) == [["a", "p1"]]

@@ -1,12 +1,13 @@
 """A cleanup merge survives live ingest and offline restore (issue #190, slice 17, AC-BI-008).
 
-The real executor runs a real merge (capability and obligation) against the scripted graph.
-The persisted effect is then rebuilt from the exact parameters the guarded writer statement
-was called with, and served as the single-tenant graph to the real Company Merge live path
-(`dedupe_canonical_nodes`, `resolve_obligation_redirects`) and to the real offline restore
-merge. No FalkorDB runs here: the statement text is pinned against the redirect readers'
-shapes (`status = 'merged'` + `MERGED_INTO`; `MergedObligation {merged_into}`), and the
-`falkordb_live` writer tests (unverified without FalkorDB) pin the statement itself.
+The real executor runs a real merge (capability and obligation) over the gateway rig (#212). The
+persisted effect is then read back from the rig graph the gateway group built (a `merged`
+tombstone with `MERGED_INTO`; a `MergedObligation {merged_into}` marker), and served as the
+single-tenant graph to the real Company Merge live path (`dedupe_canonical_nodes`,
+`resolve_obligation_redirects`) and to the real offline restore merge. No FalkorDB runs here:
+the real redirect readers (`read_capability_tombstone`, `read_obligation_marker`) are run over
+the rig graph to pin the shapes the live path looks for, and the `falkordb_live` tests
+(unverified without FalkorDB) pin the frozen legacy statements.
 """
 
 from __future__ import annotations
@@ -24,16 +25,12 @@ from graph_cleanup._fakes import (
     OBL_ABSORBED,
     OBL_SURVIVOR,
     SURVIVOR,
-    OrderedGraph,
-    RecordingAuditStore,
-    ScriptedObligationGraph,
 )
 from ps_service.authz.models import AccessRole
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.models import BaselineGraph, BaselineNode
 from ps_service.company_merge.obligation_redirect import resolve_obligation_redirects
 from ps_service.config import ServiceConfig
-from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 from ps_service.graph_cleanup.executors import (
     TOOL_MERGE_CAPABILITIES,
     TOOL_MERGE_OBLIGATIONS,
@@ -42,9 +39,10 @@ from ps_service.graph_cleanup.executors import (
 )
 from ps_service.graph_cleanup.graph_reader import (
     read_capability_merge_state,
+    read_capability_tombstone,
+    read_obligation_marker,
     read_obligation_merge_state,
 )
-from ps_service.graph_cleanup.graph_writer import MERGE_CAPABILITIES_QUERY
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
 from ps_service.graph_cleanup.obligation_planner import plan_obligation_merge
 from ps_service.logging import configure
@@ -53,7 +51,9 @@ from ps_service.passkey_signing.models import PendingApprovalRow
 if TYPE_CHECKING:
     from falkordb import FalkorDB
 
+    from graph_cleanup._gateway_fakes import CleanupRig
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 
 _OWNER = ("owner", "https://issuer.example.com/")
 _OFFICER = ("officer", "https://issuer.example.com/")
@@ -88,7 +88,7 @@ class _Node:
 
 @dataclass
 class _Persisted:
-    """What the single-tenant graph holds after the merge, derived from the writer's params."""
+    """What the single-tenant graph holds after the merge, read back from the rig graph."""
 
     tombstones: dict[str, str] = field(default_factory=dict)
     markers: dict[str, str] = field(default_factory=dict)
@@ -141,20 +141,14 @@ def _row(tool: str, args: dict[str, object]) -> PendingApprovalRow:
     )
 
 
-def _deps(graph: object, audit: RecordingAuditStore) -> GraphCleanupDependencies:
-    return GraphCleanupDependencies(
-        open_single_tenant_graph=lambda _config: cast("GraphHandle", graph),
-        audit_store=lambda _config: audit,
-        access_role_store=lambda _config: _roles(),
-    )
+def _deps(rig: CleanupRig) -> GraphCleanupDependencies:
+    return rig.dependencies(_roles())
 
 
-def _merge_capabilities() -> _Persisted:
-    events: list[str] = []
-    graph = OrderedGraph(events=events)
-    audit = RecordingAuditStore(events=events)
+def _merge_capabilities(rig: CleanupRig) -> _Persisted:
+    rig.seed_capability_merge_world()
     digest = plan_capability_merge(
-        read_capability_merge_state(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
+        read_capability_merge_state(rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
     ).state_digest
     row = _row(
         TOOL_MERGE_CAPABILITIES,
@@ -165,47 +159,55 @@ def _merge_capabilities() -> _Persisted:
             "state_digest": digest,
         },
     )
-    outcome = execute_capability_merge(row, _CONFIG, _deps(graph, audit))
+    outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
     assert outcome["merged"] is True
-    [(query, params)] = graph.write_calls
-    assert query == MERGE_CAPABILITIES_QUERY
-    assert params is not None
-    return _Persisted(
-        tombstones={cast("str", params["absorbed_id"]): cast("str", params["survivor_id"])},
-        survivors={cast("str", params["survivor_id"])},
-    )
+    assert len(rig.cleanup_groups()) == 1
+    redirects = {k[2]: k[4] for k in rig.graph.edges if k[0] == "MERGED_INTO"}
+    return _Persisted(tombstones=redirects, survivors=set(redirects.values()))
 
 
-def _merge_obligations() -> _Persisted:
-    events: list[str] = []
-    graph = ScriptedObligationGraph(events=events)
-    audit = RecordingAuditStore(events=events)
+def _merge_obligations(rig: CleanupRig) -> _Persisted:
+    rig.seed_obligation_merge_world()
     digest = plan_obligation_merge(
-        read_obligation_merge_state(graph, survivor_id=OBL_SURVIVOR, absorbed_id=OBL_ABSORBED)
+        read_obligation_merge_state(rig.read, survivor_id=OBL_SURVIVOR, absorbed_id=OBL_ABSORBED)
     ).state_digest
     row = _row(
         TOOL_MERGE_OBLIGATIONS,
         {"survivor_id": OBL_SURVIVOR, "absorbed_id": OBL_ABSORBED, "state_digest": digest},
     )
-    outcome = execute_obligation_merge(row, _CONFIG, _deps(graph, audit))
+    outcome = execute_obligation_merge(row, _CONFIG, _deps(rig))
     assert outcome["merged"] is True
-    [(query, params)] = graph.write_calls
-    assert "MERGE (m:MergedObligation {id: $absorbed_id})" in query
-    assert "SET m.merged_into = $survivor_id" in query
-    assert params is not None
-    return _Persisted(
-        markers={cast("str", params["absorbed_id"]): cast("str", params["survivor_id"])},
-        survivors={cast("str", params["survivor_id"])},
+    assert len(rig.cleanup_groups()) == 1
+    markers = {
+        node_id: cast("str", props["merged_into"])
+        for (label, node_id), props in rig.graph.nodes.items()
+        if label == "MergedObligation"
+    }
+    return _Persisted(markers=markers, survivors=set(markers.values()))
+
+
+def test_the_capability_merge_leaves_exactly_what_the_redirect_reader_looks_for(
+    cleanup_rig: CleanupRig,
+) -> None:
+    _merge_capabilities(cleanup_rig)
+
+    assert read_capability_tombstone(cleanup_rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
+
+
+def test_the_obligation_merge_leaves_exactly_what_the_redirect_reader_looks_for(
+    cleanup_rig: CleanupRig,
+) -> None:
+    _merge_obligations(cleanup_rig)
+
+    assert read_obligation_marker(
+        cleanup_rig.read, survivor_id=OBL_SURVIVOR, absorbed_id=OBL_ABSORBED
     )
 
 
-def test_the_capability_writer_leaves_exactly_what_the_redirect_reader_looks_for() -> None:
-    assert "SET a.status = 'merged'" in MERGE_CAPABILITIES_QUERY
-    assert "MERGE (a)-[:MERGED_INTO]->(s)" in MERGE_CAPABILITIES_QUERY
-
-
-def test_live_ingest_after_a_capability_merge_resolves_to_the_survivor_and_mints_nothing() -> None:
-    persisted = _merge_capabilities()
+def test_live_ingest_after_a_capability_merge_resolves_to_the_survivor_and_mints_nothing(
+    cleanup_rig: CleanupRig,
+) -> None:
+    persisted = _merge_capabilities(cleanup_rig)
 
     result = dedupe_canonical_nodes(
         (BaselineNode(id=ABSORBED, properties={"name": "Absorbed", "confidence": 0.9}),),
@@ -291,10 +293,10 @@ def _restore(
     )
 
 
-def test_offline_restore_after_a_capability_merge_attaches_to_the_survivor_and_mints_nothing() -> (
-    None
-):
-    persisted = _merge_capabilities()
+def test_offline_restore_after_a_capability_merge_attaches_to_the_survivor_and_mints_nothing(
+    cleanup_rig: CleanupRig,
+) -> None:
+    persisted = _merge_capabilities(cleanup_rig)
 
     _restore(_CapabilityBaseline(), persisted, {ABSORBED: (1.0, 0.0)})
 
@@ -319,8 +321,10 @@ def _obligation_baseline_graph() -> BaselineGraph:
     )
 
 
-def test_live_ingest_after_an_obligation_merge_drops_the_absorbed_obligation() -> None:
-    persisted = _merge_obligations()
+def test_live_ingest_after_an_obligation_merge_drops_the_absorbed_obligation(
+    cleanup_rig: CleanupRig,
+) -> None:
+    persisted = _merge_obligations(cleanup_rig)
 
     rewritten, mapping = resolve_obligation_redirects(
         cast("GraphHandle", persisted), _obligation_baseline_graph()
@@ -330,8 +334,10 @@ def test_live_ingest_after_an_obligation_merge_drops_the_absorbed_obligation() -
     assert rewritten.obligation_nodes == ()
 
 
-def test_offline_restore_after_an_obligation_merge_re_targets_onto_the_survivor() -> None:
-    persisted = _merge_obligations()
+def test_offline_restore_after_an_obligation_merge_re_targets_onto_the_survivor(
+    cleanup_rig: CleanupRig,
+) -> None:
+    persisted = _merge_obligations(cleanup_rig)
 
     _restore(_ObligationBaseline(), persisted, {})
 

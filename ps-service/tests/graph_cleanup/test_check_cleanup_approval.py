@@ -8,10 +8,12 @@ are left alone.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+import redis.exceptions
 
 from graph_cleanup._fakes import (
     ABSORBED,
@@ -21,15 +23,22 @@ from graph_cleanup._fakes import (
     ScriptedMergeGraph,
     expire_approval,
 )
+from graph_cleanup._gateway_fakes import POLICY_SYSTEM, CleanupRig
+from ps_service.api.errors import GraphWriteUnavailableError
 from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.config import ServiceConfig
 from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 from ps_service.graph_cleanup.errors import GraphCleanupPersistenceError
 from ps_service.graph_cleanup.executors import TOOL_MERGE_CAPABILITIES
 from ps_service.graph_cleanup.service import RECONCILE_GRACE, check_cleanup_approval
+from ps_service.graph_gateway.errors import GraphLogUnavailableError, GraphUnavailableError
 from ps_service.logging import configure
+from ps_service.logging.facade import reset_for_tests
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ps_service.graph_cleanup.graph_submission import CleanupSubmitter
     from ps_service.passkey_signing.models import PendingApprovalRow
 
 _ACTOR = ("officer", "https://issuer.example.com/")
@@ -87,9 +96,12 @@ def _check(
     graph: ScriptedMergeGraph | None = None,
     audit: RecordingAuditStore | None = None,
     actor: tuple[str, str] | None = _ACTOR,
+    gateway: CleanupSubmitter | None = None,
 ):
+    """Check `row`; the gateway defaults to a caught-up rig (the graph holds its whole log)."""
     scripted = graph if graph is not None else ScriptedMergeGraph()
     recorder = audit if audit is not None else RecordingAuditStore()
+    submitter = gateway if gateway is not None else CleanupRig().gateway
     return check_cleanup_approval(
         pending_approval_id=row.id,
         actor=actor,
@@ -98,6 +110,7 @@ def _check(
         dependencies=GraphCleanupDependencies(
             open_single_tenant_graph=lambda _config: scripted,
             audit_store=lambda _config: recorder,
+            graph_write_gateway=lambda _config: submitter,
         ),
     )
 
@@ -290,3 +303,220 @@ def test_an_orphan_case_three_row_without_effect_keeps_the_policy_case_in_its_fa
 
     [recorded] = audit.rows
     assert recorded.details["policy_case"] == 3
+
+
+# -- the reconciler waits for the graph to catch up (issue #212, AC-BI-007) -----------------------
+
+
+def _orphan(store: FakeApprovalStore, **kwargs: object) -> PendingApprovalRow:
+    return _seed(store, signed=True, expired_for=RECONCILE_GRACE + timedelta(seconds=5), **kwargs)  # pyright: ignore[reportArgumentType] -- passes optional seed keywords through
+
+
+def _behind_its_log(rig: CleanupRig) -> None:
+    """A committed group the graph has not applied yet: the graph lags its log."""
+    rig.graph.fail_on_write(redis.exceptions.ConnectionError("down"))
+    rig.append_unrelated_group()
+    assert not rig.gateway.is_caught_up(POLICY_SYSTEM)
+
+
+def _catch_up(rig: CleanupRig) -> None:
+    rig.graph.heal()
+    rig.gateway.catch_up(POLICY_SYSTEM)
+    assert rig.gateway.is_caught_up(POLICY_SYSTEM)
+
+
+def test_a_graph_behind_its_log_defers_the_check_and_leaves_the_row_untouched() -> None:
+    store = FakeApprovalStore()
+    row = _orphan(store)
+    rig = CleanupRig()
+    _behind_its_log(rig)
+    graph = ScriptedMergeGraph(tombstone_count=0)
+    audit = RecordingAuditStore()
+
+    status = _check(store, row, graph=graph, audit=audit, gateway=rig.gateway)
+
+    assert status is not None
+    assert status.outcome is None
+    assert status.status == "signed"
+    assert graph.queries == []  # the verifier never read the lagging graph
+    assert audit.rows == []  # no false `failed` row
+    stored = store.get_by_id(row.id)
+    assert stored is not None
+    assert stored.outcome is None
+
+
+def test_the_next_check_reconciles_once_the_graph_has_caught_up() -> None:
+    store = FakeApprovalStore()
+    row = _orphan(store)
+    rig = CleanupRig()
+    _behind_its_log(rig)
+    audit = RecordingAuditStore()
+    deferred = _check(
+        store, row, graph=ScriptedMergeGraph(tombstone_count=1), audit=audit, gateway=rig.gateway
+    )
+    assert deferred is not None
+    assert deferred.outcome is None
+
+    _catch_up(rig)
+    settled = _check(
+        store, row, graph=ScriptedMergeGraph(tombstone_count=1), audit=audit, gateway=rig.gateway
+    )
+
+    assert settled is not None
+    assert settled.outcome == {"reconciled": "applied"}
+
+
+def test_a_caught_up_graph_without_the_effect_records_the_failed_row_as_before() -> None:
+    store = FakeApprovalStore()
+    row = _orphan(store)
+    audit = RecordingAuditStore()
+
+    status = _check(store, row, graph=ScriptedMergeGraph(tombstone_count=0), audit=audit)
+
+    assert status is not None
+    assert status.outcome is not None
+    assert "error" in status.outcome
+    [recorded] = audit.rows
+    assert recorded.details["reason_code"] == "interrupted_no_effect"
+
+
+class _UnavailableGateway:
+    """A gateway whose catch-up check raises `error` (the log or the gateway cannot answer)."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def is_caught_up(self, graph: str) -> bool:
+        del graph
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [GraphLogUnavailableError(), GraphUnavailableError()],
+    ids=["log-unavailable", "graph-unavailable"],
+)
+def test_a_gateway_that_cannot_answer_defers_the_check_without_raising(error: Exception) -> None:
+    store = FakeApprovalStore()
+    row = _orphan(store)
+    graph = ScriptedMergeGraph(tombstone_count=0)
+    audit = RecordingAuditStore()
+
+    status = _check(
+        store,
+        row,
+        graph=graph,
+        audit=audit,
+        gateway=_UnavailableGateway(error),  # pyright: ignore[reportArgumentType] -- only `is_caught_up` is asked
+    )
+
+    assert status is not None
+    assert status.outcome is None
+    assert graph.queries == []
+    assert audit.rows == []
+
+
+def test_no_installed_gateway_defers_the_check_without_raising() -> None:
+    store = FakeApprovalStore()
+    row = _orphan(store)
+    graph = ScriptedMergeGraph(tombstone_count=0)
+    audit = RecordingAuditStore()
+
+    def _none(_config: ServiceConfig) -> CleanupSubmitter:
+        raise GraphWriteUnavailableError("graph writes are unavailable: no gateway")
+
+    status = check_cleanup_approval(
+        pending_approval_id=row.id,
+        actor=_ACTOR,
+        store=store,
+        config=_CONFIG,
+        dependencies=GraphCleanupDependencies(
+            open_single_tenant_graph=lambda _config: graph,
+            audit_store=lambda _config: audit,
+            graph_write_gateway=_none,
+        ),
+    )
+
+    assert status is not None
+    assert status.outcome is None
+    assert graph.queries == []
+    assert audit.rows == []
+
+
+def test_the_catch_up_check_comes_before_the_graph_is_opened_or_read() -> None:
+    store = FakeApprovalStore()
+    row = _orphan(store)
+    rig = CleanupRig()
+    graph = ScriptedMergeGraph(tombstone_count=1)
+    order: list[str] = []
+
+    def _open(_config: ServiceConfig) -> ScriptedMergeGraph:
+        order.append("open_graph")
+        return graph
+
+    check_cleanup_approval(
+        pending_approval_id=row.id,
+        actor=_ACTOR,
+        store=store,
+        config=_CONFIG,
+        dependencies=GraphCleanupDependencies(
+            open_single_tenant_graph=_open,
+            audit_store=lambda _config: RecordingAuditStore(),
+            graph_write_gateway=lambda _config: order.append("gateway") or rig.hooked,  # pyright: ignore[reportReturnType] -- the hooked rig gateway is a `CleanupSubmitter`
+        ),
+    )
+
+    assert order == ["gateway", "open_graph"]
+    assert rig.hooked.calls == ["is_caught_up"]
+
+
+def test_a_deferral_emits_a_semantic_log_entry_with_the_approval_and_the_reason(
+    tmp_path: Path,
+) -> None:
+    store = FakeApprovalStore()
+    row = _orphan(store)
+    rig = CleanupRig()
+    _behind_its_log(rig)
+
+    _check(store, row, gateway=rig.gateway)
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "ps-service.jsonl").read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    [entry] = [
+        line
+        for line in lines
+        if line.get("action") == "reconcile_cleanup_approval" and line.get("outcome") == "deferred"
+    ]
+    assert entry["component"] == "graph_cleanup"
+    assert entry["approval_id"] == row.id
+    assert entry["reason"] == "graph_behind_its_log"
+
+
+@pytest.mark.parametrize("case", ["unsigned", "inside-grace", "has-outcome", "near-miss"])
+def test_rows_that_are_not_orphans_never_touch_the_gateway(case: str) -> None:
+    store = FakeApprovalStore()
+    rows = {
+        "unsigned": _seed(store, expired_for=RECONCILE_GRACE + timedelta(seconds=5)),
+        "inside-grace": _seed(store, signed=True, expired_for=timedelta(seconds=10)),
+        "has-outcome": _seed(
+            store,
+            signed=True,
+            outcome={"merged": True},
+            expired_for=RECONCILE_GRACE + timedelta(seconds=5),
+        ),
+        "near-miss": _seed(
+            store,
+            tool_name="near_misses_resolve",
+            signed=True,
+            expired_for=RECONCILE_GRACE + timedelta(seconds=5),
+        ),
+    }
+    rig = CleanupRig()
+
+    _check(store, rows[case], gateway=rig.hooked)  # pyright: ignore[reportArgumentType] -- the hooked rig gateway is a `CleanupSubmitter`
+
+    assert rig.hooked.calls == []

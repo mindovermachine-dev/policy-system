@@ -1,16 +1,16 @@
 """Executors run when a signed passkey approval is verified (issue #190).
 
 `execute_capability_merge` and `execute_obligation_merge` are the post-signature steps of
-`merge-capabilities` and `merge-obligations` (CHANGES.md Decision 4, audit-first and
-fail-closed). Order:
+`merge-capabilities` and `merge-obligations` (audit-first and fail-closed). Order:
 
 1. re-check the approving actor still holds `ComplianceOfficer` (a store outage denies);
 2. re-read the graph, re-validate, and compare the state digest bound into the signed args
    (drift means the previewed state is gone: nothing is written, no audit row);
 3. record the `applied` audit row, then write -- if the audit row cannot be recorded, no
    graph edit is made (AC-BI-022);
-4. one guarded statement (all-or-nothing, AC-BI-018); a guard miss or failure records a
-   `failed` row with the same `approval_id` (best effort) and returns a generic error.
+4. one gateway group, guarded by the graph's log position (all-or-nothing, AC-BI-018); a guard
+   miss or failure records a `failed` row with the same `approval_id` (best effort) and returns a
+   generic error.
 
 The function never raises for an expected failure; every error outcome is a short message
 with no internal detail. The module registers its executor and effect verifier with
@@ -28,6 +28,7 @@ from ps_service.audit.errors import (
     AuditPostgresUnavailableError,
     AuditUnknownActionError,
 )
+from ps_service.audit.store import EventIdAuditStore
 from ps_service.authz.models import AccessRole
 from ps_service.authz.service import require_role
 from ps_service.graph_cleanup.audit_actions import (
@@ -59,12 +60,13 @@ from ps_service.graph_cleanup.graph_reader import (
     read_obligation_present,
     read_release_state,
 )
-from ps_service.graph_cleanup.graph_writer import (
-    merge_capabilities,
-    merge_obligations,
-    release_governance,
-    unmerge_capability,
-    unmerge_obligation,
+from ps_service.graph_cleanup.graph_submission import graph_write_target
+from ps_service.graph_cleanup.group_builders import (
+    write_capability_merge,
+    write_capability_unmerge,
+    write_obligation_merge,
+    write_obligation_unmerge,
+    write_release,
 )
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
 from ps_service.graph_cleanup.models import CapabilityUnmergePlan
@@ -216,6 +218,36 @@ def _record(
     )
 
 
+def _record_applied(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    absorbed_id: str,
+    details: dict[str, object],
+    action: str,
+    resource_type: str = "capability",
+) -> str:
+    """Record the `applied` row and return its id, the audit link of the group that follows.
+
+    The audit store must report the id of the row it wrote (`EventIdAuditStore`, the real store
+    does); a store that cannot is a wiring error, not a runtime condition, so a `TypeError`.
+    """
+    store = dependencies.audit_store(config)
+    if not isinstance(store, EventIdAuditStore):
+        message = "the audit store cannot report the id of the row it records"
+        raise TypeError(message)
+    return store.record_standalone_with_event_id(
+        actor_subject=row.actor_subject,
+        actor_issuer=row.actor_issuer,
+        action=action,
+        resource_type=resource_type,
+        resource_id=absorbed_id,
+        outcome="applied",
+        details=details,
+    )
+
+
 def _actor_is_still_authorised(
     row: PendingApprovalRow, dependencies: GraphCleanupDependencies, config: ServiceConfig
 ) -> bool:
@@ -240,23 +272,32 @@ def _write_after_audit(
     absorbed_id: str,
     plan: CapabilityMergePlan,
 ) -> dict[str, object]:
-    """Steps 3-4: record `applied`, then write; on failure record `failed`, return the error."""
+    """Steps 3-4: record `applied`, then one gateway group; on failure record `failed`.
+
+    The group carries the `applied` row's id as its audit link. A group committed but not applied
+    yet is a success (no `failed` row).
+    """
     try:
-        _record(
+        audit_event_id = _record_applied(
             row,
             dependencies,
             config,
-            outcome="applied",
             absorbed_id=absorbed_id,
             details=_details(row, survivor_id=survivor_id, absorbed_id=absorbed_id, plan=plan),
+            action=CAPABILITY_MERGE_ACTION,
         )
     except _AUDIT_ERRORS as exc:
         _log(row, "failed", f"audit_unavailable:{type(exc).__name__}")
         return _error(_NOT_AUDITED)
     reason: Literal["graph_guard_missed", "graph_write_failed"]
     try:
-        merge_capabilities(
-            graph, survivor_id=survivor_id, absorbed_id=absorbed_id, expected=plan.expected
+        write_capability_merge(
+            graph,
+            graph_write_target(dependencies, config),
+            audit_event_id=audit_event_id,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            expected=plan.expected,
         )
     except GraphCleanupStaleStateError:
         reason, message = "graph_guard_missed", _STALE
@@ -420,25 +461,35 @@ def _write_obligation_after_audit(
     absorbed_id: str,
     plan: ObligationMergePlan,
 ) -> dict[str, object]:
-    """Steps 3-4 for an obligation merge: record `applied`, then write; `failed` on error."""
+    """Steps 3-4 for an obligation merge: record `applied`, then one gateway group.
+
+    The group carries the `applied` row's id as its audit link; `failed` is recorded on error. A
+    group committed but not applied yet is a success (no `failed` row).
+    """
     try:
-        _record_obligation(
+        audit_event_id = _record_applied(
             row,
             dependencies,
             config,
-            outcome="applied",
             absorbed_id=absorbed_id,
             details=_obligation_details(
                 row, survivor_id=survivor_id, absorbed_id=absorbed_id, plan=plan
             ),
+            action=OBLIGATION_MERGE_ACTION,
+            resource_type="obligation",
         )
     except _AUDIT_ERRORS as exc:
         _log(row, "failed", f"audit_unavailable:{type(exc).__name__}")
         return _error(_NOT_AUDITED)
     reason: Literal["graph_guard_missed", "graph_write_failed"]
     try:
-        merge_obligations(
-            graph, survivor_id=survivor_id, absorbed_id=absorbed_id, expected=plan.expected
+        write_obligation_merge(
+            graph,
+            graph_write_target(dependencies, config),
+            audit_event_id=audit_event_id,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            expected=plan.expected,
         )
     except GraphCleanupStaleStateError:
         reason, message = "graph_guard_missed", _STALE
@@ -570,16 +621,31 @@ def _write_release_after_audit(
     *,
     plan: ReleasePlan,
 ) -> dict[str, object]:
-    """Steps 3-4 for a release: record `applied`, then delete the edge; `failed` on error."""
+    """Steps 3-4 for a release: record `applied`, then one gateway group; `failed` on error.
+
+    The group deletes the `GOVERNED_BY` edge and carries the `applied` row's id as its audit link.
+    A group committed but not applied yet is a success (no `failed` row).
+    """
     try:
-        _record_release(row, dependencies, config, outcome="applied", plan=plan)
+        audit_event_id = _record_applied(
+            row,
+            dependencies,
+            config,
+            absorbed_id=plan.preview.capability_id,
+            details=_release_details(row, plan=plan),
+            action=CAPABILITY_RELEASE_GOVERNANCE_ACTION,
+        )
     except _AUDIT_ERRORS as exc:
         _log(row, "failed", f"audit_unavailable:{type(exc).__name__}")
         return _error(_RELEASE_NOT_AUDITED)
     reason: Literal["graph_guard_missed", "graph_write_failed"]
     try:
-        release_governance(
-            graph, capability_id=plan.preview.capability_id, policy_id=plan.preview.policy_id
+        write_release(
+            graph,
+            graph_write_target(dependencies, config),
+            audit_event_id=audit_event_id,
+            capability_id=plan.preview.capability_id,
+            policy_id=plan.preview.policy_id,
         )
     except GraphCleanupStaleStateError:
         reason, message = "graph_guard_missed", _STALE
@@ -707,44 +773,48 @@ def _unmerge_details(
     ).model_dump()
 
 
-def _record_unmerge(
+def _unmerge_action(plan: UnmergePlan) -> tuple[str, str]:
+    """The audit action and resource type of the plan's kind."""
+    if isinstance(plan, CapabilityUnmergePlan):
+        return CAPABILITY_UNMERGE_ACTION, "capability"
+    return OBLIGATION_UNMERGE_ACTION, "obligation"
+
+
+def _record_unmerge_failed(
     row: PendingApprovalRow,
     dependencies: GraphCleanupDependencies,
     config: ServiceConfig,
     *,
-    outcome: Literal["applied", "failed"],
     plan: UnmergePlan,
-    failed_reason: Literal["graph_guard_missed", "graph_write_failed"] | None = None,
+    failed_reason: Literal["graph_guard_missed", "graph_write_failed"],
 ) -> None:
-    is_capability = isinstance(plan, CapabilityUnmergePlan)
+    action, resource_type = _unmerge_action(plan)
     _record(
         row,
         dependencies,
         config,
-        outcome=outcome,
+        outcome="failed",
         absorbed_id=plan.preview.merged_id,
         details=_unmerge_details(row, plan=plan, failed_reason=failed_reason),
-        action=CAPABILITY_UNMERGE_ACTION if is_capability else OBLIGATION_UNMERGE_ACTION,
-        resource_type="capability" if is_capability else "obligation",
+        action=action,
+        resource_type=resource_type,
     )
 
 
-def _run_unmerge_write(graph: GraphHandle, plan: UnmergePlan) -> None:
-    """The one guarded writer statement for the plan's kind."""
+def _run_unmerge_write(
+    graph: GraphHandle,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    audit_event_id: str,
+    plan: UnmergePlan,
+) -> None:
+    """The one gateway group for the plan's kind."""
+    target = graph_write_target(dependencies, config)
     if isinstance(plan, CapabilityUnmergePlan):
-        unmerge_capability(
-            graph,
-            absorbed_id=plan.preview.merged_id,
-            survivor_id=plan.preview.survivor_id,
-            write=plan.write,
-        )
+        write_capability_unmerge(graph, target, audit_event_id=audit_event_id, plan=plan)
     else:
-        unmerge_obligation(
-            graph,
-            absorbed_id=plan.preview.merged_id,
-            survivor_id=plan.preview.survivor_id,
-            write=plan.write,
-        )
+        write_obligation_unmerge(graph, target, audit_event_id=audit_event_id, plan=plan)
 
 
 def _write_unmerge_after_audit(
@@ -755,15 +825,28 @@ def _write_unmerge_after_audit(
     *,
     plan: UnmergePlan,
 ) -> dict[str, object]:
-    """Steps 3-4 for an unmerge: record `applied`, then write; `failed` on error."""
+    """Steps 3-4 for an unmerge: record `applied`, then one gateway group; `failed` on error.
+
+    The group carries the `applied` row's id as its audit link. A group committed but not applied
+    yet is a success (no `failed` row).
+    """
+    action, resource_type = _unmerge_action(plan)
     try:
-        _record_unmerge(row, dependencies, config, outcome="applied", plan=plan)
+        audit_event_id = _record_applied(
+            row,
+            dependencies,
+            config,
+            absorbed_id=plan.preview.merged_id,
+            details=_unmerge_details(row, plan=plan),
+            action=action,
+            resource_type=resource_type,
+        )
     except _AUDIT_ERRORS as exc:
         _log(row, "failed", f"audit_unavailable:{type(exc).__name__}")
         return _error(_UNMERGE_NOT_AUDITED)
     reason: Literal["graph_guard_missed", "graph_write_failed"]
     try:
-        _run_unmerge_write(graph, plan)
+        _run_unmerge_write(graph, dependencies, config, audit_event_id=audit_event_id, plan=plan)
     except GraphCleanupStaleStateError:
         reason, message = "graph_guard_missed", _STALE
     except GraphCleanupPersistenceError:
@@ -780,9 +863,7 @@ def _write_unmerge_after_audit(
         }
     _log(row, "failed", reason)
     try:
-        _record_unmerge(
-            row, dependencies, config, outcome="failed", plan=plan, failed_reason=reason
-        )
+        _record_unmerge_failed(row, dependencies, config, plan=plan, failed_reason=reason)
     except _AUDIT_ERRORS as exc:
         _log(row, "failed", f"failed_row_not_recorded:{type(exc).__name__}")
     return _error(message)

@@ -1,7 +1,7 @@
 """Pure planning and validation for `merge-capabilities` (issue #190, AC-BI-005/010/016/021).
 
 No I/O: takes the `MergeState` the reader produced and returns the preview, the
-guard counts for the writer statement, the before/after snapshots and a state
+guard counts the writer pins, the before/after snapshots and a state
 digest. The digest binds a passkey approval to the exact state that was previewed.
 
 Merge case 1 (neither governed), case 2 (exactly one governed: the `GOVERNED_BY` edge moves

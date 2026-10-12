@@ -1,4 +1,8 @@
-"""Live FalkorDB proof of the capability-unmerge writer A5 (issue #190, slice 15).
+"""Live FalkorDB proof of the capability-unmerge statement A5 (issue #190, slice 15).
+
+Since #212 the production unmerge is a gateway group; this file runs the FROZEN pre-migration
+statement raw (`_legacy_reference.run_frozen_unmerge_capability`) as the live anchor for the
+in-memory interpreter that the equivalence tests compare the gateway group against.
 
 Scripted fakes prove only call shape; this proves the statement is valid Cypher and that its
 semantics hold: merge then unmerge returns the graph to its starting edge set, edges added to
@@ -16,8 +20,10 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.graph_cleanup.errors import GraphCleanupStaleStateError
-from ps_service.graph_cleanup.graph_writer import merge_capabilities, unmerge_capability
+from graph_cleanup._legacy_reference import (
+    run_frozen_merge_capabilities,
+    run_frozen_unmerge_capability,
+)
 from ps_service.graph_cleanup.models import CapabilityUnmergeWrite, ExpectedCounts
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 
@@ -82,7 +88,7 @@ def graph() -> Iterator[GraphHandle]:
 
 
 def _merge(graph: GraphHandle) -> None:
-    merge_capabilities(
+    run_frozen_merge_capabilities(
         graph,
         survivor_id="s",
         absorbed_id="a",
@@ -94,7 +100,7 @@ def test_merge_then_unmerge_returns_the_graph_to_its_starting_edges(graph: Graph
     before = _rows(graph, _SNAPSHOT_QUERY)
     _merge(graph)
 
-    unmerge_capability(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
+    run_frozen_unmerge_capability(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
 
     assert _rows(graph, _SNAPSHOT_QUERY) == before
     assert _rows(graph, "MATCH (c:Capability {id:'a'}) RETURN c.status") == [["active"]]
@@ -109,7 +115,7 @@ def test_an_edge_added_to_the_survivor_since_the_merge_stays(graph: GraphHandle)
         "MATCH (o:Obligation {id:'o_new'}), (s:Capability {id:'s'}) CREATE (o)-[:REQUIRES]->(s)"
     )
 
-    unmerge_capability(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
+    run_frozen_unmerge_capability(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
 
     assert _rows(
         graph, "MATCH (x)-[:REQUIRES]->(:Capability {id:'s'}) RETURN x.id ORDER BY x.id"
@@ -123,7 +129,7 @@ def test_a_case_two_governed_by_edge_moves_back_to_the_absorbed_capability(
         "CREATE (:Policy {id: 'p1', title: 'P', status: 'approved'}) WITH 1 AS _ "
         "MATCH (c:Capability {id:'a'}), (p:Policy {id:'p1'}) CREATE (c)-[:GOVERNED_BY]->(p)"
     )
-    merge_capabilities(
+    run_frozen_merge_capabilities(
         graph,
         survivor_id="s",
         absorbed_id="a",
@@ -138,7 +144,7 @@ def test_a_case_two_governed_by_edge_moves_back_to_the_absorbed_capability(
     )
     write = _WRITE.model_copy(update={"restore_policy_id": "p1", "remove_policy_edge": True})
 
-    unmerge_capability(graph, absorbed_id="a", survivor_id="s", write=write)
+    run_frozen_unmerge_capability(graph, absorbed_id="a", survivor_id="s", write=write)
 
     assert _rows(
         graph, "MATCH (c:Capability)-[:GOVERNED_BY]->(:Policy) RETURN c.id ORDER BY c.id"
@@ -160,10 +166,9 @@ def test_a_guard_miss_leaves_the_graph_identical(
     _merge(graph)
     before = _rows(graph, _SNAPSHOT_QUERY)
 
-    with pytest.raises(GraphCleanupStaleStateError):
-        unmerge_capability(
-            graph, absorbed_id="a", survivor_id="s", write=_WRITE.model_copy(update=overrides)
-        )
+    assert not run_frozen_unmerge_capability(
+        graph, absorbed_id="a", survivor_id="s", write=_WRITE.model_copy(update=overrides)
+    )
 
     assert _rows(graph, _SNAPSHOT_QUERY) == before
 
@@ -172,5 +177,4 @@ def test_a_survivor_that_is_no_longer_active_is_a_guard_miss(graph: GraphHandle)
     _merge(graph)
     graph.query("MATCH (c:Capability {id:'s'}) SET c.status = 'merged'")
 
-    with pytest.raises(GraphCleanupStaleStateError):
-        unmerge_capability(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
+    assert not run_frozen_unmerge_capability(graph, absorbed_id="a", survivor_id="s", write=_WRITE)

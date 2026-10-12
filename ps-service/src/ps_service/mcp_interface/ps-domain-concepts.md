@@ -687,7 +687,7 @@ These structured fields pair with `ps-skills/ps-plugin/rubrics/control-rubric.md
 
 ## Graph Write Gateway and Mutation Log
 
-Implemented by #205-#207 for the gateway, its log, replay and digest; Ingestion writes through it since #208, the Domain Mapper since #209 Company Merge (the merge stage and the near-miss resolution) since #210 and Policy Lifecycle (creation, edits, transitions and governance backfills) since #211. The other writers (Restore, Graph Cleanup, Regulatory Change Monitor) move onto it in #212-#214, until then their direct writes are not in the log.
+Implemented by #205-#207 for the gateway, its log, replay and digest; Ingestion writes through it since #208, the Domain Mapper since #209 Company Merge (the merge stage and the near-miss resolution) since #210 Policy Lifecycle (creation, edits, transitions and governance backfills) since #211 and Graph Cleanup (merge, release and unmerge) since #212. The other writers (Restore, Regulatory Change Monitor) move onto it in #213-#214, until then their direct writes are not in the log.
 
 The entities in this section are **not graph nodes**. They are not part of the compliance-graph vocabulary, are not defined in `ps_service.domain_schema`, and so have no generated Properties or Relationships tables. They describe how every write to the compliance graph is recorded, so that the graph can be rebuilt and checked from that record.
 

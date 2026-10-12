@@ -28,7 +28,10 @@ from ps_service.graph_cleanup.discovery import (
     group_capabilities,
     group_duplicate_obligations,
 )
-from ps_service.graph_cleanup.errors import GraphCleanupAcknowledgmentRequiredError
+from ps_service.graph_cleanup.errors import (
+    GraphCleanupAcknowledgmentRequiredError,
+    GraphCleanupPersistenceError,
+)
 from ps_service.graph_cleanup.executors import (
     TOOL_MERGE_CAPABILITIES,
     TOOL_MERGE_OBLIGATIONS,
@@ -42,6 +45,7 @@ from ps_service.graph_cleanup.graph_reader import (
     read_obligations_by_role,
     read_release_state,
 )
+from ps_service.graph_cleanup.graph_submission import graph_write_target, require_caught_up
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
 from ps_service.graph_cleanup.models import (
     CapabilityMergePlan,
@@ -564,6 +568,29 @@ def _interrupted_audit_row(row: PendingApprovalRow) -> tuple[str, str, str, dict
     return CAPABILITY_MERGE_ACTION, "capability", absorbed_id, details
 
 
+def _graph_has_caught_up(
+    row: PendingApprovalRow, *, config: ServiceConfig, dependencies: GraphCleanupDependencies
+) -> bool:
+    """Whether the single-tenant graph holds everything committed to its log; log a deferral if not.
+
+    The question is asked of the gateway before the graph is opened. Every way of not knowing
+    (behind the log, no gateway, the log unreadable) is a deferral, never an error: the state
+    heals by itself and `check-cleanup-approval` is retried.
+    """
+    try:
+        require_caught_up(graph_write_target(dependencies, config))
+    except GraphCleanupPersistenceError as exc:
+        reason = "graph_behind_its_log" if exc.__cause__ is None else "gateway_unavailable"
+        emit_log_entry(
+            component=_COMPONENT,
+            action="reconcile_cleanup_approval",
+            outcome="deferred",
+            extra={"approval_id": row.id, "reason": reason},
+        )
+        return False
+    return True
+
+
 def _reconcile_orphan(
     row: PendingApprovalRow,
     *,
@@ -576,9 +603,18 @@ def _reconcile_orphan(
     Effect present -> outcome `{"reconciled": "applied"}`. Effect absent -> a `failed`
     audit row (`interrupted_no_effect`, same approval id) first, then a failed outcome.
     Anything that raises leaves the row untouched so a later check retries.
+
+    The verifier reads the live graph, and a write is logged first (#202): a committed group may
+    not be applied to the graph yet, and "effect absent" read from a lagging graph would record a
+    false `failed` row for an action that is committed. So the verifier runs only once the graph
+    has caught up to its log. A graph behind its log, a gateway that is not installed, and a log
+    that cannot be read all defer: `None`, no audit row, no outcome, nothing opened or read, and a
+    `deferred` log entry; the next check retries.
     """
     verifier = resolve_effect_verifier(row.tool_name)
     if verifier is None:
+        return None
+    if not _graph_has_caught_up(row, config=config, dependencies=dependencies):
         return None
     graph = dependencies.open_single_tenant_graph(config)
     if verifier(row, graph):
@@ -618,7 +654,8 @@ def check_cleanup_approval(
     `None` for every case that must look like "not found": no resolvable actor, an unknown
     id, another actor's approval, or an approval that is not a cleanup approval. A signed
     row with no outcome that is past `expires_at + RECONCILE_GRACE` is verified against the
-    graph first; see `_reconcile_orphan`.
+    graph first, once the graph has caught up to its log; until then the row is returned with no
+    outcome and a later check retries. See `_reconcile_orphan`.
 
     Raises:
         GraphCleanupPersistenceError: reconciliation could not read the graph.

@@ -1,4 +1,8 @@
-"""Live FalkorDB proof of the obligation-unmerge writer A6 (issue #190, slice 16).
+"""Live FalkorDB proof of the obligation-unmerge statement A6 (issue #190, slice 16).
+
+Since #212 the production unmerge is a gateway group; this file runs the FROZEN pre-migration
+statement raw (`_legacy_reference.run_frozen_unmerge_obligation`) as the live anchor for the
+in-memory interpreter that the equivalence tests compare the gateway group against.
 
 Scripted fakes prove only call shape; this proves the statement is valid Cypher and that its
 semantics hold: merge then unmerge recreates the Obligation under its original id with its
@@ -18,8 +22,10 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.graph_cleanup.errors import GraphCleanupStaleStateError
-from ps_service.graph_cleanup.graph_writer import merge_obligations, unmerge_obligation
+from graph_cleanup._legacy_reference import (
+    run_frozen_merge_obligations,
+    run_frozen_unmerge_obligation,
+)
 from ps_service.graph_cleanup.models import ObligationExpectedCounts, ObligationUnmergeWrite
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 
@@ -80,7 +86,7 @@ def graph() -> Iterator[GraphHandle]:
 
 
 def _merge(graph: GraphHandle) -> None:
-    merge_obligations(
+    run_frozen_merge_obligations(
         graph,
         survivor_id="s",
         absorbed_id="a",
@@ -93,7 +99,7 @@ def test_the_obligation_is_recreated_with_its_properties_and_edges_and_the_marke
 ) -> None:
     _merge(graph)
 
-    unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
+    run_frozen_unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
 
     assert _rows(graph, "MATCH (o:Obligation {id:'a'}) RETURN o.text, o.confidence") == [["A", 0.8]]
     assert _rows(
@@ -111,7 +117,7 @@ def test_the_obligation_is_recreated_with_its_properties_and_edges_and_the_marke
 def test_the_survivors_edges_are_left_in_place(graph: GraphHandle) -> None:
     _merge(graph)
 
-    unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
+    run_frozen_unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
 
     assert _rows(
         graph, "MATCH (q)-[:SATISFIED_BY]->(:Obligation {id:'s'}) RETURN q.id ORDER BY q.id"
@@ -135,8 +141,7 @@ def test_a_guard_miss_leaves_the_graph_identical(
     _merge(graph)
     before = _rows(graph, _SNAPSHOT_QUERY)
 
-    with pytest.raises(GraphCleanupStaleStateError):
-        unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=write)
+    assert not run_frozen_unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=write)
 
     assert _rows(graph, _SNAPSHOT_QUERY) == before
 
@@ -145,20 +150,19 @@ def test_a_capability_tombstone_endpoint_is_a_guard_miss(graph: GraphHandle) -> 
     _merge(graph)
     graph.query("MATCH (c:Capability {id:'c2'}) SET c.status = 'merged'")
 
-    with pytest.raises(GraphCleanupStaleStateError):
-        unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
+    assert not run_frozen_unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
 
 
 def test_an_obligation_that_exists_again_is_a_guard_miss(graph: GraphHandle) -> None:
     _merge(graph)
     graph.query("CREATE (:Obligation {id: 'a', text: 'regenerated'})")
 
-    with pytest.raises(GraphCleanupStaleStateError):
-        unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
+    assert not run_frozen_unmerge_obligation(graph, absorbed_id="a", survivor_id="s", write=_WRITE)
 
 
 def test_a_marker_pointing_at_another_survivor_is_a_guard_miss(graph: GraphHandle) -> None:
     _merge(graph)
 
-    with pytest.raises(GraphCleanupStaleStateError):
-        unmerge_obligation(graph, absorbed_id="a", survivor_id="other", write=_WRITE)
+    assert not run_frozen_unmerge_obligation(
+        graph, absorbed_id="a", survivor_id="other", write=_WRITE
+    )

@@ -1,0 +1,293 @@
+"""The Graph Cleanup side of the Graph Write Gateway seam (issue #212).
+
+Graph Cleanup issues no write Cypher. A writer turns a guarded decision into gateway primitives and
+submits them as ONE group on the `policy_system` graph, through a `CleanupSubmitter`.
+`GraphWriteTarget` carries what a writer needs for that: the submitter and the graph the group goes
+to. `submit_cleanup_group` is the one place a writer's primitives reach the gateway and the one
+place a gateway failure becomes a Graph Cleanup error:
+
+- a stale `ExpectedPosition` is `GraphCleanupStaleStateError` (the flow's own message): the graph
+  moved between the guard reads and the append, so nothing of this group was logged;
+- every other gateway failure (a refused group, an unreachable store or graph, an unstorable value,
+  no gateway installed) is `GraphCleanupPersistenceError` with one fixed, sanitized message; the
+  gateway error is chained as `__cause__` and never put in the message;
+- a group that was `applied`, `unchanged`, or committed but not applied yet
+  (`committed_apply_pending`) returns normally. The last is SUCCESS: the edit is in the log and the
+  gateway applies it on recovery (the documented C-0 exception of #202), so no `failed` audit row
+  is written for it. This is why Graph Cleanup does not use `ingestion.graph_submission.
+  submit_or_raise`, which treats a pending group as a failure.
+
+Guarded flows follow this order: the `applied` audit row, then `require_caught_up`, then read the
+log position P0 with `read_log_position`, then the guard reads and the Python decision (a guard
+miss or a read failure logs nothing, not even a stamp), then `ensure_stamped` (the stamp only adds
+`stamped` entries after P0), then submit with `ExpectedPosition(P0 + stamped)`. Reading P0 AFTER
+the guard reads would make the guard vacuous. A refused position happens after the stamp, so a
+legacy-edge stamp group may already be in the log under the `applied` row's audit id; the cleanup
+group itself is never logged.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+from pydantic import ValidationError
+
+from ps_service.api.errors import GraphWriteUnavailableError
+from ps_service.graph_cleanup.errors import (
+    GraphCleanupPersistenceError,
+    GraphCleanupStaleStateError,
+)
+from ps_service.graph_gateway.errors import (
+    GraphApplyError,
+    GraphLogPersistenceError,
+    GraphUnavailableError,
+    GraphWriteRejectedError,
+    StaleGraphStateError,
+    UnexpectedGraphReplyError,
+)
+from ps_service.graph_gateway.models import MutationGroup
+from ps_service.ingestion.graph_submission import GroupSubmitter
+from ps_service.logging import emit_log_entry
+from ps_service.persistence import StatePostgresConnectionError
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from ps_service.config import ServiceConfig
+    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
+    from ps_service.graph_gateway.models import Precondition, Primitive
+
+__all__ = [
+    "CleanupSubmitter",
+    "GraphWriteTarget",
+    "cleanup_submitter",
+    "edge_identity",
+    "ensure_stamped",
+    "graph_write_target",
+    "read_log_position",
+    "refuse_unstorable_values",
+    "require_caught_up",
+    "submit_cleanup_group",
+]
+
+_COMPONENT = "graph_cleanup"
+_WRITE_FAILED_MESSAGE = "the policy graph database could not complete the write"
+_STALE_DEFAULT_MESSAGE = "the graph changed since the preview; nothing was written"
+
+_GATEWAY_FAILURES = (
+    GraphWriteRejectedError,
+    GraphApplyError,
+    GraphUnavailableError,
+    GraphLogPersistenceError,
+    UnexpectedGraphReplyError,
+    StatePostgresConnectionError,
+    GraphWriteUnavailableError,
+)
+"""Every failure a gateway call raises on purpose; anything else is a bug and propagates.
+
+`GraphWriteRejectedError` is the base of `StaleGraphStateError`, so a handler that catches both
+must name the stale one first (`_mapped_failures`).
+"""
+
+
+@runtime_checkable
+class CleanupSubmitter(GroupSubmitter, Protocol):
+    """What Graph Cleanup needs of the gateway: a `GroupSubmitter` that reads the log position.
+
+    Declared here, not on `GroupSubmitter`, so no other writer's submitter (or test fake) has to
+    grow a method it does not use. `GraphWriteGateway` satisfies it structurally.
+    """
+
+    def read_log_position(self, graph: str) -> int:
+        """Read the last log position of `graph` (the position an `ExpectedPosition` names)."""
+        ...
+
+
+def cleanup_submitter(gateway: GroupSubmitter) -> CleanupSubmitter:
+    """Narrow the process's gateway to what Graph Cleanup needs of it.
+
+    `graph_write_access` hands out a `GroupSubmitter`; the guarded flows also read the log
+    position. The real `GraphWriteGateway` has `read_log_position`; a gateway without it is a
+    wiring error, not a runtime condition, so it is a `TypeError`, not a persistence error.
+    """
+    if not isinstance(gateway, CleanupSubmitter):
+        message = "the installed graph write gateway cannot read the log position"
+        raise TypeError(message)
+    return gateway
+
+
+class GraphWriteTarget:
+    """Where a writer's group goes: a submitter and a graph name."""
+
+    def __init__(self, submitter: CleanupSubmitter, graph_name: str) -> None:
+        """Hold the submitter and the target graph; nothing is stamped yet."""
+        self.submitter = submitter
+        self.graph_name = graph_name
+        self.stamped = False
+        """Whether this target's graph has had its legacy edges stamped by this run."""
+
+
+def graph_write_target(
+    dependencies: GraphCleanupDependencies, config: ServiceConfig
+) -> GraphWriteTarget:
+    """The submitter and graph a cleanup write goes to, resolved at call time.
+
+    The graph name is the one the reads' opener uses (`company_merge.falkordb_client.
+    single_tenant_graph_name`), so a write never lands in a different graph than the one it
+    was guarded against. The import is function-local for the reason `dependencies` gives (M6).
+
+    Raises:
+        GraphCleanupPersistenceError: no gateway is installed.
+    """
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+        single_tenant_graph_name,
+    )
+
+    with _mapped_failures(_STALE_DEFAULT_MESSAGE):
+        submitter = dependencies.graph_write_gateway(config)
+    return GraphWriteTarget(submitter, single_tenant_graph_name())
+
+
+def edge_identity(edge_type: str, source_id: str, target_id: str) -> str:
+    """`{type}:{source}->{target}`: the gateway identity of an edge, one per (type, endpoints).
+
+    The scheme of the Domain Mapper writer, the internal-seed path, Company Merge, Policy
+    Lifecycle and the edge-identity backfill, so one edge has the same identity whichever path
+    wrote it. A deliberate near-duplicate (pinned equal to Policy Lifecycle's by a test), not a
+    cross-component import.
+    """
+    return f"{edge_type}:{source_id}->{target_id}"
+
+
+@contextmanager
+def _mapped_failures(stale_message: str) -> Generator[None]:
+    """Map the gateway's failures to Graph Cleanup's errors (stale first: it is a subclass)."""
+    try:
+        yield
+    except StaleGraphStateError as exc:
+        raise GraphCleanupStaleStateError(stale_message) from exc
+    except _GATEWAY_FAILURES as exc:
+        _log_write_failure(exc)
+        raise GraphCleanupPersistenceError(_WRITE_FAILED_MESSAGE) from exc
+
+
+def _log_write_failure(exc: Exception) -> None:
+    emit_log_entry(
+        component=_COMPONENT,
+        action="submit_cleanup_group",
+        outcome="failed",
+        extra={"error_type": type(exc).__name__},
+    )
+
+
+@contextmanager
+def refuse_unstorable_values() -> Generator[None]:
+    """Map a primitive's own validation failure to the persistence error (no content echoed).
+
+    A writer builds gateway primitives before it submits them, and a primitive refuses a property
+    value the graph cannot store (a reserved key, an empty or nested list, a non-finite number).
+    The direct writer accepted such a value and let FalkorDB decide; now it is refused before
+    anything is written, as the same error a refused group is. The `ValidationError` (which
+    carries the offending content) is chained, never put in the message.
+
+    Raises:
+        GraphCleanupPersistenceError: the fixed, sanitized write-failed message.
+    """
+    try:
+        yield
+    except ValidationError as exc:
+        _log_write_failure(exc)
+        raise GraphCleanupPersistenceError(_WRITE_FAILED_MESSAGE) from exc
+
+
+def require_caught_up(target: GraphWriteTarget) -> None:
+    """Raise unless `target`'s graph holds everything committed to its log.
+
+    A guard read is only valid once the graph has caught up with the log: if an earlier group of
+    the graph is still waiting to be applied, the read would not see it.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph is behind its log, or the log could not be read.
+    """
+    with _mapped_failures(_STALE_DEFAULT_MESSAGE):
+        caught_up = target.submitter.is_caught_up(target.graph_name)
+    if not caught_up:
+        emit_log_entry(
+            component=_COMPONENT,
+            action="require_caught_up",
+            outcome="failed",
+            extra={"reason": "graph_behind_its_log"},
+        )
+        raise GraphCleanupPersistenceError(_WRITE_FAILED_MESSAGE)
+
+
+def read_log_position(target: GraphWriteTarget) -> int:
+    """Read the last log position of `target`'s graph (no node or edge scan, nothing logged).
+
+    Raises:
+        GraphCleanupPersistenceError: the log could not be read or the graph is closed to the
+            gateway.
+    """
+    with _mapped_failures(_STALE_DEFAULT_MESSAGE):
+        return target.submitter.read_log_position(target.graph_name)
+
+
+def ensure_stamped(target: GraphWriteTarget, audit_event_id: str | None) -> int:
+    """Stamp `target`'s legacy identity-less edges once per target; return how many were stamped.
+
+    The graph must be caught up first (the scan must see what the log wrote). A graph with nothing
+    to stamp costs one read and logs nothing; otherwise one stamp group is logged under
+    `audit_event_id` (`None`: no audit link). A second call on the same target does nothing.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph could not be read or the stamp group was refused.
+    """
+    if target.stamped:
+        return 0
+    require_caught_up(target)
+    with _mapped_failures(_STALE_DEFAULT_MESSAGE):
+        outcome = target.submitter.stamp_legacy_edge_identity(target.graph_name, audit_event_id)
+    target.stamped = True
+    return outcome.stamped
+
+
+def submit_cleanup_group(
+    target: GraphWriteTarget,
+    primitives: tuple[Primitive, ...],
+    *,
+    audit_event_id: str | None,
+    stale_message: str,
+    preconditions: tuple[Precondition, ...] = (),
+) -> None:
+    """Submit `primitives` as one group on `target`'s graph; return once it is committed.
+
+    Nothing to write submits nothing and stamps nothing. Otherwise the graph's legacy edges are
+    stamped before the first group of this target (a no-op when a guarded flow already did) and
+    the group is submitted. A group that is committed but not applied yet is success; no catch-up
+    is awaited after it.
+
+    Raises:
+        GraphCleanupStaleStateError: an `ExpectedPosition` precondition no longer held; nothing
+            of this group was logged. The message is `stale_message`.
+        GraphCleanupPersistenceError: the gateway refused the group or could not reach its
+            stores; the fixed, sanitized message, with the gateway error chained.
+    """
+    if not primitives:
+        return
+    with refuse_unstorable_values():
+        group = MutationGroup(
+            graph=target.graph_name,
+            audit_event_id=audit_event_id,
+            primitives=primitives,
+            preconditions=preconditions,
+        )
+    ensure_stamped(target, audit_event_id)
+    with _mapped_failures(stale_message):
+        outcome = target.submitter.submit_group(group)
+    emit_log_entry(
+        component=_COMPONENT,
+        action="submit_cleanup_group",
+        outcome="succeeded",
+        extra={"status": outcome.status, "graph": target.graph_name},
+    )

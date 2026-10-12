@@ -3,7 +3,7 @@
 No I/O. `derive_capability_unmerge_inputs` reads what a `capability.merge` audit snapshot says
 to reverse; `plan_capability_unmerge` compares it with the live graph, rejects every conflict
 with an explanation (D9), and returns the preview, the exact parameters the guarded writer
-statement pins, the before/after snapshots and a state digest binding the approval.
+pins, the before/after snapshots and a state digest binding the approval.
 
 Only the edges the merge moved come back, and only those the merge moved leave the survivor;
 anything the survivor gained since stays in place and is listed (`survivor_added_edges`).

@@ -10,6 +10,7 @@ Anchors are headings and quoted text, never line numbers.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -743,7 +744,8 @@ def test_architecture_policy_lifecycle_says_its_writes_go_through_the_gateway() 
         assert needle in guidance, needle
     assert "#211" in _ca_row("| Graph Write Gateway | `ps.")
     assert "#211-#214" not in ca
-    assert "#212-#214" in ca
+    assert "#212-#214" not in ca
+    assert "#213-#214" in ca
 
 
 def test_architecture_policy_lifecycle_cascade_is_one_gateway_group_not_one_cypher_statement() -> (
@@ -831,13 +833,15 @@ def test_solution_architecture_and_domain_concepts_name_policy_lifecycle_as_a_ga
 
     assert "Policy Lifecycle (#211)" in sa
     assert "#211-#214" not in sa
+    assert "#212-#214" not in sa
     assert "(target)" not in sa.split("Cypher: read knowledge graph")[1].split("\n")[0]
     assert (
         "Policy Lifecycle (creation, edits, transitions and governance backfills) since #211"
         in section
     )
     assert "#211-#214" not in section
-    assert "#212-#214" in section
+    assert "#212-#214" not in section
+    assert "#213-#214" in section
 
 
 def test_both_copies_of_the_domain_concepts_are_identical() -> None:
@@ -853,3 +857,166 @@ def test_operations_guide_says_policy_lifecycle_tools_answer_an_error_without_a_
     assert "Policy Lifecycle" in ops
     assert "answer `error: ...`" in ops
     assert "record no audit row" in ops
+
+
+# --- issue #212: Graph Cleanup writes through the gateway ----------------------------------------
+
+_MCP_SERVER = _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "mcp_server.py"
+_EXECUTORS = _REPO / "ps-service" / "src" / "ps_service" / "graph_cleanup" / "executors.py"
+_CLEANUP_TOOL_FUNCTIONS = (
+    "merge_capabilities_tool",
+    "merge_obligations_tool",
+    "release_capability_governance_tool",
+    "unmerge_tool",
+)
+
+
+def _graph_cleanup_section() -> str:
+    return _section(_read(_CA), "### Graph Cleanup")
+
+
+def _graph_cleanup_guidance() -> str:
+    return _graph_cleanup_section().split("#### Implementation Registration")[0]
+
+
+def test_architecture_graph_cleanup_says_its_writes_go_through_the_gateway() -> None:
+    ca = _read(_CA)
+    guidance = _graph_cleanup_guidance()
+
+    assert "Target design (not yet implemented" not in guidance
+    for needle in (
+        "Implemented (#212)",
+        "test_no_graph_write_path.py",
+        "record_standalone_with_event_id",
+        "one gateway group",
+        "committed_apply_pending",
+        "is_caught_up",
+        "AC-BI-002",
+    ):
+        assert needle in guidance, needle
+    assert "#212" in _ca_row("| Graph Write Gateway | `ps.")
+    assert "Graph Cleanup is its fifth" in ca
+    assert "#212-#214" not in ca
+    assert "#213-#214" in ca
+
+
+def test_architecture_graph_cleanup_lists_the_observable_differences() -> None:
+    guidance = _graph_cleanup_guidance()
+    differences = guidance.split("Observable differences from the direct writes (#212)")[1]
+    differences = differences.split("\n- ")[0]
+
+    for needle in (
+        "`identity` property",
+        "AC-BI-002",
+        "unrelated write",
+        "stale",
+        "committed but not yet applied",
+        "success",
+        "defers",
+        "without a gateway",
+        "`failed`",
+        "identity-less",
+        "collapse",
+        "stamp",
+        "logs nothing",
+    ):
+        assert needle in differences, needle
+
+
+def test_architecture_graph_cleanup_constraints_describe_a_gateway_group() -> None:
+    section = _graph_cleanup_section()
+    constraints = section.split("###### Constraints")[1].split("#### Kind")[0]
+
+    assert "one gateway group guarded by the graph's log position" in constraints
+    assert "one all-or-nothing statement" not in section
+    assert "once the graph has caught up to its log" in constraints
+
+
+def test_architecture_graph_cleanup_registry_lists_the_gateway_modules_not_the_writer() -> None:
+    section = _graph_cleanup_section()
+    registration = section.split("#### Implementation Registration")[1].split("#### Actions")[0]
+    paths = re.findall(r"^\| `([^`]+)`", registration, flags=re.MULTILINE)
+    joined = " ".join(paths)
+
+    assert "graph_cleanup/graph_submission.py" in joined
+    assert "graph_cleanup/group_builders.py" in joined
+    assert "graph_cleanup/graph_writer.py" not in joined
+    for path in paths:
+        for single in re.findall(r"ps-service/\S+?\.(?:py|md)", path):
+            assert (_REPO / single).exists(), single
+    dependencies = next(line for line in registration.splitlines() if "dependencies.py" in line)
+    assert "Graph Write Gateway" in dependencies
+
+
+def test_architecture_graph_cleanup_actions_submit_one_gateway_group() -> None:
+    actions = _graph_cleanup_section().split("#### Actions")[1].split("\n---")[0]
+    rows = {
+        line.split("|")[1].strip(): line for line in actions.splitlines() if line.startswith("| ")
+    }
+
+    assert "same statement" not in actions
+    for name in ("MergeCapabilities", "MergeObligations", "ReleaseCapabilityGovernance", "Unmerge"):
+        assert "gateway group" in rows[name], name
+    assert "defers" in rows["CheckCleanupApproval"]
+
+
+def test_solution_architecture_and_domain_concepts_name_graph_cleanup_as_a_gateway_writer() -> None:
+    sa = _read(_SA)
+    section = _section(_read(_DOMAIN_CONCEPTS), "## Graph Write Gateway and Mutation Log")
+
+    assert "Graph Cleanup (#212)" in sa
+    assert "#212-#214" not in sa
+    assert "#213-#214" in sa
+    assert "Graph Cleanup (merge, release and unmerge) since #212" in section
+    assert "#212-#214" not in section
+    assert "#213-#214" in section
+    assert "since #212" in _read(
+        _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "ps-domain-concepts.md"
+    )
+
+
+def test_operations_guide_says_graph_cleanup_without_a_gateway_records_a_failed_row() -> None:
+    ops = _section(_read(_OPS), "## Troubleshooting / FAQ")
+
+    assert "Graph Cleanup" in ops
+    assert "check-cleanup-approval" in ops
+    assert "`failed`" in ops
+
+
+def _tool_docstrings() -> dict[str, str]:
+    tree = ast.parse(_read(_MCP_SERVER))
+    return {
+        node.name: ast.get_docstring(node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name in _CLEANUP_TOOL_FUNCTIONS
+    }
+
+
+def test_the_four_cleanup_mcp_descriptions_say_one_gateway_group() -> None:
+    descriptions = _tool_docstrings()
+
+    assert set(descriptions) == set(_CLEANUP_TOOL_FUNCTIONS)
+    for name, text in descriptions.items():
+        flat = " ".join(text.split())
+        assert "gateway" in flat, name
+        assert "one all-or-nothing gateway group (one logged write)" in flat, name
+        assert "guarded statement" not in flat, name
+        assert "one guarded write" not in flat, name
+
+
+def test_the_executors_docstring_describes_audit_first_then_one_gateway_group() -> None:
+    doc = " ".join((ast.get_docstring(ast.parse(_read(_EXECUTORS))) or "").split())
+
+    assert "one gateway group" in doc
+    assert "one guarded statement" not in doc
+    assert "CHANGES.md" not in doc
+
+
+def test_no_cleanup_source_or_doc_describes_a_direct_cleanup_write() -> None:
+    cleanup = _REPO / "ps-service" / "src" / "ps_service" / "graph_cleanup"
+    texts = [path.read_text(encoding="utf-8") for path in cleanup.glob("*.py")]
+    texts.append(_graph_cleanup_section())
+
+    for text in texts:
+        assert "one guarded statement" not in text
+        assert "one guarded, all-or-nothing statement" not in text

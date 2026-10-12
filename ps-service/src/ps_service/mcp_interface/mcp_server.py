@@ -3827,8 +3827,8 @@ def merge_capabilities_tool(
 
     On execution the absorbed Capability's `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move
     to the survivor with no duplicate edges, and the absorbed node is kept as a tombstone
-    (`status` `merged`, `MERGED_INTO` the survivor), in one all-or-nothing write that is
-    audited first (`capability.merge`).
+    (`status` `merged`, `MERGED_INTO` the survivor), in one all-or-nothing gateway group (one logged
+    write) that is audited first (`capability.merge`).
 
     Merge case 1 (neither Capability has a governing Policy) needs nothing more. Case 2 (exactly
     one is governed) changes which Capability that Policy governs: the first call, without
@@ -3916,9 +3916,9 @@ def merge_obligations_tool(
     `SATISFIED_BY` and `REQUIRES` edges union onto the survivor (no duplicate edges), the
     survivor keeps its single `HAS` Role edge, and the absorbed Obligation is DELETED with its
     full node and edge snapshot held in the audit row (`obligation.merge`), all in one
-    all-or-nothing write that is audited first. The delete leaves a `MergedObligation` marker
-    so a later ingest or restore that regenerates the absorbed Obligation attaches to the
-    survivor instead of recreating it.
+    all-or-nothing gateway group (one logged write) that is audited first. The delete leaves a
+    `MergedObligation` marker so a later ingest or restore that regenerates the absorbed
+    Obligation attaches to the survivor instead of recreating it.
 
     Returns `{"preview": {"survivor_id", "survivor_text", "absorbed_id", "absorbed_text",
     "role_id", "role_name", "edges_to_move": {"satisfied_by", "requires"},
@@ -3978,10 +3978,10 @@ def release_capability_governance_tool(
 
     Only a Capability governed by a `draft` Policy can be released: on execution its single
     `GOVERNED_BY` edge to that Policy is deleted (the Capability and the Policy stay, the
-    Capability becomes ungoverned) in one guarded write that is audited first
-    (`capability.release_governance`, with a before/after snapshot). A `proposed` Policy is
-    rejected with a pointer to `revert-policy-to-draft`; an `approved` or `deprecated` Policy
-    is rejected with a pointer to the policy lifecycle, stating plainly that a fork carries
+    Capability becomes ungoverned) in one all-or-nothing gateway group (one logged write) that is
+    audited first (`capability.release_governance`, with a before/after snapshot). A `proposed`
+    Policy is rejected with a pointer to `revert-policy-to-draft`; an `approved` or `deprecated`
+    Policy is rejected with a pointer to the policy lifecycle, stating plainly that a fork carries
     the whole governed set and so does not by itself free the Capability.
 
     Returns `{"preview": {"capability_id", "capability_name", "policy_id", "policy_title",
@@ -4055,8 +4055,8 @@ def unmerge_tool(
     `survivor_added_edges` and those that may have come from the absorbed Obligation as
     `survivor_edges_possibly_from_merge` (they may originate from the merge).
 
-    Either way the write is one guarded all-or-nothing statement that is audited first
-    (`capability.unmerge` or `obligation.unmerge`, with a before/after snapshot).
+    Either way the write is one all-or-nothing gateway group (one logged write) that is audited
+    first (`capability.unmerge` or `obligation.unmerge`, with a before/after snapshot).
 
     Returns `{"preview": {"kind": "capability" | "obligation", "merged_id", "survivor_id",
     "merge_approval_id", "edges_to_restore", "survivor_added_edges", "state_digest", ...},

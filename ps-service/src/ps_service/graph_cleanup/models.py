@@ -229,7 +229,7 @@ class CapabilityMergePreview(BaseModel):
 
 
 class ExpectedCounts(BaseModel):
-    """Per-class counts the guarded writer statement pins (A1 guard)."""
+    """Per-class counts the guarded writer pins (A1 guard)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -321,7 +321,7 @@ class ObligationMergePreview(BaseModel):
 
 
 class ObligationExpectedCounts(BaseModel):
-    """Per-class counts of the absorbed Obligation's edges the guarded statement pins (A2)."""
+    """Per-class counts of the absorbed Obligation's edges the guarded write pins (A2)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -458,7 +458,7 @@ class CapabilityUnmergePreview(BaseModel):
 
 
 class CapabilityUnmergeWrite(BaseModel):
-    """The exact parameters the guarded unmerge statement pins and applies (A5)."""
+    """The exact parameters the guarded unmerge write pins and applies (A5)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -473,7 +473,7 @@ class CapabilityUnmergeWrite(BaseModel):
 
 
 class CapabilityUnmergePlan(BaseModel):
-    """Pure result of planning one capability unmerge: preview, statement params, snapshots."""
+    """Pure result of planning one capability unmerge: preview, write params, snapshots."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -558,7 +558,7 @@ class ObligationUnmergePreview(BaseModel):
 
 
 class ObligationUnmergeWrite(BaseModel):
-    """The exact parameters the guarded obligation-unmerge statement pins and applies (A6)."""
+    """The exact parameters the guarded obligation-unmerge write pins and applies (A6)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -569,7 +569,7 @@ class ObligationUnmergeWrite(BaseModel):
 
 
 class ObligationUnmergePlan(BaseModel):
-    """Pure result of planning one obligation unmerge: preview, statement params, snapshots."""
+    """Pure result of planning one obligation unmerge: preview, write params, snapshots."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
