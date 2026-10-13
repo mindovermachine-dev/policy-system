@@ -1,8 +1,12 @@
 {
   "mcpServers": {
     "ps-mcp": {
-      "type": "stdio",
-      "command": "ps-cli-mcp-bridge"
+      "type": "http",
+      "url": "${PS_MCP_URL}",
+      "oauth": {
+        "clientId": "ps-cli",
+        "callbackPort": 53682
+      }
     }
   }
 }

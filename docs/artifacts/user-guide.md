@@ -121,10 +121,11 @@ URL and code, you complete sign-in in a browser, and the resulting token is stor
 under the current context. Both the evaluator and production instances are deployed with
 the bundled Authentik identity provider wired in, so this step is required on either.
 
-Every subsequent `ps-cli` command, and the Claude Desktop plugin's
-Policy System MCP connector (`ps-mcp`), uses whichever context is current. See the
+Every subsequent `ps-cli` command uses whichever context is current. See the
 [Appendix](#configuring-which-ps-service-instance-ps-cli-targets) for switching
 between multiple environments, per-command overrides, and credential storage.
+The Claude Desktop plugin's `ps-mcp` connector is configured separately, through `PS_MCP_URL`
+(see [Using Claude Desktop - Code](#using-claude-desktop---code)).
 
 ### Load curated content
 
@@ -192,12 +193,11 @@ with:
 /plugin install ps-plugin@ps-marketplace
 ```
 
-The plugin's Policy System MCP connector (`ps-mcp`) reaches whichever PS Service
-instance `ps-cli`'s current context points at (see [Point ps-cli at your
-instance](#point-ps-cli-at-your-instance)). It can take the connector a moment to
-connect, so if a query fails, try again.
+The plugin's Policy System MCP connector (`ps-mcp`) reaches the PS Service in `PS_MCP_URL`
+(see [Install the Policy System Plugin](./installation-guide.md#9-install-the-policy-system-plugin)).
+It can take the connector a moment to connect, so if a query fails, try again.
 
-Which Claude surfaces can reach your instance (only the Claude Code CLI is verified; the others are expected): [Which Claude surfaces reach your deployment](./installation-guide.md#which-claude-surfaces-reach-your-deployment).
+Which Claude surfaces can reach your instance, and which are verified: [Which Claude surfaces reach your deployment](./installation-guide.md#which-claude-surfaces-reach-your-deployment).
 
 ### Ask a question
 
@@ -578,8 +578,9 @@ single vendor's IdP is assumed) is implemented server-side
 given deployment enforces it once configured with an issuer/audience. The
 evaluator deployment (see [Installation Guide: Evaluator
 installation](./installation-guide.md#evaluator-installation)) and production both
-are, so every `ps-cli` command (and the plugin's `ps-mcp` connector — see
-[Using Claude Desktop](#using-claude-desktop---code)) needs `ps-cli auth login` first. Only a
+are, so every `ps-cli` command needs `ps-cli auth login` first. The plugin's `ps-mcp`
+connector authenticates through `/mcp` Authenticate instead (see
+[Using Claude Desktop](#using-claude-desktop---code)). Only a
 deployment started with the local-test bypass (`PS_SERVICE_LOCAL_TEST_BYPASS`, which cannot
 run in a container) needs no login. Re-running `config set-context` for an existing context name with a
 new `--url` always clears any credential previously stored for that name, so nothing
@@ -722,17 +723,26 @@ the above — delete it directly wherever you created it.
 | `PS_CLI_CONFIG_DIR` (env var) | ps-cli | `~/.config/ps-cli/` | Where `targets.toml` is read/written. |
 | `targets.toml` (`[contexts]`, `current_context`) | ps-cli | none until `config set-context` is run | Named PS Service targets and which one is current. Never contains a credential. |
 
-This table covers `ps-cli` only. The Policy System Plugin's `ps-mcp`
-connector needs no configuration of its own — it runs as a local `ps-cli-mcp-bridge`
-process that reuses whichever `ps-cli` context is current, so every row above already
-governs it too. This is the present behaviour; it changes with #173 and #174 (the bridge is being retired).
+This table covers `ps-cli` only. The plugin has its own settings, below.
 
-While the plugin uses the bridge, you do not need to restart Claude when you log in or out. After `ps-cli auth logout`, the next
-plugin call fails with "no stored credentials" and tells you to run `ps-cli auth login`. After
-`ps-cli auth login`, the next call uses the new credential. The bridge writes a log to
-`~/.config/ps-cli/mcp-bridge.log`. Each call line shows `token_resolution_latency` (time to get
-the token) and `upstream_latency` (time PS Service took to answer), so you can tell a slow
-credential store from a slow service.
+### Plugin (`ps-mcp`) settings
+
+| Setting | Applies to | Default | Purpose |
+| --- | --- | --- | --- |
+| `PS_MCP_URL` (`env` in `~/.claude/settings.json`) | plugin `ps-mcp` | unset | PS Service URL, for example `https://<host>/mcp/`. The trailing slash is part of the URL. |
+
+- **Not set:** `/mcp` shows `ps-mcp` as failed with `Missing environment variables: PS_MCP_URL`.
+  Set it in the `env` block of `~/.claude/settings.json`, then start a new session.
+- **`userConfig` is not used.** A `${user_config.*}` value never reached Claude Desktop - Code
+  sessions (#171), and an unset one drops the server silently.
+- **Sign-in:** `/mcp`, then Authenticate. Authentik shows its consent screen, because Claude Code
+  sends `prompt=consent`. Approve it.
+- **Same URL:** if a server you added by hand has the same URL as the plugin server, Claude Code
+  does not load the plugin server, and `/mcp` shows no error. Remove one of the two.
+- **Versions:** lowest verified are Claude Code CLI 2.1.236 and the Claude Desktop app 2.31226.1
+  (bundled Claude Code 2.1.295). Lower versions are untested.
+
+The `ps-cli` rows above do not affect the plugin.
 
 See the [Helm Chart Values Reference](./helm-chart-values-reference.md) for PS
 Service / chart-level configuration.

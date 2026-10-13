@@ -171,3 +171,126 @@ def test_fragment_links_resolve_in_architecture_and_idp_contract(doc: Path) -> N
 @pytest.mark.parametrize("guide", _GUIDES, ids=lambda p: p.name)
 def test_guides_link_to_other_documents_with_dot_slash_form(guide: Path) -> None:
     assert _BARE_MD_FRAGMENT_LINK.findall(_text(guide)) == []
+
+
+# --- Plugin remote-connector docs (issue #173) -------------------------------------------
+
+_BRIDGE = "ps-cli-" + "mcp-bridge"
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_PLUGIN_WORDS = re.compile(r"(?i)plugin|ps-mcp|connector")
+_CONTEXT_DEPENDENCY = re.compile(r"(?i)context|ps-cli auth login|reuses that login")
+_BANNED_STRINGS = (
+    "until #173",
+    "#173 and #174",
+    "#173/#174",
+    "mcp-bridge.log",
+    "token_resolution_latency",
+    "upstream_latency",
+    "no stored credentials",
+)
+_STEP_9 = "### 9. Install the Policy System Plugin"
+_USER_PLUGIN_HEADING = "## Using Claude Desktop - Code"
+_USER_SETTINGS_HEADING = "### Plugin (`ps-mcp`) settings"
+_PS_MCP_URL_ERROR = "Missing environment variables: PS_MCP_URL"
+
+
+def _section(path: Path, start_heading: str) -> str:
+    """Text from `start_heading` to the next heading of the same or higher level."""
+    level = len(start_heading) - len(start_heading.lstrip("#"))
+    after = _text(path).split(f"{start_heading}\n", 1)
+    assert len(after) == 2, f"{path.name} has no section {start_heading!r}"
+    end = re.compile(rf"^#{{1,{level}}} ", flags=re.MULTILINE)
+    return re.split(end, after[1], maxsplit=1)[0]
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", " ", text)
+
+
+def _sentences(path: Path) -> list[str]:
+    return _SENTENCE_END.split(_flat(path))
+
+
+def test_installation_guide_step_9_documents_ps_mcp_url_setup() -> None:
+    step = _squash(_section(_INSTALL, _STEP_9))
+    for needle in (
+        "PS_MCP_URL",
+        '"env"',
+        "https://<host>/mcp/",
+        _PS_MCP_URL_ERROR,
+        "userConfig",
+        "prompt=consent",
+        "same URL",
+        "2.1.236",
+        "2.31226.1",
+        "2.1.295",
+        "untested",
+        "53682",
+    ):
+        assert needle in step, f"installation guide step 9 lacks {needle!r}"
+
+
+def test_user_guide_documents_ps_mcp_url_and_error() -> None:
+    section = _squash(_section(_USER, _USER_PLUGIN_HEADING))
+    settings = _squash(_section(_USER, _USER_SETTINGS_HEADING))
+    assert "PS_MCP_URL" in section
+    assert "./installation-guide.md#9-install-the-policy-system-plugin" in section
+    for needle in (
+        "PS_MCP_URL",
+        _PS_MCP_URL_ERROR,
+        "userConfig",
+        "prompt=consent",
+        "same URL",
+        "2.1.236",
+        "2.31226.1",
+        "untested",
+    ):
+        assert needle in settings, f"user guide plugin settings lack {needle!r}"
+
+
+@pytest.mark.parametrize("guide", [_INSTALL, _USER], ids=lambda p: p.name)
+def test_guide_has_no_retired_bridge_notes(guide: Path) -> None:
+    flat = _flat(guide)
+    assert [s for s in _BANNED_STRINGS if s in flat] == []
+
+
+@pytest.mark.parametrize("guide", [_INSTALL, _USER], ids=lambda p: p.name)
+def test_guide_does_not_say_the_plugin_uses_the_bridge(guide: Path) -> None:
+    assert [s for s in _sentences(guide) if "bridge" in s.lower() and _PLUGIN_WORDS.search(s)] == []
+
+
+@pytest.mark.parametrize("guide", [_INSTALL, _USER], ids=lambda p: p.name)
+def test_guide_does_not_tie_the_plugin_to_the_ps_cli_context(guide: Path) -> None:
+    assert [
+        s for s in _sentences(guide) if _PLUGIN_WORDS.search(s) and _CONTEXT_DEPENDENCY.search(s)
+    ] == []
+
+
+@pytest.mark.parametrize("guide", [_INSTALL, _USER], ids=lambda p: p.name)
+def test_guide_does_not_claim_only_the_cli_is_verified(guide: Path) -> None:
+    assert [s for s in _sentences(guide) if "only the Claude Code CLI is verified" in s] == []
+
+
+def test_user_guide_keeps_the_desktop_code_heading_and_matrix_link() -> None:
+    assert _USER_PLUGIN_HEADING in _text(_USER)
+    assert "](./installation-guide.md#which-claude-surfaces-reach-your-deployment)" in _text(_USER)
+
+
+def test_reach_matrix_rows_carry_the_168_171_172_evidence() -> None:
+    body = _matrix_body()
+    rows = {r[0]: " ".join(r) for r in _matrix_data_rows(body)}
+    cli = next(v for k, v in rows.items() if "CLI" in k)
+    desktop_code = next(v for k, v in rows.items() if "Code tab" in k)
+    chat = next(v for k, v in rows.items() if re.search(r"(?i)chat", k))
+    claude_ai = next(v for k, v in rows.items() if "claude.ai" in k)
+    assert "2.1.236" in cli
+    assert "#168" in cli
+    assert "#171" in desktop_code
+    assert "2.31226.1" in desktop_code
+    for needle in ("GO (#172)", "#237", "custom connector", "ps-cli", "expected"):
+        assert needle in chat.lower() or needle in chat, f"Chat/Cowork row lacks {needle!r}"
+    assert "expected" in claude_ai.lower()
+    assert "untested" in _squash(body)
+    assert "oauth.clientId" in body
+    assert _BRIDGE not in body
+    assert "#173 and #174" not in body

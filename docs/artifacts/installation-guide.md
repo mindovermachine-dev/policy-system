@@ -533,7 +533,7 @@ Two things are different:
    - Send the certificate only. **Never send `ca.key`** from the same folder.
    - You can use any file transfer: AirDrop, a shared drive, or `scp` (if Remote Login is on
      for the laptop).
-   - Trust the copy as described above. `ps-cli` and the plugin bridge read the same OS trust
+   - Trust the copy as described above. `ps-cli` reads the same OS trust
      store.
 
 Without both changes, the browser shows a certificate warning and passkey registration fails.
@@ -583,17 +583,51 @@ Add the marketplace first. Then install the plugin from it.
    claude plugin install ps-plugin@ps-marketplace
    ```
 
-3. Quit Claude Desktop fully (⌘Q). Start it again. Open a **new** chat.
+3. Set the PS Service URL.
 
-4. Check the installation. Ask:
+   The plugin's Policy System MCP connector (`ps-mcp`) reads its URL from the `PS_MCP_URL`
+   environment variable. Add it to the `env` block of `~/.claude/settings.json`:
+
+   ```json
+   {
+     "env": {
+       "PS_MCP_URL": "https://<host>/mcp/"
+     }
+   }
+   ```
+
+   - Use your PS Service's public address for `<host>`. The trailing slash is part of the URL.
+   - If `PS_MCP_URL` is not set, `/mcp` shows `ps-mcp` as failed with
+     `Missing environment variables: PS_MCP_URL`. Set it, then start a new Claude Code session.
+   - The plugin does not use `userConfig` for the URL. A `${user_config.*}` value never reached
+     Claude Desktop - Code sessions (#171), and an unset one drops the server silently.
+
+4. Quit Claude Desktop fully (⌘Q). Start it again. Open a **new** chat.
+
+5. Sign in. In Claude Code run `/mcp`, select `plugin:ps-plugin:ps-mcp`, and choose
+   **Authenticate**.
+
+   - The browser opens Authentik. Sign in with your own account. The plugin uses the
+     pre-registered `ps-cli` OAuth client, so you enter no token and need no `ps-cli` install.
+     PS Service attributes your calls to your own identity-provider `sub`.
+   - Authentik shows its consent screen, because Claude Code sends `prompt=consent`. This is
+     expected; approve it.
+   - The callback port `53682` must be free on your machine.
+   - If a server you added by hand has the same URL as the plugin server, Claude Code does not
+     load the plugin server, and `/mcp` shows no error. Remove one of the two.
+
+6. Check the installation. Ask:
 
    ```text
    List the policy system tools you have available
    ```
 
+Lowest verified versions: Claude Code CLI 2.1.236, and the Claude Desktop app 2.31226.1 (it
+bundles Claude Code 2.1.295). Lower versions are untested.
+
 To ask a question, see the [User Guide](./user-guide.md#using-claude-desktop---code).
 
-Which Claude surfaces can reach your deployment, and what is verified: [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment). The evaluator is a non-public deployment, and only the Claude Code CLI is verified.
+Which Claude surfaces can reach your deployment, and what is verified per surface: [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment). The evaluator is a non-public deployment; what is verified per surface is listed in that section.
 
 ### What is exposed (evaluator)
 
@@ -811,7 +845,7 @@ depends on the owner's state:
 ### 6. Set up each user's computer
 
 The steps above provision the shared backend once. Each person who queries this instance needs
-the items below on their own machine. This applies to `ps-cli` and to the Claude Desktop plugin.
+the items below on their own machine. This applies to `ps-cli`.
 `scripts/deploy-ps-prod.sh` does none of it.
 
 A user who is not the owner needs an invitation first:
@@ -849,21 +883,13 @@ evaluator instance. Production deploys the bundled Authentik identity provider.
 2. Install the Policy System Plugin (`ps-plugin`):
    `/plugin install ps-plugin@ps-marketplace`.
 
-For more detail, see [Evaluator installation, step 9](#9-install-the-policy-system-plugin). For which Claude surfaces reach a public deployment, see [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
+For the `PS_MCP_URL` setting and sign-in, see [Evaluator installation, step 9](#9-install-the-policy-system-plugin). For which Claude surfaces reach a public deployment, see [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
 
-> **No extra plugin configuration:** The plugin's Policy System MCP connector (`ps-mcp`) runs a
-> local `ps-cli-mcp-bridge`. The bridge uses the current `ps-cli` context. When the context is
-> `prod`, the plugin talks to this instance. The bridge sends the stored `prod` credential as an
-> `Authorization` header, like any other authenticated `ps-cli` call. This bridge is the present
-> path; it changes with #173 and #174. For which Claude surfaces reach a public deployment, see
+> **Plugin configuration:** The plugin's Policy System MCP connector (`ps-mcp`) connects straight
+> to the URL in `PS_MCP_URL` and signs in with the pre-registered `ps-cli` OAuth client. It does
+> not depend on `ps-cli` being installed or logged in. For which Claude surfaces reach a public
+> deployment, see
 > [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
-
-> **Logout and login while Claude runs:** You do not need to restart Claude. After
-> `ps-cli auth logout`, the next plugin call fails with "no stored credentials" and tells you to
-> run `ps-cli auth login`. The bridge sends nothing without a credential. After
-> `ps-cli auth login`, the next call uses the new credential. The bridge writes a log to
-> `~/.config/ps-cli/mcp-bridge.log`. Each call line shows `token_resolution_latency` (time to get
-> the token) and `upstream_latency` (time PS Service took to answer).
 
 ### What is exposed (production)
 
@@ -948,14 +974,15 @@ deployment has a public hostname (see [What is exposed (production)](#what-is-ex
 | Surface | Public deployment | Non-public deployment | Status |
 | --- | --- | --- | --- |
 | Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (#168, Claude Code 2.1.236). Non-public: Expected (inferred from #167, not run). |
-| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Expected, not yet verified. |
-| Claude Desktop Chat and Cowork | Expected to work | Does not work (needs public PS Service and Authentik; no stdio) | Expected, not yet verified (#172). |
+| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (#171, Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (#172 descoped it). Login in the Desktop Code tab: Expected, not yet verified. |
+| Claude Desktop Chat and Cowork | Works as a manually added custom connector (URL plus Client ID `ps-cli`): GO (#172), needs #237 | Does not work (needs public PS Service and Authentik) | Expected for everything beyond the #172 login result. |
 | claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested by #167 or #168). |
 
-Only the Claude Code CLI login against the plugin-declared server is verified; everything else
-here is expected. This describes the direct connector (a remote connector that logs in against
-Authentik). The plugin still ships the local `ps-cli-mcp-bridge` (stdio) until #173 and #174, so
-today the bridge is a Claude Code (local) path.
+This describes the direct connector: a remote connector that logs in against Authentik. The
+plugin declares it as a remote HTTP server with no local process. What is verified is listed per
+row by issue; everything else here is expected. Chat and Cowork support is a later, separate
+plugin, because the skills accept only the tool names of `plugin:ps-plugin:ps-mcp`. The plugin
+declaration in Claude Desktop (`oauth.clientId`) is untested, and claude.ai is not tested.
 
 **The connector must use the existing `ps-cli` client**, not a new one. The token's `aud` is the
 client ID, and PS Service accepts it only when `PS_AUTH_AUDIENCE` equals that client ID (#167).
@@ -964,15 +991,16 @@ The chart provisions the client (#169); the grants and redirect URIs are in the
 For an identity provider other than Authentik, see
 [Other identity providers](./idp-configuration-contract.md#other-identity-providers).
 
-Two behaviours of Claude Code 2.1.236 (CLI), Verified (#168). They are not claimed for Chat,
-Cowork or claude.ai:
+Two behaviours of Claude Code 2.1.236 (CLI), Verified (#168). They are also expected in the
+Desktop Code tab, but not separately verified there. They are not claimed for Chat, Cowork or
+claude.ai:
 
 - **Consent screen.** Claude Code sends `prompt=consent`, so Authentik shows its consent screen
   at login even though the authorization flow is implicit consent. This is expected; approve it.
 - **Same URL hides the plugin server.** If a plugin server has the same URL as a server you added
   by hand, Claude Code does not load the plugin server, and `/mcp` shows no error. Remove one of
-  the two. An unresolved `${user_config.*}` value also drops the server silently. Supplying the
-  URL through `userConfig` end to end is not verified (#171).
+  the two. An unresolved `${user_config.*}` value also drops the server silently. `userConfig` does
+  not reach Desktop Code sessions (#171), so the plugin uses `PS_MCP_URL`.
 
 ---
 
@@ -1003,8 +1031,8 @@ To become `SystemOwner`:
 1. **Register a passkey** from the link that the script printed
    ([evaluator](#8-register-your-passkey-and-log-in-with-ps-cli),
    [production](#5-enrol-the-owners-passkey)).
-2. **Log in with `ps-cli`** (`ps-cli auth login`). Or let the Claude Desktop plugin make the
-   call. The plugin reuses that login.
+2. **Log in with `ps-cli`** (`ps-cli auth login`). Claude Desktop plugin sign-in is separate;
+   see [step 9](#9-install-the-policy-system-plugin).
 3. **Make the first role-gated call** as the owner. For example, list the access roles with the
    `ps-manage-access-roles` skill. That call wins the bootstrap and makes you `SystemOwner`.
    For what to do next, see the [User Guide's Role System](./user-guide.md#role-system).
@@ -1144,7 +1172,7 @@ before you rely on a claim for a real deployment.
     - The AKS managed NGINX add-on.
     - Real Let's Encrypt issuance through this flow.
     - Real Azure resources.
-- **Direct Claude connector: partly verified.** The Claude Code CLI (2.1.236) logged in as the `ps-cli` client and refreshed across sessions against a standalone Authentik, using the plugin-declared server (#168). This was not run through these scripts. Not verified: Claude Desktop (Code tab, Chat, Cowork), claude.ai, a public deployment, and the `userConfig` URL. See [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
+- **Direct Claude connector: partly verified.** The Claude Code CLI (2.1.236) logged in as the `ps-cli` client and refreshed across sessions against a standalone Authentik, using the plugin-declared server (#168). The Desktop Code tab read the `PS_MCP_URL` setting from `settings.json` against a stub with no authentication (#171, Desktop app 2.31226.1). A manually added custom connector in Claude Desktop Chat and Cowork logged in against a public deployment (GO, #172; needs #237). None of this was run through these scripts. Not verified: the plugin-declared `oauth.clientId` in Desktop, claude.ai, and the plugin on a live deployment until a result is recorded. See [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
 - **The invitation link on production needs an unreleased PS Service image.**
   - `invite_user` calls Authentik in-cluster. It must build the invitee's link on the public
     address.
