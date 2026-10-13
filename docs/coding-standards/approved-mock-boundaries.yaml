@@ -166,3 +166,4 @@ process_os:
 #   ps-cli/tests/release — see release-deploy.md; zero remediation, zero guardrail action needed.
 #   (Issue #165: the stateful Authentik-API `curl` and the `podman` fake live as plain executables
 #   under ps-service/tests/fixtures/fakes/ and are copied into each test's bin/, never imported.)
+# Fake kubectl/helm/curl executables on PATH (ps-service/tests/scripts/, backup-restore docs/tools tests) are subprocess fakes; the guardrail does not scan them.

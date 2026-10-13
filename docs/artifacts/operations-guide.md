@@ -20,11 +20,17 @@
   - [Manual steps and operational notes](#manual-steps-and-operational-notes)
 - [Imported policy trees (restore and internal ingest)](#imported-policy-trees-restore-and-internal-ingest)
 - [Backup](#backup)
-  - [FalkorDB](#falkordb)
   - [PS Postgres (`ps_state` and `ps_signing`)](#ps-postgres-ps_state-and-ps_signing)
+  - [Take a backup](#take-a-backup)
+  - [Check the backup](#check-the-backup)
+  - [Contents and protection](#contents-and-protection)
+  - [Authentik is not covered](#authentik-is-not-covered)
+  - [Operational notes](#operational-notes)
 - [Restore](#restore)
-  - [FalkorDB](#falkordb-1)
-  - [PS Postgres (`ps_state` and `ps_signing`)](#ps-postgres-ps_state-and-ps_signing-1)
+  - [Before you start](#before-you-start)
+  - [Restore with the script](#restore-with-the-script)
+  - [Restore by hand](#restore-by-hand)
+  - [If a credentials Secret is lost](#if-a-credentials-secret-is-lost)
 - [Troubleshooting / FAQ](#troubleshooting--faq)
   - [Reading a failed ingestion](#reading-a-failed-ingestion)
 - [Teardown](#teardown)
@@ -74,9 +80,10 @@ kubectl get pods -l app.kubernetes.io/component=ps-service \
 The chart's `psService.image.tag` defaults to empty and falls back to `Chart.appVersion`
 (see the [Helm Chart Values Reference](./helm-chart-values-reference.md)), so the chart
 version and the image version can never disagree — there is no tag to hand-pin and no
-flag needed to reset one. Your graph data is kept — FalkorDB persists to a
-`PersistentVolumeClaim` (see [Backup](#backup)), so previously loaded regulations do
-not need to be re-seeded.
+flag needed to reset one. Your graph data is kept: the FalkorDB
+`PersistentVolumeClaim` only spares PS Service a replay at startup. The graph content itself is
+rebuilt from the graph mutation log in PS Postgres (see [Backup](#backup)), so previously loaded
+regulations do not need to be re-seeded.
 
 ### Updating or reinstalling the Policy System Plugin
 
@@ -130,7 +137,8 @@ cluster created before Authentik was served over HTTPS lacks the `30443` mapping
 plain-HTTP `30080` one), so it must be deleted and recreated — `kind delete cluster --name
 policy-system`, then the `kind create cluster` command from the installation guide. This destroys
 the cluster's PVC data (FalkorDB graph, PS Postgres, Authentik's Postgres), so load curated
-content again afterwards. The local CA and certificate live outside the cluster (default
+content again afterwards, or restore a PS Postgres backup (see [Restore](#restore)). The local CA
+and certificate live outside the cluster (default
 `~/.config/policy-system/eval-tls`) and are reused by the next `scripts/deploy-ps-eval.sh` run,
 which also creates the owner again (a new cluster has a new Authentik).
 
@@ -300,9 +308,9 @@ while `psPostgres.provisioning.enabled` is true. Developers running `scripts/ps-
 against their own state Postgres run the same command once with admin credentials; until then PS
 Service refuses to start.
 
-**Backup and restore.** `pg_dump` as `ps_state` is unchanged and includes `graph_log`. Restoring
-`ps_state` now needs the admin credential and the owner role; see
-[Restore](#ps-postgres-ps_state-and-ps_signing-1). The single-backup design is tracked in #216.
+**Backup and restore.** The physical [Backup](#backup) includes `graph_log`, its owner role
+`ps_state_graph_owner` and the grants. The [Restore](#restore) brings them back as they were, and
+the provisioning Job runs again on the restored data with the admin credential.
 
 **What this does not protect.** The `ps_state` role still owns the `ps_state` database (and the
 `public` schema, including `audit_events`). It can therefore `DROP DATABASE` from another
@@ -469,13 +477,16 @@ this guide:
    and quota, and fails with the exact numbers if insufficient — but discovering
    which SKU has real default quota for your subscription/region in the first
    place remains a manual step before you fill in `scripts/ps-defaults.conf`:
+
    ```bash
    az cognitiveservices model list --location <region> \
      --query "[?model.name=='gpt-5.4-mini'].model.skus[].name"
    ```
+
    ```bash
    az cognitiveservices usage list --location <region>
    ```
+
 2. **AKS node VM-size allowlist + vCPU quota — automated.** `scripts/deploy-ps-prod.sh`
    checks both the subscription allowlist and vCPU family quota for the fixed
    `Standard_D4as_v7` node size before ever calling `az aks create`, failing with
@@ -484,9 +495,11 @@ this guide:
 3. **`kubectl rollout restart` FalkorDB startup-race workaround — remains
    manual.** If PS Service's pod isn't `Ready` shortly after first install, once
    FalkorDB is confirmed `Running`:
+
    ```bash
    kubectl rollout restart deployment/policy-system-ps-service
    ```
+
    The underlying FalkorDB startup race is out of scope for this deployment
    script; only the workaround is documented here, not a fix.
 
@@ -526,43 +539,10 @@ live deployment, so watch `hold_seconds` after the first large restore.
 
 ## Backup
 
-### FalkorDB
-
-FalkorDB persists to a `PersistentVolumeClaim` (`policy-system-falkordb-data`) when
-`falkordb.persistence.enabled=true` (the default in both the local-test and production
-profiles — see the [Helm Chart Values Reference](./helm-chart-values-reference.md)).
-Back up the graph — every ingested regulation, internal policy, and company-graph merge
-state — by capturing FalkorDB's own RDB snapshot file. No Policy System-specific backup
-feature exists or is planned; this uses standard, unmodified Redis/`kubectl` tooling.
-
-1. Find the running FalkorDB pod:
-   ```bash
-   POD=$(kubectl get pod -l app.kubernetes.io/component=falkordb -o jsonpath='{.items[0].metadata.name}')
-   ```
-2. Trigger a snapshot and wait for it to finish:
-   ```bash
-   kubectl exec "$POD" -c falkordb -- redis-cli BGSAVE
-   ```
-   ```bash
-   kubectl exec "$POD" -c falkordb -- redis-cli INFO persistence | grep rdb_bgsave_in_progress
-   ```
-   Re-run the second command until it reports `rdb_bgsave_in_progress:0`.
-3. Copy the resulting file out of the pod:
-   ```bash
-   kubectl cp "$POD":/var/lib/falkordb/data/dump.rdb "./falkordb-backup-$(date +%Y%m%d).rdb" -c falkordb
-   ```
-
-Store the resulting `.rdb` file wherever your backup retention policy requires — it is
-a complete, standalone copy of the graph.
-
-> **Tip:** `/var/lib/falkordb/data/dump.rdb` is the chart's default data-volume path, not
-> a Policy System-configured one. If you've changed FalkorDB's persistence settings, confirm
-> the real path first: `kubectl exec "$POD" -c falkordb -- redis-cli CONFIG GET dir`.
-
-This is a different concern from
-[#66](https://github.com/mindovermachine-dev/policy-system/issues/66)'s curated-catalog
-restore, which seeds public reference content into any deployment (fresh or established)
-without needing this backup/restore machinery at all.
+One backup operation covers everything Policy System keeps: a physical backup (`pg_basebackup`)
+of the PS Postgres server, taken from the running pod. There is no separate FalkorDB step. The
+graphs are not backed up; PS Service rebuilds and verifies them from the graph mutation log
+(`graph_log`), which is part of the backup, when it starts after a [Restore](#restore).
 
 ### PS Postgres (`ps_state` and `ps_signing`)
 
@@ -580,8 +560,7 @@ image. The `graph_log` tables are owned by `ps_state_graph_owner` instead.
 
 PS Service reads its connection settings from `PS_STATE_POSTGRES_*` and
 `PS_PASSKEYSIGNING_POSTGRES_*`, which the chart wires into the pod. Each role can connect only
-to its own database. Authentik keeps its own separate Postgres (when enabled); it is not
-covered here.
+to its own database.
 
 The PS state Postgres is a hard dependency: PS Service does not start, and `/ready` reports
 `not_ready`, while it is unreachable. Reads of the catalog-source override fail closed — while
@@ -589,45 +568,64 @@ the database cannot be read, `GET /catalog`, curated-instrument restores and `ge
 return an error rather than serving the env-var/default source. `set-catalog-source` and
 `reset-catalog-source` also need this database, including under the local-test bypass.
 
-Back up both databases with standard, unmodified `pg_dump` — no Policy System-specific backup
-feature exists or is planned. Because the catalog override lives in `ps_state`, restoring
-`ps_state` restores the override with it.
+The backup is physical, so it captures the whole server: both databases, the roles and the
+role password hashes. Because the catalog override lives in `ps_state`, a restore brings the
+override back with it.
 
-1. Find the running PS Postgres pod and read each role's password from its Secret:
-   ```bash
-   POD=$(kubectl get pod -l app.kubernetes.io/component=ps-postgres -o jsonpath='{.items[0].metadata.name}')
-   STATE_PW=$(kubectl get secret policy-system-ps-postgres-state-credentials \
-     -o jsonpath='{.data.PS_STATE_POSTGRES_PASSWORD}' | base64 -d)
-   SIGNING_PW=$(kubectl get secret policy-system-ps-postgres-signing-credentials \
-     -o jsonpath='{.data.PS_PASSKEYSIGNING_POSTGRES_PASSWORD}' | base64 -d)
-   ```
-   If you set `psPostgres.state.existingSecret` / `psPostgres.signing.existingSecret`, read
-   the password from that Secret instead (same key names).
-2. Dump each database in `pg_dump`'s custom format (compressed, and it supports selective
-   `pg_restore`), inside the pod:
-   ```bash
-   kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" \
-     pg_dump -h 127.0.0.1 -U ps_state -d ps_state -Fc -f /tmp/ps_state.dump
-   kubectl exec "$POD" -- env PGPASSWORD="$SIGNING_PW" \
-     pg_dump -h 127.0.0.1 -U ps_signing -d ps_signing -Fc -f /tmp/ps_signing.dump
-   ```
-3. Copy both files out of the pod, then remove the copies left in it:
-   ```bash
-   kubectl cp "$POD":/tmp/ps_state.dump "./ps_state-backup-$(date +%Y%m%d).dump"
-   kubectl cp "$POD":/tmp/ps_signing.dump "./ps_signing-backup-$(date +%Y%m%d).dump"
-   kubectl exec "$POD" -- rm /tmp/ps_state.dump /tmp/ps_signing.dump
-   ```
+### Take a backup
 
-Store the two `.dump` files wherever your backup retention policy requires — together they
-are a complete, standalone copy of everything PS Service keeps in Postgres. Both files
-contain sensitive data (the audit trail and enrolled signing credentials); protect them
-accordingly.
+Run one `pg_basebackup` inside the PS Postgres pod over the local socket, as the admin role
+(`psPostgres.admin.user`, default `postgres_admin`), and stream the tar to a local file. The
+local socket needs no password, and the default `pg_hba` already admits it.
 
-`pg_dump` as `ps_state` still captures the `graph_log` tables (the role holds `SELECT` on them);
-the dump records their owner as `ps_state_graph_owner` and their grants. Restoring them needs more
-than `ps_state` can do; see Restore below.
+```bash
+kubectl exec deploy/policy-system-ps-postgres -- pg_basebackup -U postgres_admin -D - -Ft -X fetch -c fast \
+  > "ps-postgres-$(date -u +%Y%m%dT%H%M%SZ).tar"
+```
 
-Two operational notes:
+`-Ft -D -` writes one tar of the data directory to standard output. `-X fetch` includes the
+write-ahead log needed to make the copy consistent, so the file is self-contained. `-c fast`
+starts the backup at once instead of waiting for the next scheduled checkpoint. The backup runs
+against the live database.
+
+`scripts/verify-backup-restore.sh backup [--out-dir DIR]` runs the same command, writes
+`ps-postgres-<UTC timestamp>.tar` into `DIR`, performs the checks below, prints the file path
+and logs the row counts of `audit_events`, `access_role_assignments` and `graph_log.entries`
+before and after. It refuses a context that is not `kind-*` unless `--allow-context <ctx>`
+names it.
+
+### Check the backup
+
+A backup is usable only if all three hold:
+
+1. The `kubectl exec` exit code is `0`.
+2. The file is not empty.
+3. `tar tf <file> > /dev/null` exits `0`, which proves the tar is complete and readable.
+
+Delete a file that fails any check and run the backup again. The script does this for you.
+
+### Contents and protection
+
+The file is a copy of the whole PS Postgres data directory. It contains the role password
+hashes for `postgres_admin`, `ps_state` and `ps_signing`, the audit trail, the enrolled passkey
+signing credentials and the graph mutation log. It is not encrypted by Postgres or by the
+command. Keep it out of any repository, and store it encrypted at rest (an encrypted volume or
+bucket, or an encrypting archiver) with access limited to the operators who may restore the
+deployment.
+
+A restore also needs the three PS Postgres credentials Secrets (`psPostgres.admin`,
+`psPostgres.state` and `psPostgres.signing`, each via `existingSecret`), because the password
+hashes in the backup match those passwords. Keep those Secrets separately from the backup file.
+
+### Authentik is not covered
+
+This backup does not include Authentik. Authentik keeps its users, passkeys and OIDC application
+in its own Postgres (when enabled), a separate server that `pg_basebackup` of PS Postgres does
+not read. A tested Authentik backup and restore procedure is tracked in
+[#235](https://github.com/mindovermachine-dev/policy-system/issues/235). Until then, follow the
+upstream procedure: <https://docs.goauthentik.io/sys-mgmt/ops/backup-restore>.
+
+### Operational notes
 
 - The init step that creates the two databases and roles runs only when the PVC is empty.
   Rotating a password in its Secret does not change the existing database role; run
@@ -637,85 +635,202 @@ Two operational notes:
 
 ## Restore
 
-### FalkorDB
+A restore puts one [backup file](#take-a-backup) (taken with `pg_basebackup -X fetch -c fast`)
+back into the PS Postgres server of a running release and empties FalkorDB. PS Service is
+stopped for the whole restore. When it starts again it rebuilds and verifies every graph from the
+restored graph mutation log (see [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph)),
+so the graphs come back without a separate FalkorDB step. Only graphs recorded in the log come
+back; a graph that was never written to the log is not rebuilt.
 
-Restoring loads a previously captured `dump.rdb` snapshot back into FalkorDB so it starts
-from that data. Run this against a deployment whose FalkorDB pod is already up — a fresh
-install already has one running, even before any data has been ingested.
+The backup file holds the whole data directory, including the roles (among them the non-login
+`ps_state_graph_owner` that owns the log tables, so no role is created by hand), the role
+password hashes, the audit trail and the graph mutation log. Decrypt it first if you stored it encrypted, and keep the
+decrypted copy only for the duration of the restore.
 
-1. Find the running FalkorDB pod:
-   ```bash
-   POD=$(kubectl get pod -l app.kubernetes.io/component=falkordb -o jsonpath='{.items[0].metadata.name}')
-   ```
-2. Copy the snapshot into the pod's data volume, overwriting whatever is there:
-   ```bash
-   kubectl cp ./falkordb-backup-YYYYMMDD.rdb "$POD":/var/lib/falkordb/data/dump.rdb -c falkordb
-   ```
-3. Restart FalkorDB so it loads the new file on startup — Redis only reads `dump.rdb` when
-   the process starts, not while it's already running:
-   ```bash
-   kubectl rollout restart deployment/policy-system-falkordb
-   ```
+### Before you start
 
-The graph now contains exactly what was in the backup — anything ingested after that
-snapshot was taken is gone.
+1. **Retain the three credentials Secrets.** The role password hashes in the backup match the
+   passwords of `psPostgres.admin`, `psPostgres.state` and `psPostgres.signing`, so the
+   restored server accepts only those passwords. Keep operator-managed copies of the three
+   Secrets outside the cluster and outside the backup file, and point the release at them with
+   `psPostgres.admin.existingSecret`, `psPostgres.state.existingSecret` and
+   `psPostgres.signing.existingSecret` (keys `POSTGRES_PASSWORD`, `PS_STATE_POSTGRES_PASSWORD`,
+   `PS_PASSKEYSIGNING_POSTGRES_PASSWORD`). Use names other than the chart-generated
+   `<release>-ps-postgres-{admin,state,signing}-credentials`: once `existingSecret` is set the
+   chart does not render the generated Secret and Helm removes it. To retain the current
+   passwords of a running release, copy each generated Secret under a new name, stop PS Postgres,
+   then upgrade. The upgrade changes the PS Postgres pod template (new Secret names), and on a
+   cluster whose volumes are single-node disks (AKS) the replacement pod cannot attach the disk
+   while the old pod holds it (`Multi-Attach error`), so the rollout never finishes unless PS
+   Postgres is stopped first; the upgrade starts it again:
 
-### PS Postgres (`ps_state` and `ps_signing`)
-
-Restoring loads previously captured `pg_dump` custom-format files back into the PS Postgres
-server, replacing the current contents of each database with the backup's. Run this against
-a deployment whose PS Postgres pod is already up — a fresh install already has one running,
-with both databases and roles created, even before PS Service has run its migrations. Restore
-`ps_state`, `ps_signing`, or both; each is independent. Restoring `ps_state` also restores the
-catalog-source override recorded in its `runtime_config` table.
-
-1. Find the pod and read the passwords as in the Backup section above (`POD`, `STATE_PW`,
-   `SIGNING_PW`).
-2. Copy the dump files into the pod:
    ```bash
-   kubectl cp ./ps_state-backup-YYYYMMDD.dump "$POD":/tmp/ps_state.dump
-   kubectl cp ./ps_signing-backup-YYYYMMDD.dump "$POD":/tmp/ps_signing.dump
-   ```
-3. Restore each database, dropping and recreating every object the dump contains before
-   loading it (`--clean --if-exists` — safe on a database that already has some or all of the
-   same tables, and on an empty one). **`ps_state` must be restored with the admin credential**,
-   not as `ps_state`: the `graph_log` tables are owned by `ps_state_graph_owner`, and `--clean`
-   drops and recreates them, which `ps_state` is deliberately unable to do (it would fail on the
-   first `graph_log` table). The owner role must exist first (the provisioning Job and the init
-   script create it; a restore into a brand-new server needs one of them to have run, because
-   `pg_dump` does not carry roles). `ps_signing` is unaffected:
-   ```bash
-   ADMIN_PW=$(kubectl get secret policy-system-ps-postgres-admin-credentials \
-     -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
-   kubectl exec "$POD" -- env PGPASSWORD="$ADMIN_PW" \
-     pg_restore -h 127.0.0.1 -U postgres_admin -d ps_state --clean --if-exists /tmp/ps_state.dump
-   kubectl exec "$POD" -- env PGPASSWORD="$SIGNING_PW" \
-     pg_restore -h 127.0.0.1 -U ps_signing -d ps_signing --clean --if-exists /tmp/ps_signing.dump
-   kubectl exec "$POD" -- rm /tmp/ps_state.dump /tmp/ps_signing.dump
-   ```
-   Use `psPostgres.admin.existingSecret`'s `POSTGRES_PASSWORD` if you set one, and
-   `psPostgres.admin.user` if you changed it from `postgres_admin`. The dump is restored with its
-   original owners and grants, so the log tables stay owned by `ps_state_graph_owner`. A single
-   backup that covers PS Postgres end to end is tracked in #216.
-4. Restart `ps-service` so it starts from a consistent view of the restored databases and its
-   migration runners re-check the restored schemas against their tracking tables:
-   ```bash
-   kubectl rollout restart deployment/policy-system-ps-service
-   ```
-5. Verify the restore landed before relying on it — compare the counts against the system the
-   backup was taken from:
-   ```bash
-   kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state -d ps_state \
-     -c "SELECT count(*) FROM access_role_assignments;" \
-     -c "SELECT count(*) FROM runtime_config;" \
-     -c "SELECT count(*), max(occurred_at) FROM audit_events;"
-   kubectl exec "$POD" -- env PGPASSWORD="$SIGNING_PW" psql -h 127.0.0.1 -U ps_signing -d ps_signing \
-     -c "SELECT count(*) FROM pending_approvals;" \
-     -c "SELECT count(*) FROM signing_credentials;"
+   for role in admin state signing; do
+     kubectl get secret "policy-system-ps-postgres-${role}-credentials" -o json \
+       | jq --arg name "ps-${role}-retained" '{apiVersion, kind, type, metadata: {name: $name}, data}' \
+       | kubectl apply -f -
+   done
+   kubectl scale deploy/policy-system-ps-service deploy/policy-system-ps-postgres --replicas=0
+   kubectl wait --for=delete pod -l app.kubernetes.io/component=ps-postgres --timeout=180s
+   helm upgrade policy-system <chart> --reset-then-reuse-values \
+     --set psPostgres.admin.existingSecret=ps-admin-retained \
+     --set psPostgres.state.existingSecret=ps-state-retained \
+     --set psPostgres.signing.existingSecret=ps-signing-retained \
+     --wait --wait-for-jobs
    ```
 
-The role roster, audit trail, runtime settings and enrolled signing credentials now contain
-exactly what was in the backups — anything recorded after the snapshots were taken is gone.
+   On a new cluster, create the Secrets first and install with the same values, so the first
+   start of PS Postgres uses the retained passwords.
+2. **Use the same chart version as the backup, or a newer one.** The provisioning Job applies any
+   migration the newer version adds to the restored databases.
+3. **Know the target.** The restore overwrites all PS Postgres data and empties FalkorDB in the
+   current kubectl context. Authentik is not touched; restore it separately
+   (see [Authentik is not covered](#authentik-is-not-covered), [#235](https://github.com/mindovermachine-dev/policy-system/issues/235)).
+
+### Restore with the script
+
+```bash
+scripts/verify-backup-restore.sh restore --artifact ps-postgres-<UTC timestamp>.tar \
+  [--chart <chart reference or path>] [--chart-version <version>]
+```
+
+The script refuses unless the context is `kind-*` (or named with `--allow-context <ctx>`), the
+three `existingSecret` values are set on the release and those Secrets exist, the file is a
+readable tar, and you type `yes` (or pass `--yes`). It then runs the steps below in order and
+stops at the first failure with `ps-service` still stopped. `--chart` defaults to the published
+OCI chart `oci://ghcr.io/mindovermachine-dev/charts/policy-system`; pass `--chart-version` to
+keep the version the release runs. The final lines log the row counts of `audit_events`,
+`access_role_assignments` and `graph_log.entries` (`event=counts phase=restored`).
+
+### Restore by hand
+
+1. Stop PS Service, FalkorDB and PS Postgres, and wait until their pods are gone:
+
+   ```bash
+   kubectl scale deploy/policy-system-ps-service deploy/policy-system-falkordb \
+     deploy/policy-system-ps-postgres --replicas=0
+   for component in ps-service falkordb ps-postgres; do
+     kubectl wait --for=delete pod -l app.kubernetes.io/component=$component --timeout=180s
+   done
+   ```
+
+2. Replace the data directory and empty FalkorDB's volume from one helper pod that mounts both
+   volumes and runs as root (the extracted files keep the owner recorded in the backup, so no
+   `chown` is needed):
+
+   ```bash
+   kubectl apply -f - <<'EOF'
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: policy-system-restore-helper
+   spec:
+     restartPolicy: Never
+     containers:
+       - name: helper
+         image: postgres:16-alpine   # the image of the ps-postgres Deployment
+         command: ["sleep", "3600"]
+         securityContext:
+           runAsUser: 0
+         volumeMounts:
+           - {name: pg, mountPath: /pg}
+           - {name: fdb, mountPath: /fdb}
+     volumes:
+       - name: pg
+         persistentVolumeClaim: {claimName: policy-system-ps-postgres-data}
+       - name: fdb
+         persistentVolumeClaim: {claimName: policy-system-falkordb-data}
+   EOF
+   kubectl wait --for=condition=Ready pod/policy-system-restore-helper --timeout=180s
+   kubectl exec -i policy-system-restore-helper -- \
+     sh -c 'set -e; rm -rf /pg/pgdata; mkdir -p /pg/pgdata; chmod 700 /pg/pgdata; tar -xf - -C /pg/pgdata' \
+     < ps-postgres-<UTC timestamp>.tar
+   kubectl exec policy-system-restore-helper -- sh -c 'rm -rf /fdb/* /fdb/.[!.]* /fdb/..?*'
+   kubectl delete pod policy-system-restore-helper --wait=true
+   ```
+
+   FalkorDB is emptied because a FalkorDB that keeps data newer than the restored log is not
+   repaired: PS Service starts, `/ready` answers `200`, and the extra data stays in the graph.
+3. Start PS Postgres, then FalkorDB, and wait for each:
+
+   ```bash
+   kubectl scale deploy/policy-system-ps-postgres --replicas=1
+   kubectl rollout status deploy/policy-system-ps-postgres --timeout=300s
+   kubectl scale deploy/policy-system-falkordb --replicas=1
+   kubectl rollout status deploy/policy-system-falkordb --timeout=300s
+   ```
+
+   PS Postgres finds a data directory and skips its init script; the log reads
+   `PostgreSQL Database directory appears to contain a database; Skipping initialization`, then
+   `completed backup recovery` and `database system is ready to accept connections`.
+4. Run the provisioning Job with a Helm upgrade. The Job is named by release revision, so every
+   `helm upgrade` runs it, and it applies any migration the restored databases still need.
+   Keep `--wait-for-jobs` so a failed Job fails the upgrade:
+
+   ```bash
+   helm upgrade policy-system <chart> --reset-then-reuse-values --wait --wait-for-jobs
+   ```
+
+   Helm does not change the replica count of a Deployment whose manifest did not change, so
+   PS Service stays stopped until step 6.
+5. Check the provisioning. The Job of the new revision must be `Complete`, and the PS Postgres
+   log must not contain `ps-postgres-init: created roles` (that line means the init script ran
+   on an empty data directory, so the restored data is not what the server is using):
+
+   ```bash
+   REVISION=$(helm status policy-system -o json | jq -r .version)
+   kubectl get job "policy-system-ps-state-provision-r${REVISION}"
+   kubectl logs deploy/policy-system-ps-postgres | grep -c 'ps-postgres-init: created roles'   # 0
+   ```
+
+   `scripts/verify-backup-restore.sh verify-provision` runs both checks.
+6. Start PS Service and wait for `/ready`:
+
+   ```bash
+   kubectl scale deploy/policy-system-ps-service --replicas=1
+   scripts/verify-backup-restore.sh wait-ready
+   ```
+
+   While PS Service rebuilds the graphs from the log, `/ready` can answer `503` with
+   `graph_replay` in `unhealthy_dependencies`. The restore is done when it answers `200` with an
+   empty `gated_graphs`. A gated graph is handled as described in
+   [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph).
+7. Compare the counts with the system the backup was taken from:
+   `scripts/verify-backup-restore.sh counts` prints `audit_events`, `access_role_assignments` and
+   `graph_log_entries`. They equal the counts logged when the backup was taken; anything
+   recorded after the backup is gone, including audit events, role grants and logged graph
+   changes.
+
+### If a credentials Secret is lost
+
+Without the retained Secrets, the new passwords do not match the hashes in the backup. The
+provisioning Job then cannot authenticate: it retries, and `helm upgrade --wait --wait-for-jobs`
+fails when its timeout runs out, while PS Service crash-loops on the state password. Set the roles'
+passwords to the new Secrets' values, through the local socket as the admin role (no password is
+needed there), and run the upgrade again:
+
+```bash
+ADMIN_PW=$(kubectl get secret <admin secret> -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
+STATE_PW=$(kubectl get secret <state secret> -o jsonpath='{.data.PS_STATE_POSTGRES_PASSWORD}' | base64 -d)
+SIGNING_PW=$(kubectl get secret <signing secret> -o jsonpath='{.data.PS_PASSKEYSIGNING_POSTGRES_PASSWORD}' | base64 -d)
+kubectl exec -i deploy/policy-system-ps-postgres -- psql -U postgres_admin -d postgres \
+  -v ON_ERROR_STOP=1 -v admin_pw="$ADMIN_PW" -v state_pw="$STATE_PW" -v signing_pw="$SIGNING_PW" <<'SQL'
+ALTER ROLE postgres_admin PASSWORD :'admin_pw';
+ALTER ROLE ps_state PASSWORD :'state_pw';
+ALTER ROLE ps_signing PASSWORD :'signing_pw';
+SQL
+helm upgrade policy-system <chart> --reset-then-reuse-values \
+  --set psPostgres.admin.existingSecret=<admin secret> \
+  --set psPostgres.state.existingSecret=<state secret> \
+  --set psPostgres.signing.existingSecret=<signing secret> \
+  --wait --wait-for-jobs
+```
+
+Use the role names from `psPostgres.admin.user`, `psPostgres.state.user` and
+`psPostgres.signing.user` if you changed them. A failed `helm upgrade` leaves the release on its
+last deployed revision, and `--reset-then-reuse-values` reuses that revision's values, so pass the
+`--set` flags again on the retry. Delete the leftover provisioning Job of the failed revision
+(`kubectl delete job policy-system-ps-state-provision-r<N>`).
 
 ---
 

@@ -187,8 +187,9 @@ The command prints the cluster information when the cluster is up.
 >
 > 1. Run the `kind create cluster` command above again.
 > 2. Run step 5 and the steps after it again.
-> 3. Reload the FalkorDB data. See [User Guide: Load curated
->    content](./user-guide.md#load-curated-content).
+> 3. Restore a PS Postgres backup (see [Operations Guide:
+>    Restore](./operations-guide.md#restore)), or load the content again. See [User Guide: Load
+>    curated content](./user-guide.md#load-curated-content).
 >
 > **Why:** kind fixes its `extraPortMappings` when it creates a cluster. You cannot change
 > them later. The evaluator profile serves Authentik over HTTPS on host port `30443`. Older

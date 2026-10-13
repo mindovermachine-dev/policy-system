@@ -24,6 +24,11 @@ _CA = _REPO / "docs" / "architecture" / "ps-service-container-architecture.md"
 _SA = _REPO / "docs" / "architecture" / "ps-solution-architecture.md"
 _PROVISION_COMMAND = "python -m ps_service.graph_gateway.provision"
 _MISSING_MIGRATION = "graph_gateway/0001_graph_mutation_log.sql"
+_BACKUP_COMMAND = (
+    "kubectl exec deploy/policy-system-ps-postgres -- "
+    "pg_basebackup -U postgres_admin -D - -Ft -X fetch -c fast"
+)
+_AUTHENTIK_BACKUP_DOCS = "https://docs.goauthentik.io/sys-mgmt/ops/backup-restore"
 
 
 def _read(path: Path) -> str:
@@ -90,13 +95,12 @@ def test_operations_guide_names_the_missing_migration_remedy_command() -> None:
     assert "not_ready" in section
 
 
-def test_operations_guide_restore_needs_admin_credentials_and_states_the_residuals() -> None:
+def test_operations_guide_restore_carries_the_roles_and_states_the_residuals() -> None:
     ops = _read(_OPS)
     restore = _section(ops, "## Restore")
 
     assert "admin" in restore
     assert "ps_state_graph_owner" in restore
-    assert "#216" in ops
     # Residual: ps_state owns the database, so "cannot DROP" must not be over-claimed.
     upgrade = _section(ops, "### Upgrading to the graph mutation log")
     assert "DROP DATABASE" in upgrade
@@ -1598,3 +1602,191 @@ def test_architecture_diagram_comment_names_the_gateway_only_rule() -> None:
     text = _read(_CA)
 
     assert "outside the gateway package reaches FalkorDB only through" in text
+
+
+def _collapsed(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_operations_guide_backup_is_one_pg_basebackup_operation() -> None:
+    backup = _collapsed(_section(_read(_OPS), "## Backup"))
+
+    assert _BACKUP_COMMAND in backup
+    assert "tar tf" in backup
+    assert "verify-backup-restore.sh backup" in backup
+    for retired in ("redis-cli", "dump.rdb", "pg_dump", "pg_restore", "each is independent"):
+        assert retired not in backup, retired
+
+
+def test_operations_guide_backup_states_contents_and_encryption() -> None:
+    backup = _collapsed(_section(_read(_OPS), "## Backup"))
+
+    assert "password hashes" in backup
+    assert "audit trail" in backup
+    assert "encrypted" in backup
+    assert "not encrypted by Postgres or by the command" in backup
+
+
+def test_operations_guide_backup_excludes_authentik_and_links_the_follow_up() -> None:
+    backup = _collapsed(_section(_read(_OPS), "## Backup"))
+
+    assert "Authentik" in backup
+    assert "not covered" in backup
+    assert "#235" in backup
+    assert _AUTHENTIK_BACKUP_DOCS in backup
+
+
+def test_operations_guide_backup_has_no_change_history_wording() -> None:
+    backup = _collapsed(_section(_read(_OPS), "## Backup")).lower()
+
+    for phrase in ("replaces", "no longer", "previously", "used to"):
+        assert phrase not in backup, phrase
+
+
+def test_operations_guide_restore_runs_the_provisioning_job_with_retained_secrets() -> None:
+    restore = _collapsed(_section(_read(_OPS), "## Restore"))
+
+    assert "helm upgrade" in restore
+    assert "--wait-for-jobs" in restore
+    assert "--reset-then-reuse-values" in restore
+    for role in ("admin", "state", "signing"):
+        assert f"psPostgres.{role}.existingSecret" in restore
+    assert "ps-postgres-init: created roles" in restore
+    assert "ps-state-provision-r" in restore
+
+
+def test_operations_guide_restore_stops_ps_postgres_before_retaining_secrets() -> None:
+    restore = _collapsed(_section(_read(_OPS), "### Before you start"))
+
+    retain = restore.index("To retain the current passwords of a running release")
+    scale = restore.index("deploy/policy-system-ps-postgres --replicas=0", retain)
+    upgrade = restore.index("helm upgrade", retain)
+    assert scale < upgrade
+    assert "Multi-Attach" in restore
+
+
+def test_operations_guide_restore_stops_ps_service_and_empties_falkordb() -> None:
+    restore = _collapsed(_section(_read(_OPS), "## Restore"))
+
+    assert "kubectl scale deploy/policy-system-ps-service" in restore
+    assert "--replicas=0" in restore
+    assert "FalkorDB is emptied" in restore
+    assert "/fdb" in restore
+    assert "kubectl scale deploy/policy-system-ps-service --replicas=1" in restore
+
+
+def test_operations_guide_restore_states_the_ready_outcome() -> None:
+    restore = _collapsed(_section(_read(_OPS), "## Restore"))
+
+    assert "503" in restore
+    assert "graph_replay" in restore
+    assert "empty `gated_graphs`" in restore
+    assert "verify-backup-restore.sh restore" in restore
+    assert "wait-ready" in restore
+    assert "verify-provision" in restore
+
+
+def test_operations_guide_restore_documents_the_alter_role_fallback_for_a_lost_secret() -> None:
+    restore = _collapsed(_section(_read(_OPS), "### If a credentials Secret is lost"))
+
+    assert "ALTER ROLE postgres_admin PASSWORD" in restore
+    assert "ALTER ROLE ps_state PASSWORD" in restore
+    assert "ALTER ROLE ps_signing PASSWORD" in restore
+    assert "--set psPostgres.admin.existingSecret" in restore
+
+
+def test_operations_guide_restore_has_no_retired_text_or_change_history() -> None:
+    restore = _collapsed(_section(_read(_OPS), "## Restore"))
+
+    for retired in (
+        "redis-cli",
+        "dump.rdb",
+        "pg_dump",
+        "pg_restore",
+        "each is independent",
+        "#216",
+    ):
+        assert retired not in restore, retired
+    for phrase in ("replaces", "no longer", "previously", "used to"):
+        assert phrase not in restore.lower(), phrase
+
+
+def test_values_reference_existing_secret_row_gives_the_restore_guidance() -> None:
+    row = _collapsed(
+        next(
+            line
+            for line in _read(_VALREF).splitlines()
+            if "psPostgres.admin.existingSecret" in line and line.startswith("|")
+        )
+    )
+
+    assert "operations-guide.md#restore" in row
+    assert "backup" in row
+    assert "different name" in row
+
+
+_README = _REPO / "README.md"
+_COLLAPSE_SECTIONS = ("## Backup", "## Restore")
+
+
+def _collapse(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_no_old_backup_statements() -> None:
+    """AC-BI-006: no old backup procedure, marker or stale persistence claim remains."""
+    ops = _read(_OPS)
+    backup_restore = _collapse(" ".join(_section(ops, heading) for heading in _COLLAPSE_SECTIONS))
+    for absent in ("redis-cli", "dump.rdb", "pg_dump", "pg_restore", "each is independent", "#216"):
+        assert absent not in backup_restore, absent
+    for present in (
+        "pg_basebackup",
+        "-X fetch",
+        "-c fast",
+        "encrypted",
+        "existingSecret",
+        "--wait-for-jobs",
+        "#235",
+        _AUTHENTIK_BACKUP_DOCS,
+    ):
+        assert present in backup_restore, present
+
+    ops_all = _collapse(ops)
+    for absent in (
+        "#216",
+        "survives a pod restart",
+        "persists to a `PersistentVolumeClaim` (see [Backup]",
+    ):
+        assert absent not in ops_all, absent
+
+    valref = _collapse(_read(_VALREF))
+    for absent in ("survives a pod restart", "data lost on pod restart"):
+        assert absent not in valref, absent
+    assert "avoids a replay" in valref
+
+    install = _collapse(_read(_INSTALL))
+    assert "Reload the FalkorDB data" not in install
+    assert "operations-guide.md#restore" in install
+
+    sa = _collapse(_read(_SA))
+    for absent in ("(target)", "mutation log, target)"):
+        assert absent not in sa, absent
+
+    readme_rows = [
+        _collapse(line) for line in _read(_README).splitlines() if "Backup & Restore" in line
+    ]
+    assert len(readme_rows) == 1
+    row = readme_rows[0]
+    assert "PS Postgres Backup & Restore" in row
+    assert "#234" in row
+    for absent in ("Azure Blob", "Scheduled backups of the compliance graph", "FalkorDB Backup"):
+        assert absent not in row, absent
+
+    history = _collapse(
+        " ".join(
+            _section(ops, heading)
+            for heading in (*_COLLAPSE_SECTIONS, "### Authentik is not covered")
+        )
+    ).lower()
+    for absent in ("replaces", "no longer", "previously", "used to"):
+        assert absent not in history, absent
