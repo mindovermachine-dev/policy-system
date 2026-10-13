@@ -248,3 +248,24 @@ def test_confirmation_table_lists_every_resource_type_before_the_prompt(
     ):
         field_index = run.stdout.index(field_label)
         assert field_index < prompt_index, f"{field_label!r} did not appear before the prompt"
+
+
+def test_ingress_and_certificate_steps_run_before_the_helm_release_wait(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    """Issue #236: `helm --wait` only returns once PS Service is Ready, and PS Service's startup
+    does OIDC discovery over the public HTTPS issuer, which needs the Ingress and certificate.
+    cert-manager, the ClusterIssuer and both Ingresses must therefore be set up before the
+    Helm release step.
+    """
+    _seed(deploy_ps_fixture)
+    run = deploy_ps_fixture.run_deploy("--yes", expect=0)
+
+    release_index = run.stderr.index("==> Reconciling the Helm release")
+    for step in (
+        "==> Installing cert-manager",
+        "==> Ensuring the Let's Encrypt ClusterIssuer",
+        "==> Ensuring the PS Service Ingress",
+        "==> Ensuring the Authentik Ingress",
+    ):
+        assert run.stderr.index(step) < release_index, f"{step!r} ran after the Helm release"

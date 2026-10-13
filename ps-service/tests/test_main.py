@@ -590,6 +590,8 @@ def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(
         "host": "127.0.0.1",
         "port": 8000,
         "timeout_graceful_shutdown": 10,
+        "proxy_headers": True,
+        "forwarded_allow_ips": "*",
     }
 
 

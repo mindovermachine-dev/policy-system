@@ -1668,18 +1668,11 @@ main() {
   public_hostname="$(fetch_public_ip_fqdn "$public_ip_id")"
   log_step "Public hostname: $public_hostname"
 
-  log_step "Reconciling the Helm release"
-  # Fixed constants, never an `az ad app show`-derived value (issue #129, AC-BI-001: no
-  # tenant app registrations) -- S4's blueprint defines exactly one OAuth2 Provider/Application, both
-  # named "ps-cli" (PLAN.md §0.5), so audience and cliClientId are the SAME literal, not two
-  # distinct app IDs. issuer is path-based under PS Service's own
-  # already-resolved $public_hostname (CHANGES.md row F1) -- never a second, Authentik-only
-  # hostname, never an external IdP's host.
-  local issuer
-  issuer="https://${public_hostname}/auth/application/o/${AUTHENTIK_APP_SLUG}/"
-  ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES" \
-    "$OWNER_EMAIL" "$issuer" "$AUTHENTIK_IN_CLUSTER_BASE_URL" "https://${public_hostname}/auth"
-
+  # Issue #236: cert-manager, the issuer and both Ingresses come BEFORE the Helm release.
+  # `helm --wait` below only returns once PS Service is Ready, and PS Service's startup does OIDC
+  # discovery against the public https://<hostname>/auth/... issuer, which needs the Ingress and
+  # its Let's Encrypt certificate to exist already. The Ingresses reference the chart's Services
+  # by name only, so they can be applied before those Services exist.
   log_step "Installing cert-manager"
   ensure_cert_manager
 
@@ -1694,6 +1687,18 @@ main() {
   # ensure_ps_service_ingress.
   log_step "Ensuring the Authentik Ingress"
   ensure_authentik_ingress "$public_hostname"
+
+  log_step "Reconciling the Helm release"
+  # Fixed constants, never an `az ad app show`-derived value (issue #129, AC-BI-001: no
+  # tenant app registrations) -- S4's blueprint defines exactly one OAuth2 Provider/Application, both
+  # named "ps-cli" (PLAN.md §0.5), so audience and cliClientId are the SAME literal, not two
+  # distinct app IDs. issuer is path-based under PS Service's own
+  # already-resolved $public_hostname (CHANGES.md row F1) -- never a second, Authentik-only
+  # hostname, never an external IdP's host.
+  local issuer
+  issuer="https://${public_hostname}/auth/application/o/${AUTHENTIK_APP_SLUG}/"
+  ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES" \
+    "$OWNER_EMAIL" "$issuer" "$AUTHENTIK_IN_CLUSTER_BASE_URL" "https://${public_hostname}/auth"
 
   # Issue #165: the owner (an Authentik admin, username == email, no password) and the
   # single-use passkey-enrolment link. The port-forward is killed however the script ends.

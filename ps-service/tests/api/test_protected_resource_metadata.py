@@ -142,3 +142,37 @@ def test_no_duplicate_route_registered_inside_the_mcp_mount(
     response = client.get(f"/mcp{_PATH}")
 
     assert response.status_code != 200
+
+
+def test_path_specific_document_for_the_mcp_url_names_that_url_as_the_resource(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    """Issue #237: a client given `https://<host>/mcp/` requires `resource` to equal it."""
+    client = TestClient(create_app(_config(mock_oidc_provider)))
+
+    for suffix in ("mcp/", "mcp"):
+        response = client.get(f"{_PATH}/{suffix}")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["resource"] == f"http://testserver/{suffix}"
+        assert body["authorization_servers"] == [mock_oidc_provider.issuer]
+
+
+def test_path_specific_document_uses_the_forwarded_scheme_when_trusted(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    client = TestClient(create_app(_config(mock_oidc_provider)), base_url="https://ps.example.com")
+
+    body = client.get(f"{_PATH}/mcp/").json()
+
+    assert body["resource"] == "https://ps.example.com/mcp/"
+
+
+def test_path_specific_document_is_404_for_any_non_mcp_path(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    client = TestClient(create_app(_config(mock_oidc_provider)))
+
+    for suffix in ("api", "mcpx/", "mcp/extra", "../evil"):
+        assert client.get(f"{_PATH}/{suffix}").status_code == 404

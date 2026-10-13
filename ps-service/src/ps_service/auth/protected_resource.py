@@ -20,9 +20,37 @@ this module's route is the only one that exists, at the top level only.
 
 from __future__ import annotations
 
-from fastapi import Request  # noqa: TC002 — FastAPI needs it at runtime (else a 422 body field)
+from fastapi import (  # FastAPI needs Request at runtime (else a 422 body field)
+    HTTPException,
+    Request,
+    status,
+)
 
 from ps_service.api.models import ProtectedResourceMetadata
+
+MCP_RESOURCE_PATH = "mcp"
+
+
+def _build_metadata(request: Request, resource: str) -> ProtectedResourceMetadata:
+    auth_context = request.app.state.auth_context
+    if auth_context is None:
+        return ProtectedResourceMetadata(
+            resource=resource,
+            authorization_servers=[],
+            scopes_supported=[],
+            ps_cli_client_id=None,
+        )
+    return ProtectedResourceMetadata(
+        resource=resource,
+        authorization_servers=[auth_context.issuer],
+        scopes_supported=list(auth_context.scopes),
+        ps_cli_client_id=auth_context.cli_client_id,
+    )
+
+
+def _origin(request: Request) -> str:
+    host = request.headers.get("host", request.url.netloc)
+    return f"{request.url.scheme}://{host}"
 
 
 def protected_resource_metadata(request: Request) -> ProtectedResourceMetadata:
@@ -31,7 +59,8 @@ def protected_resource_metadata(request: Request) -> ProtectedResourceMetadata:
     `resource` is derived from the live request (scheme + host), never
     hardcoded, mirroring `RestAuthMiddleware._resource_metadata_url`'s exact
     convention -- correct under a local dev bind, a `kind` NodePort, and a
-    prod ClusterIP+Ingress alike.
+    prod ClusterIP+Ingress alike (behind the Ingress the scheme is `https`
+    because `main()` runs uvicorn with the proxy's forwarded headers trusted).
 
     When the local-test bypass (#67) is active, `request.app.state.auth_context`
     is `None` -- there is no issuer to report, so `authorization_servers`/
@@ -47,20 +76,30 @@ def protected_resource_metadata(request: Request) -> ProtectedResourceMetadata:
     Returns:
         The RFC 9728 metadata document for this PS Service instance.
     """
-    auth_context = request.app.state.auth_context
-    scheme = request.url.scheme
-    host = request.headers.get("host", request.url.netloc)
-    resource = f"{scheme}://{host}"
-    if auth_context is None:
-        return ProtectedResourceMetadata(
-            resource=resource,
-            authorization_servers=[],
-            scopes_supported=[],
-            ps_cli_client_id=None,
-        )
-    return ProtectedResourceMetadata(
-        resource=resource,
-        authorization_servers=[auth_context.issuer],
-        scopes_supported=list(auth_context.scopes),
-        ps_cli_client_id=auth_context.cli_client_id,
-    )
+    return _build_metadata(request, _origin(request))
+
+
+def protected_resource_metadata_for_path(
+    request: Request, resource_path: str
+) -> ProtectedResourceMetadata:
+    """Build the path-specific RFC 9728 document for the MCP endpoint (issue #237).
+
+    RFC 9728 inserts the resource's path after `/.well-known/oauth-protected-resource`, so a
+    client given the MCP URL `https://<host>/mcp/` asks for
+    `/.well-known/oauth-protected-resource/mcp/` and requires the document's `resource` to equal
+    that URL. Only the MCP mount is a resource with its own path; any other suffix is a 404, so
+    the route never reflects arbitrary client-chosen paths into `resource`.
+
+    Args:
+        request: The incoming request (FastAPI injects it).
+        resource_path: The path after the well-known prefix, without the leading slash.
+
+    Returns:
+        The metadata document whose `resource` is the MCP URL as the client addressed it.
+
+    Raises:
+        HTTPException: 404 when `resource_path` is not the MCP mount.
+    """
+    if resource_path.rstrip("/") != MCP_RESOURCE_PATH:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    return _build_metadata(request, f"{_origin(request)}/{resource_path}")

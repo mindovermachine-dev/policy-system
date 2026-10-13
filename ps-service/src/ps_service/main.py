@@ -31,7 +31,10 @@ from ps_service.api.errors import RequestBodyTooLargeError
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.routes import build_api_router
 from ps_service.auth.middleware import RestAuthMiddleware
-from ps_service.auth.protected_resource import protected_resource_metadata
+from ps_service.auth.protected_resource import (
+    protected_resource_metadata,
+    protected_resource_metadata_for_path,
+)
 from ps_service.auth.startup import resolve_auth_context
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.authz.startup import require_bootstrap_owner_configured
@@ -955,6 +958,14 @@ def create_app(config: ServiceConfig) -> FastAPI:
         methods=["GET"],
         response_model_exclude_none=True,
     )
+    # RFC 9728 path-specific form for the MCP endpoint (issue #237); not part of the REST surface.
+    app.add_api_route(
+        "/.well-known/oauth-protected-resource/{resource_path:path}",
+        protected_resource_metadata_for_path,
+        methods=["GET"],
+        response_model_exclude_none=True,
+        include_in_schema=False,
+    )
 
     return app
 
@@ -979,4 +990,9 @@ def main() -> None:
         host=config.host,
         port=config.port,
         timeout_graceful_shutdown=config.graceful_shutdown_seconds,
+        # Behind the Ingress the pod only sees plain HTTP from the proxy's pod IP. Trusting its
+        # X-Forwarded-Proto makes request.url.scheme `https`, which the protected-resource
+        # metadata advertises (issue #237). Only the scheme/client address are affected.
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )
