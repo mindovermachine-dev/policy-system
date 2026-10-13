@@ -293,6 +293,27 @@ def test_ps_cli_provider_uses_username_as_the_token_subject(
     assert provider["attrs"]["sub_mode"] == "user_username"
 
 
+# --- #169: authorization_code grant + Claude redirect URIs ---------------------------------------
+
+
+def test_ps_cli_provider_accepts_authorization_code_with_claude_redirect_uris(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    attrs = _by_id(main_entries, "ps-cli-provider")["attrs"]
+
+    assert attrs["client_type"] == "public"
+    assert set(attrs["grant_types"]) == {
+        "urn:ietf:params:oauth:grant-type:device_code",
+        "refresh_token",
+        "authorization_code",
+    }
+    assert len(attrs["grant_types"]) == 3  # no duplicates, no implicit/client_credentials/password
+    assert attrs["redirect_uris"] == [
+        {"matching_mode": "strict", "url": "https://claude.ai/api/mcp/auth_callback"},
+        {"matching_mode": "regex", "url": r"^http://(localhost|127\.0\.0\.1):[0-9]+/callback$"},
+    ]
+
+
 # --- blueprint hygiene ---------------------------------------------------------------------------
 
 

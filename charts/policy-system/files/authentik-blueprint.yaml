@@ -103,7 +103,8 @@ entries:
           [name, default-authentication-mfa-validation],
         ]
 
-  # --- 2. One fixed OAuth2 Provider for PS-Cli's device-code login
+  # --- 2. One fixed OAuth2 Provider for PS-Cli's device-code login, also used by Claude
+  # (Claude connector / Claude Code) via authorization_code + PKCE (#169).
   # (PLAN.md §0.5 — one Provider, not a separate API-app/CLI-app pair).
   # `client_id` is a blueprint-authored literal, "ps-cli", reused verbatim
   # as scripts/deploy-ps-prod.sh's fixed AUTHENTIK_APP_SLUG constant (S8) and as
@@ -115,10 +116,12 @@ entries:
   # grant_types/client_type confirmed against
   # authentik/providers/oauth2/models.py (ClientType, GrantType) and
   # authentik/common/oauth/constants.py (GRANT_TYPE_DEVICE_CODE =
-  # "urn:ietf:params:oauth:grant-type:device_code"). redirect_uris is
-  # explicitly empty: RFC 8628 device-code exchanges never redirect a
-  # browser back to the client, so no redirect_uri is ever consulted for
-  # this provider's own grant.
+  # "urn:ietf:params:oauth:grant-type:device_code"). The device-code grant never
+  # consults redirect_uri; the authorization_code grant does, so redirect_uris lists
+  # exactly two entries: Claude's connector callback (strict) and the Claude Code
+  # loopback callback (regex, any localhost/127.0.0.1 port). Dynamic client registration is
+  # intentionally absent: this is one pre-registered public client (no client secret) and
+  # Claude sends PKCE (#168 spike).
   # authorization_flow is Authentik's shipped default
   # "implicit consent" provider-authorization flow (no consent-screen
   # stage) -- confirmed via the upstream
@@ -141,7 +144,12 @@ entries:
       grant_types:
         - "urn:ietf:params:oauth:grant-type:device_code"
         - refresh_token
-      redirect_uris: []
+        - authorization_code
+      redirect_uris:
+        - matching_mode: strict
+          url: "https://claude.ai/api/mcp/auth_callback"
+        - matching_mode: regex
+          url: '^http://(localhost|127\.0\.0\.1):[0-9]+/callback$'
       access_code_validity: "minutes=5"
       # property_mappings -- a blueprint-created Provider gets NO scope mappings
       # by default (unlike one created through Authentik's own Admin UI wizard,

@@ -141,6 +141,24 @@ tests:
           path: data["authentik-blueprint.yaml"]
           pattern: "sub_mode: user_username"
 
+  - it: ps-cli provider grants device_code, refresh_token and authorization_code (issue #169, AC1/AC3)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: 'grant_types:\s*\n\s*- "urn:ietf:params:oauth:grant-type:device_code"\s*\n\s*- refresh_token\s*\n\s*- authorization_code'
+
+  - it: ps-cli provider registers the Claude connector callback as a strict redirect URI (issue #169, AC1)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: 'matching_mode: strict\s*\n\s*url: "https://claude\.ai/api/mcp/auth_callback"'
+
+  - it: ps-cli provider registers a regex redirect URI for the Claude Code loopback callback (issue #169, AC1)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "matching_mode: regex"
+
   - it: local TLS blueprint registers the mounted certificate and sets the brand web_certificate (issue #165, 2D)
     set:
       localTls.secretName: policy-system-local-tls

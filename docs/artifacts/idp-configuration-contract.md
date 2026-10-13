@@ -71,6 +71,25 @@ release and chart hardening
 profile](../architecture/customer-azure-deployment.md#helm-release-and-chart-hardening-profile)
 section for the exact `--set` list.
 
+### Grants and redirect URIs of the `ps-cli` provider
+
+The `ps-cli` provider is a public client (no client secret) and allows three grants:
+
+- `urn:ietf:params:oauth:grant-type:device_code` for `ps-cli auth login`.
+- `authorization_code`, for Claude (Claude connector and Claude Code). Claude sends PKCE (S256);
+  Authentik does not require it of a public client, so the provider does not rely on it.
+- `refresh_token`.
+
+`authorization_code` needs registered redirect URIs, so the provider lists exactly two:
+
+- `https://claude.ai/api/mcp/auth_callback` (strict match), the Claude connector callback.
+- `^http://(localhost|127\.0\.0\.1):[0-9]+/callback$` (regex match), the Claude Code loopback callback on any port.
+
+Claude connects with `client_id` `ps-cli` alone. Dynamic client registration stays disabled, and
+the blueprint has no setting for it. Claude shows the consent screen only when it sends
+`prompt=consent`; the provider's authorization flow is implicit consent (#168 spike). The token
+`sub` is the username, as described in the next section.
+
 ### The `sub` claim and the bootstrap owner
 
 The blueprint sets the `ps-cli` Provider's `sub_mode` to `user_username`, so the ID token's
