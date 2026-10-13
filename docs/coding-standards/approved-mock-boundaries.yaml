@@ -109,7 +109,6 @@ http:
   - ps_service.main.check_cellar_eli_connectivity
 
 process_os:
-  - sys.stdin                              # ps_cli.mcp_bridge stdin boundary
   - atexit.register                        # stdlib; see §2 case 4
   - uvicorn.run
   - tempfile.mkdtemp

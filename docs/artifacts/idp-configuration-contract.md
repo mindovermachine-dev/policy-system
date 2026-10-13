@@ -112,16 +112,16 @@ bootstrap](./installation-guide.md#systemowner-bootstrap)).
 
 ### Transport: HTTPS, and trust for `ps-cli`
 
-`ps-cli` (and the MCP bridge that reuses its login; the bridge is the legacy path, removed by #174 after #173) refuses to send credentials to an issuer,
+`ps-cli` refuses to send credentials to an issuer,
 device-authorization endpoint or token endpoint that is neither `https://` nor a loopback address
 (`_assert_secure_or_loopback` in `oidc_discovery.py`); this rule is unchanged. The evaluator
 profile therefore serves Authentik over HTTPS, with a certificate from a local certificate
 authority created by `scripts/deploy-ps-eval.sh`. PS Service's pod trusts that CA through
 `SSL_CERT_FILE` (a bundle of the system CAs plus the local CA, mounted by the chart); nothing
-disables TLS verification. `ps-cli` and `ps-cli-mcp-bridge` verify the certificate against the
+disables TLS verification. `ps-cli` verifies the certificate against the
 operating system trust store (through `truststore`), so a machine whose OS already trusts the
 local CA (`scripts/deploy-ps-eval.sh --apply-host-setup` arranges this) needs no environment
-variable, including for the bridge under Claude Desktop. On macOS and Windows
+variable. On macOS and Windows
 `SSL_CERT_FILE`/`SSL_CERT_DIR` are ignored; on Linux they are honoured, with the system bundle as
 the fallback. A failed certificate check is reported as such, not as an unreachable host.
 Browsers need the CA imported into the OS or browser store too, and passkeys only work over such
@@ -252,12 +252,11 @@ defined as follows. It has not been verified against a non-Authentik provider.
   `PS_AUTH_AUDIENCE`, the authorization-code grant with PKCE (S256), and the same two redirect
   URIs as listed under [Grants and redirect URIs of the `ps-cli` provider](#grants-and-redirect-uris-of-the-ps-cli-provider).
   Dynamic client registration is not part of this and is not used.
-- **Bridge.** A provider that enforces the RFC 8707 `resource` parameter in conflict with the MCP
-  authorization spec (Entra, #65), or that cannot offer such a client, does not support a direct
-  connector; use `ps-cli-mcp-bridge` instead. The bridge is the legacy path, removed by #174
-  (after #173), so such a provider has no supported Claude path after that.
-- **Federation.** Federating an upstream provider (such as Entra) into Authentik keeps the
-  Authentik rule; see [Optional: federate to an upstream IdP](#optional-federate-to-an-upstream-idp).
+- **No direct path; federate.** A provider that enforces the RFC 8707 `resource` parameter in
+  conflict with the MCP authorization spec (Entra, #65), or that cannot offer such a client, has no
+  direct Claude path: Claude cannot connect to PS Service with it. The supported route is to
+  federate that upstream provider into Authentik, which keeps the Authentik rule; see
+  [Optional: federate to an upstream IdP](#optional-federate-to-an-upstream-idp).
 
 ### Common pitfalls
 

@@ -63,27 +63,6 @@ def test_persistence_credential_store_happy_path_round_trips(
     assert store.get_tokens("dev") == _TOKENS
 
 
-def test_last_modified_returns_none_when_never_saved_and_moves_after_save(
-    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
-) -> None:
-    """Issue #181 AC-BI-004: `last_modified` is the stat-only change signal -- `None`
-    before anything was ever saved, a value that moves on every later write (including
-    `delete_tokens`' empty-sentinel write), and never reads the stored content.
-    """
-    store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
-    assert store.last_modified("dev") is None
-
-    store.set_tokens("dev", _TOKENS)
-    after_set = store.last_modified("dev")
-    store.delete_tokens("dev")
-    after_delete = store.last_modified("dev")
-
-    assert after_set is not None
-    assert after_delete is not None
-    assert after_delete > after_set
-    assert build_in_memory_persistence("dev").loads == 0
-
-
 def test_persistence_credential_store_persists_only_refresh_token_and_issuer(
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
@@ -379,9 +358,6 @@ class _FlakyReadPersistence:
     def save(self, content: str) -> None:
         self._content = content
 
-    def time_last_modified(self) -> float:
-        return 1.0
-
     def load(self) -> str:
         self.loads += 1
         if self._failures:
@@ -493,7 +469,7 @@ def test_other_statuses_keep_the_unlock_hint(
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "darwin", reason="reproduces the macOS Keychain rewrite race")
 def test_live_keychain_reader_survives_concurrent_rewrites(tmp_path: Path) -> None:
-    """Issue #180 reproduction (AC-BI-001/003): a long-lived reader against the real
+    """Issue #180 reproduction (AC-BI-001/003): a reader held open against the real
     macOS Keychain, while another process rewrites the same entry, never raises.
 
     Uses a throwaway service/account, deleted afterwards -- never a real credential.
@@ -552,9 +528,6 @@ class _ContentEchoingPersistence:
         del content
         raise self._failure()
 
-    def time_last_modified(self) -> float:
-        raise self._failure()
-
     def load(self) -> str:
         raise self._failure()
 
@@ -562,7 +535,7 @@ class _ContentEchoingPersistence:
         return str(self._lock_path)
 
 
-@pytest.mark.parametrize("operation", ["get", "get_observed", "set", "delete", "last_modified"])
+@pytest.mark.parametrize("operation", ["get", "set", "delete"])
 def test_credential_store_error_str_and_repr_never_contain_stored_content(
     tmp_path: Path, operation: str
 ) -> None:
@@ -574,10 +547,8 @@ def test_credential_store_error_str_and_repr_never_contain_stored_content(
     )
     operations: dict[str, Callable[[], object]] = {
         "get": lambda: store.get_tokens("dev"),
-        "get_observed": lambda: store.get_tokens_observed("dev"),
         "set": lambda: store.set_tokens("dev", TokenBundle(refresh_token=secret, issuer="i")),
         "delete": lambda: store.delete_tokens("dev"),
-        "last_modified": lambda: store.last_modified("dev"),
     }
 
     with pytest.raises(CredentialStoreError) as excinfo:

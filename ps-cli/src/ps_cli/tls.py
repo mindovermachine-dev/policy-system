@@ -1,10 +1,9 @@
 """TLS trust for every `httpx.Client` ps-cli builds (issue #175).
 
-ps-cli and `ps-cli-mcp-bridge` verify server certificates against the operating
-system trust store via `truststore`, as the single trust mechanism -- so an
-evaluator whose local CA is trusted by the OS (`deploy-ps-eval.sh --apply-host-setup`)
-needs no environment tweaks, including when Claude Desktop spawns the bridge with its
-own environment. Certificate verification is never disabled.
+ps-cli verifies server certificates against the operating system trust store via
+`truststore`, as the single trust mechanism -- so an evaluator whose local CA is trusted
+by the OS (`deploy-ps-eval.sh --apply-host-setup`) needs no environment tweaks.
+Certificate verification is never disabled.
 
 On macOS and Windows `truststore` uses the native verifier and ignores
 `SSL_CERT_FILE`/`SSL_CERT_DIR`; on Linux it uses OpenSSL's default paths, which

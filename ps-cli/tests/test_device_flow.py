@@ -9,12 +9,10 @@ since the real provider only ever emits the four documented RFC 8628 error codes
 Issue #121: `TokenBundle` shrinks to `refresh_token`/`issuer` only (AC-BI-001) --
 every construction below drops `access_token`/`expires_at`. The in-memory-only
 access token now lives in a required `access_token_cache: AccessTokenCache`
-parameter threaded through `ensure_valid_access_token`/`peek_cached_access_token`
-(D-121-2/D-121-3). CHANGES.md's critical-flaw fix (Appendix A1) keeps
-`AccessTokenCache.expires_at` so a long-lived cache holder (e.g. `mcp_bridge`'s
-proxy-loop process) can self-heal once its in-memory token goes stale, without
-breaking AC-BI-003's "exactly one refresh per (fresh-process) invocation" for a
-real CLI invocation, whose cache always starts empty.
+parameter threaded through `ensure_valid_access_token` (D-121-2). `AccessTokenCache.expires_at`
+is kept so a run that outlives the token TTL (a long ingest) refreshes once more, without
+breaking AC-BI-003's "exactly one refresh per (fresh-process) invocation", whose cache
+always starts empty.
 """
 
 from __future__ import annotations
@@ -32,7 +30,6 @@ from ps_cli.device_flow import (
     TokenResponse,
     complete_device_login,
     ensure_valid_access_token,
-    peek_cached_access_token,
     poll_for_token,
     request_device_authorization,
     token_bundle_from_response,
@@ -320,8 +317,8 @@ def test_complete_device_login_full_flow_round_trips_via_real_provider(
     assert bundle.issuer == mock_oidc_provider.issuer
 
 
-# --- Issue #57 Group 3 (AC-BI-002/003/004/005/009): ensure_valid_access_token /
-# peek_cached_access_token, retargeted onto AccessTokenCache by issue #121 -----------
+# --- Issue #57 Group 3 (AC-BI-002/003/004/005/009): ensure_valid_access_token,
+# retargeted onto AccessTokenCache by issue #121 -----------
 
 
 class _FakeCredentialStore:
@@ -407,29 +404,6 @@ def _transport_for(
 ) -> _SplitTransport:
     """Build the `transport=` DI seam `ensure_valid_access_token` needs for `provider`."""
     return _SplitTransport(_resource_metadata_handler(provider, scopes=scopes))
-
-
-class TestPeekCachedAccessToken:
-    """D-121-3: read-only, in-memory-cache-only access-token lookup."""
-
-    def test_returns_none_when_cache_is_empty(self) -> None:
-        cache = AccessTokenCache()
-
-        assert peek_cached_access_token(access_token_cache=cache) is None
-
-    def test_returns_the_cached_token_verbatim_when_populated(self) -> None:
-        cache = AccessTokenCache(token="fresh", expires_at=int(time.time()) + 3600)
-
-        assert peek_cached_access_token(access_token_cache=cache) == "fresh"
-
-    def test_returns_the_cached_token_even_when_stale(self) -> None:
-        """A read-only peek never checks staleness -- that is `ensure_valid_access_token`'s
-        job, not this best-effort function's (its own docstring: "never calls the
-        network, never writes the store, never raises").
-        """
-        cache = AccessTokenCache(token="stale-but-cached", expires_at=int(time.time()) - 10)
-
-        assert peek_cached_access_token(access_token_cache=cache) == "stale-but-cached"
 
 
 class TestEnsureValidAccessToken:
@@ -541,9 +515,8 @@ class TestEnsureValidAccessToken:
         holds a token, but whose `expires_at` is in the past, is treated as a cache
         miss -- exactly one more refresh happens, and the cache is updated with the
         newly-refreshed token, not left holding the stale one. This is the proof that
-        a long-lived cache holder (e.g. `mcp_bridge`'s proxy-loop process) can self-heal
-        once its in-memory token goes stale, instead of returning an increasingly-stale
-        token forever.
+        a run that outlives the token TTL refreshes once more instead of sending an
+        expired token.
         """
         transport = _transport_for(mock_oidc_provider)
         initial = _obtain_real_tokens(mock_oidc_provider)
@@ -883,7 +856,7 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path() -> None:
 class TestRefreshFailureClassification:
     """`ensure_valid_access_token` separates "cannot verify" from "credential rejected".
 
-    Both keep the bridge's existing user-facing wording (AC-BI-013): the split is the
+    Both keep the existing user-facing wording (AC-BI-013): the split is the
     exception *type*, never the message.
     """
 

@@ -69,7 +69,7 @@ SystemOwner floor protected and its warning surfaced.
   stored row — a freshly enrolled invitee appears nowhere in the roster until their
   first grant. The admin must obtain the `principal_subject` out-of-band (from the
   invitee, or the IdP's admin UI); CUC-02 → CUC-03 therefore has a gap in the middle
-  that the client cannot bridge today. Candidates: a "principals seen" read, or carrying
+  that the client cannot close today. Candidates: a "principals seen" read, or carrying
   the subject through the invite. Related to PSC-12 (CUC-01's self-grants read), which covers the caller's own
   grants, not other principals.
 - **Ceremony tier for owner-level grants.** Granting `SystemOwner` is arguably the most

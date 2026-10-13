@@ -75,9 +75,9 @@ def _resolve_client(
     business command (`near-misses`, `check`, `ingest`, `restore`, `export`, ...) was
     silently sending no `Authorization` header at all and relying on PS Service's own 401
     to fail loud, rather than ever attaching the token `ps-cli auth login` stored. Confirmed
-    against a real deployment. Mirrors `auth_handlers.py`'s `_dispatch_auth_login` and
-    `mcp_bridge.py`'s own independent resolution -- `resolve_auth_override` is shared across
-    all three (`targets.py`'s own docstring on it).
+    against a real deployment. Mirrors `auth_handlers.py`'s `_dispatch_auth_login` --
+    `resolve_auth_override` is shared by `_resolve_client` and the `auth` subcommands
+    (`targets.py`'s own docstring on it).
     """
     if client is not None:
         return client

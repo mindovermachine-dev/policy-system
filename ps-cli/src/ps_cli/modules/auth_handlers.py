@@ -118,7 +118,7 @@ def handle_auth_status(
 
     Raises `PsCliError` if `context_name is None` (D-57-5, same boundary as
     `handle_auth_login`). Otherwise resolves the credential through
-    `device_flow.ensure_valid_access_token` -- the same path the bridge and every
+    `device_flow.ensure_valid_access_token` -- the same path every
     other authenticated command use -- so "logged in" means a usable access token
     actually came back, and the rotated refresh token is persisted. Prints `context`,
     `issuer` and `logged in` and returns only in that case; every other outcome
@@ -131,7 +131,7 @@ def handle_auth_status(
     - any other `PsCliError` from the refresh: "not usable", pointing at `auth login`.
 
     This reverses #121's D-121-6 offline invariant: the offline design reported
-    "logged in" for credentials the plugin's bridge then failed to refresh. No token
+    "logged in" for credentials that every other command then failed to refresh. No token
     value is ever printed -- only the issuer, context and the error's own wording.
     `transport` is the same test seam `ensure_valid_access_token` takes.
     """

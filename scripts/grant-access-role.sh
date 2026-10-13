@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Grants an AccessRole to a principal via PS Service's `grant-access-role` MCP tool, by driving the
-# ps-cli stdio MCP bridge (which reuses the credentials `ps-cli auth login` already stored).
+# Grants an AccessRole to a principal via PS Service's `grant-access-role` MCP tool, calling its
+# Streamable HTTP endpoint directly with the bearer token `ps-cli auth login` stored.
 #
 # Usage:
 #   scripts/grant-access-role.sh [--principal <subject>] [--role <AccessRole>]
@@ -10,10 +10,9 @@
 #   --role       SystemOwner | SystemAdmin | PolicyManager | ComplianceOfficer (default
 #                ComplianceOfficer).
 #
-# Targets ps-cli's current context (`ps-cli config get-contexts`; `eval` = local kind).
-# Prerequisites: `ps-cli auth login` done for that context, and the caller holds SystemOwner (a
-# SystemOwner may grant themselves any role). Access-role management is never available under the
-# local-test bypass.
+# Targets ps-cli's current context (`ps-cli config get-contexts`; `eval` = local kind). Needs
+# `ps-cli auth login` for it and a SystemOwner caller. GRANT_ACCESS_ROLE_TOKEN, when set, is the
+# bearer token instead of the stored credential. Never available under the local-test bypass.
 #
 # Exit codes: 2 usage error, 1 tool/transport failure, 0 granted.
 set -euo pipefail
@@ -40,17 +39,13 @@ esac
 
 command -v jq >/dev/null || { printf 'jq is required.\n' >&2; exit 1; }
 
-bridge=(uv run --quiet --project "${REPO_ROOT}/ps-cli" ps-cli-mcp-bridge)
-
-init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"grant-access-role.sh","version":"1"}}}'
-initialized='{"jsonrpc":"2.0","method":"notifications/initialized"}'
-call="$(jq -nc --arg p "${principal}" --arg r "${role}" \
-  '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"grant-access-role",arguments:{principal_subject:$p,access_role:$r}}}')"
-
-reply="$(printf '%s\n%s\n%s\n' "${init}" "${initialized}" "${call}" | "${bridge[@]}" | jq -c 'select(.id == 2)')"
+client=(uv run --quiet --project "${REPO_ROOT}/ps-cli" python -I "${SCRIPT_DIR}/grant_access_role_client.py")
+if ! reply="$("${client[@]}" --principal "${principal}" --role "${role}")"; then
+  exit 1 # the client already wrote the reason to stderr
+fi
 
 if [[ -z "${reply}" ]]; then
-  printf 'No reply to grant-access-role (is PS Service reachable and are you logged in? see ~/.config/ps-cli/mcp-bridge.log).\n' >&2
+  printf "No reply to grant-access-role (is PS Service reachable and are you logged in? run 'ps-cli auth login').\n" >&2
   exit 1
 fi
 

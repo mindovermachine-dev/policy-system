@@ -191,12 +191,9 @@ def resolve_auth_override(config: CliConfig, config_dir: Path) -> AuthOverrides 
 
     Shared by every call site that must resolve `credential_store`/`auth_override`
     independently of `cli.py::_resolve_client` (issue #57's `auth` subcommands, which
-    must never go through a path requiring an already-valid token, and
-    `mcp_bridge.py`, which has no `argparse.Namespace` to share `_resolve_client`'s
-    own resolution with) -- extracted here once a third call site
-    (`_resolve_client` itself, after issue #57 Slice 15's bearer-attachment gap fix)
-    needed the identical lookup, past this codebase's own "extract once a pattern
-    repeats a third time" DRY threshold (`http_client.py`'s cited convention).
+    must never go through a path requiring an already-valid token) -- its callers are
+    `_resolve_client` and the `auth` subcommands, extracted here so the lookup stays
+    identical (`http_client.py`'s cited "extract once a pattern repeats" convention).
     Reads `targets.toml` fresh on every call rather than threading a `TargetsFile`
     through from wherever `load_config()` already read it internally -- mirrors
     `config_handlers.py`'s own handlers, none of which share a load across calls

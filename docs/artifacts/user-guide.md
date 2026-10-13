@@ -653,7 +653,7 @@ unhealthy server:
 
 `ps-cli auth login` against an evaluator instance can instead fail with `Could not reach
 <issuer>.` even though Authentik is running: the issuer is HTTPS with a locally issued
-certificate, and `ps-cli` (and `ps-cli-mcp-bridge`) verify it against the operating system
+certificate, and `ps-cli` verifies it against the operating system
 trust store. If the message says it could not verify the TLS certificate, the local CA is not
 trusted on this machine: trust it as described in [Installation Guide, step
 8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli) and retry. A plain

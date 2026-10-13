@@ -1147,7 +1147,7 @@ before you rely on a claim for a real deployment.
   The test covered:
   - One deployment.
   - Owner passkey enrolment in a browser.
-  - `ps-cli auth login` and the MCP bridge with `SSL_CERT_FILE`.
+  - `ps-cli auth login` with `SSL_CERT_FILE`.
   - `SystemOwner` granted on the first role-gated call.
   - A second user invited and enrolled.
   - Owner re-run recovery.

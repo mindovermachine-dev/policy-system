@@ -104,21 +104,16 @@ class TokenResponse:
 class AccessTokenCache:
     """One CLI invocation's in-memory-only access token (AC-BI-004, issue #121).
 
-    Never persisted. Constructed once per invocation by whichever object's lifetime *is*
-    that invocation (`PsServiceClient.__init__` for a real ps-cli command;
-    `mcp_bridge.main()` for the proxy-loop process), then passed explicitly into
-    `ensure_valid_access_token`/`peek_cached_access_token` -- discarded at process exit by
-    simply going out of scope, no explicit "clear" step needed.
+    Never persisted. Constructed once per `PsServiceClient` (`PsServiceClient.__init__`)
+    and reused for every authenticated request of that invocation (`http_client.py`
+    passes it into `ensure_valid_access_token` on each call) -- discarded at process exit
+    by simply going out of scope, no explicit "clear" step needed.
 
-    `expires_at` (issue #121 critical-flaw fix): the token's own absolute Unix-epoch
-    expiry, set alongside `token` on every refresh. Never persisted, never read from any
-    store -- exists purely so a long-lived holder of this cache (mcp_bridge's whole
-    proxy-loop process) can detect its own token going stale mid-session and self-heal,
-    instead of returning an increasingly-stale token forever once populated. For a real
-    CLI invocation (a fresh process every time, `token` starts `None`), this field never
-    changes AC-BI-003's "exactly one refresh per invocation" behavior: the first check
-    always misses (`token is None`), so exactly one refresh still happens before the
-    first business-endpoint call, same as before this field existed.
+    `expires_at` is the token's own absolute Unix-epoch expiry, set alongside `token` on
+    every refresh. Never persisted, never read from any store, so a run that outlives the
+    token's TTL (a long ingest) refreshes once more instead of sending an expired token.
+    A fresh cache always misses (`token is None`), so the first call refreshes exactly
+    once (AC-BI-003).
     """
 
     token: str | None = None
@@ -400,8 +395,8 @@ def _raise_refresh_failed() -> NoReturn:
 def _raise_refresh_unverifiable(detail: str) -> NoReturn:
     """Raise `CannotVerifyError` for a refresh that failed for reasons unrelated to the credential.
 
-    Same wording as `_raise_refresh_failed` (AC-BI-013 is unchanged for the bridge and
-    every other command); the exception type alone tells `auth status` the credential
+    Same wording as `_raise_refresh_failed` (AC-BI-013 is unchanged for every command);
+    the exception type alone tells `auth status` the credential
     was never judged. `detail` is a transport exception class name or an HTTP status.
     """
     raise CannotVerifyError(msg=_REFRESH_FAILED_MSG, hint=_RELOGIN_HINT, detail=detail)
@@ -413,23 +408,12 @@ def _is_cache_stale(cache: AccessTokenCache) -> bool:
     Mirrors the old (pre-#121) `_is_expired(bundle: TokenBundle)` check bit-for-bit, but
     reads the in-memory `AccessTokenCache` instead of a persisted `TokenBundle` -- there is
     no persisted `expires_at` left to check (AC-BI-001), but the in-memory cache still
-    needs one to self-heal within a long-lived process (issue #121 critical-flaw fix).
+    needs one so a run that outlives the token's TTL refreshes again (`http_client.py`
+    reuses one cache for every authenticated call).
     `cache.expires_at is None` (nothing cached yet) counts as stale, so a fresh cache
     always falls through to a real refresh.
     """
     return cache.expires_at is None or cache.expires_at <= int(time.time()) + _EXPIRY_LEEWAY_SECONDS
-
-
-def peek_cached_access_token(*, access_token_cache: AccessTokenCache) -> str | None:
-    """Return this invocation's already-obtained access token, if any (D-121-3).
-
-    Read-only: never calls the network, never writes the store, never raises --
-    for a best-effort caller that must never trigger a refresh or a
-    credential-store write. Contrast with `ensure_valid_access_token()`, which
-    refreshes a stale/missing cache entry (and fails closed if it cannot); here,
-    an empty cache simply means "attach no Authorization header", not an error.
-    """
-    return access_token_cache.token
 
 
 def _refresh_tokens(
@@ -513,8 +497,8 @@ def ensure_valid_access_token(
     returns immediately, no store read, no network call -- AC-BI-004's "reused by
     further business-endpoint calls within the same invocation."
 
-    Cache-miss (nothing cached yet, OR the cached token is stale -- issue #121
-    critical-flaw fix): reads the stored bundle, fails closed if absent
+    Cache-miss (nothing cached yet, OR the cached token is stale): reads the stored
+    bundle, fails closed if absent
     (`_raise_no_stored_credentials`, AC-BI-002) or if `refresh_token is None`
     (`_raise_refresh_failed`), otherwise always refreshes (AC-BI-003, AC-BI-005's
     rotation preserved verbatim inside `_refresh_tokens`), persists
@@ -522,15 +506,11 @@ def ensure_valid_access_token(
     populates `access_token_cache.token`/`access_token_cache.expires_at`, and returns
     the new access token.
 
-    For a real CLI invocation this is unobservably identical to a design with no
-    `expires_at` field at all: the cache starts empty, so the first call always
-    misses and refreshes exactly once, same as every subsequent call for the rest of
-    that invocation once populated. For `mcp_bridge`'s long-lived proxy-loop process,
-    this is what makes a real Entra ID access token's ~60-90 min TTL survive a session
-    that outlives it: once `_is_cache_stale` trips, the very next forwarded message
-    (not the one mid-flight -- this is checked before a request is sent, never
-    mid-request) transparently re-refreshes and the process keeps working with no
-    manual restart.
+    The cache starts empty, so the first call always misses and refreshes exactly once;
+    later calls in the same invocation reuse the token (`http_client.py:449` passes the
+    one per-client cache on every authenticated call). A run that outlives a real Entra
+    ID access token's ~60-90 min TTL (a long ingest) re-refreshes once `_is_cache_stale`
+    trips -- checked before a request is sent, never mid-request.
 
     `transport` is the constructor-injection seam tests use to substitute a
     combined real-provider/fake-metadata transport for `resolve_auth_parameters`'s

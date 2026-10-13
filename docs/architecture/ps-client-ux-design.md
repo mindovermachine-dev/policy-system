@@ -27,8 +27,7 @@ them.
 ps-client is a **domain-specific agent harness**: the same class of software as a general
 chat/coding agent client, specialized to PS compliance work. It is the **complete product
 surface** — every role, admin included, works here. The aspiration is to retire ps-cli's
-operator-facing commands once the client absorbs local-file intake; ps-cli's MCP-bridge
-plumbing is the legacy path for the plugin today; it is removed by #174 (after #173), because a remote connector with the pre-registered `ps-cli` client replaces it.
+operator-facing commands once the client absorbs local-file intake; the plugin reaches PS Service through a remote connector with the pre-registered `ps-cli` client (#173), so ps-cli carries no MCP plumbing (#174).
 
 Two interactions dominate, in order:
 

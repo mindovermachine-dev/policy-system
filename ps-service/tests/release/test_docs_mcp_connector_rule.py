@@ -4,7 +4,7 @@ Structural: wording and issue numbers are free. The tests read the real markdown
 disk (no fakes) and check shape only: no doc ties the direct connector to a Dynamic Client
 Registration prerequisite, the reach matrix exists with every row tagged verified or
 expected, the user guide links to it, the architecture entries name the `ps-cli` client and
-the legacy bridge, and the identity-provider contract defines the other-provider case.
+no MCP bridge, and the identity-provider contract defines the other-provider case.
 """
 
 from __future__ import annotations
@@ -140,17 +140,39 @@ def test_user_guide_links_to_reach_matrix() -> None:
     assert f"](./installation-guide.md#{_slug(heading)})" in _text(_USER)
 
 
-def test_architecture_entries_require_ps_cli_client_and_mark_bridge_legacy() -> None:
+def test_architecture_entries_require_ps_cli_client_and_name_no_bridge() -> None:
     cli_entry = _entry("- PS-Cli")
     skill_entry = _entry("- PS Question Skill")
     assert _DCR_PREREQUISITE.findall(cli_entry + skill_entry) == []
     assert "ps-cli" in cli_entry.lower()
     assert "ps-cli" in skill_entry.lower()
-    assert "legacy" in skill_entry.lower()
+    assert "bridge" not in (cli_entry + skill_entry).lower()
 
 
 def test_idp_contract_defines_other_identity_providers() -> None:
     assert any("Other identity providers" in h for h in _headings(_IDP_CONTRACT))
+
+
+def test_idp_contract_other_providers_name_federation_and_no_direct_path() -> None:
+    section = _section(_IDP_CONTRACT, "### Other identity providers").lower()
+    for needle in ("authentik", "federate", "no direct"):
+        assert needle in section, f"other-providers section lacks {needle!r}"
+    assert "bridge" not in section
+
+
+_MCP_BRIDGE_REFERENCE = re.compile(
+    r"(?i)mcp[ -]?bridge|the bridge|ps-cli-" + "mcp|bridge" + "_credentials"
+)
+
+
+def test_docs_name_no_retired_bridge() -> None:
+    offenders = [
+        f"{path.relative_to(_REPO)}:{number}"
+        for path in sorted((_REPO / "docs").rglob("*.md"))
+        for number, line in enumerate(_text(path).splitlines(), 1)
+        if _MCP_BRIDGE_REFERENCE.search(line)
+    ]
+    assert offenders == []
 
 
 def _broken_fragment_links(doc: Path) -> list[str]:
