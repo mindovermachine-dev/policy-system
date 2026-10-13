@@ -23,6 +23,7 @@
   - [5. Enrol the owner's passkey](#5-enrol-the-owners-passkey)
   - [6. Set up each user's computer](#6-set-up-each-users-computer)
   - [What is exposed (production)](#what-is-exposed-production)
+- [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment)
 - [SystemOwner bootstrap](#systemowner-bootstrap)
 - [Upgrading an existing install](#upgrading-an-existing-install)
 - [Verification status](#verification-status)
@@ -592,6 +593,8 @@ Add the marketplace first. Then install the plugin from it.
 
 To ask a question, see the [User Guide](./user-guide.md#using-claude-desktop---code).
 
+Which Claude surfaces can reach your deployment, and what is verified: [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment). The evaluator is a non-public deployment, and only the Claude Code CLI is verified.
+
 ### What is exposed (evaluator)
 
 The evaluator profile is for one trusted person on their own machine. It exposes Authentik to
@@ -846,12 +849,14 @@ evaluator instance. Production deploys the bundled Authentik identity provider.
 2. Install the Policy System Plugin (`ps-plugin`):
    `/plugin install ps-plugin@ps-marketplace`.
 
-For more detail, see [Evaluator installation, step 9](#9-install-the-policy-system-plugin).
+For more detail, see [Evaluator installation, step 9](#9-install-the-policy-system-plugin). For which Claude surfaces reach a public deployment, see [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
 
 > **No extra plugin configuration:** The plugin's Policy System MCP connector (`ps-mcp`) runs a
 > local `ps-cli-mcp-bridge`. The bridge uses the current `ps-cli` context. When the context is
 > `prod`, the plugin talks to this instance. The bridge sends the stored `prod` credential as an
-> `Authorization` header, like any other authenticated `ps-cli` call.
+> `Authorization` header, like any other authenticated `ps-cli` call. This bridge is the present
+> path; it changes with #173 and #174. For which Claude surfaces reach a public deployment, see
+> [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
 
 > **Logout and login while Claude runs:** You do not need to restart Claude. After
 > `ps-cli auth logout`, the next plugin call fails with "no stored credentials" and tells you to
@@ -929,6 +934,45 @@ For the `ps-cli` configuration reference (context and credential storage, enviro
 variables, config files), see [User Guide: Appendix — ps-cli
 reference](./user-guide.md#appendix-ps-cli-reference). For PS Service and chart configuration,
 see the [Helm Chart Values Reference](./helm-chart-values-reference.md).
+
+---
+
+## Which Claude surfaces reach your deployment
+
+Claude Chat and Cowork call a remote connector from Anthropic's cloud, so they can only reach a
+PS Service and an Authentik that are public on the internet. Claude Code runs on your machine,
+so it connects from there. The evaluator is a non-public deployment (local `kind`, Authentik on
+the LAN only; see [What is exposed (evaluator)](#what-is-exposed-evaluator)). A production
+deployment has a public hostname (see [What is exposed (production)](#what-is-exposed-production)).
+
+| Surface | Public deployment | Non-public deployment | Status |
+| --- | --- | --- | --- |
+| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (#168, Claude Code 2.1.236). Non-public: Expected (inferred from #167, not run). |
+| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Expected, not yet verified. |
+| Claude Desktop Chat and Cowork | Expected to work | Does not work (needs public PS Service and Authentik; no stdio) | Expected, not yet verified (#172). |
+| claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested by #167 or #168). |
+
+Only the Claude Code CLI login against the plugin-declared server is verified; everything else
+here is expected. This describes the direct connector (a remote connector that logs in against
+Authentik). The plugin still ships the local `ps-cli-mcp-bridge` (stdio) until #173 and #174, so
+today the bridge is a Claude Code (local) path.
+
+**The connector must use the existing `ps-cli` client**, not a new one. The token's `aud` is the
+client ID, and PS Service accepts it only when `PS_AUTH_AUDIENCE` equals that client ID (#167).
+The chart provisions the client (#169); the grants and redirect URIs are in the
+[IdP configuration contract](./idp-configuration-contract.md#grants-and-redirect-uris-of-the-ps-cli-provider).
+For an identity provider other than Authentik, see
+[Other identity providers](./idp-configuration-contract.md#other-identity-providers).
+
+Two behaviours of Claude Code 2.1.236 (CLI), Verified (#168). They are not claimed for Chat,
+Cowork or claude.ai:
+
+- **Consent screen.** Claude Code sends `prompt=consent`, so Authentik shows its consent screen
+  at login even though the authorization flow is implicit consent. This is expected; approve it.
+- **Same URL hides the plugin server.** If a plugin server has the same URL as a server you added
+  by hand, Claude Code does not load the plugin server, and `/mcp` shows no error. Remove one of
+  the two. An unresolved `${user_config.*}` value also drops the server silently. Supplying the
+  URL through `userConfig` end to end is not verified (#171).
 
 ---
 
@@ -1100,6 +1144,7 @@ before you rely on a claim for a real deployment.
     - The AKS managed NGINX add-on.
     - Real Let's Encrypt issuance through this flow.
     - Real Azure resources.
+- **Direct Claude connector: partly verified.** The Claude Code CLI (2.1.236) logged in as the `ps-cli` client and refreshed across sessions against a standalone Authentik, using the plugin-declared server (#168). This was not run through these scripts. Not verified: Claude Desktop (Code tab, Chat, Cowork), claude.ai, a public deployment, and the `userConfig` URL. See [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
 - **The invitation link on production needs an unreleased PS Service image.**
   - `invite_user` calls Authentik in-cluster. It must build the invitee's link on the public
     address.

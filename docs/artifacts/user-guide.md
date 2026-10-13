@@ -197,6 +197,8 @@ instance `ps-cli`'s current context points at (see [Point ps-cli at your
 instance](#point-ps-cli-at-your-instance)). It can take the connector a moment to
 connect, so if a query fails, try again.
 
+Which Claude surfaces can reach your instance (only the Claude Code CLI is verified; the others are expected): [Which Claude surfaces reach your deployment](./installation-guide.md#which-claude-surfaces-reach-your-deployment).
+
 ### Ask a question
 
 ```text
@@ -723,9 +725,9 @@ the above — delete it directly wherever you created it.
 This table covers `ps-cli` only. The Policy System Plugin's `ps-mcp`
 connector needs no configuration of its own — it runs as a local `ps-cli-mcp-bridge`
 process that reuses whichever `ps-cli` context is current, so every row above already
-governs it too.
+governs it too. This is the present behaviour; it changes with #173 and #174 (the bridge is being retired).
 
-You do not need to restart Claude when you log in or out. After `ps-cli auth logout`, the next
+While the plugin uses the bridge, you do not need to restart Claude when you log in or out. After `ps-cli auth logout`, the next
 plugin call fails with "no stored credentials" and tells you to run `ps-cli auth login`. After
 `ps-cli auth login`, the next call uses the new credential. The bridge writes a log to
 `~/.config/ps-cli/mcp-bridge.log`. Each call line shows `token_resolution_latency` (time to get

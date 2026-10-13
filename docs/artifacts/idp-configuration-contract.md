@@ -27,7 +27,7 @@ it runs the same real OIDC login as production.
 | --- | --- | --- | --- |
 | Issuer | `PS_AUTH_ISSUER` | `psService.auth.issuer` | The OIDC authorization server's base URL. PS Service fetches `<issuer>/.well-known/openid-configuration` from it at startup to discover the JWKS endpoint and the signing algorithms it trusts, and every presented token's `iss` claim must match this value exactly (character for character). |
 | Audience | `PS_AUTH_AUDIENCE` | `psService.auth.audience` | The identifier of PS Service itself as an OIDC *resource server* — for the bundled Authentik, the fixed OAuth2 Provider's own `client_id`; Every presented token's `aud` claim must match this value exactly. |
-| CLI client id | `PS_AUTH_CLI_CLIENT_ID` | `psService.auth.cliClientId` | The **public client** Provider that PS-Cli authenticates as (device-authorization flow, issue #57). Optional: only needed so PS Service can advertise it in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`, letting a client discover which client id to use without being told out of band. |
+| CLI client id | `PS_AUTH_CLI_CLIENT_ID` | `psService.auth.cliClientId` | The **public client** Provider that PS-Cli authenticates as (device-authorization flow, issue #57; for Claude, the authorization-code flow, see [Grants and redirect URIs of the `ps-cli` provider](#grants-and-redirect-uris-of-the-ps-cli-provider)). Optional: only needed so PS Service can advertise it in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`, letting a client discover which client id to use without being told out of band. |
 | Scopes | `PS_AUTH_SCOPES` | `psService.auth.scopes` | The OAuth scope(s) (space- or comma-separated) that a client should request when logging in — e.g. Authentik's own `openid profile email offline_access` scope mappings. **Not used for token validation** (PS Service checks `aud`, not `scope`), but **required in practice**: PS-Cli's device-authorization login (issue #57) sources its OAuth `scope` request parameter directly from this value, via `/.well-known/oauth-protected-resource`'s `scopes_supported`. Leaving it unset makes PS Service advertise an empty scope list, which most IdPs reject outright, so `ps-cli auth login` fails against any deployment that omits it. |
 
 Only `issuer` and `audience` are required for PS Service to validate tokens at
@@ -86,7 +86,14 @@ The `ps-cli` provider is a public client (no client secret) and allows three gra
 - `^http://(localhost|127\.0\.0\.1):[0-9]+/callback$` (regex match), the Claude Code loopback callback on any port.
 
 Claude connects with `client_id` `ps-cli` alone. Dynamic client registration stays disabled, and
-the blueprint has no setting for it. Claude shows the consent screen only when it sends
+the blueprint has no setting for it. It could not serve Claude anyway: Claude registers without
+credentials, and an anonymous registration request to Authentik is answered with 401 (#167).
+Authentik advertises a `registration_endpoint` only while registration is on, so keeping it off
+also keeps the discovery metadata free of an endpoint Claude cannot use.
+
+The connector must use this existing `ps-cli` client, not a new one. The access token's `aud` is
+the client id, and PS Service accepts a token only when `PS_AUTH_AUDIENCE` equals it (the
+Audience row of [The four values](#the-four-values)). Claude shows the consent screen only when it sends
 `prompt=consent`; the provider's authorization flow is implicit consent (#168 spike). The token
 `sub` is the username, as described in the next section.
 
@@ -105,7 +112,7 @@ bootstrap](./installation-guide.md#systemowner-bootstrap)).
 
 ### Transport: HTTPS, and trust for `ps-cli`
 
-`ps-cli` (and the MCP bridge that reuses its login) refuses to send credentials to an issuer,
+`ps-cli` (and the MCP bridge that reuses its login; the bridge is the legacy path, removed by #174 after #173) refuses to send credentials to an issuer,
 device-authorization endpoint or token endpoint that is neither `https://` nor a loopback address
 (`_assert_secure_or_loopback` in `oidc_discovery.py`); this rule is unchanged. The evaluator
 profile therefore serves Authentik over HTTPS, with a certificate from a local certificate
@@ -234,6 +241,23 @@ $ curl -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer <real token>" 
 PS Service's existing, unmodified OIDC validator (issue #58) accepted a
 real, passkey-login-derived Authentik token — no PS Service code or
 configuration beyond the four values above was involved.
+
+### Other identity providers
+
+PS Service is an IdP-agnostic OIDC resource server (see the top of this document). The Claude
+connector rule above is specific to Authentik; for any other identity provider the rule is
+defined as follows. It has not been verified against a non-Authentik provider.
+
+- **Direct connector.** The provider needs a pre-registered public client whose token `aud` equals
+  `PS_AUTH_AUDIENCE`, the authorization-code grant with PKCE (S256), and the same two redirect
+  URIs as listed under [Grants and redirect URIs of the `ps-cli` provider](#grants-and-redirect-uris-of-the-ps-cli-provider).
+  Dynamic client registration is not part of this and is not used.
+- **Bridge.** A provider that enforces the RFC 8707 `resource` parameter in conflict with the MCP
+  authorization spec (Entra, #65), or that cannot offer such a client, does not support a direct
+  connector; use `ps-cli-mcp-bridge` instead. The bridge is the legacy path, removed by #174
+  (after #173), so such a provider has no supported Claude path after that.
+- **Federation.** Federating an upstream provider (such as Entra) into Authentik keeps the
+  Authentik rule; see [Optional: federate to an upstream IdP](#optional-federate-to-an-upstream-idp).
 
 ### Common pitfalls
 
