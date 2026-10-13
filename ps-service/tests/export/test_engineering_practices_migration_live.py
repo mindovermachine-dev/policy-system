@@ -1,59 +1,85 @@
-"""Live proof for PLAN.md Slice 3.6 (D15): the real, permanently-seeded
-`engprac_baseline`/`engprac_native` FalkorDB graph pair (seeded by issue
-#95's real internal-seed adapter submissions -- the incremental per-slice
-submissions of `internal-sources/engineering-practices/
-engineering-practices-seed.json` through `POST /ingestions` across Slices
-2-8 and 11 of that issue's plan) is a shape-correct baseline graph, and
-Slice 3.5's `export_instrument` orchestration runs against it end to end.
+"""Live proof for PLAN.md Slice 3.6 (D15): the engineering-practices `{short}_baseline`/
+`{short}_native` graph pair, built by the real internal-seed adapter from the shipped
+`internal-sources/engineering-practices/engineering-practices-seed.json`, is a shape-correct
+baseline graph, and Slice 3.5's `export_instrument` orchestration runs against it end to end.
 
-Two things this test deliberately does NOT do:
+The pair is seeded by the `engprac_graphs` fixture into uniquely named graphs (deleted
+afterwards) through the real Graph Write Gateway on a scratch PS Postgres. The test used to
+read permanently seeded `engprac_baseline`/`engprac_native` graphs that only a hand-seeded dev
+FalkorDB had, so it failed in any clean environment; it now owns its data and never reads or
+writes those shared keys.
 
-- It does not create-then-delete `engprac_baseline`/`engprac_native` --
-  unlike this suite's other `falkordb_live` tests' uniquely-tokened
-  throwaway keys, these are meant to be the real, permanent curated-content
-  source graphs (D15's whole point), so this test only ever reads them (plus
-  the one documented D7 side effect below) and never deletes them.
-- It does not use a live LLM provider (no `llm_live` marker, and this
-  sandbox has no configured provider credentials) -- `export_instrument` is
-  called with a fake, deterministic `EmbeddingCaller`, exactly like
-  `CHANGES.md` MA5's own synthetic round-trip test. This still exercises
-  every other part of the real export pipeline (real FalkorDB reads, real
-  `SET n.embedding = ...` writes, real serialize/checksum/manifest/catalog
-  logic) against genuinely-shaped internal-source content -- a
-  fakes-in-the-embedding-seam proof, not a fakes-only proof.
-
-Running this test writes a real `embedding` property onto every Capability/
-Policy node in the live `engprac_baseline` graph that doesn't already carry
-one (D7's documented side effect of running Export) -- idempotent on rerun,
-since `backfill_capability_embeddings` only ever targets nodes with
-`embedding IS NULL`.
+It does not use a live LLM provider (no `llm_live` marker): `export_instrument` is called with a
+fake, deterministic `EmbeddingCaller`, exactly like `CHANGES.md` MA5's own synthetic round-trip
+test. Every other part of the pipeline (real FalkorDB reads, real `SET n.embedding = ...`
+writes, real serialize/checksum/manifest/catalog logic) runs against genuinely shaped
+internal-source content.
 """
 
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Protocol, cast
+import uuid
+from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple, Protocol, cast
 
 import pytest
 from litellm.types.utils import Embedding, EmbeddingResponse
 
 from export.live_gateway import live_write_target
-from ps_service.company_merge.falkordb_client import select_graph as select_company_merge_graph
 from ps_service.company_merge.graph_reader import read_baseline_graph
 from ps_service.export.export_instrument import InstrumentDescriptor, export_instrument
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.serialize import parse_serialized_graph_json
+from ps_service.graph_gateway.connection import select_graph as select_company_merge_graph
+from ps_service.ingestion.adapters.internal_seed.adapter import InternalSeedIngestionAdapter
+from ps_service.ingestion.adapters.internal_seed.persist import (
+    ingest_internal_regulatory_instrument,
+)
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Iterator
 
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
     from persistence.provisioned_postgres import Provisioned
 
-_BASELINE_GRAPH_NAME = "engprac_baseline"
-_NATIVE_GRAPH_NAME = "engprac_native"
 _REGULATORY_INSTRUMENT_ID = "ENGPRAC-1.0"
+_SEED_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "internal-sources"
+    / "engineering-practices"
+    / "engineering-practices-seed.json"
+)
+
+
+class _EngpracGraphs(NamedTuple):
+    """The names of the uniquely named baseline and native graphs the fixture seeded."""
+
+    baseline: str
+    native: str
+
+
+@pytest.fixture
+def engprac_graphs(
+    live_falkordb: FalkorDB, provisioned_graph_log: Provisioned
+) -> Iterator[_EngpracGraphs]:
+    """Ingest the shipped engineering-practices seed into throwaway graphs; delete them after."""
+    token = uuid.uuid4().hex[:12]
+    names = _EngpracGraphs(baseline=f"engprac_{token}_baseline", native=f"engprac_{token}_native")
+    seed = InternalSeedIngestionAdapter().parse_seed(json.loads(_SEED_PATH.read_text("utf-8")))
+    try:
+        with live_write_target(provisioned_graph_log, live_falkordb, names.baseline) as target:
+            ingest_internal_regulatory_instrument(
+                seed,
+                submitter=target["submitter"],  # pyright: ignore[reportArgumentType]
+                native_graph_name=names.native,
+                baseline_graph_name=names.baseline,
+                audit_event_id=cast("str", target["audit_event_id"]),
+            )
+        yield names
+    finally:
+        live_falkordb.connection.delete(names.baseline, names.native)
 
 
 class _QueryResult(Protocol):
@@ -92,7 +118,7 @@ class _FakeEmbeddingCaller:
 
 @pytest.mark.falkordb_live
 def test_engprac_baseline_passes_company_merges_own_baseline_graph_shape_assertions(
-    live_falkordb: FalkorDB,
+    live_falkordb: FalkorDB, engprac_graphs: _EngpracGraphs
 ) -> None:
     """`read_baseline_graph` -- Company Merge's own baseline-graph reader --
     succeeds against `engprac_baseline` and returns non-empty node
@@ -100,7 +126,7 @@ def test_engprac_baseline_passes_company_merges_own_baseline_graph_shape_asserti
     baseline graph that genuinely continues through Policy/Standard/
     Control, not just Capability").
     """
-    baseline_graph = select_company_merge_graph(live_falkordb, _BASELINE_GRAPH_NAME)
+    baseline_graph = select_company_merge_graph(live_falkordb, engprac_graphs.baseline)
 
     result = read_baseline_graph(baseline_graph, _REGULATORY_INSTRUMENT_ID)
 
@@ -123,11 +149,12 @@ def test_engprac_baseline_passes_company_merges_own_baseline_graph_shape_asserti
 def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
     live_falkordb: FalkorDB,
     provisioned_graph_log: Provisioned,
+    engprac_graphs: _EngpracGraphs,
     tmp_path: Path,
     make_emitter: MakeEmitter,
 ) -> None:
     """The real `export_instrument()` orchestration (Slice 3.5), run against
-    the real `engprac_baseline`/`engprac_native` graphs -- a real-content
+    the seeded engineering-practices graphs -- a real-content
     proof of the whole export pipeline, not just a fakes-only proof (module
     docstring). Writes into a `tmp_path` repo root, never the real
     `curated-content/` tree (this test must stay repeatable and must not
@@ -147,11 +174,11 @@ def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
         jurisdiction=None,
     )
 
-    with live_write_target(provisioned_graph_log, live_falkordb, _BASELINE_GRAPH_NAME) as target:
+    with live_write_target(provisioned_graph_log, live_falkordb, engprac_graphs.baseline) as target:
         manifest = export_instrument(
             descriptor,
-            baseline_graph=graph_query_handle(live_falkordb, _BASELINE_GRAPH_NAME),
-            native_graph=graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME),
+            baseline_graph=graph_query_handle(live_falkordb, engprac_graphs.baseline),
+            native_graph=graph_query_handle(live_falkordb, engprac_graphs.native),
             embed_model="fake-embed-model",
             repo_root=repo_root,
             packaged_copy_path=packaged_copy_path,
@@ -191,8 +218,8 @@ def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
     native_document = json.loads((instrument_dir / "native.json").read_text(encoding="utf-8"))
     parsed_baseline = parse_serialized_graph_json((instrument_dir / "baseline.json").read_bytes())
     parsed_native = parse_serialized_graph_json((instrument_dir / "native.json").read_bytes())
-    baseline_graph_handle = graph_query_handle(live_falkordb, _BASELINE_GRAPH_NAME)
-    native_graph_handle = graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME)
+    baseline_graph_handle = graph_query_handle(live_falkordb, engprac_graphs.baseline)
+    native_graph_handle = graph_query_handle(live_falkordb, engprac_graphs.native)
     live_node_count = _count(baseline_graph_handle.query("MATCH (n) RETURN count(n)"))
     live_edge_count = _count(baseline_graph_handle.query("MATCH ()-[r]->() RETURN count(r)"))
     live_native_node_count = _count(native_graph_handle.query("MATCH (n) RETURN count(n)"))

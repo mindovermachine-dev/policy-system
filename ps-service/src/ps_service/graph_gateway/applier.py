@@ -42,8 +42,8 @@ from ps_service.graph_gateway.validation import node_labels
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
+    from ps_service.graph_gateway.connection import WritableGraph
     from ps_service.graph_gateway.models import GraphLogEntry, Primitive
-    from ps_service.ingestion.falkordb_client import GraphHandle
 
 
 type _Positioned = tuple[int, Primitive]
@@ -51,7 +51,7 @@ type _Positioned = tuple[int, Primitive]
 
 
 def apply_entries(
-    graph: GraphHandle,
+    graph: WritableGraph,
     entries: Sequence[GraphLogEntry],
     *,
     batch_size: int,
@@ -67,7 +67,7 @@ def apply_entries(
 
 
 def apply_decoded(
-    graph: GraphHandle,
+    graph: WritableGraph,
     decoded: Sequence[tuple[int, Primitive]],
     *,
     batch_size: int,
@@ -161,7 +161,7 @@ def _only[P](chunk: Sequence[Primitive], kind: type[P]) -> list[P]:
     return [primitive for primitive in chunk if isinstance(primitive, kind)]
 
 
-def _apply_chunk(graph: GraphHandle, chunk: Sequence[Primitive]) -> None:
+def _apply_chunk(graph: WritableGraph, chunk: Sequence[Primitive]) -> None:
     """Send one batch of a single run as a single query."""
     first = chunk[0]
     match first:

@@ -29,8 +29,8 @@ from ps_service.graph_gateway.label_allow_list import (
 from ps_service.graph_gateway.models import MutationGroup, NodeRef, StampEdgeIdentity
 
 if TYPE_CHECKING:
+    from ps_service.graph_gateway.connection import WritableGraph
     from ps_service.graph_gateway.models import GroupOutcome
-    from ps_service.ingestion.falkordb_client import GraphHandle
     from ps_service.logging import LogEmitter
 
 SCAN_CHUNK_ROWS = 5000
@@ -71,7 +71,7 @@ def backfill_edge_identity(
     graph_name: str,
     audit_event_id: str | None,
     *,
-    reader: GraphHandle,
+    reader: WritableGraph,
     emitter: LogEmitter | None = None,
     chunk_rows: int = SCAN_CHUNK_ROWS,
 ) -> EdgeIdentityBackfillOutcome:
@@ -123,7 +123,7 @@ def legacy_edge_stamp(edge_type: str, source: NodeRef, target: NodeRef) -> Stamp
 
 
 def scan_unidentified_edges(
-    reader: GraphHandle, chunk_rows: int = SCAN_CHUNK_ROWS
+    reader: WritableGraph, chunk_rows: int = SCAN_CHUNK_ROWS
 ) -> tuple[list[UnidentifiedEdge], int]:
     """Return the distinct identity-less edges, in scan order, and how many were unnameable.
 

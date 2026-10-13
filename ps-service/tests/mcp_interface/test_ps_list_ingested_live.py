@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, NamedTuple, cast
 
 import pytest
 
-from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
+from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 from ps_service.ingestion.graph_writer import build_native_writes
 from ps_service.ingestion.models import RegulatoryInstrumentMetadata
 from ps_service.mcp_interface.mcp_server import handle_mcp_tool_call
@@ -31,7 +31,10 @@ from ps_service.query_engine.cypher_query import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from company_merge._fakes import MakeEmitter
+
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
+    from ps_service.logging import LogEmitter
 
 pytestmark = pytest.mark.falkordb_live
 
@@ -112,16 +115,25 @@ def _seed(
     status: str,
     source_type: str = "external",
     instrument_type: str | None = None,
-    jurisdiction: str = "EU",
+    jurisdiction: str | None = "EU",
     celex: str | None = None,
 ) -> None:
+    """Seed one instrument; `jurisdiction=None` is an internal source's node with none at all.
+
+    `instrument_type` defaults by `source_type` to what the model requires: `regulation` for an
+    external source, none for an internal one. An internal source's instrument is written without
+    a `jurisdiction` property (the internal-seed adapter writes it only when the seed has one), so
+    that shape is seeded by removing the property after the production-shaped registration.
+    """
+    if instrument_type is None and source_type == "external":
+        instrument_type = "regulation"
     _register_instrument(
         graph,
         ident,
         RegulatoryInstrumentMetadata.model_validate(
             {
                 "title": f"Title of {ident}",
-                "jurisdiction": jurisdiction,
+                "jurisdiction": jurisdiction or "EU",
                 "effective_date": date(2024, 1, 1),
                 "version": version,
                 "status": status,
@@ -131,10 +143,20 @@ def _seed(
             }
         ),
     )
+    if jurisdiction is None:
+        graph.query("MATCH (n:RegulatoryInstrument {id: $id}) REMOVE n.jurisdiction", {"id": ident})
 
 
-def _run(graph: query_engine_client.GraphHandle) -> list[dict[str, object]]:
-    result = handle_mcp_tool_call(_skill_query(), graph=graph, timeout_ms=5000, row_cap=1000)
+@pytest.fixture
+def emitter(make_emitter: MakeEmitter) -> LogEmitter:
+    """The emitter `handle_mcp_tool_call` logs through (the tests isolate the process default)."""
+    return make_emitter()[0]
+
+
+def _run(graph: query_engine_client.GraphHandle, emitter: LogEmitter) -> list[dict[str, object]]:
+    result = handle_mcp_tool_call(
+        _skill_query(), graph=graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
     assert isinstance(result, dict)
     columns = cast("list[str]", result["columns"])
     return [
@@ -157,7 +179,7 @@ def _link(graph: GraphHandle, prior: str, successor: str) -> None:
 
 
 def test_skill_query_lists_every_version_ordered_with_blanks_and_successor_link(
-    graph: _Graphs,
+    graph: _Graphs, emitter: LogEmitter
 ) -> None:
     _seed(
         graph.seed,
@@ -165,7 +187,7 @@ def test_skill_query_lists_every_version_ordered_with_blanks_and_successor_link(
         version="1.0",
         status="active",
         source_type="internal",
-        jurisdiction="",
+        jurisdiction=None,
     )
     _seed(graph.seed, "CMCAP-2.0", version="2.0", status="active", instrument_type="regulation")
     _seed(graph.seed, "CMCAP-1.0", version="1.0", status="superseded", instrument_type="regulation")
@@ -173,7 +195,7 @@ def test_skill_query_lists_every_version_ordered_with_blanks_and_successor_link(
     _link(graph.seed, "CMCAP-1.0", "CMCAP-2.0")
     before = _counts(graph.seed)
 
-    rows = _run(graph.read)
+    rows = _run(graph.read, emitter)
 
     assert [r["id"] for r in rows] == ["CMCAP-1.0", "CMCAP-2.0", "CRA-1.0", "ENGPRAC-1.0"]
     by_id = {r["id"]: r for r in rows}
@@ -183,24 +205,26 @@ def test_skill_query_lists_every_version_ordered_with_blanks_and_successor_link(
     assert by_id["CMCAP-2.0"]["superseded_by"] is None
     assert by_id["ENGPRAC-1.0"]["celex"] is None
     assert by_id["ENGPRAC-1.0"]["instrument_type"] is None
+    assert by_id["ENGPRAC-1.0"]["jurisdiction"] is None
+    assert by_id["CRA-1.0"]["jurisdiction"] == "EU"
     assert by_id["CRA-1.0"]["celex"] == "32024R2847"
     assert _counts(graph.seed) == before
 
 
 def test_skill_query_returns_one_row_per_node_when_no_superseded_by_edge_exists(
-    graph: _Graphs,
+    graph: _Graphs, emitter: LogEmitter
 ) -> None:
     for ident in ("A-1.0", "B-1.0", "C-1.0"):
         _seed(graph.seed, ident, version="1.0", status="active")
 
-    rows = _run(graph.read)
+    rows = _run(graph.read, emitter)
 
     assert [r["id"] for r in rows] == ["A-1.0", "B-1.0", "C-1.0"]
     assert all(r["superseded_by"] is None for r in rows)
 
 
 def test_skill_query_returns_one_ten_column_row_for_a_seeded_instrument(
-    graph: _Graphs,
+    graph: _Graphs, emitter: LogEmitter
 ) -> None:
     _register_instrument(
         graph.seed,
@@ -217,7 +241,9 @@ def test_skill_query_returns_one_ten_column_row_for_a_seeded_instrument(
         ),
     )
 
-    result = handle_mcp_tool_call(_skill_query(), graph=graph.read, timeout_ms=5000, row_cap=1000)
+    result = handle_mcp_tool_call(
+        _skill_query(), graph=graph.read, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert isinstance(result, dict)
     assert result["columns"] == _COLUMNS
@@ -226,19 +252,25 @@ def test_skill_query_returns_one_ten_column_row_for_a_seeded_instrument(
     assert rows[0][0] == "CRA-1.0"
 
 
-def test_empty_graph_returns_the_unseeded_error_the_skill_names(graph: _Graphs) -> None:
-    result = handle_mcp_tool_call(_skill_query(), graph=graph.read, timeout_ms=5000, row_cap=1000)
+def test_empty_graph_returns_the_unseeded_error_the_skill_names(
+    graph: _Graphs, emitter: LogEmitter
+) -> None:
+    result = handle_mcp_tool_call(
+        _skill_query(), graph=graph.read, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert result == f"error: {_GRAPH_UNSEEDED_DETAIL}"
     assert _GRAPH_UNSEEDED_DETAIL in _SKILL.read_text(encoding="utf-8")
 
 
 def test_seeded_graph_without_instruments_is_an_empty_success_not_an_error(
-    graph: _Graphs,
+    graph: _Graphs, emitter: LogEmitter
 ) -> None:
     graph.seed.query("CREATE (:Capability {id: 'cap-1'})")
 
-    result = handle_mcp_tool_call(_skill_query(), graph=graph.read, timeout_ms=5000, row_cap=1000)
+    result = handle_mcp_tool_call(
+        _skill_query(), graph=graph.read, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert isinstance(result, dict)
     assert result["rows"] == []

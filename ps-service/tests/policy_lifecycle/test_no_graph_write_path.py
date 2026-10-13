@@ -21,25 +21,15 @@ module and the sink check are plain tests: AC-BI-001 is enforced.
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
+from graph_gateway.write_path_scan import called_name, calls_by_function, scan_source
 
 import ps_service.policy_lifecycle as policy_lifecycle_package
 
 _ROOT = Path(policy_lifecycle_package.__file__).parent
 
-_QUERY_CALLS = frozenset({"query", "ro_query", "_execute_query", "_read_query", "read_rows"})
-_CONNECTION_CALLS = frozenset({"FalkorDB", "connect", "connect_from_config", "select_graph"})
-_WRITE_CYPHER = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|DROP|DETACH)\b")
-_FORBIDDEN_IMPORT_PREFIXES = (
-    "falkordb",
-    "ps_service.graph_gateway.applier",
-    "ps_service.graph_gateway.cypher",
-)
-_ALLOWED_REDIS_PREFIX = "redis.exceptions"
-_FORBIDDEN_NAMES = frozenset({"apply_entries"})
 _SINK = "submit_group"
 _PUBLIC_GRAPH_WRITERS = (
     "backfill_governance_status",
@@ -68,109 +58,6 @@ _SERVICE_WRITE_ENTRYPOINTS = (
 )
 
 
-def _called_name(call: ast.Call) -> str | None:
-    func = call.func
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func.id
-    return None
-
-
-def _literal_text(node: ast.expr, names: dict[str, list[str]]) -> list[str]:
-    """The constant text `node` stands for (placeholders dropped); `[]` when it is not text."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return [node.value]
-    if isinstance(node, ast.JoinedStr):
-        return [
-            " ".join(
-                part.value
-                for part in node.values
-                if isinstance(part, ast.Constant) and isinstance(part.value, str)
-            )
-        ]
-    if isinstance(node, ast.Name):
-        return names.get(node.id, [])
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        if node.func.attr == "format":  # TEMPLATE.format(kind=kind): the template is the text
-            return _literal_text(node.func.value, names)
-        return []
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return [
-            f"{left} {right}"
-            for left in _literal_text(node.left, names)
-            for right in _literal_text(node.right, names)
-        ]
-    return []
-
-
-def _text_assignments(tree: ast.Module) -> dict[str, list[str]]:
-    """Every name assigned text anywhere in the module (module constants and locals), resolved."""
-    names: dict[str, list[str]] = {}
-    assignments = [
-        (target.id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name)
-    ]
-    assignments += [
-        (node.target.id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.target, ast.Name)
-        and node.value is not None
-    ]
-    for _ in range(3):  # a name built from another name resolves within a few passes
-        for name, value in assignments:
-            texts = _literal_text(value, names)
-            if texts:
-                names[name] = list({*names.get(name, []), *texts})
-    return names
-
-
-def _imported_modules(node: ast.Import | ast.ImportFrom) -> list[str]:
-    if isinstance(node, ast.Import):
-        return [alias.name for alias in node.names]
-    if node.module is None or node.level != 0:
-        return []
-    return [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
-
-
-def _call_findings(node: ast.Call, names: dict[str, list[str]]) -> list[str]:
-    name = _called_name(node)
-    findings: list[str] = []
-    if name in _FORBIDDEN_NAMES or name in _CONNECTION_CALLS:
-        findings.append(f"line {node.lineno}: calls {name}")
-    if name in _QUERY_CALLS:
-        arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
-        findings += [
-            f"line {node.lineno}: write Cypher passed to {name}: {text!r}"
-            for argument in arguments
-            for text in _literal_text(argument, names)
-            if _WRITE_CYPHER.search(text)
-        ]
-    return findings
-
-
-def scan_source(source: str) -> list[str]:
-    """Return one finding per write path in `source` (empty: the module is clean)."""
-    tree = ast.parse(source)
-    names = _text_assignments(tree)
-    findings: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import | ast.ImportFrom):
-            findings += [
-                f"line {node.lineno}: imports {module}"
-                for module in _imported_modules(node)
-                if module.startswith(_FORBIDDEN_IMPORT_PREFIXES)
-                or (module.startswith("redis") and not module.startswith(_ALLOWED_REDIS_PREFIX))
-            ]
-        elif isinstance(node, ast.Call):
-            findings += _call_findings(node, names)
-    return findings
-
-
 def reaches_the_sink(source: str, function: str) -> bool:
     """Whether `function` calls `submit_group`, directly or through same-module functions."""
     tree = ast.parse(source)
@@ -179,7 +66,7 @@ def reaches_the_sink(source: str, function: str) -> bool:
             name
             for call in ast.walk(node)
             if isinstance(call, ast.Call)
-            if (name := _called_name(call))
+            if (name := called_name(call))
         }
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
@@ -195,19 +82,6 @@ def reaches_the_sink(source: str, function: str) -> bool:
             return True
         pending.extend(calls[current])
     return False
-
-
-def _calls_by_function(source: str) -> dict[str, set[str]]:
-    return {
-        node.name: {
-            name
-            for call in ast.walk(node)
-            if isinstance(call, ast.Call)
-            if (name := _called_name(call))
-        }
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.FunctionDef)
-    }
 
 
 def _policy_lifecycle_modules() -> list[Path]:
@@ -239,13 +113,13 @@ def test_every_public_graph_writer_reaches_the_gateway_sink() -> None:
 
 
 def test_the_graph_writer_still_defines_every_public_writer_the_guard_names() -> None:
-    defined = _calls_by_function((_ROOT / "graph_writer.py").read_text(encoding="utf-8"))
+    defined = calls_by_function((_ROOT / "graph_writer.py").read_text(encoding="utf-8"))
 
     assert set(_PUBLIC_GRAPH_WRITERS) <= set(defined)
 
 
 def test_every_service_entry_point_that_writes_calls_a_graph_writer_function() -> None:
-    calls = _calls_by_function((_ROOT / "service.py").read_text(encoding="utf-8"))
+    calls = calls_by_function((_ROOT / "service.py").read_text(encoding="utf-8"))
     writers = set(_PUBLIC_GRAPH_WRITERS)
 
     def reaches_a_writer(function: str) -> bool:
@@ -284,8 +158,8 @@ def test_every_service_entry_point_that_writes_calls_a_graph_writer_function() -
         "from ps_service.graph_gateway.applier import apply_entries\n",
         "from ps_service.graph_gateway import cypher\n",
         "def f(entries):\n    return apply_entries(entries)\n",
-        "def f(db):\n    return db.select_graph('x')\n",
-        "def f(config):\n    return connect_from_config(config)\n",
+        "def f():\n    return FalkorDB(host='h', port=1)\n",
+        "from ps_service.graph_gateway.connection import connect\n",
     ],
     ids=[
         "merge",
@@ -302,8 +176,8 @@ def test_every_service_entry_point_that_writes_calls_a_graph_writer_function() -
         "applier_import",
         "cypher_import",
         "apply_entries_call",
-        "select_graph",
-        "connect",
+        "construction",
+        "write_capable_factory",
     ],
 )
 def test_the_guard_finds_a_planted_violation(source: str) -> None:

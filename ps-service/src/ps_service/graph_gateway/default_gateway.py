@@ -13,11 +13,12 @@ from typing import TYPE_CHECKING
 
 import redis.exceptions
 
-from ps_service.export.falkordb_connection import graph_copy_handle, raw_connection
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.errors import SwapConflictError
 from ps_service.graph_gateway.gateway import GraphWriteGateway
+from ps_service.graph_gateway.key_port import graph_copy_handle, raw_connection
+from ps_service.graph_gateway.read_only import open_read_only_database_from_config
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
-from ps_service.ingestion.falkordb_client import connect_from_config, select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Sequence
@@ -25,11 +26,16 @@ if TYPE_CHECKING:
     from falkordb import FalkorDB
 
     from ps_service.config import ServiceConfig
-    from ps_service.export.falkordb_connection import (
+    from ps_service.graph_gateway.connection import WritableGraph
+    from ps_service.graph_gateway.key_port import (
         _WatchablePipeline,  # pyright: ignore[reportPrivateUsage]
     )
+    from ps_service.graph_gateway.read_only import (
+        DriverDatabase,
+        ReadOnlyDatabase,
+        ReadOnlyGraph,
+    )
     from ps_service.graph_gateway.swap_port import KeySwapper
-    from ps_service.ingestion.falkordb_client import GraphHandle
 
 
 class FalkorDBGraphOpener:
@@ -57,7 +63,7 @@ class FalkorDBGraphOpener:
                 self._db = connect_from_config(self._config)
             return self._db
 
-    def __call__(self, graph: str) -> GraphHandle:
+    def __call__(self, graph: str) -> WritableGraph:
         """Return the handle of `graph`, connecting first if needed.
 
         Raises:
@@ -65,6 +71,37 @@ class FalkorDBGraphOpener:
                 as transient).
         """
         return select_graph(self.database(), graph)
+
+
+class ReadOnlyGraphOpener:
+    """Opens named graphs for reading (`GRAPH.RO_QUERY` only) on a connection made on first use.
+
+    The drift check reads the whole live graph through it. It is a connection of its own, apart
+    from the writers', and a failed connect is not remembered, as for `FalkorDBGraphOpener`.
+    """
+
+    def __init__(
+        self,
+        config: ServiceConfig,
+        *,
+        connect: Callable[[str, int], DriverDatabase] | None = None,
+    ) -> None:
+        """Remember `config` (and the driver seam `connect`); nothing is connected yet."""
+        self._config = config
+        self._connect = connect
+        self._db: ReadOnlyDatabase | None = None
+        self._lock = threading.Lock()
+
+    def __call__(self, graph: str) -> ReadOnlyGraph:
+        """Return the read-only handle of `graph`, connecting first if needed.
+
+        Raises:
+            redis.exceptions.ConnectionError: FalkorDB is unreachable.
+        """
+        with self._lock:
+            if self._db is None:
+                self._db = open_read_only_database_from_config(self._config, connect=self._connect)
+            return self._db.select_graph(graph)
 
 
 _EMPTY_KEY_MESSAGE = "Invalid graph operation on empty key"
@@ -137,4 +174,5 @@ def build_default_graph_write_gateway(config: ServiceConfig) -> GraphWriteGatewa
         log_store=PsycopgGraphLogStore(config),
         graph_opener=opener,
         key_port=FalkorDBKeyPort(opener.database),
+        read_graph_opener=ReadOnlyGraphOpener(config),
     )

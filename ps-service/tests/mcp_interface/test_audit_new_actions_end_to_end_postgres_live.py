@@ -25,6 +25,7 @@ from ps_service.ingestion_runs.audit_actions import (
     completion_audit_entry,
     submission_audit_entry,
 )
+from ps_service.invitations.audit_actions import USER_INVITE_ACTION
 from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
 
 if TYPE_CHECKING:
@@ -159,7 +160,7 @@ def _seed(store: PsycopgAuditStore) -> None:
     store.record_standalone(
         actor_subject=_ACTOR[0],
         actor_issuer=_ACTOR[1],
-        action="user.invite",
+        action=USER_INVITE_ACTION,
         resource_type="user",
         resource_id="target@example.com",
         outcome="applied",
@@ -192,7 +193,7 @@ def test_every_new_action_row_round_trips_through_list_audit_events_with_typed_d
         ("ingestion_run.complete", 2),
         ("instrument.restore", 3),
         ("near_miss.resolve", 1),
-        ("user.invite", 1),
+        (USER_INVITE_ACTION, 1),
     ):
         events = _list(store, AuditQueryFilters(action=action))
         assert len(events) == expected, action

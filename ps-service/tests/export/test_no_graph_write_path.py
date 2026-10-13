@@ -4,11 +4,11 @@ Export's only graph write, the embedding backfill, goes through the Graph Write 
 module under `ps_service.export` may open a FalkorDB connection of its own, name the gateway's
 apply machinery, or pass write Cypher to a graph handle. The scan is
 `graph_gateway.write_path_scan` (an AST walk of the literals passed to `query` and its siblings,
-never docstrings or prose). The one connection-helper module (`falkordb_connection.py`, which
-opens the READ handle) is exempt from the connection rule only; write Cypher is never admitted
-anywhere. The REST orchestration (`api/export_orchestration.py`) and the maintainer CLI shim
-(`tools/curated-export/export_instrument.py`, which opens the READ connection itself) are scanned
-too: the three places Export is driven from.
+never docstrings or prose). No module is
+exempt: `falkordb_connection.py` is a read-only handle over the gateway and is scanned like the
+others. The REST orchestration (`api/export_orchestration.py`) is scanned too, and the maintainer
+CLI shim (`tools/curated-export/export_instrument.py`) is checked for write Cypher only: its own
+read connection stays outside the architecture guard by specification.
 
 Positive half: the backfill reaches the gateway sink `submit_or_raise`, `export_instrument`
 reaches the backfill, and `run_export` hands the gateway and the audit row to the delegate.
@@ -34,13 +34,6 @@ _ROOT = Path(export_package.__file__).parent
 _API = Path(api_package.__file__).parent
 _TESTS = Path(__file__).parent
 _CLI = Path(__file__).resolve().parents[3] / "tools" / "curated-export" / "export_instrument.py"
-_CONNECTION_HELPER = "falkordb_connection.py"
-# `serialize.py` hides the gateway's replay-progress sentinel node from an artifact. It imports the
-# label (a plain string constant) and nothing else of `graph_gateway.cypher`: no template, no
-# applier. Exactly this one import is admitted.
-_READ_SIDE_IMPORTS = {
-    "serialize.py": frozenset({"ps_service.graph_gateway.cypher.REPLAY_STATE_LABEL"}),
-}
 _GATEWAY_SINK = "submit_or_raise"
 _REMOVED_SYMBOLS = re.compile(r"\b_write_embedding\b")
 _THIS_FILE = Path(__file__).name
@@ -68,72 +61,20 @@ def test_the_scan_covers_the_export_package() -> None:
 
 @pytest.mark.parametrize("path", [_module_param(path) for path in _modules()])
 def test_no_export_module_opens_a_write_connection_or_passes_write_cypher(path: Path) -> None:
-    allow = path.name == _CONNECTION_HELPER
-    findings = scan_source(
-        path.read_text(encoding="utf-8"),
-        allow_connection=allow,
-        allow_imports=_READ_SIDE_IMPORTS.get(path.name, frozenset()),
-    )
-    assert findings == []
+    assert scan_source(path.read_text(encoding="utf-8")) == []
 
 
-def test_only_the_connection_helper_needs_the_connection_allowance() -> None:
-    needing = [
-        path.name
-        for path in _modules()
-        if scan_source(
-            path.read_text(encoding="utf-8"),
-            allow_imports=_READ_SIDE_IMPORTS.get(path.name, frozenset()),
-        )
-        != []
-    ]
-
-    assert needing == [_CONNECTION_HELPER]
+def test_the_rest_orchestration_is_clean_under_the_shared_scan() -> None:
+    assert scan_source((_API / "export_orchestration.py").read_text(encoding="utf-8")) == []
 
 
-def test_serialize_may_import_only_the_replay_label_from_the_gateway_cypher() -> None:
-    allowed = _READ_SIDE_IMPORTS["serialize.py"]
+def test_the_cli_shim_passes_no_write_cypher() -> None:
+    # The shim is a script-level composition root with its own read connection, outside the
+    # architecture guard by specification (it is not part of the service tree). It must still
+    # issue no write Cypher and name no apply machinery.
+    findings = scan_source(_CLI.read_text(encoding="utf-8"))
 
-    assert scan_source("from ps_service.graph_gateway.cypher import REPLAY_STATE_LABEL\n") != []
-    assert (
-        scan_source(
-            "from ps_service.graph_gateway.cypher import REPLAY_STATE_LABEL\n",
-            allow_imports=allowed,
-        )
-        == []
-    )
-    assert (
-        scan_source(
-            "from ps_service.graph_gateway.cypher import UPSERT_NODE_TEMPLATE\n",
-            allow_imports=allowed,
-        )
-        != []
-    )
-
-
-def test_the_rest_orchestration_passes_no_write_cypher_and_names_no_apply_machinery() -> None:
-    source = (_API / "export_orchestration.py").read_text(encoding="utf-8")
-
-    # Its connection helpers (a function-local `connect_from_config` and a `TYPE_CHECKING`
-    # `falkordb` import) open the READ handle; only the write paths are forbidden here.
-    findings = [
-        finding
-        for finding in scan_source(source)
-        if "write Cypher" in finding
-        or "applier" in finding
-        or "cypher" in finding
-        or "apply" in finding
-    ]
-    assert findings == []
-
-
-def test_the_cli_shim_passes_no_write_cypher_and_opens_only_its_read_connection() -> None:
-    source = _CLI.read_text(encoding="utf-8")
-
-    # The read connection (`FalkorDB(host, port)` / `select_graph`) is the CLI's own; it is the
-    # one script-level composition root. No write Cypher, no apply machinery.
-    assert scan_source(source, allow_connection=True) == []
-    assert scan_source(source) != []  # it does open the connection, so the allowance is needed
+    assert [f for f in findings if "imports falkordb" not in f and "calls FalkorDB" not in f] == []
 
 
 def test_the_backfill_reaches_the_gateway_sink() -> None:
@@ -194,8 +135,8 @@ def test_the_symbol_scan_finds_a_planted_reference() -> None:
         "from ps_service.graph_gateway.applier import apply_entries\n",
         "from ps_service.graph_gateway import cypher\n",
         "def f(entries):\n    return apply_entries(entries)\n",
-        "def f(db):\n    return db.select_graph('x')\n",
-        "def f(config):\n    return connect_from_config(config)\n",
+        "def f():\n    return FalkorDB(host='h', port=1)\n",
+        "from ps_service.graph_gateway.connection import connect\n",
     ],
     ids=[
         "set_embedding",
@@ -206,8 +147,8 @@ def test_the_symbol_scan_finds_a_planted_reference() -> None:
         "applier_import",
         "cypher_import",
         "apply_entries_call",
-        "select_graph",
-        "connect",
+        "construction",
+        "write_capable_factory",
     ],
 )
 def test_the_guard_finds_a_planted_violation(source: str) -> None:
@@ -227,7 +168,7 @@ def test_the_guard_ignores_prose_and_reads(source: str) -> None:
     assert scan_source(source) == []
 
 
-def test_the_connection_allowance_never_admits_write_cypher() -> None:
+def test_write_cypher_is_found_even_beside_a_connection_helper_call() -> None:
     source = 'def f(g):\n    connect()\n    g.query("SET n.x = 1")\n'
 
-    assert len(scan_source(source, allow_connection=True)) == 1
+    assert len(scan_source(source)) == 1

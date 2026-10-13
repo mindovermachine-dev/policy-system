@@ -18,10 +18,10 @@ from graph_gateway.live_endpoints import falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
 
 from ps_service.dependency_health import FALKORDB, is_healthy
+from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
 from ps_service.ingestion.errors import IngestionPersistenceError
-from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 from ps_service.ingestion.graph_writer import (
     build_native_group,
     build_native_writes,

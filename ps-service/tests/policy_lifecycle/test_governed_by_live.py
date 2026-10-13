@@ -27,7 +27,7 @@ from graph_gateway.live_endpoints import falkordb_endpoint
 from graph_gateway.live_graphs import AUDIT_EVENT_ID, LiveGraph, LiveGraphs
 
 from policy_lifecycle._legacy_reference import legacy_create_policy_draft
-from ps_service.ingestion.falkordb_client import connect
+from ps_service.graph_gateway.connection import connect
 from ps_service.policy_lifecycle.graph_submission import GraphWriteTarget, lifecycle_submitter
 from ps_service.policy_lifecycle.graph_writer import (
     ControlDraft,
@@ -41,7 +41,7 @@ from ps_service.policy_lifecycle.graph_writer import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 pytestmark = pytest.mark.falkordb_live
 

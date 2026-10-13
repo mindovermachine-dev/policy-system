@@ -38,6 +38,7 @@ GRAPH_LOG_TABLES = (
 """Schema-qualified tables the `0001` migration creates; startup verifies each one."""
 
 # Imported after `MIGRATIONS_DIR` is defined: the provisioning CLI imports it from this package.
+from ps_service.graph_gateway.cypher import REPLAY_STATE_LABEL  # noqa: E402
 from ps_service.graph_gateway.default_gateway import (  # noqa: E402
     build_default_graph_write_gateway,
 )
@@ -98,6 +99,7 @@ from ps_service.graph_gateway.store import GraphLogStore, PsycopgGraphLogStore  
 __all__ = [
     "GRAPH_LOG_TABLES",
     "MIGRATIONS_DIR",
+    "REPLAY_STATE_LABEL",
     "AppendedGroup",
     "AppliedMarker",
     "CatchUpResult",

@@ -31,19 +31,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api._fakes import install_compliance_officer_grant
+from api._live_config import live_app_config
 from ps_service.api.dependencies import get_principal, provide_restore_dependencies
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.restore_orchestration import build_default_restore_dependencies
 from ps_service.auth.models import Principal
-from ps_service.company_merge.falkordb_client import connect_from_config
-from ps_service.config import load_config
 from ps_service.export import catalog_writer
 from ps_service.export.serialize import parse_serialized_graph_json
+from ps_service.graph_gateway.connection import connect_from_config
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
+    from persistence.provisioned_postgres import Provisioned
 
     from ps_service.api.restore_orchestration import RestoreDependencies
     from ps_service.config import ServiceConfig
@@ -145,14 +146,16 @@ def _assert_governance_tree_is_draft_and_owned(
 
 @pytest.mark.usefixtures("configured_logging")
 def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, provisioned_graph_log: Provisioned
 ) -> None:
     token = uuid.uuid4().hex[:12]
     short_name = f"ENGPRAC_T{token}"
     native_target = f"{short_name.lower()}_native"
     baseline_target = f"{short_name.lower()}_baseline"
     single_tenant_graph_name = f"__gh104_engprac_single_tenant_{token}__"
-    config = replace(load_config(), company_merge_similarity_threshold=_SIMILARITY_THRESHOLD)
+    config = live_app_config(
+        provisioned_graph_log, company_merge_similarity_threshold=_SIMILARITY_THRESHOLD
+    )
     db = connect_from_config(config)
 
     def _tokened_single_tenant_graph_name(_config: ServiceConfig) -> str:
@@ -174,7 +177,6 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
     body, native_blob = _restoration_body(short_name)
     # The restore writes through the Graph Write Gateway (#214). `TestClient` is not entered, so
     # the app lifespan never installs it: install the real one the way a deployed service does.
-    # Not run in the implementation sandbox.
     install_graph_write_gateway(build_default_graph_write_gateway(config))
 
     try:

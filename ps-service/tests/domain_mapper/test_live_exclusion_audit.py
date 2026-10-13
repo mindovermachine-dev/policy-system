@@ -98,14 +98,9 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.config import load_config
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
-from ps_service.domain_mapper.falkordb_client import (
-    baseline_graph_name,
-    connect_from_config,
-    native_graph_name,
-    select_graph,
-)
+from ps_service.domain_mapper.falkordb_client import baseline_graph_name, native_graph_name
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.llm_interface.client import default_completion_caller
 
 if TYPE_CHECKING:
@@ -114,6 +109,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
     from domain_mapper._fakes import MakeEmitter
+    from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.falkordb_client import GraphHandle
 
 _TOOLS_DOMAIN_MAPPER_DIR = Path(__file__).resolve().parents[3] / "tools" / "domain-mapper"
@@ -200,9 +196,14 @@ def _native_citation_refs(native_graph: GraphHandle) -> set[str]:
     """
     article_refs = _query_rows(native_graph, "MATCH (a:ARTICLE) RETURN a.citation_ref")
     paragraph_refs = _query_rows(native_graph, "MATCH (p:PARAGRAPH) RETURN p.citation_ref")
-    return {cast("str", row[0]) for row in article_refs} | {
-        cast("str", row[0]) for row in paragraph_refs
-    }
+    # The adapter also reads ANNEX nodes (issue #27's annex extension), whose units carry the
+    # annex's own `citation_ref` ("Annex II"), so the provenance set must include them.
+    annex_refs = _query_rows(native_graph, "MATCH (a:ANNEX) RETURN a.citation_ref")
+    return (
+        {cast("str", row[0]) for row in article_refs}
+        | {cast("str", row[0]) for row in paragraph_refs}
+        | {cast("str", row[0]) for row in annex_refs}
+    )
 
 
 def _node_count(graph: GraphHandle) -> int:
@@ -259,12 +260,16 @@ class _CountingCompletionCaller:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
     not _LLM_INTERFACE_MODEL,
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
-def test_live_audit_captures_first_five_cra_units(make_emitter: MakeEmitter) -> None:
+def test_live_audit_captures_first_five_cra_units(
+    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig
+) -> None:
     """Runs the real capture -> flag -> propose(AI-labeled) -> report-row chain on the
     first 5 CRA `ExtractionUnit`s (document order) against the real `cra_native` graph
     and real Azure OpenAI, and writes the captured records to
@@ -276,10 +281,9 @@ def test_live_audit_captures_first_five_cra_units(make_emitter: MakeEmitter) -> 
 
     module = _load_exclusion_audit_module()
 
-    # load_config() still resolves falkordb_host/port correctly here -- only
-    # PS_LLMINTERFACE_MODEL/PS_LLMINTERFACE_EMBED_MODEL are stripped by the autouse
-    # fixture, not PS_FALKORDB_HOST/PORT.
-    config = load_config()
+    # The native graphs are ingested fresh from Cellar by `live_native_graphs`, which yields the
+    # config that reaches the scratch stores.
+    config = live_native_graphs
     db = connect_from_config(config)
     native_graph = select_graph(db, native_graph_name(_REGULATION))
     baseline_graph = select_graph(db, baseline_graph_name(_REGULATION))
@@ -362,12 +366,16 @@ def test_live_audit_captures_first_five_cra_units(make_emitter: MakeEmitter) -> 
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
     not _LLM_INTERFACE_MODEL,
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
-def test_live_audit_extends_cra_sample_to_tier_a_and_b(make_emitter: MakeEmitter) -> None:
+def test_live_audit_extends_cra_sample_to_tier_a_and_b(
+    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig
+) -> None:
     """Slice 3 (PLAN.md §3, CHANGES.md row 1a): widens Slice 2's tiny 5-unit CRA sample to
     the real Tier A (first 30 units) + Tier B (up to 10 regex-flagged conditional-
     permissive units) strategy, additively over Slice 2's already-cached
@@ -422,7 +430,7 @@ def test_live_audit_extends_cra_sample_to_tier_a_and_b(make_emitter: MakeEmitter
 
     module = _load_exclusion_audit_module()
 
-    config = load_config()
+    config = live_native_graphs
     db = connect_from_config(config)
     native_graph = select_graph(db, native_graph_name(_REGULATION))
     baseline_graph = select_graph(db, baseline_graph_name(_REGULATION))
@@ -565,6 +573,7 @@ def _run_fresh_regulation_sample(
     records_path: Path,
     start_count: int,
     make_emitter: MakeEmitter,
+    config: ServiceConfig,
 ) -> None:
     """Slice 4: a FRESH Tier A (30) + Tier B (<=8) live sample for one regulation with no
     prior cache to merge with (unlike CRA's Slice 3, which is additive over Slice 2's
@@ -575,7 +584,6 @@ def _run_fresh_regulation_sample(
     120-call ceiling is enforced across the whole run, not just this regulation's own
     38-call slice.
     """
-    config = load_config()
     db = connect_from_config(config)
     native_graph = select_graph(db, native_graph_name(regulation))
     baseline_graph = select_graph(db, baseline_graph_name(regulation))
@@ -677,12 +685,16 @@ def _run_fresh_regulation_sample(
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
     not _LLM_INTERFACE_MODEL,
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
-def test_live_audit_captures_gdpr_sample(make_emitter: MakeEmitter) -> None:
+def test_live_audit_captures_gdpr_sample(
+    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig
+) -> None:
     """Slice 4: fresh Tier A + Tier B GDPR sample against the real `gdpr_native` graph,
     <=38 new extraction calls, written to `records/gdpr.json`. Counter seeded at this
     module's own `_TRUE_CUMULATIVE_BEFORE_SLICE_4` (42) so the cumulative ceiling check
@@ -697,16 +709,21 @@ def test_live_audit_captures_gdpr_sample(make_emitter: MakeEmitter) -> None:
         records_path=_GDPR_RECORDS_PATH,
         start_count=_TRUE_CUMULATIVE_BEFORE_SLICE_4,
         make_emitter=make_emitter,
+        config=live_native_graphs,
     )
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
     not _LLM_INTERFACE_MODEL,
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
-def test_live_audit_captures_nis2_sample(make_emitter: MakeEmitter) -> None:
+def test_live_audit_captures_nis2_sample(
+    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig
+) -> None:
     """Slice 4: fresh Tier A + Tier B NIS2 sample against the real `nis2_native` graph,
     <=38 new extraction calls, written to `records/nis2.json`. Counter seeded at
     `_TRUE_CUMULATIVE_BEFORE_SLICE_4 + _SLICE_4_PER_REGULATION_CALL_LIMIT` (80) -- the
@@ -722,4 +739,5 @@ def test_live_audit_captures_nis2_sample(make_emitter: MakeEmitter) -> None:
         records_path=_NIS2_RECORDS_PATH,
         start_count=_TRUE_CUMULATIVE_BEFORE_SLICE_4 + _SLICE_4_PER_REGULATION_CALL_LIMIT,
         make_emitter=make_emitter,
+        config=live_native_graphs,
     )

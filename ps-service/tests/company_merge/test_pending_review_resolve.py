@@ -30,11 +30,10 @@ from company_merge._legacy_reference import (
     write_legacy_resolve_merge,
 )
 from ps_service.company_merge.errors import CompanyMergePersistenceError, StalePendingReviewError
-from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import ResolveOutcome
 from ps_service.company_merge.pending_review import resolve_review
-from ps_service.config import load_config
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.system_audit import build_system_audit_recorder
@@ -43,9 +42,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from graph_gateway._fakes import InMemoryGraph
+    from persistence.provisioned_postgres import Provisioned
 
     from company_merge._fakes import MakeEmitter, ReadLines
     from company_merge._gateway_fakes import MergeRig
+    from ps_service.config import ServiceConfig
     from ps_service.graph_gateway.models import GraphLogEntry
     from ps_service.logging import LogEmitter
 
@@ -808,12 +809,8 @@ def test_the_resolve_log_entry_carries_winner_id_and_loser_id(
 _LIVE_TEST_GRAPH = "policy_system_slice4_merge_live_test"
 
 
-def _live_target(graph_name: str) -> GraphWriteTarget:
-    """The real gateway on the disposable graph, under one system audit row (issue #210).
-
-    Not runnable in the implementation sandbox (needs the PS state Postgres and FalkorDB).
-    """
-    config = load_config()
+def _live_target(config: ServiceConfig, graph_name: str) -> GraphWriteTarget:
+    """The real gateway on the disposable graph, under one system audit row (issue #210)."""
     audit_event_id = build_system_audit_recorder(config)(
         action="ingestion_run.submit",
         resource_type="ingestion_run",
@@ -824,8 +821,9 @@ def _live_target(graph_name: str) -> GraphWriteTarget:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_resolve_merge_repoints_edges_and_deletes_loser_live(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter, read_lines: ReadLines, provisioned_graph_log: Provisioned
 ) -> None:
     """AC-BI-005/006/007 against a REAL FalkorDB instance (CHANGES.md H1's required gate).
 
@@ -853,7 +851,8 @@ def test_resolve_merge_repoints_edges_and_deletes_loser_live(
     several rows that must collapse to one primitive per edge and one loser delete (the condition
     CHANGES.md C1 identified for the pre-#210 statement).
     """
-    db = connect_from_config(load_config())
+    config = provisioned_graph_log.state_config()
+    db = connect_from_config(config)
 
     existing_graphs = set(db.list_graphs())
     if _LIVE_TEST_GRAPH in existing_graphs:
@@ -909,7 +908,7 @@ def test_resolve_merge_repoints_edges_and_deletes_loser_live(
 
         # The actual call under test: the real resolve_review, against real FalkorDB.
         outcome = resolve_review(
-            graph, review_id, "merge", _live_target(_LIVE_TEST_GRAPH), emitter=emitter
+            graph, review_id, "merge", _live_target(config, _LIVE_TEST_GRAPH), emitter=emitter
         )
         emitter.flush()
 

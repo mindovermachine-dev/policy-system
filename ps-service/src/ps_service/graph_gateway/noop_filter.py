@@ -37,15 +37,15 @@ from ps_service.graph_gateway.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
 
+    from ps_service.graph_gateway.connection import WritableGraph
     from ps_service.graph_gateway.models import MutationGroup, Primitive
-    from ps_service.ingestion.falkordb_client import GraphHandle
 
 _MISSING_TARGET_MESSAGE = "primitive {index} names a node that does not exist"
 _EMBEDDING = "embedding"
 
 
 def select_effective_primitives(
-    open_graph: Callable[[], GraphHandle], group: MutationGroup, *, batch_size: int
+    open_graph: Callable[[], WritableGraph], group: MutationGroup, *, batch_size: int
 ) -> tuple[Primitive, ...]:
     """Return the primitives of `group` that change the graph, in order.
 

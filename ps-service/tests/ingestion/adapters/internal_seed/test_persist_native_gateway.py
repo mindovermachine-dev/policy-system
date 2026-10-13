@@ -10,6 +10,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+import redis.exceptions
+from graph_gateway._fakes import Fault
+from graph_gateway.checkpoint_checks import assert_head_checkpoints, assert_no_checkpoint
 
 from ingestion.adapters.internal_seed._seeds import (
     CAPABILITY,
@@ -214,3 +217,22 @@ def test_a_reserved_key_on_an_edge_is_rejected_before_anything_is_submitted(
         run.ingest(seed)
 
     assert rig.store.groups == []
+
+
+def test_each_seeded_graph_gets_a_head_checkpoint(rig: GatewayRig) -> None:
+    """AC-BI-009: each graph's one group is its terminal group (#215, S4b)."""
+    run = Run(rig)
+
+    run.ingest(_seed())
+
+    assert_head_checkpoints(rig, [run.native_name, run.baseline_name])
+
+
+def test_a_checkpoint_that_cannot_be_recorded_does_not_fail_the_seed(rig: GatewayRig) -> None:
+    rig.store.checkpoint_fault = Fault(redis.exceptions.ConnectionError("down"))
+    run = Run(rig)
+
+    run.ingest(_seed())
+
+    assert ("Capability", "cap-1") in run.native.nodes
+    assert_no_checkpoint(rig)

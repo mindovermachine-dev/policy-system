@@ -13,6 +13,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
+from graph_gateway._fakes import Fault
+from graph_gateway.checkpoint_checks import (
+    assert_head_checkpoints,
+    assert_no_checkpoint,
+)
 
 from domain_mapper._gateway_fakes import entry_properties, seed_extraction_output
 from ps_service.dependency_health import FALKORDB, is_healthy, mark_unhealthy
@@ -778,3 +783,45 @@ def test_a_successful_endpoint_read_marks_falkordb_healthy(baseline_rig: Baselin
 
     assert baseline_rig.read_graph.queries != []
     assert is_healthy(FALKORDB) is True
+
+
+# --- Checkpoints (#215, S4c; AC-BI-009) --------------------------------------
+
+
+def _one_derivation(rig: BaselineRig) -> None:
+    obligation = _obligation_node()
+    _persist_derivation(
+        rig,
+        obligation_nodes=(obligation,),
+        has_edges=(ObligationHasEdge(role_node_id=_ROLE_ID, obligation_node_id=obligation.id),),
+    )
+
+
+def test_the_derivation_group_requests_a_checkpoint_so_the_baseline_has_one_at_its_head(
+    baseline_rig: BaselineRig,
+) -> None:
+    _seed_endpoints(baseline_rig)
+
+    _one_derivation(baseline_rig)
+
+    assert_head_checkpoints(baseline_rig, [baseline_rig.baseline_graph_name])
+
+
+def test_the_extraction_group_is_not_terminal_and_requests_no_checkpoint(
+    baseline_rig: BaselineRig,
+) -> None:
+    _persist(baseline_rig, role_nodes=(_role_node(),))
+
+    assert_no_checkpoint(baseline_rig)
+
+
+def test_a_checkpoint_that_cannot_be_recorded_does_not_fail_the_derivation(
+    baseline_rig: BaselineRig,
+) -> None:
+    _seed_endpoints(baseline_rig)
+    baseline_rig.store.checkpoint_fault = Fault(redis.exceptions.ConnectionError("down"))
+
+    _one_derivation(baseline_rig)
+
+    assert ("Obligation", _obligation_node().id) in baseline_rig.baseline.nodes
+    assert_no_checkpoint(baseline_rig)

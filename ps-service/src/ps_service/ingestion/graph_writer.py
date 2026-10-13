@@ -303,8 +303,12 @@ def build_native_group(
     existing: ExistingNodes,
     graph_name: str,
     audit_event_id: str,
+    checkpoint_requested: bool = False,
 ) -> MutationGroup:
     """Assemble the one native group: the instrument, the structural nodes, then the edges.
+
+    `checkpoint_requested` asks the gateway to record the graph's digest once the group is
+    applied; the pipeline sets it because this group is the last one it writes to the graph.
 
     An edge whose endpoint is neither in the group nor in `existing` is dropped, silently
     (AC-BI-004): `MATCH ... MERGE` matched zero rows for it before, and the gateway would reject
@@ -324,6 +328,7 @@ def build_native_group(
         graph=graph_name,
         audit_event_id=audit_event_id,
         primitives=(writes.instrument, *writes.nodes, *edges),
+        checkpoint_requested=checkpoint_requested,
     )
 
 
@@ -336,9 +341,12 @@ def _scalar_count(result: GraphQueryResult) -> int:
     `list[object]` (matching `falkordb.QueryResult`'s own untyped shape —
     the library ships no more specific stub), so a first cast recovers the
     row-of-columns shape a real FalkorDB result actually has, and a second
-    recovers the cell's runtime `int` value from a `count(...)` clause.
+    recovers the cell's runtime `int` value from a `count(...)` clause. No rows (a graph key
+    that does not exist, read through `GRAPH.RO_QUERY`) counts as zero.
     """
     rows = cast("list[list[object]]", result.result_set)
+    if not rows:
+        return 0  # a read-only query of a graph key that does not exist answers with no rows
     return cast("int", rows[0][0])
 
 

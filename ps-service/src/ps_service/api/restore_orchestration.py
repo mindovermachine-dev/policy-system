@@ -86,10 +86,6 @@ from ps_service.runtime_config import PsycopgRuntimeConfigStore, RuntimeConfigEr
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from falkordb import (
-        FalkorDB,  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker
-    )
-
     from ps_service.api.graph_write_access import GraphWriteAccess
     from ps_service.api.models import (
         CatalogRestorationRequest,
@@ -97,6 +93,7 @@ if TYPE_CHECKING:
         RestorationRequest,
     )
     from ps_service.config import ServiceConfig
+    from ps_service.graph_gateway.read_only import ReadOnlyDatabase
     from ps_service.logging import LogEmitter
     from ps_service.restore.models import RestoreOutcome
 
@@ -117,7 +114,7 @@ class RestoreStage(Protocol):
         self,
         artifact: RestoreArtifact,
         *,
-        db: FalkorDB,
+        db: ReadOnlyDatabase,
         single_tenant_graph_name: str,
         similarity_threshold: float,
         actor: str,
@@ -134,7 +131,7 @@ class RestoreStage(Protocol):
 class RestoreDependencies:
     """Everything :func:`run_restoration` needs that is not per-request."""
 
-    open_db: Callable[[ServiceConfig], FalkorDB]
+    open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
     single_tenant_graph_name: Callable[[ServiceConfig], str]
     restore: RestoreStage
     graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
@@ -156,7 +153,7 @@ class CatalogRestoreStage(Protocol):
         self,
         artifact: RestoreArtifact,
         *,
-        db: FalkorDB,
+        db: ReadOnlyDatabase,
         single_tenant_graph_name: str,
         similarity_threshold: float,
         actor: str,
@@ -186,7 +183,7 @@ class CatalogRestoreDependencies:
     fetch_artifact: FetchArtifactCall
     fetch_catalog: FetchCatalogCall
     resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource]
-    open_db: Callable[[ServiceConfig], FalkorDB]
+    open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
     single_tenant_graph_name: Callable[[ServiceConfig], str]
     restore: CatalogRestoreStage
     graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
@@ -216,7 +213,7 @@ class CatalogRestoreInfra:
     fetch_artifact: FetchArtifactCall
     fetch_catalog: FetchCatalogCall
     resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource]
-    open_db: Callable[[ServiceConfig], FalkorDB]
+    open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
 
 
 # --- request decoding ---------------------------------------------------
@@ -354,7 +351,7 @@ class _RestoreInfra(Protocol):
     """The two graph-handle accessors both dependency bundles share."""
 
     @property
-    def open_db(self) -> Callable[[ServiceConfig], FalkorDB]:
+    def open_db(self) -> Callable[[ServiceConfig], ReadOnlyDatabase]:
         """Open the FalkorDB connection for the config."""
         ...
 
@@ -376,7 +373,7 @@ def _perform_restore(
     actor: str,
     dependencies: _RestoreInfra,
     audit_event_id: str,
-    invoke: Callable[[float, FalkorDB, str, Callable[[], object], str], RestoreOutcome],
+    invoke: Callable[[float, ReadOnlyDatabase, str, Callable[[], object], str], RestoreOutcome],
     emitter: LogEmitter | None,
 ) -> RestorationAcceptedResponse:
     """Run the restore delegate (via ``invoke``) and translate its failures to API errors.
@@ -679,7 +676,7 @@ def run_restoration_from_catalog_source(
 # --- default wiring (M6 -- every restore/company_merge import below is function-local) ---
 
 
-def _default_open_db(config: ServiceConfig) -> FalkorDB:
+def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
     """Open the real FalkorDB connection for ``config``."""
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
         connect_from_config,

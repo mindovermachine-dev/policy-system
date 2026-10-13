@@ -41,6 +41,7 @@ from graph_gateway.live_postgres import committed_audit_event
 
 from ingestion.adapters.internal_seed._legacy_reference import write_legacy
 from ingestion.adapters.internal_seed._seeds import full_seed
+from ps_service.graph_gateway.connection import connect, select_graph
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.models import MutationGroup, UpsertNode
@@ -49,7 +50,7 @@ from ps_service.ingestion.adapters.internal_seed.adapter import InternalSeedInge
 from ps_service.ingestion.adapters.internal_seed.persist import (
     ingest_internal_regulatory_instrument,
 )
-from ps_service.ingestion.falkordb_client import connect, native_graph_name, select_graph
+from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.ingestion.models import (
     FetchedRegulatoryInstrumentStructure,
     RegulatoryInstrumentMetadata,
@@ -63,8 +64,9 @@ if TYPE_CHECKING:
 
     from persistence.provisioned_postgres import Provisioned
 
+    from ps_service.graph_gateway.connection import FalkorDB
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
     from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
-    from ps_service.ingestion.falkordb_client import FalkorDB, GraphHandle
     from ps_service.logging import LogEmitter
 
 pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]

@@ -15,7 +15,9 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from graph_gateway.live_endpoints import falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
+from ps_service.graph_gateway.connection import connect, select_graph
 from ps_service.graph_gateway.cypher import GRAPH_HOLDS_A_NODE
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.errors import GraphDigestMismatchError
@@ -32,7 +34,6 @@ from ps_service.graph_gateway.models import (
 )
 from ps_service.graph_gateway.replay_state import read_replay_state
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
-from ps_service.ingestion.falkordb_client import select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -40,11 +41,31 @@ if TYPE_CHECKING:
     from persistence.provisioned_postgres import Provisioned
 
     from graph_gateway.live_graphs import LiveGraphs
-    from ps_service.ingestion.falkordb_client import FalkorDB, GraphHandle
+    from ps_service.graph_gateway.connection import FalkorDB
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
 _EMBEDDING = (0.1, -0.0, 1.7976931348623157e308, 5e-324, 0.30000000000000004, 1 / 3)
+
+
+_GRAPHS_CREATED: list[str] = []
+"""Every graph name a rig of this module chose, for the module-end cleanup."""
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _delete_every_graph_the_module_created(live_graphs_db: FalkorDB) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse fixture
+    """Delete the module's graphs once its last gateway is stopped.
+
+    The module shares one log, and a later test's gateway recovers the graphs of the earlier tests
+    (their applied markers are still in the log), so a graph deleted in its own test's teardown
+    can come back; only after the last test is nothing left to bring one back.
+    """
+    yield
+    present = set(live_graphs_db.list_graphs())
+    names = [name for name in _GRAPHS_CREATED if name in present]
+    if names:
+        live_graphs_db.connection.delete(*names)
 
 
 class _Rig:
@@ -54,13 +75,27 @@ class _Rig:
         self.prov = prov
         self.db = db
         self.name = f"replay_live_{uuid.uuid4().hex[:10]}"
+        _GRAPHS_CREATED.append(self.name)
         self.store = PsycopgGraphLogStore(prov.state_config())
+        self.gateways: list[GraphWriteGateway] = []
         self.gateway = self.new_gateway()
 
     def new_gateway(self) -> GraphWriteGateway:
-        return GraphWriteGateway(
+        gateway = GraphWriteGateway(
             log_store=self.store, graph_opener=lambda graph: select_graph(self.db, graph)
         )
+        self.gateways.append(gateway)
+        return gateway
+
+    def close(self) -> None:
+        """Stop every gateway's reconciler, then delete the graph.
+
+        The reconciler rebuilds a wiped graph whose applied marker is still set (that is the
+        behaviour under test), so deleting the graph first would let it come back after the test.
+        """
+        for gateway in self.gateways:
+            gateway.stop_reconciler()
+        self.wipe()
 
     @property
     def handle(self) -> GraphHandle:
@@ -81,11 +116,18 @@ class _Rig:
             self.db.select_graph(self.name).delete()
 
 
+@pytest.fixture(scope="module")
+def live_graphs_db() -> FalkorDB:
+    """A connection to the live FalkorDB for the module-level cleanup."""
+    host, port = falkordb_endpoint()
+    return connect(host=host, port=port)
+
+
 @pytest.fixture
 def rig(provisioned_graph_log: Provisioned, live_graphs: LiveGraphs) -> Iterator[_Rig]:
     made = _Rig(provisioned_graph_log, live_graphs.new().db)
     yield made
-    made.wipe()
+    made.close()
 
 
 def _build(rig: _Rig) -> None:

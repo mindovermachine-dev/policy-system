@@ -1,76 +1,48 @@
 # © 2026 Cartman ApS. All rights reserved.
 """FalkorDB connection helper for `ps_service.ingestion`.
 
-Ports `spikes/cellar1/falkordb_client.py`'s `connect`/`check_connectivity`/
-`select_graph`/`GraphHandle` Protocol, retyped and cleaned per L1/L2 coding
-standards (see PLAN_REVIEWED.md §7 Increment 6):
+Ingestion reads the graph (existence reads, reachability and pre-flight counts) and writes only
+through the Graph Write Gateway. Since issue #215 this module imports no driver: `connect` hands
+back the gateway's read-only database (`graph_gateway.read_only`), so every query is sent as
+`GRAPH.RO_QUERY`, and the connectivity probe comes from `graph_gateway.connectivity`. It keeps its
+public names (`connect`, `connect_from_config`, `select_graph`, `GraphHandle`, `GraphQueryResult`,
+`FalkorDBConnectionError`, `check_connectivity*`, `native_graph_name`) so callers and their test
+patch sites are unchanged.
 
-- `check_connectivity`'s `db` parameter is typed against a narrow local
-  `_ConnectivityProbe` Protocol (only the `list_graphs()` call surface it
-  actually needs) rather than the concrete `falkordb.FalkorDB` class the
-  spike used — this is an L1 Dependency Inversion / L2 "use Protocol for
-  interfaces" improvement over the spike: a real `connect()`-returned
-  `FalkorDB` instance satisfies it structurally with no change, and tests
-  can substitute a lightweight fake without a `unittest.mock.Mock(spec=...)`
-  cast through the real client type.
-- `GraphHandle.query`'s `params` is typed `dict[str, object] | None`
-  (never `Any`) per L2 Types Handling's "no implicit Any" rule — the
-  spike's own `GraphHandle` used `dict[str, Any]`. `dict`, not the more
-  permissive `Mapping`, exactly to match `falkordb.Graph.query`'s own
-  real (invariant) parameter type — a `Mapping`-typed parameter here would
-  make the real `falkordb.Graph` fail this Protocol structurally, since
-  `Graph.query` only ever declares `Dict[str, object] | None`.
-- No `cellar1_`-style namespace prefix / `namespaced()` helper is carried
-  forward — that was the spike's own optional `--namespace` CLI flag for
-  test-isolation, not part of this component's contract. This module adds
-  `native_graph_name` instead, implementing PLAN_REVIEWED.md §4.1's
-  graph-per-regulation naming (`{short_name.lower()}_native`).
-- `connect_from_config` (Increment 12, S4 fix, PLAN_REVIEWED.md §6.4/§7)
-  composes this module's own `connect()` with `ServiceConfig.falkordb_host`/
-  `falkordb_port` — the load-bearing use of the config fields Increment 7
-  added to `ps_service.config`. It is the config-wired connection path the
-  live end-to-end test (Increment 13) uses instead of hardcoding
-  `"127.0.0.1"`/`6379` literals.
+`FalkorDBConnectionError` subclasses `IngestionConfigurationError` (`ps_service.ingestion.errors`),
+whose docstring documents it as the type raised when Ingestion's FalkorDB connection cannot be
+established.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker; this is the one boundary import
-    FalkorDB,
-)
-
-from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+from ps_service.graph_gateway import connectivity as gateway_connectivity
+from ps_service.graph_gateway.connectivity import ConnectivityProbe, GraphConnectivityError
+from ps_service.graph_gateway.read_only import ReadOnlyDatabase, open_read_only_database
 from ps_service.ingestion.errors import IngestionConfigurationError
 
 if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
 
+__all__ = [
+    "FalkorDBConnectionError",
+    "GraphHandle",
+    "GraphQueryResult",
+    "check_connectivity",
+    "check_connectivity_from_config",
+    "connect",
+    "connect_from_config",
+    "native_graph_name",
+    "select_graph",
+]
+
 _NATIVE_GRAPH_SUFFIX = "_native"
 
 
-class FalkorDBConnectionError(IngestionConfigurationError):
-    """FalkorDB is unreachable at `check_connectivity` time.
-
-    Subclasses `IngestionConfigurationError` (`ps_service.ingestion.errors`,
-    Increment 1) — that type's own docstring already documents "Ingestion's
-    FalkorDB connection could not be established from the resolved
-    ServiceConfig... raised by falkordb_client.connect/connect_from_config"
-    as its purpose. This is the concrete type actually raised, kept local to
-    this module (matching the spike's own precedent of colocating the
-    exception beside `connect()`/`check_connectivity()`) while remaining
-    catchable as an `IngestionConfigurationError` by any caller relying on
-    that broader family.
-    """
-
-
 class GraphQueryResult(Protocol):
-    """Structural stand-in for `falkordb.QueryResult`.
-
-    Exposes the one field any caller of `GraphHandle.query` needs to read
-    off a response.
-    """
+    """Structural stand-in for `falkordb.QueryResult`: the rows a query returned."""
 
     @property
     def result_set(self) -> list[object]:
@@ -79,12 +51,9 @@ class GraphQueryResult(Protocol):
 
 
 class GraphHandle(Protocol):
-    """Structural stand-in for `falkordb.Graph`.
+    """The `query()` surface Ingestion's reads need: bare Cypher, or Cypher with `params=`.
 
-    The `query()` call surface `ingestion/graph_writer.py` (Increments
-    8-10) needs: bare Cypher, or Cypher + `params=` for parameterized
-    writes. Callers outside this module never import `falkordb.Graph`
-    directly; `select_graph` below is the one conversion site.
+    A `ReadOnlyGraph` satisfies it structurally, so every handle opened here is read-only.
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
@@ -92,111 +61,60 @@ class GraphHandle(Protocol):
         ...
 
 
-class _ConnectivityProbe(Protocol):
-    """Structural requirement for `check_connectivity`'s `db` parameter.
+class FalkorDBConnectionError(IngestionConfigurationError):
+    """FalkorDB is unreachable at `check_connectivity` time.
 
-    Only the one call surface needed to verify connectivity. A real
-    `connect()`-returned `FalkorDB` instance satisfies this structurally
-    with no change; tests can substitute a lightweight fake instead of
-    mocking the real client type.
+    Subclasses `IngestionConfigurationError`, catchable by any caller relying on that family.
     """
 
-    def list_graphs(self) -> list[str]: ...
 
+def connect(host: str, port: int) -> ReadOnlyDatabase:
+    """Open a read-only FalkorDB connection (see `graph_gateway.read_only`).
 
-def connect(host: str, port: int) -> FalkorDB:
-    """Construct a FalkorDB client.
-
-    Despite the underlying client's own lazy-connection intent, the installed
-    `falkordb` package's `FalkorDB.__init__` calls `Is_Sentinel`, which issues
-    a real `INFO` command immediately — confirmed empirically: constructing
-    this against an unreachable host raises `redis.exceptions.ConnectionError`
-    right here, before any caller-visible connectivity check ever runs. Do not
-    call this outside a `dependency_health`-recording boundary (see
-    `check_connectivity_from_config`) — an unguarded call here silently drops
-    the failure from `/ready`'s `unhealthy_dependencies` even though it's
-    real.
+    Do not call this outside a `dependency_health`-recording boundary
+    (`check_connectivity_from_config`): the driver connects eagerly.
     """
-    return FalkorDB(host=host, port=port)
+    return open_read_only_database(host, port)
 
 
-def connect_from_config(config: ServiceConfig) -> FalkorDB:
-    """Build the real FalkorDB connection from a resolved `ServiceConfig`.
+def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
+    """Open the read-only connection from a resolved `ServiceConfig`.
 
-    Uses `config.falkordb_host`/`config.falkordb_port` (Increment 12, S4
-    fix — PLAN_REVIEWED.md §6.4). Composes this module's own `connect()`
-    with the `ServiceConfig` fields
-    Increment 7 added — the only call path in this component that is meant
-    to build a live connection from resolved configuration rather than
-    caller-supplied literals. Callers build `config` via
-    `ps_service.config.load_config()`, never by constructing a
-    `ServiceConfig` with hardcoded host/port values, so this function is
-    what makes `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` genuinely load-bearing.
+    Callers build `config` via `ps_service.config.load_config()`, which is what makes
+    `PS_FALKORDB_HOST` / `PS_FALKORDB_PORT` load-bearing.
     """
     return connect(host=config.falkordb_host, port=config.falkordb_port)
 
 
-def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:
+def check_connectivity(db: ConnectivityProbe, host: str, port: int) -> None:
     """Fail loud, with a friendly message, before doing any real work.
 
-    Raises `FalkorDBConnectionError` (wrapping the underlying cause) if
-    `db` cannot list its graphs — the cheapest real round-trip available to
-    confirm the connection is actually usable. Records the outcome in
-    `ps_service.dependency_health` either way, so a caller using this as
-    `main.py`'s startup probe also feeds the live readiness signal that
-    `graph_writer`'s write-path exception handling updates on every
-    subsequent real write.
+    Raises:
+        FalkorDBConnectionError: `db` cannot list its graphs (the cause is chained).
     """
     try:
-        db.list_graphs()
-    except Exception as exc:
-        mark_unhealthy(FALKORDB, error=exc)
-        raise FalkorDBConnectionError(
-            f"FalkorDB connection failed at {host}:{port}. Is FalkorDB running? Error: {exc}"
-        ) from exc
-    mark_healthy(FALKORDB)
+        gateway_connectivity.check_connectivity(db, host, port)
+    except GraphConnectivityError as exc:
+        raise FalkorDBConnectionError(str(exc)) from exc.__cause__
 
 
 def check_connectivity_from_config(config: ServiceConfig) -> None:
-    """Connect via `connect_from_config` and verify connectivity, as one guarded step.
+    """Connect via this module's `connect_from_config` and verify connectivity, as one guarded step.
 
-    `main.py`'s startup probe used to call `connect_from_config(config)` and
-    `check_connectivity(db, ...)` as two separate steps, with only the second
-    wrapped in a `dependency_health`-recording try/except. Since `connect()`
-    actually performs a real round-trip (see its docstring) rather than the
-    lazy connect its API implies, a connection failure raised by `connect()`
-    never got surfaced to `check_connectivity` at all -- it escaped
-    unrecorded, so `/ready`'s `unhealthy_dependencies` stayed empty even
-    while `status` correctly flipped to `not_ready`. This wraps both steps
-    so a failure from either path is recorded.
+    Raises:
+        FalkorDBConnectionError: the connection or the probe failed (the cause is chained).
     """
     try:
-        db = connect_from_config(config)
-    except Exception as exc:
-        mark_unhealthy(FALKORDB, error=exc)
-        raise FalkorDBConnectionError(
-            f"FalkorDB connection failed at {config.falkordb_host}:{config.falkordb_port}. "
-            f"Is FalkorDB running? Error: {exc}"
-        ) from exc
-    check_connectivity(db, config.falkordb_host, config.falkordb_port)
+        gateway_connectivity.check_connectivity_via(config, connect_from_config)
+    except GraphConnectivityError as exc:
+        raise FalkorDBConnectionError(str(exc)) from exc.__cause__
 
 
-def select_graph(db: FalkorDB, name: str) -> GraphHandle:
-    """Convert a real `falkordb.Graph` to this module's local `GraphHandle`.
-
-    The single conversion site — callers elsewhere in `ps_service.ingestion`
-    never import `falkordb.Graph` directly. `name` is expected to already be
-    the final graph name (e.g. the result of `native_graph_name`) — this
-    function does no naming/namespacing of its own.
-    """
+def select_graph(db: ReadOnlyDatabase, name: str) -> GraphHandle:
+    """Select graph `name` on `db`; `name` is already the final graph name."""
     return db.select_graph(name)
 
 
 def native_graph_name(short_name: str) -> str:
-    """One FalkorDB graph name per regulation, `{short_name.lower()}_native`.
-
-    PLAN_REVIEWED.md §4.1 (e.g. `"CRA"` -> `"cra_native"`, `"GDPR"` ->
-    `"gdpr_native"`). No `cellar1_`-style prefix — that was the spike's own
-    test-isolation namespacing, not part of this component's contract.
-    """
+    """One FalkorDB graph name per regulation, `{short_name.lower()}_native`."""
     return f"{short_name.lower()}{_NATIVE_GRAPH_SUFFIX}"

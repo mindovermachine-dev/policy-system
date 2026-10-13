@@ -1,7 +1,7 @@
 """The `policy_system` leg of a restore as gateway primitives (issue #214, D-1 Option A).
 
 The pre-#214 restore ran the offline baseline merge inside a `GRAPH.COPY` snapshot of
-`policy_system` (`restore_instrument._run_baseline_merge` over `snapshot_merge_writer`), because
+`policy_system` (`restore_instrument._run_baseline_merge`), because
 later steps read what earlier steps had written. The D-1 classification of that merge found that
 the only reads of its own writes are node existence by id (the provenance edges' endpoints, the
 classification edge endpoints, the rewired edges' endpoints). So the merge is rebuilt here from

@@ -1,8 +1,9 @@
 """Increment 20 -- the live 3-regulation Company Merge capstone
 (PLAN_REVIEWED.md §10 Batch 11, §12).
 
-`@pytest.mark.falkordb_live @pytest.mark.llm_live`: reads #15's own
-live-populated `cra_baseline`/`gdpr_baseline`/`nis2_baseline` graphs, runs
+`@pytest.mark.falkordb_live @pytest.mark.llm_live` (plus `cellar_live` and `postgres_live`):
+reads the `cra_baseline`/`gdpr_baseline`/`nis2_baseline` graphs the `live_baseline_graphs` fixture
+builds fresh (Cellar ingest, then bounded Domain Mapper extraction and derivation), runs
 `merge_baseline_graph` for each regulation against real Azure OpenAI (via
 `route_embedding`'s default caller, real `RouteEmbedding` calls, no
 `call_embedding` override), and writes into a **dedicated, disposable**
@@ -50,6 +51,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter, ReadLines
+    from ps_service.config import ServiceConfig
 
 import os
 from dataclasses import dataclass
@@ -66,14 +68,8 @@ from company_merge._live_merge_assertions import (
     _snapshot_counts,  # pyright: ignore[reportPrivateUsage]
     _snapshot_embeddings,  # pyright: ignore[reportPrivateUsage]
 )
-from ps_service.company_merge.falkordb_client import (
-    GraphHandle,
-    connect_from_config,
-    select_graph,
-    single_tenant_graph_name,
-)
+from ps_service.company_merge.falkordb_client import GraphHandle, single_tenant_graph_name
 from ps_service.company_merge.merge import merge_baseline_graph
-from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.domain_mapper.identity import (
     capability_id,
@@ -81,6 +77,7 @@ from ps_service.domain_mapper.identity import (
     requirement_id,
     role_id,
 )
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.logging import bind_run_context
@@ -367,12 +364,12 @@ def _report_ac003_ac004_mechanism_presence(
     }
 
 
-def _live_audit_event_id(run_id: str) -> str:
+def _live_audit_event_id(config: ServiceConfig, run_id: str) -> str:
     """One system audit row for the run, the way production records it (#210).
 
     The merge's gateway groups are logged under it. Not runnable in the implementation sandbox.
     """
-    return build_system_audit_recorder(load_config())(
+    return build_system_audit_recorder(config)(
         action="ingestion_run.submit",
         resource_type="ingestion_run",
         resource_id=run_id,
@@ -381,6 +378,8 @@ def _live_audit_event_id(run_id: str) -> str:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
     not _LLM_INTERFACE_EMBED_MODEL,
@@ -390,14 +389,15 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     make_emitter: MakeEmitter,
     read_lines: ReadLines,
     monkeypatch: pytest.MonkeyPatch,
+    live_baseline_graphs: ServiceConfig,
 ) -> None:
     assert _LLM_INTERFACE_EMBED_MODEL is not None  # narrows type; skipif already guards this
     embed_model = _LLM_INTERFACE_EMBED_MODEL
 
-    # load_config() still resolves falkordb_host/port correctly here -- only
-    # PS_LLMINTERFACE_MODEL/PS_LLMINTERFACE_EMBED_MODEL are stripped by the autouse fixture,
-    # not PS_FALKORDB_HOST/PORT.
-    config = load_config()
+    # The config of the scratch PS state Postgres the baseline graphs were built through
+    # (`live_baseline_graphs`); PS_LLMINTERFACE_EMBED_MODEL is stripped by the autouse fixture,
+    # hence the module-import capture above.
+    config = live_baseline_graphs
     db = connect_from_config(config)
 
     # --- Safety check (BEFORE): the real policy_system graph must be provably untouched ---
@@ -429,7 +429,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     emitter, log_path = make_emitter(filename=_LOG_FILENAME)
 
     run_ids: list[str] = []
-    submitter = build_default_graph_write_gateway(load_config())
+    submitter = build_default_graph_write_gateway(config)
 
     def _run_pass(pass_number: int) -> None:
         for fixture in _REGULATIONS:
@@ -446,7 +446,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
                     submitter=submitter,
                     single_tenant_graph_name=single_tenant_graph_name(),
                     baseline_graph_name=baseline_graph_name(fixture.short_name),
-                    audit_event_id=_live_audit_event_id(run_id),
+                    audit_event_id=_live_audit_event_id(config, run_id),
                 )
 
     # --- Pass 1: the actual 3-regulation merge ---

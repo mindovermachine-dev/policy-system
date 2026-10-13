@@ -9,10 +9,10 @@ a name that resolves to such text. It never looks at docstrings or prose, so a m
 *describe* `MERGE` without being flagged, and it matches the uppercase keywords only, so the
 lowercase `'merged'` of a read stays clean.
 
-The connection-helper module of a package (the one place that opens the READ handle) is scanned
-with `allow_connection=True`: that admits the connection calls and the `falkordb` and `redis`
-imports it needs, and nothing else. Write Cypher, the applier and cypher imports and
-`apply_entries` are never admitted.
+There is one policy and no way to relax it: no allowance for a connection helper, a type-only
+import or a read-side constant. Only the `graph_gateway` package may touch the driver or the
+write-capable factory modules, and it is not scanned (`test_gateway_only_graph_access.py`).
+Write Cypher, the applier and cypher imports and `apply_entries` are always forbidden.
 
 `reaches` is the positive half: whether a function calls a target directly or through same-module
 functions (by name, no mock), so a guard can prove every writer ends at the gateway sink.
@@ -22,21 +22,41 @@ from __future__ import annotations
 
 import ast
 import re
+from typing import TYPE_CHECKING
 
-__all__ = ["called_name", "calls_by_function", "reaches", "scan_source"]
+if TYPE_CHECKING:
+    from pathlib import Path
+
+__all__ = ["called_name", "calls_by_function", "iter_service_modules", "reaches", "scan_source"]
 
 QUERY_CALLS = frozenset(
     {"query", "ro_query", "_execute_query", "_read_query", "read_rows", "query_rows"}
 )
-CONNECTION_CALLS = frozenset({"FalkorDB", "connect", "connect_from_config", "select_graph"})
+# `select_graph`, `connect` and `connect_from_config` are also the names of read-only delegates, so
+# they are not connection calls by name: the write-capable ones are reachable only through the
+# factory modules below, whose import is forbidden.
+CONNECTION_CALLS = frozenset({"FalkorDB"})
+WRITE_CAPABLE_GATEWAY_MODULES = (
+    "ps_service.graph_gateway.connection",
+    "ps_service.graph_gateway.key_port",
+)
 WRITE_CYPHER = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|DROP|DETACH|FOREACH)\b")
 _ALWAYS_FORBIDDEN_IMPORT_PREFIXES = (
     "ps_service.graph_gateway.applier",
     "ps_service.graph_gateway.cypher",
+    *WRITE_CAPABLE_GATEWAY_MODULES,
 )
 _CONNECTION_IMPORT_PREFIXES = ("falkordb", "redis")
 _ALLOWED_REDIS_PREFIX = "redis.exceptions"
 _FORBIDDEN_NAMES = frozenset({"apply_entries"})
+
+
+def iter_service_modules(root: Path) -> list[Path]:
+    """Every Python module under `root`, sorted: the one walk shared by the architecture guard
+    (`test_gateway_only_graph_access.py`) and the Cypher vocabulary scan (#198), so they cannot
+    diverge on which files make up the service.
+    """
+    return sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
 
 
 def called_name(call: ast.Call) -> str | None:
@@ -109,29 +129,18 @@ def _imported_modules(node: ast.Import | ast.ImportFrom) -> list[str]:
     return [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
 
 
-def _is_allowed_import(node: ast.ImportFrom, allowed: frozenset[str]) -> bool:
-    """Whether every name `node` imports is one of the `allowed` fully qualified names."""
-    if node.module is None or node.level != 0:
-        return False
-    return all(f"{node.module}.{alias.name}" in allowed for alias in node.names)
-
-
-def _forbidden_import(module: str, *, allow_connection: bool) -> bool:
+def _forbidden_import(module: str) -> bool:
     if module.startswith(_ALWAYS_FORBIDDEN_IMPORT_PREFIXES):
         return True
-    if allow_connection:
-        return False
     if module.startswith("redis"):
         return not module.startswith(_ALLOWED_REDIS_PREFIX)
     return module.startswith(_CONNECTION_IMPORT_PREFIXES)
 
 
-def _call_findings(
-    node: ast.Call, names: dict[str, list[str]], *, allow_connection: bool
-) -> list[str]:
+def _call_findings(node: ast.Call, names: dict[str, list[str]]) -> list[str]:
     name = called_name(node)
     findings: list[str] = []
-    if name in _FORBIDDEN_NAMES or (name in CONNECTION_CALLS and not allow_connection):
+    if name in _FORBIDDEN_NAMES or name in CONNECTION_CALLS:
         findings.append(f"line {node.lineno}: calls {name}")
     if name in QUERY_CALLS:
         arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
@@ -144,31 +153,26 @@ def _call_findings(
     return findings
 
 
-def scan_source(
-    source: str, *, allow_connection: bool = False, allow_imports: frozenset[str] = frozenset()
-) -> list[str]:
+def scan_source(source: str) -> list[str]:
     """Return one finding per write path in `source` (empty: the module is clean).
 
-    `allow_connection` admits the connection calls and the `falkordb` / `redis` imports of a
-    package's one connection-helper module; write Cypher and the other forbidden names are never
-    admitted. `allow_imports` admits individual `from module import name` statements by their
-    fully qualified names (`module.name`), for a module that needs one read-side constant from a
-    forbidden module (never a template or the apply machinery: the caller names it and says why).
+    A `falkordb` or `redis` import (beyond `redis.exceptions`), a `FalkorDB(...)` construction, an
+    import of the gateway's write-capable factory modules, the applier or the Cypher templates,
+    `apply_entries`, and write Cypher passed to a query call. An import under `TYPE_CHECKING`
+    counts: the walk does not distinguish it, on purpose.
     """
     tree = ast.parse(source)
     names = _text_assignments(tree)
     findings: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and _is_allowed_import(node, allow_imports):
-            continue
         if isinstance(node, ast.Import | ast.ImportFrom):
             findings += [
                 f"line {node.lineno}: imports {module}"
                 for module in _imported_modules(node)
-                if _forbidden_import(module, allow_connection=allow_connection)
+                if _forbidden_import(module)
             ]
         elif isinstance(node, ast.Call):
-            findings += _call_findings(node, names, allow_connection=allow_connection)
+            findings += _call_findings(node, names)
     return findings
 
 

@@ -18,6 +18,10 @@ import redis.exceptions
 from ps_service.dependency_health import FALKORDB, mark_healthy
 from ps_service.graph_gateway.applier import apply_entries
 from ps_service.graph_gateway.digest import canonical_digest
+from ps_service.graph_gateway.drift import (
+    DEFAULT_STOP_TIMEOUT_SECONDS as DEFAULT_DRIFT_STOP_TIMEOUT_SECONDS,
+)
+from ps_service.graph_gateway.drift import DriftChecker, DriftPass, DriftResult, GraphDriftMonitor
 from ps_service.graph_gateway.edge_identity_backfill import (
     EdgeIdentityBackfillOutcome,
     backfill_edge_identity,
@@ -69,6 +73,8 @@ if TYPE_CHECKING:
     import psycopg
     from psycopg.rows import TupleRow
 
+    from ps_service.graph_gateway.connection import WritableGraph
+    from ps_service.graph_gateway.digest import QueryableGraph
     from ps_service.graph_gateway.graph_reader import PersistedElements
     from ps_service.graph_gateway.models import (
         AppendedGroup,
@@ -81,7 +87,6 @@ if TYPE_CHECKING:
     from ps_service.graph_gateway.replay import StartupAction
     from ps_service.graph_gateway.store import GraphLogStore
     from ps_service.graph_gateway.swap_port import GraphKeyPort
-    from ps_service.ingestion.falkordb_client import GraphHandle
     from ps_service.logging import LogEmitter
 
 _CHECKPOINT_FAILURES = (
@@ -149,17 +154,23 @@ class GatewaySettings:
 class GraphWriteGateway:
     """Single chokepoint for graph writes: validate, log, apply, report."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917 -- the stores, the openers and the injectable pauses
         self,
         log_store: GraphLogStore,
-        graph_opener: Callable[[str], GraphHandle],
+        graph_opener: Callable[[str], WritableGraph],
         settings: GatewaySettings | None = None,
         emitter: LogEmitter | None = None,
         sleep: Callable[[float], None] | None = None,
         reconciler_wait: Callable[[float], bool] | None = None,
         key_port: GraphKeyPort | None = None,
+        read_graph_opener: Callable[[str], QueryableGraph] | None = None,
+        drift_wait: Callable[[float], bool] | None = None,
     ) -> None:
         """Take the log store, a graph opener (graph name to handle) and optional tunables.
+
+        `read_graph_opener` opens the read-only handle the drift check reads the live graph
+        through (default: the writable `graph_opener`, which can also be read); `drift_wait` is
+        the drift monitor's pause between passes, like `reconciler_wait`.
 
         `sleep` waits out a retry backoff and `reconciler_wait` the pause between background
         reconciler passes (it returns True to stop the reconciler); tests inject both,
@@ -189,6 +200,15 @@ class GraphWriteGateway:
         self._reconciler = GraphReconciler(
             self.catch_up, settings=self._settings, emitter=emitter, wait=reconciler_wait
         )
+        self._drift = DriftChecker(
+            log_store=log_store,
+            read_graph_opener=read_graph_opener if read_graph_opener is not None else graph_opener,
+            locks=self._locks,
+            is_gated=self._is_closed_to_drift_checks,
+            emitter=emitter,
+        )
+        self._drift_wait = drift_wait
+        self._drift_monitor: GraphDriftMonitor | None = None
         self._swap = (
             None
             if key_port is None
@@ -591,6 +611,43 @@ class GraphWriteGateway:
     def stop_reconciler(self, timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS) -> bool:
         """Stop the background reconciler, waiting up to `timeout` seconds; True if it ended."""
         return self._reconciler.stop(timeout)
+
+    def check_drift(self, graph: str) -> DriftResult:
+        """Compare `graph` with the checkpoint at the head of its log; log the finding.
+
+        Read-only and never waits for a writer: a graph that is closed, locked, behind its log or
+        written to while it is read is skipped, a graph without a checkpoint at its head is
+        reported `no_baseline`, and a difference is an alert in the log (outcome `failed`,
+        `error_class` `GraphDriftDetected`). Nothing is repaired and nothing raises.
+        """
+        return self._drift.check(graph)
+
+    def check_all_drift(self) -> DriftPass:
+        """Run `check_drift` over every graph the log holds; one pass of the drift monitor.
+
+        Raises:
+            GraphLogUnavailableError: the log could not be asked which graphs it holds.
+        """
+        return self._drift.run_pass(self._log_store.logged_graphs())
+
+    def start_drift_monitor(self, interval_seconds: float) -> bool:
+        """Start the periodic drift check; False if `interval_seconds` is 0 or it already runs."""
+        if self._drift_monitor is None:
+            self._drift_monitor = GraphDriftMonitor(
+                self.check_all_drift,
+                interval_seconds=interval_seconds,
+                emitter=self._emitter,
+                wait=self._drift_wait,
+            )
+        return self._drift_monitor.start()
+
+    def stop_drift_monitor(self, timeout: float = DEFAULT_DRIFT_STOP_TIMEOUT_SECONDS) -> bool:
+        """Stop the periodic drift check, waiting up to `timeout` seconds; True if it ended."""
+        return True if self._drift_monitor is None else self._drift_monitor.stop(timeout)
+
+    def _is_closed_to_drift_checks(self, graph: str) -> bool:
+        """Whether `graph` is closed by a replay or blocked by a permanent apply failure."""
+        return self._gate.is_gated(graph) or graph in self._blocked or graph in self._blocked_units
 
     def _standing(self, graph: str) -> CatchUpResult:
         """Report where `graph`'s marker and log stand."""

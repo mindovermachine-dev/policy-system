@@ -46,17 +46,18 @@ from ps_service.domain_mapper.models import (
     ObligationHasEdge,
     RequirementSatisfiedByEdge,
 )
+from ps_service.graph_gateway.connection import connect, select_graph
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
-from ps_service.ingestion.falkordb_client import connect, select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from persistence.provisioned_postgres import Provisioned
 
-    from ps_service.ingestion.falkordb_client import FalkorDB, GraphHandle
+    from ps_service.graph_gateway.connection import FalkorDB
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 

@@ -28,8 +28,8 @@ from policy_lifecycle._legacy_reference import (
     legacy_create_policy_draft,
     legacy_update_policy_fields,
 )
+from ps_service.graph_gateway.connection import connect
 from ps_service.graph_gateway.digest import canonical_digest
-from ps_service.ingestion.falkordb_client import connect
 from ps_service.policy_lifecycle.graph_submission import GraphWriteTarget, lifecycle_submitter
 from ps_service.policy_lifecycle.graph_writer import (
     ControlDraft,

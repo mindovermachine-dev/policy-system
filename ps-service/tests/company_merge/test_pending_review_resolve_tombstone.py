@@ -15,16 +15,18 @@ import pytest
 
 from company_merge._gateway_fakes import POLICY_SYSTEM, UnusedSubmitter
 from ps_service.company_merge.errors import StalePendingReviewError
-from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.pending_review import resolve_review
-from ps_service.config import load_config
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 
 if TYPE_CHECKING:
+    from persistence.provisioned_postgres import Provisioned
+
     from company_merge._fakes import MakeEmitter
     from company_merge._gateway_fakes import MergeRig
+    from ps_service.config import ServiceConfig
 
 _REVIEW = "review_aaa"
 
@@ -121,9 +123,8 @@ def test_loser_with_inbound_tombstone_repoints_the_tombstone_to_the_winner(
     }
 
 
-def _live_target(graph_name: str) -> GraphWriteTarget:
+def _live_target(config: ServiceConfig, graph_name: str) -> GraphWriteTarget:
     """The real gateway on the disposable graph, under one system audit row (issue #210)."""
-    config = load_config()
     audit_event_id = build_system_audit_recorder(config)(
         action="ingestion_run.submit",
         resource_type="ingestion_run",
@@ -137,9 +138,14 @@ _LIVE_TEST_GRAPH = "policy_system_issue190_near_miss_tombstone_live_test"
 
 
 @pytest.mark.falkordb_live
-def test_loser_with_inbound_tombstone_leaves_the_tombstone_resolving_to_the_winner_live() -> None:
+@pytest.mark.postgres_live
+def test_loser_with_inbound_tombstone_leaves_the_tombstone_resolving_to_the_winner_live(
+    provisioned_graph_log: Provisioned, make_emitter: MakeEmitter
+) -> None:
     """Real FalkorDB: S absorbed T earlier, then loses a near-miss to W; T must resolve to W."""
-    db = connect_from_config(load_config())
+    emitter, _log_path = make_emitter()
+    config = provisioned_graph_log.state_config()
+    db = connect_from_config(config)
     if _LIVE_TEST_GRAPH in set(db.list_graphs()):
         db.select_graph(_LIVE_TEST_GRAPH).delete()
     try:
@@ -156,7 +162,9 @@ def test_loser_with_inbound_tombstone_leaves_the_tombstone_resolving_to_the_winn
             "nearest_existing_text: 'W', similarity: 0.9, created_at: '2024-06-01T00:00:00+00:00'})"
         )
 
-        outcome = resolve_review(graph, "review_t190", "merge", _live_target(_LIVE_TEST_GRAPH))
+        outcome = resolve_review(
+            graph, "review_t190", "merge", _live_target(config, _LIVE_TEST_GRAPH), emitter=emitter
+        )
 
         assert outcome is not None
         assert (outcome.winner_id, outcome.loser_id) == ("cap_w", "cap_s")

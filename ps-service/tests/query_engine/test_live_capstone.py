@@ -2,9 +2,8 @@
 infrastructure (PLAN_REVIEWED.md §5 Batch 8).
 
 `@pytest.mark.falkordb_live`. Connects to the real, reachable FalkorDB
-instance and selects the real, already-populated `policy_system` graph
-(the same single-tenant graph #15/#16's own live capstones ran against,
-~776 nodes per #16's tracker) -- never a disposable test graph, and this
+instance and reads a uniquely named throwaway graph the test seeds and
+deletes itself -- never the shared `policy_system` graph, whose content is ambient. This
 whole file is read-only by construction: every query either goes through
 `execute_cypher_query`'s write-clause guard (which
 `test_live_write_clause_rejected_and_graph_provably_unmutated` below proves
@@ -31,10 +30,17 @@ Two tests:
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from ps_service.graph_gateway.connection import (
+    connect as connect_writable,
+)
+from ps_service.graph_gateway.connection import (
+    select_graph as select_writable_graph,
+)
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.query_engine.cypher_query import execute_cypher_query
 from ps_service.query_engine.errors import WriteClauseRejectedError
@@ -46,7 +52,6 @@ if TYPE_CHECKING:
 
 _HOST = "127.0.0.1"
 _PORT = 6379
-_GRAPH_NAME = "policy_system"
 
 
 @pytest.fixture
@@ -62,13 +67,24 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
 
 
 @pytest.fixture
-def real_graph() -> GraphHandle:
-    """Connects to the real, reachable FalkorDB instance and selects the
-    real `policy_system` graph via the real `connect`/`select_graph` from
-    `falkordb_client.py` -- no fake `GraphHandle`.
+def real_graph() -> Iterator[GraphHandle]:
+    """A uniquely named throwaway graph holding a few nodes, read through the real read-only
+    `connect`/`select_graph` from `falkordb_client.py` -- no fake `GraphHandle`.
+
+    The test never reads the shared `policy_system` graph: that graph is empty (or absent) in a
+    clean environment, where the unseeded guard rightly refuses every query, so a test that
+    needs content seeds its own and deletes it afterwards.
     """
-    db = connect(host=_HOST, port=_PORT)
-    return select_graph(db, _GRAPH_NAME)
+    graph_name = f"query_live_capstone_{uuid.uuid4().hex[:12]}"
+    write_db = connect_writable(host=_HOST, port=_PORT)
+    seed = select_writable_graph(write_db, graph_name)
+    seed.query(
+        "CREATE (:Capability {id: 'cap-1'}), (:Capability {id: 'cap-2'}), (:Role {id: 'r1'})"
+    )
+    try:
+        yield select_graph(connect(host=_HOST, port=_PORT), graph_name)
+    finally:
+        write_db.select_graph(graph_name).delete()
 
 
 def _count_nodes(graph: GraphHandle) -> int:
@@ -77,10 +93,14 @@ def _count_nodes(graph: GraphHandle) -> int:
     before/after the guarded write attempt below. Routing this through
     `execute_cypher_query` itself would be circular; this is a plain
     `MATCH ... RETURN` query, never anything else.
+
+    The handle is read-only (`GRAPH.RO_QUERY`): on a graph key that does not exist it answers with
+    no rows instead of `[[0]]` (and creates nothing), so no rows means a count of zero. The test
+    therefore no longer depends on the key having been created by an earlier run (#215).
     """
     result = graph.query("MATCH (n) RETURN count(n)")
     rows = cast("list[list[object]]", result.result_set)
-    return cast("int", rows[0][0])
+    return cast("int", rows[0][0]) if rows else 0
 
 
 @pytest.mark.falkordb_live
@@ -88,7 +108,7 @@ def test_live_read_only_query_matches_real_driver_response_shape(
     real_graph: GraphHandle, emitter: LogEmitter
 ) -> None:
     """AC-001 live proof: a real `MATCH (n) RETURN n LIMIT 5` query against
-    the real `policy_system` graph, executed through the actual
+    the throwaway graph, executed through the actual
     `execute_cypher_query` against the real FalkorDB driver, not
     Increment 4's scripted fake.
 
@@ -134,7 +154,7 @@ def test_live_write_clause_rejected_and_graph_provably_unmutated(
 ) -> None:
     """Defense-in-depth proof for AC-002 against the real graph: not just
     that `execute_cypher_query` raises `WriteClauseRejectedError` for a
-    write-clause query, but that the real `policy_system` graph's node
+    write-clause query, but that the throwaway graph's node
     count is provably unchanged before vs. after the rejected attempt --
     i.e. the guard actually prevented FalkorDB from ever seeing the write,
     not merely that some exception happened to be raised.
@@ -157,6 +177,6 @@ def test_live_write_clause_rejected_and_graph_provably_unmutated(
 
     count_after = _count_nodes(real_graph)
     assert count_after == count_before, (
-        f"policy_system's node count changed ({count_before} -> {count_after}) -- "
+        f"the graph's node count changed ({count_before} -> {count_after}) -- "
         "the write-clause guard must reject before graph.query is ever called"
     )

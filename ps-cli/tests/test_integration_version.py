@@ -71,7 +71,17 @@ def _spawn_ps_service(port: int, log_dir: Path) -> subprocess.Popen[bytes]:
     workspace `.venv` interpreter this test process itself runs under, so `ps_service`
     is importable without any `uv run` indirection.
     """
-    env = {**os.environ, "PS_SERVICE_PORT": str(port), "PS_LOGGING_DIR": str(log_dir)}
+    env = {
+        **os.environ,
+        # Unconditional startup config (`ps_test_support.required_startup_env`, vendored: ps-cli
+        # tests do not import ps-service test code) plus the loopback-only bypass so the process
+        # boots without an OIDC issuer.
+        "PS_AUTHENTIK_API_TOKEN": "ps-smoke-test-token",
+        "PS_AUTHENTIK_BASE_URL": "https://authentik.invalid",
+        "PS_SERVICE_LOCAL_TEST_BYPASS": "true",
+        "PS_SERVICE_PORT": str(port),
+        "PS_LOGGING_DIR": str(log_dir),
+    }
     return subprocess.Popen(
         [sys.executable, "-m", "ps_service"],
         cwd=_REPO_ROOT,

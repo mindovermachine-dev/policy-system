@@ -202,6 +202,8 @@ spec:
             {{- end }}
             - name: PS_COMPANYMERGE_SIMILARITY_THRESHOLD
               value: {{ .Values.psService.companyMerge.similarityThreshold | quote }}
+            - name: PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS
+              value: {{ .Values.psService.graphGateway.driftCheckIntervalSeconds | quote }}
             - name: PS_SERVICE_LOCAL_TEST_BYPASS
               value: {{ .Values.psService.localTestBypass.enabled | quote }}
             - name: PS_LLMINTERFACE_MODEL

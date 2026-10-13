@@ -10,12 +10,13 @@ import uuid
 from typing import TYPE_CHECKING, cast
 
 from graph_gateway._fakes import InMemoryGraphLogStore
+from ps_service.graph_gateway.connection import select_graph
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.models import GroupOutcome, MutationGroup, Primitive
-from ps_service.ingestion.falkordb_client import select_graph
 
 if TYPE_CHECKING:
-    from ps_service.ingestion.falkordb_client import FalkorDB, GraphHandle
+    from ps_service.graph_gateway.connection import FalkorDB
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 AUDIT_EVENT_ID = "3f2b8c1e-5d4a-4b7e-9a61-0c2d7e8f9a10"
 

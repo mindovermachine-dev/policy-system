@@ -304,11 +304,15 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     # edges, and the classification edges -- governance_edges/
     # classification_edges are empty for an external baseline, so this is
     # unchanged from before S4/#106 in that case.
+    # issue #215 -- the LAST group written to `policy_system` asks for the digest checkpoint: the
+    # embedding backfill when it has something to write, otherwise the rewired edges.
+    backfill_follows = bool(capability_dedup.embedding_backfills)
     graph_writer.persist_rewired_edges(
         targets.single_tenant,
         single_tenant_graph,
         graph.bare_edges + graph.governance_edges + graph.classification_edges,
         canonical_id_by_incoming_id,
+        checkpoint_requested=not backfill_follows,
     )
 
     graph_writer.backfill_canonical_embeddings(
@@ -316,6 +320,7 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         single_tenant_graph,
         kind="Capability",
         embeddings=capability_dedup.embedding_backfills,
+        checkpoint_requested=backfill_follows,
     )
     # issue #31 -- the incoming side of the same cost problem: cache a
     # freshly-computed incoming Capability embedding onto its OWN

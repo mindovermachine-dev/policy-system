@@ -63,8 +63,17 @@ def edge_identity(edge_type: str, source_id: str, target_id: str) -> str:
     return f"{edge_type}:{source_id}->{target_id}"
 
 
-def submit_group(target: GraphWriteTarget, primitives: tuple[Primitive, ...]) -> None:
+def submit_group(
+    target: GraphWriteTarget,
+    primitives: tuple[Primitive, ...],
+    *,
+    checkpoint_requested: bool = False,
+) -> None:
     """Submit `primitives` as one group on `target`'s graph and require it applied.
+
+    `checkpoint_requested` asks the gateway to record the graph's digest once the group is
+    applied (the writer sets it on its last group to the graph; a failure to record never fails
+    the group).
 
     Nothing to write submits nothing and stamps nothing. Otherwise the graph's legacy edges are
     stamped before the first group of this target, then the group is submitted and the graph must
@@ -78,7 +87,10 @@ def submit_group(target: GraphWriteTarget, primitives: tuple[Primitive, ...]) ->
     if not primitives:
         return
     group = MutationGroup(
-        graph=target.graph_name, audit_event_id=target.audit_event_id, primitives=primitives
+        graph=target.graph_name,
+        audit_event_id=target.audit_event_id,
+        primitives=primitives,
+        checkpoint_requested=checkpoint_requested,
     )
     if not target.stamped:
         stamp_legacy_edges_before_first_write(

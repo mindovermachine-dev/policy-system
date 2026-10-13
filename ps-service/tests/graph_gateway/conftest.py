@@ -14,7 +14,7 @@ from persistence.provisioned_postgres import (  # pytest discovers these by name
 from graph_gateway._fakes import close_all_rigs
 from graph_gateway.live_endpoints import falkordb_endpoint
 from graph_gateway.live_graphs import LiveGraphs
-from ps_service.ingestion.falkordb_client import connect
+from ps_service.graph_gateway.connection import connect
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

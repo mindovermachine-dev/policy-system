@@ -81,12 +81,12 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from fastapi.testclient import TestClient
 
+from api._live_config import live_app_config
 from ps_service.api.dependencies import get_principal
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.auth.models import Principal
-from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
-from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.logging import facade
@@ -96,6 +96,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
     from ps_service.company_merge.falkordb_client import GraphHandle
 
@@ -141,6 +142,7 @@ _GOVERNANCE_EDGE_TYPES = ("REQUIRES", "GOVERNED_BY", "SUPPORTED_BY", "IMPLEMENTE
 
 pytestmark = [
     pytest.mark.falkordb_live,
+    pytest.mark.postgres_live,
     pytest.mark.llm_live,
     pytest.mark.skipif(
         not _CHAT_MODEL or not _EMBED_MODEL,
@@ -212,7 +214,9 @@ def _delete_graph_if_exists(db: FalkorDB, name: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_InternalCapstoneData]:
+def capstone(
+    tmp_path_factory: pytest.TempPathFactory, provisioned_graph_log: Provisioned
+) -> Iterator[_InternalCapstoneData]:
     """Run the real internal-seed pipeline against real infrastructure, once, and capture state.
 
     Sequence, all against one disposable single-tenant graph
@@ -237,15 +241,17 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_InternalCaps
     monkeypatch = pytest.MonkeyPatch()
     saved_atexit_registered = facade._atexit_registered  # pyright: ignore[reportPrivateUsage]
 
-    config = load_config()
-    db = connect_from_config(config)
-    real_before = _count(select_graph(db, _REAL_GRAPH), _COUNT_ALL)
-
     monkeypatch.setenv("PS_LLMINTERFACE_MODEL", _CHAT_MODEL)
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", _EMBED_MODEL)
     if not os.environ.get("PS_COMPANYMERGE_SIMILARITY_THRESHOLD"):
         monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.85")
     monkeypatch.setenv("PS_FALKORDB_GRAPH", _DISPOSABLE_GRAPH)
+
+    # Built after the env above is set: layers the provisioned state Postgres (graph log and audit
+    # trail) and the local-test auth bypass over `load_config()`.
+    config = live_app_config(provisioned_graph_log)
+    db = connect_from_config(config)
+    real_before = _count(select_graph(db, _REAL_GRAPH), _COUNT_ALL)
 
     for graph_name in (
         _DISPOSABLE_GRAPH,
@@ -258,11 +264,13 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_InternalCaps
 
     facade.configure(log_path=tmp_path_factory.mktemp("api_internal_capstone") / "capstone.jsonl")
 
-    app = create_app(load_config())
+    app = create_app(config)
     # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
     # entered, so the app lifespan never installs it: install the real one (PS state Postgres and
     # FalkorDB) the way a deployed service does. Not run in the implementation sandbox.
-    install_graph_write_gateway(build_default_graph_write_gateway(load_config()))
+    gateway = build_default_graph_write_gateway(config)
+    install_graph_write_gateway(gateway)
+    app.state.graph_write_gateway = gateway  # the internal route is handed it from app state
     # Issue #227: a Policy-bearing seed needs a verified caller, who then owns the imported
     # draft tree; the override stands in for the sign-in a deployed service performs.
     app.dependency_overrides[get_principal] = lambda: Principal(

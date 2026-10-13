@@ -31,9 +31,8 @@ class DraftGovernanceWriter(Protocol):
     """The write step of the pass: persists a Policy/Standard/Control tree as `draft`.
 
     Company Merge passes `graph_writer.persist_governance_drafts` with its gateway write target
-    bound (a Graph Write Gateway group, issue #210); Restore passes its snapshot copy
-    (`restore.snapshot_merge_writer`, issue #210 D1), which writes Cypher into the staged copy.
-    `graph` is the handle the writer reads (and, for the snapshot copy, writes) through.
+    bound (a Graph Write Gateway group, issue #210); Restore passes its own primitive writer.
+    `graph` is the handle the writer reads through.
     """
 
     def __call__(

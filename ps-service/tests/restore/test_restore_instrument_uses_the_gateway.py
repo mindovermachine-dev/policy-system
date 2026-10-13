@@ -1,9 +1,9 @@
 """`restore_instrument` writes only through the Graph Write Gateway (issue #214, slice 8a).
 
-The legacy staging modules stay importable until slice 10b but nothing in the restore path
-references them: no `GRAPH.COPY`, no `RENAME`, no `WATCH`, no write Cypher. The pre-#214
-`_run_baseline_merge` is gone; its behaviour lives in `merge_primitives.build_policy_system_leg`
-(equivalence in `test_restore_legs_equivalence.py`).
+The legacy staging modules were deleted by #215 (S6); nothing in the restore path references them:
+no `GRAPH.COPY`, no `RENAME`, no `WATCH`, no write Cypher. The pre-#214 `_run_baseline_merge` is
+gone; its behaviour lives in `merge_primitives.build_policy_system_leg` (pinned by
+`test_merge_primitives.py`).
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+
+import pytest
 
 import ps_service.restore.restore_instrument as restore_instrument_module
 
@@ -53,6 +55,7 @@ def test_restore_instrument_issues_no_cypher() -> None:
         assert keyword not in source, keyword
 
 
-def test_the_legacy_modules_stay_importable_until_the_live_gate() -> None:
+def test_the_deleted_legacy_modules_are_gone() -> None:
     for name in ("staging", "populate", "snapshot_merge_writer"):
-        assert importlib.import_module(f"ps_service.restore.{name}")
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(f"ps_service.restore.{name}")

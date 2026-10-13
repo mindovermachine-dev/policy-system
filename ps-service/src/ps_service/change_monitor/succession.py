@@ -266,6 +266,7 @@ def clear_marker(target: SuccessionTarget, new_id: str) -> None:
         new_id=new_id,
         build=lambda: (DeleteNode(label=_REINGEST_PROGRESS, id=new_id),),
         missing=f"the native graph could not clear the marker of {new_id!r}",
+        checkpoint_requested=True,  # the re-ingest's last write to the native graph (#215, D-8)
     )
 
 
@@ -343,4 +344,5 @@ def supersede_in_single_tenant(target: SuccessionTarget, prior_id: str, new_id: 
             ),
         ),
         missing=f"policy_system has no {prior_id!r} and {new_id!r} pair to link with SUPERSEDED_BY",
+        checkpoint_requested=True,  # the re-ingest's last write to policy_system (#215, D-8)
     )

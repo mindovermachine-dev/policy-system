@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING
 
 from graph_gateway.live_postgres import committed_audit_event
 
+from ps_service.graph_gateway.connection import select_graph
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
-from ps_service.ingestion.falkordb_client import select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Generator

@@ -837,8 +837,12 @@ def backfill_canonical_embeddings(
     *,
     kind: Literal["Capability", "Policy"],
     embeddings: dict[str, tuple[float, ...]],
+    checkpoint_requested: bool = False,
 ) -> None:
     """Set each `embeddings` entry on an already-existing `kind` canonical node that has none.
+
+    `checkpoint_requested` asks the gateway to record the graph's digest after this group (#215):
+    the merge sets it when this backfill is the last group it writes to `policy_system`.
 
     PLAN_REVIEWED.md §6.2, B2's fix -- distinct from `persist_canonical_nodes`' create-only mint,
     and never touching a node's other properties. Since #210 set-if-null is decided here, before
@@ -855,7 +859,11 @@ def backfill_canonical_embeddings(
             (`FalkorDB write failed:`).
     """
     state = _read_embedding_state(single_tenant_graph, kind, embeddings)
-    submit_group(target, build_embedding_backfill_primitives(state, embeddings, label=kind))
+    submit_group(
+        target,
+        build_embedding_backfill_primitives(state, embeddings, label=kind),
+        checkpoint_requested=checkpoint_requested,
+    )
 
 
 def backfill_incoming_capability_embeddings(
@@ -879,7 +887,9 @@ def backfill_incoming_capability_embeddings(
     """
     state = _read_embedding_state(baseline_graph, _CAPABILITY_LABEL, embeddings)
     submit_group(
-        target, build_embedding_backfill_primitives(state, embeddings, label=_CAPABILITY_LABEL)
+        target,
+        build_embedding_backfill_primitives(state, embeddings, label=_CAPABILITY_LABEL),
+        checkpoint_requested=True,  # the last group the merge writes to the baseline graph (#215)
     )
 
 
@@ -1007,8 +1017,13 @@ def persist_rewired_edges(
     single_tenant_graph: GraphHandle,
     bare_edges: tuple[BareEdge, ...],
     canonical_id_by_incoming_id: dict[str, str],
+    *,
+    checkpoint_requested: bool = False,
 ) -> None:
     """Persist `bare_edges` (the ten Edge Catalog types) into `target`'s graph as ONE group.
+
+    `checkpoint_requested` asks the gateway to record the graph's digest after this group (#215);
+    the merge sets it unless a canonical-embedding backfill follows and will request it instead.
 
     Rewrites each edge's endpoints through `canonical_id_by_incoming_id`
     (`incoming_id -> canonical_id`, Capability dedup's resolutions -- see module docstring)
@@ -1042,5 +1057,7 @@ def persist_rewired_edges(
         for label, ids in endpoint_ids.items()
     }
     submit_group(
-        target, build_rewired_edge_primitives(existing, bare_edges, canonical_id_by_incoming_id)
+        target,
+        build_rewired_edge_primitives(existing, bare_edges, canonical_id_by_incoming_id),
+        checkpoint_requested=checkpoint_requested,
     )

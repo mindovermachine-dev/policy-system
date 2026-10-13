@@ -20,6 +20,7 @@ import redis.exceptions
 
 from graph_gateway._fakes import InMemoryGraphLogStore
 from graph_gateway.live_endpoints import falkordb_endpoint
+from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.graph_reader import read_nodes
 from ps_service.graph_gateway.models import (
@@ -34,12 +35,11 @@ from ps_service.graph_gateway.models import (
     UpsertEdge,
     UpsertNode,
 )
-from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 pytestmark = pytest.mark.falkordb_live
 

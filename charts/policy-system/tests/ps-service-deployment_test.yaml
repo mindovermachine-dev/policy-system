@@ -32,6 +32,22 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_COMPANYMERGE_SIMILARITY_THRESHOLD")].value
           value: "0.59"
 
+  # --- issue #215: the Graph Write Gateway's periodic drift check ---
+
+  - it: PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS comes from values, default 3600
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS")].value
+          value: "3600"
+
+  - it: PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS follows psService.graphGateway.driftCheckIntervalSeconds, and 0 is rendered, not dropped
+    set:
+      psService.graphGateway.driftCheckIntervalSeconds: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS")].value
+          value: "0"
+
   # --- issue #131 Slice 1: Passkey Signing's own, distinct Postgres env wiring (AC-BI-006) ---
 
   - it: PS_PASSKEYSIGNING_POSTGRES_HOST is the exact PS Postgres Service name, never an IP, and distinct from FalkorDB's

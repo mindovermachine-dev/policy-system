@@ -37,6 +37,8 @@ from persistence.provisioned_postgres import Provisioned, provision_graph_log
 import ps_service.main as main_module
 from ps_service import dependency_health
 from ps_service.config import ServiceConfig, load_config
+from ps_service.graph_gateway.connection import connect as connect_falkordb
+from ps_service.graph_gateway.connection import select_graph
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.errors import GraphReplayGatedError
 from ps_service.graph_gateway.gateway import GatewaySettings, GraphWriteGateway
@@ -49,8 +51,6 @@ from ps_service.graph_gateway.models import (
 from ps_service.graph_gateway.replay_state import read_replay_state
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
 from ps_service.ingestion.errors import IngestionConfigurationError
-from ps_service.ingestion.falkordb_client import connect as connect_falkordb
-from ps_service.ingestion.falkordb_client import select_graph
 from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
 from ps_service.logging.facade import (
@@ -82,7 +82,8 @@ if TYPE_CHECKING:
 
     from ps_service.auth.models import AuthContext
     from ps_service.auth.verifier import PsTokenVerifier
-    from ps_service.ingestion.falkordb_client import GraphHandle, GraphQueryResult
+    from ps_service.graph_gateway.connection import GraphQueryResult
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -3104,3 +3105,147 @@ def test_service_ready_flow_against_real_stores(
     assert status_after == 200
     assert after.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
     assert rebuilt == checkpoint.canonical_digest
+
+
+# -- the drift monitor (issue #215, S5b/S5c) ---------------------------------------------------
+
+
+class _FakeDriftGateway(_FakeStartupGateway):
+    """A startup-replayable gateway that also offers the periodic drift check."""
+
+    def __init__(
+        self, result: StartupReplayReport | None = None, failure: Exception | None = None
+    ) -> None:
+        super().__init__(result, failure)
+        self.intervals: list[float] = []
+        self.drift_stop_timeouts: list[float] = []
+
+    def start_drift_monitor(self, interval_seconds: float) -> bool:
+        self.calls.append("start_drift_monitor")
+        self.intervals.append(interval_seconds)
+        return True
+
+    def stop_drift_monitor(self, timeout: float) -> bool:
+        self.calls.append("stop_drift_monitor")
+        self.drift_stop_timeouts.append(timeout)
+        return True
+
+
+def _app_with_gateway(
+    monkeypatch: pytest.MonkeyPatch, gateway: object, **config: object
+) -> FastAPI:
+    def skip_state_migrations(_config: ServiceConfig) -> None:
+        """Stand-in for the migration step, which needs a real Postgres."""
+
+    # detroit-exception: the migration step needs a real Postgres; replay IS the spec (§1.2)
+    monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
+
+    def build(_config: ServiceConfig) -> object:
+        return gateway
+
+    # detroit-exception: composition-root builder seam handing the lifespan a fake gateway (§1.2)
+    monkeypatch.setattr(main_module, "build_default_graph_write_gateway", build)
+    return create_app(_state_config(**config))
+
+
+def _wait_for_call(gateway: _FakeStartupGateway, call: str) -> None:
+    deadline = time.monotonic() + _REPLAY_START_TIMEOUT_SECONDS
+    while call not in gateway.calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert call in gateway.calls, f"{call} never happened: {gateway.calls}"
+
+
+def test_the_drift_monitor_starts_after_the_startup_replay_ends_and_stops_before_the_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDriftGateway()
+    app = _app_with_gateway(monkeypatch, fake, graph_drift_check_interval_seconds=120)
+
+    with TestClient(app):
+        _wait_for_call(fake, "start_drift_monitor")
+        assert fake.calls[:3] == ["hold", "replay", "start_drift_monitor"]
+        assert fake.drift_stop_timeouts == []
+
+    assert fake.intervals == [120]
+    assert fake.calls[-3:] == ["stop_drift_monitor", "stop_replay", "stop_reconciler"]
+    assert fake.drift_stop_timeouts == [5.0]
+
+
+def test_the_drift_monitor_is_not_started_when_the_startup_replay_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDriftGateway(failure=RuntimeError("boom"))
+    app = _app_with_gateway(monkeypatch, fake)
+
+    with TestClient(app):
+        assert fake.replay_started.wait(timeout=_REPLAY_START_TIMEOUT_SECONDS)
+
+    assert fake.intervals == []
+    assert "start_drift_monitor" not in fake.calls
+
+
+def test_no_gateway_and_so_no_drift_monitor_without_a_state_postgres(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDriftGateway()
+    _app_with_gateway(monkeypatch, fake)  # installs the builder seam
+    app = create_app(_complete_config())  # no `state_postgres_host`: nothing to replay or check
+
+    with TestClient(app):
+        assert app.state.graph_write_gateway is None
+
+    assert fake.calls == []
+
+
+def test_ready_and_app_state_are_identical_with_the_drift_monitor_on_and_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def observe(gateway: _FakeStartupGateway) -> tuple[dict[str, object], set[str]]:
+        app = _app_with_gateway(monkeypatch, gateway)
+        with TestClient(app) as client:
+            assert _await_ready(client) == 200
+            body = cast("dict[str, object]", client.get("/ready").json())
+            return body, set(app.state._state)  # pyright: ignore[reportPrivateUsage]
+
+    without_monitor = observe(_FakeStartupGateway())
+    with_monitor = observe(_FakeDriftGateway())
+
+    assert with_monitor == without_monitor
+    assert with_monitor[0] == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
+
+
+def test_a_drift_check_that_cannot_reach_falkordb_leaves_ready_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = GatewayRig()
+    rig.gateway.submit_group(
+        MutationGroup(
+            graph="compliance",
+            audit_event_id="3f2b8c1e-5d4a-4b7e-9a61-0c2d7e8f9a10",
+            primitives=(UpsertNode(label="Capability", id="cap-1", properties={}),),
+            checkpoint_requested=True,
+        )
+    )
+
+    class _Down:
+        def query(
+            self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+        ) -> object:
+            del q, params, timeout
+            raise redis.exceptions.ConnectionError("falkordb is down")
+
+    gateway = GraphWriteGateway(
+        log_store=rig.store,
+        graph_opener=rig.graphs.open,
+        read_graph_opener=lambda _name: _Down(),  # pyright: ignore[reportArgumentType]
+        reconciler_wait=lambda _delay: True,
+    )
+    app = _app_with_gateway(monkeypatch, gateway)
+
+    with TestClient(app) as client:
+        assert _await_ready(client) == 200
+        result = gateway.check_drift("compliance")  # a checkpoint exists, so the digest is read
+        body = client.get("/ready").json()
+
+    assert result.status == "failed"
+    assert body == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}

@@ -42,15 +42,10 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from ps_service.change_monitor.cellar_consolidated import fetch_consolidated_versions
-from ps_service.change_monitor.falkordb_client import (
-    check_connectivity,
-    connect_from_config,
-    native_graph_name,
-    select_graph,
-)
+from ps_service.change_monitor.falkordb_client import check_connectivity, native_graph_name
 from ps_service.change_monitor.models import PipelineRunResult, StageSummary
 from ps_service.change_monitor.trigger import trigger_reingestion
-from ps_service.config import load_config
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.ingestion.adapters.cellar_eli import CellarEliAdapter
@@ -60,11 +55,14 @@ from ps_service.logging import EmitterConfig, LogEmitter
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from persistence.provisioned_postgres import Provisioned
+
     from ps_service.change_monitor.falkordb_client import GraphHandle
     from ps_service.change_monitor.models import PipelineRunner
+    from ps_service.config import ServiceConfig
     from ps_service.ingestion.graph_submission import GroupSubmitter
 
-pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live]
+pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
 # GDPR's base-act CELEX: one consolidated expression, `02016R0679-20160504`,
 # stable since 2016 — a fixed, well-understood live target for AC-001.
@@ -80,9 +78,9 @@ _SEED_ID = f"{_CAPSTONE_SHORT}-{_SEED_VERSION}"
 _NEW_ID = f"{_CAPSTONE_SHORT}-{_NEW_VERSION}"
 
 
-def _audit_event_id(resource_id: str) -> str:
+def _audit_event_id(config: ServiceConfig, resource_id: str) -> str:
     """A real system audit row (PS state Postgres) to anchor a live gateway write to."""
-    return build_system_audit_recorder(load_config())(
+    return build_system_audit_recorder(config)(
         action="ingestion_run.submit",
         resource_type="ingestion_run",
         resource_id=resource_id,
@@ -91,7 +89,11 @@ def _audit_event_id(resource_id: str) -> str:
 
 
 def _ingestion_only_runner(
-    adapter: CellarEliAdapter, graph: GraphHandle, emitter: LogEmitter, gateway: GroupSubmitter
+    adapter: CellarEliAdapter,
+    graph: GraphHandle,
+    emitter: LogEmitter,
+    gateway: GroupSubmitter,
+    config: ServiceConfig,
 ) -> PipelineRunner:
     """A `PipelineRunner` that runs the REAL Ingestion stage and no-ops the later stages.
 
@@ -114,7 +116,7 @@ def _ingestion_only_runner(
                     adapter=adapter,
                     graph=graph,
                     submitter=gateway,
-                    audit_event_id=_audit_event_id(run_id),
+                    audit_event_id=_audit_event_id(config, run_id),
                     emitter=emitter,
                     run_id=run_id,
                 )
@@ -190,7 +192,9 @@ def test_ac001_live_consolidated_version_detection() -> None:
 
 
 def test_consolidated_reingestion_end_to_end(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    provisioned_graph_log: Provisioned,
 ) -> None:
     """Seed a throwaway `{short}_native` graph with a real base-act ingest,
     then run a real `trigger_reingestion` of the *consolidated expression*
@@ -212,7 +216,8 @@ def test_consolidated_reingestion_end_to_end(
     - Re-running with identical args is a clean no-op (`already_processed`,
       `run_id is None`, node + edge totals unchanged).
     """
-    config = load_config()
+    # The scratch PS state Postgres (graph log and audit trail), not ambient env.
+    config = provisioned_graph_log.state_config()
     gateway = build_default_graph_write_gateway(config)
     db = connect_from_config(config)
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)
@@ -238,7 +243,7 @@ def test_consolidated_reingestion_end_to_end(
             adapter=adapter,
             graph=graph,
             submitter=gateway,
-            audit_event_id=_audit_event_id("capstone-seed"),
+            audit_event_id=_audit_event_id(config, "capstone-seed"),
             emitter=emitter,
         )
         assert _status_of(graph, _SEED_ID) == "active"
@@ -255,9 +260,9 @@ def test_consolidated_reingestion_end_to_end(
             adapter=adapter,
             graph=graph,
             submitter=gateway,
-            audit_anchor=lambda: _audit_event_id("capstone-trigger"),
+            audit_anchor=lambda: _audit_event_id(config, "capstone-trigger"),
             emitter=emitter,
-            run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway),
+            run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway, config),
         )
 
         assert outcome.outcome == "superseded"
@@ -312,9 +317,9 @@ def test_consolidated_reingestion_end_to_end(
             adapter=adapter,
             graph=graph,
             submitter=gateway,
-            audit_anchor=lambda: _audit_event_id("capstone-trigger"),
+            audit_anchor=lambda: _audit_event_id(config, "capstone-trigger"),
             emitter=emitter,
-            run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway),
+            run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway, config),
         )
 
         assert rerun.outcome == "already_processed"

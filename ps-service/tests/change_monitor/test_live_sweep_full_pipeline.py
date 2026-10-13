@@ -26,11 +26,12 @@ What the real run proves that the hermetic `test_reingestion_graph_state.py` can
   `ingestion_run.submit` audit row: edge with `absorbed`, prior `superseded` in the native and
   single-tenant graphs, no marker left behind.
 
-Run explicitly (needs a reachable FalkorDB; set `PS_FALKORDB_HOST` / `PS_FALKORDB_PORT` if it is not
+Run explicitly (needs a reachable FalkorDB and `PS_TEST_POSTGRES_SUPERUSER_DSN`; set
+`PS_FALKORDB_HOST` / `PS_FALKORDB_PORT` if it is not
 on the default):
 
     uv run pytest ps-service/tests/change_monitor/test_live_sweep_full_pipeline.py \
-        -m "falkordb_live and not postgres_live" -n0 -q
+        -m "falkordb_live and postgres_live" -n0 -q
 """
 
 from __future__ import annotations
@@ -60,18 +61,16 @@ from ps_service.audit.store import PsycopgAuditStore
 from ps_service.change_monitor.falkordb_client import (
     GraphHandle,
     check_connectivity,
-    connect_from_config,
     native_graph_name,
-    select_graph,
 )
 from ps_service.change_monitor.models import AmendmentFinding, PollReport, TrackedInstrumentNode
-from ps_service.config import ServiceConfig, load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.domain_mapper.prompts import (
     CAPABILITY_DERIVATION_SYSTEM_PROMPT,
     EXTRACTION_SYSTEM_PROMPT,
     OBLIGATION_DERIVATION_SYSTEM_PROMPT,
 )
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.ingestion.models import (
     FetchedRegulatoryInstrumentStructure,
@@ -86,12 +85,14 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
     from change_monitor._fakes import MakeEmitter
     from ps_service.audit.models import AuditQueryPage
+    from ps_service.config import ServiceConfig
 
 
-pytestmark = pytest.mark.falkordb_live
+pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
 _SHORT = "LIVE201"
 _CELEX = "32099R0201"
@@ -108,8 +109,6 @@ _ROLE = "Manufacturer"
 # Every node and edge type of the spine, so a snapshot sees all of it.
 _NODES_QUERY = "MATCH (n) RETURN labels(n)[0], n.id, properties(n)"
 _EDGES_QUERY = "MATCH (a)-[r]->(b) RETURN type(r), a.id, b.id, properties(r)"
-
-_CONFIG_BASE = load_config()
 
 
 class _ScriptedAdapter:
@@ -432,10 +431,12 @@ def _drop(db: FalkorDB, names: tuple[str, ...]) -> None:
             db.select_graph(name).delete()
 
 
-def _build_world(monkeypatch: pytest.MonkeyPatch, emitter: object) -> Iterator[_World]:
+def _build_world(
+    monkeypatch: pytest.MonkeyPatch, emitter: object, prov: Provisioned
+) -> Iterator[_World]:
     monkeypatch.setenv("PS_FALKORDB_GRAPH", _SINGLE_TENANT)
     config = dataclasses.replace(
-        _CONFIG_BASE,
+        prov.state_config(),
         llm_interface_model="azure/stub-chat",
         llm_interface_embed_model="azure/stub-embed",
         company_merge_similarity_threshold=0.83,
@@ -448,6 +449,9 @@ def _build_world(monkeypatch: pytest.MonkeyPatch, emitter: object) -> Iterator[_
     monkeypatch.setattr("ps_service.llm_interface.client.litellm.completion", llm.completion)
     monkeypatch.setattr("ps_service.llm_interface.client.litellm.embedding", llm.embedding)
     adapter = _ScriptedAdapter()
+    # Ingestion writes through the REAL Graph Write Gateway (issue #208) on the scratch state
+    # Postgres, seed included, so it is installed before v1 is seeded.
+    install_graph_write_gateway(build_default_graph_write_gateway(config))
     try:
         world = _World(
             native=select_graph(db, names[0]),
@@ -479,12 +483,16 @@ def _build_world(monkeypatch: pytest.MonkeyPatch, emitter: object) -> Iterator[_
         adapter.articles = (_ART_1, _ART_2)
         yield world
     finally:
+        install_graph_write_gateway(None)
         _drop(db, names)
 
 
 @pytest.fixture
 def world(
-    monkeypatch: pytest.MonkeyPatch, make_emitter: MakeEmitter, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    make_emitter: MakeEmitter,
+    tmp_path: Path,
+    provisioned_graph_log: Provisioned,
 ) -> Iterator[_World]:
     """The disposable graphs, v1 seeded, with a real process-wide log facade installed.
 
@@ -496,7 +504,7 @@ def world(
     saved_atexit_registered = facade._atexit_registered  # pyright: ignore[reportPrivateUsage]
     facade.configure(log_path=tmp_path / "facade.jsonl")
     try:
-        yield from _build_world(monkeypatch, emitter)
+        yield from _build_world(monkeypatch, emitter, provisioned_graph_log)
     finally:
         facade.reset_for_tests()
         facade._atexit_registered = saved_atexit_registered  # pyright: ignore[reportPrivateUsage]
@@ -546,7 +554,11 @@ def test_amendment_runs_the_real_stages_and_absorbs_without_touching_the_prior_v
     )
     # Succession statements (real Cypher): edge + absorbed, prior superseded, no marker left.
     native_after, baseline_after, tenant_after = world.snapshots()
-    assert native_after[1][("SUPERSEDED_BY", _PRIOR, _NEW)] == {"absorbed": True}
+    # The gateway stamps the edge with the repo-wide identity `TYPE:source->target` (#213).
+    assert native_after[1][("SUPERSEDED_BY", _PRIOR, _NEW)] == {
+        "absorbed": True,
+        "identity": f"SUPERSEDED_BY:{_PRIOR}->{_NEW}",
+    }
     assert native_after[0][("RegulatoryInstrument", _PRIOR)]["status"] == "superseded"
     assert tenant_after[0][("RegulatoryInstrument", _PRIOR)]["status"] == "superseded"
     assert tenant_after[0][("RegulatoryInstrument", _NEW)]["status"] == "active"

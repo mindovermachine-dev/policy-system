@@ -38,10 +38,10 @@ from ps_service.graph_gateway.replay_state import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from ps_service.graph_gateway.connection import WritableGraph
     from ps_service.graph_gateway.models import DigestCheckpoint, GraphLogEntry, Primitive
     from ps_service.graph_gateway.replay_state import ReplayStateName
     from ps_service.graph_gateway.store import GraphLogStore
-    from ps_service.ingestion.falkordb_client import GraphHandle
 
 type StartupAction = Literal["resume", "replay", "catch_up", "untouched"]
 """What startup does for a graph: finish a replay, rebuild it, apply what is missing, or nothing."""
@@ -54,7 +54,7 @@ class GraphReplayer:
     def __init__(
         self,
         log_store: GraphLogStore,
-        graph_opener: Callable[[str], GraphHandle],
+        graph_opener: Callable[[str], WritableGraph],
         *,
         batch_size: int,
         page_size: int,
@@ -104,7 +104,7 @@ class GraphReplayer:
             )
             raise
 
-    def _replay_recorded(self, graph: str, head: int, handle: GraphHandle) -> ReplayReport:
+    def _replay_recorded(self, graph: str, head: int, handle: WritableGraph) -> ReplayReport:
         """Apply the log of `graph` up to `head`, recording progress; failures propagate."""
         indexes = IdIndexes(handle)
         checkpoint = self._log_store.read_highest_checkpoint_at_or_below(graph, head)
@@ -161,7 +161,7 @@ class GraphReplayer:
         return checkpoint is not None and checkpoint.canonical_digest == EMPTY_GRAPH_DIGEST
 
     def _start_or_resume(
-        self, handle: GraphHandle, graph: str, checkpoint: DigestCheckpoint | None
+        self, handle: WritableGraph, graph: str, checkpoint: DigestCheckpoint | None
     ) -> _Progress:
         """Open the progress record of a fresh replay, or pick up the one an earlier run left.
 
@@ -197,7 +197,7 @@ class GraphReplayer:
 
     def _advance(
         self,
-        handle: GraphHandle,
+        handle: WritableGraph,
         graph: str,
         entries: Sequence[GraphLogEntry],
         progress: _Progress,
@@ -219,7 +219,7 @@ class GraphReplayer:
 
     def _apply_page(
         self,
-        handle: GraphHandle,
+        handle: WritableGraph,
         graph: str,
         entries: Sequence[GraphLogEntry],
         first: int,
@@ -245,7 +245,7 @@ class GraphReplayer:
             raise failure
         return first + len(decoded)
 
-    def _verify(self, handle: GraphHandle, checkpoint: DigestCheckpoint) -> None:
+    def _verify(self, handle: WritableGraph, checkpoint: DigestCheckpoint) -> None:
         """Raise if the rebuilt graph's digest is not the checkpoint's."""
         actual = canonical_digest(handle)
         if actual != checkpoint.canonical_digest:
@@ -257,7 +257,7 @@ class GraphReplayer:
             )
 
 
-def _recorded_verified(handle: GraphHandle) -> int:
+def _recorded_verified(handle: WritableGraph) -> int:
     """The checkpoint position the progress record says was verified (-1: none, or no record)."""
     recorded = read_replay_state(handle)
     return recorded.verified if recorded is not None else NOT_VERIFIED

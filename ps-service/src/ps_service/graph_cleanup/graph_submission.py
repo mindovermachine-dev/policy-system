@@ -267,6 +267,10 @@ def submit_cleanup_group(
     the group is submitted. A group that is committed but not applied yet is success; no catch-up
     is awaited after it.
 
+    Every cleanup operation is exactly one group, so every group is the terminal one and asks the
+    gateway to record the graph's digest once it is applied (#215, AC-BI-009); a failure to record
+    never fails the group.
+
     Raises:
         GraphCleanupStaleStateError: an `ExpectedPosition` precondition no longer held; nothing
             of this group was logged. The message is `stale_message`.
@@ -281,6 +285,7 @@ def submit_cleanup_group(
             audit_event_id=audit_event_id,
             primitives=primitives,
             preconditions=preconditions,
+            checkpoint_requested=True,
         )
     ensure_stamped(target, audit_event_id)
     with _mapped_failures(stale_message):

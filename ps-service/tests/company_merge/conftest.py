@@ -8,6 +8,7 @@ import pytest
 from graph_gateway._fakes import close_all_rigs
 
 from company_merge._gateway_fakes import MergeRig
+from company_merge._hermetic_policy_system import merged_graph_run
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -19,3 +20,6 @@ def merge_rig() -> Iterator[MergeRig]:
     rig = MergeRig()
     yield rig
     close_all_rigs()
+
+
+__all__ = ["merge_rig", "merged_graph_run"]  # pytest discovers the fixture by name

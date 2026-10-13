@@ -22,7 +22,7 @@ load (M6 / the Process Harness decoupling guarantee).
    all via ``db.list_graphs()`` -- **before** opening it or issuing any
    ``MATCH`` (issue #71 CHANGES.md Appendix A1's fix: querying a
    not-yet-existing key lazily vivifies a permanent empty graph,
-   ``ps_service.restore.staging``'s own documented FalkorDB gotcha). A
+   a documented FalkorDB gotcha). A
    missing key raises ``ExportInstrumentNotFoundError`` with **zero** calls
    to ``open_baseline_graph``/``open_native_graph``.
 4. Only once the key is known to exist: opens the baseline graph and looks
@@ -78,10 +78,6 @@ from ps_service.logging.facade import emit_log_entry
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from falkordb import (
-        FalkorDB,  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker
-    )
-
     from ps_service.api.models import ExportRequest
     from ps_service.config import ServiceConfig
     from ps_service.export.export_instrument import InstrumentDescriptor
@@ -89,6 +85,7 @@ if TYPE_CHECKING:
         _GraphQueryHandle,  # pyright: ignore[reportPrivateUsage]
     )
     from ps_service.export.models import InstrumentManifest
+    from ps_service.graph_gateway.read_only import ReadOnlyDatabase
     from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import EmbeddingCaller
     from ps_service.logging import LogEmitter
@@ -148,9 +145,9 @@ class ExportDependencies:
     ``default_embedding_caller``.
     """
 
-    open_db: Callable[[ServiceConfig], FalkorDB]
-    open_baseline_graph: Callable[[FalkorDB, str], _GraphQueryHandle]
-    open_native_graph: Callable[[FalkorDB, str], _GraphQueryHandle]
+    open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
+    open_baseline_graph: Callable[[ReadOnlyDatabase, str], _GraphQueryHandle]
+    open_native_graph: Callable[[ReadOnlyDatabase, str], _GraphQueryHandle]
     export: ExportStage
     call_embedding: EmbeddingCaller | None
     graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
@@ -199,7 +196,7 @@ def _require_embed_model(config: ServiceConfig) -> str:
 # --- safe existence probe (issue #71 CHANGES.md Appendix A1) ---------------
 
 
-def _baseline_graph_exists(db: FalkorDB, baseline_name: str) -> bool:
+def _baseline_graph_exists(db: ReadOnlyDatabase, baseline_name: str) -> bool:
     """Safe existence probe.
 
     Mirrors ``check_connectivity``'s ``db.list_graphs()``
@@ -208,8 +205,8 @@ def _baseline_graph_exists(db: FalkorDB, baseline_name: str) -> bool:
     exist" without issuing any command against the key itself. Callers
     MUST call this before ``dependencies.open_baseline_graph``/any ``MATCH``
     against ``baseline_name`` -- querying a not-yet-existing key lazily
-    vivifies a permanent empty graph (``ps_service.restore.staging``'s own
-    documented FalkorDB gotcha).
+    vivifies a permanent empty graph (a documented FalkorDB
+    gotcha).
     """
     return baseline_name in db.list_graphs()
 
@@ -454,7 +451,7 @@ def run_export(
 # --- default wiring (M6 -- every export import below is function-local) ---
 
 
-def _default_open_db(config: ServiceConfig) -> FalkorDB:
+def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
     """Open the real FalkorDB connection for ``config``."""
     from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- M6: function-local
         connect_from_config,
@@ -463,7 +460,7 @@ def _default_open_db(config: ServiceConfig) -> FalkorDB:
     return connect_from_config(config)
 
 
-def _default_open_baseline_graph(db: FalkorDB, short_name: str) -> _GraphQueryHandle:
+def _default_open_baseline_graph(db: ReadOnlyDatabase, short_name: str) -> _GraphQueryHandle:
     """Open the real ``{short}_baseline`` graph on ``db``."""
     from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- M6: function-local
         baseline_graph_name,
@@ -475,7 +472,7 @@ def _default_open_baseline_graph(db: FalkorDB, short_name: str) -> _GraphQueryHa
     return graph_query_handle(db, baseline_graph_name(short_name))
 
 
-def _default_open_native_graph(db: FalkorDB, short_name: str) -> _GraphQueryHandle:
+def _default_open_native_graph(db: ReadOnlyDatabase, short_name: str) -> _GraphQueryHandle:
     """Open the real ``{short}_native`` graph on ``db``."""
     from ps_service.export.falkordb_connection import (  # noqa: PLC0415 -- M6: function-local
         graph_query_handle,

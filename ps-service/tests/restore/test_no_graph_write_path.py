@@ -6,12 +6,9 @@ module of `ps_service.restore` may open a FalkorDB connection, name the gateway'
 machinery, or pass write Cypher to a graph handle. The scan is `graph_gateway.write_path_scan`
 (an AST walk of the literals passed to `query` and its siblings, never docstrings or prose).
 
-Until the live gate has passed (CHANGES.md A-2, slice 10b) three legacy modules stay in the tree,
-unreferenced: `populate.py`, `staging.py` and `snapshot_merge_writer.py`. They are named in
-`_LEGACY` and exempt from the scan, but nothing else may import or call them, and the allow-list
-must not outlive the files: when 10b deletes them,
-`test_the_legacy_allow_list_names_only_files_that_still_exist` fails until the names are removed
-here.
+The three pre-gateway modules (`populate.py`, `staging.py`, `snapshot_merge_writer.py`) were
+deleted by issue #215 slice S6 after the live comparison; `test_no_legacy_restore_module_remains`
+keeps them gone and `_used_legacy` keeps anything from importing or calling their entry points.
 
 Positive half: `restore_instrument` reaches `submit_restore`, which reaches the gateway's
 `submit_multi_graph_group`.
@@ -34,8 +31,10 @@ import ps_service.restore as restore_package
 _ROOT = Path(restore_package.__file__).parent
 _API = Path(api_package.__file__).parent
 _MCP = Path(mcp_package.__file__).parent
-_LEGACY = frozenset({"populate.py", "staging.py", "snapshot_merge_writer.py"})
-_LEGACY_MODULES = frozenset(f"ps_service.restore.{name.removesuffix('.py')}" for name in _LEGACY)
+_LEGACY_FILES = frozenset({"populate.py", "staging.py", "snapshot_merge_writer.py"})
+_LEGACY_MODULES = frozenset(
+    f"ps_service.restore.{name.removesuffix('.py')}" for name in _LEGACY_FILES
+)
 _LEGACY_NAMES = frozenset(
     {
         "populate_graph",
@@ -47,9 +46,6 @@ _LEGACY_NAMES = frozenset(
         "_run_baseline_merge",
     }
 )
-# `restore_instrument` annotates its read handle with the driver's class under TYPE_CHECKING and
-# never connects: exactly this one name is admitted.
-_TYPE_ONLY_IMPORTS = frozenset({"falkordb.FalkorDB"})
 _SINK = "submit_multi_graph_group"
 
 
@@ -58,7 +54,7 @@ def _modules() -> list[Path]:
 
 
 def _checked() -> list[Path]:
-    return [path for path in _modules() if path.name not in _LEGACY]
+    return _modules()
 
 
 def _param(path: Path) -> object:
@@ -101,29 +97,18 @@ def test_the_scan_covers_the_restore_package() -> None:
         "schema_allowlist.py",
         "errors.py",
     } <= names
-    assert not names & _LEGACY
+    assert not names & _LEGACY_FILES
 
 
 @pytest.mark.parametrize("path", [_param(path) for path in _checked()])
 def test_no_restore_module_opens_a_connection_or_passes_write_cypher(path: Path) -> None:
-    findings = scan_source(path.read_text(encoding="utf-8"), allow_imports=_TYPE_ONLY_IMPORTS)
+    findings = scan_source(path.read_text(encoding="utf-8"))
 
     assert findings == []
 
 
-def test_the_legacy_allow_list_names_only_files_that_still_exist() -> None:
-    assert {path.name for path in _modules()} >= _LEGACY
-
-
-def test_the_population_helper_is_the_only_legacy_module_that_passes_write_cypher() -> None:
-    offenders = {
-        path.name
-        for path in _modules()
-        if path.name in _LEGACY
-        and scan_source(path.read_text(encoding="utf-8"), allow_imports=_TYPE_ONLY_IMPORTS) != []
-    }
-
-    assert offenders <= {"populate.py"}
+def test_no_legacy_restore_module_remains() -> None:
+    assert {path.name for path in _modules()} & _LEGACY_FILES == set()
 
 
 @pytest.mark.parametrize(
@@ -139,7 +124,7 @@ def test_the_population_helper_is_the_only_legacy_module_that_passes_write_cyphe
         if path.is_file()
     ],
 )
-def test_nothing_outside_the_legacy_modules_uses_them(path: Path) -> None:
+def test_nothing_in_the_restore_path_uses_the_deleted_modules(path: Path) -> None:
     assert _used_legacy(ast.parse(path.read_text(encoding="utf-8"))) == []
 
 
@@ -172,9 +157,9 @@ def test_restore_instrument_reaches_the_submit_and_the_submit_reaches_the_gatewa
         'def f(g, label):\n    g.ro_query(f"MERGE (n:{label})")\n',
         "from falkordb import FalkorDB\n",
         "from ps_service.graph_gateway.applier import apply_entries\n",
-        "def f(config):\n    return connect_from_config(config)\n",
+        "from ps_service.graph_gateway.connection import connect\n",
     ],
-    ids=["unwind_create", "merge_fstring", "driver_import", "applier_import", "connect"],
+    ids=["unwind_create", "merge_fstring", "driver_import", "applier_import", "factory"],
 )
 def test_the_scan_finds_a_planted_violation(source: str) -> None:
     assert len(scan_source(source)) >= 1

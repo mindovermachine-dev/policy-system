@@ -1,24 +1,22 @@
-"""Tests for `ps_service.export.falkordb_connection` (PLAN.md Slice 2.1)."""
+"""Tests for Export's read handle and the gateway key port's handles (PLAN.md Slice 2.1)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from ps_service.export.falkordb_connection import (
-    graph_copy_handle,
-    graph_query_handle,
-    raw_connection,
-)
+from ps_service.export.falkordb_connection import graph_query_handle
+from ps_service.graph_gateway.key_port import graph_copy_handle, raw_connection
 
 if TYPE_CHECKING:
     from falkordb import FalkorDB
 
-    # Cross-module import of these module-private Protocols is deliberate here, mirroring
-    # CHANGES.md B1's own documented convention ("ps_service.restore imports both Protocols
-    # from ps_service.export.falkordb_connection") -- this test proves the exact same shape.
+    # Cross-module import of these module-private Protocols is deliberate here: the staged-write
+    # swap imports them from the gateway's key port (#215).
     from ps_service.export.falkordb_connection import (
-        _GraphCopyHandle,  # pyright: ignore[reportPrivateUsage]
         _GraphQueryHandle,  # pyright: ignore[reportPrivateUsage]
+    )
+    from ps_service.graph_gateway.key_port import (
+        _GraphCopyHandle,  # pyright: ignore[reportPrivateUsage]
         _RawGraphConnection,  # pyright: ignore[reportPrivateUsage]
         _WatchablePipeline,  # pyright: ignore[reportPrivateUsage]
     )

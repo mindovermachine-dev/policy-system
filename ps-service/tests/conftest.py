@@ -24,6 +24,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from ingestion.live_native import live_baseline_graphs, live_native_graphs
 from persistence.provisioned_postgres import (  # pytest discovers these by name
     fresh_provisioned,
     provisioned,
@@ -107,7 +108,13 @@ def read_lines():
     return _read
 
 
-__all__ = ["fresh_provisioned", "provisioned", "provisioned_graph_log"]
+__all__ = [
+    "fresh_provisioned",
+    "live_baseline_graphs",
+    "live_native_graphs",
+    "provisioned",
+    "provisioned_graph_log",
+]
 
 
 @pytest.fixture

@@ -33,15 +33,15 @@ import pytest
 from authz._fakes import FakeAccessRoleStore
 from fastapi.testclient import TestClient
 
+from api._live_config import live_app_config
 from ps_service.api.dependencies import get_principal
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.audit.store import PsycopgAuditStore
 from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
-from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
-from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.export import catalog_writer
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.logging import facade
@@ -56,8 +56,10 @@ if TYPE_CHECKING:
 
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.config import ServiceConfig
     from ps_service.logging import LogEmitter
 
 # Captured at import time, before the autouse `_isolate_logging` fixture strips them.
@@ -66,6 +68,7 @@ _EMBED_MODEL = os.environ.get("PS_LLMINTERFACE_EMBED_MODEL")
 
 pytestmark = [
     pytest.mark.falkordb_live,
+    pytest.mark.postgres_live,
     pytest.mark.llm_live,
     pytest.mark.skipif(
         not _CHAT_MODEL or not _EMBED_MODEL,
@@ -115,8 +118,10 @@ def _governance_state(graph: GraphHandle) -> dict[str, object]:
 
 
 @pytest.fixture
-def ingest_env(tmp_path: Path) -> Iterator[tuple[TestClient, FalkorDB, str]]:
-    """A real app over a disposable single-tenant graph; yields the client, db and graph name."""
+def ingest_env(
+    tmp_path: Path, provisioned_graph_log: Provisioned
+) -> Iterator[tuple[TestClient, FalkorDB, str, ServiceConfig]]:
+    """A real app over a disposable single-tenant graph; yields client, db, graph and config."""
     assert _CHAT_MODEL is not None  # narrowed by the module skipif
     assert _EMBED_MODEL is not None
     token = uuid.uuid4().hex[:12]
@@ -128,7 +133,10 @@ def ingest_env(tmp_path: Path) -> Iterator[tuple[TestClient, FalkorDB, str]]:
     if not os.environ.get("PS_COMPANYMERGE_SIMILARITY_THRESHOLD"):
         monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.85")
     monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)
-    db = connect_from_config(load_config())
+    # Built after the env above is set: layers the provisioned state Postgres (graph log and audit
+    # trail) and the local-test auth bypass over `load_config()`.
+    config = live_app_config(provisioned_graph_log)
+    db = connect_from_config(config)
     scratch = (
         graph_name,
         native_graph_name(_SHORT_NAME),
@@ -138,14 +146,16 @@ def ingest_env(tmp_path: Path) -> Iterator[tuple[TestClient, FalkorDB, str]]:
         if name in db.list_graphs():
             db.select_graph(name).delete()
     facade.configure(log_path=tmp_path / "ingest.jsonl")
-    app = create_app(load_config())
+    app = create_app(config)
     app.dependency_overrides[get_principal] = lambda: Principal(sub=_OWNER[0], iss=_OWNER[1])
     # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
     # entered, so the app lifespan never installs it: install the real one the way a deployed
     # service does. Not run in the implementation sandbox.
-    install_graph_write_gateway(build_default_graph_write_gateway(load_config()))
+    gateway = build_default_graph_write_gateway(config)
+    install_graph_write_gateway(gateway)
+    app.state.graph_write_gateway = gateway  # the internal route is handed it from app state
     try:
-        yield TestClient(app, raise_server_exceptions=False), db, graph_name
+        yield TestClient(app, raise_server_exceptions=False), db, graph_name, config
     finally:
         install_graph_write_gateway(None)
         monkeypatch.undo()
@@ -156,14 +166,15 @@ def ingest_env(tmp_path: Path) -> Iterator[tuple[TestClient, FalkorDB, str]]:
         facade._atexit_registered = saved_atexit_registered  # pyright: ignore[reportPrivateUsage]
 
 
-def _restore_into(db: FalkorDB, graph_name: str, emitter: LogEmitter) -> None:
+def _restore_into(
+    db: FalkorDB, graph_name: str, emitter: LogEmitter, config: ServiceConfig
+) -> None:
     """Restore the shipped curated `ENGPRAC-1.0` artifact into the scratch graph `graph_name`."""
     short_name = f"ENGPRAC_P{uuid.uuid4().hex[:8]}"
     manifest = replace(catalog_writer.read_manifest(_INSTRUMENT_DIR), short_name=short_name)
     # The restore writes through the real gateway, its groups anchored to a real
     # `instrument.restore` audit row (the graph log's audit link is a foreign key into
     # `audit_events`). Not run in the implementation sandbox.
-    config = load_config()
     audit_event_id = PsycopgAuditStore(config).record_standalone_with_event_id(
         actor_subject=_OWNER[0],
         actor_issuer=_OWNER[1],
@@ -192,10 +203,10 @@ def _restore_into(db: FalkorDB, graph_name: str, emitter: LogEmitter) -> None:
 
 
 def test_ingest_imports_the_tree_as_caller_owned_drafts(
-    ingest_env: tuple[TestClient, FalkorDB, str],
+    ingest_env: tuple[TestClient, FalkorDB, str, ServiceConfig],
 ) -> None:
     """AC-BI-002/003/004: 200, all stages succeeded, 11/21/39 drafts owned by the caller."""
-    client, db, graph_name = ingest_env
+    client, db, graph_name, _config = ingest_env
 
     response = client.post("/ingestions", json={"source": "internal", "content": _SEED})
 
@@ -223,10 +234,10 @@ def test_ingest_imports_the_tree_as_caller_owned_drafts(
 
 
 def test_ingest_and_restore_produce_the_same_governance_tree(
-    ingest_env: tuple[TestClient, FalkorDB, str], make_emitter: MakeEmitter
+    ingest_env: tuple[TestClient, FalkorDB, str, ServiceConfig], make_emitter: MakeEmitter
 ) -> None:
     """AC-BI-005: one shared write function, so ingest and restore agree node for node."""
-    client, db, graph_name = ingest_env
+    client, db, graph_name, config = ingest_env
     restored_graph_name = f"policy_system_gh227_restore_{uuid.uuid4().hex[:8]}"
     emitter, _log_path = make_emitter()
     try:
@@ -234,7 +245,7 @@ def test_ingest_and_restore_produce_the_same_governance_tree(
             client.post("/ingestions", json={"source": "internal", "content": _SEED}).status_code
             == 200
         )
-        _restore_into(db, restored_graph_name, emitter)
+        _restore_into(db, restored_graph_name, emitter, config)
 
         assert _governance_state(select_graph(db, graph_name)) == _governance_state(
             select_graph(db, restored_graph_name)
@@ -245,10 +256,10 @@ def test_ingest_and_restore_produce_the_same_governance_tree(
 
 
 def test_reingest_after_approval_leaves_the_approved_tree_untouched(
-    ingest_env: tuple[TestClient, FalkorDB, str],
+    ingest_env: tuple[TestClient, FalkorDB, str, ServiceConfig],
 ) -> None:
     """AC-BI-006: a second ingest changes neither the approved tree, its owner, nor any count."""
-    client, db, graph_name = ingest_env
+    client, db, graph_name, config = ingest_env
     assert (
         client.post("/ingestions", json={"source": "internal", "content": _SEED}).status_code == 200
     )
@@ -266,7 +277,6 @@ def test_reingest_after_approval_leaves_the_approved_tree_untouched(
     # The lifecycle writes through the real gateway, and its `applied` rows are real audit rows
     # (the graph log's audit link is a foreign key into `audit_events`). Not run in the
     # implementation sandbox.
-    config = load_config()
     audit = PsycopgAuditStore(config)
     submitter = lifecycle_submitter(build_default_graph_write_gateway(config))
     propose_policy(

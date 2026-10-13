@@ -63,31 +63,38 @@ import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 from fastapi.testclient import TestClient
 from litellm.types.utils import Embedding, EmbeddingResponse
 
-from ps_service.api.dependencies import provide_export_dependencies, provide_pipeline_dependencies
+from api._fakes import install_compliance_officer_grant
+from api._live_config import live_app_config
+from ps_service.api.dependencies import (
+    get_principal,
+    provide_export_dependencies,
+    provide_pipeline_dependencies,
+)
 from ps_service.api.export_orchestration import build_default_export_dependencies
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import build_default_pipeline_dependencies
-from ps_service.company_merge.falkordb_client import connect_from_config
-from ps_service.config import load_config
+from ps_service.auth.models import Principal
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.serialize import parse_serialized_graph_json
+from ps_service.graph_gateway.connection import connect_from_config
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.logging import facade
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
     from ps_service.api.export_orchestration import ExportDependencies
     from ps_service.api.ingestion_orchestration import PipelineDependencies
@@ -109,7 +116,7 @@ _EXPORTS_ENDPOINT = "/exports"
 
 _CRA_CELEX = "32024R2847"
 _CRA_INSTRUMENT_ID = "CRA-1.0"
-_CRA_REQUEST: dict[str, str] = {"source": "catalog", "celex": _CRA_CELEX}
+_CRA_REQUEST: dict[str, str] = {"source": "catalog", "celex": _CRA_CELEX, "short_name": "CRA"}
 _CRA_BASELINE_GRAPH = "cra_baseline"
 _CRA_NATIVE_GRAPH = "cra_native"
 
@@ -118,6 +125,20 @@ _ENGPRAC_BASELINE_GRAPH = "engprac_baseline"
 _ENGPRAC_NATIVE_GRAPH = "engprac_native"
 
 _INTERNAL_DEPTH_LABELS = {"Policy", "Standard", "Control"}
+_ENGPRAC_SEED_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "internal-sources"
+    / "engineering-practices"
+    / "engineering-practices-seed.json"
+)
+# The instrument graph pairs this module creates (their names derive from the exported ids). It
+# deletes only the ones that did not exist when it started, so a developer's own are never touched.
+_INSTRUMENT_GRAPHS = (
+    _CRA_BASELINE_GRAPH,
+    _CRA_NATIVE_GRAPH,
+    _ENGPRAC_BASELINE_GRAPH,
+    _ENGPRAC_NATIVE_GRAPH,
+)
 
 pytestmark = [
     pytest.mark.falkordb_live,
@@ -244,7 +265,9 @@ class _CapstoneData:
 
 
 @pytest.fixture(scope="module")
-def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData]:
+def capstone(
+    tmp_path_factory: pytest.TempPathFactory, provisioned_graph_log: Provisioned
+) -> Iterator[_CapstoneData]:
     """Ingest CRA (bounded), then export both CRA and ENGPRAC over the real HTTP route.
 
     The Domain Mapper stages and the export route both emit through the
@@ -265,25 +288,35 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
     monkeypatch = pytest.MonkeyPatch()
     saved_atexit_registered = facade._atexit_registered  # pyright: ignore[reportPrivateUsage]
 
-    config = load_config()
-    db = connect_from_config(config)
-
     monkeypatch.setenv("PS_LLMINTERFACE_MODEL", _CHAT_MODEL)
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", _EMBED_MODEL)
     if not os.environ.get("PS_COMPANYMERGE_SIMILARITY_THRESHOLD"):
         monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.85")
     monkeypatch.setenv("PS_FALKORDB_GRAPH", _DISPOSABLE_GRAPH)
 
+    # Built after the env above is set: layers the provisioned state Postgres (graph log and audit
+    # trail) and the local-test auth bypass over `load_config()`.
+    config = live_app_config(provisioned_graph_log)
+    db = connect_from_config(config)
+    preexisting_graphs = set(db.list_graphs())
+
     _delete_graph_if_exists(db, _DISPOSABLE_GRAPH)
     log_path = tmp_path_factory.mktemp("export_capstone") / "capstone.jsonl"
     facade.configure(log_path=log_path)
 
-    app = create_app(load_config())
+    install_compliance_officer_grant(monkeypatch, granted=True)  # the routes are role-gated
+    app = create_app(config)
     # The ingestion pre-step and both exports write through the Graph Write Gateway (#208-#213).
     # `TestClient` is not entered, so the app lifespan never installs it: install the real one
     # (PS state Postgres and FalkorDB) the way a deployed service does. Not run in the sandbox.
-    install_graph_write_gateway(build_default_graph_write_gateway(load_config()))
+    gateway = build_default_graph_write_gateway(config)
+    install_graph_write_gateway(gateway)
+    app.state.graph_write_gateway = gateway  # the internal route is handed it from app state
     app.dependency_overrides[provide_pipeline_dependencies] = _limited_pipeline_dependencies
+    # Issue #227: the Policy-bearing seed needs a verified caller, who then owns the draft tree.
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        sub="capstone-owner", iss="https://idp.example"
+    )
     app.dependency_overrides[provide_export_dependencies] = _fake_export_dependencies
 
     try:
@@ -294,6 +327,19 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
             message = (
                 f"CRA ingestion POST returned {ingestion_response.status_code}: "
                 f"{ingestion_response.text}"
+            )
+            pytest.fail(message)
+
+        # The internal half's instrument is seeded here too, so the export never depends on
+        # permanently hand-seeded `engprac_*` graphs.
+        engprac_seed = json.loads(_ENGPRAC_SEED_PATH.read_text(encoding="utf-8"))
+        engprac_ingestion = client.post(
+            _INGESTIONS_ENDPOINT, json={"source": "internal", "content": engprac_seed}
+        )
+        if engprac_ingestion.status_code != 200:
+            message = (
+                f"ENGPRAC ingestion POST returned {engprac_ingestion.status_code}: "
+                f"{engprac_ingestion.text}"
             )
             pytest.fail(message)
 
@@ -325,8 +371,10 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
     finally:
         install_graph_write_gateway(None)
         monkeypatch.undo()
-        with contextlib.suppress(Exception):
-            db.select_graph(_DISPOSABLE_GRAPH).delete()
+        for graph_name in (_DISPOSABLE_GRAPH, *_INSTRUMENT_GRAPHS):
+            if graph_name not in preexisting_graphs:
+                with contextlib.suppress(Exception):
+                    db.select_graph(graph_name).delete()
         facade.reset_for_tests()
         facade._atexit_registered = saved_atexit_registered  # pyright: ignore[reportPrivateUsage]
 

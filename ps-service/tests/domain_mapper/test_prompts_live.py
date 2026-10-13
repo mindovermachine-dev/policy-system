@@ -25,24 +25,26 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.config import load_config
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.domain_mapper.extraction import (
     _build_extraction_messages,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
 )
-from ps_service.domain_mapper.falkordb_client import (
-    connect_from_config,
-    native_graph_name,
-    select_graph,
-)
+from ps_service.domain_mapper.falkordb_client import native_graph_name
 from ps_service.domain_mapper.prompts import parse_extraction_response
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.llm_interface.completion import route_completion
 
 if TYPE_CHECKING:
     from domain_mapper._fakes import MakeEmitter
+    from ps_service.config import ServiceConfig
 
-pytestmark = [pytest.mark.llm_live, pytest.mark.falkordb_live]
+pytestmark = [
+    pytest.mark.llm_live,
+    pytest.mark.falkordb_live,
+    pytest.mark.postgres_live,
+    pytest.mark.cellar_live,
+]
 
 # Captured at module-import time (collection), before tests/conftest.py's autouse
 # `_isolate_logging` fixture runs `monkeypatch.delenv("PS_LLMINTERFACE_MODEL", ...)`
@@ -61,14 +63,14 @@ _LLM_INTERFACE_MODEL = os.environ.get("PS_LLMINTERFACE_MODEL")
 )
 def test_extraction_prompt_yields_multiple_duties_from_real_cra_annex_i(
     make_emitter: MakeEmitter,
+    live_native_graphs: ServiceConfig,
 ) -> None:
     assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
     model = _LLM_INTERFACE_MODEL
 
-    # load_config() still resolves falkordb_host/port correctly here -- only
-    # PS_LLMINTERFACE_MODEL/PS_LLMINTERFACE_EMBED_MODEL are stripped by the
-    # autouse fixture, not PS_FALKORDB_HOST/PORT (mirrors test_live_capstone.py).
-    config = load_config()
+    # The CRA native graph is ingested fresh from Cellar by `live_native_graphs`, which yields the
+    # config that reaches the scratch stores (mirrors test_live_capstone.py).
+    config = live_native_graphs
     db = connect_from_config(config)
     native_graph = select_graph(db, native_graph_name("CRA"))
 

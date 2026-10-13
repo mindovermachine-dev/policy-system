@@ -36,6 +36,12 @@ ALLOWED_LOG_FIELDS = frozenset(
         "hold_seconds",
         "leg_count",
         "swap_set_id",
+        "checkpoint_digest",
+        "live_digest",
+        "reason",
+        "graph_count",
+        "drift_count",
+        "interval_seconds",
     }
 )
 """The only `extra` keys a gateway log entry may carry."""
@@ -47,8 +53,12 @@ def emit_gateway_event(
     fields: dict[str, str | int | float],
     *,
     emitter: LogEmitter | None,
+    duration_ms: float | None = None,
 ) -> None:
-    """Log one `action` entry of the gateway; `fields` must be a subset of `ALLOWED_LOG_FIELDS`."""
+    """Log one `action` entry of the gateway; `fields` must be a subset of `ALLOWED_LOG_FIELDS`.
+
+    `duration_ms` is the envelope's standard duration field, for an entry that times a pass.
+    """
     unexpected = set(fields) - ALLOWED_LOG_FIELDS
     if unexpected:
         message = f"gateway log fields not allowed: {sorted(unexpected)}"
@@ -59,5 +69,6 @@ def emit_gateway_event(
             action=action,
             outcome=outcome,
             extra=dict(fields),
+            duration_ms=duration_ms,
             emitter=emitter,
         )

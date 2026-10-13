@@ -28,6 +28,7 @@ _DEFAULT_STATE_POSTGRES_PORT = 5432
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB (CHANGES.md OQ7)
 _DEFAULT_QUERY_TIMEOUT_MS = 5000
 _DEFAULT_QUERY_ROW_CAP = 1000
+_DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS = 3600
 _DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT = 1
 # D-DEFAULT-URL (issue #125, AC-BI-001): this repo's own public GitHub remote,
 # `raw.githubusercontent.com`-served, at the default branch's `curated-content/`
@@ -176,6 +177,7 @@ class ServiceConfig:
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
     query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
     query_row_cap: int = _DEFAULT_QUERY_ROW_CAP
+    graph_drift_check_interval_seconds: int = _DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS
     ingestion_runs_max_in_flight: int = _DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT
     auth_issuer: str | None = None
     auth_audience: str | None = None
@@ -380,6 +382,26 @@ def _parse_query_row_cap(raw: str) -> int:
         message = f"PS_QUERY_ROW_CAP must be positive, got {query_row_cap}"
         raise ServiceConfigurationError(message)
     return query_row_cap
+
+
+def _parse_graph_drift_check_interval_seconds(raw: str) -> int:
+    """Parse `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS`, failing closed on any bad value.
+
+    The pause between two passes of the Graph Write Gateway's drift check (issue #215). Zero is
+    valid and turns the periodic check off; a negative or non-integer value is refused. Never
+    required: the default is one hour.
+    """
+    try:
+        interval = int(raw)
+    except ValueError as exc:
+        message = f"PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if interval < 0:
+        message = (
+            f"PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS must not be negative, got {interval}"
+        )
+        raise ServiceConfigurationError(message)
+    return interval
 
 
 def _parse_ingestion_runs_max_in_flight(raw: str) -> int:
@@ -859,6 +881,12 @@ def load_config() -> ServiceConfig:
         max_request_body_bytes=max_request_body_bytes,
         query_timeout_ms=query_timeout_ms,
         query_row_cap=query_row_cap,
+        graph_drift_check_interval_seconds=_parse_graph_drift_check_interval_seconds(
+            os.environ.get(
+                "PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS",
+                str(_DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS),
+            )
+        ),
         ingestion_runs_max_in_flight=_parse_ingestion_runs_max_in_flight(
             os.environ.get(
                 "PS_INGESTIONRUNS_MAX_IN_FLIGHT", str(_DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT)

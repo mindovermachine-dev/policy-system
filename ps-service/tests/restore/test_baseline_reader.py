@@ -8,8 +8,11 @@ answers its fixed queries.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from company_merge._seed_merge_graphs import BaselineGraphReader
+from graph_gateway._fakes import InMemoryGraph
 
 from ps_service.company_merge import graph_reader
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
@@ -18,7 +21,25 @@ from ps_service.restore.baseline_reader import (
     UnansweredBaselineQueryError,
 )
 from restore._curated import CURATED_IDS, load_curated
-from restore._spike_builders import in_memory_graph
+
+
+def in_memory_graph(serialized: SerializedGraph) -> InMemoryGraph:
+    graph = InMemoryGraph()
+    for node in serialized.nodes:
+        properties = dict(node.properties)
+        node_id = cast("str", properties.pop("id"))
+        graph.nodes[(node.label, node_id)] = cast("dict[str, object]", properties)
+    for edge in serialized.edges:
+        key = (
+            edge.relationship_type,
+            edge.source_label,
+            edge.source_id,
+            edge.target_label,
+            edge.target_id,
+            "",
+        )
+        graph.edges[key] = dict(edge.properties)
+    return graph
 
 
 def _node(label: str, node_id: str, **properties: object) -> SerializedNode:

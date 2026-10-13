@@ -23,13 +23,13 @@ from ps_service.api.ingestion_orchestration import (
     _is_already_merged,  # pyright: ignore[reportPrivateUsage] -- the real preflight query under test
     check_short_name_collision,
 )
-from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
+from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from ps_service.api.ingestion_orchestration import GraphHandle as OrchestrationGraphHandle
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 pytestmark = pytest.mark.falkordb_live
 

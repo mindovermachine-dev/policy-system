@@ -1,5 +1,5 @@
 """Round-trip proof: `serialize_graph` -> `to_json_bytes` -> `parse_serialized_graph_json`
--> `stage_graph` -> `serialize_graph` reconstructs an equivalent graph (CHANGES2.md §3.5).
+-> a test-side populate -> `serialize_graph` reconstructs an equivalent graph (CHANGES2.md §3.5).
 
 Supersedes `test_dump_roundtrip_live.py` (PLAN.md Slice 2.4, permanently
 `xfail` -- its premise, `DUMP`+`RESTORE` round-tripping, is permanently
@@ -22,15 +22,29 @@ from ps_service.export.serialize import (
     serialize_graph,
     to_json_bytes,
 )
-from ps_service.restore.staging import stage_graph
 
 if TYPE_CHECKING:
     from falkordb import FalkorDB
 
-    from ps_service.export.models import SerializedEdge, SerializedNode
+    from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 
-_ALLOWED_LABELS = frozenset({"RegulatoryInstrument", "TITLE", "ARTICLE"})
-_ALLOWED_RELATIONSHIP_TYPES = frozenset({"HAS"})
+
+def _populate(db: FalkorDB, name: str, graph: SerializedGraph) -> None:
+    """Rebuild `graph` in the key `name` with the test's own writable handle (labels are fixed)."""
+    target = db.select_graph(name)
+    for node in graph.nodes:
+        target.query(f"CREATE (n:{node.label}) SET n = $props", {"props": dict(node.properties)})
+    for edge in graph.edges:
+        target.query(
+            f"MATCH (a:{edge.source_label} {{id: $source}}), "
+            f"(b:{edge.target_label} {{id: $target}}) "
+            f"CREATE (a)-[e:{edge.relationship_type}]->(b) SET e = $props",
+            {
+                "source": edge.source_id,
+                "target": edge.target_id,
+                "props": dict(edge.properties),
+            },
+        )
 
 
 def _sort_key_for_nodes(node: SerializedNode) -> tuple[str, str]:
@@ -80,13 +94,8 @@ def test_serialize_to_json_parse_stage_serialize_reconstructs_an_equivalent_grap
             original.edges, key=_sort_key_for_edges
         )
 
-        staged_name = stage_graph(
-            live_falkordb,
-            parsed,
-            staged_key_name,
-            allowed_labels=_ALLOWED_LABELS,
-            allowed_relationship_types=_ALLOWED_RELATIONSHIP_TYPES,
-        )
+        _populate(live_falkordb, staged_key_name, parsed)
+        staged_name = staged_key_name
         try:
             restored = serialize_graph(graph_query_handle(live_falkordb, staged_name))
 

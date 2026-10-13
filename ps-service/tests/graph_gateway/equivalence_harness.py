@@ -40,7 +40,7 @@ from ps_service.graph_gateway.models import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 _AUDIT_EVENT_ID = "3f2b8c1e-5d4a-4b7e-9a61-0c2d7e8f9a10"
 _GRAPH = "equivalence"

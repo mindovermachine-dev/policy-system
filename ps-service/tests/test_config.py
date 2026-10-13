@@ -839,3 +839,34 @@ def test_load_config_ignores_retired_env_var_names_for_the_state_store(
     config = load_config()
 
     assert config.state_postgres_host is None
+
+
+def test_load_config_with_no_drift_check_interval_set_defaults_to_one_hour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS` -> 3600 (issue #215, AC-BI-007)."""
+    monkeypatch.delenv("PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS", raising=False)
+
+    assert load_config().graph_drift_check_interval_seconds == 3600
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0", 0), ("60", 60), ("86400", 86400)])
+def test_load_config_honors_the_drift_check_interval_override_and_zero_disables(
+    raw: str, expected: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The interval is configurable; `0` is a valid value (the monitor is then off)."""
+    monkeypatch.setenv("PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS", raw)
+
+    assert load_config().graph_drift_check_interval_seconds == expected
+
+
+@pytest.mark.parametrize("invalid", ["not-a-number", "-1", "1.5", ""])
+def test_load_config_fails_closed_naming_the_variable_for_an_invalid_drift_check_interval(
+    invalid: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS", invalid)
+
+    with pytest.raises(
+        ServiceConfigurationError, match="PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS"
+    ):
+        load_config()

@@ -241,8 +241,13 @@ def _submit_baseline_group(
     baseline_graph_name: str,
     audit_event_id: str,
     primitives: tuple[Primitive, ...],
+    *,
+    checkpoint_requested: bool = False,
 ) -> None:
     """Stamp the graph's legacy edges, submit `primitives` as one group, require it applied.
+
+    `checkpoint_requested` asks the gateway to record the graph's digest once the group is
+    applied; only the derivation group, the last one the Domain Mapper writes, sets it.
 
     Stamping runs after the caller's pre-flight validation and building (a rejected request
     writes and logs nothing) and before the first group. `require_caught_up` is mandatory: the
@@ -254,7 +259,10 @@ def _submit_baseline_group(
             applied.
     """
     group = MutationGroup(
-        graph=baseline_graph_name, audit_event_id=audit_event_id, primitives=primitives
+        graph=baseline_graph_name,
+        audit_event_id=audit_event_id,
+        primitives=primitives,
+        checkpoint_requested=checkpoint_requested,
     )
     stamp_legacy_edges_before_first_write(
         submitter, baseline_graph_name, audit_event_id, DomainMapperPersistenceError
@@ -438,4 +446,10 @@ def persist_obligation_and_capability_graph(  # noqa: PLR0913 -- the gateway tri
         return
     require_caught_up(submitter, baseline_graph_name, DomainMapperPersistenceError)
     kept_edges = _drop_edges_with_missing_endpoints(graph, nodes, edges)
-    _submit_baseline_group(submitter, baseline_graph_name, audit_event_id, (*nodes, *kept_edges))
+    _submit_baseline_group(
+        submitter,
+        baseline_graph_name,
+        audit_event_id,
+        (*nodes, *kept_edges),
+        checkpoint_requested=True,
+    )

@@ -18,7 +18,7 @@ from ps_service.graph_gateway.errors import UnexpectedGraphReplyError
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph
 
 _REPLY_MESSAGE = "the graph answered an index listing with an unexpected shape"
 _ALREADY_INDEXED = "already indexed"
@@ -35,7 +35,7 @@ class IdIndexes:
     creations established and list nothing again, so a replay of many pages lists once.
     """
 
-    def __init__(self, graph: GraphHandle) -> None:
+    def __init__(self, graph: WritableGraph) -> None:
         """Start without a listing; nothing is queried until the first `ensure`."""
         self._graph = graph
         self._indexed: set[str] | None = None
@@ -57,12 +57,12 @@ class IdIndexes:
                 self._indexed.add(label)
 
 
-def ensure_id_indexes(graph: GraphHandle, labels: Iterable[str]) -> None:
+def ensure_id_indexes(graph: WritableGraph, labels: Iterable[str]) -> None:
     """Create an index on `id` for each of `labels` that does not have one yet (one pass)."""
     IdIndexes(graph).ensure(labels)
 
 
-def _labels_indexed_on_id(graph: GraphHandle) -> set[str]:
+def _labels_indexed_on_id(graph: WritableGraph) -> set[str]:
     """Return the node labels that already have an index on `id`."""
     indexed: set[str] = set()
     for row in graph.query(LIST_INDEXES).result_set:
@@ -85,7 +85,7 @@ def _is_node_index(columns: list[object]) -> bool:
     return len(columns) <= _ENTITY_COLUMN or columns[_ENTITY_COLUMN] == _NODE_ENTITY
 
 
-def _create_index(graph: GraphHandle, label: str) -> None:
+def _create_index(graph: WritableGraph, label: str) -> None:
     """Index `id` on `label`; "already indexed" means another writer got there first."""
     try:
         graph.query(create_index_query(label))

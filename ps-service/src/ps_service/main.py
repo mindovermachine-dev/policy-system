@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from importlib.metadata import version as installed_version
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 import uvicorn
 from fastapi import FastAPI, status
@@ -395,8 +395,18 @@ class _StartupGateway(Protocol):
     def stop_reconciler(self, timeout: float) -> bool: ...
 
 
+@runtime_checkable
+class _DriftMonitored(Protocol):
+    """What the lifespan needs of a gateway that checks its graphs for drift (issue #215)."""
+
+    def start_drift_monitor(self, interval_seconds: float) -> bool: ...
+
+    def stop_drift_monitor(self, timeout: float) -> bool: ...
+
+
 _RECONCILER_STOP_TIMEOUT_SECONDS = 5.0
 _REPLAY_STOP_TIMEOUT_SECONDS = 5.0
+_DRIFT_MONITOR_STOP_TIMEOUT_SECONDS = 5.0
 
 
 async def _start_graph_replay_at_startup(
@@ -427,11 +437,17 @@ async def _start_graph_replay_at_startup(
     mark_unhealthy(
         GRAPH_REPLAY, error=RuntimeError("the startup replay of the graph log is running")
     )
-    return gateway, asyncio.create_task(_run_startup_replay(gateway))
+    return gateway, asyncio.create_task(
+        _run_startup_replay(gateway, config.graph_drift_check_interval_seconds)
+    )
 
 
-async def _run_startup_replay(gateway: _StartupGateway) -> None:
+async def _run_startup_replay(gateway: _StartupGateway, drift_interval_seconds: int = 0) -> None:
     """Run the startup replay on a worker thread; mark `graph_replay` healthy once it has ended.
+
+    When the replay ended, a gateway that checks for drift starts its periodic check (issue #215):
+    never earlier, so no graph is compared with its checkpoint while it is being rebuilt. A replay
+    that failed starts no check.
 
     Ending includes graphs that stay closed because their own replay failed: the others are
     unaffected and `/ready` goes green (the failure is logged and the graph refuses writes with a
@@ -444,6 +460,7 @@ async def _run_startup_replay(gateway: _StartupGateway) -> None:
         _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
         return
     mark_healthy(GRAPH_REPLAY)
+    _start_drift_monitor(gateway, drift_interval_seconds)
     _log_graph_gateway_startup_replay(
         "warning" if report.gated else "success",
         {
@@ -453,6 +470,16 @@ async def _run_startup_replay(gateway: _StartupGateway) -> None:
             "gated_graphs": len(report.gated),
         },
     )
+
+
+def _start_drift_monitor(gateway: _StartupGateway, interval_seconds: int) -> None:
+    """Start the gateway's periodic drift check, if it has one; a failure is logged only."""
+    if not isinstance(gateway, _DriftMonitored):
+        return
+    try:
+        gateway.start_drift_monitor(interval_seconds)
+    except Exception as exc:  # noqa: BLE001 - the drift check is internal; it must never break startup
+        _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
 
 
 def _log_graph_gateway_startup_replay(outcome: str, extra: dict[str, object]) -> None:
@@ -482,10 +509,21 @@ async def _stop_graph_replay(
 async def _shutdown_graph_gateway(
     gateway: _StartupGateway | None, replay_task: asyncio.Task[None] | None
 ) -> None:
-    """Stop the startup replay first (it holds the graphs), then the background reconciler."""
+    """Stop the drift check and the startup replay (it holds the graphs), then the reconciler."""
     install_graph_write_gateway(None)
+    await _stop_drift_monitor(gateway)
     await _stop_graph_replay(gateway, replay_task)
     await _stop_graph_gateway_reconciler(gateway)
+
+
+async def _stop_drift_monitor(gateway: _StartupGateway | None) -> None:
+    """Stop the gateway's periodic drift check at shutdown; never raises, never waits long."""
+    if not isinstance(gateway, _DriftMonitored):
+        return
+    try:
+        await run_in_threadpool(gateway.stop_drift_monitor, _DRIFT_MONITOR_STOP_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001 - shutdown must go on whatever the drift check does
+        _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
 
 
 async def _stop_graph_gateway_reconciler(gateway: _StartupGateway | None) -> None:

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from graph_gateway._fakes import InMemoryGraphLogStore
+from ps_service.graph_gateway.connection import select_graph
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.models import (
@@ -26,7 +27,6 @@ from ps_service.graph_gateway.models import (
     UpsertEdge,
     UpsertNode,
 )
-from ps_service.ingestion.falkordb_client import select_graph
 
 if TYPE_CHECKING:
     from graph_gateway.live_graphs import LiveGraph, LiveGraphs

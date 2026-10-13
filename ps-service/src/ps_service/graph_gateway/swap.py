@@ -28,12 +28,12 @@ if TYPE_CHECKING:
     import uuid
     from collections.abc import Callable, Sequence
 
+    from ps_service.graph_gateway.connection import WritableGraph
     from ps_service.graph_gateway.gateway import GatewaySettings
     from ps_service.graph_gateway.models import GraphLogEntry, SwapGroupRef
     from ps_service.graph_gateway.retry import GraphCallGuard
     from ps_service.graph_gateway.store import GraphLogStore
     from ps_service.graph_gateway.swap_port import GraphKeyPort, KeySwapper
-    from ps_service.ingestion.falkordb_client import GraphHandle
     from ps_service.logging import LogEmitter
 
 STAGED_KEY_MARKER = "__swap__"
@@ -57,7 +57,7 @@ class SwapApplier:
         self,
         *,
         log_store: GraphLogStore,
-        graph_opener: Callable[[str], GraphHandle],
+        graph_opener: Callable[[str], WritableGraph],
         key_port: GraphKeyPort,
         settings: GatewaySettings,
         guard: GraphCallGuard,

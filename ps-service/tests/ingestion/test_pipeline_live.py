@@ -4,12 +4,12 @@
 Cellar/ELI service (`publications.europa.eu`) and a real, reachable
 FalkorDB instance.
 
-`@pytest.mark.cellar_live @pytest.mark.falkordb_live` on every test in this
-module (via `pytestmark`): these tests make real network calls and write
+`@pytest.mark.cellar_live @pytest.mark.falkordb_live @pytest.mark.postgres_live` on every test
+in this module (via `pytestmark`): these tests make real network calls and write
 real data to FalkorDB — they are excluded from the fast regression suite
 (`-m "not cellar_live and not falkordb_live"`) and must be run explicitly.
 
-Connection is built via `connect_from_config(load_config())` (Increment 12,
+Connection is built via `connect_from_config(<provisioned state config>)` (Increment 12,
 S4 fix) — never hardcoded `"127.0.0.1"`/`6379` literals — proving the
 config surface Increment 7 added is genuinely load-bearing.
 
@@ -39,26 +39,23 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.config import load_config
+from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.ingestion.adapters.cellar_eli import CellarEliAdapter
-from ps_service.ingestion.falkordb_client import (
-    GraphHandle,
-    check_connectivity,
-    connect_from_config,
-    native_graph_name,
-    select_graph,
-)
+from ps_service.ingestion.falkordb_client import check_connectivity, native_graph_name
 from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import EmitterConfig, LogEmitter
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from persistence.provisioned_postgres import Provisioned
+
     from ps_service.ingestion.models import IngestResult
 
-pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live]
+pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
 _VERSION = "1.0"
 
@@ -104,7 +101,9 @@ class _LiveRun:
 
 
 @pytest.fixture(scope="module")
-def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
+def live_runs(
+    tmp_path_factory: pytest.TempPathFactory, provisioned_graph_log: Provisioned
+) -> dict[str, _LiveRun]:
     """Ingest CRA, NIS2, and GDPR for real, once, sharing the cost across
     every `test_ac_0*` function below.
 
@@ -112,7 +111,9 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
     graphs first (from a previous partial run), so this is a clean,
     reproducible run — local dev FalkorDB data, safe to reset.
     """
-    config = load_config()
+    # The state Postgres (graph log + audit trail) is the provisioned scratch cluster's `ps_state`
+    # role: the gateway-only write path (issue #208) needs it, and it must not be ambient env.
+    config = provisioned_graph_log.state_config()
     db = connect_from_config(config)
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)
 

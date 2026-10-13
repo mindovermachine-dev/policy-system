@@ -21,30 +21,18 @@ The guard is itself guarded: planted violations must be found, and prose must no
 
 from __future__ import annotations
 
-import ast
 import importlib
 import re
 from pathlib import Path
 
 import pytest
+from graph_gateway.write_path_scan import calls_by_function, reaches, scan_source
 
 import ps_service.graph_cleanup as graph_cleanup_package
 
 _ROOT = Path(graph_cleanup_package.__file__).parent
 _TESTS = Path(__file__).parent
 
-_QUERY_CALLS = frozenset(
-    {"query", "ro_query", "_execute_query", "_read_query", "read_rows", "query_rows"}
-)
-_CONNECTION_CALLS = frozenset({"FalkorDB", "connect", "connect_from_config", "select_graph"})
-_WRITE_CYPHER = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|DROP|DETACH|FOREACH)\b")
-_FORBIDDEN_IMPORT_PREFIXES = (
-    "falkordb",
-    "ps_service.graph_gateway.applier",
-    "ps_service.graph_gateway.cypher",
-)
-_ALLOWED_REDIS_PREFIX = "redis.exceptions"
-_FORBIDDEN_NAMES = frozenset({"apply_entries"})
 _SINK = "submit_group"
 _CLEANUP_SINK = "submit_cleanup_group"
 _WRITERS = (
@@ -69,147 +57,6 @@ _REMOVED_SYMBOLS = re.compile(
 )
 _FROZEN_REFERENCE = "_legacy_reference.py"
 _THIS_FILE = Path(__file__).name
-# `dependencies.py` opens the READ handle used by the planners and the verifier (the approved mock
-# boundary); every write goes through the gateway. Only that module may call a connection helper.
-_READ_HANDLE_OPENER = "dependencies.py"
-
-
-def _called_name(call: ast.Call) -> str | None:
-    func = call.func
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func.id
-    return None
-
-
-def _literal_text(node: ast.expr, names: dict[str, list[str]]) -> list[str]:
-    """The constant text `node` stands for (placeholders dropped); `[]` when it is not text."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return [node.value]
-    if isinstance(node, ast.JoinedStr):
-        return [
-            " ".join(
-                part.value
-                for part in node.values
-                if isinstance(part, ast.Constant) and isinstance(part.value, str)
-            )
-        ]
-    if isinstance(node, ast.Name):
-        return names.get(node.id, [])
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        if node.func.attr == "format":  # TEMPLATE.format(kind=kind): the template is the text
-            return _literal_text(node.func.value, names)
-        return []
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return [
-            f"{left} {right}"
-            for left in _literal_text(node.left, names)
-            for right in _literal_text(node.right, names)
-        ]
-    return []
-
-
-def _text_assignments(tree: ast.Module) -> dict[str, list[str]]:
-    """Every name assigned text anywhere in the module (module constants and locals), resolved."""
-    names: dict[str, list[str]] = {}
-    assignments = [
-        (target.id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name)
-    ]
-    assignments += [
-        (node.target.id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.target, ast.Name)
-        and node.value is not None
-    ]
-    for _ in range(3):  # a name built from another name resolves within a few passes
-        for name, value in assignments:
-            texts = _literal_text(value, names)
-            if texts:
-                names[name] = list({*names.get(name, []), *texts})
-    return names
-
-
-def _imported_modules(node: ast.Import | ast.ImportFrom) -> list[str]:
-    if isinstance(node, ast.Import):
-        return [alias.name for alias in node.names]
-    if node.module is None or node.level != 0:
-        return []
-    return [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
-
-
-def _call_findings(
-    node: ast.Call, names: dict[str, list[str]], *, allow_connection: bool
-) -> list[str]:
-    name = _called_name(node)
-    findings: list[str] = []
-    if name in _FORBIDDEN_NAMES or (name in _CONNECTION_CALLS and not allow_connection):
-        findings.append(f"line {node.lineno}: calls {name}")
-    if name in _QUERY_CALLS:
-        arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
-        findings += [
-            f"line {node.lineno}: write Cypher passed to {name}: {text!r}"
-            for argument in arguments
-            for text in _literal_text(argument, names)
-            if _WRITE_CYPHER.search(text)
-        ]
-    return findings
-
-
-def scan_source(source: str, *, allow_connection: bool = False) -> list[str]:
-    """Return one finding per write path in `source` (empty: the module is clean).
-
-    `allow_connection` admits the connection calls of the one read-handle opener (see
-    `_READ_HANDLE_OPENER`); write Cypher and the other forbidden names are never admitted.
-    """
-    tree = ast.parse(source)
-    names = _text_assignments(tree)
-    findings: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import | ast.ImportFrom):
-            findings += [
-                f"line {node.lineno}: imports {module}"
-                for module in _imported_modules(node)
-                if module.startswith(_FORBIDDEN_IMPORT_PREFIXES)
-                or (module.startswith("redis") and not module.startswith(_ALLOWED_REDIS_PREFIX))
-            ]
-        elif isinstance(node, ast.Call):
-            findings += _call_findings(node, names, allow_connection=allow_connection)
-    return findings
-
-
-def reaches(source: str, function: str, target: str) -> bool:
-    """Whether `function` calls `target`, directly or through same-module functions."""
-    calls = _calls_by_function(source)
-    seen: set[str] = set()
-    pending = [function]
-    while pending:
-        current = pending.pop()
-        if current in seen or current not in calls:
-            continue
-        seen.add(current)
-        if target in calls[current]:
-            return True
-        pending.extend(calls[current])
-    return False
-
-
-def _calls_by_function(source: str) -> dict[str, set[str]]:
-    return {
-        node.name: {
-            name
-            for call in ast.walk(node)
-            if isinstance(call, ast.Call)
-            if (name := _called_name(call))
-        }
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.FunctionDef)
-    }
 
 
 def _graph_cleanup_modules() -> list[Path]:
@@ -236,24 +83,13 @@ def test_the_scan_covers_the_graph_cleanup_package() -> None:
 def test_no_graph_cleanup_module_opens_a_write_connection_or_passes_write_cypher(
     path: Path,
 ) -> None:
-    allow = path.name == _READ_HANDLE_OPENER
-    assert scan_source(path.read_text(encoding="utf-8"), allow_connection=allow) == []
+    assert scan_source(path.read_text(encoding="utf-8")) == []
 
 
-def test_only_the_read_handle_opener_needs_the_connection_allowance() -> None:
-    needing = [
-        path.name
-        for path in _graph_cleanup_modules()
-        if scan_source(path.read_text(encoding="utf-8")) != []
-    ]
-
-    assert needing == [_READ_HANDLE_OPENER]
-
-
-def test_the_connection_allowance_never_admits_write_cypher() -> None:
+def test_write_cypher_is_found_even_beside_a_connection_helper_call() -> None:
     source = 'def f(g):\n    connect()\n    g.query("MERGE (n)")\n'
 
-    assert len(scan_source(source, allow_connection=True)) == 1
+    assert len(scan_source(source)) == 1
 
 
 def test_every_writer_reaches_the_cleanup_sink() -> None:
@@ -270,7 +106,7 @@ def test_the_cleanup_sink_reaches_the_gateway_sink() -> None:
 
 def test_the_executors_call_the_writers() -> None:
     executors = (_ROOT / "executors.py").read_text(encoding="utf-8")
-    calls = _calls_by_function(executors)
+    calls = calls_by_function(executors)
 
     assert [name for name in _EXECUTOR_TO_WRITER if name not in calls] == []
     called: set[str] = set()
@@ -351,8 +187,8 @@ def test_the_symbol_scan_ignores_the_lookalikes(text: str) -> None:
         "from ps_service.graph_gateway.applier import apply_entries\n",
         "from ps_service.graph_gateway import cypher\n",
         "def f(entries):\n    return apply_entries(entries)\n",
-        "def f(db):\n    return db.select_graph('x')\n",
-        "def f(config):\n    return connect_from_config(config)\n",
+        "def f():\n    return FalkorDB(host='h', port=1)\n",
+        "from ps_service.graph_gateway.connection import connect\n",
     ],
     ids=[
         "merge",
@@ -370,8 +206,8 @@ def test_the_symbol_scan_ignores_the_lookalikes(text: str) -> None:
         "applier_import",
         "cypher_import",
         "apply_entries_call",
-        "select_graph",
-        "connect",
+        "construction",
+        "write_capable_factory",
     ],
 )
 def test_the_guard_finds_a_planted_violation(source: str) -> None:

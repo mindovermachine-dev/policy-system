@@ -54,9 +54,8 @@ class InstrumentDescriptor:
     argument -- this repo's `max-args = 8` rule (root `pyproject.toml`)
     would otherwise be tripped by `export_instrument`'s full parameter list
     (descriptor fields plus `baseline_graph`/`native_graph`/`embed_model`/
-    `repo_root`/`packaged_copy_path`/`call_embedding`/`emitter`). Mirrors
-    `ps_service.restore.staging.StagedLegNames`'s own precedent for the
-    identical problem: a grouping dataclass, not a `# noqa` suppression.
+    `repo_root`/`packaged_copy_path`/`call_embedding`/`emitter`). A grouping dataclass, not a
+    `# noqa` suppression.
     """
 
     short_name: str

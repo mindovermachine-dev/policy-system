@@ -18,6 +18,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from graph_gateway.write_path_scan import iter_service_modules
+
 import ps_service
 from ps_service.domain_schema import DOMAIN_SCHEMA
 from ps_service.domain_schema.vocabulary_exceptions import (
@@ -131,7 +133,7 @@ def scan_cypher_names(source: str, filename: str) -> list[Finding]:
 def _scan_tree(root: Path) -> tuple[list[Finding], Counter[str]]:
     findings: list[Finding] = []
     dynamic: Counter[str] = Counter()
-    for path in sorted(root.rglob("*.py")):
+    for path in iter_service_modules(root):
         relative = path.relative_to(root).as_posix()
         found, sites = _scan(path.read_text(encoding="utf-8"), relative)
         allowed = {"label": _ALLOWED_LABELS, "edge": _ALLOWED_EDGES}
@@ -225,10 +227,6 @@ _DYNAMIC_SITES: dict[str, int] = {
     "export/serialize.py": 2,
     "graph_gateway/cypher.py": 5,
     "ingestion/graph_writer.py": 3,
-    "restore/populate.py": 4,
-    # The verbatim interim copy of Company Merge's pre-#210 Cypher writers (retired by #214); the
-    # ten sites moved here from company_merge/graph_writer.py, which now builds gateway primitives.
-    "restore/snapshot_merge_writer.py": 10,
 }
 
 

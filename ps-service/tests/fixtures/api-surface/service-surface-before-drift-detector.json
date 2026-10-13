@@ -1,0 +1,2155 @@
+{
+  "mcp_tools": [
+    {
+      "inputSchema": {
+        "properties": {
+          "control_type": {
+            "default": "manual",
+            "minLength": 1,
+            "type": "string"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "standard_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["standard_id", "title"],
+        "type": "object"
+      },
+      "name": "add-control-to-draft"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "policy_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["policy_id", "title"],
+        "type": "object"
+      },
+      "name": "add-standard-to-draft"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "policy_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["policy_id"],
+        "type": "object"
+      },
+      "name": "approve-policy"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "pending_approval_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["pending_approval_id"],
+        "type": "object"
+      },
+      "name": "check-cleanup-approval"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "celex_ids": {
+            "items": {
+              "maxLength": 10,
+              "minLength": 10,
+              "pattern": "^3\\d{4}[A-Z]\\d{4}$",
+              "type": "string"
+            },
+            "maxItems": 25,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": ["celex_ids"],
+        "type": "object"
+      },
+      "name": "check_instrument_ingestion_status"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "check_regulations"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "capability_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "standards": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "supersedes_policy_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": ["title"],
+        "type": "object"
+      },
+      "name": "create-policy-draft"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": ["query"],
+        "type": "object"
+      },
+      "name": "cypher"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "domain_concepts"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "min_similarity": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.5,
+                "maximum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "name": "find-capability-merge-candidates"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "role_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "name": "find-duplicate-obligations"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "get-catalog-listing"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "get-catalog-source"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "policy_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["policy_id"],
+        "type": "object"
+      },
+      "name": "get-policy"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "run_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["run_id"],
+        "type": "object"
+      },
+      "name": "get_ingestion_status"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "access_role": {
+            "enum": [
+              "SystemOwner",
+              "SystemAdmin",
+              "PolicyManager",
+              "ComplianceOfficer"
+            ],
+            "type": "string"
+          },
+          "principal_subject": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["principal_subject", "access_role"],
+        "type": "object"
+      },
+      "name": "grant-access-role"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "celex": {
+            "maxLength": 10,
+            "minLength": 10,
+            "pattern": "^3\\d{4}[A-Z]\\d{4}$",
+            "type": "string"
+          },
+          "short_name": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": ["celex", "short_name"],
+        "type": "object"
+      },
+      "name": "ingest_regulation"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "email": {
+            "minLength": 3,
+            "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+            "type": "string"
+          }
+        },
+        "required": ["email"],
+        "type": "object"
+      },
+      "name": "invite-user"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list-access-roles"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "actor_issuer": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "actor_subject": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "occurred_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "occurred_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "page_size": {
+            "default": 25,
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "integer"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "resource_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "name": "list-audit-events"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "absorbed_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "acknowledge_governance_change": {
+            "default": false,
+            "type": "boolean"
+          },
+          "survivor_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["survivor_id", "absorbed_id"],
+        "type": "object"
+      },
+      "name": "merge-capabilities"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "absorbed_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "survivor_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["survivor_id", "absorbed_id"],
+        "type": "object"
+      },
+      "name": "merge-obligations"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "pending_approval_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["pending_approval_id"],
+        "type": "object"
+      },
+      "name": "near_misses_check_approval"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "near_misses_list"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "decision": {
+            "enum": ["keep-separate", "merge"],
+            "type": "string"
+          },
+          "review_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["review_id", "decision"],
+        "type": "object"
+      },
+      "name": "near_misses_resolve"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "policy_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["policy_id"],
+        "type": "object"
+      },
+      "name": "propose-policy"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "policy_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["policy_id"],
+        "type": "object"
+      },
+      "name": "reject-policy"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "capability_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["capability_id"],
+        "type": "object"
+      },
+      "name": "release-capability-governance"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "reset-catalog-source"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "instrument_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": ["instrument_id"],
+        "type": "object"
+      },
+      "name": "restore_instrument"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "policy_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["policy_id"],
+        "type": "object"
+      },
+      "name": "revert-policy-to-draft"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "access_role": {
+            "enum": [
+              "SystemOwner",
+              "SystemAdmin",
+              "PolicyManager",
+              "ComplianceOfficer"
+            ],
+            "type": "string"
+          },
+          "principal_subject": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["principal_subject", "access_role"],
+        "type": "object"
+      },
+      "name": "revoke-access-role"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "url": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["url"],
+        "type": "object"
+      },
+      "name": "set-catalog-source"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "celex": {
+            "maxLength": 10,
+            "minLength": 10,
+            "pattern": "^3\\d{4}[A-Z]\\d{4}$",
+            "type": "string"
+          },
+          "short_name": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": ["celex", "short_name"],
+        "type": "object"
+      },
+      "name": "start_ingestion"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "merged_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["merged_id"],
+        "type": "object"
+      },
+      "name": "unmerge"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "control_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": ["control_id"],
+        "type": "object"
+      },
+      "name": "update-control-draft"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "policy_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["policy_id"],
+        "type": "object"
+      },
+      "name": "update-policy-draft"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "standard_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["standard_id"],
+        "type": "object"
+      },
+      "name": "update-standard-draft"
+    }
+  ],
+  "openapi": {
+    "components": {
+      "schemas": {
+        "CatalogIngestionRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "celex": {
+              "maxLength": 10,
+              "minLength": 10,
+              "pattern": "^3\\d{4}[A-Z]\\d{4}$",
+              "type": "string"
+            },
+            "run_id": {
+              "anyOf": [
+                {
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "short_name": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+              "type": "string"
+            },
+            "source": {
+              "const": "catalog",
+              "type": "string"
+            }
+          },
+          "required": ["source", "celex", "short_name"],
+          "type": "object"
+        },
+        "CatalogInstrumentEntry": {
+          "properties": {
+            "instrument_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "jurisdiction": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source_type": {
+              "enum": ["external", "internal"],
+              "type": "string"
+            }
+          },
+          "required": ["instrument_id", "title", "source_type"],
+          "type": "object"
+        },
+        "CatalogRestorationRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "instrument_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          },
+          "required": ["instrument_id"],
+          "type": "object"
+        },
+        "ChangeCheckResponse": {
+          "properties": {
+            "instruments": {
+              "items": {
+                "$ref": "#/components/schemas/InstrumentCheckOutcomeBody"
+              },
+              "type": "array"
+            },
+            "run_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": ["run_id", "instruments"],
+          "type": "object"
+        },
+        "CuratedCatalogResponse": {
+          "properties": {
+            "instruments": {
+              "items": {
+                "$ref": "#/components/schemas/CatalogInstrumentEntry"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["instruments"],
+          "type": "object"
+        },
+        "ExportAcceptedResponse": {
+          "properties": {
+            "baseline_blob_base64": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "instrument_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "manifest": {
+              "$ref": "#/components/schemas/ExportManifestPayload"
+            },
+            "native_blob_base64": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "stages": {
+              "items": {
+                "$ref": "#/components/schemas/ExportStageOutcome"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "instrument_id",
+            "manifest",
+            "baseline_blob_base64",
+            "native_blob_base64",
+            "stages"
+          ],
+          "type": "object"
+        },
+        "ExportManifestPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "baseline_sha256": {
+              "maxLength": 64,
+              "minLength": 64,
+              "type": "string"
+            },
+            "celex": {
+              "anyOf": [
+                {
+                  "maxLength": 10,
+                  "minLength": 10,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "exported_at": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "instrument_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "jurisdiction": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "native_sha256": {
+              "maxLength": 64,
+              "minLength": 64,
+              "type": "string"
+            },
+            "schema_version": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "short_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "source_type": {
+              "enum": ["external", "internal"],
+              "type": "string"
+            },
+            "version": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "instrument_id",
+            "title",
+            "short_name",
+            "version",
+            "source_type",
+            "schema_version",
+            "exported_at",
+            "baseline_sha256",
+            "native_sha256"
+          ],
+          "type": "object"
+        },
+        "ExportRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "instrument_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          },
+          "required": ["instrument_id"],
+          "type": "object"
+        },
+        "ExportStageOutcome": {
+          "properties": {
+            "stage": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "succeeded",
+              "type": "string"
+            }
+          },
+          "required": ["stage", "status"],
+          "type": "object"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "IngestionAcceptedResponse": {
+          "properties": {
+            "outcome": {
+              "default": "fresh",
+              "enum": ["fresh", "already_ingested"],
+              "type": "string"
+            },
+            "regulatory_instrument_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "run_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "source": {
+              "enum": ["catalog", "internal"],
+              "type": "string"
+            },
+            "stages": {
+              "items": {
+                "$ref": "#/components/schemas/StageOutcome"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "run_id",
+            "regulatory_instrument_id",
+            "source",
+            "stages"
+          ],
+          "type": "object"
+        },
+        "IngestionStatusResponse": {
+          "properties": {
+            "run_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "stage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["run_id"],
+          "type": "object"
+        },
+        "InstrumentCheckOutcomeBody": {
+          "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "instrument_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "current",
+                "amendment_reingested",
+                "poll_failed",
+                "not_configured",
+                "skipped",
+                "reingest_failed"
+              ],
+              "type": "string"
+            },
+            "reingest_run_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["instrument_id", "outcome"],
+          "type": "object"
+        },
+        "InternalIngestionRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "source": {
+              "const": "internal",
+              "type": "string"
+            }
+          },
+          "required": ["source", "content"],
+          "type": "object"
+        },
+        "PendingApprovalStatusResponse": {
+          "properties": {
+            "decision": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "loser_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pending_approval_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "review_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "enum": ["pending", "expired", "signed"],
+              "type": "string"
+            },
+            "winner_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["pending_approval_id", "status"],
+          "type": "object"
+        },
+        "PendingReviewEntry": {
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "incoming_text": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "nearest_existing_text": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "similarity": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "incoming_text",
+            "nearest_existing_text",
+            "similarity"
+          ],
+          "type": "object"
+        },
+        "PendingReviewListResponse": {
+          "properties": {
+            "reviews": {
+              "items": {
+                "$ref": "#/components/schemas/PendingReviewEntry"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["reviews"],
+          "type": "object"
+        },
+        "ProtectedResourceMetadata": {
+          "properties": {
+            "authorization_servers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "ps_cli_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resource": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "scopes_supported": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["resource", "authorization_servers", "scopes_supported"],
+          "type": "object"
+        },
+        "ResolveReviewRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "enum": ["keep-separate", "merge"],
+              "type": "string"
+            }
+          },
+          "required": ["decision"],
+          "type": "object"
+        },
+        "ResolveReviewResponse": {
+          "properties": {
+            "approval_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "decision": {
+              "type": "string"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "loser_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pending_approval_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "review_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "winner_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["review_id", "decision"],
+          "type": "object"
+        },
+        "RestorationAcceptedResponse": {
+          "properties": {
+            "instrument_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "stages": {
+              "items": {
+                "$ref": "#/components/schemas/RestorationStageOutcome"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["instrument_id", "stages"],
+          "type": "object"
+        },
+        "RestorationManifestPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "baseline_sha256": {
+              "maxLength": 64,
+              "minLength": 64,
+              "type": "string"
+            },
+            "celex": {
+              "anyOf": [
+                {
+                  "maxLength": 10,
+                  "minLength": 10,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "exported_at": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "instrument_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "jurisdiction": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "native_sha256": {
+              "maxLength": 64,
+              "minLength": 64,
+              "type": "string"
+            },
+            "schema_version": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "short_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "source_type": {
+              "enum": ["external", "internal"],
+              "type": "string"
+            },
+            "version": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "instrument_id",
+            "title",
+            "short_name",
+            "version",
+            "source_type",
+            "schema_version",
+            "exported_at",
+            "baseline_sha256",
+            "native_sha256"
+          ],
+          "type": "object"
+        },
+        "RestorationRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "baseline_blob_base64": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "instrument_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "manifest": {
+              "$ref": "#/components/schemas/RestorationManifestPayload"
+            },
+            "native_blob_base64": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "instrument_id",
+            "manifest",
+            "baseline_blob_base64",
+            "native_blob_base64"
+          ],
+          "type": "object"
+        },
+        "RestorationStageOutcome": {
+          "properties": {
+            "stage": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "succeeded",
+              "type": "string"
+            }
+          },
+          "required": ["stage", "status"],
+          "type": "object"
+        },
+        "StageOutcome": {
+          "properties": {
+            "stage": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "succeeded",
+              "type": "string"
+            }
+          },
+          "required": ["stage", "status", "summary"],
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "type": "object"
+            },
+            "input": {},
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "msg": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            }
+          },
+          "required": ["loc", "msg", "type"],
+          "type": "object"
+        },
+        "_ApprovalCodeRequest": {
+          "properties": {
+            "code": {
+              "type": "string"
+            }
+          },
+          "required": ["code"],
+          "type": "object"
+        },
+        "_EnrollVerifyRequest": {
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "credential": {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          },
+          "required": ["code", "credential"],
+          "type": "object"
+        },
+        "_SignVerifyRequest": {
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "credential": {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          },
+          "required": ["code", "credential"],
+          "type": "object"
+        }
+      }
+    },
+    "info": {
+      "version": "0.1.0"
+    },
+    "openapi": "3.1.0",
+    "paths": {
+      "/.well-known/oauth-protected-resource": {
+        "get": {
+          "operationId": "protected_resource_metadata__well_known_oauth_protected_resource_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ProtectedResourceMetadata"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/approvals/{pending_approval_id}": {
+        "get": {
+          "operationId": "get_approval_shell_approvals__pending_approval_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "pending_approval_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/approvals/{pending_approval_id}/enroll/options": {
+        "post": {
+          "operationId": "post_enroll_options_approvals__pending_approval_id__enroll_options_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "pending_approval_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_ApprovalCodeRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/approvals/{pending_approval_id}/enroll/verify": {
+        "post": {
+          "operationId": "post_enroll_verify_approvals__pending_approval_id__enroll_verify_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "pending_approval_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_EnrollVerifyRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/approvals/{pending_approval_id}/sign/options": {
+        "post": {
+          "operationId": "post_sign_options_approvals__pending_approval_id__sign_options_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "pending_approval_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_ApprovalCodeRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/approvals/{pending_approval_id}/sign/verify": {
+        "post": {
+          "operationId": "post_sign_verify_approvals__pending_approval_id__sign_verify_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "pending_approval_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_SignVerifyRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/approvals/{pending_approval_id}/summary": {
+        "post": {
+          "operationId": "post_approval_summary_approvals__pending_approval_id__summary_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "pending_approval_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_ApprovalCodeRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/catalog": {
+        "get": {
+          "operationId": "list_curated_catalog_catalog_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CuratedCatalogResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/change-checks": {
+        "post": {
+          "operationId": "create_change_check_change_checks_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ChangeCheckResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/exports": {
+        "post": {
+          "operationId": "create_export_exports_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ExportAcceptedResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/health": {
+        "get": {
+          "operationId": "health_health_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/ingestions": {
+        "post": {
+          "operationId": "create_ingestion_ingestions_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "catalog": "#/components/schemas/CatalogIngestionRequest",
+                      "internal": "#/components/schemas/InternalIngestionRequest"
+                    },
+                    "propertyName": "source"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/CatalogIngestionRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InternalIngestionRequest"
+                    }
+                  ]
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/IngestionAcceptedResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/ingestions/{run_id}": {
+        "get": {
+          "operationId": "get_ingestion_status_ingestions__run_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "run_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/IngestionStatusResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/near-misses": {
+        "get": {
+          "operationId": "list_near_misses_near_misses_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/PendingReviewListResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/near-misses/approvals/{pending_approval_id}": {
+        "get": {
+          "operationId": "check_merge_pending_approval_near_misses_approvals__pending_approval_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "pending_approval_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/PendingApprovalStatusResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/near-misses/{review_id}/resolve": {
+        "post": {
+          "operationId": "resolve_near_miss_near_misses__review_id__resolve_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "review_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveReviewRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ResolveReviewResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/ready": {
+        "get": {
+          "operationId": "ready_ready_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              }
+            }
+          }
+        }
+      },
+      "/restorations": {
+        "post": {
+          "operationId": "create_restoration_restorations_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestorationRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RestorationAcceptedResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/restorations/from-catalog": {
+        "post": {
+          "operationId": "create_restoration_from_catalog_restorations_from_catalog_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRestorationRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RestorationAcceptedResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

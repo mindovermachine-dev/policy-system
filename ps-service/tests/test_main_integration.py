@@ -88,10 +88,27 @@ if sys.platform == "win32":  # pragma: no cover - documented platform caveat, no
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HOST = "127.0.0.1"
-_PORT = 8000
-_OVERRIDE_PORT = (
-    8010  # distinct from _PORT so this test can run independently of TestSharedServer's lifecycle
-)
+
+
+def _find_free_port() -> int:
+    """Ask the OS for an unused loopback port (bind port 0, read it back, close).
+
+    Successive calls differ in practice (the OS rotates ephemeral ports).
+
+    The tests must not depend on what already listens on the default port 8000 (a developer's
+    local cluster commonly serves a real `ps_service` there). Same accepted small TOCTOU race
+    as `ps-cli/tests/test_integration_version.py`.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind((_HOST, 0))
+        return int(probe.getsockname()[1])
+
+
+# Spawned servers are pointed at these via `PS_SERVICE_PORT` (the variable `load_config` reads),
+# never at the default 8000. `_OVERRIDE_PORT` is distinct from `_PORT` so its test can run
+# independently of TestSharedServer's lifecycle.
+_PORT = _find_free_port()
+_OVERRIDE_PORT = _find_free_port()
 _HEALTH_URL = f"http://{_HOST}:{_PORT}/health"
 _READY_POLL_TIMEOUT_SECONDS = 5.0
 _READY_POLL_INTERVAL_SECONDS = 0.05
@@ -102,7 +119,13 @@ _TERMINATE_WAIT_TIMEOUT_SECONDS = 10
 
 def _build_env(log_dir: Path, extra_env: dict[str, str] | None) -> dict[str, str]:
     """Build a subprocess environment isolated to `log_dir` via `PS_LOGGING_DIR`."""
-    env = {**os.environ, "PS_LOGGING_DIR": str(log_dir)}
+    env = {
+        **os.environ,
+        **REQUIRED_STARTUP_ENV,
+        "PS_SERVICE_LOCAL_TEST_BYPASS": "true",
+        "PS_SERVICE_PORT": str(_PORT),
+        "PS_LOGGING_DIR": str(log_dir),
+    }
     if extra_env:
         env.update(extra_env)
     return env

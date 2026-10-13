@@ -232,7 +232,9 @@ def _query_rows(
 
 
 def _count(graph: GraphHandle, query: str) -> int:
-    return cast("int", _query_rows(graph, query)[0][0])
+    """A count query's value; a graph key that does not exist yet answers with no rows: zero."""
+    rows = _query_rows(graph, query)
+    return cast("int", rows[0][0]) if rows else 0
 
 
 def _snapshot_graph(graph: GraphHandle) -> dict[str, object]:

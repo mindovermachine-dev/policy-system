@@ -32,6 +32,7 @@ from api._gateway_fakes import (
     installed_process_gateway,
 )
 from graph_gateway._fakes import GatewayRig
+from graph_gateway.checkpoint_checks import assert_head_checkpoints
 
 from change_monitor._fakes import (
     FakeAdapter,
@@ -209,6 +210,23 @@ def test_amendment_adds_new_obligation_and_capability_to_single_tenant_graph(
     # AC-BI-011: the audited counts are the graph delta (A already existed, B and C are new).
     complete = store.rows[1].details
     assert (complete["new_obligations"], complete["new_capabilities"]) == (1, 1)
+
+
+def test_an_amendment_sweep_leaves_a_head_checkpoint_on_every_graph_the_succession_logged(
+    succession_rig: SuccessionRig, make_emitter: MakeEmitter
+) -> None:
+    """AC-BI-009 (#215, S4e): the succession's terminal groups checkpoint native and policy_system.
+
+    The stage doubles write MERGE-by-key, outside the log, so the log holds only the succession's
+    own groups; the last of each graph's groups is `clear_marker` / `supersede_in_single_tenant`.
+    """
+    emitter, _ = make_emitter()
+    graphs, stages = _seeded(succession_rig)
+
+    _sweep(graphs, stages, emitter)
+
+    assert set(graphs.rig.rig.store.logged_graphs()) == {"cra_native", "policy_system"}
+    assert_head_checkpoints(graphs.rig.rig)
 
 
 def test_prior_version_nodes_edges_and_properties_unchanged_except_status_and_succession_edge(

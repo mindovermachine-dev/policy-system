@@ -714,3 +714,17 @@ def test_an_unavailable_audit_trail_stops_the_run_before_that_regulations_merge(
     assert approval_path.exists()
     report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert report["errors"][0]["regulatory_instrument_id"] == "CRA-1.0"
+
+
+def test_snapshot_of_a_graph_key_that_does_not_exist_yet_counts_zero(
+    cli_module: ModuleType,
+) -> None:
+    """A read-only handle answers every query on a never-created key with no rows (not `[[0]]`).
+
+    The first merge into a new `policy_system` snapshots exactly that, so the snapshot must read
+    zero nodes and zero edges instead of failing on the missing count row.
+    """
+    snapshot = cli_module._snapshot_graph(_FakeBaselineGraph([]))  # pyright: ignore[reportPrivateUsage]
+
+    assert set(snapshot["node_counts"].values()) == {0}  # pyright: ignore[reportAttributeAccessIssue]
+    assert set(snapshot["edge_counts"].values()) == {0}  # pyright: ignore[reportAttributeAccessIssue]

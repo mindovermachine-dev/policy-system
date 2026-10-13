@@ -701,19 +701,14 @@ def test_architecture_company_merge_lists_the_observable_differences() -> None:
         assert needle in differences, needle
 
 
-def test_architecture_restore_lists_the_interim_snapshot_writer_as_legacy_and_unreferenced() -> (
-    None
-):
+def test_architecture_restore_registration_lists_no_deleted_interim_module() -> None:
     restore = _section(_read(_CA), "### Restore")
     registration = restore.split("#### Implementation Registration")[1].split("#### Actions")[0]
 
     for module in ("populate", "staging", "snapshot_merge_writer"):
-        row = next(
-            line
-            for line in registration.splitlines()
-            if line.startswith(f"| `ps-service/src/ps_service/restore/{module}.py`")
-        )
-        assert "Legacy: Restore no longer calls it" in row, module
+        assert f"restore/{module}.py" not in registration, module
+    for module in ("leg_primitives", "merge_primitives", "baseline_reader", "graph_submission"):
+        assert f"restore/{module}.py" in registration, module
     assert "test_no_graph_write_path.py" in restore
     assert "retired by #214" not in restore
     assert "Interim snapshot writer (#210)" not in restore
@@ -1464,3 +1459,142 @@ def test_operations_guide_503_row_names_restore_and_a_blocked_swap_has_its_own_r
     assert "no partial state is read" not in swap
     assert "no partial state is read" not in _read(_OPS)
     assert "hold_seconds" in _read(_OPS)
+
+
+def test_architecture_registers_the_gateway_owned_connection_modules() -> None:
+    text = _read(_CA)
+
+    for module in ("connection.py", "key_port.py"):
+        row = next(
+            line
+            for line in text.splitlines()
+            if f"`ps-service/src/ps_service/graph_gateway/{module}`" in line
+        )
+        assert "FalkorDB" in row, module
+    assert "the only module that imports the FalkorDB driver" in text
+    probe_row = next(
+        line
+        for line in text.splitlines()
+        if "`ps-service/src/ps_service/graph_gateway/connectivity.py`" in line
+    )
+    assert "driver-free" in probe_row
+
+
+def test_architecture_describes_the_server_side_read_only_query_path() -> None:
+    text = _read(_CA)
+    engine_section = _section(text, "### Query Engine")
+
+    assert "GRAPH.RO_QUERY" in engine_section
+    assert "the boundary available today" in engine_section
+    row = next(
+        line
+        for line in text.splitlines()
+        if "`ps-service/src/ps_service/graph_gateway/read_only.py`" in line
+    )
+    assert "ReadOnlyGraph" in row
+    query_client_row = next(
+        line
+        for line in text.splitlines()
+        if "`ps-service/src/ps_service/query_engine/falkordb_client.py`" in line
+    )
+    assert "ReadOnlyGraph" in query_client_row
+
+
+def test_architecture_says_every_reader_client_is_driver_free() -> None:
+    text = _read(_CA)
+
+    for package in ("ingestion", "domain_mapper", "company_merge", "change_monitor"):
+        row = next(
+            line
+            for line in text.splitlines()
+            if f"`ps-service/src/ps_service/{package}/falkordb_client.py`" in line
+        )
+        assert "ReadOnlyDatabase" in row, package
+    export_row = next(
+        line
+        for line in text.splitlines()
+        if "`ps-service/src/ps_service/export/falkordb_connection.py`" in line
+    )
+    assert "ReadOnlyDatabase" in export_row
+    assert "key_port.py" in export_row
+
+
+def test_operations_guide_documents_the_graph_drift_alert() -> None:
+    section = _section(_read(_OPS), "### Graph drift alert")
+
+    for needle in (
+        "drift_check",
+        "GraphDriftDetected",
+        "checkpoint_digest",
+        "live_digest",
+        "no_baseline",
+        "skipped",
+        "PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS",
+        "psService.graphGateway.driftCheckIntervalSeconds",
+        "kubectl logs",
+        "never repaired",
+        "redis-cli DEL",
+    ):
+        assert needle in section, needle
+    assert '"outcome": "failed"' in section
+
+
+def test_values_reference_lists_the_drift_check_interval() -> None:
+    row = next(
+        line
+        for line in _read(_VALREF).splitlines()
+        if "`psService.graphGateway.driftCheckIntervalSeconds`" in line
+    )
+
+    assert "PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS" in row
+    assert "`3600`" in row
+    assert "`0`" in row
+
+
+def test_architecture_describes_requested_checkpoints_and_the_drift_check() -> None:
+    text = _read(_CA)
+    gateway = _section(text, "### Graph Write Gateway")
+
+    assert "**Drift is detected, never repaired:**" in gateway
+    assert "GraphDriftDetected" in gateway
+    assert "requests a digest checkpoint on its terminal group" in gateway
+    for field in ("checkpoint_digest", "live_digest", "graph_count", "drift_count", "reason"):
+        assert f"`{field}`" in gateway, field
+    for action in ("drift_check", "drift_pass", "drift_monitor"):
+        assert f"`{action}`" in gateway, action
+    drift_row = next(
+        line
+        for line in text.splitlines()
+        if "`ps-service/src/ps_service/graph_gateway/drift.py`" in line
+    )
+    assert "DriftChecker" in drift_row
+    assert any(line.startswith("| CheckDrift |") for line in gateway.splitlines())
+
+
+# --- issue #215 S8: gateway-only graph access and read-only reads ---------------------------------
+
+
+def test_architecture_states_gateway_only_graph_access_and_read_only_reads() -> None:
+    gateway = _section(_read(_CA), "### Graph Write Gateway")
+
+    assert "**Gateway-only graph access:**" in gateway
+    assert "**Read-only reads:**" in gateway
+    assert "reads stay direct" not in gateway
+    assert "test_gateway_only_graph_access.py" in gateway
+    assert "no allow-list" in gateway
+    assert "tools/curated-export/export_instrument.py" in gateway
+    assert "Since #215 every writer requests a digest checkpoint" in gateway
+
+
+def test_architecture_restore_status_records_the_deletion_of_the_interim_modules() -> None:
+    restore = _section(_read(_CA), "### Restore")
+
+    assert "unreferenced by Restore" not in restore
+    assert "allows them by name" not in restore
+    assert "deleted by #215" in restore
+
+
+def test_architecture_diagram_comment_names_the_gateway_only_rule() -> None:
+    text = _read(_CA)
+
+    assert "outside the gateway package reaches FalkorDB only through" in text

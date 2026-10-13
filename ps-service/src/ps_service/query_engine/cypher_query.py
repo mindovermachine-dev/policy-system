@@ -54,12 +54,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import TYPE_CHECKING, Literal, cast
-
-from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker
-    Edge,
-    Node,
-)
+from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
 
 from ps_service.logging.facade import emit_log_entry
 from ps_service.query_engine.errors import (
@@ -139,6 +134,26 @@ def _classify_execution_failure(exc: Exception) -> Literal["timeout", "failed"]:
     return "failed"
 
 
+@runtime_checkable
+class _NodeLike(Protocol):
+    """The attributes of a driver node (`falkordb.Node`) that the result conversion reads."""
+
+    id: int
+    labels: object
+    properties: dict[str, object]
+
+
+@runtime_checkable
+class _EdgeLike(Protocol):
+    """The attributes of a driver edge (`falkordb.Edge`) that the result conversion reads."""
+
+    id: int
+    relation: object
+    properties: dict[str, object]
+    src_node: object
+    dest_node: object
+
+
 def _to_jsonable(value: object) -> object:
     """Recursively convert a raw FalkorDB result value into a JSON-serializable shape.
 
@@ -154,19 +169,19 @@ def _to_jsonable(value: object) -> object:
     converted element-wise; every other value (str, int, float, bool, None,
     already-plain dict) passes through unchanged.
     """
-    if isinstance(value, Node):
+    if isinstance(value, _NodeLike):
         return {
-            "id": cast("int", value.id),
+            "id": value.id,
             "labels": value.labels,
-            "properties": cast("dict[str, object]", value.properties),
+            "properties": value.properties,
         }
-    if isinstance(value, Edge):
+    if isinstance(value, _EdgeLike):
         return {
-            "id": cast("int", value.id),
+            "id": value.id,
             "relation": value.relation,
-            "properties": cast("dict[str, object]", value.properties),
-            "src_node": _to_jsonable(cast("object", value.src_node)),
-            "dest_node": _to_jsonable(cast("object", value.dest_node)),
+            "properties": value.properties,
+            "src_node": _to_jsonable(value.src_node),
+            "dest_node": _to_jsonable(value.dest_node),
         }
     if isinstance(value, list):
         return [_to_jsonable(item) for item in cast("list[object]", value)]

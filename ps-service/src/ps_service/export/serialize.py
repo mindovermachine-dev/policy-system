@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from ps_service.export.errors import ExportSourceGraphError
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
-from ps_service.graph_gateway.cypher import REPLAY_STATE_LABEL
+from ps_service.graph_gateway import REPLAY_STATE_LABEL
 
 if TYPE_CHECKING:
     from ps_service.export.falkordb_connection import (
@@ -137,7 +137,8 @@ def serialize_graph(graph: _GraphQueryHandle) -> SerializedGraph:
             "is unfinished or failed, so it is not exported"
         )
 
-    total_node_count = cast("int", _rows(graph, _TOTAL_NODE_COUNT_QUERY)[0][0])
+    count_rows = _rows(graph, _TOTAL_NODE_COUNT_QUERY)
+    total_node_count = cast("int", count_rows[0][0]) if count_rows else 0  # no rows: no graph key
     if len(nodes) != total_node_count:
         raise ExportSourceGraphError(
             f"graph has {total_node_count} node(s) total but only {len(nodes)} were reachable "

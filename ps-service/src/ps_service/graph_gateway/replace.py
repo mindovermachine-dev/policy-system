@@ -43,14 +43,14 @@ from ps_service.graph_gateway.models import (
 )
 
 if TYPE_CHECKING:
+    from ps_service.graph_gateway.connection import WritableGraph
     from ps_service.graph_gateway.graph_reader import EdgeKey, GraphShape, NodeKey
     from ps_service.graph_gateway.models import Primitive
-    from ps_service.ingestion.falkordb_client import GraphHandle
 
 _EMBEDDING = "embedding"
 
 
-def expand_leg(graph: GraphHandle, group: MutationGroup, *, replace: bool) -> MutationGroup:
+def expand_leg(graph: WritableGraph, group: MutationGroup, *, replace: bool) -> MutationGroup:
     """Return `group` with the stamps (and, when replacing, the deletes) placed before its own.
 
     Reads `graph` (read-only); the caller holds the graph's lock, so what is read is what the

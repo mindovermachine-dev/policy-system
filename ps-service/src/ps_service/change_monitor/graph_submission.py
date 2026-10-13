@@ -149,8 +149,12 @@ def submit_succession_group(
     new_id: str,
     build: Callable[[], tuple[Primitive, ...]],
     missing: str,
+    checkpoint_requested: bool = False,
 ) -> GroupOutcome:
     """Submit one succession step as one group on `graph`; return the gateway's outcome.
+
+    `checkpoint_requested` asks the gateway to record the graph's digest once the group is
+    applied; only a re-ingest's terminal step on a graph sets it (#215).
 
     `build` makes the primitives; one the graph cannot store (a reserved key, a non-finite number)
     is refused here as a persistence error, before anything is logged. `missing` is the message of
@@ -165,7 +169,10 @@ def submit_succession_group(
     try:
         primitives = build()
         group = MutationGroup(
-            graph=graph, audit_event_id=target.audit_anchor(), primitives=primitives
+            graph=graph,
+            audit_event_id=target.audit_anchor(),
+            primitives=primitives,
+            checkpoint_requested=checkpoint_requested,
         )
     except ValidationError as exc:
         _log(target, graph, step, new_id, outcome="failed", extra={"error_type": "ValidationError"})

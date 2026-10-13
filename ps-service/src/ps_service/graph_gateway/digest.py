@@ -19,7 +19,7 @@ import math
 import struct
 from dataclasses import dataclass
 from itertools import chain
-from typing import TYPE_CHECKING, NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple, Protocol, cast
 
 from ps_service.graph_gateway.cypher import DIGEST_EDGE_SCAN, DIGEST_NODE_SCAN
 from ps_service.graph_gateway.errors import GraphDigestError, UnexpectedGraphReplyError
@@ -27,8 +27,6 @@ from ps_service.graph_gateway.exact_floats import restore_properties
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
-
-    from ps_service.ingestion.falkordb_client import GraphHandle
 
 DEFAULT_NODE_CHUNK_ROWS = 50
 """A row with a 3,072-double embedding costs about 4 ms of server time; 50 rows stay far below
@@ -44,6 +42,28 @@ _VALUE_MESSAGE = "a graph element holds a value the digest cannot encode"
 _LENGTH_BYTES = 8
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
+
+
+class _ScanResult(Protocol):
+    """The rows of a scan; both the writable and the read-only handle's results have them."""
+
+    @property
+    def result_set(self) -> list[object]:
+        """The rows exactly as the driver returned them."""
+        ...
+
+
+class QueryableGraph(Protocol):
+    """What a digest needs of a graph: it can run a read query.
+
+    A writable handle and a read-only one both satisfy it, so the checkpoint path (writable
+    opener, under the graph's lock) and the drift check (read-only opener, no lock) share the
+    one digest. A graph key that does not exist reads as the empty graph.
+    """
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _ScanResult:
+        """Run Cypher `q` with `params` and return its rows."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -62,7 +82,7 @@ class DigestSettings:
             raise ValueError(message)
 
 
-def canonical_digest(graph: GraphHandle, settings: DigestSettings | None = None) -> str:
+def canonical_digest(graph: QueryableGraph, settings: DigestSettings | None = None) -> str:
     """Return `sha256:<hex>` of `graph`'s logical content.
 
     Raises:
@@ -85,7 +105,7 @@ class ElementHashes(NamedTuple):
     edges: tuple[bytes, ...]
 
 
-def element_hashes(graph: GraphHandle, settings: DigestSettings | None = None) -> ElementHashes:
+def element_hashes(graph: QueryableGraph, settings: DigestSettings | None = None) -> ElementHashes:
     """Return the element hashes `canonical_digest` combines, split by kind.
 
     Lets a caller tell which elements two graphs disagree on without reading any content (the
@@ -110,7 +130,10 @@ def combine_element_hashes(hashes: Iterable[bytes]) -> str:
 
 
 def _scan_hashes(
-    graph: GraphHandle, query: str, chunk_rows: int, encode: Callable[[object], tuple[int, bytes]]
+    graph: QueryableGraph,
+    query: str,
+    chunk_rows: int,
+    encode: Callable[[object], tuple[int, bytes]],
 ) -> Iterator[bytes]:
     """Yield the hash of each element a scan returns, chunk by chunk, along the internal-id cursor.
 

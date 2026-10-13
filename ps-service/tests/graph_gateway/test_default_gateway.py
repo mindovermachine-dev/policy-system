@@ -7,17 +7,23 @@ or FalkorDB is unreachable, since that is decided later, per call, with the fail
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 import redis.exceptions
 
 from ps_service.config import ServiceConfig
 from ps_service.graph_gateway.default_gateway import (
     FalkorDBGraphOpener,
+    ReadOnlyGraphOpener,
     build_default_graph_write_gateway,
 )
 from ps_service.graph_gateway.errors import GraphLogUnavailableError
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.models import GraphLeg, MultiGraphGroup, UpsertNode
+
+if TYPE_CHECKING:
+    from ps_service.graph_gateway.read_only import DriverGraph
 
 _UNREACHABLE_PORT = 1
 
@@ -70,3 +76,52 @@ def test_the_default_gateway_has_a_key_port_so_a_swap_group_is_not_refused_as_un
 
     with pytest.raises(GraphLogUnavailableError):
         gateway.submit_multi_graph_group(group)
+
+
+class _Reply:
+    header: list[list[object]] = []  # noqa: RUF012 -- a read-only test double
+    result_set: list[object] = []  # noqa: RUF012
+
+
+class _DriverGraph:
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    def ro_query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _Reply:
+        del q, params, timeout
+        self._calls.append("ro_query")
+        return _Reply()
+
+
+class _DriverDatabase:
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    def select_graph(self, graph_id: str, /) -> DriverGraph:
+        del graph_id
+        return _DriverGraph(self._calls)
+
+    def list_graphs(self) -> list[str]:
+        return []
+
+
+def test_the_read_only_graph_opener_connects_on_first_use_and_reads_with_ro_query_only() -> None:
+    calls: list[str] = []
+    connects: list[tuple[str, int]] = []
+
+    def connect(host: str, port: int) -> _DriverDatabase:
+        connects.append((host, port))
+        return _DriverDatabase(calls)
+
+    opener = ReadOnlyGraphOpener(
+        _config(falkordb_host="falkor", falkordb_port=7000), connect=connect
+    )
+    assert connects == []  # building connects to nothing
+
+    opener("compliance").query("MATCH (n) RETURN n")
+    opener("compliance").query("MATCH (n) RETURN n")
+
+    assert connects == [("falkor", 7000)]  # one connection, shared
+    assert calls == ["ro_query", "ro_query"]

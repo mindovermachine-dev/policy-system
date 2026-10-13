@@ -23,6 +23,7 @@ import pytest
 from graph_gateway._fakes import InMemoryGraphLogStore
 from graph_gateway.live_endpoints import falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
+from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 from ps_service.graph_gateway.default_gateway import FalkorDBKeyPort
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.errors import SwapConflictError
@@ -33,15 +34,14 @@ from ps_service.graph_gateway.models import (
     UpsertNode,
 )
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
-from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Sequence
 
     from persistence.provisioned_postgres import Provisioned
 
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
     from ps_service.graph_gateway.swap_port import GraphKeyPort, KeySwapper
-    from ps_service.ingestion.falkordb_client import GraphHandle
 
 _AUDIT_EVENT_ID = "3f2b8c1e-5d4a-4b7e-9a61-0c2d7e8f9a10"
 _POLL_SECONDS = 0.005

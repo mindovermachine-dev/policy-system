@@ -25,12 +25,12 @@ from graph_cleanup._legacy_reference import (
     run_frozen_unmerge_capability,
 )
 from ps_service.graph_cleanup.models import CapabilityUnmergeWrite, ExpectedCounts
-from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
+from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 pytestmark = pytest.mark.falkordb_live
 
@@ -154,9 +154,9 @@ def test_a_case_two_governed_by_edge_moves_back_to_the_absorbed_capability(
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"remove_requires_ids": ("o1", "o2")},
+        {"remove_requires_ids": ("o1", "o_new")},  # o_new has no REQUIRES edge to the survivor
         {"restore_requires_ids": ("o1", "o2", "o_missing")},
-        {"restore_covers_ids": ()},
+        {"restore_covers_ids": ("pa1", "pa_missing")},
         {"restore_policy_id": "p_missing"},
     ],
 )

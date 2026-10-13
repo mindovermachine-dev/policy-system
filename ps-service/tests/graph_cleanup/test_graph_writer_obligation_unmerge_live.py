@@ -27,12 +27,12 @@ from graph_cleanup._legacy_reference import (
     run_frozen_unmerge_obligation,
 )
 from ps_service.graph_cleanup.models import ObligationExpectedCounts, ObligationUnmergeWrite
-from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
+from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
 pytestmark = pytest.mark.falkordb_live
 

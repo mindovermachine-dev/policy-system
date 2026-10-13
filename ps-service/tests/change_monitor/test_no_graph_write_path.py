@@ -3,9 +3,8 @@
 Every succession mutation goes through the Graph Write Gateway, so no module under
 `ps_service.change_monitor` may open a FalkorDB connection of its own, name the gateway's apply
 machinery, or pass write Cypher to a graph handle. The scan is `graph_gateway.write_path_scan`
-(an AST walk of the literals passed to `query` and its siblings, never docstrings or prose). The
-one connection-helper module (`falkordb_client.py`, which opens the READ handle) is exempt from
-the connection rule only; write Cypher is never admitted anywhere.
+(an AST walk of the literals passed to `query` and its siblings, never docstrings or prose). No
+module is exempt: `falkordb_client.py` is a read-only delegate and is scanned like the others.
 
 Positive half: each of the five succession writers reaches `submit_succession_group`, which
 reaches the gateway sink `submit_group` through `submit_or_raise` (same-module call graphs by
@@ -29,7 +28,6 @@ import ps_service.change_monitor as change_monitor_package
 
 _ROOT = Path(change_monitor_package.__file__).parent
 _TESTS = Path(__file__).parent
-_CONNECTION_HELPER = "falkordb_client.py"
 _WRITERS = (
     "set_new_version_property",
     "mark_stage_complete",
@@ -72,22 +70,13 @@ def test_the_scan_covers_the_change_monitor_package() -> None:
 def test_no_change_monitor_module_opens_a_write_connection_or_passes_write_cypher(
     path: Path,
 ) -> None:
-    allow = path.name == _CONNECTION_HELPER
-    assert scan_source(path.read_text(encoding="utf-8"), allow_connection=allow) == []
+    assert scan_source(path.read_text(encoding="utf-8")) == []
 
 
-def test_only_the_connection_helper_needs_the_connection_allowance() -> None:
-    needing = [
-        path.name for path in _modules() if scan_source(path.read_text(encoding="utf-8")) != []
-    ]
-
-    assert needing == [_CONNECTION_HELPER]
-
-
-def test_the_connection_allowance_never_admits_write_cypher() -> None:
+def test_write_cypher_is_found_even_beside_a_connection_helper_call() -> None:
     source = 'def f(g):\n    connect()\n    g.query("MERGE (n)")\n'
 
-    assert len(scan_source(source, allow_connection=True)) == 1
+    assert len(scan_source(source)) == 1
 
 
 def test_every_succession_writer_reaches_the_succession_sink() -> None:
@@ -161,8 +150,8 @@ def test_the_symbol_scan_ignores_the_read_queries() -> None:
         "from ps_service.graph_gateway.applier import apply_entries\n",
         "from ps_service.graph_gateway import cypher\n",
         "def f(entries):\n    return apply_entries(entries)\n",
-        "def f(db):\n    return db.select_graph('x')\n",
-        "def f(config):\n    return connect_from_config(config)\n",
+        "def f():\n    return FalkorDB(host='h', port=1)\n",
+        "from ps_service.graph_gateway.connection import connect\n",
         "from redis import Redis\n",
     ],
     ids=[
@@ -177,8 +166,8 @@ def test_the_symbol_scan_ignores_the_read_queries() -> None:
         "applier_import",
         "cypher_import",
         "apply_entries_call",
-        "select_graph",
-        "connect",
+        "construction",
+        "write_capable_factory",
         "redis_client_import",
     ],
 )
@@ -194,8 +183,8 @@ def test_the_guard_finds_a_planted_violation(source: str) -> None:
         "from ps_service.graph_gateway import cypher\n",
     ],
 )
-def test_the_connection_allowance_never_admits_the_gateway_apply_machinery(source: str) -> None:
-    assert len(scan_source(source, allow_connection=True)) >= 1
+def test_the_gateway_apply_machinery_is_never_admitted(source: str) -> None:
+    assert len(scan_source(source)) >= 1
 
 
 @pytest.mark.parametrize(

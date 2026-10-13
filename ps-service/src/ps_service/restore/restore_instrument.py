@@ -67,11 +67,10 @@ from ps_service.restore.models import RestoreOutcome
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from falkordb import FalkorDB
-
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.export.models import SerializedGraph
     from ps_service.graph_gateway.models import Primitive
+    from ps_service.graph_gateway.read_only import ReadOnlyDatabase
     from ps_service.logging.emitter import LogEmitter
     from ps_service.restore.models import RestoreArtifact
 
@@ -215,6 +214,7 @@ def _restore_group(
             audit_event_id=audit_event_id,
             primitives=leg.primitives,
             preconditions=leg.preconditions,
+            checkpoint_requested=leg.checkpoint_requested,
         )
     return None
 
@@ -262,6 +262,7 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
                     graph=single_tenant_graph_name,
                     primitives=policy_system.primitives,
                     preconditions=(ExpectedPosition(position=position),),
+                    checkpoint_requested=True,
                 ),
             )
         group = _restore_group(audit_event_id, legs)
@@ -298,14 +299,18 @@ def _content_legs(
     ):
         primitives: tuple[Primitive, ...] = leg_primitives(serialized)
         if primitives:
-            legs.append(GraphLeg(graph=graph, primitives=primitives, replace=True))
+            legs.append(
+                GraphLeg(
+                    graph=graph, primitives=primitives, replace=True, checkpoint_requested=True
+                )
+            )
     return tuple(legs)
 
 
 def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natural grouping
     artifact: RestoreArtifact,
     *,
-    db: FalkorDB,
+    db: ReadOnlyDatabase,
     single_tenant_graph_name: str,
     similarity_threshold: float,
     actor: str,

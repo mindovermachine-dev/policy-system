@@ -882,6 +882,7 @@ def _submit_group(
         audit_event_id=audit_event_id,
         primitives=plan.primitives,
         preconditions=(ExpectedPosition(position=expected),),
+        checkpoint_requested=True,  # the last group the seed writes to this graph (#215)
     )
     submit_or_raise(submitter, group, InternalSeedError)
 

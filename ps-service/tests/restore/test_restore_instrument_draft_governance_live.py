@@ -23,12 +23,12 @@ from authz._fakes import FakeAccessRoleStore
 
 from ps_service.audit.store import PsycopgAuditStore
 from ps_service.authz.models import AccessRole
-from ps_service.config import load_config
 from ps_service.export import catalog_writer
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.policy_lifecycle.errors import PolicySelfApprovalBlockedError
 from ps_service.policy_lifecycle.graph_submission import lifecycle_submitter
 from ps_service.policy_lifecycle.service import approve_policy, propose_policy
+from ps_service.restore.audit_actions import INSTRUMENT_RESTORE_ACTION
 from ps_service.restore.models import RestoreArtifact
 from ps_service.restore.restore_instrument import restore_instrument
 
@@ -37,6 +37,9 @@ if TYPE_CHECKING:
 
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
+
+    from ps_service.config import ServiceConfig
 
 pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
@@ -73,15 +76,16 @@ def _graph_counts(
     return counts
 
 
-def _restore(db: FalkorDB, emitter: object, short_name: str, graph_name: str) -> None:
+def _restore(
+    db: FalkorDB, emitter: object, short_name: str, graph_name: str, config: ServiceConfig
+) -> None:
     # The restore writes through the real gateway; its groups are anchored to a real
     # `instrument.restore` audit row (the graph log's audit link is a foreign key into
-    # `audit_events`). Not run in the implementation sandbox.
-    config = load_config()
+    # `audit_events`).
     audit_event_id = PsycopgAuditStore(config).record_standalone_with_event_id(
         actor_subject=_OWNER[0],
         actor_issuer=_OWNER[1],
-        action="instrument.restore",
+        action=INSTRUMENT_RESTORE_ACTION,
         resource_type="instrument",
         resource_id="ENGPRAC-1.0",
         outcome="applied",
@@ -101,7 +105,7 @@ def _restore(db: FalkorDB, emitter: object, short_name: str, graph_name: str) ->
     )
 
 
-def _approve_one_restored_policy(db: FalkorDB, graph_name: str) -> str:
+def _approve_one_restored_policy(db: FalkorDB, graph_name: str, config: ServiceConfig) -> str:
     """Propose and approve one restored Policy through the real lifecycle service."""
     graph = db.select_graph(graph_name)
     rows = cast(
@@ -116,9 +120,7 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str) -> str:
     store.grant(actor=_OWNER, target=_OWNER, access_role=AccessRole.POLICY_MANAGER)
     store.grant(actor=_OWNER, target=_MANAGER, access_role=AccessRole.POLICY_MANAGER)
     # The lifecycle writes through the real gateway into `graph_name`, and its `applied` rows are
-    # real audit rows (the graph log's audit link is a foreign key into `audit_events`). Not run
-    # in the implementation sandbox.
-    config = load_config()
+    # real audit rows (the graph log's audit link is a foreign key into `audit_events`).
     audit = PsycopgAuditStore(config)
     submitter = lifecycle_submitter(build_default_graph_write_gateway(config))
 
@@ -166,12 +168,14 @@ def _tree_statuses(db: FalkorDB, graph_name: str, policy_id: str) -> dict[str, s
 
 def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
     monkeypatch: pytest.MonkeyPatch,
+    provisioned_graph_log: Provisioned,
     live_falkordb: FalkorDB,
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
 ) -> None:
     """AC-BI-009: a restored draft is a normal draft; approval cascades its whole tree only."""
     emitter, _log_path = make_emitter()
+    config = provisioned_graph_log.state_config()
     token = uuid.uuid4().hex[:12]
     short_name = f"ENGPRAC_L{token}"
     graph_name = f"__gh183_single_tenant_{token}__"
@@ -179,9 +183,9 @@ def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
     targets = (f"{short_name.lower()}_native", f"{short_name.lower()}_baseline", graph_name)
 
     try:
-        _restore(live_falkordb, emitter, short_name, graph_name)
+        _restore(live_falkordb, emitter, short_name, graph_name, config)
 
-        approved = _approve_one_restored_policy(live_falkordb, graph_name)
+        approved = _approve_one_restored_policy(live_falkordb, graph_name, config)
 
         assert _tree_statuses(live_falkordb, graph_name, approved) == {
             "Policy": {"approved"},
@@ -203,12 +207,14 @@ def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
 
 def test_second_restore_after_approval_leaves_the_approved_tree_and_counts_untouched(
     monkeypatch: pytest.MonkeyPatch,
+    provisioned_graph_log: Provisioned,
     live_falkordb: FalkorDB,
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
 ) -> None:
     """AC-BI-010/011: a re-restore never resets an approved tree, owner, or duplicates anything."""
     emitter, _log_path = make_emitter()
+    config = provisioned_graph_log.state_config()
     token = uuid.uuid4().hex[:12]
     short_name = f"ENGPRAC_R{token}"
     graph_name = f"__gh183_rerestore_{token}__"
@@ -216,11 +222,11 @@ def test_second_restore_after_approval_leaves_the_approved_tree_and_counts_untou
     targets = (f"{short_name.lower()}_native", f"{short_name.lower()}_baseline", graph_name)
 
     try:
-        _restore(live_falkordb, emitter, short_name, graph_name)
-        approved = _approve_one_restored_policy(live_falkordb, graph_name)
+        _restore(live_falkordb, emitter, short_name, graph_name, config)
+        approved = _approve_one_restored_policy(live_falkordb, graph_name, config)
         before = _graph_counts(query_result_rows, live_falkordb, graph_name)
 
-        _restore(live_falkordb, emitter, short_name, graph_name)
+        _restore(live_falkordb, emitter, short_name, graph_name, config)
 
         assert _tree_statuses(live_falkordb, graph_name, approved) == {
             "Policy": {"approved"},

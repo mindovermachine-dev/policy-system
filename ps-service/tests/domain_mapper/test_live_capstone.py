@@ -1,15 +1,13 @@
 """Increment 19 — the live 3-regulation end-to-end capstone
 (PLAN_REVIEWED.md §11 Batch 11).
 
-`@pytest.mark.falkordb_live @pytest.mark.llm_live`: reads #14's own
-live-populated `cra_native`/`gdpr_native`/`nis2_native` graphs through the
-real Cellar/ELI Domain Mapping Adapter, runs `ExtractRolesAndRequirements`
-then `DeriveObligationsAndCapabilities` for each regulation against real
-Azure OpenAI (via `route_completion`'s default caller), and writes to the
-real, permanent `cra_baseline`/`gdpr_baseline`/`nis2_baseline` graphs —
-the walking skeleton's actual output, left in place afterward (unlike
-`test_baseline_graph_isolation.py`'s `_isolation_test`-suffixed throwaway
-graphs, which ARE cleaned up).
+`@pytest.mark.falkordb_live @pytest.mark.llm_live` (plus `cellar_live` and `postgres_live`):
+reads the `cra_native`/`gdpr_native`/`nis2_native` graphs the `live_native_graphs` fixture ingests
+fresh from Cellar/ELI, through the real Cellar/ELI Domain Mapping Adapter, runs
+`ExtractRolesAndRequirements` then `DeriveObligationsAndCapabilities` for each regulation against
+real Azure OpenAI (via `route_completion`'s default caller), and writes to the
+`cra_baseline`/`gdpr_baseline`/`nis2_baseline` graphs. The fixture deletes all six graphs before
+and after, so the module neither depends on nor leaves behind ambient state.
 
 **Bounded, not exhaustive** (Open Question 2's mitigation): each
 regulation's extraction is capped to the first `_LIMIT_PER_REGULATORY_INSTRUMENT`
@@ -32,18 +30,16 @@ from typing import TYPE_CHECKING, TypedDict, cast
 
 import pytest
 
-from ps_service.config import load_config
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
 from ps_service.domain_mapper.derivation import derive_obligations_and_capabilities
 from ps_service.domain_mapper.extraction import extract_roles_and_requirements
 from ps_service.domain_mapper.falkordb_client import (
     GraphHandle,
     baseline_graph_name,
-    connect_from_config,
     native_graph_name,
-    select_graph,
 )
 from ps_service.domain_mapper.models import ExtractionUnit
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.logging import LogEmitter, bind_run_context
@@ -52,6 +48,7 @@ if TYPE_CHECKING:
     from falkordb import FalkorDB
 
     from domain_mapper._fakes import MakeEmitter, ReadLines
+    from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
     from ps_service.domain_mapper.models import DerivationResult
     from ps_service.ingestion.graph_submission import GroupSubmitter
@@ -186,13 +183,14 @@ def _native_citation_refs(native_graph: GraphHandle) -> set[str]:
     }
 
 
-def _live_gateway_keywords(short_name: str, run_id: str) -> _LiveGatewayKeywords:
+def _live_gateway_keywords(
+    config: ServiceConfig, short_name: str, run_id: str
+) -> _LiveGatewayKeywords:
     """The gateway keywords of an extraction stage, built the way production builds them (#209).
 
     The real gateway over the PS state Postgres and FalkorDB, and one system audit row for the
     run (the stage's group is logged under it). Not runnable in the implementation sandbox.
     """
-    config = load_config()
     audit_event_id = build_system_audit_recorder(config)(
         action="ingestion_run.submit",
         resource_type="ingestion_run",
@@ -217,6 +215,7 @@ def _run_pipeline_for_regulatory_instrument(
     adapter: DomainMappingAdapter,
     fixture: _RegulatoryInstrumentFixture,
     *,
+    config: ServiceConfig,
     model: str,
     emitter: LogEmitter,
 ) -> _RegulatoryInstrumentOutcome:
@@ -238,7 +237,7 @@ def _run_pipeline_for_regulatory_instrument(
             fixture.regulatory_instrument_id,
             adapter=limited_adapter,
             native_graph=native_graph,
-            **_live_gateway_keywords(fixture.short_name, extraction_run_id),
+            **_live_gateway_keywords(config, fixture.short_name, extraction_run_id),
             model=model,
             emitter=emitter,
         )
@@ -248,7 +247,7 @@ def _run_pipeline_for_regulatory_instrument(
         derivation_result = derive_obligations_and_capabilities(
             fixture.regulatory_instrument_id,
             baseline_graph=baseline_graph,
-            **_live_gateway_keywords(fixture.short_name, derivation_run_id),
+            **_live_gateway_keywords(config, fixture.short_name, derivation_run_id),
             model=model,
             emitter=emitter,
         )
@@ -394,28 +393,30 @@ def _assert_run_id_logged(
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
     not _LLM_INTERFACE_MODEL,
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
 def test_live_three_regulation_capstone_extracts_and_derives_across_cra_gdpr_nis2(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+    make_emitter: MakeEmitter, read_lines: ReadLines, live_native_graphs: ServiceConfig
 ) -> None:
     assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
     model = _LLM_INTERFACE_MODEL
 
-    # load_config() still resolves falkordb_host/port correctly here — only
-    # PS_LLMINTERFACE_MODEL/PS_LLMINTERFACE_EMBED_MODEL are stripped by the
-    # autouse fixture, not PS_FALKORDB_HOST/PORT.
-    config = load_config()
+    # The config of the scratch PS state Postgres the native graphs were ingested through
+    # (`live_native_graphs`); PS_LLMINTERFACE_MODEL is stripped by the autouse fixture, hence
+    # the module-import capture above.
+    config = live_native_graphs
     db = connect_from_config(config)
     adapter = CellarEliDomainMappingAdapter()
     emitter, log_path = make_emitter(filename=_LOG_FILENAME)
 
     outcomes = {
         fixture.short_name: _run_pipeline_for_regulatory_instrument(
-            db, adapter, fixture, model=model, emitter=emitter
+            db, adapter, fixture, config=config, model=model, emitter=emitter
         )
         for fixture in _REGULATIONS
     }
@@ -483,6 +484,8 @@ def _annex_i_defines_and_expresses_rows(
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
     not _LLM_INTERFACE_MODEL,
@@ -490,6 +493,7 @@ def _annex_i_defines_and_expresses_rows(
 )
 def test_live_cra_annex_i_produces_at_least_one_role_and_requirement(
     make_emitter: MakeEmitter,
+    live_native_graphs: ServiceConfig,
 ) -> None:
     """AC-BI-006: running `ExtractRolesAndRequirements` against CRA's real
     native graph, scoped to only its ANNEX units via
@@ -509,7 +513,7 @@ def test_live_cra_annex_i_produces_at_least_one_role_and_requirement(
     assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
     model = _LLM_INTERFACE_MODEL
 
-    config = load_config()
+    config = live_native_graphs
     db = connect_from_config(config)
     adapter = _AnnexOnlyDomainMappingAdapter(CellarEliDomainMappingAdapter())
     emitter, _log_path = make_emitter(filename=_LOG_FILENAME)
@@ -523,7 +527,7 @@ def test_live_cra_annex_i_produces_at_least_one_role_and_requirement(
             fixture.regulatory_instrument_id,
             adapter=adapter,
             native_graph=native_graph,
-            **_live_gateway_keywords(fixture.short_name, "capstone-cra-annex-i-extraction"),
+            **_live_gateway_keywords(config, fixture.short_name, "capstone-cra-annex-i-extraction"),
             model=model,
             emitter=emitter,
         )
@@ -553,6 +557,8 @@ _CRA_ANNEX_I_REQUIREMENT_CONFIDENCES: list[float] = []
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
     not _LLM_INTERFACE_MODEL,
@@ -560,6 +566,7 @@ _CRA_ANNEX_I_REQUIREMENT_CONFIDENCES: list[float] = []
 )
 def test_live_nis2_annex_content_yields_no_hallucinated_duties(
     make_emitter: MakeEmitter,
+    live_native_graphs: ServiceConfig,
 ) -> None:
     """AC-BI-011 (and the runtime half of AC-BI-005): running the identical
     `_AnnexOnlyDomainMappingAdapter` code path — no regulation-specific
@@ -585,7 +592,7 @@ def test_live_nis2_annex_content_yields_no_hallucinated_duties(
     assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
     model = _LLM_INTERFACE_MODEL
 
-    config = load_config()
+    config = live_native_graphs
     db = connect_from_config(config)
     adapter = _AnnexOnlyDomainMappingAdapter(CellarEliDomainMappingAdapter())
     emitter, _log_path = make_emitter(filename=_LOG_FILENAME)
@@ -599,7 +606,7 @@ def test_live_nis2_annex_content_yields_no_hallucinated_duties(
             fixture.regulatory_instrument_id,
             adapter=adapter,
             native_graph=native_graph,
-            **_live_gateway_keywords(fixture.short_name, "capstone-nis2-annex-extraction"),
+            **_live_gateway_keywords(config, fixture.short_name, "capstone-nis2-annex-extraction"),
             model=model,
             emitter=emitter,
         )

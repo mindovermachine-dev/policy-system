@@ -352,6 +352,59 @@ Deleting the key removes the graph and the progress record kept inside it; the l
 touched. If the rebuild fails again at the same position, the log itself or a checkpoint is
 wrong: keep the pod as it is and escalate with the logged position.
 
+### Graph drift alert
+
+**Applies to:** every PS Service that has a graph mutation log, from the release that adds the
+drift check.
+
+PS Service writes its graphs only through the Graph Write Gateway. After the last write of a flow
+(a restore, an ingestion, a merge, a re-ingest, a cleanup) the gateway records a digest of the
+graph, a short hash of everything in it. Once an hour (`PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS`,
+Helm `psService.graphGateway.driftCheckIntervalSeconds`; `0` turns the check off) it compares each
+graph with the digest at the head of its log. Nothing is exposed: there is no endpoint, no tool
+and no `/ready` field, and a failing check never changes readiness.
+
+A graph that changed behind the gateway's back (someone wrote to FalkorDB directly) shows up as
+one log entry per graph per hour, and it is also written to the container's stderr so
+`kubectl logs` shows it:
+
+```json
+{
+  "component": "graph_gateway",
+  "action": "drift_check",
+  "outcome": "failed",
+  "error_class": "GraphDriftDetected",
+  "graph": "policy_system",
+  "last_position": 1204,
+  "checkpoint_digest": "sha256:...",
+  "live_digest": "sha256:..."
+}
+```
+
+`last_position` is the head of the graph's log, the position the checkpoint was taken at. The two
+digests are hashes; no content is logged. The graph is never repaired by PS Service: it keeps serving, and the
+alert repeats every interval until it is dealt with. Find who wrote to FalkorDB outside PS Service
+(the server's own client list and the `kubectl logs` of other pods) and stop them. To bring the
+graph back to what the log says, rebuild it from the log as for a gated graph (delete the key,
+restart the service):
+
+```bash
+kubectl exec "$POD" -c falkordb -- redis-cli DEL <graph>      # the name from the alert
+kubectl rollout restart deploy/<ps-service deployment>        # the empty graph is rebuilt at start
+```
+
+Other `drift_check` entries are normal and need no action:
+
+| `outcome` | Meaning |
+| --- | --- |
+| `ok` | The graph matches its checkpoint. |
+| `no_baseline` | A write after the last checkpoint moved the head, so there is nothing to compare with yet. The next flow that checkpoints the graph ends it. |
+| `skipped` | The check stood aside; `reason` is `busy` (a write was being applied), `unapplied` (the log is ahead of the graph), `in_flight` (a write landed while the graph was read) or `gated` (a replay has the graph closed). Never an alert. |
+| `failed` without `GraphDriftDetected` | The check could not run; `error_class` names the exception (for example `ConnectionError` when FalkorDB or Postgres was down). The next pass tries again. |
+
+Each pass also logs `drift_pass` with `graph_count` and `drift_count`, and the monitor logs
+`drift_monitor` (`started`, `stopped`, `disabled`) with `interval_seconds`.
+
 ### Owner recovery and the Authentik admin UI
 
 Re-running `scripts/deploy-ps-prod.sh` with the same owner email (`--owner-email` or

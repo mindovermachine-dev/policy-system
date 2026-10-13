@@ -15,8 +15,9 @@ name, just this component's own accessor for the existing convention.
 
 Read-only since issue #210: every Company Merge write is a Graph Write Gateway group
 (`graph_submission.submit_group`), and `tests/company_merge/test_no_graph_write_path.py` pins that
-no write Cypher is handed to `GraphHandle.query`. This module is the one place `falkordb` is
-imported.
+no write Cypher is handed to `GraphHandle.query`. Since issue #215 the connection is the
+gateway's `ReadOnlyDatabase` (`graph_gateway.read_only`): every query is sent as
+`GRAPH.RO_QUERY`, so the FalkorDB server refuses a write, and this module imports no driver.
 """
 
 from __future__ import annotations
@@ -24,12 +25,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Protocol
 
-from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker; this is the one boundary import
-    FalkorDB,
-)
-
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+from ps_service.graph_gateway.read_only import ReadOnlyDatabase, open_read_only_database
 
 if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
@@ -56,8 +54,7 @@ class GraphHandle(Protocol):
     The `query()` call surface this component's graph reader/dedup/redirect
     logic needs: bare Cypher, or Cypher + `params=` for parameterized
     reads. Callers outside this module never import `falkordb.Graph`
-    directly. (The Protocol is shared with Restore's interim snapshot writer, which still issues
-    writes through it until #214; Company Merge itself does not.)
+    directly. A `ReadOnlyGraph` satisfies it structurally.
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
@@ -77,17 +74,16 @@ class _ConnectivityProbe(Protocol):
     def list_graphs(self) -> list[str]: ...
 
 
-def connect(host: str, port: int) -> FalkorDB:
-    """Construct a FalkorDB client.
+def connect(host: str, port: int) -> ReadOnlyDatabase:
+    """Open a read-only FalkorDB connection: every graph it selects sends `GRAPH.RO_QUERY` only.
 
-    Does not itself verify connectivity -- the underlying client connects
-    lazily on first use; call `check_connectivity()` against the result to
+    Does not itself verify connectivity; call `check_connectivity()` against the result to
     fail loud early.
     """
-    return FalkorDB(host=host, port=port)
+    return open_read_only_database(host, port)
 
 
-def connect_from_config(config: ServiceConfig) -> FalkorDB:
+def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
     """Build the real FalkorDB connection from `config.falkordb_host`/`config.falkordb_port`.
 
     Mirrors `ps_service.domain_mapper.falkordb_client.connect_from_config`
@@ -116,11 +112,11 @@ def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:
     mark_healthy(FALKORDB)
 
 
-def select_graph(db: FalkorDB, name: str) -> GraphHandle:
-    """Convert a real `falkordb.Graph` to this module's local `GraphHandle` Protocol.
+def select_graph(db: ReadOnlyDatabase, name: str) -> GraphHandle:
+    """Select graph `name` on `db` as this module's local, read-only `GraphHandle`.
 
     This is the single conversion site -- callers elsewhere in
-    `ps_service.company_merge` never import `falkordb.Graph` directly. `name`
+    `ps_service.company_merge` never see the driver's graph type. `name`
     is expected to already be the final graph name (e.g. the result of
     `single_tenant_graph_name()`, or a `{short}_baseline` name built
     elsewhere) -- this function does no naming/namespacing of its own.

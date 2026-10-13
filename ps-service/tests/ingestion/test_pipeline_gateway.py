@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
+from graph_gateway._fakes import Fault
+from graph_gateway.checkpoint_checks import assert_head_checkpoints, assert_no_checkpoint
 
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.ingestion.errors import IngestionPersistenceError
@@ -311,3 +313,23 @@ def test_a_re_ingest_with_fewer_properties_keeps_the_ones_the_graph_already_has(
 
     instrument = rig.graphs.open(_GRAPH).nodes[("RegulatoryInstrument", "CRA-1.0")]
     assert instrument["celex"] == "32024R2847"
+
+
+def test_the_native_group_requests_a_checkpoint_so_the_graph_has_a_head_checkpoint(
+    rig: GatewayRig, emitter: LogEmitter
+) -> None:
+    """AC-BI-009: the native group is the terminal group of an external ingest (#215, S4b)."""
+    _Run(rig, emitter).ingest()
+
+    assert_head_checkpoints(rig, [_GRAPH])
+
+
+def test_a_checkpoint_that_cannot_be_recorded_does_not_fail_the_ingest(
+    rig: GatewayRig, emitter: LogEmitter
+) -> None:
+    rig.store.checkpoint_fault = Fault(redis.exceptions.ConnectionError("down"))
+
+    _Run(rig, emitter).ingest()
+
+    assert ("RegulatoryInstrument", "CRA-1.0") in rig.graphs.open(_GRAPH).nodes
+    assert_no_checkpoint(rig)

@@ -101,6 +101,9 @@ def _seeded(rig: RestoreRig) -> tuple[Keys, ...]:
 def _replayed_digests_equal_live(rig: RestoreRig, short: str) -> bool:
     live = tuple(canonical_digest(rig.graph(graph)) for graph in _graphs(short))
     for graph in _graphs(short):
+        # A restore now records a digest checkpoint, and a replay verifies against it, so the log
+        # is replayed into an empty graph (as after FalkorDB lost it), not over the live content.
+        rig.graph(graph).flush()
         rig.gateway.replay_graph(graph)
     return live == tuple(canonical_digest(rig.graph(graph)) for graph in _graphs(short))
 

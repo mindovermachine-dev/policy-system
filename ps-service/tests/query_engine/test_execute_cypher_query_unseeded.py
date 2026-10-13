@@ -115,3 +115,19 @@ def test_write_clause_on_unseeded_graph_still_rejected_first_with_zero_io(
         )
 
     assert fake.calls == []
+
+
+def test_an_empty_seed_check_result_reads_as_unseeded(emitter: LogEmitter) -> None:
+    """The read-only path answers a never-created graph key with an empty result (issue #215).
+
+    Characterisation (green before and after): an empty `result_set` from the seed check is the
+    unseeded case, so the caller still gets `GraphUnseededError` and their query never runs.
+    """
+    fake = _ScriptedGraphHandle([_FakeQueryResult(header=[], result_set=[])])
+
+    with pytest.raises(GraphUnseededError):
+        execute_cypher_query(
+            "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=1000, row_cap=10
+        )
+
+    assert fake.calls == [_SEED_CHECK_QUERY]

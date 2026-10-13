@@ -32,6 +32,11 @@ psService:
     nodePort: 30800
   companyMerge:
     similarityThreshold: 0.59
+  graphGateway:
+    # Seconds between two passes of the Graph Write Gateway's drift check, which compares each
+    # graph with the digest checkpointed after its last gateway write and logs an alert if they
+    # differ (issue #215). 0 turns the check off.
+    driftCheckIntervalSeconds: 3600
   resources:
     requests:
       cpu: 500m

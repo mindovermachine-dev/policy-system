@@ -45,4 +45,6 @@ def test_script_generated_leaf_chains_to_the_local_ca_and_names_the_host(
     assert "DNS:authentik.local" in text
     assert "Authority Key Identifier" in text
     assert "Subject Key Identifier" in text
-    assert f"export SSL_CERT_FILE={state}/ca.pem" in run.stdout
+    # The closing summary names the local CA so the evaluator can trust it (the script no longer
+    # prints an `export SSL_CERT_FILE=` line since #176).
+    assert f"{state.resolve()}/ca.pem" in run.stdout

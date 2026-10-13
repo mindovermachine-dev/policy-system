@@ -12,7 +12,7 @@ deviation note).
 
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -23,6 +23,9 @@ from ps_service.company_merge.models import (
     BaselineNode,
     ProvenanceEdge,
 )
+
+if TYPE_CHECKING:
+    from ps_service.graph_gateway.connection import WritableGraph
 
 
 class _FakeQueryResult:
@@ -744,12 +747,18 @@ def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -
     convention every other `falkordb_live` test in this suite uses (e.g.
     `test_live_capstone.py`), rather than a hardcoded literal host/port.
     """
-    from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
     from ps_service.config import load_config
+    from ps_service.graph_gateway.connection import connect_from_config, select_graph
 
     db = connect_from_config(load_config())
     graph = select_graph(db, "test_company_merge_graph_reader_live")
+    try:
+        _assert_reads_back_a_real_persisted_baseline_graph(graph)
+    finally:
+        db.connection.delete("test_company_merge_graph_reader_live")
 
+
+def _assert_reads_back_a_real_persisted_baseline_graph(graph: WritableGraph) -> None:
     graph.query(
         "MERGE (r:RegulatoryInstrument {id: $id}) SET r += $properties",
         params={"id": "LIVE-1.0", "properties": {"title": "Live Test Regulation"}},

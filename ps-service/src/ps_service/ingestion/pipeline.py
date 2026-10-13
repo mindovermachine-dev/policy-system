@@ -124,6 +124,7 @@ def ingest_regulatory_instrument(  # noqa: PLR0913 -- the stage's call shape: id
             existing=read_existing_nodes(graph, writes),
             graph_name=graph_name,
             audit_event_id=audit_event_id,
+            checkpoint_requested=True,
         )
         stamp_legacy_edges_before_first_write(
             submitter, graph_name, audit_event_id, IngestionPersistenceError

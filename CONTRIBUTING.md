@@ -123,6 +123,15 @@ A test that needs several external services carries every one of their markers (
 Postgres through a fixture), so a run selecting one marker picks only tests whose sole external service is that one.
 Run a multi-service test with the conjunction, for example `-m "integration and falkordb_live"`.
 
+The live suites are self-contained: each seeds (and removes) its own graphs, so none depends on
+ambient dev data. A full live run needs a reachable FalkorDB, a Postgres superuser DSN in
+`PS_TEST_POSTGRES_SUPERUSER_DSN` (the tests provision a scratch cluster), network access to
+`publications.europa.eu` for `cellar_live`, and the Azure OpenAI settings of `.env.example`
+(`PS_LLMINTERFACE_MODEL`, `PS_LLMINTERFACE_EMBED_MODEL`, `AZURE_API_BASE`, `AZURE_API_VERSION` and
+`AZURE_API_KEY`) for `llm_live`. The `live_native_graphs` and `live_baseline_graphs` fixtures
+(`ps-service/tests/ingestion/live_native.py`) delete and rebuild the per-instrument
+native and baseline graphs, so do not run those suites against a FalkorDB holding data you keep.
+
 Run the full local gate exactly as CI does:
 
 ```bash

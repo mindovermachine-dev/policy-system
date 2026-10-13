@@ -59,7 +59,8 @@ _VALID_APPROVAL_FIELDS: dict[str, str] = {
 
 def _node_count(graph: GraphHandle) -> int:
     rows = cast("list[list[object]]", graph.query("MATCH (n) RETURN count(n)").result_set)
-    return cast("int", rows[0][0])
+    # A never-created `policy_system` key answers a count with no rows: zero nodes, no error.
+    return cast("int", rows[0][0]) if rows else 0
 
 
 def _offline_write_access(config: object) -> tuple[object, object]:

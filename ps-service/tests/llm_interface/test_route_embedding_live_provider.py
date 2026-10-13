@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.llm_live
 
+_MIN_COSINE_FOR_IDENTICAL_INPUT = 0.9999
+
 # Captured at module-import time (collection), before the autouse `_isolate_logging`
 # fixture in `tests/conftest.py` runs `monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", ...)`
 # for every test. Reading `os.environ["PS_LLMINTERFACE_EMBED_MODEL"]` inside the test body
@@ -70,7 +72,7 @@ def test_route_embedding_returns_vector_of_expected_dimensionality_from_live_pro
     not _LLM_INTERFACE_EMBED_MODEL,
     reason="requires .env sourced (PS_LLMINTERFACE_EMBED_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
-def test_route_embedding_returns_identical_vector_for_identical_input_from_live_provider(
+def test_route_embedding_returns_near_identical_vector_for_identical_input_from_live_provider(
     emitter: LogEmitter,
 ) -> None:
     assert (
@@ -91,4 +93,9 @@ def test_route_embedding_returns_identical_vector_for_identical_input_from_live_
         emitter=emitter,
     )
 
-    assert result1.vector == result2.vector
+    # The provider's embeddings are not bit-reproducible (observed element drift ~1e-4 between two
+    # identical calls), so "same input -> same vector" is asserted as cosine similarity ~1.
+    dot = sum(a * b for a, b in zip(result1.vector, result2.vector, strict=True))
+    norm1 = sum(a * a for a in result1.vector) ** 0.5
+    norm2 = sum(b * b for b in result2.vector) ** 0.5
+    assert dot / (norm1 * norm2) > _MIN_COSINE_FOR_IDENTICAL_INPUT

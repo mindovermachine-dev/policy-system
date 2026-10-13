@@ -22,12 +22,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker; this is the one boundary import
-    FalkorDB,
-)
-
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 from ps_service.domain_mapper.errors import DomainMapperConfigurationError
+from ps_service.graph_gateway.read_only import ReadOnlyDatabase, open_read_only_database
 
 if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
@@ -74,17 +71,16 @@ class _ConnectivityProbe(Protocol):
     def list_graphs(self) -> list[str]: ...
 
 
-def connect(host: str, port: int) -> FalkorDB:
-    """Construct a FalkorDB client.
+def connect(host: str, port: int) -> ReadOnlyDatabase:
+    """Open a read-only FalkorDB connection: every graph it selects sends `GRAPH.RO_QUERY` only.
 
-    Does not itself verify connectivity — the underlying client connects
-    lazily on first use; call `check_connectivity()` against the result to
+    Does not itself verify connectivity; call `check_connectivity()` against the result to
     fail loud early.
     """
-    return FalkorDB(host=host, port=port)
+    return open_read_only_database(host, port)
 
 
-def connect_from_config(config: ServiceConfig) -> FalkorDB:
+def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
     """Build the real FalkorDB connection from `config`'s host/port.
 
     Mirrors `ps_service.ingestion.falkordb_client.connect_from_config`
@@ -114,15 +110,12 @@ def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:
     mark_healthy(FALKORDB)
 
 
-def select_graph(db: FalkorDB, name: str) -> GraphHandle:
-    """Convert a real `falkordb.Graph` to this module's local `GraphHandle` Protocol.
+def select_graph(db: ReadOnlyDatabase, name: str) -> GraphHandle:
+    """Select graph `name` on `db` as this module's local, read-only `GraphHandle`.
 
-    The single conversion site — callers elsewhere in
-    `ps_service.domain_mapper` never import `falkordb.Graph` directly.
-
-    `name` is expected to already be the final graph name (e.g. the result
-    of `native_graph_name`/`baseline_graph_name`) — this function does no
-    naming/namespacing of its own.
+    This is the single conversion site -- callers elsewhere in `ps_service.domain_mapper` never see
+    the driver's graph type. `name` is expected to already be the final graph name -- this
+    function does no naming/namespacing of its own.
     """
     return db.select_graph(name)
 

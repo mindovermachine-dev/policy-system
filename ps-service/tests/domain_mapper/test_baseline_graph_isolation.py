@@ -38,17 +38,14 @@ from domain_mapper._gateway_fakes import seed_extraction_output
 from ps_service.config import load_config
 from ps_service.domain_mapper.derivation import derive_obligations_and_capabilities
 from ps_service.domain_mapper.extraction import extract_roles_and_requirements
-from ps_service.domain_mapper.falkordb_client import (
-    GraphHandle,
-    connect_from_config,
-    select_graph,
-)
 from ps_service.domain_mapper.identity import obligation_id, role_id
 from ps_service.domain_mapper.models import ExtractionUnit
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 
 if TYPE_CHECKING:
     from domain_mapper._fakes import MakeEmitter
     from domain_mapper._gateway_fakes import BaselineRig
+    from ps_service.domain_mapper.falkordb_client import GraphHandle
     from ps_service.llm_interface.client import CompletionCaller
 
 # --- shared helpers ----------------------------------------------------

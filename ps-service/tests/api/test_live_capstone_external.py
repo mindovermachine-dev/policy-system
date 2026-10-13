@@ -27,17 +27,12 @@ before the app's build-time ``load_config()`` runs -- otherwise the route hits
 **AC-BI-003 coverage.** The first half -- stages auto-chain, each consuming the
 prior stage's output with no manual step -- is proven end to end by
 ``test_catalog_celex_ingestion_populates_merged_spine`` (the merged spine only
-exists if all four stages ran in sequence). The convergence half -- a second
-ingestion of the same identifier converging on the same canonical nodes with no
-duplicates -- is bounded by issue #34: LLM extraction is non-deterministic, so a
-second run can reword a Capability enough that it falls outside Company Merge's
-cosine-similarity dedup threshold and a new canonical node is minted. The
-MERGE + semantic-dedup mechanism itself is correct; the residual drift is
-upstream in the Domain Mapper. ``test_second_catalog_ingestion_converges_exact_identity_nodes``
-enforces convergence for the deterministically-keyed
-``RegulatoryInstrument`` node and records the #34-bounded Capability behaviour
-as an inline ``xfail`` (non-deterministic -- it may or may not drift on any
-given run).
+exists if all four stages ran in sequence). The second half -- re-ingesting the same
+CELEX -- is no longer a re-extraction that must converge: since issue #193 the identity
+check refuses a CELEX already in the graph with ``409 celex_already_ingested`` before any
+stage runs, so the second POST changes nothing. That makes the graph snapshot after the
+second POST exactly equal to the first, deterministically (the old LLM-drift ``xfail``,
+issue #34, can no longer be reached through this route).
 """
 
 from __future__ import annotations
@@ -50,12 +45,13 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from fastapi.testclient import TestClient
 
+from api._fakes import install_compliance_officer_grant
+from api._live_config import live_app_config
 from ps_service.api.dependencies import provide_pipeline_dependencies
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import build_default_pipeline_dependencies
-from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
-from ps_service.config import load_config
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.logging import facade
 from ps_service.main import create_app
@@ -64,6 +60,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from falkordb import FalkorDB
+    from persistence.provisioned_postgres import Provisioned
 
     from ps_service.api.ingestion_orchestration import GraphHandle, PipelineDependencies
     from ps_service.company_merge.falkordb_client import GraphHandle as CompanyMergeGraphHandle
@@ -81,8 +78,13 @@ _REAL_GRAPH = "policy_system"
 _ENDPOINT = "/ingestions"
 _CRA_CELEX = "32024R2847"
 _CRA_REGULATORY_INSTRUMENT_ID = "CRA-1.0"
-_CRA_REQUEST: dict[str, str] = {"source": "catalog", "celex": _CRA_CELEX}
+_CRA_REQUEST: dict[str, str] = {"source": "catalog", "celex": _CRA_CELEX, "short_name": "CRA"}
 _COUNT_ALL = "MATCH (n) RETURN count(n)"
+# The ingestion's own per-instrument graphs (named from the request's `short_name`): Company Merge
+# reads `{short}_baseline`, so content a sibling module (or an earlier run) left in them -- e.g. the
+# export capstone's 2-dimensional fake embeddings -- would be merged with this run's 3072-dimension
+# real ones. This run owns them for its duration: dropped before it starts and after it ends.
+_INSTRUMENT_GRAPHS = ("cra_baseline", "cra_native")
 
 # Fixed label / relationship-type allow-list -- safe to interpolate into Cypher
 # (L2: labels/rel-types may come from fixed module-level constants).
@@ -91,6 +93,7 @@ _EDGE_TYPES = ("DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES")
 
 pytestmark = [
     pytest.mark.falkordb_live,
+    pytest.mark.postgres_live,
     pytest.mark.llm_live,
     pytest.mark.skipif(
         not _CHAT_MODEL or not _EMBED_MODEL,
@@ -125,6 +128,7 @@ class _CapstoneData:
     response_1_status: int
     response_1_body: dict[str, object]
     response_2_status: int
+    response_2_text: str
     snapshot_1: dict[str, int]
     snapshot_2: dict[str, int]
     real_policy_system_before: int
@@ -171,7 +175,9 @@ def _delete_graph_if_exists(db: FalkorDB, name: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData]:
+def capstone(
+    tmp_path_factory: pytest.TempPathFactory, provisioned_graph_log: Provisioned
+) -> Iterator[_CapstoneData]:
     """Run the real catalog ingestion pipeline once (twice, for the no-op check) and capture state.
 
     The Domain Mapper stages emit through the process-wide default emitter (the
@@ -190,25 +196,29 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
     monkeypatch = pytest.MonkeyPatch()
     saved_atexit_registered = facade._atexit_registered  # pyright: ignore[reportPrivateUsage]
 
-    config = load_config()
-    db = connect_from_config(config)
-    real_before = _count(select_graph(db, _REAL_GRAPH), _COUNT_ALL)
-
     monkeypatch.setenv("PS_LLMINTERFACE_MODEL", _CHAT_MODEL)
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", _EMBED_MODEL)
     if not os.environ.get("PS_COMPANYMERGE_SIMILARITY_THRESHOLD"):
         monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.85")
     monkeypatch.setenv("PS_FALKORDB_GRAPH", _DISPOSABLE_GRAPH)
 
-    _delete_graph_if_exists(db, _DISPOSABLE_GRAPH)
+    # Built after the env above is set: it layers the provisioned state Postgres (graph log and
+    # audit trail) and the local-test auth bypass over `load_config()`.
+    config = live_app_config(provisioned_graph_log)
+    db = connect_from_config(config)
+    real_before = _count(select_graph(db, _REAL_GRAPH), _COUNT_ALL)
+
+    for stale_graph in (_DISPOSABLE_GRAPH, *_INSTRUMENT_GRAPHS):
+        _delete_graph_if_exists(db, stale_graph)
     facade.configure(log_path=tmp_path_factory.mktemp("api_capstone") / "capstone.jsonl")
 
-    app = create_app(load_config())
+    install_compliance_officer_grant(monkeypatch, granted=True)  # the catalog route is role-gated
+    app = create_app(config)
     app.dependency_overrides[provide_pipeline_dependencies] = _limited_dependencies
     # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
     # entered, so the app lifespan never installs it: install the real one (PS state Postgres and
     # FalkorDB) the way a deployed service does. Not run in the implementation sandbox.
-    install_graph_write_gateway(build_default_graph_write_gateway(load_config()))
+    install_graph_write_gateway(build_default_graph_write_gateway(config))
 
     try:
         client = TestClient(app, raise_server_exceptions=False)
@@ -229,6 +239,7 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
             response_1_status=response_1.status_code,
             response_1_body=cast("dict[str, object]", response_1.json()),
             response_2_status=response_2.status_code,
+            response_2_text=response_2.text,
             snapshot_1=snapshot_1,
             snapshot_2=snapshot_2,
             real_policy_system_before=real_before,
@@ -238,8 +249,9 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_CapstoneData
     finally:
         install_graph_write_gateway(None)
         monkeypatch.undo()
-        with contextlib.suppress(Exception):
-            db.select_graph(_DISPOSABLE_GRAPH).delete()
+        for graph_name in (_DISPOSABLE_GRAPH, *_INSTRUMENT_GRAPHS):
+            with contextlib.suppress(Exception):
+                db.select_graph(graph_name).delete()
         facade.reset_for_tests()
         facade._atexit_registered = saved_atexit_registered  # pyright: ignore[reportPrivateUsage]
 
@@ -280,36 +292,17 @@ def test_catalog_celex_ingestion_populates_merged_spine(capstone: _CapstoneData)
     ), "no Regulation->Requirement->Obligation traversal in the merged graph"
 
 
-def test_second_catalog_ingestion_converges_exact_identity_nodes(capstone: _CapstoneData) -> None:
-    """AC-BI-003 (convergence half): re-ingesting the same CELEX converges on exact-identity nodes.
+def test_second_catalog_ingestion_is_refused_and_changes_nothing(capstone: _CapstoneData) -> None:
+    """AC-BI-003 (re-ingestion half): the same CELEX is refused 409 and the graph is untouched.
 
-    The ``RegulatoryInstrument`` canonical node is deterministically keyed
-    (``regulatory_instrument_id`` is fixed for the CELEX), so a second ingestion
-    MUST converge on it with no duplicate -- that assertion is enforced.
-
-    The ``Capability`` convergence check is #34-bounded and recorded as an
-    inline ``xfail``: LLM extraction non-determinism can reword a Capability
-    between runs so it falls outside Company Merge's cosine-similarity dedup
-    threshold, minting a new canonical node. Whether that drift happens on any
-    given run is non-deterministic, hence an unconditional in-body
-    ``pytest.xfail()`` at that point rather than a ``@pytest.mark.xfail``
-    decorator -- the assertion still executes and its outcome is recorded as a
-    known limitation without failing the suite. The MERGE + semantic-dedup
-    mechanism itself is correct; the residual is upstream in the Domain Mapper.
+    The identity check (issue #193) rejects a CELEX already in the graph under any
+    ``short_name`` before the Domain Mapper or Company Merge run, so no node or edge of any
+    label changes -- an exact snapshot comparison, not a drift-tolerant one.
     """
-    assert capstone.response_2_status == 200
-    assert (
-        capstone.snapshot_2["node:RegulatoryInstrument"]
-        == capstone.snapshot_1["node:RegulatoryInstrument"]
-        == 1
-    )
-
-    pytest.xfail(
-        "AC-BI-003 convergence is bounded by #34 -- LLM extraction non-determinism can reword a "
-        "Capability between runs so it falls outside Company Merge's cosine-similarity dedup "
-        "threshold; the MERGE + semantic-dedup mechanism itself is correct"
-    )
-    assert capstone.snapshot_2["node:Capability"] == capstone.snapshot_1["node:Capability"]
+    assert capstone.response_2_status == 409, capstone.response_2_text
+    assert '"celex_already_ingested"' in capstone.response_2_text
+    assert capstone.snapshot_2 == capstone.snapshot_1
+    assert capstone.snapshot_2["node:RegulatoryInstrument"] == 1
 
 
 def test_real_policy_system_graph_node_count_unchanged(capstone: _CapstoneData) -> None:

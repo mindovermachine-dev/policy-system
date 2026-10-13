@@ -19,10 +19,10 @@ from typing import cast
 
 import pytest
 
-from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
 from ps_service.company_merge.models import PendingReviewRecord
 from ps_service.company_merge.pending_review import list_pending_reviews
 from ps_service.config import load_config
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 
 
 @dataclass

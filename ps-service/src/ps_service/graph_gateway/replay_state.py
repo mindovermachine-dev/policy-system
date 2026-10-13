@@ -26,7 +26,7 @@ from ps_service.graph_gateway.cypher import (
 from ps_service.graph_gateway.errors import UnexpectedGraphReplyError
 
 if TYPE_CHECKING:
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph
 
 type ReplayStateName = Literal["in_progress", "failed"]
 
@@ -45,7 +45,7 @@ class ReplayState:
     verified: int
 
 
-def read_replay_state(graph: GraphHandle) -> ReplayState | None:
+def read_replay_state(graph: WritableGraph) -> ReplayState | None:
     """Return the sentinel of `graph`, or None when no replay is recorded (or the key is missing).
 
     Raises:
@@ -68,7 +68,7 @@ def read_replay_state(graph: GraphHandle) -> ReplayState | None:
     return ReplayState(position=position, state=state, kind=kind, verified=verified)
 
 
-def write_replay_state(graph: GraphHandle, state: ReplayState) -> None:
+def write_replay_state(graph: WritableGraph, state: ReplayState) -> None:
     """Create the sentinel of `graph` or move it to `state`."""
     graph.query(
         REPLAY_STATE_WRITE,
@@ -81,6 +81,6 @@ def write_replay_state(graph: GraphHandle, state: ReplayState) -> None:
     )
 
 
-def delete_replay_state(graph: GraphHandle) -> None:
+def delete_replay_state(graph: WritableGraph) -> None:
     """Remove the sentinel of `graph` (a no-op when there is none)."""
     graph.query(REPLAY_STATE_DELETE)

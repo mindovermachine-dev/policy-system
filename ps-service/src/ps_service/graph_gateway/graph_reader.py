@@ -28,7 +28,7 @@ from ps_service.graph_gateway.exact_floats import PROPERTY_COLUMN_COUNT, restore
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Sequence
 
-    from ps_service.ingestion.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.connection import WritableGraph
 
 type NodeKey = tuple[str, str]
 """`(label, id)` of a node."""
@@ -79,7 +79,7 @@ class PersistedElements:
 
 
 def read_persisted_elements(
-    graph: GraphHandle, *, log_position: int, settings: DigestSettings | None = None
+    graph: WritableGraph, *, log_position: int, settings: DigestSettings | None = None
 ) -> PersistedElements:
     """Enumerate the node keys and edge keys of `graph` with two chunked read-only scans.
 
@@ -112,7 +112,7 @@ class GraphShape:
     edges: dict[EdgeKey, frozenset[str]]
 
 
-def read_graph_shape(graph: GraphHandle, *, settings: DigestSettings | None = None) -> GraphShape:
+def read_graph_shape(graph: WritableGraph, *, settings: DigestSettings | None = None) -> GraphShape:
     """Read the key and property names of every node and edge of `graph` (read-only, chunked).
 
     Raises:
@@ -144,7 +144,7 @@ def _legacy(key: EdgeKey) -> LegacyEdgeKey:
 
 
 def _scan[T](
-    graph: GraphHandle, query: str, chunk_rows: int, decode: Callable[[object], tuple[int, T]]
+    graph: WritableGraph, query: str, chunk_rows: int, decode: Callable[[object], tuple[int, T]]
 ) -> Iterator[T]:
     """Yield what `decode` makes of each scanned row, chunk by chunk along the id cursor."""
     after = -1
@@ -193,7 +193,7 @@ def _single_label(labels: object) -> str:
 
 
 def read_nodes(
-    graph: GraphHandle, nodes: Iterable[NodeKey], batch_size: int
+    graph: WritableGraph, nodes: Iterable[NodeKey], batch_size: int
 ) -> dict[NodeKey, dict[str, object]]:
     """Return the properties (minus `id`) of each of `nodes` that the graph holds.
 
@@ -211,7 +211,7 @@ def read_nodes(
 
 
 def read_existing_nodes(
-    graph: GraphHandle, nodes: Iterable[NodeKey], batch_size: int
+    graph: WritableGraph, nodes: Iterable[NodeKey], batch_size: int
 ) -> set[NodeKey]:
     """Return which of `nodes` the graph holds, without reading any of their properties."""
     found: set[NodeKey] = set()
@@ -233,7 +233,7 @@ def _ids_by_label(nodes: Iterable[NodeKey]) -> dict[str, list[str]]:
 
 
 def read_edges(
-    graph: GraphHandle, edges: Iterable[EdgeKey], batch_size: int
+    graph: WritableGraph, edges: Iterable[EdgeKey], batch_size: int
 ) -> dict[EdgeKey, dict[str, object]]:
     """Return the properties (minus `identity`) of each of `edges` that the graph holds."""
     by_shape: dict[tuple[str, str, str], list[tuple[str, str, str]]] = {}
@@ -261,7 +261,7 @@ def read_edges(
 
 
 def read_unidentified_edges(
-    graph: GraphHandle, edges: Iterable[EdgeKey], batch_size: int
+    graph: WritableGraph, edges: Iterable[EdgeKey], batch_size: int
 ) -> dict[EdgeKey, dict[str, object]]:
     """Return the properties of each of `edges` (identity ignored) that the graph holds without one.
 

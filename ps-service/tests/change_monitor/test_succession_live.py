@@ -18,14 +18,13 @@ import pytest
 from change_monitor._legacy_reference import FROZEN_STATEMENTS
 from ps_service.change_monitor.falkordb_client import (
     check_connectivity,
-    connect_from_config,
     native_graph_name,
-    select_graph,
     single_tenant_graph_name,
 )
 from ps_service.change_monitor.graph_reader import read_tracked_instruments
 from ps_service.change_monitor.succession import read_reingestion_facts
 from ps_service.config import load_config
+from ps_service.graph_gateway.connection import connect_from_config, select_graph
 
 if TYPE_CHECKING:
     from ps_service.change_monitor.falkordb_client import GraphHandle

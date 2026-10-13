@@ -9,7 +9,8 @@ name that resolves to such text (Company Merge keeps its read Cypher in constant
 `_LIST_PENDING_REVIEWS_QUERY`, and builds some with `TEMPLATE.format(...)`). It never looks at
 docstrings or prose, so a module may *describe* `MERGE` without being flagged, and it matches the
 uppercase keywords only, so the lowercase `'merged'` of a read stays clean. The one module
-allowed to touch the FalkorDB driver is `falkordb_client.py`, the connection helper.
+allowed to touch the FalkorDB driver is the gateway package; `falkordb_client.py` is a read-only
+delegate scanned like every other module.
 
 Positive half: every public writer (`persist_*`, `backfill_*`, `resolve_review`) reaches the
 gateway sink `submit_group`, found by a same-module call graph by name (no mock).
@@ -20,131 +21,16 @@ The guard is itself guarded: planted violations must be found, and prose must no
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
+from graph_gateway.write_path_scan import called_name, scan_source
 
 import ps_service.company_merge as company_merge_package
 
 _ROOT = Path(company_merge_package.__file__).parent
-_CONNECTION_HELPER = "falkordb_client.py"
-
-_QUERY_CALLS = frozenset({"query", "ro_query", "_execute_query", "_read_query", "read_rows"})
-_CONNECTION_CALLS = frozenset({"FalkorDB", "connect", "connect_from_config", "select_graph"})
-_WRITE_CYPHER = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|DROP|DETACH)\b")
-_FORBIDDEN_IMPORT_PREFIXES = (
-    "falkordb",
-    "ps_service.graph_gateway.applier",
-    "ps_service.graph_gateway.cypher",
-)
-_FORBIDDEN_NAMES = frozenset({"apply_entries"})
 _SINK = "submit_group"
 _WRITER_MODULES = ("graph_writer.py", "pending_review.py")
-
-
-def _called_name(call: ast.Call) -> str | None:
-    func = call.func
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func.id
-    return None
-
-
-def _literal_text(node: ast.expr, names: dict[str, list[str]]) -> list[str]:
-    """The constant text `node` stands for (placeholders dropped); `[]` when it is not text."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return [node.value]
-    if isinstance(node, ast.JoinedStr):
-        return [
-            " ".join(
-                part.value
-                for part in node.values
-                if isinstance(part, ast.Constant) and isinstance(part.value, str)
-            )
-        ]
-    if isinstance(node, ast.Name):
-        return names.get(node.id, [])
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        if node.func.attr == "format":  # TEMPLATE.format(kind=kind): the template is the text
-            return _literal_text(node.func.value, names)
-        return []
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return [
-            f"{left} {right}"
-            for left in _literal_text(node.left, names)
-            for right in _literal_text(node.right, names)
-        ]
-    return []
-
-
-def _text_assignments(tree: ast.Module) -> dict[str, list[str]]:
-    """Every name assigned text anywhere in the module (module constants and locals), resolved."""
-    names: dict[str, list[str]] = {}
-    assignments = [
-        (target.id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name)
-    ]
-    assignments += [
-        (node.target.id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.target, ast.Name)
-        and node.value is not None
-    ]
-    for _ in range(3):  # a name built from another name resolves within a few passes
-        for name, value in assignments:
-            texts = _literal_text(value, names)
-            if texts:
-                names[name] = list({*names.get(name, []), *texts})
-    return names
-
-
-def _imported_modules(node: ast.Import | ast.ImportFrom) -> list[str]:
-    if isinstance(node, ast.Import):
-        return [alias.name for alias in node.names]
-    if node.module is None or node.level != 0:
-        return []
-    return [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
-
-
-def _call_findings(
-    node: ast.Call, names: dict[str, list[str]], *, is_connection_helper: bool
-) -> list[str]:
-    name = _called_name(node)
-    findings: list[str] = []
-    if name in _FORBIDDEN_NAMES or (name in _CONNECTION_CALLS and not is_connection_helper):
-        findings.append(f"line {node.lineno}: calls {name}")
-    if name in _QUERY_CALLS:
-        arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
-        findings += [
-            f"line {node.lineno}: write Cypher passed to {name}: {text!r}"
-            for argument in arguments
-            for text in _literal_text(argument, names)
-            if _WRITE_CYPHER.search(text)
-        ]
-    return findings
-
-
-def scan_source(source: str, *, is_connection_helper: bool = False) -> list[str]:
-    """Return one finding per write path in `source` (empty: the module is clean)."""
-    tree = ast.parse(source)
-    names = _text_assignments(tree)
-    findings: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import | ast.ImportFrom) and not is_connection_helper:
-            findings += [
-                f"line {node.lineno}: imports {module}"
-                for module in _imported_modules(node)
-                if module.startswith(_FORBIDDEN_IMPORT_PREFIXES)
-            ]
-        elif isinstance(node, ast.Call):
-            findings += _call_findings(node, names, is_connection_helper=is_connection_helper)
-    return findings
 
 
 def reaches_the_sink(source: str, function: str) -> bool:
@@ -155,7 +41,7 @@ def reaches_the_sink(source: str, function: str) -> bool:
             name
             for call in ast.walk(node)
             if isinstance(call, ast.Call)
-            if (name := _called_name(call))
+            if (name := called_name(call))
         }
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
@@ -207,11 +93,7 @@ def test_the_scan_covers_the_company_merge_package() -> None:
 def test_no_company_merge_module_opens_a_write_connection_or_passes_write_cypher(
     path: Path,
 ) -> None:
-    findings = scan_source(
-        path.read_text(encoding="utf-8"), is_connection_helper=path.name == _CONNECTION_HELPER
-    )
-
-    assert findings == []
+    assert scan_source(path.read_text(encoding="utf-8")) == []
 
 
 @pytest.mark.parametrize("module", _WRITER_MODULES)
@@ -264,8 +146,8 @@ def test_the_writers_found_include_every_single_tenant_and_baseline_embedding_wr
         "from ps_service.graph_gateway.applier import apply_entries\n",
         "from ps_service.graph_gateway import cypher\n",
         "def f(entries):\n    return apply_entries(entries)\n",
-        "def f(db):\n    return db.select_graph('x')\n",
-        "def f(config):\n    return connect_from_config(config)\n",
+        "def f():\n    return FalkorDB(host='h', port=1)\n",
+        "from ps_service.graph_gateway.connection import connect\n",
     ],
     ids=[
         "merge",
@@ -282,8 +164,8 @@ def test_the_writers_found_include_every_single_tenant_and_baseline_embedding_wr
         "applier_import",
         "cypher_import",
         "apply_entries_call",
-        "select_graph",
-        "connect",
+        "construction",
+        "write_capable_factory",
     ],
 )
 def test_the_guard_finds_a_planted_violation(source: str) -> None:
@@ -324,13 +206,10 @@ def test_the_guard_ignores_prose_and_read_queries(source: str) -> None:
     assert scan_source(source) == []
 
 
-def test_the_connection_helper_may_touch_the_driver_but_not_pass_write_cypher() -> None:
+def test_the_former_connection_helper_gets_no_allowance() -> None:
     helper = "from falkordb import FalkorDB\ndef connect(host):\n    return FalkorDB(host=host)\n"
 
-    assert scan_source(helper, is_connection_helper=True) == []
-    assert (
-        len(scan_source('def f(g):\n    g.query("CREATE (n)")\n', is_connection_helper=True)) == 1
-    )
+    assert len(scan_source(helper)) >= 2
 
 
 def test_the_sink_check_fails_for_a_writer_that_never_submits_and_passes_through_a_helper() -> None:

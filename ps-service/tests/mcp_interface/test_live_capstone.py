@@ -4,8 +4,8 @@ against real infrastructure.
 
 Mirrors `tests/query_engine/test_live_capstone.py`'s shape exactly (marker,
 fixture style, direct-read `_count_nodes` helper). Connects to the real,
-reachable FalkorDB instance and selects the real, already-populated
-`policy_system` graph (~776 nodes) -- never a disposable test graph. The
+reachable FalkorDB instance and reads a uniquely named throwaway graph the test seeds and
+deletes itself -- never the shared `policy_system` graph, whose content is ambient. The
 whole file is read-only by construction: every query either goes through
 `handle_mcp_tool_call` -> `execute_cypher_query`'s write-clause guard (which
 `test_live_write_clause_rejected` below proves rejects before FalkorDB ever
@@ -31,10 +31,17 @@ Three tests, all `@pytest.mark.falkordb_live` (deselected by the default
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from ps_service.graph_gateway.connection import (
+    connect as connect_writable,
+)
+from ps_service.graph_gateway.connection import (
+    select_graph as select_writable_graph,
+)
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.mcp_interface.mcp_server import handle_mcp_tool_call
 from ps_service.query_engine.cypher_query import (
@@ -48,7 +55,6 @@ if TYPE_CHECKING:
 
 _HOST = "127.0.0.1"
 _PORT = 6379
-_GRAPH_NAME = "policy_system"
 
 
 @pytest.fixture
@@ -65,14 +71,24 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
 
 
 @pytest.fixture
-def real_graph() -> GraphHandle:
-    """Connects to the real, reachable FalkorDB instance and selects the
-    real `policy_system` graph via the real `connect`/`select_graph` from
-    `falkordb_client.py` -- no fake `GraphHandle`. Same host/port/graph as
-    `tests/query_engine/test_live_capstone.py`.
+def real_graph() -> Iterator[GraphHandle]:
+    """A uniquely named throwaway graph holding a few nodes, read through the real read-only
+    `connect`/`select_graph` from `falkordb_client.py` -- no fake `GraphHandle`.
+
+    The test never reads the shared `policy_system` graph: that graph is empty (or absent) in a
+    clean environment, where the unseeded guard rightly refuses every query, so a test that
+    needs content seeds its own and deletes it afterwards.
     """
-    db = connect(host=_HOST, port=_PORT)
-    return select_graph(db, _GRAPH_NAME)
+    graph_name = f"query_live_capstone_{uuid.uuid4().hex[:12]}"
+    write_db = connect_writable(host=_HOST, port=_PORT)
+    seed = select_writable_graph(write_db, graph_name)
+    seed.query(
+        "CREATE (:Capability {id: 'cap-1'}), (:Capability {id: 'cap-2'}), (:Role {id: 'r1'})"
+    )
+    try:
+        yield select_graph(connect(host=_HOST, port=_PORT), graph_name)
+    finally:
+        write_db.select_graph(graph_name).delete()
 
 
 def _count_nodes(graph: GraphHandle) -> int:
@@ -92,7 +108,7 @@ def test_live_read_only_query_returns_expected_shape(
     real_graph: GraphHandle, emitter: LogEmitter
 ) -> None:
     """AC-001 live proof: a real `MATCH (n) RETURN n LIMIT 3` query against
-    the real `policy_system` graph, executed through the actual
+    the throwaway graph, executed through the actual
     `handle_mcp_tool_call` -> `execute_cypher_query` -> real FalkorDB driver.
     """
     result = handle_mcp_tool_call(
@@ -155,7 +171,7 @@ def test_live_write_clause_rejected(real_graph: GraphHandle, emitter: LogEmitter
 
     count_after = _count_nodes(real_graph)
     assert count_after == count_before, (
-        f"policy_system's node count changed ({count_before} -> {count_after}) -- "
+        f"the graph's node count changed ({count_before} -> {count_after}) -- "
         "the write-clause guard must reject before graph.query is ever called"
     )
 
