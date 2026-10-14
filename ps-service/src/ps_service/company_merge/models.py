@@ -17,8 +17,7 @@ class BaselineNode:
     """A Role, Requirement, Obligation, Capability, Policy, Standard or Control node of a baseline.
 
     Read from a `{short}_baseline` graph exactly as the Domain Mapper wrote it. `properties` is used
-    for nodes that never carry an embedding; the properties dict Company Merge itself writes onto a
-    canonical Capability node has its own wider type (`CanonicalNodeProperties`).
+    for nodes that never carry an embedding.
 
     Attributes:
         id: The node's baseline-local id.
@@ -375,10 +374,3 @@ class MergeResult:
     governance_standards: int = 0
     governance_controls: int = 0
     governance_status_overridden: int = 0
-
-
-# Wider than `BaselineNode.properties` so it can legally carry an embedding value. Used only for
-# the `$properties` of a newly minted canonical Capability node and the `$embedding` of a
-# canonical-embedding backfill; Role, Requirement, RegulatoryInstrument and Obligation properties
-# never carry an embedding and stay `dict[str, str | float]`.
-CanonicalNodeProperties = dict[str, str | float | list[float]]

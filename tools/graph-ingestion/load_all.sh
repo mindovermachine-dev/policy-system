@@ -31,6 +31,6 @@ echo "Loading CRA, GDPR, NIS2, and Engineering Practices into FalkorDB graph '${
 load "${DATA_DIR}/eu-regulations/cra.json" --reset
 load "${DATA_DIR}/eu-regulations/gdpr.json"
 load "${DATA_DIR}/eu-regulations/nis2.json"
-load "${DATA_DIR}/engineering-practices/engineering-practices-seed.json"
+load "${REPO_ROOT}/internal-sources/engineering-practices/engineering-practices-seed.json"
 
 echo "Done."

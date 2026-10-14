@@ -72,24 +72,6 @@ class IdIndexes:
                 self._indexed.add(label)
 
 
-def ensure_id_indexes(graph: WritableGraph, labels: Iterable[str]) -> None:
-    """Create an index on `id` for each of `labels` that does not have one yet (one pass).
-
-    Args:
-        graph: The writable graph to index.
-        labels: Node labels that need an index on `id`; may repeat or be empty.
-
-    Raises:
-        UnexpectedGraphReplyError: The index listing has an unexpected shape.
-        redis.exceptions.ResponseError: Creating an index failed for a reason other than
-            "already indexed".
-
-    Side Effects:
-        Lists the graph's indexes and creates the missing ones.
-    """
-    IdIndexes(graph).ensure(labels)
-
-
 def _labels_indexed_on_id(graph: WritableGraph) -> set[str]:
     """Return the node labels that already have an index on `id`."""
     indexed: set[str] = set()

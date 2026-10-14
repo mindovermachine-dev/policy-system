@@ -62,7 +62,7 @@
 - Absolute imports only, no relative imports (`[tool.ruff.lint.flake8-tidy-imports] ban-relative-imports = "all"`) — clearer with the `src/` layout's nested packages.
 - DRY: don't duplicate logic across modules — extract a shared function/class within the same package once a pattern repeats a third time.
 - Docstrings required on public functions/classes and anything crossing a component boundary, written against the L1 Documentation rubric and its mandatory subset (see Documentation below); the MCP tool-docstring rule under ps-service is a stricter special case of the Documentation rubric, not a separate rule. Presence is enforced by `pydocstyle` (`google` convention); tests and `tools/` are exempted from docstring rules via `per-file-ignores` — but `tools/` and `docs/**.py` are still type-checked by basedpyright.
-- Scope: config is workspace-wide from the root `pyproject.toml`, applied uniformly to `ps-service`, `ps-cli`, `tools/`, and `docs/**.py`. `spikes/` (nested git repo) and `ps-question-skill/` contain no `.py` today and are excluded; bring them into scope when they gain Python code.
+- Scope: config is workspace-wide from the root `pyproject.toml`, applied uniformly to `ps-service`, `ps-cli`, `tools/`, and `docs/**.py`. `spikes/` (nested git repo) contains no `.py` today and is excluded; bring it into scope when it gains Python code.
 
 ### Documentation
 

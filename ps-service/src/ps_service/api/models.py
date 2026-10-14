@@ -574,34 +574,3 @@ class ProtectedResourceMetadata(BaseModel):
     authorization_servers: list[str]
     scopes_supported: list[str]
     ps_cli_client_id: str | None = None
-
-
-class ErrorDetail(BaseModel):
-    """The ``error`` object inside a structured error body.
-
-    Attributes:
-        code: Stable machine-readable error code; non-empty.
-        message: Sanitised human-readable message; non-empty.
-        failing_stage: Name of the pipeline stage that failed; ``None`` when the error is not
-            tied to a stage.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    code: str = Field(min_length=1)
-    message: str = Field(min_length=1)
-    failing_stage: str | None = None
-
-
-class ErrorBody(BaseModel):
-    """Structured 4xx/5xx response body: a sanitised error plus the request run id.
-
-    Attributes:
-        error: The error code, message and failing stage.
-        run_id: Run id bound to the request; ``None`` when none was bound.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    error: ErrorDetail
-    run_id: str | None

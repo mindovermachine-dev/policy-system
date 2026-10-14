@@ -1,10 +1,9 @@
-"""ps-cli's minimal, hand-rolled TOML writer: escaper + array/flat-table formatters.
+"""ps-cli's minimal, hand-rolled TOML writer: escaper + string-array formatter.
 
 Python's stdlib `tomllib` (`ps-cli`'s sole TOML dependency) is read-only — there is no
 stdlib TOML writer. Rather than add a runtime dependency (`tomli-w`, `toml`) for a
 small serialization need, this module provides `escape_basic_string` (the one escaper
-every writer needs), `format_flat_table` (a flat single-level table formatter), and
-`format_string_array` (for `auth.scopes`). Nested per-context tables
+every writer needs) and `format_string_array` (for `auth.scopes`). Nested per-context tables
 (`targets.py::write_targets()`'s `[contexts.<name>]`/`[contexts.<name>.auth]`,
 `credentials.py`'s `[credentials.<context>]`) are hand-rolled inline at each of their
 two call sites rather than generalized into a shared nested-table writer, because the
@@ -57,26 +56,6 @@ def escape_basic_string(value: str) -> str:
         raises and has no side effects.
     """
     return "".join(_escape_char(char) for char in value)
-
-
-def format_flat_table(table_name: str, pairs: dict[str, str]) -> str:
-    """Render `[table_name]` followed by one `key = "value"` line per pair, sorted by key.
-
-    Keys are never quoted — callers only pass keys already known to be safe bare TOML
-    keys by construction (e.g. a validated context name); only values pass through
-    `escape_basic_string`. Sorted by key for deterministic, diff-friendly output.
-
-    Parameters:
-        table_name: Name placed inside the `[...]` header, written verbatim (not
-            escaped or validated).
-        pairs: Key/value pairs for the table; may be empty.
-
-    Returns:
-        The table text ending in a newline. Never raises and has no side effects.
-    """
-    lines = [f"[{table_name}]"]
-    lines.extend(f'{key} = "{escape_basic_string(pairs[key])}"' for key in sorted(pairs))
-    return "\n".join(lines) + "\n"
 
 
 def format_string_array(values: tuple[str, ...]) -> str:

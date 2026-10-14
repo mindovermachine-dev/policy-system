@@ -315,7 +315,7 @@ def _parse_export_response(payload: object) -> ExportResult:
 def _raise_from_error_body(response: httpx.Response) -> NoReturn:
     """Parse a non-2xx PS Service response into a `PsCliError` naming the server's error.
 
-    Expects the structured `ErrorBody` shape (`{"error": {"code", "message",
+    Expects the structured error body shape (`{"error": {"code", "message",
     "failing_stage"}, "run_id"}`); falls back to a generic `PsCliError` naming
     the HTTP status if the body is not JSON or does not match that shape —
     never assume the server always returns the documented shape. Shared
@@ -566,19 +566,6 @@ class PsServiceClient:
             if timeout is None:
                 return self._client.get(path)
             return self._client.get(path, timeout=timeout)
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
-
-    def _post(
-        self, path: str, *, json: object | None = None, timeout: httpx.Timeout | None = None
-    ) -> httpx.Response:
-        """Un-authenticated `POST path`: no bearer header, no 401 special-case."""
-        try:
-            if timeout is None:
-                return self._client.post(path, json=json)
-            return self._client.post(path, json=json, timeout=timeout)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
         except httpx.TransportError as exc:

@@ -15,7 +15,7 @@ appending to it as more regulations are loaded.
 
 Usage (a single command line, wrapped here for width):
     python tools/graph-ingestion/merge_capabilities.py
-      --decisions docs/test-data/eu-regulations/capability_merges.json
+      --decisions test-data/eu-regulations/capability_merges.json
       --graph-name policy_system
 
 Options:

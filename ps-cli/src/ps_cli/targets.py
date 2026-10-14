@@ -244,8 +244,7 @@ def _format_auth_table(name: str, auth: AuthOverrides) -> str:
     nested-table call sites exist in this codebase (this one, and `credentials.py`'s
     per-context `[credentials.<context>]` token-bundle table), under the codebase's
     "extract once a pattern repeats a third time" threshold. Fields are emitted
-    alphabetically for deterministic,
-    diff-friendly output, mirroring `format_flat_table`'s sorted-key convention.
+    alphabetically for deterministic, diff-friendly output.
     """
     lines = [f"[contexts.{name}.auth]"]
     if auth.audience is not None:
