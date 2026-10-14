@@ -106,7 +106,7 @@ def test_fetch_xhtml_marks_cellar_eli_unhealthy_on_failure() -> None:
 
 
 def test_fetch_xhtml_raises_cellar_not_found_error_on_http_404_without_marking_unhealthy() -> None:
-    """AC-BI-007: a genuine Cellar 404 means the CELEX doesn't resolve -- the host
+    """A genuine Cellar 404 means the CELEX doesn't resolve -- the host
     responded, so this is not a Cellar/ELI outage and must not mark it unhealthy.
     """
 
@@ -123,7 +123,7 @@ def test_fetch_xhtml_raises_cellar_not_found_error_on_http_404_without_marking_u
 
 
 def test_fetch_rdf_sends_exact_url_and_accept_header_for_celex() -> None:
-    """PLAN_REVISED.md §1/§6: the RDF request must ask for the lean
+    """The RDF request must ask for the lean
     `notice=non-inferred` profile and must NOT send `Accept-Language` at
     all -- live-verified elsewhere that including it, at any value,
     collapses the response to an empty per-language stub. This is the
@@ -176,7 +176,7 @@ def test_fetch_rdf_marks_cellar_eli_unhealthy_on_failure() -> None:
 
 
 def test_fetch_rdf_raises_cellar_not_found_error_on_http_404_without_marking_unhealthy() -> None:
-    """AC-BI-007: a genuine Cellar 404 means the CELEX doesn't resolve -- the host
+    """A genuine Cellar 404 means the CELEX doesn't resolve -- the host
     responded, so this is not a Cellar/ELI outage and must not mark it unhealthy.
     """
 
@@ -247,7 +247,7 @@ def test_check_connectivity_treats_http_error_status_as_reachable() -> None:
 @pytest.mark.cellar_live
 def test_fetch_xhtml_live_fetch_of_cra_returns_eli_container_markup() -> None:
     """Real fetch of CRA (Regulation (EU) 2024/2847, CELEX 32024R2847) —
-    no local file/fixture/PDF as source, per AC-001.
+    no local file/fixture/PDF as source.
     """
     result = fetch_xhtml("32024R2847")
 

@@ -1,4 +1,4 @@
-"""The Graph Write Gateway rig, seen from the Domain Mapper stages (issue #209).
+"""The Graph Write Gateway rig, seen from the Domain Mapper stages.
 
 The Domain Mapper submits its baseline writes as gateway groups and only reads the baseline
 graph through a handle. `BaselineRig` is the gateway rig (in-memory log and FalkorDB fakes, the

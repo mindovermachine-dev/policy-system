@@ -1,6 +1,6 @@
-"""A cleanup merge survives live ingest and offline restore (issue #190, slice 17, AC-BI-008).
+"""A cleanup merge survives live ingest and offline restore.
 
-The real executor runs a real merge (capability and obligation) over the gateway rig (#212). The
+The real executor runs a real merge (capability and obligation) over the gateway rig. The
 persisted effect is then read back from the rig graph the gateway group built (a `merged`
 tombstone with `MERGED_INTO`; a `MergedObligation {merged_into}` marker), and served as the
 single-tenant graph to the real Company Merge live path (`dedupe_canonical_nodes`,

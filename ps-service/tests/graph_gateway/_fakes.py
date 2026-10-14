@@ -1,4 +1,4 @@
-"""Hand-written boundary fakes for the Graph Write Gateway tests (issue #206).
+"""Hand-written boundary fakes for the Graph Write Gateway tests.
 
 Postgres and FalkorDB are the only true boundaries. Each is replaced by a Protocol-conforming
 in-memory fake injected through the gateway's constructor:

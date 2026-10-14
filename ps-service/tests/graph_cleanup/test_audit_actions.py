@@ -1,4 +1,4 @@
-"""`capability.merge` audit action registration (issue #190, slice 10 sub-step c; AC-BI-021/023)."""
+"""`capability.merge` audit action registration."""
 
 from __future__ import annotations
 

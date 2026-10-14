@@ -1,4 +1,4 @@
-"""Live exact-key redirect over `merged` Capability tombstones (issue #190, AC-BI-008/009).
+"""Live exact-key redirect over `merged` Capability tombstones.
 
 `dedupe_canonical_nodes` follows `MERGED_INTO` for an incoming Capability id that
 equals a tombstone id, drops tombstones from the semantic-match pool, and fails

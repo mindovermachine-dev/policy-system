@@ -1,4 +1,4 @@
-"""Edge primitives through the Graph Write Gateway (issue #206 S3: AC-BI-003, AC-BI-001).
+"""Edge primitives through the Graph Write Gateway.
 
 Drives the public `submit_group` with `UpsertEdge` / `DeleteEdge` against the Protocol fakes.
 """

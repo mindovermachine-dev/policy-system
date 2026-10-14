@@ -1,7 +1,7 @@
 """Tests for ps_service.domain_mapper.derivation._derive_obligations.
 
-Per PLAN_REVIEWED.md §11 Increment 12 / the binding testing convention
-(§0.3/§0.5): `call_completion` is faked with a hand-written structural fake
+Per the binding testing convention,
+`call_completion` is faked with a hand-written structural fake
 satisfying `CompletionCaller`'s Protocol, scripted per-call in Role-then-
 Requirement document order — never `unittest.mock.Mock`/`MagicMock`.
 """
@@ -67,7 +67,7 @@ def _model_response(content: str) -> ModelResponse:
 def _scripted_sequential_call_completion(responses: list[str | Exception]) -> CompletionCaller:
     """A `CompletionCaller` fake that returns `responses` in the exact
     order `_derive_obligations`/`_derive_capabilities` calls the LLM — Role
-    then Requirement document order (PLAN_REVIEWED.md §7.3), or Obligation
+    then Requirement document order, or Obligation
     processing order for Capability derivation. Raises if more calls are
     made than were scripted, so an unexpected extra call fails loudly
     rather than silently reusing a stale response.
@@ -75,7 +75,7 @@ def _scripted_sequential_call_completion(responses: list[str | Exception]) -> Co
     An item may be an `Exception` instance instead of a response string —
     the fake raises it directly rather than returning a canned
     `ModelResponse`, to simulate a genuine infra failure (e.g.
-    `openai.APIConnectionError`, issue #64 slice 7) partway through a
+    `openai.APIConnectionError`) partway through a
     sequence.
     """
     remaining = list(responses)
@@ -256,7 +256,7 @@ def test_derive_obligations_same_role_convergence_on_independent_identical_mints
 def test_derive_obligations_same_duty_text_under_two_roles_is_two_distinct_nodes(
     make_emitter: MakeEmitter,
 ) -> None:
-    """(d) #42's resolution: Role A's Requirement mints "Cooperate with
+    """(d) Role A's Requirement mints "Cooperate with
     Market Surveillance Authority Requests" (one HAS edge to Role A). Role B,
     processed later in the same run, independently mints the IDENTICAL text.
     Because `obligation_id` is Role-scoped, the two ids differ by
@@ -313,7 +313,7 @@ def test_derive_obligations_same_duty_text_under_two_roles_is_two_distinct_nodes
 def test_derive_obligations_malformed_response_marks_unmatched_without_aborting(
     make_emitter: MakeEmitter,
 ) -> None:
-    """§7.5: a malformed/unparseable response is unified with the explicit
+    """A malformed/unparseable response is unified with the explicit
     unmatchable outcome -- surfaced, not silently dropped, and the run does
     not abort.
     """
@@ -359,11 +359,11 @@ def test_derive_obligations_emits_unmatched_log_entry(
     assert unmatched_entries[0]["action"] == "derive_obligations_and_capabilities"
 
 
-# --- _to_capability_node (issue #109) ---------------------------------------
+# --- _to_capability_node -----------------------------------------------------
 
 
 def test_to_capability_node_stamps_status_active_at_mint_time() -> None:
-    """AC-BI-002: every newly-minted CapabilityNode carries status="active" —
+    """Every newly-minted CapabilityNode carries status="active" —
     same ingest-time-active rule as RequirementNode (extraction.py), mirroring
     ingestion's RegulatoryInstrument.status pattern (graph_writer.py:163).
     """
@@ -381,13 +381,12 @@ def test_to_capability_node_stamps_status_active_at_mint_time() -> None:
 
 
 def test_capability_active_only_filter_returns_newly_minted_but_not_legacy_null_status() -> None:
-    """AC-BI-003 (Capability half): filter-semantics proxy test
-    (documentation only — no production filter exists; see PLAN.md §0 /
-    CHANGES.md Resolution 2). This test does not call or exercise any
+    """Capability half: filter-semantics proxy test
+    (documentation only — no production filter exists). This test does not call or exercise any
     production filter code — none exists in ps-qna or
-    `ps_service/query_engine` (confirmed in §0/Critique); `active_only_filter()`
+    `ps_service/query_engine`; `active_only_filter()`
     is a lambda defined locally inside the test purely to document and verify
-    the predicate semantics AC-BI-003 depends on, not to test a real filter
+    the predicate semantics, not to test a real filter
     implementation. Same predicate shape as
     test_requirement_active_only_filter_returns_newly_minted_but_not_legacy_null_status
     (test_extraction.py) — mirrors ps-qna/SKILL.md:86-107's
@@ -411,9 +410,9 @@ def test_capability_active_only_filter_returns_newly_minted_but_not_legacy_null_
     assert active_only_filter(legacy_pre_fix) is False
 
 
-# --- _derive_capabilities (Increment 14) ------------------------------------
+# --- _derive_capabilities ---------------------------------------------------
 #
-# Per PLAN_REVIEWED.md §7.4/§11 Increment 14: dedup distinct Obligations
+# Dedup distinct Obligations
 # first (by `.id`), one LLM call per distinct Obligation, single registry
 # spanning the WHOLE run (all Roles' Obligations -- Capability convergence
 # is deliberately Role- and Obligation-independent, unlike Obligation
@@ -542,12 +541,12 @@ def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capabil
     """Two distinct Obligations (conceptually from two different Roles --
     this function has no Role awareness at all) whose scripted responses
     BOTH mint the IDENTICAL Capability name -> the whole-run registry
-    (keyed by identity.capability_id(name), §7.4) converges them onto ONE
+    (keyed by identity.capability_id(name)) converges them onto ONE
     shared Capability node, with TWO REQUIRES edges, one per Obligation.
     Both calls MINT (not match) on purpose -- proving the CODE-level
     registry, not the model, guarantees convergence, mirroring
     _resolve_obligation_id's own same-Role reuse philosophy. B's identical
-    mint is verified as a reuse (#187) and accepted.
+    mint is verified as a reuse and accepted.
     """
     emitter, _log_path = make_emitter()
     capability_name = "Access Control System"
@@ -580,9 +579,7 @@ def test_derive_capabilities_one_obligation_two_capabilities_produces_two_requir
 ) -> None:
     """One Obligation's response lists TWO capabilities -> TWO REQUIRES
     edges off the SAME Obligation node, one new Capability minted for
-    each -- multi-capability-per-Obligation support, a proven finding
-    ported from spikes/cellar2/derive_capabilities.py and retained here
-    per §7.4/§11 Increment 13's explicit instruction.
+    each -- multi-capability-per-Obligation support.
     """
     emitter, _log_path = make_emitter()
     call_completion = _scripted_sequential_call_completion(
@@ -652,7 +649,7 @@ def test_derive_capabilities_match_response_reuses_registry_entry(
     (rather than re-minting identical text) resolves to the same node --
     the ordinary, model-cooperative convergence path, complementing the
     code-guaranteed convergence proven above. B's match is verified as a
-    reuse (#187) and accepted.
+    reuse and accepted.
     """
     emitter, _log_path = make_emitter()
     minted_name = "Access Control System"
@@ -681,7 +678,7 @@ def test_derive_capabilities_match_response_reuses_registry_entry(
 def test_derive_capabilities_malformed_response_marks_unmatched_without_aborting(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #64 / AC-BI-001, AC-BI-002: a malformed/unparseable Capability
+    """A malformed/unparseable Capability
     response for one Obligation is isolated -- surfaced via
     `unmatched_obligation_ids`, not a silently dropped Obligation and not an
     uncaught exception that aborts the whole run.
@@ -701,7 +698,7 @@ def test_derive_capabilities_malformed_response_marks_unmatched_without_aborting
 def test_derive_capabilities_emits_unmatched_log_entry(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """Issue #64 / AC-BI-002: the isolated failure emits exactly one
+    """The isolated failure emits exactly one
     `outcome="unmatched"` log entry keyed by the failing Obligation's id.
     """
     emitter, log_path = make_emitter()
@@ -723,7 +720,7 @@ def test_derive_capabilities_emits_unmatched_log_entry(
 def test_derive_capabilities_two_of_three_obligations_converge_despite_one_malformed_response(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #64 / AC-BI-003: three distinct Obligations processed in order
+    """Three distinct Obligations processed in order
     A, C, B. A and B's responses both MINT the identical Capability name
     (same code-level-convergence technique as
     `test_derive_capabilities_two_distinct_obligations_converge_on_shared_capability`),
@@ -731,7 +728,7 @@ def test_derive_capabilities_two_of_three_obligations_converge_despite_one_malfo
     neither poisons nor skips the whole-run registry state built up by A
     and consumed by B: A and B still converge onto ONE shared Capability
     node with TWO REQUIRES edges, and C alone is surfaced as unmatched.
-    B's identical mint is verified as a reuse (#187) and accepted.
+    B's identical mint is verified as a reuse and accepted.
     """
     emitter, _log_path = make_emitter()
     capability_name = "Access Control System"
@@ -762,7 +759,7 @@ def test_derive_capabilities_two_of_three_obligations_converge_despite_one_malfo
 def test_derive_capabilities_dedups_repeated_obligation_node_id_even_when_it_fails(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #64 / AC-BI-003 completeness: the same obligation_node_id
+    """The same obligation_node_id
     appearing TWICE in the input still results in exactly ONE LLM call even
     when that one call's response is malformed -- proven by scripting
     exactly one response; an unscripted second call raises inside the
@@ -790,10 +787,10 @@ def test_derive_capabilities_dedups_repeated_obligation_node_id_even_when_it_fai
 def test_derive_capabilities_hallucinated_capability_match_isolated_within_batch(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#45 AC-BI-001 + AC-BI-002: a well-formed capability-derivation response whose
+    """A well-formed capability-derivation response whose
     matched_existing_id names a Capability absent from the registry, with no usable
-    new_name, is the exact hallucination shape TASK.md:7 reports from the live capstone
-    flake -- distinct from issue #64's bad-JSON trigger. Three distinct Obligations
+    new_name, is the exact hallucination shape seen in a live run
+    -- distinct from a bad-JSON trigger. Three distinct Obligations
     processed in order A, C, B: A and B's responses both MINT the identical Capability
     name (same code-level-convergence technique as
     test_derive_capabilities_two_distinct_obligations_converge_on_shared_capability),
@@ -802,8 +799,8 @@ def test_derive_capabilities_hallucinated_capability_match_isolated_within_batch
     and B still converge onto ONE shared Capability node with TWO REQUIRES edges, and C
     alone is surfaced as unmatched with no Capability node or REQUIRES edge of its own --
     proving _process_obligation's except DomainMapperDerivationError catch
-    (derivation.py:598-609) reaches this specific well-formed-but-unresolvable trigger,
-    not just malformed JSON. B's identical mint is verified as a reuse (#187) and
+    reaches this specific well-formed-but-unresolvable trigger,
+    not just malformed JSON. B's identical mint is verified as a reuse and
     accepted.
     """
     emitter, _log_path = make_emitter()
@@ -824,12 +821,12 @@ def test_derive_capabilities_hallucinated_capability_match_isolated_within_batch
         emitter=emitter,
     )
 
-    # AC-BI-001: the hallucinated-id Obligation surfaces unmatched, nothing else for it.
+    # the hallucinated-id Obligation surfaces unmatched, nothing else for it.
     assert unmatched_obligation_ids == (_OBLIGATION_C.id,)
     assert all(edge.obligation_node_id != _OBLIGATION_C.id for edge in requires_edges)
     assert _HALLUCINATED_CAPABILITY_ID not in {node.id for node in capability_nodes}
 
-    # AC-BI-002: the rest of the batch is unaffected -- normal return, no exception, A/B
+    # the rest of the batch is unaffected -- normal return, no exception, A/B
     # still converge correctly.
     assert len(capability_nodes) == 1
     assert capability_nodes[0].id == capability_id(capability_name)
@@ -844,15 +841,14 @@ def test_derive_capabilities_hallucinated_capability_match_isolated_within_batch
 def test_derive_capabilities_hallucinated_capability_match_emits_unmatched_log_entry(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """#45 AC-BI-003: the hallucinated-id Obligation from the same A/C/B batch as
+    """The hallucinated-id Obligation from the same A/C/B batch as
     test_derive_capabilities_hallucinated_capability_match_isolated_within_batch emits
     EXACTLY ONE outcome="unmatched" log entry, keyed by its own entity_id -- and A/B's
     successful mint/match decisions do not also produce unmatched entries alongside it.
-    Mirrors test_derive_capabilities_emits_unmatched_log_entry's assertion shape
-    (test_derivation.py:555-574), the issue #64 precedent for this exact log-assertion
-    style, extended to a 3-Obligation batch so "exactly one" is actually exercised
+    Mirrors test_derive_capabilities_emits_unmatched_log_entry's assertion shape,
+    extended to a 3-Obligation batch so "exactly one" is actually exercised
     against a run where other entries could plausibly appear. B's identical mint is
-    verified as a reuse (#187) and accepted; that verdict line has
+    verified as a reuse and accepted; that verdict line has
     outcome="reuse_accepted", so "exactly one unmatched" still holds.
     """
     emitter, log_path = make_emitter()
@@ -885,12 +881,12 @@ def test_derive_capabilities_hallucinated_capability_match_emits_unmatched_log_e
 def test_derive_capabilities_propagates_llm_provider_error_and_aborts(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #64 / AC-BI-004: a genuine LLM Interface infra failure
+    """A genuine LLM Interface infra failure
     (`openai.APIConnectionError`, wrapped by `route_completion` into
     `LlmProviderError`) for one Obligation's call is NOT caught by
     `_process_obligation`'s `try/except DomainMapperDerivationError` --
     it propagates unchanged and aborts the whole `_derive_capabilities`
-    call, proving the isolation added for issue #64 does not accidentally
+    call, proving the isolation does not accidentally
     widen to catch infra failures too.
     """
     emitter, _log_path = make_emitter()
@@ -910,7 +906,7 @@ def test_derive_capabilities_propagates_llm_provider_error_and_aborts(
 def test_derive_capabilities_propagates_llm_provider_error_for_empty_completion_content_and_aborts(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #64 / AC-BI-004 (CHANGES.md item 1): an empty-string completion
+    """An empty-string completion
     content is a distinct `LlmProviderError` trigger from
     `openai.APIConnectionError` above -- `route_completion`'s
     `_to_completion_result` (`completion.py:62-63`) raises `LlmProviderError`
@@ -928,14 +924,14 @@ def test_derive_capabilities_propagates_llm_provider_error_for_empty_completion_
         )
 
 
-# --- derive_obligations_and_capabilities (Increment 16) --------------------
+# --- derive_obligations_and_capabilities ------------------------------------
 #
-# Per PLAN_REVIEWED.md §11 Increment 16: a hand-written structural fake for
+# A hand-written structural fake for
 # the baseline `GraphHandle`, scripted with the rows
 # `_read_requirements_by_role`'s query expects -- mirrors `test_extraction.py`'s
 # `_FakeBaselineGraph` style, no `unittest.mock`.
 #
-# #209: the write side now goes through the Graph Write Gateway, so the fake owns a `BaselineRig`
+# The write side goes through the Graph Write Gateway, so the fake owns a `BaselineRig`
 # (`gateway_kwargs()`); the assertions below read the submitted group from `rig.logged()`.
 
 
@@ -1022,7 +1018,7 @@ def _edge_pairs(graph: _FakeBaselineGraph, relationship_type: str) -> list[tuple
 
 def _never_called_completion(invocations: list[bool]) -> CompletionCaller:
     """A `CompletionCaller` fake that raises if it is EVER invoked --
-    Increment 16 test (e)'s direct proof that the dangling-`role_id` check
+    Direct proof that the dangling-`role_id` check
     runs before any LLM call is made for any Role's Requirements.
     """
 
@@ -1034,7 +1030,7 @@ def _never_called_completion(invocations: list[bool]) -> CompletionCaller:
 
 
 def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter: MakeEmitter) -> None:
-    """(a) AC-003: 2 Roles, 3 Requirements, all matchable -> every
+    """(a) 2 Roles, 3 Requirements, all matchable -> every
     Requirement has >=1 SATISFIED_BY, every Obligation has exactly 1 HAS
     from its Role, every Obligation has >=1 REQUIRES.
     """
@@ -1110,7 +1106,7 @@ def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter: MakeE
 def test_derive_reads_only_the_requested_instruments_requirements(
     make_emitter: MakeEmitter,
 ) -> None:
-    """A re-ingested amendment shares `{short}_baseline` with its prior version (#201): deriving
+    """A re-ingested amendment shares `{short}_baseline` with its prior version: deriving
     the new version must not re-derive (or LLM-process) the prior version's Requirements.
     """
     emitter, _log_path = make_emitter()
@@ -1147,7 +1143,7 @@ def test_derive_reads_only_the_requested_instruments_requirements(
 def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surfaced(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """(b) AC-004: one Requirement's scripted response is unmatchable -> it
+    """(b) one Requirement's scripted response is unmatchable -> it
     appears in DerivationResult.unmatched_requirement_ids, has no
     SATISFIED_BY edge written, and an outcome="unmatched" log entry is
     emitted naming its id.
@@ -1202,7 +1198,7 @@ def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surface
 def test_derive_obligations_and_capabilities_unmatched_obligation_surfaced(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #64 / AC-BI-001, AC-BI-002, AC-BI-003 -- end-to-end integration
+    """End-to-end integration
     proof through the public entry point (not the module-internal
     `_derive_capabilities`). 2 Requirements under one Role, both
     Obligation-derivation calls succeed (2 distinct Obligations), but the
@@ -1266,7 +1262,7 @@ def test_derive_obligations_and_capabilities_unmatched_obligation_surfaced(
 def test_derive_obligations_and_capabilities_ac007_emits_log_entry_with_bound_run_id(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """(c) AC-007: mirrors the AC-006 pattern exactly."""
+    """(c) A run bound to a run context logs a `succeeded` entry carrying that run id."""
     emitter, log_path = make_emitter()
     rows: list[list[object]] = [
         [
@@ -1386,7 +1382,7 @@ def test_derive_obligations_and_capabilities_dangling_role_id_raises_before_any_
 def test_derive_obligations_and_capabilities_renders_registry_with_id_name_and_description(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-001/002: the capability call sees each prior registry entry as
+    """The capability call sees each prior registry entry as
     `id: name — description` (or `(no description)`) inside
     `<capability_registry>`, and a `None` description never errors.
     """
@@ -1455,7 +1451,7 @@ def test_derive_obligations_and_capabilities_renders_registry_with_id_name_and_d
 
 
 # ---------------------------------------------------------------------------
-# #187: per-reuse verification (accept path). Driven through the public entry
+# Per-reuse verification (accept path). Driven through the public entry
 # point with `_prompt_routed_call_completion` and `_FakeBaselineGraph`; one
 # Requirement per Obligation, all under `_ROLE_MANUFACTURER`, minted in
 # document order, so Capability calls happen in that same order (A, B, ...).
@@ -1531,7 +1527,7 @@ def _reuse_scenario(
 def test_derive_obligations_and_capabilities_reuse_proposal_makes_exactly_one_verification_call(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 AC-BI-003: B's reuse proposal triggers exactly one verification
+    """B's reuse proposal triggers exactly one verification
     call; A's first mint triggers none (the one call carries B's duty text).
     """
     emitter, _log_path = make_emitter()
@@ -1548,7 +1544,7 @@ def test_derive_obligations_and_capabilities_reuse_proposal_makes_exactly_one_ve
 def test_derive_obligations_and_capabilities_mint_proposals_make_no_verification_call(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 AC-BI-003 (mint half, A-M1 rewrite): two first mints of distinct
+    """Mint half: two first mints of distinct
     names are not reuses, so no verification call is made.
     """
     emitter, _log_path = make_emitter()
@@ -1580,7 +1576,7 @@ def test_derive_obligations_and_capabilities_mint_proposals_make_no_verification
 def test_derive_obligations_and_capabilities_mint_of_existing_capability_name_is_verified_as_reuse(
     b_name: str, make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """#187 A-M1: B's "mint" of a name already in the registry (exactly or
+    """B's "mint" of a name already in the registry (exactly or
     case-insensitively -- `capability_id` lower-cases) attaches to the
     existing Capability, so it is verified exactly like a reuse, against the
     registry's own name and description.
@@ -1620,7 +1616,7 @@ def test_derive_obligations_and_capabilities_mint_of_existing_capability_name_is
 def test_derive_obligations_and_capabilities_accepted_reuse_keeps_existing_capability(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 AC-BI-004: an accepted reuse attaches B to the existing
+    """An accepted reuse attaches B to the existing
     Capability X and mints nothing new.
     """
     emitter, _log_path = make_emitter()
@@ -1635,7 +1631,7 @@ def test_derive_obligations_and_capabilities_accepted_reuse_keeps_existing_capab
 def test_derive_capabilities_accepted_reuse_keeps_existing_capability_node(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 AC-BI-004 at `_derive_capabilities` level: B's edge targets X
+    """At `_derive_capabilities` level: B's edge targets X
     and the run still holds exactly one Capability node.
     """
     emitter, _log_path = make_emitter()
@@ -1663,7 +1659,7 @@ def test_derive_capabilities_accepted_reuse_keeps_existing_capability_node(
 def test_reuse_verification_messages_delimit_obligation_text_and_description_as_untrusted(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 AC-BI-007: the verification call carries the Obligation text and
+    """The verification call carries the Obligation text and
     the Capability's name/description only as tag-delimited user content,
     never in the system prompt.
     """
@@ -1688,7 +1684,7 @@ def test_reuse_verification_messages_delimit_obligation_text_and_description_as_
 def test_derive_obligations_and_capabilities_logs_accepted_reuse_verdict(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """#187 AC-BI-011 (accept half): exactly one verdict line, keyed by
+    """Accept half: exactly one verdict line, keyed by
     (B, X), outcome "reuse_accepted", with no reject-only keys.
     """
     emitter, log_path = make_emitter()
@@ -1709,7 +1705,7 @@ def test_derive_obligations_and_capabilities_logs_accepted_reuse_verdict(
 
 
 # ---------------------------------------------------------------------------
-# #191: recalibrated reuse verification (accept path), real #187 DORA cases.
+# Recalibrated reuse verification (accept path), real DORA cases.
 
 _EU_REPORTING_NAME = "EU Regulatory Reporting"
 _EU_REPORTING_DESCRIPTION = (
@@ -1725,18 +1721,17 @@ _SUBSUMPTION_GUIDANCE = "A broader description can cover a narrower duty"
 def test_derive_obligations_and_capabilities_accepts_broader_eu_regulatory_reporting_for_ict_incident_reporting_duty(  # noqa: E501
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """#191 AC-BI-001/AC-BI-003: the #187 DORA subsumption case
-    (dora-reingest-187.jsonl:1053). B's narrower ICT-incident reporting duty
+    """The DORA subsumption case. B's narrower ICT-incident reporting duty
     is proposed for reuse of the broader "EU Regulatory Reporting"; the
     verifier accepts, so B attaches to it and "Incident Reporting" is never
-    minted. Q7: A's mint of EU Regulatory Reporting is first-pass here,
+    minted. A's mint of EU Regulatory Reporting is first-pass here,
     whereas in the real run it came from a verifier mint; that is irrelevant
     to B's decision.
 
-    The red step proves only that the recalibrated guidance is the system
+    This proves only that the recalibrated guidance is the system
     prompt recorded at the LLM boundary (implied by the prompt pin, since the
     fake routes on identity); the verdict is scripted, so behavioural proof
-    that a real model now accepts lives in test_reuse_verification_live.py (S4).
+    that a real model accepts lives in test_reuse_verification_live.py.
     """
     emitter, log_path = make_emitter()
 
@@ -1789,17 +1784,16 @@ _DOMAIN_QUALIFIER_GUIDANCE = "A domain qualifier alone does not make two capacit
 def test_derive_obligations_and_capabilities_accepts_ict_operational_risk_management_for_unqualified_operational_risk_duty(  # noqa: E501
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """#191 AC-BI-002/AC-BI-004: the #187 DORA domain-qualifier case
-    (dora-reingest-187.jsonl:1904). B's unqualified operational-risk duty is
+    """The DORA domain-qualifier case. B's unqualified operational-risk duty is
     proposed for reuse of the existing, ICT-scoped "ICT Operational Risk
     Management"; the verifier accepts, so B attaches to it and "Operational
-    Risk Management" is never minted. Direction follows the raw #187 log
-    (PLAN.md G4), not the issue prose, per user decision C1(b), CHANGES.md.
+    Risk Management" is never minted. Direction follows the recorded
+    model output.
 
-    The red step proves only that the recalibrated guidance is the system
+    This proves only that the recalibrated guidance is the system
     prompt recorded at the LLM boundary (implied by the prompt pin, since the
     fake routes on identity); the verdict is scripted, so behavioural proof
-    that a real model now accepts lives in test_reuse_verification_live.py (S4).
+    that a real model accepts lives in test_reuse_verification_live.py.
     """
     emitter, log_path = make_emitter()
 
@@ -1837,7 +1831,7 @@ def test_derive_obligations_and_capabilities_accepts_ict_operational_risk_manage
 
 
 # ---------------------------------------------------------------------------
-# #187: per-reuse verification (reject path).
+# Per-reuse verification (reject path).
 
 _CONTINUITY_NAME = "Organisational Continuity Structure"
 _CONTINUITY_DESCRIPTION = "Maintains the organisational structure needed for continuity."
@@ -1883,7 +1877,7 @@ def _capability_node_writes(graph: _FakeBaselineGraph) -> dict[object, object]:
 def test_derive_obligations_and_capabilities_rejected_reuse_mints_verifier_capability(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 AC-BI-005: a rejected reuse mints the verifier's more specific
+    """A rejected reuse mints the verifier's more specific
     Capability (its description, status "active") and attaches B to it --
     never to X -- while A keeps its edge to X.
     """
@@ -1904,9 +1898,9 @@ def test_derive_obligations_and_capabilities_rejected_reuse_mints_verifier_capab
 def test_derive_obligations_and_capabilities_logs_rejected_reuse_verdict(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """#187 AC-BI-011 (reject half): exactly one verdict line, keyed by
+    """Reject half: exactly one verdict line, keyed by
     (B, X), outcome "reuse_rejected", carrying the minted id as a top-level
-    key (A-m5: `extra` is flattened, never nested).
+    key (`extra` is flattened, never nested).
     """
     emitter, log_path = make_emitter()
 
@@ -1927,7 +1921,7 @@ def test_derive_obligations_and_capabilities_logs_rejected_reuse_verdict(
 def test_derive_obligations_and_capabilities_mint_of_existing_capability_name_rejected_mints_verifier_capability(  # noqa: E501
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 A-M1: B's "mint" of a name already in the registry is verified
+    """B's "mint" of a name already in the registry is verified
     as a reuse; on reject, B attaches to the verifier's Capability instead
     of X, and A keeps X.
     """
@@ -1982,7 +1976,7 @@ def test_derive_obligations_and_capabilities_multiple_reuses_in_one_response_are
     expected_c_targets: set[object],
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 AC-BI-006: each reuse in one response gets its own verification
+    """Each reuse in one response gets its own verification
     call, and each verdict decides only its own proposal.
     """
     emitter, _log_path = make_emitter()
@@ -2037,7 +2031,7 @@ _INCIDENT_REPORTING_ID = capability_id("Incident Reporting Workflow")
 def test_derive_obligations_and_capabilities_verifier_minted_name_colliding_with_registry_marks_unmatched(  # noqa: E501
     new_name: str, make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """#187 AC-BI-009: a verifier "mint" whose id is already in the registry
+    """A verifier "mint" whose id is already in the registry
     (exactly or case-insensitively; `capability_id` does not normalise
     whitespace, so there is no whitespace case) marks B unmatched -- no
     retry, no second verification call -- and the run continues with C.
@@ -2082,7 +2076,7 @@ def test_derive_obligations_and_capabilities_verifier_minted_name_colliding_with
 def test_derive_obligations_and_capabilities_verifier_mint_equal_to_same_response_mint_converges_on_one_capability(  # noqa: E501
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 A-m6: when the verifier mints the same Capability as another mint
+    """When the verifier mints the same Capability as another mint
     in B's own response, the run holds that Capability once and B attaches
     only to it (a duplicate REQUIRES entry is harmless -- the writer MERGEs).
     """
@@ -2122,8 +2116,7 @@ def test_derive_obligations_and_capabilities_verifier_mint_equal_to_same_respons
 
 
 # ---------------------------------------------------------------------------
-# #187: malformed verification responses (AC-BI-008, characterisation pins --
-# the phase-1 catch and two-phase atomicity landed with S2/S3).
+# Malformed verification responses (characterisation pins).
 
 
 @pytest.mark.parametrize(
@@ -2151,7 +2144,7 @@ def test_derive_obligations_and_capabilities_verifier_mint_equal_to_same_respons
 def test_derive_obligations_and_capabilities_malformed_reuse_verification_marks_obligation_unmatched(  # noqa: E501
     malformed_verification: str, make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """#187 AC-BI-008: a malformed verification response for B's reuse marks
+    """A malformed verification response for B's reuse marks
     B unmatched with no REQUIRES edge, and the run continues with C.
     """
     emitter, log_path = make_emitter()
@@ -2180,7 +2173,7 @@ def test_derive_obligations_and_capabilities_malformed_reuse_verification_marks_
 def test_derive_capabilities_malformed_second_reuse_verification_drops_all_edges_for_that_obligation(  # noqa: E501
     make_emitter: MakeEmitter,
 ) -> None:
-    """#187 AC-BI-008 atomicity guard: C's first reuse is accepted but its
+    """Atomicity guard: C's first reuse is accepted but its
     second verification is malformed, so C gets no REQUIRES edge at all,
     and A's and B's Capabilities and edges are unchanged.
     """
@@ -2222,7 +2215,7 @@ def test_derive_capabilities_malformed_second_reuse_verification_drops_all_edges
 
 
 # ---------------------------------------------------------------------------
-# #187: provider failure during verification (AC-BI-010, characterisation pin).
+# Provider failure during verification (characterisation pin).
 
 
 @pytest.mark.parametrize(
@@ -2238,7 +2231,7 @@ def test_derive_capabilities_malformed_second_reuse_verification_drops_all_edges
 def test_derive_obligations_and_capabilities_reuse_verification_provider_error_aborts_run(
     verification_failure: str | Exception, make_emitter: MakeEmitter
 ) -> None:
-    """#187 AC-BI-010: an `LlmProviderError` from a verification call is
+    """An `LlmProviderError` from a verification call is
     never caught -- it aborts the whole run before persistence, so no
     REQUIRES/HAS/SATISFIED_BY edge is written.
     """
@@ -2270,8 +2263,8 @@ def test_derive_obligations_and_capabilities_reuse_verification_provider_error_a
 def test_derive_obligations_and_capabilities_accepts_the_gateway_keywords_the_orchestrator_passes(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Signature-only slice (#209): the stage accepts `submitter`, `baseline_graph_name` and
-    `audit_event_id` (not yet used) so the orchestrator can hand them over.
+    """The stage accepts `submitter`, `baseline_graph_name` and
+    `audit_event_id` (not used) so the orchestrator can hand them over.
     """
     emitter, _log_path = make_emitter()
     rig = GatewayRig()

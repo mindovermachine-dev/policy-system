@@ -1,15 +1,15 @@
-"""`falkordb_live` + `postgres_live`: the Domain Mapper's gateway write path, real stores (#209).
+"""`falkordb_live` + `postgres_live`: the Domain Mapper's gateway write path, real stores.
 
 The live twin of `test_persist_equivalence.py`: the same recorded-CRA inputs go through the frozen
-pre-#209 Cypher (`_legacy_reference`, run against a real FalkorDB graph) and through the real
+direct Cypher (`_legacy_reference`, run against a real FalkorDB graph) and through the real
 `persist_*` functions over the real gateway (the `PsycopgGraphLogStore` as the `ps_state` role on a
 scratch PS Postgres, and the real FalkorDB opener), each on a uniquely named graph that is deleted
 afterwards.
 
-AC-BI-002 is met modulo identity (D2): the digest of the graph the gateway built equals the digest
+Equivalence holds modulo identity: the digest of the graph the gateway built equals the digest
 of the graph the legacy Cypher built, once the legacy edges are given the gateway's deterministic
 `identity` (the one stamp Cypher below). A second test shows an edge whose endpoint exists nowhere
-is dropped by both paths (AC-BI-004). Met modulo identity; live digest not verified here: this
+is dropped by both paths. Live digest not verified here: this
 sandbox has no FalkorDB module and no Postgres, so these tests are only collected and
 linted/type-checked in the implementation; the fast, in-memory twin carries the verified
 assertions.
@@ -125,7 +125,7 @@ def stack(provisioned_graph_log: Provisioned) -> Iterator[_Stack]:
 
 
 def _write_legacy(stack: _Stack, inputs: Inputs) -> str:
-    """The graph the pre-#209 writer built: its own Cypher on a real graph, edges stamped."""
+    """The graph the old writer built: its own Cypher on a real graph, edges stamped."""
     name = stack.graph_name("legacy_baseline")
     graph = stack.handle(name)
     write_legacy_role_and_requirement_graph(

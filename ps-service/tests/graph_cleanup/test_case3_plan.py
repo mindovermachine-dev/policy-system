@@ -1,9 +1,9 @@
-"""Pure planner for merge case 3, both capabilities governed (issue #190, slice 13 a).
+"""Pure planner for merge case 3, both capabilities governed.
 
-AC-BI-011 (different policies: rejected before any approval, naming both policies and the
-release-governance step), AC-BI-012 (the same policy needs no acknowledgment), D-A1 (the
-absorbed capability's `GOVERNED_BY` edge is deleted, the survivor's stays), and E1/D6 (a pair
-governed by two non-draft policies has no completion path; the error says so honestly).
+Different policies: rejected before any approval, naming both policies and the release-governance
+step. The same policy needs no acknowledgment, and the absorbed capability's `GOVERNED_BY` edge is
+deleted while the survivor's stays. A pair governed by two non-draft policies has no completion
+path; the error says so.
 """
 
 from __future__ import annotations

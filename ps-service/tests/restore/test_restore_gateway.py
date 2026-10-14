@@ -1,11 +1,11 @@
-"""A restore is ONE multi-graph group through the Graph Write Gateway (issue #214, slice 8a).
+"""A restore is ONE multi-graph group through the Graph Write Gateway.
 
 The real `restore_instrument` runs against the gateway rig (`restore._gateway_fakes.RestoreRig`:
-the in-memory log and FalkorDB boundaries behind the real gateway). Covered: AC-BI-001 (one
-transaction, one group per leg, shared audit event), AC-BI-002 (a failing restore logs nothing
-and leaves the graphs as they were), AC-BI-005 (verification before any gateway call), AC-BI-006
-(drafts owned by the caller, never converged), AC-BI-011 (restore over an existing copy), and
-AC-BI-012's gateway half (the group carries the restore's event id; the failure outcomes the
+the in-memory log and FalkorDB boundaries behind the real gateway). Covered: one
+transaction, one group per leg, shared audit event; a failing restore logs nothing
+and leaves the graphs as they were; verification before any gateway call; drafts owned by the
+caller, never converged; restore over an existing copy; and the gateway half of the audit
+trail (the group carries the restore's event id; the failure outcomes the
 audit row records are asserted in `tests/api/test_restore_orchestration_audit.py`).
 
 The restore is applied by swap (`test_restore_swap.py` covers the swap itself).
@@ -112,7 +112,7 @@ def test_a_restore_that_changes_nothing_logs_nothing(restore_rig: RestoreRig) ->
 def test_restoring_over_an_existing_copy_leaves_exactly_the_artifacts_content(
     restore_rig: RestoreRig,
 ) -> None:
-    """AC-BI-011: nothing from the previous copy survives in the native and baseline graphs."""
+    """Nothing from the previous copy survives in the native and baseline graphs."""
     restore_rig.restore(_artifact(capability_name="Keep Logs"))
     changed = _artifact(capability_name="Keep Logs Safely")
     fresh = RestoreRig()
@@ -369,7 +369,7 @@ def _raise_once(error: Exception) -> Callable[..., None]:
 def test_the_internal_curated_instrument_lands_as_drafts_owned_by_the_restoring_caller(
     restore_rig: RestoreRig,
 ) -> None:
-    """AC-BI-006 end to end on the real ENGPRAC artifact."""
+    """Draft ownership end to end on the real ENGPRAC artifact."""
     curated = load_curated("ENGPRAC-1.0")
     artifact = build_restore_artifact(
         instrument_id="ENGPRAC-1.0",

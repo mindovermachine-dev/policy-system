@@ -1,9 +1,9 @@
-"""Replay reads the log in pages, in order, and refuses a log it cannot trust (#207 S10).
+"""Replay reads the log in pages, in order, and refuses a log it cannot trust.
 
 A page is cut at the checkpoint position so the digest is taken exactly there; a gap in the
 sequence or an entry that does not decode stops the replay at that sequence with a typed error.
 Gaps and corrupt entries cannot exist in the real database (its triggers and the content hash
-forbid them), so these are proven with a tampered in-memory log (defence in depth, PLAN D22).
+forbid them), so these are proven with a tampered in-memory log (defence in depth).
 """
 
 from __future__ import annotations

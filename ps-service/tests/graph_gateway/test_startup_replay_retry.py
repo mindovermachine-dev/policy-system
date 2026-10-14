@@ -1,4 +1,4 @@
-"""`run_startup_replay` keeps the startup replay going through an infrastructure outage (#207 S17b).
+"""`run_startup_replay` keeps the startup replay going through an infrastructure outage.
 
 A startup replay that meets Postgres or FalkorDB down must not give up: the pod would sit at
 `not_ready` for good. `run_startup_replay` retries `startup_replay` with a growing, capped wait

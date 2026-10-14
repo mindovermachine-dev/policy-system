@@ -1,4 +1,4 @@
-"""Seed builders and a legacy-handle stand-in shared by the internal-seed gateway tests (#208)."""
+"""Seed builders and a legacy-handle stand-in shared by the internal-seed gateway tests."""
 
 from __future__ import annotations
 

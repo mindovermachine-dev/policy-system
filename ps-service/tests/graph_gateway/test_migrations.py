@@ -1,4 +1,4 @@
-"""Fast checks of the `graph_gateway` migration files and startup wiring (issues #205, #214).
+"""Fast checks of the `graph_gateway` migration files and startup wiring.
 
 The live application of the migrations is covered by `test_provision_live.py`.
 """

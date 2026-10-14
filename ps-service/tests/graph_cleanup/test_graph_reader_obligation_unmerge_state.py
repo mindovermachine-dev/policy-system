@@ -1,4 +1,4 @@
-"""Reader for obligation `unmerge` (issue #190, slice 16 sub-step b): live state around a marker.
+"""Reader for obligation `unmerge`: live state around a marker.
 
 Pure reads with literal parameterised queries; a driver failure is a generic error.
 """

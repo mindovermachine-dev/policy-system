@@ -1,12 +1,11 @@
-"""Executor for capability `unmerge` (issue #190, slice 15 c; AC-BI-017/018/019/020/021/022).
+"""Executor for capability `unmerge`.
 
 Audit-first and fail-closed like the merges: re-check the role, re-locate the merge in the
 audit trail, re-read and compare the state digest, record `applied`, run the write, record `failed`
 (same approval id) on a guard miss or a failed write.
 
-Since #212 the write is one gateway group (`CleanupRig`, the gateway over in-memory log and graph
-fakes); the assertions on outcomes, messages and audit rows are the ones from before that change,
-only the write-shape ones (Cypher call recorded) now name the group.
+The write is one gateway group (`CleanupRig`, the gateway over in-memory log and graph fakes);
+the write-shape assertions name the group.
 """
 
 from __future__ import annotations

@@ -1,10 +1,9 @@
-"""Fake-wiring proof for `tools/company-merge/check_baseline_preconditions.py`
-(issue #28, PLAN.md §2.2).
+"""Fake-wiring proof for `tools/company-merge/check_baseline_preconditions.py`.
 
 Mirrors `test_export_instrument_cli.py`'s `importlib.util.spec_from_file_location`
 pattern to load a non-package `tools/` script by path. Injects three fake
 `GraphHandle`s via the CLI's `graph_provider` constructor-injection seam
-(CHANGES.md #7's corrected description of PLAN.md §2.2 -- a true DI seam, never
+(a true DI seam, never
 `monkeypatch.setattr` on a `FalkorDB` class) -- no real FalkorDB connection
 anywhere in this file. The real end-to-end proof (real FalkorDB, real baseline
 graphs) is `test_check_baseline_preconditions_cli_live.py`'s `falkordb_live`

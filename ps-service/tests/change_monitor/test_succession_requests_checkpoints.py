@@ -1,4 +1,4 @@
-"""The succession's terminal groups request a digest checkpoint (issue #215, S4d; D-8).
+"""The succession's terminal groups request a digest checkpoint.
 
 Terminal = the last group a re-ingest writes to a graph: `supersede_in_single_tenant` on
 `policy_system` and `clear_marker` on the native graph. `mark_stage_complete`, `link_and_supersede`

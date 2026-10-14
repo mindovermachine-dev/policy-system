@@ -1,8 +1,8 @@
-"""Offline restore follows `MergedObligation` markers (issue #190, H1 / CHANGES.md A7).
+"""Offline restore follows `MergedObligation` markers.
 
 Re-restoring an artifact that regenerates an Obligation a Compliance Officer cleanup merge
 absorbed must not mint it again: the restore drops it, re-targets its `SATISFIED_BY` / `REQUIRES`
-edges onto the survivor, and upserts `HAS` onto the survivor (idempotent). Since #214 the
+edges onto the survivor, and upserts `HAS` onto the survivor (idempotent). The
 `policy_system` leg is a tuple of gateway primitives built from reads of the live graph, so the
 expectations are asserted on primitives. The live graph is a hand-written fake satisfying
 `GraphHandle` structurally.

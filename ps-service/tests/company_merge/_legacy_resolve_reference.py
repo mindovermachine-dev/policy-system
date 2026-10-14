@@ -1,11 +1,11 @@
-"""The frozen near-miss resolution statements and the interpreter that applies them (issue #210).
+"""The frozen near-miss resolution statements and the interpreter that applies them.
 
-`pending_review.resolve_review` used to read a review, check that both of its nodes still exist, and
-then issue ONE statement that picked a winner with a `CASE`, re-pointed five edge families with
-`FOREACH ... MERGE` blocks and `DETACH DELETE`d the loser and the review. This module keeps those
-statements verbatim (pinned by sha256 of the rendered text, taken from `git show HEAD:` at freeze,
-commit 006c08f) and interprets them clause by clause against a node/edge dictionary pair, so the
-gateway path can be compared with what they did (CHANGES.md F5d, A2).
+The frozen `pending_review.resolve_review` read a review, checked that both of its nodes still
+existed, and then issued ONE statement that picked a winner with a `CASE`, re-pointed five edge
+families with `FOREACH ... MERGE` blocks and `DETACH DELETE`d the loser and the review. This
+module keeps those statements verbatim (pinned by sha256 of the rendered text, taken at freeze)
+and interprets them clause by clause against a node/edge dictionary pair, so the gateway path
+can be compared with what they did.
 
 The interpreter is not a Cypher engine. It parses the frozen skeleton with the winner predicate
 left open (`coalesce` or none on each side, `<=` or `<`) and evaluates that predicate with Cypher's

@@ -232,9 +232,9 @@ def test_validate_seed_document_accepts_the_documented_worked_example() -> None:
 
 
 def test_validate_seed_document_rejects_unknown_top_level_field() -> None:
-    """A submitted `graph_name` (or any other unrecognized top-level field) is rejected (D2).
+    """A submitted `graph_name` (or any other unrecognized top-level field) is rejected.
 
-    AC-BI-010's "graph_name field can never redirect a write" guarantee holds
+    The "graph_name field can never redirect a write" guarantee holds
     structurally here: `additionalProperties: false` at the schema's top level
     means the field is rejected outright, not silently ignored.
     """
@@ -259,12 +259,10 @@ def test_validate_seed_document_rejects_missing_required_node_property() -> None
 
 
 def test_validate_seed_document_rejects_unknown_node_label() -> None:
-    """A node labeled outside the allow-list is rejected (D2/AC-BI-002).
+    """A node labeled outside the allow-list is rejected.
 
-    `PracticeArea` (GH #93 Slice 1) and `RiskPath` (GH #93 Slice 2) are both
-    accepted now, so neither is a valid "still rejected" example any more --
-    this uses a wholly fictional label instead of chasing whichever real
-    label was most recently added.
+    `PracticeArea` and `RiskPath` are both accepted, so neither is a valid
+    "still rejected" example; this uses a wholly fictional label instead.
     """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
@@ -276,9 +274,7 @@ def test_validate_seed_document_rejects_unknown_node_label() -> None:
 
 
 def test_validate_seed_document_accepts_a_practice_area_node() -> None:
-    """GH #93 AC-BI-001 (PracticeArea portion): a standalone `PracticeArea` node is
-    schema-valid -- red before the schema gained `PracticeArea` (issue #93 Slice 1).
-    """
+    """A standalone `PracticeArea` node is schema-valid."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
         {
@@ -292,7 +288,7 @@ def test_validate_seed_document_accepts_a_practice_area_node() -> None:
 
 
 def test_validate_seed_document_rejects_practice_area_with_confidence_property() -> None:
-    """Design Decision 2 (PLAN.md §3): `confidence` is never accepted on
+    """`confidence` is never accepted on
     `PracticeArea` at the intake boundary -- `additionalProperties: false` makes
     submitting one a schema violation, not a silently-dropped field.
     """
@@ -310,10 +306,9 @@ def test_validate_seed_document_rejects_practice_area_with_confidence_property()
 
 
 def test_validate_seed_document_accepts_a_practice_area_node_and_covers_edge() -> None:
-    """GH #93 AC-BI-001 (COVERS portion): a `PracticeArea` node + `COVERS` edge to
-    a Capability is schema-valid -- red before the schema gained `COVERS`
-    (issue #93 Slice 3), green after (mirrors
-    `test_validate_seed_document_accepts_a_policy_node_and_governed_by_edge`).
+    """A `PracticeArea` node + `COVERS` edge to a Capability is schema-valid.
+
+    Mirrors `test_validate_seed_document_accepts_a_policy_node_and_governed_by_edge`.
     """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
@@ -335,10 +330,9 @@ def test_validate_seed_document_accepts_a_practice_area_node_and_covers_edge() -
 
 
 def test_validate_seed_document_accepts_a_practice_area_node_and_owns_edge() -> None:
-    """GH #93 (Slice 4): a `PracticeArea` node + `OWNS` edge to a `Policy` is
-    schema-valid -- red before the schema gained `OWNS` (issue #93 Slice 4),
-    green after (mirrors
-    `test_validate_seed_document_accepts_a_practice_area_node_and_covers_edge`).
+    """A `PracticeArea` node + `OWNS` edge to a `Policy` is schema-valid.
+
+    Mirrors `test_validate_seed_document_accepts_a_practice_area_node_and_covers_edge`.
     """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
@@ -367,9 +361,7 @@ def test_validate_seed_document_accepts_a_practice_area_node_and_owns_edge() -> 
 
 
 def test_validate_seed_document_accepts_a_risk_path_node() -> None:
-    """GH #93 AC-BI-001 (RiskPath portion): a standalone `RiskPath` node is
-    schema-valid -- red before the schema gained `RiskPath` (issue #93 Slice 2).
-    """
+    """A standalone `RiskPath` node is schema-valid."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
         {
@@ -387,7 +379,7 @@ def test_validate_seed_document_accepts_a_risk_path_node() -> None:
 
 
 def test_validate_seed_document_rejects_risk_path_with_confidence_property() -> None:
-    """Design Decision 2 (PLAN.md §3): `confidence` is never accepted on
+    """`confidence` is never accepted on
     `RiskPath` at the intake boundary -- `additionalProperties: false` makes
     submitting one a schema violation, not a silently-dropped field.
     """
@@ -409,9 +401,7 @@ def test_validate_seed_document_rejects_risk_path_with_confidence_property() -> 
 
 
 def test_validate_seed_document_accepts_a_risk_path_node_and_verified_by_edge() -> None:
-    """GH #93 (Slice 6): a `RiskPath` node + `VERIFIED_BY` edge to a `Control` is
-    schema-valid -- red before the schema gained `VERIFIED_BY` (issue #93 Slice 6).
-    """
+    """A `RiskPath` node + `VERIFIED_BY` edge to a `Control` is schema-valid."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
         {
@@ -443,9 +433,7 @@ def test_validate_seed_document_accepts_a_risk_path_node_and_verified_by_edge() 
 
 
 def test_validate_seed_document_accepts_a_risk_path_node_and_mitigated_by_edge() -> None:
-    """GH #93 (Slice 5): a `RiskPath` node + `MITIGATED_BY` edge to a `Capability` is
-    schema-valid -- red before the schema gained `MITIGATED_BY` (issue #93 Slice 5).
-    """
+    """A `RiskPath` node + `MITIGATED_BY` edge to a `Capability` is schema-valid."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
         {
@@ -466,10 +454,7 @@ def test_validate_seed_document_accepts_a_risk_path_node_and_mitigated_by_edge()
 
 
 def test_validate_seed_document_accepts_a_policy_node_and_governed_by_edge() -> None:
-    """GH #76 AC-BI-001 (Policy portion): a `Policy` node + `GOVERNED_BY` edge
-    from a Capability is schema-valid -- red before the schema gained
-    `Policy`/`GOVERNED_BY` (issue #76 Slice 1), green after.
-    """
+    """A `Policy` node + `GOVERNED_BY` edge from a Capability is schema-valid."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
         {
@@ -490,10 +475,7 @@ def test_validate_seed_document_accepts_a_policy_node_and_governed_by_edge() -> 
 
 
 def test_validate_seed_document_accepts_a_standard_node_and_supported_by_edge() -> None:
-    """GH #76 AC-BI-001 (Standard portion): a `Standard` node + `SUPPORTED_BY` edge
-    from a Policy is schema-valid -- red before the schema gained `Standard`/
-    `SUPPORTED_BY` (issue #76 Slice 2), green after.
-    """
+    """A `Standard` node + `SUPPORTED_BY` edge from a Policy is schema-valid."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
         {
@@ -531,11 +513,10 @@ def test_validate_seed_document_accepts_a_standard_node_and_supported_by_edge() 
 
 
 def test_validate_seed_document_accepts_a_control_node_and_implemented_by_edge() -> None:
-    """GH #76 AC-BI-001 (Control portion): a `Control` node + `IMPLEMENTED_BY` edge
-    from a Standard is schema-valid -- red before the schema gained `Control`/
-    `IMPLEMENTED_BY` (issue #76 Slice 3), green after. AC-BI-001 is now fully
-    satisfied: all three governance labels and all three governance edge types
-    are schema-validated.
+    """A `Control` node + `IMPLEMENTED_BY` edge from a Standard is schema-valid.
+
+    Together with the Policy and Standard cases, all three governance labels
+    and all three governance edge types are schema-validated.
     """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
@@ -592,7 +573,7 @@ def test_validate_seed_document_accepts_a_control_node_and_implemented_by_edge()
 
 
 def test_validate_seed_document_rejects_policy_with_confidence_property() -> None:
-    """Design Decision 2 (PLAN.md §3): `confidence` is never accepted on
+    """`confidence` is never accepted on
     `Policy` at the intake boundary -- `additionalProperties: false` makes
     submitting one a schema violation, not a silently-dropped field.
     """
@@ -614,7 +595,7 @@ def test_validate_seed_document_rejects_policy_with_confidence_property() -> Non
 
 
 def test_validate_seed_document_rejects_source_type_other_than_internal() -> None:
-    """A `RegulatoryInstrument.source_type` other than `"internal"` is rejected (AC-BI-003)."""
+    """A `RegulatoryInstrument.source_type` other than `"internal"` is rejected."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"][0]["properties"]["source_type"] = "external"
 

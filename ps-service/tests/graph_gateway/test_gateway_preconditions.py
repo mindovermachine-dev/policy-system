@@ -1,6 +1,6 @@
-"""Caller preconditions on a group (issue #206 S5, AC-BI-002).
+"""Caller preconditions on a group.
 
-Only `ExpectedPosition` exists (D3): the caller states the log position it last saw, and the
+Only `ExpectedPosition` exists: the caller states the log position it last saw, and the
 gateway refuses the group, logging nothing, if the log has moved. The check reads the log store
 only, never the graph.
 """

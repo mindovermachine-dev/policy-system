@@ -1,12 +1,11 @@
-"""AC-005 proof: per-regulation baseline graph isolation (PLAN_REVIEWED.md
-§11 Increment 17).
+"""Proof of per-regulation baseline graph isolation.
 
-Two parts, per the plan:
+Two parts:
 
 (a) Unit-level, hand-written fakes (two INDEPENDENT gateway rigs for extraction, which writes
-through the Graph Write Gateway since #209, and a gateway rig
-for derivation too -- no `unittest.mock`, per the binding testing convention,
-PLAN_REVIEWED.md §0.3/§0.5). Two INDEPENDENT baseline graphs stand in for
+through the Graph Write Gateway, and a gateway rig
+for derivation too -- no `unittest.mock`, per the binding testing convention).
+Two INDEPENDENT baseline graphs stand in for
 `cra_baseline`/`gdpr_baseline`; each is passed to its own `extract_roles_and_requirements`/
 `derive_obligations_and_capabilities` call. This proves the abstraction
 itself -- not just "two Python objects are different objects" (trivially

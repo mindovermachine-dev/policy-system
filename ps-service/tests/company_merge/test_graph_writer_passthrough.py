@@ -1,22 +1,18 @@
 """Tests for `ps_service.company_merge.graph_writer.
-persist_role_and_requirement_passthrough`/`persist_obligation_passthrough`
-(PLAN_REVIEWED.md §10 Increment 10; issue #28 AC-BI-006 fix): the
-Regulation/Role/Requirement/Obligation writers. RegulatoryInstrument keeps
+persist_role_and_requirement_passthrough`/`persist_obligation_passthrough`:
+the Regulation/Role/Requirement/Obligation writers. RegulatoryInstrument keeps
 an unconditional `SET` (never canonically deduped, always refreshed);
 Role/Requirement/Obligation are create-only (an existing id is left out of the group), matching
 Capability's own load-bearing pattern (`persist_canonical_nodes`) exactly,
-since issue #28's live verification (IMPL_SLICE_7.md) found a real,
-pre-existing `policy_system` graph had 202 Role/Requirement/Obligation
-nodes' properties silently overwritten by a second `merge_baseline_graph`
-run against baseline graphs whose content had drifted slightly.
+so a second `merge_baseline_graph` run against baseline graphs whose content has drifted slightly
+cannot silently overwrite the properties of existing Role/Requirement/Obligation nodes.
 
-Since issue #210 the RegulatoryInstrument/Role/Requirement writer submits a gateway group (the
-`merge_rig` fixture); the Obligation writer (slice 4a) submits a group too.
+The RegulatoryInstrument/Role/Requirement writer submits a gateway group (the
+`merge_rig` fixture); the Obligation writer submits a group too.
 
 Fakes implement the `GraphHandle`/`GraphQueryResult` Protocols
 (`ps_service.company_merge.falkordb_client`) structurally -- no mocking
-library, matching L2 Testing Patterns' "mock at component boundaries" and
-this issue's binding testing convention.
+library, matching L2 Testing Patterns' "mock at component boundaries".
 """
 
 from __future__ import annotations
@@ -138,7 +134,7 @@ def test_persist_writes_regulation_role_and_requirement_with_edges(merge_rig: Me
 
 
 def test_persist_passthrough_writes_instrument_type_verbatim(merge_rig: MergeRig) -> None:
-    """AC-BI-011 (Company Merge, write side): `instrument_type` rides
+    """Write side: `instrument_type` rides
     through the Regulation upsert verbatim inside its properties —
     `regulatory_instrument_properties` is `dict[str, object]` with no key allow-list,
     so the key propagates by construction with NO src change.
@@ -160,7 +156,7 @@ def test_persist_passthrough_writes_instrument_type_verbatim(merge_rig: MergeRig
 
 def test_persist_is_idempotent_across_repeated_calls(merge_rig: MergeRig) -> None:
     """Re-running with identical input twice against the same graph leaves the graph as the
-    first run did and logs nothing more (PLAN_REVIEWED.md §10 Increment 10; the gateway drops
+    first run did and logs nothing more (the gateway drops
     the mutations that change nothing).
     """
     role = _role_node()
@@ -198,9 +194,9 @@ def test_persist_with_no_role_or_requirement_nodes_writes_only_regulation(
 
 
 def test_persist_role_and_requirement_are_create_only(merge_rig: MergeRig) -> None:
-    """Issue #28 AC-BI-006 fix: Role/Requirement writes are create-only, matching Capability's
+    """Role/Requirement writes are create-only, matching Capability's
     own load-bearing pattern exactly -- NOT the refresh RegulatoryInstrument still gets (it is
-    never canonically deduped and is always meant to refresh). Since #210 an existing node is
+    never canonically deduped and is always meant to refresh). An existing node is
     left out of the group (a gateway upsert would merge over it), so the second run's group
     carries the instrument alone.
     """
@@ -226,13 +222,10 @@ def test_persist_role_and_requirement_are_create_only(merge_rig: MergeRig) -> No
 def test_persist_role_preserves_pre_existing_properties_on_second_write(
     merge_rig: MergeRig,
 ) -> None:
-    """Reproduces the real, live AC-BI-006 violation (IMPL_SLICE_7.md): a
-    second `merge_baseline_graph` run (e.g. re-merging CRA against a
+    """A second `merge_baseline_graph` run (e.g. re-merging CRA against a
     baseline graph whose content has since drifted) must never overwrite a
     pre-existing Role node's properties -- e.g. `confidence` silently
-    drifting from 0.86 to 0.93, exactly as happened to
-    `role_the_obligations_laid_down_in_this_regulation_5e6f1d` in the real
-    `policy_system` graph.
+    drifting from 0.86 to 0.93.
     """
     role_id = "role_the_obligations_laid_down_in_this_regulation_5e6f1d"
     original_properties: dict[str, str | float] = {"name": "Regulated Entity", "confidence": 0.86}
@@ -261,10 +254,9 @@ def test_persist_role_preserves_pre_existing_properties_on_second_write(
 def test_persist_requirement_preserves_pre_existing_text_on_second_write(
     merge_rig: MergeRig,
 ) -> None:
-    """Reproduces the real, live AC-BI-006 violation for a Requirement node
-    (IMPL_SLICE_7.md): `CRA-1.0_req_art_4.3`'s `confidence` (0.97->0.92) AND
-    `text` (a "Member States " prefix silently added) both changed on a
-    second run against real `policy_system`. A second write with different
+    """A Requirement node's `confidence` (0.97->0.92) AND
+    `text` (a "Member States " prefix silently added) must not change on a
+    second run against `policy_system`. A second write with different
     property values must leave the pre-existing node untouched.
     """
     requirement_id = "CRA-1.0_req_art_4.3"
@@ -300,8 +292,8 @@ def test_persist_requirement_preserves_pre_existing_text_on_second_write(
 
 
 def test_persist_obligation_writes_create_only_nodes_as_one_group(merge_rig: MergeRig) -> None:
-    """Issue #28 AC-BI-006 fix: Obligation writes are create-only, matching
-    Role/Requirement/Capability's pattern (since #210: one gateway group, not Cypher).
+    """Obligation writes are create-only, matching
+    Role/Requirement/Capability's pattern (one gateway group, not Cypher).
     """
     obligation = BaselineNode(
         id="obl_ensure_correct_application_of_the_ce_marking_regime_0579d8",
@@ -322,10 +314,8 @@ def test_persist_obligation_writes_create_only_nodes_as_one_group(merge_rig: Mer
 def test_persist_obligation_preserves_pre_existing_properties_on_second_write(
     merge_rig: MergeRig,
 ) -> None:
-    """Reproduces the real, live AC-BI-006 violation for Obligation nodes
-    (IMPL_SLICE_7.md): 199 pre-existing Obligation nodes had `confidence`
-    drift between a report's `before`/`after` snapshots (e.g.
-    `obl_ensure_correct_application_of_the_ce_marking_regime_0579d8`,
+    """Obligation nodes must not have `confidence` drift between
+    runs (e.g. `obl_ensure_correct_application_of_the_ce_marking_regime_0579d8`,
     0.88->0.93) after a second `merge_baseline_graph` run. A second write
     with a different `confidence` value must leave the pre-existing node
     untouched.

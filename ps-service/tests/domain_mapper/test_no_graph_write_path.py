@@ -1,4 +1,4 @@
-"""The Domain Mapper holds no write path to FalkorDB (issue #209, AC-BI-001).
+"""The Domain Mapper holds no write path to FalkorDB.
 
 Every baseline-graph mutation goes through the Graph Write Gateway, so no module under
 `ps_service.domain_mapper` (adapters included) may open a FalkorDB connection of its own, name

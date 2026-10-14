@@ -1,21 +1,19 @@
-"""AC-BI-008 live test (GH #25 Slice 8): the extraction prompt's multi-duty.
+"""Live test: the extraction prompt's multi-duty.
 
 "trailing letters" mechanism against CRA Annex I's real, long, itemized
 text -- not a fabricated/short fixture string.
 
-`@pytest.mark.llm_live @pytest.mark.falkordb_live`: reads #14's own
-live-populated `cra_native` graph through the now-ANNEX-extended
-`CellarEliDomainMappingAdapter` (GH #25 Slices 1-7), builds the exact
+`@pytest.mark.llm_live @pytest.mark.falkordb_live`: reads the
+live-populated `cra_native` graph through the ANNEX-aware
+`CellarEliDomainMappingAdapter`, builds the exact
 system+user message pair `extraction.py::_build_extraction_messages` would
 for the "Annex I" unit, calls `route_completion` for real against the
 configured LLM Provider, and parses the response via
 `parse_extraction_response`.
 
-This is a verification-only slice (PLAN.md decision 1.8 / Slice 8): no
-production code changes here. Per PLAN.md's own exit criterion, if this
-assertion fails when run with real credentials, a prompt-variant follow-up
-is a NEW slice for a later implementation pass -- not silently patched in
-here.
+This is verification-only: it changes no production code, and a failure
+with real credentials calls for a prompt-variant follow-up rather than a
+patch here.
 """
 
 from __future__ import annotations

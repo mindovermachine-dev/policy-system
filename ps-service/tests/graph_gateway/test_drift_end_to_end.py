@@ -1,6 +1,6 @@
-"""A real writer, a head checkpoint, an out-of-band write, then the alert (issue #215, S5d).
+"""A real writer, a head checkpoint, an out-of-band write, then the alert.
 
-The whole chain of AC-BI-009 and AC-BI-005 with nothing stubbed between them: the internal-seed
+The whole chain with nothing stubbed between them: the internal-seed
 ingestion writer submits its groups through the gateway (and so requests its checkpoints), the
 drift check finds the graph as the gateway left it, a write that bypasses the gateway makes it
 differ, and the next check raises the alert naming graph, position and both digests. A later

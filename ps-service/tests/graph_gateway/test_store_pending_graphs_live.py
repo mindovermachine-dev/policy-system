@@ -1,4 +1,4 @@
-"""`postgres_live` test for `graphs_with_pending_entries` (issue #206, S13a; AC-BI-011).
+"""`postgres_live` test for `graphs_with_pending_entries` .
 
 Runs the read-only query as the real `ps_state` role against a scratch PS Postgres.
 

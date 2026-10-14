@@ -1,8 +1,7 @@
-"""AC-BI-001: `graph_reader`'s read vocabulary must equal internal_seed's
+"""`graph_reader`'s read vocabulary must equal internal_seed's
 `NodeLabel`/`EdgeType`, or a future vocabulary addition silently drops data
-again (issue #106's own root cause -- PracticeArea/RiskPath/COVERS/OWNS/
-MITIGATED_BY/VERIFIED_BY were dropped for two release cycles with no test
-catching it, per TASK.md).
+(for example PracticeArea/RiskPath/COVERS/OWNS/MITIGATED_BY/VERIFIED_BY
+would go unread with no test catching it).
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ def test_graph_reader_reads_every_internal_seed_edge_type() -> None:
     )
 
 
-# AC-BI-015: the read set is also pinned to the code-defined domain schema.
+# The read set is also pinned to the code-defined domain schema.
 _SCHEMA_LABELS = frozenset(node.label for node in DOMAIN_SCHEMA.nodes)
 _SCHEMA_EDGE_TYPES = frozenset(edge.type for edge in DOMAIN_SCHEMA.edges)
 _HANDLED_LABELS = graph_reader._HANDLED_NODE_LABELS  # pyright: ignore[reportPrivateUsage]  # pin test compares the module-private read set to the schema

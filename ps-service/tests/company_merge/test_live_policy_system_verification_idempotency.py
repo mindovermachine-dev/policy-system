@@ -1,10 +1,9 @@
-"""AC-BI-007 (a second merge creates no duplicate canonical nodes or edges), made hermetic (LL-11).
+"""A second merge creates no duplicate canonical nodes or edges (hermetic).
 
-`falkordb_live` + `postgres_live`, no LLM. Formerly read two JSON reports of one-off live merges
-into the developer's `policy_system`. Now the real `merge_baseline_graph` is run twice for the
+`falkordb_live` + `postgres_live`, no LLM. The real `merge_baseline_graph` is run twice for the
 same regulation into a uniquely named graph (`_hermetic_policy_system.merged_graph_run`) and the
 two resulting snapshots are compared. Non-strict idempotency (edges may legitimately grow
-additively on a re-run, issue #88) is not asserted away: no loss and no duplication are.
+additively on a re-run) is not asserted away: no loss and no duplication are.
 """
 
 from __future__ import annotations

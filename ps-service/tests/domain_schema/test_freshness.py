@@ -1,4 +1,4 @@
-"""`check` compares every generated artifact with the schema and reports drift (AC-BI-006/008)."""
+"""`check` compares every generated artifact with the schema and reports drift."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def _flip_one_byte(path: Path) -> None:
 
 
 def test_committed_tree_is_fresh() -> None:
-    """AC-BI-006: the real repository passes its own freshness check."""
+    """The real repository passes its own freshness check."""
     assert _check(_REPO) == 0
 
 
@@ -98,7 +98,7 @@ def test_stale_packaged_copy_is_drift(tree: Path, capsys: pytest.CaptureFixture[
 def test_one_byte_change_in_an_intake_copy_is_drift(
     tree: Path, capsys: pytest.CaptureFixture[str], relative: str
 ) -> None:
-    """AC-BI-006: each of the three committed intake schema copies is compared."""
+    """Each of the three committed intake schema copies is compared."""
     _flip_one_byte(tree / relative)
 
     assert _check(tree) == 1
@@ -137,7 +137,7 @@ def test_check_never_modifies_the_artifacts(tree: Path) -> None:
 
 
 def test_subcommand_set_is_exactly_check_write_docs_print_intake_measure() -> None:
-    """F4: the parser offers these four and no write-intake variant."""
+    """The parser offers these four and no write-intake variant."""
     parser = build_parser()
     [action] = [a for a in parser._actions if a.dest == "command"]  # pyright: ignore[reportPrivateUsage]  # argparse exposes its subcommands only through the private action list
 
@@ -153,7 +153,7 @@ def _precommit_hook() -> dict[str, object]:
 
 @pytest.mark.parametrize("relative", [*_ARTIFACTS, *_SOURCE_PATHS])
 def test_precommit_hook_triggers_on_every_artifact_and_source_path(relative: str) -> None:
-    """AC-BI-008: the hook's `files` regex matches each artifact the check compares."""
+    """The hook's `files` regex matches each artifact the check compares."""
     pattern = str(_precommit_hook()["files"])
 
     assert re.search(pattern, relative)
@@ -167,7 +167,7 @@ def test_precommit_hook_runs_the_check_without_filenames() -> None:
 
 
 def test_ci_defines_the_check_and_lists_it_in_trunk_worthy() -> None:
-    """AC-BI-008: `.insitu.yml` runs the same command in the trunk-worthy wave."""
+    """`.insitu.yml` runs the same command in the trunk-worthy wave."""
     config = yaml.safe_load((_REPO / ".insitu.yml").read_text("utf-8"))
     [check] = [c for c in config["inventory"] if c["id"] == _CHECK_ID]
     [trunk_worthy] = [c for c in config["waves"] if c["id"] == "trunk-worthy"]

@@ -1,4 +1,4 @@
-"""`falkordb_live`: the digest scan against a real FalkorDB (#207 S2 / S2L).
+"""`falkordb_live`: the digest scan against a real FalkorDB.
 
 Run with `uv run pytest -m falkordb_live` (see `live_endpoints` for the endpoint variables).
 """

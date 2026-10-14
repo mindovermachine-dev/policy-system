@@ -1,9 +1,9 @@
-"""Tests for `ps_service.curated_source.resolve.resolve_effective_source` (issues #125, #130).
+"""Tests for `ps_service.curated_source.resolve.resolve_effective_source`.
 
-AC-BI-013 (a persisted override takes precedence over the env-var/default), AC-BI-008 (a reset
-falls back to it) and, since issue #130, D-FAILCLOSED: a failed override read raises and is
-logged with the exception class only -- the env-var/default is never served in its place
-(AC-BI-010). Runs against `InMemoryRuntimeConfigStore`, a hand-written fake at the
+A persisted override takes precedence over the env-var/default, a reset falls back to it and
+a failed override read raises and is
+logged with the exception class only -- the env-var/default is never served in its place.
+Runs against `InMemoryRuntimeConfigStore`, a hand-written fake at the
 persistence boundary that still applies the catalog key's real type check and validator.
 """
 

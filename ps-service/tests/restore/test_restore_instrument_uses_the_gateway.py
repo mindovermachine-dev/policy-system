@@ -1,9 +1,8 @@
-"""`restore_instrument` writes only through the Graph Write Gateway (issue #214, slice 8a).
+"""`restore_instrument` writes only through the Graph Write Gateway.
 
-The legacy staging modules were deleted by #215 (S6); nothing in the restore path references them:
-no `GRAPH.COPY`, no `RENAME`, no `WATCH`, no write Cypher. The pre-#214 `_run_baseline_merge` is
-gone; its behaviour lives in `merge_primitives.build_policy_system_leg` (pinned by
-`test_merge_primitives.py`).
+The legacy staging modules are gone; nothing in the restore path references them: no `GRAPH.COPY`,
+no `RENAME`, no `WATCH`, no write Cypher. The baseline merge's behaviour lives in
+`merge_primitives.build_policy_system_leg` (pinned by `test_merge_primitives.py`).
 """
 
 from __future__ import annotations

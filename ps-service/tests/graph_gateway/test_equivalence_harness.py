@@ -1,4 +1,4 @@
-"""The equivalence harness passes for equal write paths (#207 S20, AC-RD-009)."""
+"""The equivalence harness passes for equal write paths."""
 
 from __future__ import annotations
 

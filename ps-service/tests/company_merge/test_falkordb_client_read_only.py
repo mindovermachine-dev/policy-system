@@ -1,4 +1,4 @@
-"""Company Merge reads through the gateway's `ReadOnlyGraph` and imports no driver (#215, S3a)."""
+"""Company Merge reads through the gateway's `ReadOnlyGraph` and imports no driver."""
 
 from __future__ import annotations
 

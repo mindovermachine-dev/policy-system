@@ -1,4 +1,4 @@
-"""The gateway path builds the same baseline graph the pre-#209 writer did (AC-BI-002).
+"""The gateway path builds the same baseline graph the old direct-Cypher writer did.
 
 The reference is `_legacy_reference`, a frozen copy of the old writer's Cypher run against a
 recording graph. Both paths are fed the same in-memory inputs (the Role/Requirement/Obligation/
@@ -12,7 +12,7 @@ Capability nodes and edges the extraction and derivation steps produce) and comp
   graph the gateway built. Anything else that differs still fails the digest.
 
 The inputs come from the real pure steps driven by the scripted LLM of `_pipeline` (the
-extraction and derivation fixtures), from a `#2` requirement-id collision, from hand-built
+extraction and derivation fixtures), from a requirement-id collision, from hand-built
 collections with repeated nodes and edges and edges whose endpoint exists nowhere, and from
 recorded extractions: a trimmed subset of the curated CRA baseline (committed fixture) and the
 whole artifact (skipped when absent).
@@ -85,7 +85,7 @@ if TYPE_CHECKING:
     from ps_service.logging import LogEmitter
 
 _INSTRUMENT_ID = _pipeline.INSTRUMENT_ID
-# The native node's own id differs in casing: the writer must strip it (BASELINE.md row 2).
+# The native node's own id differs in casing; the writer strips it and merges on the caller's id.
 _INSTRUMENT_PROPERTIES: dict[str, object] = {
     "id": "cra-1.0",
     "title": "Cyber Resilience Act",
@@ -207,7 +207,7 @@ def _scripted_pipeline_inputs(emitter: LogEmitter) -> Inputs:
 
 
 def _collision_inputs(_emitter: LogEmitter) -> Inputs:
-    """Two different texts at one base id: the second Requirement id carries the `#2` suffix."""
+    """Two different texts at one base id: the second Requirement id carries a collision suffix."""
     inputs = _extraction_inputs(
         [
             _candidate(),

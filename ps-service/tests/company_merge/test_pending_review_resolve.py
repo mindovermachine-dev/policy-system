@@ -1,18 +1,16 @@
-"""Tests for `ps_service.company_merge.pending_review.resolve_review`
-(issue #35): AC-BI-004 (keep-separate deletes only the `PendingReview`
-record), AC-BI-005/006/007 (merge re-points edges, deletes the loser and the
-review, atomically, with deterministic winner selection), AC-BI-008 (both
-decisions' not-found paths make no graph changes at all -- including merge's
-own "stale reference" case, CHANGES.md H2), and AC-BI-009 (a structured log
-entry records the decision, review id, and timestamp -- plus winner/loser
-for merge).
+"""Tests for `ps_service.company_merge.pending_review.resolve_review`:
+keep-separate deletes only the `PendingReview` record; merge re-points edges,
+deletes the loser and the review, atomically, with deterministic winner
+selection; both decisions' not-found paths make no graph changes at all
+(including merge's own "stale reference" case); and a structured log entry
+records the decision, review id, and timestamp (plus winner/loser for merge).
 
-Issue #210: both decisions write ONE gateway group on `policy_system` (read, resolve the winner in
+Both decisions write ONE gateway group on `policy_system` (read, resolve the winner in
 Python, write), so these tests run `resolve_review` over the gateway rig: the reads are answered
 from the rig's own graph and the writes are asserted as gateway entries, not Cypher text. The
-winner rule and the five rewired families are also compared with the frozen pre-#210 statement
+winner rule and the five rewired families are also compared with the frozen reference statement
 (`_legacy_resolve_reference`), modulo edge identity; the `falkordb_live` test at the bottom is the
-live anchor and is not runnable in the implementation sandbox.
+live anchor.
 """
 
 from __future__ import annotations
@@ -83,7 +81,7 @@ def _target(rig: MergeRig) -> GraphWriteTarget:
 def test_resolve_keep_separate_deletes_review_only(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-004: the PendingReview record is removed, no other graph node/edge changes."""
+    """The PendingReview record is removed, no other graph node/edge changes."""
     emitter, _log_path = make_emitter()
     _seed_review(merge_rig)
     candidates_before = {
@@ -142,7 +140,7 @@ def test_keep_separate_submits_one_group_deleting_only_the_review_and_leaves_bot
 def test_resolve_nonexistent_id_returns_none_before_any_write(
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-008 (not-found half): an unknown/already-resolved id makes no graph changes."""
+    """An unknown/already-resolved id makes no graph changes."""
     target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
 
     outcome = resolve_review(merge_rig.legacy, "review_missing", "keep-separate", target=target)
@@ -157,7 +155,7 @@ def test_resolve_nonexistent_id_returns_none_before_any_write(
 def test_resolve_keep_separate_emits_structured_log_entry(
     make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-009 (keep-separate half): decision, review id, and timestamp are logged."""
+    """Keep-separate logs decision, review id, and timestamp are logged."""
     emitter, log_path = make_emitter()
     _seed_review(merge_rig)
 
@@ -194,10 +192,9 @@ def test_resolve_nonexistent_id_emits_no_log_entry(
 def test_keep_separate_of_a_review_deleted_since_the_read_is_a_no_op_that_still_resolves(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """The read-then-delete has no lock (C-0): a review gone in between logs nothing, as before.
+    """The read-then-delete has no lock: a review gone in between logs nothing.
 
-    The old `MATCH ... DELETE r` matched nothing and succeeded; the gateway drops a delete of an
-    absent node (`unchanged`) and nothing is logged for it.
+    The gateway drops a delete of an absent node (`unchanged`) and nothing is logged for it.
     """
     emitter, _log_path = make_emitter()
     _seed_review(merge_rig)
@@ -223,7 +220,7 @@ def test_keep_separate_of_a_review_deleted_since_the_read_is_a_no_op_that_still_
 def test_a_refused_keep_separate_group_raises_the_persistence_error_and_keeps_the_review(
     make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-008: a gateway that cannot log the group fails the resolution, nothing is deleted."""
+    """A gateway that cannot log the group fails the resolution, nothing is deleted."""
     emitter, log_path = make_emitter()
     _seed_review(merge_rig)
     merge_rig.store.fail_appends()
@@ -261,9 +258,8 @@ def test_the_delete_statement_the_reference_replays_is_the_one_pinned_at_freeze(
 def test_keep_separate_leaves_the_graph_the_frozen_reference_leaves(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """R-keep (AC-BI-002): digest of the gateway path equals the frozen `DELETE r`'s, modulo edge
-    identity. Met modulo identity; live digest and live interpreter agreement are not verifiable
-    here (no FalkorDB in this sandbox).
+    """Digest of the gateway path equals the frozen `DELETE r`'s, modulo edge
+    identity.
     """
     emitter, _log_path = make_emitter()
     _seed_review(merge_rig)
@@ -282,7 +278,7 @@ def test_keep_separate_leaves_the_graph_the_frozen_reference_leaves(
     )
 
 
-# --- decision="merge": read, resolve the winner, write one group (issue #35 slice 4; #210 10b) ---
+# --- decision="merge": read, resolve the winner, write one group ---
 
 _OLD = "2020-01-01T00:00:00+00:00"
 _NEW = "2024-01-01T00:00:00+00:00"
@@ -358,7 +354,7 @@ _POLICY_LOSER_EDGES: tuple[_Edge, ...] = (
 def test_older_created_at_wins_and_the_loser_is_the_newer_node(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-003: the incoming node is newer, so the existing one wins; the loser is gone."""
+    """The incoming node is newer, so the existing one wins; the loser is gone."""
     emitter, _log_path = make_emitter()
     _seed_merge(merge_rig)
 
@@ -375,7 +371,7 @@ def test_older_created_at_wins_and_the_loser_is_the_newer_node(
 def test_a_capability_losers_families_are_rewired_in_one_group_before_the_deletes(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """Inbound REQUIRES (twice: C1 row multiplication), outbound GOVERNED_BY and inbound
+    """Inbound REQUIRES (twice: row multiplication), outbound GOVERNED_BY and inbound
     MERGED_INTO move to the winner: ONE group of `UpsertEdge`s (one per edge, in the statement's
     block order), then `DeleteNode(loser)`, then `DeleteNode(PendingReview)`.
     """
@@ -431,9 +427,8 @@ def test_the_merge_leaves_the_graph_the_frozen_reference_leaves(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """R-older / R-five (AC-BI-002): digest of the gateway path equals the frozen statement's,
-    modulo edge identity. Met modulo identity; live digest and live interpreter agreement are not
-    verifiable here (no FalkorDB in this sandbox).
+    """Digest of the gateway path equals the frozen statement's,
+    modulo edge identity.
     """
     emitter, _log_path = make_emitter()
     _seed_merge(merge_rig, kind=kind, nodes=nodes, edges=edges)
@@ -479,11 +474,10 @@ def test_the_winner_rule_leaves_the_graph_the_frozen_reference_leaves(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """R-tie / R-missing / R-both-missing, both kinds (AC-BI-002, AC-BI-003): the older node wins,
+    """Both kinds: the older node wins,
     a missing `created_at` wins, a tie (and both missing) goes to the incoming node, and the digest
     equals the frozen statement's, modulo edge identity. The winner is asserted explicitly so the
-    rule cannot drift together with the reference. Met modulo identity; live digest and live
-    interpreter agreement are not verifiable here (no FalkorDB in this sandbox).
+    rule cannot drift together with the reference.
     """
     emitter, _log_path = make_emitter()
     _seed_merge(
@@ -558,10 +552,10 @@ def test_an_edge_the_winner_already_has_is_not_logged_again(
 def test_several_obligations_requiring_the_loser_leave_the_graph_the_frozen_reference_leaves(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """C1 row multiplication (the `WITH DISTINCT` comment of the retired statement): three
+    """Row multiplication: three
     Obligations require the loser, one of them already requires the winner and one Policy is
     reachable twice. Each edge ends up once on the winner; the digest equals the reference's,
-    modulo edge identity (live digest not verifiable here).
+    modulo edge identity.
     """
     emitter, _log_path = make_emitter()
     _seed_merge(
@@ -601,8 +595,8 @@ def test_several_obligations_requiring_the_loser_leave_the_graph_the_frozen_refe
 def test_a_tombstone_pointing_at_the_loser_ends_up_where_the_frozen_reference_puts_it(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """Issue #190: the inbound `MERGED_INTO` of a merged tombstone moves onto the winner; the
-    digest equals the reference's, modulo edge identity (live digest not verifiable here).
+    """The inbound `MERGED_INTO` of a merged tombstone moves onto the winner; the
+    digest equals the reference's, modulo edge identity.
     """
     emitter, _log_path = make_emitter()
     _seed_merge(
@@ -625,7 +619,7 @@ def test_a_tombstone_pointing_at_the_loser_ends_up_where_the_frozen_reference_pu
 
 class _RaceAfterReads(RigReadHandle):
     """A read handle that runs `race` once, right after the last loser-edge read: the window
-    between the reads and the single write, in which the old code held no lock either.
+    between the reads and the single write, in which no lock is held.
     """
 
     def __init__(self, graph: InMemoryGraph, race: Callable[[], object]) -> None:
@@ -645,9 +639,9 @@ class _RaceAfterReads(RigReadHandle):
 def test_a_review_resolved_elsewhere_after_the_reads_still_merges_and_its_delete_is_a_no_op(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """The review vanishes after the reads (e.g. resolved by another caller). The old statement
-    rewired and then returned no row (IndexError); the group now rewires, deletes the loser and
-    finds the review already gone: the outcome is reported and nothing raises (recorded in 10b).
+    """The review vanishes after the reads (e.g. resolved by another caller). The group rewires,
+    deletes the loser and finds the review already gone: the outcome is reported and nothing
+    raises.
     """
     emitter, _log_path = make_emitter()
     _seed_merge(merge_rig, nodes=_CAPABILITY_LOSER_NODES, edges=_CAPABILITY_LOSER_EDGES)
@@ -673,7 +667,7 @@ def test_a_review_resolved_elsewhere_after_the_reads_still_merges_and_its_delete
 def test_a_candidate_deleted_after_the_reads_is_a_refused_group_and_nothing_changes(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-008 / atomic: the winner vanishes between the reads and the write. The gateway
+    """Atomic: the winner vanishes between the reads and the write. The gateway
     refuses the group on the missing endpoint (`MissingTargetError`): the persistence error is
     raised, and neither the loser, the review nor any edge changed.
     """
@@ -694,7 +688,7 @@ def test_a_candidate_deleted_after_the_reads_is_a_refused_group_and_nothing_chan
 def test_a_refused_merge_group_raises_the_persistence_error_and_leaves_everything_in_place(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-008, atomic: the group is logged whole or not at all; nothing partial is left."""
+    """Atomic: the group is logged whole or not at all; nothing partial is left."""
     emitter, _log_path = make_emitter()
     _seed_merge(merge_rig, nodes=_CAPABILITY_LOSER_NODES, edges=_CAPABILITY_LOSER_EDGES)
     merge_rig.store.fail_appends()
@@ -729,7 +723,7 @@ def test_the_loser_edge_reads_are_issued_once_each_after_the_existence_check(
 def test_resolve_merge_of_nonexistent_review_returns_none_before_any_write(
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-008 (not-found half, merge): an unknown/already-resolved id makes no graph changes."""
+    """Merge: an unknown/already-resolved id makes no graph changes."""
     target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
 
     outcome = resolve_review(merge_rig.legacy, "review_missing", "merge", target)
@@ -741,7 +735,10 @@ def test_resolve_merge_of_nonexistent_review_returns_none_before_any_write(
 def test_resolve_merge_when_review_vanishes_before_existence_check_returns_none(
     merge_rig: MergeRig,
 ) -> None:
-    """Benign race: Step 1 found the review, but it's gone by Step 2 -- treated as not-found."""
+    """Benign race: the first read found the review, but it's gone by the second.
+
+    Treated as not-found.
+    """
     _seed_merge(merge_rig)
 
     class _VanishingReview(RigReadHandle):
@@ -764,7 +761,7 @@ def test_resolve_merge_when_review_vanishes_before_existence_check_returns_none(
 def test_stale_review_either_node_missing_raises_stale_error_and_writes_nothing(
     missing: str, make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-004 / CHANGES.md H2 / issue #190: nothing is submitted, logged or changed."""
+    """Nothing is submitted, logged or changed."""
     emitter, log_path = make_emitter()
     _seed_merge(merge_rig)
     del merge_rig.policy_system.nodes[("Capability", missing)]
@@ -785,7 +782,7 @@ def test_stale_review_either_node_missing_raises_stale_error_and_writes_nothing(
 def test_the_resolve_log_entry_carries_winner_id_and_loser_id(
     make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-009 (full): merge logs decision, review id, timestamp, AND winner/loser ids."""
+    """Merge logs decision, review id, timestamp, AND winner/loser ids."""
     emitter, log_path = make_emitter()
     _seed_merge(merge_rig)
 
@@ -804,13 +801,13 @@ def test_the_resolve_log_entry_carries_winner_id_and_loser_id(
     assert "timestamp" in entry
 
 
-# --- falkordb_live (issue #35, Slice 4, CHANGES.md H1: REQUIRED, not optional) ---
+# --- falkordb_live ---
 
 _LIVE_TEST_GRAPH = "policy_system_slice4_merge_live_test"
 
 
 def _live_target(config: ServiceConfig, graph_name: str) -> GraphWriteTarget:
-    """The real gateway on the disposable graph, under one system audit row (issue #210)."""
+    """The real gateway on the disposable graph, under one system audit row."""
     audit_event_id = build_system_audit_recorder(config)(
         action="ingestion_run.submit",
         resource_type="ingestion_run",
@@ -825,12 +822,11 @@ def _live_target(config: ServiceConfig, graph_name: str) -> GraphWriteTarget:
 def test_resolve_merge_repoints_edges_and_deletes_loser_live(
     make_emitter: MakeEmitter, read_lines: ReadLines, provisioned_graph_log: Provisioned
 ) -> None:
-    """AC-BI-005/006/007 against a REAL FalkorDB instance (CHANGES.md H1's required gate).
+    """Merge re-points edges and deletes the loser, against a REAL FalkorDB instance.
 
-    This is the live anchor of the file: since #210 the merge is a read-resolve-write group, and
-    only a real FalkorDB proves the read (`RETURN DISTINCT`) and the gateway application agree
-    with the pre-#210 single statement on the row-multiplication scenario below. (Not run in the
-    implementation sandbox.)
+    This is the live anchor of the file: the merge is a read-resolve-write group, and only a real
+    FalkorDB proves the read (`RETURN DISTINCT`) and the gateway application agree with the
+    frozen reference statement on the row-multiplication scenario below.
 
     Writes into a dedicated, disposable graph name
     (`policy_system_slice4_merge_live_test`), NEVER the real, shared
@@ -839,17 +835,16 @@ def test_resolve_merge_repoints_edges_and_deletes_loser_live(
     holds real regulatory data is not something this test mutates without a
     human's separately-obtained permission" convention (CLAUDE.md). The
     disposable graph is deleted in a `finally` block regardless of outcome,
-    including a failing run, so no live residue survives (per this slice's
-    own "leave the real FalkorDB instance clean" requirement) -- a
+    including a failing run, so no live residue survives -- a
     defensive pre-clean also runs first, in case a prior failed run left
     residue.
 
     Seeds TWO `Obligation`s `REQUIRES`-ing the same loser `Capability`
     (mirroring `docs/artifacts/ps-domain-concepts.md:652-681`'s worked
     example -- the domain's *primary* convergence scenario, not an edge
-    case) plus a `Policy` the loser is `GOVERNED_BY`, so the loser's edge read genuinely returns
-    several rows that must collapse to one primitive per edge and one loser delete (the condition
-    CHANGES.md C1 identified for the pre-#210 statement).
+    case) plus a `Policy` the loser is `GOVERNED_BY`, so the loser's edge read genuinely
+    returns several rows that must collapse to one primitive per edge and one loser delete
+    (the row-multiplication condition of the frozen reference statement).
     """
     config = provisioned_graph_log.state_config()
     db = connect_from_config(config)
@@ -869,7 +864,7 @@ def test_resolve_merge_repoints_edges_and_deletes_loser_live(
     try:
         graph = select_graph(db, _LIVE_TEST_GRAPH)
 
-        # Winner: earlier created_at (2020). Loser: later created_at (2024). M2: earlier wins.
+        # Winner: earlier created_at (2020). Loser: later created_at (2024). The earlier wins.
         graph.query(
             "CREATE (:Capability {id: $id, name: 'Incident Notification (winner)', "
             "created_at: '2020-01-01T00:00:00+00:00'})",
@@ -957,7 +952,7 @@ def test_resolve_merge_repoints_edges_and_deletes_loser_live(
         )
         assert review_result.result_set == []
 
-        # AC-BI-009 (full): the structured log entry names winner/loser too.
+        # The structured log entry names winner/loser too.
         entries = read_lines(log_path)
         assert len(entries) == 1
         assert entries[0]["component"] == "company_merge"

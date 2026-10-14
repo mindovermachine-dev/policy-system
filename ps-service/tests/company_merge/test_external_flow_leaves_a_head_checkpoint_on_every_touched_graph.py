@@ -1,9 +1,9 @@
-"""An external ingest, Domain Mapper and Company Merge run leaves head checkpoints (#215, S4e).
+"""An external ingest, Domain Mapper and Company Merge run leaves head checkpoints.
 
 The real writers of the three stages run, one after the other, on one gateway rig: Ingestion's
 `{short}_native` group, the Domain Mapper's two `{short}_baseline` groups and Company Merge's
 `policy_system` and baseline groups. Whatever order they ran in, every graph the run touched ends
-with a checkpoint at its head equal to the live canonical digest (AC-BI-009, CHANGES FL-2).
+with a checkpoint at its head equal to the live canonical digest.
 """
 
 from __future__ import annotations

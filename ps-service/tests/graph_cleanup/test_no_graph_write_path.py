@@ -1,4 +1,4 @@
-"""Graph Cleanup holds no write path to FalkorDB (issue #212, AC-BI-001, AC-BI-010).
+"""Graph Cleanup holds no write path to FalkorDB.
 
 Every `policy_system` mutation goes through the Graph Write Gateway, so no module under
 `ps_service.graph_cleanup` may open a FalkorDB connection of its own, name the gateway's apply
@@ -13,7 +13,7 @@ Positive half: each of the five writers of `group_builders.py` reaches `submit_c
 reaches the gateway sink `submit_group` (same-module call graphs by name, no mock), and each
 executor reaches its writer.
 
-Symbol absence (AC-BI-010): the pre-#212 `graph_writer` module is gone and none of its statements
+Symbol absence: the former `graph_writer` module is gone and none of its statements
 or functions is named in the source or the tests, outside the frozen reference.
 
 The guard is itself guarded: planted violations must be found, and prose must not be.
@@ -115,7 +115,7 @@ def test_the_executors_call_the_writers() -> None:
     assert set(_WRITERS) <= called
 
 
-# --- AC-BI-010: the direct-write module and its symbols are gone ---
+# --- the direct-write module and its symbols are gone ---
 
 
 def test_the_direct_write_module_is_not_importable() -> None:

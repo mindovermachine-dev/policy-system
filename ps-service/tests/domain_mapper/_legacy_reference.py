@@ -1,4 +1,4 @@
-"""Frozen copy of the Domain Mapper's graph writer as it was before issue #209: the reference.
+"""Frozen copy of the Domain Mapper's pre-gateway graph writer: the reference.
 
 It issues the Cypher the pre-migration `graph_writer.py` issued (`MERGE ... SET n += $properties`;
 `MATCH ... MERGE ... SET e.source_ref = $source_ref` for DEFINES/EXPRESSES; `MATCH ... MERGE` with
@@ -7,8 +7,7 @@ graph records every call and keeps the node and edge sets those calls would have
 `MATCH` that finds no endpoint writes nothing, and a repeated `MERGE` folds onto the first. Only
 the parameters of the calls are read; the Cypher text yields labels and relationship types only.
 The legacy `_validate_role_references` pre-flight is not copied: it wrote nothing and the new
-writer keeps it unchanged, so it is not a write shape. The frozen shapes are `git show
-HEAD:ps-service/src/ps_service/domain_mapper/graph_writer.py` at the commit before #209.
+writer keeps it unchanged, so it is not a write shape.
 """
 
 from __future__ import annotations
@@ -217,7 +216,7 @@ def write_legacy_role_and_requirement_graph(
     requirement_nodes: tuple[RequirementNode, ...],
     requirement_edges: tuple[RequirementExpressesEdge, ...],
 ) -> None:
-    """The pre-#209 `persist_role_and_requirement_graph` write sequence, statement for statement."""
+    """The pre-gateway `persist_role_and_requirement_graph` writes, statement for statement."""
     _merge_node(
         graph,
         _INSTRUMENT,
@@ -244,7 +243,7 @@ def write_legacy_obligation_and_capability_graph(
     capability_nodes: tuple[CapabilityNode, ...],
     requires_edges: tuple[CapabilityRequiresEdge, ...],
 ) -> None:
-    """The pre-#209 `persist_obligation_and_capability_graph` writes, statement for statement."""
+    """The pre-gateway `persist_obligation_and_capability_graph` writes, statement for statement."""
     for obligation in obligation_nodes:
         _merge_node(graph, "Obligation", obligation.id, obligation.properties)
     for capability in capability_nodes:

@@ -1,8 +1,8 @@
-"""`postgres_live` tests for a graph-log group with no audit link (issue #211, S1).
+"""`postgres_live` tests for a graph-log group with no audit link.
 
 Policy Lifecycle's draft edits and status/version backfills have no `audit_events` row; their
 groups are appended with a null `audit_event_id` (the column is nullable). Written against the
-real Postgres store; NOT run in the sandbox that built it (no Postgres): unverified until run.
+real Postgres store.
 
 Deselected by default -- run with `uv run pytest -m postgres_live`; needs
 `PS_TEST_POSTGRES_SUPERUSER_DSN` and `psql` on `PATH`.

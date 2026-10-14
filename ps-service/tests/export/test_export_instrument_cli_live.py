@@ -1,4 +1,4 @@
-"""`falkordb_live` proof for `tools/curated-export/export_instrument.py` (issue #66, D4).
+"""`falkordb_live` proof for `tools/curated-export/export_instrument.py`.
 
 Runs the real CLI shim's `main()` end to end against a real, throwaway
 `{short}_baseline`/`{short}_native` FalkorDB graph pair -- uniquely tokened
@@ -90,7 +90,7 @@ def test_export_instrument_cli_runs_end_to_end_against_a_real_throwaway_graph_pa
     )
 
     cli_module = _load_cli_module()
-    # The CLI builds its gateway and audit recorder from the service configuration (issue #213):
+    # The CLI builds its gateway and audit recorder from the service configuration:
     # point that at the scratch PS Postgres. `--host`/`--port` keep deciding the FalkorDB.
     repo_root = tmp_path / "repo"
     packaged_copy_path = tmp_path / "packaged" / "catalog.json"

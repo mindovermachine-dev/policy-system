@@ -1,4 +1,4 @@
-"""The Graph Write Gateway rig, seen from Restore (issue #214, slice 8a).
+"""The Graph Write Gateway rig, seen from Restore.
 
 Restore hands the gateway ONE multi-graph group and only READS `policy_system`. `RestoreRig` is
 the gateway rig (in-memory log and FalkorDB fakes, the true boundaries) plus the pieces

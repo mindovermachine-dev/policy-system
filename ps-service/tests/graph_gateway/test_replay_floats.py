@@ -1,4 +1,4 @@
-"""64-bit floats survive log, replay and graph bit for bit (#207 S14, AC-RD-007).
+"""64-bit floats survive log, replay and graph bit for bit.
 
 Embeddings travel as little-endian binary64 payloads; float properties travel inside the entry's
 JSON content. The hermetic proof goes through the real entry codec and payload codec with the

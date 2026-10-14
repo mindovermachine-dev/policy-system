@@ -1,4 +1,4 @@
-"""Submitting a group on the caller's own transaction (issue #206 S7a, App-C).
+"""Submitting a group on the caller's own transaction.
 
 A writer that records an audit row and the log group on ONE transaction calls
 `submit_group_in_transaction(cur, group)`. The call stages the group (graph lock taken, state

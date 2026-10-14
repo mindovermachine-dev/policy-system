@@ -1,4 +1,4 @@
-"""A replay that is interrupted resumes from its progress record (#207 S12a, AC-RD-005).
+"""A replay that is interrupted resumes from its progress record.
 
 The progress record is a sentinel node inside the graph being rebuilt (`replay_state`). It is
 excluded from the digest, removed when the replay completes, and found again after a restart even
@@ -149,7 +149,7 @@ def test_a_failure_leaves_the_progress_record_at_the_last_completed_page() -> No
     assert (state.position, state.state) == (4, "in_progress")
 
 
-# Verification across a resume (CHANGES A2).
+# Verification across a resume.
 
 
 @pytest.mark.parametrize(

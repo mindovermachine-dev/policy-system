@@ -1,5 +1,5 @@
 """Tests for `ps_service.export.catalog_writer.write_catalog_json`
-(PLAN.md Slice 3.4, CHANGES.md MA3): the aggregate `catalog.json` listing,
+the aggregate `catalog.json` listing,
 written identically to both the repo-root copy and a packaged copy.
 """
 

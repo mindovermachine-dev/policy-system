@@ -1,8 +1,8 @@
 """Real, freshly ingested CRA/GDPR/NIS2 native graphs for the live tests that read them.
 
 The Domain Mapper, Company Merge and Change Monitor live tests start from the native graphs the
-Ingestion component writes. They used to read whatever `cra_native`/`gdpr_native`/`nis2_native`
-happened to sit in the developer's FalkorDB, so they failed on any clean instance. The
+Ingestion component writes. Reading whatever `cra_native`/`gdpr_native`/`nis2_native` happened to be
+in the developer's FalkorDB would fail on any clean instance. The
 `live_native_graphs` fixture ingests the three instruments from the live Cellar/ELI service
 through the real Graph Write Gateway on the scratch PS Postgres (the `provisioned_graph_log`
 fixture), and deletes the native and baseline graphs of all three before and after, so a run never

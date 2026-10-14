@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def test_public_actions_importable_from_package_root() -> None:
-    """PLAN_REVIEWED.md §1: __init__.py re-exports both public actions, so
+    """__init__.py re-exports both public actions, so
     callers can import from the package root, not just the submodules.
     """
     from ps_service.domain_mapper import (

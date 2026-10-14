@@ -1,4 +1,4 @@
-"""The thin vertical path of the internal-seed ingestion through the gateway (#208, slice 1).
+"""The thin vertical path of the internal-seed ingestion through the gateway.
 
 A seed holding only the RegulatoryInstrument: it is submitted as one mutation group on
 `{short}_native` (and one on `{short}_baseline`), logged under the caller's audit event id,

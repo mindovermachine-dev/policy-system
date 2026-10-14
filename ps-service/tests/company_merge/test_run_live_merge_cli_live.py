@@ -1,19 +1,17 @@
-"""Live wiring smoke test for `tools/company-merge/run_live_merge.py` (issue #28,
-CHANGES.md #2).
+"""Live wiring smoke test for `tools/company-merge/run_live_merge.py`.
 
 `@pytest.mark.falkordb_live`, **ZERO writes**: `test_run_live_merge_cli.py`'s own unit suite
 fakes every collaborator (`graph_provider`, `merge_fn`, `clock`), so nothing before this test
 ever exercised the runner's REAL `select_graph`/`load_config`/`bind_run_context`/
-`Logging.configure()` wiring against a real FalkorDB instance -- CHANGES.md #2's "integration
+`Logging.configure()` wiring against a real FalkorDB instance -- the "integration
 wiring never exercised live" gap. This test closes it: real `graph_provider` (real
 `select_graph` against real FalkorDB), real `ps_service.config.load_config()`-resolved
 `similarity_threshold`/`embed_model`, real `bind_run_context`/emitter (`Logging.configure()`)
 -- and ONLY `merge_fn` faked, raising immediately on its FIRST call (recording the exact real
 args it was invoked with) BEFORE any write of any kind occurs. No `--approval-file` points at
-either of the two human-authored `APPROVAL_LIVE_MERGE_*.md` files this issue's real slice 6/8
-runs will consume -- a fresh, valid approval fixture lives under `tmp_path` instead, so the
-approval-gate code path is exercised too without touching anything under this issue's own
-tracker directory.
+either of the two human-authored `APPROVAL_LIVE_MERGE_*.md` files the real runs consume --
+a fresh, valid approval fixture lives under `tmp_path` instead, so the approval-gate code path
+is exercised too without touching any real approval file.
 
 Mirrors `test_check_baseline_preconditions_cli_live.py`'s `importlib`-by-path loading and
 `test_run_live_merge_cli.py`'s `_preserve_atexit_registered_guard` fixture (this test's own
@@ -43,10 +41,9 @@ if TYPE_CHECKING:
 _SCRIPT_PATH = Path(__file__).resolve().parents[3] / "tools" / "company-merge" / "run_live_merge.py"
 _MODULE_NAME = "_run_live_merge_cli_under_test_live"
 
-# A fresh, valid approval fixture -- lives under tmp_path only, never under this issue's own
-# tracker directory, and is NOT one of the two human-authored
-# APPROVAL_LIVE_MERGE_INITIAL.md/APPROVAL_LIVE_MERGE_RERUN.md files (this suite never creates
-# those, per issue #28's own approval-gate design: only a human authors those, by hand).
+# A fresh, valid approval fixture -- lives under tmp_path only, and is NOT one of the two
+# human-authored APPROVAL_LIVE_MERGE_INITIAL.md/APPROVAL_LIVE_MERGE_RERUN.md files (this suite
+# never creates those: only a human authors those, by hand).
 _VALID_APPROVAL_FIELDS: dict[str, str] = {
     "approved_by": "tete@cartman.dk",
     "approved_at": "2026-09-13T10:00:00Z",
@@ -64,11 +61,10 @@ def _node_count(graph: GraphHandle) -> int:
 
 
 def _offline_write_access(config: object) -> tuple[object, object]:
-    """Issue #210: the gateway and audit row are not the subject of this smoke test.
+    """The gateway and audit row are not the subject of this smoke test.
 
     The gateway is never submitted to (`merge_fn` raises first) and the audit recorder is
-    replaced so the test issues no write to the PS state database either. Mechanism updated for
-    #210; not run in the implementation sandbox.
+    replaced so the test issues no write to the PS state database either.
     """
     del config
 
@@ -183,7 +179,7 @@ def test_real_wiring_reaches_merge_fn_with_real_args_and_issues_zero_writes(
         merge_fn=merge_fn,
         write_access=_offline_write_access,
         # graph_provider/clock deliberately left at their REAL defaults -- this is the whole
-        # point of this test, per CHANGES.md #2.
+        # point of this test.
     )
 
     # --- Safety check (AFTER): must be byte-for-byte the same. ---

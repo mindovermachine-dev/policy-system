@@ -1,4 +1,4 @@
-"""Tests for the graph log store when `ps_state` is unreachable or unconfigured (AC-BI-009).
+"""Tests for the graph log store when `ps_state` is unreachable or unconfigured.
 
 Hermetic: the unreachable case connects to a local port nothing listens on, so the real driver
 failure is exercised without a Postgres server.

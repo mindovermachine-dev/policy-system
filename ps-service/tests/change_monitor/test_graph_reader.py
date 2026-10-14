@@ -1,6 +1,6 @@
-"""Tests for `ps_service.change_monitor.graph_reader` (AC-002, AC-003).
+"""Tests for `ps_service.change_monitor.graph_reader`.
 
-Test 4 (PLAN_REVIEWED.md §3): scripted `FakeGraph` rows map to
+Scripted `FakeGraph` rows map to
 `TrackedInstrumentNode`s carrying only the projected fields, and the
 enumeration query carries the `active` / `external` /
 `regulation`-or-`directive` filter and the `n.celex` / `n.effective_date`

@@ -1,7 +1,7 @@
 """Tests for `ps_service.company_merge.falkordb_client`.
 
 Mirrors `ps_service.domain_mapper.tests.test_falkordb_client`'s shape
-exactly (PLAN_REVIEWED.md §10 Increment 4) -- this is a deliberate
+exactly -- this is a deliberate
 near-duplicate component (own copy, not a shared import; see the module's
 own docstring), so its tests are a deliberate near-duplicate too.
 """

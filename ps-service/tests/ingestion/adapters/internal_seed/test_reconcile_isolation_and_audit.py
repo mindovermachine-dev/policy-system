@@ -1,6 +1,6 @@
 """Reconciliation stays inside the target's graphs and takes nothing from the submission.
 
-It is also auditable and replayable (GH #99, S4 and S5).
+It is also auditable and replayable.
 """
 
 from __future__ import annotations

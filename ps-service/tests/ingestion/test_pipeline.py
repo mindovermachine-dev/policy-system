@@ -1,8 +1,8 @@
-"""Tests for `ps_service.ingestion.pipeline` (PLAN_REVIEWED.md §7 Increment 11).
+"""Tests for `ps_service.ingestion.pipeline`.
 
-Two tests, per the plan:
+Two tests:
 
-(a) AC-005 proof — two separate `ingest_regulatory_instrument()` calls, each inside its
+(a) Two separate `ingest_regulatory_instrument()` calls, each inside its
 own `bind_run_context()` scope (via `pipeline.py`'s own `with` block), emit
 log entries carrying two distinct `run_id`s. Mirrors
 `tests/llm_interface/test_route_completion_logs_run_id.py`'s
@@ -10,7 +10,7 @@ bind -> call -> read-back-from-emitted-JSON mechanism, using the same
 `make_emitter`/`read_lines` fixtures (now shared at `tests/conftest.py` —
 see that file's docstring for why this is the DRY-extraction point).
 
-(b) AC-006 proof — THE B2/B3 FIX. An AST-based scan (not a substring grep)
+(b) An AST-based scan (not a substring grep)
 of every `.py` file actually delivered under `ps_service/ingestion/`
 (`pathlib.Path(...).rglob("*.py")`, not a hardcoded file list), asserting no
 string literal naming a regulation ("CRA"/"GDPR"/"NIS2") appears inside a
@@ -23,7 +23,7 @@ construct (an `if`/`elif` test, a ternary's test, a `while`/`assert`
 condition, a bare `Compare` node, a `match` statement's case patterns) —
 and a docstring statement can never structurally appear inside one of those.
 A `_docstring_constant_ids` exclusion is layered on top anyway, explicitly,
-per PLAN_REVIEWED.md's requirement — defensive, not load-bearing given the
+defensive, not load-bearing given the
 above, but making the "docstrings never trip this check" guarantee explicit
 rather than implicit.
 """
@@ -143,7 +143,7 @@ def _structure(title: str) -> FetchedRegulatoryInstrumentStructure:
     return FetchedRegulatoryInstrumentStructure(metadata=metadata, nodes=nodes, edges=edges)
 
 
-# --- (a) AC-005: two calls, two distinct run_ids ---------------------------
+# --- (a) two calls, two distinct run_ids ---------------------------
 
 
 def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(
@@ -267,7 +267,7 @@ def test_ingest_regulatory_instrument_uses_currently_bound_run_id_when_nested_in
 def test_ingest_regulatory_instrument_binds_caller_supplied_run_id_across_every_stage_entry(
     make_emitter: _MakeEmitter, read_lines: _ReadLines, rig: GatewayRig
 ) -> None:
-    """A caller (the REST API, per issue #51 T2) may pass a request-scoped
+    """A caller (the REST API) may pass a request-scoped
     `run_id` so ingestion-stage log lines correlate with the rest of the
     request. Every emitted line carries exactly that id, and it round-trips
     on `IngestResult.run_id` — no fresh uuid4 is generated.
@@ -293,13 +293,11 @@ def test_ingest_regulatory_instrument_binds_caller_supplied_run_id_across_every_
     assert all(line["run_id"] == "req-abc" for line in lines)
 
 
-# --- (b) AC-006: AST-based regulation-name-conditional scan (B2/B3 fix) ---
+# --- (b) AST-based regulation-name-conditional scan ---
 #
 # The scan machinery (FORBIDDEN_LITERALS, find_forbidden_literals,
 # scan_package_for_forbidden_conditionals) now lives in the shared
-# `change_monitor._regulation_independence` module (PLAN_REVIEWED.md §1.6,
-# flaw 12/13). Behaviour and assertions below are unchanged — only the
-# import source moved.
+# `change_monitor._regulation_independence` module.
 
 
 def _files_to_scan() -> list[Path]:
@@ -363,8 +361,8 @@ def test_find_forbidden_literals_flags_a_hypothetical_conditional() -> None:
 
 
 def test_find_forbidden_literals_flags_a_hypothetical_celex_conditional() -> None:
-    """Proves the scan now also flags a branch on a specific CELEX
-    identifier — the same per-instrument conditional AC-BI-013 forbids,
+    """The scan also flags a branch on a specific CELEX
+    identifier — a per-instrument conditional,
     just keyed on the source identifier rather than the short name.
     """
     tree = ast.parse(

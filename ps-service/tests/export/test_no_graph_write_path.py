@@ -1,4 +1,4 @@
-"""Export holds no write path to FalkorDB (issue #213, AC-BI-001, AC-BI-007).
+"""Export holds no write path to FalkorDB.
 
 Export's only graph write, the embedding backfill, goes through the Graph Write Gateway, so no
 module under `ps_service.export` may open a FalkorDB connection of its own, name the gateway's
@@ -13,7 +13,7 @@ read connection stays outside the architecture guard by specification.
 Positive half: the backfill reaches the gateway sink `submit_or_raise`, `export_instrument`
 reaches the backfill, and `run_export` hands the gateway and the audit row to the delegate.
 
-Symbol absence (AC-BI-001): the pre-#213 direct writer `_write_embedding` is named neither in the
+Symbol absence: the former direct writer `_write_embedding` is named neither in the
 source nor in the tests.
 
 The guard is itself guarded: planted violations must be found, and prose must not be.
@@ -97,7 +97,7 @@ def test_run_export_gives_the_delegate_the_gateway_and_the_audit_anchor() -> Non
         assert keyword in source
 
 
-# --- AC-BI-001: the direct writer's symbol is gone ---
+# --- the direct writer's symbol is gone ---
 
 
 def test_no_removed_symbol_is_named_in_the_source_or_the_tests() -> None:

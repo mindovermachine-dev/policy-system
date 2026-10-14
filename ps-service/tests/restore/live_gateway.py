@@ -1,4 +1,4 @@
-"""The real Graph Write Gateway for Restore's `falkordb_live` + `postgres_live` tests (issue #214).
+"""The real Graph Write Gateway for Restore's `falkordb_live` + `postgres_live` tests.
 
 Restore writes its three graphs through the gateway, so the live tests that call
 `restore_instrument` need a real one: the `PsycopgGraphLogStore` as the `ps_state` role of a
@@ -51,7 +51,7 @@ def live_restore(
         log_store=PsycopgGraphLogStore(prov.state_config()),
         graph_opener=lambda graph: select_graph(db, graph),
         emitter=emitter,
-        key_port=FalkorDBKeyPort(lambda: db),  # a restore is applied by swap (issue #214)
+        key_port=FalkorDBKeyPort(lambda: db),  # a restore is applied by swap
     )
     try:
         yield LiveRestore(gateway, committed_audit_event(prov))

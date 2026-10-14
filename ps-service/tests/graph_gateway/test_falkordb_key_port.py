@@ -1,4 +1,4 @@
-"""`FalkorDBKeyPort` against a hand-written Redis/FalkorDB stand-in (issue #214 S6).
+"""`FalkorDBKeyPort` against a hand-written Redis/FalkorDB stand-in.
 
 The stand-in keeps a version number per key. A pipeline that watched a key refuses to execute when
 that key's version moved since the watch, as Redis does. The real engine's behaviour is proved by

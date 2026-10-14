@@ -1,12 +1,12 @@
-"""Real-wiring proof for `tools/curated-export/export_instrument.py` (issue #66, D4; #213).
+"""Real-wiring proof for `tools/curated-export/export_instrument.py`.
 
 This suite never touches a real FalkorDB or Postgres and never calls a real LLM provider, but it
 *does* exercise the real `ps_service.export.export_instrument.export_instrument` orchestrator
 (embed -> serialize -> checksum -> manifest -> catalog.json) end to end. The Graph Write Gateway
 rig (in-memory log and FalkorDB, the true boundaries) is what the CLI's gateway, read handles and
-system audit recorder are; a fake `EmbeddingCaller` stands in for the LLM Provider (D7) -- so every
+system audit recorder are; a fake `EmbeddingCaller` stands in for the LLM Provider -- so every
 assertion below is against real written files and what the rig's graph, log and audit recorder
-hold, never a captured-kwargs stub. Since issue #213 the CLI writes the embedding backfill through
+hold, never a captured-kwargs stub. The CLI writes the embedding backfill through
 a gateway it builds from the configuration (with `--host`/`--port` applied), after recording the
 Export system audit row.
 
@@ -292,7 +292,7 @@ def test_main_wires_cli_args_into_export_instrument(
 def test_main_writes_the_backfill_as_one_gateway_group_anchored_to_the_audit_row(
     cli_module: ModuleType, wiring: _Wiring, tmp_path: Path
 ) -> None:
-    """AC-BI-001/AC-BI-010: no direct write; one `cra_baseline` group, anchored to the row the
+    """No direct write; one `cra_baseline` group, anchored to the row the
     CLI recorded first (the read handle refuses any write statement).
     """
     instrument_id = "32024R2847"
@@ -357,7 +357,7 @@ def test_main_exits_non_zero_and_writes_nothing_when_the_audit_row_cannot_be_wri
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-010: fail-closed -- no embedding is computed, no group is submitted."""
+    """Fail-closed -- no embedding is computed, no group is submitted."""
     instrument_id = "32024R2847"
     rig = wiring.rig
     _seed_instrument(rig, instrument_id, source_type="external")

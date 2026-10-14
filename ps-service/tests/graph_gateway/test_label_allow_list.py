@@ -1,4 +1,4 @@
-"""D6 (#207): the replay sentinel label is never reachable by ordinary writers."""
+"""The replay sentinel label is never reachable by ordinary writers."""
 
 from __future__ import annotations
 

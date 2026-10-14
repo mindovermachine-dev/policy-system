@@ -1,13 +1,12 @@
-"""Increment 18 (PLAN_REVIEWED.md §9 / §10 Batch 9) -- AC-008 confirmation:
-Role/Requirement/Obligation dedup is out of scope for
+"""Role/Requirement/Obligation dedup is out of scope for
 `ps_service.company_merge`. Two independent proofs, mirroring
 `tests/domain_mapper/test_ac008_out_of_scope.py`'s own precedent of pairing
-a static-analysis check with direct positive/negative runtime cases. Since
-issue #42 Obligation joined Role/Requirement as a passthrough node
+a static-analysis check with direct positive/negative runtime cases. Obligation is a
+passthrough node like Role/Requirement
 (Role-scoped identity, a weak entity of exactly one Role), so
 `dedupe_canonical_nodes` is invoked for Capability alone.
 
-1. **Static proof** (secondary layer, PLAN_REVIEWED.md §9): `dedupe_canonical_
+1. **Static proof** (secondary layer): `dedupe_canonical_
    nodes`'s `kind` parameter is genuinely `Literal["Capability"]`-typed,
    confirmed by introspecting the function's own resolved type hints
    (`typing.get_type_hints`) rather than merely reading the source -- this
@@ -16,7 +15,7 @@ issue #42 Obligation joined Role/Requirement as a passthrough node
    `**kwargs` unpacking or a type-checker suppression comment, could still
    bypass it at runtime).
 
-2. **Runtime proof** (primary enforcement, PLAN_REVIEWED.md §9): a
+2. **Runtime proof** (primary enforcement): a
    hand-written wrapper around `ps_service.company_merge.dedup.
    dedupe_canonical_nodes` -- installed via `monkeypatch.setattr` (not
    `unittest.mock.patch`), delegating to the real implementation so
@@ -161,9 +160,9 @@ class _FakeBaselineGraph:
         if "(n:RiskPath) RETURN" in q:
             return _FakeQueryResult([])
         if "[:COVERS]" in q or "[:OWNS]" in q or "[:MITIGATED_BY]" in q or "[:VERIFIED_BY]" in q:
-            # issue #106 -- this fixture carries no classification-layer
-            # content; the four new edge queries `read_baseline_graph` now
-            # always issues answer empty (external-baseline shape).
+            # This fixture carries no classification-layer content; the four
+            # classification edge queries `read_baseline_graph` always issues
+            # answer empty (external-baseline shape).
             return _FakeQueryResult([])
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)
@@ -251,7 +250,7 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
 
 
 def _internal_baseline_with_governance() -> _FakeBaselineGraph:
-    """F2 (CHANGES.md): an internal-sourced baseline -- one Capability, one
+    """An internal-sourced baseline -- one Capability, one
     Policy, one Standard, one Control, fully wired with `GOVERNED_BY`/
     `SUPPORTED_BY`/`IMPLEMENTED_BY` -- so `merge_baseline_graph`'s governance
     import actually runs. Mirrors
@@ -297,13 +296,11 @@ def test_dedupe_canonical_nodes_kind_parameter_is_literal_capability_or_policy()
     type hint is exactly `Literal["Capability", "Policy"]` -- confirmed via
     `typing.get_type_hints`/`typing.get_origin`/`typing.get_args` against the
     live function object, not merely by reading `dedup.py`'s source text.
-    Widened in issue #54's S4 (CHANGES.md F2): Company Merge now dedupes
-    Policy alongside Capability -- Role/Requirement/Obligation/Standard/
-    Control remain out of scope (AC-008), never in this Literal. Pylance
+    Company Merge dedupes Policy alongside Capability -- Role/Requirement/
+    Obligation/Standard/Control remain out of scope, never in this Literal. Pylance
     strict mode rejects any other literal at every statically-checked call
-    site -- a genuine but lint-time-only guarantee (PLAN_REVIEWED.md §9's N2
-    fix), which is why this test exists alongside, never instead of, the
-    runtime proof below.
+    site -- a genuine but lint-time-only guarantee, which is why this test exists
+    alongside, never instead of, the runtime proof below.
     """
     hints = typing.get_type_hints(dedupe_canonical_nodes)
     kind_hint = hints["kind"]
@@ -326,8 +323,7 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """Runtime proof, the actual enforcement mechanism (PLAN_REVIEWED.md §9),
-    widened by issue #54's S4 (CHANGES.md F2): a hand-written wrapper -- not
+    """Runtime proof, the actual enforcement mechanism: a hand-written wrapper -- not
     `unittest.mock.patch` -- installed over
     `ps_service.company_merge.dedup.dedupe_canonical_nodes` via `monkeypatch.
     setattr` records every `kind=` keyword argument `merge_baseline_graph`
@@ -337,7 +333,7 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
 
     Two cases: an internal-sourced baseline (`graph.policy_nodes`
     non-empty) and an external-sourced one both record `["Capability"]` only
-    -- since issue #227 the governance tree is imported as drafts by
+    -- the governance tree is imported as drafts by
     `governance_import`, never deduped, so no Policy dedup pass exists on the
     live path. Neither case ever records `"Role"`,
     `"Requirement"`, `"Obligation"`, `"Standard"`, or `"Control"` (all
@@ -378,15 +374,13 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
             emitter=emitter,
         )
 
-    # detroit-exception: AC-008 ("Role/Requirement/Obligation dedup is out of scope") is itself
+    # detroit-exception: "Role/Requirement/Obligation dedup is out of scope" is itself
     # phrased as a call-shape claim, not a state/output one -- which `kind=` values
     # `merge_baseline_graph` invokes `dedupe_canonical_nodes` with, across the two parametrized
-    # baseline shapes (governance-bearing vs. not), IS the specified behavior here (§1.2's
-    # "interaction is the specified behavior" carve-out; see AUDIT_RAW/company_merge_groupA.md's
-    # ambiguous-case #1 and issue #163 Slice 17's ruling, which distinguishes this site from the
-    # otherwise-identical `test_merge_baseline_graph.py:1642` site -- that one asserted a fixed,
-    # non-conditional invariant with no such docstring argument and was rewritten to real state
-    # instead; this one exercises a genuine data-conditional branch decision).
+    # baseline shapes (governance-bearing vs. not), IS the specified behavior here (the
+    # "interaction is the specified behavior" carve-out). This exercises a genuine
+    # data-conditional branch decision, unlike a fixed, non-conditional invariant, which
+    # would be asserted on real state instead.
     monkeypatch.setattr(dedup_module, "dedupe_canonical_nodes", _recording_wrapper)
 
     emitter, _log_path = make_emitter()

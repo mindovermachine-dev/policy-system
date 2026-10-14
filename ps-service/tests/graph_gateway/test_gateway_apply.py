@@ -1,4 +1,4 @@
-"""Batched, idempotent apply through the public gateway (issue #206, S8; AC-BI-005, AC-BI-008).
+"""Batched, idempotent apply through the public gateway.
 
 Every test submits a group through `GraphWriteGateway.submit_group` and asserts on the queries the
 fake graph received (tagged by template and label), the graph state and the applied marker.

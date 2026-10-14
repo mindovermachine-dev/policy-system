@@ -1,6 +1,6 @@
-"""Export's artifacts after #213 equal the pre-migration export (issue #213, AC-BI-004).
+"""Export's artifacts through the gateway equal the legacy export's.
 
-`_golden_export.json` was captured on the untouched tree (`730f843`): the real legacy
+`_golden_export.json` was captured from the legacy path: the real legacy
 `export_instrument` driven over the ENGPRAC-1.0 baseline (embeddings stripped from every Capability
 and Policy node) and native artifacts, with a deterministic embedder and a stateful FalkorDB fake.
 These tests run the migrated path, `run_export` over the gateway rig with the same input and the
@@ -80,7 +80,7 @@ def gateway() -> Iterator[ProcessGateway]:
 def test_run_export_matches_the_pre_migration_golden_export(
     gateway: ProcessGateway, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-004: baseline.json, native.json and both sha256 equal the legacy export's."""
+    """Baseline.json, native.json and both sha256 equal the legacy export's."""
     rig = ExportRig(gateway.rig, short_name="ENGPRAC")
     rig.seed_artifact(
         rig.baseline, _load("baseline.json"), strip_embeddings_of=("Capability", "Policy")

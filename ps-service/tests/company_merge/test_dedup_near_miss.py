@@ -1,5 +1,4 @@
-"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`
-(PLAN_REVIEWED.md §10 Increment 9, test (c)): AC-004 near-miss surfacing --
+"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`: near-miss surfacing --
 a below-threshold semantic score mints a new canonical node AND records a
 `NearMissPair` carrying the actual similarity value that was computed.
 """

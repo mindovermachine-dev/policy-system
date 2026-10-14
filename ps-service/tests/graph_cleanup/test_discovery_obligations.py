@@ -1,4 +1,4 @@
-"""Duplicate-obligation discovery within one Role (issue #190, slice 9, AC-BI-004).
+"""Duplicate-obligation discovery within one Role.
 
 The real reader + grouping run against a scripted single-tenant graph; only the
 rows it returns are canned. Row shape: role id, role name, obligation id,

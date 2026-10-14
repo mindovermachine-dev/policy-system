@@ -1,12 +1,12 @@
 # pyright: reportPrivateUsage=false
-"""Frozen copy of the internal-seed writer as it was before issue #208: the equivalence reference.
+"""Frozen copy of the pre-migration internal-seed writer: the equivalence reference.
 
 It issues the same Cypher the pre-migration `persist.py` issued (`MERGE ... SET n += $properties`,
 `MATCH ... MERGE ... SET r += $properties`) against a `LegacyRecordingGraph`, which records every
 call and keeps the node and edge sets those calls would have produced (a `MATCH` that finds no
 endpoint writes nothing). Only the node/edge parameters of the calls are read; the Cypher text
 yields the label and relationship type only. The property builders and canonical-id minting it
-shares with the new writer are the ones #208 leaves untouched (PLAN: `_*_properties` unchanged).
+shares with the new writer are the real ones, not copies.
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ def _merge_edge(
 def write_legacy(
     seed: InternalRegulationSeed, native: LegacyWriteTarget, baseline: LegacyWriteTarget
 ) -> None:
-    """The pre-#208 `_persist_native` + `_persist_baseline`, statement for statement."""
+    """The pre-migration `_persist_native` + `_persist_baseline`, statement for statement."""
     index = new_writer._validate_and_index(seed)
     canonical = new_writer._mint_canonical_ids(seed, index)
     for node in seed.nodes:

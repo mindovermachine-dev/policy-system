@@ -23,7 +23,7 @@ def _wrap(value: Json) -> str:
 
 
 def test_committed_schema_round_trips_byte_for_byte() -> None:
-    """AC-BI-005: parse then re-render gives the committed bytes."""
+    """Parse then re-render gives the committed bytes."""
     committed = _COMMITTED.read_bytes()
 
     rendered = dumps_hand_layout(json.loads(committed))

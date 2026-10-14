@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false
-"""The Graph Write Gateway rig, seen from Regulatory Change Monitor's succession (issue #213).
+"""The Graph Write Gateway rig, seen from Regulatory Change Monitor's succession.
 
 The succession reads the native and `policy_system` graphs through a handle and writes them only
 as gateway groups. `SuccessionRig` is the process's gateway rig (in-memory log and FalkorDB fakes,

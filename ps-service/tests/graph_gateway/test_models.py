@@ -1,4 +1,4 @@
-"""Fast tests for the graph mutation log's input models (issue #205, slice 3).
+"""Fast tests for the graph mutation log's input models.
 
 The models are the boundary validation: a malformed group never reaches SQL.
 """

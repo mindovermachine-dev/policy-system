@@ -1,4 +1,4 @@
-"""Restore holds no write path to FalkorDB (issue #214, AC-BI-001, AC-BI-008, CHANGES.md A-2).
+"""Restore holds no write path to FalkorDB.
 
 A restore changes the graphs only through the Graph Write Gateway: one multi-graph group, built
 as primitives (`leg_primitives`, `merge_primitives`) and submitted by `graph_submission`. So no
@@ -6,9 +6,9 @@ module of `ps_service.restore` may open a FalkorDB connection, name the gateway'
 machinery, or pass write Cypher to a graph handle. The scan is `graph_gateway.write_path_scan`
 (an AST walk of the literals passed to `query` and its siblings, never docstrings or prose).
 
-The three pre-gateway modules (`populate.py`, `staging.py`, `snapshot_merge_writer.py`) were
-deleted by issue #215 slice S6 after the live comparison; `test_no_legacy_restore_module_remains`
-keeps them gone and `_used_legacy` keeps anything from importing or calling their entry points.
+The three removed modules (`populate.py`, `staging.py`, `snapshot_merge_writer.py`) were deleted;
+`test_no_legacy_restore_module_remains` keeps them gone and `_used_legacy` keeps anything from
+importing or calling their entry points.
 
 Positive half: `restore_instrument` reaches `submit_restore`, which reaches the gateway's
 `submit_multi_graph_group`.

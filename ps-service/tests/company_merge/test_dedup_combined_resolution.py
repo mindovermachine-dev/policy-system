@@ -1,9 +1,9 @@
-"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`
-(PLAN_REVIEWED.md §10 Increment 9): the combined whole-collection
+"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`:
+the combined whole-collection
 resolution algorithm -- exact match, semantic match/mint, in-run
-convergence, and B2's within-run embedding-reuse fix.
+convergence, and within-run embedding reuse.
 
-Per the binding testing convention (PLAN_REVIEWED.md §0.5): `call_embedding`
+Per the testing convention, `call_embedding`
 is faked with a hand-written structural fake satisfying `EmbeddingCaller`
 (mirrors `test_dedup_semantic_match.py`'s `_ScriptedCallEmbedding`); the
 fake `single_tenant_graph` is a hand-written structural fake satisfying
@@ -171,20 +171,16 @@ def test_dedupe_canonical_nodes_semantic_match_resolves_onto_existing_id(
 def test_dedupe_canonical_nodes_same_run_mints_do_not_converge_but_record_near_miss(
     make_emitter: MakeEmitter,
 ) -> None:
-    """(d), rewritten for issue #30 (AC-BI-002/AC-BI-004): two incoming nodes
+    """Two incoming nodes
     with no PRE-RUN existing match but semantically equivalent to EACH OTHER
-    (mocked identical embeddings) no longer converge onto one another -- the
+    (mocked identical embeddings) do not converge onto one another -- the
     semantic-match candidate pool is restricted to pre-run existing nodes
     only, and a same-run mint is never itself an eligible merge target, no
     matter how high its score. Both resolve `match_kind="new"`, and the
     excluded same-run mint is recorded as a `NearMissPair` instead (the
-    direct live-path proof of AC-BI-004's at/above-threshold case, since the
+    direct live-path proof of the at/above-threshold near-miss case, since the
     two scripted embeddings are identical vectors -- cosine similarity
     exactly 1.0, at/above `_THRESHOLD`).
-
-    This test previously asserted the OPPOSITE (same-run convergence
-    happens) -- per BASELINE.md's own note, that assertion became wrong
-    under issue #30's restriction and is not a regression.
     """
     emitter, _log_path = make_emitter()
     first_id = "obl_incoming_first_alpha"
@@ -232,16 +228,16 @@ def test_dedupe_canonical_nodes_same_run_mints_do_not_converge_but_record_near_m
 def test_dedupe_canonical_nodes_records_near_miss_for_higher_scoring_mint_on_merge(
     make_emitter: MakeEmitter,
 ) -> None:
-    """CHANGES.md row 1 (HIGH): the excluded same-run mint must be recorded
+    """The excluded same-run mint must be recorded
     as a `NearMissPair` independently of whether the mint or merge branch is
-    taken. Scenario (Appendix B): one pre-run existing Capability `P`;
+    taken. Scenario: one pre-run existing Capability `P`;
     incoming `M` mints first (scores below threshold against `P`); incoming
     `X` scores ABOVE threshold against BOTH `P` (eligible -- the merge
     target) and `M` (same-run mint, and a HIGHER score than `P`). `X` must
     still merge onto `P` (the eligible best), but the higher-scoring
     excluded mint `M` must ALSO be recorded as a near-miss -- proving the
-    merge branch's AC-BI-004 check fires independently of the mint branch's
-    pre-existing one.
+    merge branch's near-miss check fires independently of the mint branch's
+    one.
     """
     emitter, _log_path = make_emitter()
     existing_id = "cap_existing_p"

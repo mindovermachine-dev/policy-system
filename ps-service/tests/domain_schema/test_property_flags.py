@@ -1,4 +1,4 @@
-"""#199 property flags: identity-bearing and lifecycle-managed markers on the real schema."""
+"""Property flags: identity-bearing and lifecycle-managed markers on the real schema."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _property(label: str, name: str) -> Property:
 
 @pytest.mark.parametrize("label", ["Policy", "Standard", "Control"])
 def test_flags_match_the_documented_exclusions(label: str) -> None:
-    """#199 AC-BI-001: flagged properties are exactly the ones the lifecycle service excludes."""
+    """Flagged properties are exactly the ones the lifecycle service excludes."""
     for prop in _node(label).properties:
         assert prop.is_identity_bearing == ((label, prop.name) in _IDENTITY_BEARING)
         assert prop.is_lifecycle_managed == ((label, prop.name) in _LIFECYCLE_MANAGED)
@@ -51,7 +51,7 @@ def test_flags_match_the_documented_exclusions(label: str) -> None:
     ],
 )
 def test_writable_workflow_properties_are_unflagged(label: str, name: str) -> None:
-    """#199 AC-BI-001: type and implementation_status stay content-writable."""
+    """Type and implementation_status stay content-writable."""
     prop = _property(label, name)
 
     assert not prop.is_identity_bearing
@@ -59,7 +59,7 @@ def test_writable_workflow_properties_are_unflagged(label: str, name: str) -> No
 
 
 def test_policy_defines_owner_subject_and_issuer_after_owner_id() -> None:
-    """#199 AC-BI-009: authz owner fields are optional identity-bearing strings after owner_id."""
+    """Authz owner fields are optional identity-bearing strings after owner_id."""
     names = [prop.name for prop in _node("Policy").properties]
 
     assert names.index("owner_subject") == names.index("owner_id") + 1
@@ -72,7 +72,7 @@ def test_policy_defines_owner_subject_and_issuer_after_owner_id() -> None:
 
 
 def test_intake_profile_omits_authz_owner_fields() -> None:
-    """#199 AC-BI-009: a submitter cannot set authz ownership through intake."""
+    """A submitter cannot set authz ownership through intake."""
     omitted = {
         (op.label, op.property_name) for op in INTAKE_PROFILE.operations if isinstance(op, Omit)
     }

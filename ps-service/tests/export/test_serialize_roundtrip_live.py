@@ -1,12 +1,8 @@
 """Round-trip proof: `serialize_graph` -> `to_json_bytes` -> `parse_serialized_graph_json`
--> a test-side populate -> `serialize_graph` reconstructs an equivalent graph (CHANGES2.md §3.5).
+-> a test-side populate -> `serialize_graph` reconstructs an equivalent graph.
 
-Supersedes `test_dump_roundtrip_live.py` (PLAN.md Slice 2.4, permanently
-`xfail` -- its premise, `DUMP`+`RESTORE` round-tripping, is permanently
-superseded by this redesign, not merely temporarily blocked). This is the
-exact load-bearing proof PLAN.md's Slice 2.4 originally wanted, now
-achievable via the new mechanism -- see also CHANGES2.md §4's own live
-probes of this same logic.
+The `DUMP`+`RESTORE` mechanism is not used because it cannot round-trip a graph; this proof
+uses the serialize mechanism instead.
 """
 
 from __future__ import annotations
@@ -85,8 +81,7 @@ def test_serialize_to_json_parse_stage_serialize_reconstructs_an_equivalent_grap
         blob = to_json_bytes(original)
         parsed = parse_serialized_graph_json(blob)
         # `to_json_bytes` sorts; `serialize_graph`'s own node order follows label
-        # enumeration order -- compare sorted (CHANGES2.md §3.5: "dataclass ==
-        # after sorting").
+        # enumeration order -- compare sorted (dataclass == after sorting).
         assert sorted(parsed.nodes, key=_sort_key_for_nodes) == sorted(
             original.nodes, key=_sort_key_for_nodes
         )

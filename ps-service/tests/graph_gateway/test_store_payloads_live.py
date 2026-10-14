@@ -1,7 +1,7 @@
-"""`postgres_live` tests for payloads of the graph log (issue #205, slice 5).
+"""`postgres_live` tests for payloads of the graph log.
 
-Covers AC-BI-007 (a 64-bit embedding is stored as binary and read back bit-identical) and
-AC-BI-008 (an identical large payload appended twice is stored once, both entries share its
+Covers a 64-bit embedding stored as binary and read back bit-identical, and
+an identical large payload appended twice is stored once, both entries share its
 hash). Runs the store as the real `ps_state` role against a scratch PS Postgres.
 
 Deselected by default -- run with `uv run pytest -m postgres_live`; needs

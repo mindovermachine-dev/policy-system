@@ -1,4 +1,4 @@
-"""#199 AC-BI-005: ingestion's hand-copied enum Literals equal the domain schema."""
+"""Ingestion's hand-copied enum Literals equal the domain schema."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from ps_service.ingestion.models import InstrumentType, RegulatoryInstrumentStat
     ],
 )
 def test_ingestion_literal_equals_schema_enum(alias: object, prop: str) -> None:
-    """#199 AC-BI-005: each ingestion Literal alias has exactly the schema enum's values.
+    """Each ingestion Literal alias has exactly the schema enum's values.
 
     Args:
         alias: The `Literal[...]` alias declared in `ps_service.ingestion.models`.

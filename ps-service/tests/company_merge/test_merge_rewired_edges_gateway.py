@@ -1,7 +1,7 @@
-"""`merge_baseline_graph` writes the rewired edges through the Graph Write Gateway (issue #210).
+"""`merge_baseline_graph` writes the rewired edges through the Graph Write Gateway.
 
-Slices 7a and 7b. The ten Edge Catalog types leave Company Merge as ONE gateway group on
-`policy_system`, after the node groups and before the embedding backfills. Equivalence (AC-BI-002)
+The ten Edge Catalog types leave Company Merge as ONE gateway group on
+`policy_system`, after the node groups and before the embedding backfills. Equivalence
 against the frozen legacy reference (`MATCH ... MERGE`, no identity) is met modulo edge identity,
 with a scenario for a REQUIRES target rewritten onto a matched Capability (S-redirect), for a
 dangling edge, and for a re-run; live digest and live interpreter agreement are not verifiable
@@ -132,7 +132,7 @@ def emitter(make_emitter: MakeEmitter) -> LogEmitter:
 def test_the_frozen_reference_and_the_gateway_path_build_the_same_graph_for_rewired_edges(
     scenario: str, merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-002, family E (rewired edges), same generated values; modulo edge identity."""
+    """Family E (rewired edges), same generated values; modulo edge identity."""
     steps = _SCENARIOS[scenario]
 
     reference = reference_graph(steps, emitter)
@@ -241,7 +241,7 @@ def test_a_legacy_policy_system_edge_without_identity_is_stamped_not_duplicated(
 def test_classification_endpoint_validation_still_raises_after_the_node_groups_were_applied(
     merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """7b, PLAN 1.3 item 7: the validation read runs after the node groups, so a run that fails it
+    """The validation read runs after the node groups, so a run that fails it
     leaves the nodes written and no edge (this is observable and unchanged by the gateway).
     """
     broken = FamilyABaseline(

@@ -1,4 +1,4 @@
-"""Pre-append retry, then fail closed (issue #206, S10; AC-BI-009, AC-BI-013).
+"""Pre-append retry, then fail closed.
 
 Transient failures (redis connection and timeout errors, Postgres unavailable) are retried with a
 bounded, deterministic backoff (0.2, 0.4, 0.8 s; the sleep is injected). Past the budget the

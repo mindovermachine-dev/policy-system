@@ -1,22 +1,21 @@
-"""Frozen copy of Company Merge's graph writer as it was before issue #210: the reference.
+"""Frozen copy of Company Merge's graph writer as it was before the gateway migration.
 
 It issues the Cypher the pre-migration `company_merge/graph_writer.py` issued, in the same order,
 against a `LegacyRecordingGraph`: a small interpreter that keeps the node and edge sets those
 statements would have produced. Only the parameters are read; the statement text selects the
 shape. A statement shape the interpreter does not know raises, so the reference can only claim
-what it has been taught: it is grown family by family as each writer migrates (CHANGES.md F5).
+what it has been taught: it is grown family by family as each writer migrates.
 
-Frozen shapes so far (family A, slice 2a): the RegulatoryInstrument upsert (`SET`), the
-create-only Role/Requirement upserts (`ON CREATE SET`) and the DEFINES/EXPRESSES provenance edges;
-slice 4a adds the create-only Obligation upsert and slice 4b the PracticeArea/RiskPath ones (same
-template, other labels).
+Frozen shapes: the RegulatoryInstrument upsert (`SET`), the create-only Role/Requirement upserts
+(`ON CREATE SET`), the DEFINES/EXPRESSES provenance edges, the create-only Obligation upsert and
+the PracticeArea/RiskPath ones (same template, other labels).
 Each statement text is pinned by a sha256 taken from `git show HEAD:` at freeze time
 (`test_frozen_statements_match_their_pinned_hashes`), so an edit to a "verbatim" constant fails.
 
 Deviations from the original, each deliberate: the `_execute_query` connectivity-health wrapper is
 dropped (it records dependency health, not graph state), and generated values are drawn from a
 `ValueSource` (`values.now()` / `values.new_id()` instead of `datetime.now` / `uuid4`; the canonical
-node mint of slice 5a is the first user).
+node mint is the first user).
 
 Met modulo edge identity; the live digest and live interpreter agreement are not verifiable here
 (no FalkorDB in this sandbox): the `falkordb_live` tests stay as the live anchor.
@@ -567,8 +566,8 @@ def write_legacy_resolve_keep_separate(graph: LegacyWriteTarget, review_id: str)
 class SnapshotWriteStore(SingleTenantStore):
     """`SingleTenantStore` plus the old write interpreter: Restore's snapshot writer only.
 
-    Company Merge no longer writes Cypher (#210), so the merge-side double refuses a write. The
-    interim Restore writer (`restore/snapshot_merge_writer.py`, retired by #214) and the frozen
+    Company Merge writes no Cypher, so the merge-side double refuses a write. The
+    interim Restore writer (`restore/snapshot_merge_writer.py`) and the frozen
     agreement test still issue the old statements, and this class applies them: node `MERGE`,
     `MERGE ... ON CREATE SET` (first wins) and edge `MERGE` (dropped when an endpoint is absent).
     """

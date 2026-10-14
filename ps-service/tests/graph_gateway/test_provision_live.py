@@ -1,10 +1,10 @@
-"""`postgres_live` tests for the privileged provisioning path of the graph mutation log (#205).
+"""`postgres_live` tests for the privileged provisioning path of the graph mutation log.
 
 Provisions a scratch PS Postgres with the REAL Helm init script, applies the ordinary state
 migrations as `ps_state`, then runs the privileged provisioning path (admin credential) and
 proves with real connections that the immutable tables exist, are owned by a non-login owner
 role, and that `ps_state` -- which holds only INSERT and SELECT (plus UPDATE on the applied
-marker) -- cannot rewrite, alter, drop or bypass them (AC-BI-001, AC-BI-005, AC-BI-011).
+marker) -- cannot rewrite, alter, drop or bypass them.
 
 Deselected by default -- run with `uv run pytest -m postgres_live`; needs
 `PS_TEST_POSTGRES_SUPERUSER_DSN` and `psql` on `PATH` (see `provisioned_postgres.py`).
@@ -589,7 +589,7 @@ def test_upgrade_existing_deployment_keeps_ps_state_rows_and_gains_same_ownershi
 ) -> None:
     migrate_state_database(fresh_provisioned)
     with fresh_provisioned.superuser_connect() as admin:
-        # The pre-#205 init script never created the owner role; emulate that cluster.
+        # An init script that never created the owner role: emulate that cluster.
         admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(fresh_provisioned.owner_role)))
     with fresh_provisioned.as_state() as conn:
         conn.execute(

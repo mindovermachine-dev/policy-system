@@ -1,1 +1,1 @@
-"""Tests for `ps_service.graph_gateway` (issue #205)."""
+"""Tests for `ps_service.graph_gateway`."""

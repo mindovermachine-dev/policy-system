@@ -1,5 +1,4 @@
-"""Tests for `ps_service.company_merge.graph_reader` (PLAN_REVIEWED.md §10
-Increment 5).
+"""Tests for `ps_service.company_merge.graph_reader`.
 
 The fake `GraphHandle` dispatches by a distinctive substring of each query
 -- mirroring `tests/domain_mapper/test_derivation.py`'s own
@@ -52,8 +51,8 @@ class _ScriptedFakeGraph:
     """Satisfies `GraphHandle` structurally. Every one of the twenty-two
     queries `read_baseline_graph` issues is answered with its own scripted
     row set, dispatched by a distinctive substring of the query text. The
-    six governance queries (issue #54, S4), the two PracticeArea/RiskPath
-    node queries, and the four classification-edge queries (issue #106)
+    six governance queries, the two PracticeArea/RiskPath
+    node queries, and the four classification-edge queries
     default to an empty result set -- the external-baseline shape -- unless
     a test passes its own rows.
     """
@@ -285,7 +284,7 @@ def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> Non
 
 
 def test_read_capability_node_carries_cached_embedding_when_present() -> None:
-    """AC-BI-001 (issue #31): a Capability node's own `embedding` property,
+    """A Capability node's own `embedding` property,
     once backfilled by `graph_writer.backfill_incoming_capability_embeddings`,
     is read back onto `BaselineNode.embedding` -- not silently dropped like
     every other Capability property this reader doesn't recognize.
@@ -308,8 +307,7 @@ def test_read_capability_node_carries_cached_embedding_when_present() -> None:
 
 
 def test_read_baseline_graph_empty_when_no_obligation_or_capability_nodes() -> None:
-    """AC-004 edge case (per #15's own DeriveObligationsAndCapabilities
-    scope): a regulation whose derivation surfaced every Requirement as
+    """Edge case: a regulation whose derivation surfaced every Requirement as
     unmatched has zero Obligation and zero Capability nodes -- and
     therefore zero `HAS`/`SATISFIED_BY`/`REQUIRES` edges, since every one of
     those edge types requires an Obligation or Capability endpoint. Role/
@@ -348,7 +346,7 @@ def test_read_baseline_graph_empty_when_no_obligation_or_capability_nodes() -> N
 
 
 def test_read_regulatory_instrument_properties_includes_instrument_type() -> None:
-    """AC-BI-011 (Company Merge, read side): the Regulation property bag is
+    """Read side: the Regulation property bag is
     read back whole (`dict(node.properties)`, no field filter), so
     `instrument_type` reaches `BaselineGraph.regulatory_instrument_properties` with NO
     src change.
@@ -395,7 +393,7 @@ def _empty_scripted_graph(**overrides: object) -> _ScriptedFakeGraph:
 
 
 def test_read_requirement_nodes_omits_role_id_when_absent() -> None:
-    """F1 (CHANGES.md): a Requirement whose `role_id` the query returns as
+    """A Requirement whose `role_id` the query returns as
     `NULL` (an internal-source Requirement lacking one) gets NO `role_id`
     key in `BaselineNode.properties` at all -- never a cast-to-`str` `None`.
     A sibling Requirement that DOES carry a `role_id` keeps it, proving the
@@ -434,7 +432,7 @@ def test_read_requirement_nodes_omits_role_id_when_absent() -> None:
 
 
 def test_reads_policy_standard_control_and_governance_edges() -> None:
-    """Issues #54 S4, #227: `read_baseline_graph` reads Policy/Standard/Control
+    """`read_baseline_graph` reads Policy/Standard/Control
     nodes (whole, every property, whatever their `status`) and the
     `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` edges onto
     `BaselineGraph.policy_nodes`/`standard_nodes`/`control_nodes`/
@@ -537,10 +535,10 @@ def test_reads_policy_standard_control_and_governance_edges() -> None:
 
 
 def test_policy_standard_control_reads_take_every_status() -> None:
-    """Issue #227 (AC-BI-012): the Policy/Standard/Control reads are not filtered on
+    """The Policy/Standard/Control reads are not filtered on
     `status`. A baseline holding an `approved` tree and a `draft` tree yields both,
     at every level (Policy, Standard, Control) -- an internal seed's tree arrives
-    `draft`, and the approved-only read that dropped it is gone.
+    `draft`.
     """
     graph = _empty_scripted_graph(
         policy_rows=[
@@ -568,7 +566,7 @@ def test_policy_standard_control_reads_take_every_status() -> None:
 
 
 def test_external_baseline_yields_empty_governance_tuples() -> None:
-    """Issue #54, S4: an external-sourced baseline (no `DeriveGovernanceArtifacts`
+    """An external-sourced baseline (no `DeriveGovernanceArtifacts`
     ever ran) has no Policy/Standard/Control nodes or governance edges --
     `read_baseline_graph` returns empty tuples for all four fields, no
     exception, same tolerance as the existing empty-Obligation/Capability path.
@@ -589,7 +587,7 @@ def test_external_baseline_yields_empty_governance_tuples() -> None:
 
 
 def test_reads_practice_area_and_risk_path_nodes() -> None:
-    """Issue #106: `read_baseline_graph` reads PracticeArea/RiskPath nodes
+    """`read_baseline_graph` reads PracticeArea/RiskPath nodes
     onto `BaselineGraph.practice_area_nodes`/`risk_path_nodes`, omitting
     `description`/`version`/`owner_id` (PracticeArea) or `description`/
     `risk_type`/`version` (RiskPath) from `properties` when the query
@@ -658,7 +656,7 @@ def test_reads_practice_area_and_risk_path_nodes() -> None:
 
 
 def test_reads_classification_edges() -> None:
-    """Issue #106: `read_baseline_graph` reads `COVERS`/`OWNS`/
+    """`read_baseline_graph` reads `COVERS`/`OWNS`/
     `MITIGATED_BY`/`VERIFIED_BY` edges onto `BaselineGraph.classification_edges`
     -- reusing `BareEdge` (no parallel type), same shape as
     `test_reads_policy_standard_control_and_governance_edges`.
@@ -703,7 +701,7 @@ def test_reads_classification_edges() -> None:
 
 
 def test_external_baseline_yields_empty_classification_edges_tuple() -> None:
-    """Issue #106: a baseline with no authored classification-layer content
+    """A baseline with no authored classification-layer content
     yields an empty `classification_edges` tuple, no exception raised --
     same tolerance as the existing empty-governance-edges path.
     """
@@ -719,7 +717,7 @@ def test_external_baseline_yields_empty_classification_edges_tuple() -> None:
 
 
 def test_external_baseline_yields_empty_practice_area_and_risk_path_tuples() -> None:
-    """Issue #106: a baseline with no authored classification-layer content
+    """A baseline with no authored classification-layer content
     (no PracticeArea/RiskPath rows) yields empty tuples for both fields, no
     exception raised -- same tolerance as the existing Policy/Standard/
     Control empty path.

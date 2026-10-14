@@ -1,4 +1,4 @@
-"""Pure planner for capability `unmerge` (issue #190, slice 15 sub-step a; AC-BI-019/020/021).
+"""Pure planner for capability `unmerge`.
 
 The merge audit details are produced by the REAL merge planner, so the unmerge planner is
 proven against the snapshot shape the executor actually records.
@@ -293,7 +293,7 @@ def test_a_restore_policy_that_no_longer_exists_is_a_conflict() -> None:
         plan_capability_unmerge(inputs, _live(survivor_policy_ids=("pol_1",), policy_exists=False))
 
 
-# --- conflicts (AC-BI-020), each explained -------------------------------------------------------
+# --- conflicts, each explained -------------------------------------------------------------------
 
 
 def test_a_survivor_that_was_merged_away_is_a_conflict_naming_where_it_went() -> None:

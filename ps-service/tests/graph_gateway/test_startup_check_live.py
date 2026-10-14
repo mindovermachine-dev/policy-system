@@ -1,4 +1,4 @@
-"""`postgres_live` tests for the fail-closed startup verifier (issue #205 slice 8, AC-BI-012).
+"""`postgres_live` tests for the fail-closed startup verifier.
 
 Connects as the real `ps_state` role (never an admin credential) to scratch clusters built by the
 Helm init script, and proves `verify_privileged_migrations_applied` passes only when the

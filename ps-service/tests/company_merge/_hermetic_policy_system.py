@@ -1,12 +1,11 @@
-"""A hermetic stand-in for issue #28's one-off `policy_system` merge (LL-11).
+"""A hermetic stand-in for a one-off live `policy_system` merge.
 
-The two `test_live_policy_system_verification_*` modules used to assert on a JSON report of a
-one-off live merge into the developer's own `policy_system` graph, so they could not pass on a
-clean instance. `merged_graph_run` runs the same real `merge_baseline_graph` (real FalkorDB,
+A one-off live merge into the developer's own `policy_system` graph cannot be asserted on a
+clean instance, so `merged_graph_run` runs the same real `merge_baseline_graph` (real FalkorDB,
 real Graph Write Gateway on the scratch PS Postgres, fake one-hot embeddings so no LLM is
 needed) into a uniquely named graph, over two small seeded baselines that share one Capability:
 a pre-existing regulation merged first, then the new one, then the new one again. It returns the
-same before/after snapshots the runner's report held.
+before/after snapshots such a live merge would report.
 """
 
 from __future__ import annotations

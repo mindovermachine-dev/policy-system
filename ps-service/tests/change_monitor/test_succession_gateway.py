@@ -1,4 +1,4 @@
-"""The re-ingest succession is written only as Graph Write Gateway groups (issue #213).
+"""The re-ingest succession is written only as Graph Write Gateway groups.
 
 Each test enters at `trigger_reingestion` with a runner double that raises `_Stop` after the stage
 under test, over the process gateway rig. The assertions are on the rig graph and the rig's log:
@@ -131,7 +131,7 @@ def _trigger(
     )
 
 
-# --- shape 1: set_new_version_property (AC-BI-002, AC-BI-010) ---------------------------------
+# --- shape 1: set_new_version_property ---------------------------------
 
 
 def test_the_version_is_one_native_group_anchored_to_the_audit_row(
@@ -239,7 +239,7 @@ def test_the_submitted_group_is_logged_as_a_semantic_entry(
     assert (entries[0]["graph"], entries[0]["primitives"]) == ("cra_native", 1)
 
 
-# --- shape 2: mark_stage_complete, one group per stage (AC-BI-002, AC-BI-009) ------------------
+# --- shape 2: mark_stage_complete, one group per stage ------------------
 
 
 @pytest.mark.parametrize("stop_after", _ALL)
@@ -321,7 +321,7 @@ def test_a_pending_marker_group_is_a_persistence_error_and_the_next_run_resumes_
     assert resumed.stages_requested == [("extraction", "derivation", "merge")]
 
 
-# --- shape 3: link_and_supersede, one native group (AC-BI-002, AC-BI-009, AC-BI-010) ----------
+# --- shape 3: link_and_supersede, one native group ----------
 
 
 def _linkable_rig(rig: SuccessionRig, *, legacy_edge: bool = False) -> SuccessionRig:
@@ -430,7 +430,7 @@ def test_the_local_edge_identity_formula_equals_graph_cleanups() -> None:
     )
 
 
-# --- shape 4: supersede_in_single_tenant, one policy_system group (AC-BI-002, AC-BI-006) -------
+# --- shape 4: supersede_in_single_tenant, one policy_system group -------
 
 
 def test_the_policy_system_supersede_is_one_group_with_edge_and_status(
@@ -517,7 +517,7 @@ def test_a_stop_after_the_link_group_is_completed_by_the_next_run(
     assert rig.status_of(rig.single_tenant, _PRIOR) == "superseded"
 
 
-# --- shape 5: clear_marker (AC-BI-002) and the end of the direct writers (AC-BI-001) ----------
+# --- shape 5: clear_marker and the end of the direct writers ----------
 
 
 def test_a_completed_succession_ends_with_the_marker_delete_as_its_last_native_group(

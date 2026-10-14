@@ -1,8 +1,8 @@
-"""FalkorDB replies are parsed by hiredis's C parser (#207 S19).
+"""FalkorDB replies are parsed by hiredis's C parser.
 
 A graph reply is a tree of small tagged values; redis-py's pure-Python parser spent 5 ms on one
 3,072-double embedding node and hiredis 2.4 ms, which decides whether a digest of a graph with
-thousands of embeddings fits the replay budget (AC-RD-008). The dependency is pinned in
+thousands of embeddings fits the replay budget. The dependency is pinned in
 `ps-service/pyproject.toml`; this test fails if it is ever dropped or not installed.
 """
 

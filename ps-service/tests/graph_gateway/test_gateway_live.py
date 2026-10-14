@@ -1,8 +1,8 @@
-"""`postgres_live` tests: the gateway over the real graph log store (issue #206).
+"""`postgres_live` tests: the gateway over the real graph log store.
 
 The log store is the real `PsycopgGraphLogStore` as the `ps_state` role against a scratch PS
 Postgres (see `persistence/provisioned_postgres.py`); the graph is the in-memory fake, so these
-prove the Postgres side only: serialization across the advisory lock (AC-BI-006) and, in S7a,
+prove the Postgres side only: serialization across the advisory lock and
 the same-transaction audit link. The FalkorDB side lives in `test_gateway_falkordb_live.py`.
 
 Deselected by default -- run with `uv run pytest -m postgres_live`; needs

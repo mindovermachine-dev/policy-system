@@ -1,4 +1,4 @@
-"""Fixtures shared by the ingestion tests that write through the Graph Write Gateway (#208)."""
+"""Fixtures shared by the ingestion tests that write through the Graph Write Gateway."""
 
 from __future__ import annotations
 

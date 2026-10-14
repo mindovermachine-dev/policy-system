@@ -1,4 +1,4 @@
-"""Where the `falkordb_live` tests find their FalkorDB (issue #207).
+"""Where the `falkordb_live` tests find their FalkorDB.
 
 `PS_TEST_FALKORDB_HOST` and `PS_TEST_FALKORDB_PORT` override the defaults, so a throwaway
 container on a non-default port can stand in for a local FalkorDB on 127.0.0.1:6379.

@@ -1,9 +1,9 @@
-"""Tests for `graph_reader.read_baseline_graph`'s governance read (issues #183, #227).
+"""Tests for `graph_reader.read_baseline_graph`'s governance read.
 
 Restore of a curated internal instrument and a live internal ingest both read
 the whole authored Policy/Standard/Control tree regardless of status, and carry
 every node property so the imported draft is the full authored content a
-reviewer will be asked to approve. There is no approved-only read any more.
+reviewer will be asked to approve. There is no approved-only read.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def _baseline() -> _FakeBaselineGraph:
 
 
 def test_draft_read_returns_non_approved_policy_standard_and_control() -> None:
-    """AC-BI-004: a `draft` Policy and status-less Standard/Control are read, not dropped."""
+    """A `draft` Policy and status-less Standard/Control are read, not dropped."""
     baseline = read_baseline_graph(_baseline(), "ENGPRAC-1.0")
 
     assert [node.id for node in baseline.policy_nodes] == ["pol_a"]
@@ -93,7 +93,7 @@ def test_draft_read_leaves_id_and_embedding_out_of_properties() -> None:
 
 
 def test_read_never_filters_governance_nodes_on_approved_status() -> None:
-    """AC-BI-012: no query restricts Policy/Standard/Control to `approved` any more."""
+    """No query restricts Policy/Standard/Control to `approved`."""
     graph = _baseline()
 
     read_baseline_graph(graph, "ENGPRAC-1.0")

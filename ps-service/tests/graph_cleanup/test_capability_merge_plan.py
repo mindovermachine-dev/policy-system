@@ -1,7 +1,7 @@
-"""Pure planner/validator for `merge-capabilities`, case 1 (issue #190, slice 10 sub-step a).
+"""Pure planner/validator for `merge-capabilities`, case 1.
 
-AC-BI-005 (preview content), AC-BI-016 (self / nonexistent / tombstone rejected),
-AC-BI-021 (snapshot shape sufficient to reverse), case restriction until slices 12/13.
+Covers the preview content, rejection of a self / nonexistent / tombstone pair, and a snapshot
+shape sufficient to reverse the merge.
 """
 
 from __future__ import annotations

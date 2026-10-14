@@ -1,10 +1,10 @@
-"""The Graph Cleanup side of the gateway seam (issue #212, AC-BI-003/005/008).
+"""The Graph Cleanup side of the gateway seam.
 
 `submit_cleanup_group` is the one place a cleanup writer's primitives reach the gateway and the one
 place gateway failures become Graph Cleanup's own errors: a stale `ExpectedPosition` is the stale
 error, every other gateway failure is the sanitized persistence error, and a group that is
-committed but not applied yet is SUCCESS (the documented C-0 exception of #202; the edit is in the
-log and the gateway applies it on recovery).
+committed but not applied yet is SUCCESS (the documented committed-not-applied exception; the edit
+is in the log and the gateway applies it on recovery).
 """
 
 from __future__ import annotations
@@ -415,7 +415,7 @@ def test_the_group_goes_to_the_graph_the_reads_open(
         return object()
 
     monkeypatch.setattr("ps_service.company_merge.falkordb_client.connect_from_config", _connect)
-    # detroit-exception: no FalkorDB server here; the graph name passed IS the spec (§1.2)
+    # detroit-exception: no FalkorDB server here; the graph name passed IS the spec
     monkeypatch.setattr("ps_service.company_merge.falkordb_client.select_graph", _select)
     build_default_graph_cleanup_graph_opener()(_CONFIG)
     dependencies = cleanup_rig.dependencies(roles=None)  # pyright: ignore[reportArgumentType] -- roles are not read here

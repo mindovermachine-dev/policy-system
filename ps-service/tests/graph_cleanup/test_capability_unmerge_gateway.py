@@ -1,11 +1,11 @@
-"""`unmerge` of a Capability writes through the Graph Write Gateway (issue #212, slice S5).
+"""`unmerge` of a Capability writes through the Graph Write Gateway.
 
 One approved unmerge is one gateway group: the edges the merge moved are upserted back onto the
 absorbed Capability, ONLY the planned edges leave the survivor (never an edge it gained since),
 the policy edge moves back when the merge moved it, and the tombstone becomes `active` again with
 its `MERGED_INTO` edge deleted. The group is linked to the `applied` audit row and guarded by the
-log position read BEFORE the guard reads (AC-BI-003/005/006/008). The guard is the old statement's
-`WHERE`, evaluated in Python.
+log position read BEFORE the guard reads. The guard is the statement's `WHERE` condition,
+evaluated in Python.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ def _into(rig: CleanupRig, node_id: str) -> list[tuple[str, str]]:
     )
 
 
-# -- the group (AC-BI-005, AC-BI-006) -------------------------------------------------------------
+# -- the group -------------------------------------------------------------
 
 
 @pytest.mark.parametrize("policy", [None, "moved", "kept"], ids=["case1", "case2", "case3"])
@@ -231,7 +231,7 @@ def test_an_edge_the_survivor_gained_since_the_merge_is_neither_removed_nor_in_t
     assert ("REQUIRES", "obl_new") in _into(cleanup_rig, SURVIVOR)
 
 
-# -- the guard: the old WHERE, in Python (AC-BI-003) ----------------------------------------------
+# -- the guard: the WHERE condition, in Python ----------------------------------------------
 
 
 def _holds_after(
@@ -379,7 +379,7 @@ def test_an_unrelated_write_between_the_position_read_and_the_append_is_refused(
     assert cleanup_rig.graph.nodes[("Capability", ABSORBED)]["status"] == "merged"
 
 
-# -- legacy identity-less edges (AC-BI-005, F4) ---------------------------------------------------
+# -- legacy identity-less edges ---------------------------------------------------
 
 
 def test_legacy_edges_are_stamped_first_so_no_parallel_edge_results(
@@ -413,7 +413,7 @@ def test_a_refused_position_may_leave_the_legacy_stamp_in_the_log_and_no_unmerge
     assert cleanup_rig.graph.nodes[("Capability", ABSORBED)]["status"] == "merged"
 
 
-# -- the failure matrix (AC-BI-008) ---------------------------------------------------------------
+# -- the failure matrix ---------------------------------------------------------------
 
 
 def _reject_the_group(rig: CleanupRig) -> None:

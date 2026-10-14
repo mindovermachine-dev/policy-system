@@ -1,4 +1,4 @@
-"""Tests for `ps_service.ingestion_runs.dispatch` (issue #194)."""
+"""Tests for `ps_service.ingestion_runs.dispatch`."""
 
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ def test_reset_for_tests_joins_and_clears() -> None:
     assert dispatch.in_flight_run_count() == 0
 
 
-# --- S6: bounded admission and the same-short_name guard (AC-BI-012, OQ-10) -------------------
+# --- bounded admission and the same-short_name guard -------------------------------------
 
 
 def test_a_reserve_over_the_cap_is_rejected_with_the_named_rate_limit_error() -> None:

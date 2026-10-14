@@ -1,17 +1,17 @@
-"""Identity-reuse proof (PLAN_REVIEWED.md §3 / §10 Increment 3):
+"""Identity-reuse proof:
 `ps_service.company_merge` never reimplements Domain Mapper's `capability_id`
 hash function -- it imports it directly from
 `ps_service.domain_mapper.identity`, so its exact-key match computes *the
 same* id Domain Mapper already used to write the baseline graph's Capability
-node ids. (Since issue #42 Company Merge dedupes Capability only; Obligation
-is Role-scoped and passed through, so `obligation_id` is no longer imported
+node ids. (Company Merge dedupes Capability only; Obligation
+is Role-scoped and passed through, so `obligation_id` is not imported
 here -- but a fresh *definition* of it in this package is still forbidden.).
 
 Two independent proofs:
 
 1. An AST-based scan (not a substring grep) of every `.py` file actually
    delivered under `ps_service/company_merge/` (`pathlib.Path(...).rglob(
-   "*.py")`, not a hardcoded file list -- mirrors #15's own
+   "*.py")`, not a hardcoded file list -- mirrors the
    `test_ac008_out_of_scope.py` scan precedent,
    `ps-service/tests/domain_mapper/test_ac008_out_of_scope.py`), asserting
    no function named `obligation_id`/`capability_id`/`_hash`/`_slug` is
@@ -40,8 +40,8 @@ def _files_to_scan() -> list[Path]:
     """Every `.py` file actually delivered under `ps_service/company_merge/`
     (source only -- `ps-service/src/ps_service/company_merge/`, never
     `tests/`), found by walking the real filesystem (`rglob("*.py")`)
-    rather than a hardcoded list -- mirrors #15's `_files_to_scan`
-    precedent exactly.
+    rather than a hardcoded list -- mirrors the Domain Mapper
+    `_files_to_scan` precedent exactly.
     """
     company_merge_root = Path(company_merge_package.__file__).parent
     return sorted(company_merge_root.rglob("*.py"))
@@ -77,7 +77,7 @@ def test_no_identity_function_defined_in_company_merge_package() -> None:
 
 def test_files_to_scan_covers_every_known_company_merge_module() -> None:
     """Guards against `_files_to_scan` silently narrowing down to a
-    hardcoded-looking subset -- mirrors #15's own
+    hardcoded-looking subset -- mirrors the
     `test_files_to_scan_covers_every_known_domain_mapper_module` regression
     guard.
     """

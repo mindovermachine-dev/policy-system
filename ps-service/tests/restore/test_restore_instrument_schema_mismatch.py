@@ -1,10 +1,10 @@
 """Tests for `ps_service.restore.restore_instrument.restore_instrument`'s
-`schema_version` check (PLAN.md Slice 5.2, D10).
+`schema_version` check.
 
-Ordering: checksum verification (D9, Slice 5.1) runs first -- these tests
+Ordering: checksum verification runs first -- these tests
 use a manifest whose checksums are correct so the schema_version check is
-the one actually exercised. `restore_instrument` gained a real `db:
-FalkorDB` parameter (and others) in Slice 5.5 -- see
+the one actually exercised. `restore_instrument` takes a real `db:
+FalkorDB` parameter -- see
 `test_restore_instrument_integrity.py`'s module docstring for why every
 call below passes `db=_NEVER_TOUCHED_DB` (a plain `object()` cast to
 `FalkorDB`) rather than a real connection: verification never reaches it,
@@ -91,7 +91,7 @@ def test_schema_version_mismatch_error_names_both_versions() -> None:
 
 
 def test_matching_schema_version_does_not_raise() -> None:
-    """Proves schema_version verification (D10) passed control onward (to
+    """Proves schema_version verification passed control onward (to
     `restore_instrument`'s `outcome="started"` audit-log emission) without
     raising `ArtifactSchemaVersionMismatchError` -- exercised via the real,
     very next collaborator (`_emit_restore_log` -> the real `emit_log_entry`
@@ -101,7 +101,7 @@ def test_matching_schema_version_does_not_raise() -> None:
     facade's process-wide default emitter to `None` around every test, so
     "no emitter and no default configured" is a real, deterministic failure
     state here -- a stronger, more targeted proof than a monkeypatched
-    sentinel standing in for "control reached here" (AC-BI-004), and than
+    sentinel standing in for "control reached here" and than
     running the whole function to completion, which still requires real
     staging collaborators this file's `_NEVER_TOUCHED_DB` deliberately
     cannot provide (see `test_restore_instrument_integrity.py`'s module

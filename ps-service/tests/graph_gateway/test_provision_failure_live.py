@@ -1,4 +1,4 @@
-"""`postgres_live` tests: how the provisioning CLI fails (issue #205 follow-up, AC-FR-004).
+"""`postgres_live` tests: how the provisioning CLI fails.
 
 A failing ordinary migration or an unobtainable migration lock must exit non-zero with one
 sanitized line (migration name and exception class, or the fixed lock message -- never SQL, a

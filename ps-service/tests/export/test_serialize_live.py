@@ -1,8 +1,4 @@
-"""Live FalkorDB proof for `ps_service.export.serialize.serialize_graph` (CHANGES2.md §3.4).
-
-Supersedes `test_dump_live.py` (PLAN.md Slice 2.3, tested `dump_graph`,
-which no longer exists).
-"""
+"""Live FalkorDB proof for `ps_service.export.serialize.serialize_graph`."""
 
 from __future__ import annotations
 

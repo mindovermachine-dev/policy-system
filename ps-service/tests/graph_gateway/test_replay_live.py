@@ -1,4 +1,4 @@
-"""`falkordb_live` + `postgres_live`: replay from the real log into a real FalkorDB (#207 S7L).
+"""`falkordb_live` + `postgres_live`: replay from the real log into a real FalkorDB.
 
 The log is the real `PsycopgGraphLogStore` as the `ps_state` role; the graph is a real,
 throwaway FalkorDB graph. A graph is built through the gateway, deleted from FalkorDB (the
@@ -325,7 +325,7 @@ def test_property_floats_survive_the_jsonb_inline_path(rig: _Rig) -> None:
     assert canonical_digest(rig.handle) == before
 
 
-# Startup replay against the real log and the real FalkorDB (#207 S15L).
+# Startup replay against the real log and the real FalkorDB.
 
 
 def test_wiped_falkordb_with_applied_markers_is_detected_and_rebuilt(rig: _Rig) -> None:
@@ -401,7 +401,7 @@ def test_startup_replay_reports_every_graph_of_the_log(rig: _Rig) -> None:
     assert rig.name in report.replayed
 
 
-# A failed replay stays gated across a restart (#207 S18).
+# A failed replay stays gated across a restart.
 
 
 def _count_elements(rig: _Rig) -> object:

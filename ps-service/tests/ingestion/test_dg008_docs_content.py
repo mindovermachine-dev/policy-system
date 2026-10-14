@@ -1,4 +1,4 @@
-"""Content lint: `dataset-gates.md` documents the post-persist gate DG-008 (GH #99).
+"""Content lint: `dataset-gates.md` documents the post-persist gate DG-008.
 
 Anchors are headings and quoted text, never line numbers.
 """

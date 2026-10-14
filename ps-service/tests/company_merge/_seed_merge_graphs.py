@@ -1,4 +1,4 @@
-"""Graph doubles that run the real `merge_baseline_graph` over a real ingested seed (issue #227).
+"""Graph doubles that run the real `merge_baseline_graph` over a real ingested seed.
 
 `BaselineGraphReader` answers `graph_reader.read_baseline_graph`'s queries from the state a real
 `ingest_internal_regulatory_instrument` left in a gateway rig's in-memory `{short}_baseline`
@@ -153,7 +153,7 @@ class BaselineGraphReader:
 class SingleTenantStore:
     """A `policy_system` read stand-in: the existence, embedding-state and index reads.
 
-    Since #210 every merge write is a gateway group, so a write statement is refused. The old
+    Every merge write is a gateway group, so a write statement is refused. The old
     write interpreter is `_legacy_reference.SnapshotWriteStore` (Restore's interim writer).
     """
 

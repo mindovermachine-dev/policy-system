@@ -1,4 +1,4 @@
-"""Reader for capability `unmerge` (issue #190, slice 15 sub-step b): live state around a tombstone.
+"""Reader for capability `unmerge`: live state around a tombstone.
 
 Pure reads with literal parameterised queries; a driver failure is a generic error.
 """

@@ -1,4 +1,4 @@
-"""`falkordb_live`: the drift check against a real FalkorDB (issue #215, S5).
+"""`falkordb_live`: the drift check against a real FalkorDB.
 
 The log store is the in-memory fake; the graph, the writes and the read-only digest are real. It
 proves what the fake cannot: the whole-graph digest is readable through `GRAPH.RO_QUERY`, a

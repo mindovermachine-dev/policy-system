@@ -1,5 +1,5 @@
 """Tests for `tools/domain-mapper/exclusion_audit.py`'s classification-proposal stage
-(issue #27, Slice 1, AC-BI-006/007 — AI-proposed only, per CONTEXT.md user decision 2).
+(AI-proposed only).
 
 Loads `exclusion_audit.py` by path exactly as `test_exclusion_audit_capture.py` does (own
 `_MODULE_NAME` so `sys.modules` keys never collide across this tool's own test files run
@@ -89,8 +89,8 @@ def test_propose_classification_returns_scripted_label_and_rationale(
 
 
 def test_propose_classification_source_is_always_ai_proposed(make_emitter: MakeEmitter) -> None:
-    """CHANGES.md row 4: `source` is a fixed `"ai_proposed"` value — no other source exists
-    yet for this run (CONTEXT.md user decision 2).
+    """`source` is a fixed `"ai_proposed"` value — no other source exists
+    yet for this run.
     """
     module = _load_exclusion_audit_module()
     emitter, _log_path = make_emitter()
@@ -108,7 +108,7 @@ def test_propose_classification_source_is_always_ai_proposed(make_emitter: MakeE
 
 
 def test_miss_classification_carries_rationale(make_emitter: MakeEmitter) -> None:
-    """AC-BI-007: a "miss" classification records citation_ref + a one-line rationale."""
+    """A "miss" classification records citation_ref + a one-line rationale."""
     module = _load_exclusion_audit_module()
     emitter, _log_path = make_emitter()
     scripted = json.dumps(

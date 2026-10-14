@@ -1,6 +1,6 @@
-"""Live FalkorDB anchor for the #201 succession statements (CHANGES F9, kept by #213).
+"""Live FalkorDB anchor for the frozen succession statements.
 
-Since #213 the succession's writes are gateway groups; the pre-migration statements live in
+The succession's writes are gateway groups; the pre-migration statements live in
 `_legacy_reference` and are run raw here, against a throwaway graph, so the semantics the
 reference's interpreter models (and the equivalence tests compare against) stay anchored on a real
 FalkorDB (notably `MERGE ... SET ... WITH new MERGE`). The REAL `read_reingestion_facts` and
@@ -42,7 +42,7 @@ def _rows(graph: GraphHandle, query: str, params: dict[str, object]) -> list[lis
 
 
 def _frozen(graph: GraphHandle, name: str, **params: object) -> list[list[object]]:
-    """Run one FROZEN pre-#213 succession statement raw on `graph`."""
+    """Run one FROZEN pre-gateway succession statement raw on `graph`."""
     return _rows(graph, FROZEN_STATEMENTS[name], params)
 
 

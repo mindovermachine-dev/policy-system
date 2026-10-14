@@ -1,10 +1,9 @@
 """Tests for the embedding backfill writers of `ps_service.company_merge.graph_writer`.
 
-PLAN_REVIEWED.md §10 Increment 11 (backfill half, B2's fix) and issue #31 (the incoming-side
-twin). Since issue #210 a backfill is a Graph Write Gateway group: the writer reads which of the
+A backfill is a Graph Write Gateway group: the writer reads which of the
 named nodes exist and still have no embedding (one batched read per call, never the vector), and
 submits `UpsertNode(label, id, embedding=<vector>)` only for those. A node that already has an
-embedding, or does not exist, gets nothing (AC-BI-006): the gateway would merge over an existing
+embedding, or does not exist, gets nothing: the gateway would merge over an existing
 embedding and would create an absent node, so set-if-null cannot be left to it.
 """
 

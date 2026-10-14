@@ -1,5 +1,5 @@
 """Tests for `ps_service.export.catalog_writer.write_manifest`/`read_manifest`
-(PLAN.md Slice 3.3): `manifest.json` round-trips field-for-field.
+`manifest.json` round-trips field-for-field.
 """
 
 from __future__ import annotations

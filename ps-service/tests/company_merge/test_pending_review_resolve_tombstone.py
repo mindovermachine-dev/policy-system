@@ -1,10 +1,10 @@
-"""Near-miss merge and `merged` Capability tombstones (issue #190).
+"""Near-miss merge and `merged` Capability tombstones.
 
 Two guarantees. First, a `PendingReview` naming a tombstone on either side is
 stale: `resolve_review` raises `StalePendingReviewError` before anything is submitted, so the
 tombstone and its `MERGED_INTO` redirect survive. Second, the merge group re-points every inbound
 `MERGED_INTO` edge from the deleted loser onto the winner (gateway entries here; the real graph is
-proven by the `falkordb_live` test at the bottom, not runnable in the implementation sandbox).
+proven by the `falkordb_live` test at the bottom).
 """
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ def test_loser_with_inbound_tombstone_repoints_the_tombstone_to_the_winner(
 
 
 def _live_target(config: ServiceConfig, graph_name: str) -> GraphWriteTarget:
-    """The real gateway on the disposable graph, under one system audit row (issue #210)."""
+    """The real gateway on the disposable graph, under one system audit row."""
     audit_event_id = build_system_audit_recorder(config)(
         action="ingestion_run.submit",
         resource_type="ingestion_run",

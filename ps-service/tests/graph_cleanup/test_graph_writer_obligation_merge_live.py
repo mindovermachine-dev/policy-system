@@ -1,4 +1,4 @@
-"""Live FalkorDB proof of the FROZEN obligation-merge statement (issue #190 A2, kept by #212).
+"""Live FalkorDB proof of the FROZEN obligation-merge statement.
 
 Scripted fakes prove only call shape; this is the proof the statement is valid Cypher and
 that its semantics hold: SATISFIED_BY / REQUIRES union onto the survivor with no duplicate,
@@ -7,7 +7,7 @@ the survivor keeps its single HAS, the absorbed node and its edges are gone, a
 the graph identical. UNVERIFIED where no FalkorDB is available (collected, deselected by
 default).
 
-Since #212 an obligation merge is a gateway group; the pre-migration statement lives in
+An obligation merge is a gateway group; the pre-migration statement lives in
 `_legacy_reference` and is run raw here, so the semantics the reference's interpreter models
 (and the equivalence tests compare against) stay anchored on a real FalkorDB.
 
@@ -41,7 +41,7 @@ _GRAPH = "graph_cleanup_obligation_merge_live_test"
 def _frozen_merge_obligations(
     graph: GraphHandle, *, survivor_id: str, absorbed_id: str, expected: ObligationExpectedCounts
 ) -> None:
-    """Run the FROZEN pre-#212 merge statement raw; no row is a guard miss (issue #212)."""
+    """Run the FROZEN pre-migration merge statement raw; no row is a guard miss."""
     if not run_frozen_merge_obligations(
         graph, survivor_id=survivor_id, absorbed_id=absorbed_id, expected=expected
     ):

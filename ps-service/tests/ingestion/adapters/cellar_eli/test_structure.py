@@ -3,8 +3,7 @@
 Fixture XHTML is small, hand-trimmed, but structurally realistic against
 real Cellar/ELI markup (`eli-container`/`eli-subdivision`/`eli-title`
 classes, `cpt_*`/`art_*`/`rct_*`/`anx_*` id convention, `NNN.NNN`
-paragraph ids) — see `spikes/cellar1/LEARNINGS.md` for the real structure
-these mirror.
+paragraph ids), mirroring the real structure.
 """
 
 from __future__ import annotations
@@ -205,13 +204,13 @@ def test_annex_is_top_level_child_of_regulation_sourced_from_its_own_container()
     assert annex_edges[0].parent_id == _REGULATION_ID
 
 
-# --- Follow-on A2/A3: consolidated (amended) convention -------------------
+# --- consolidated (amended) convention -------------------
 
 _CONSOLIDATED_REGULATION_ID = "TEST-2.0"
 
 # The consolidated (amendments-incorporated) Cellar convention, measured
-# against real `02016R0679-20160504` / `02024R2847-20241120` markup
-# (CONTEXT_FOLLOWON_A.md §0.2): one unnamed `eli-container` wrapping a
+# against real `02016R0679-20160504` / `02024R2847-20241120` markup:
+# one unnamed `eli-container` wrapping a
 # single `enc_1` subdivision; article labels are `<p class="title-article-norm">`
 # (NOT an `eli-title` div); paragraphs are `<div class="norm">` with a
 # `<span class="no-parag">N. </span>` marker and no `id`; annexes are
@@ -347,7 +346,7 @@ def test_consolidated_chapter_is_still_minted_even_without_an_eli_title_heading(
     assert chapter.properties["citation_ref"] == "Chapter I"
 
 
-# --- Follow-on A3: unified ANNEX minting ---------------------------------
+# --- unified ANNEX minting ---------------------------------
 
 
 def test_consolidated_annex_minted_from_div_nested_in_the_main_container() -> None:

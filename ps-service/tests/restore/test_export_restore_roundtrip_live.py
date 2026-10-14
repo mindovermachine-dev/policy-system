@@ -1,39 +1,34 @@
 """Live FalkorDB proof of the real export -> artifact -> restore -> equality
-chain (CHANGES.md MA5, CHANGES2.md §3.8 -- New Slice 5.10, appended to Batch
-5). The first slice in the whole plan proving export and restore compose
-correctly against real FalkorDB for a genuinely curated-instrument-shaped
-graph.
+chain. Proves export and restore compose correctly against real FalkorDB for a
+genuinely curated-instrument-shaped graph.
 
 1. Hand-author a real `curated_rt_baseline`/`curated_rt_native` FalkorDB
    graph pair directly via Cypher (2 Role, 2 Requirement, 3 Obligation, 3
    Capability nodes; the full `DEFINES`/`EXPRESSES`/`HAS`/`SATISFIED_BY`/
    `REQUIRES` edge set) -- the same fixture-construction convention
-   `test_engineering_practices_migration_live.py` (Slice 3.6) already uses
+   `test_engineering_practices_migration_live.py` already uses
    for `engprac_baseline`/`engprac_native`.
-2. Call the REAL `export_instrument()` (Batch 3) against this pair, with a
+2. Call the REAL `export_instrument()` against this pair, with a
    fake, deterministic `EmbeddingCaller` (no `llm_live` marker needed --
    embeddings' exact values are irrelevant to a lossless round-trip proof,
    only their presence/persistence is), writing into a `tmp_path` repo root
-   plus a `tmp_path`-based `packaged_copy_path` (MA3's second parameter).
-3. Read `curated-content/{instrument_id}/{manifest.json,baseline.json,
-   native.json}` back off disk exactly as `ps-cli`'s future
-   `catalog_repo.read_artifact` would (raw file reads -- Slice 7.1 doesn't
-   exist yet) -- `catalog_writer.read_manifest` for the manifest fields
-   (its own exact, already-real inverse of `write_manifest`), `Path.
-   read_bytes()` directly for the two blobs.
+   plus a `tmp_path`-based `packaged_copy_path`.
+3. Read `curated-content/{instrument_id}/{manifest.json,baseline.json,native.json}` back off disk
+   exactly as `ps-cli`'s `catalog_repo.read_artifact` would (raw file reads) --
+   `catalog_writer.read_manifest` for the manifest fields (its own exact, already-real inverse of
+   `write_manifest`), `Path.read_bytes()` directly for the two blobs.
 4. Call the REAL `restore_instrument()` against a fresh, empty, dedicated
    single-tenant graph name (never `policy_system`) and the SAME
    `curated_rt_native`/`curated_rt_baseline` key names the source graphs
-   used -- the gateway's replace semantics (issue #214) install
+   used -- the gateway's replace semantics install
    the round-tripped content over the originals, exactly like a real
    re-restore. The original native content is captured in memory (via
    `serialize_graph`) before export/restore ever runs, since restore
    overwrites the very same live keys.
-5. Assert content equality: native is an exact structural match (no dedup,
-   D20); every Role/Requirement/Obligation is present unchanged in the
-   post-restore single-tenant graph; every Capability is present under its
-   own id (all "new" mints, target starts empty) with `REQUIRES` edges
-   correctly wired, each carrying the artifact-supplied embedding (D7).
+5. Assert content equality: native is an exact structural match (no dedup); every
+   Role/Requirement/Obligation is present unchanged in the post-restore single-tenant graph;
+   every Capability is present under its own id (all "new" mints, target starts empty) with
+   `REQUIRES` edges correctly wired, each carrying the artifact-supplied embedding.
 6. Cleanup: delete every graph this test created, verified via `EXISTS`.
 """
 
@@ -78,7 +73,7 @@ class _FakeEmbeddingCaller:
     This test's equality proof only cares that an embedding is present/
     persisted end to end, never its specific vector values -- but it must
     still distinguish genuinely different Capability names well enough not
-    to falsely converge two of them (MA1's in-batch convergence fix would
+    to falsely converge two of them (in-batch convergence would
     otherwise treat two unrelated Capabilities as a semantic match). Unlike
     `test_engineering_practices_migration_live.py`'s simpler
     `len(text) % 7`-based fake (fine there -- that test never compares two
@@ -282,10 +277,10 @@ def test_export_then_restore_reproduces_native_exactly_and_baseline_correctly(
                 emitter=emitter,
             )
 
-        # Step 5a: native is an exact structural match -- no dedup (D20).
+        # Step 5a: native is an exact structural match -- no dedup.
         restored_native = serialize_graph(graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME))
         # Compared modulo edge identity: the gateway stamps `identity` on every edge it writes
-        # or merges into, and the hand-seeded originals carry none (the #210 convention).
+        # or merges into, and the hand-seeded originals carry none (the gateway's convention).
         assert to_json_bytes(_without_edge_identity(restored_native)) == to_json_bytes(
             _without_edge_identity(original_native)
         )
@@ -321,7 +316,7 @@ def test_export_then_restore_reproduces_native_exactly_and_baseline_correctly(
 
         # Step 5c: every Capability is present under its own id (all "new"
         # mints, target starts empty), each carrying the artifact-supplied
-        # embedding (D7), with REQUIRES edges correctly wired.
+        # embedding, with REQUIRES edges correctly wired.
         capability_rows = query_result_rows(
             live_falkordb,
             single_tenant_graph_name,

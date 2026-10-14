@@ -1,6 +1,6 @@
-"""Every Company Merge stage writer maps a gateway failure the same way (issue #210, 11a).
+"""Every Company Merge stage writer maps a gateway failure the same way.
 
-AC-BI-008, per writer: a group the gateway rejects, a group committed to the log but not applied
+Per writer: a group the gateway rejects, a group committed to the log but not applied
 (`committed_apply_pending`) and a log that cannot be reached all surface as
 `CompanyMergePersistenceError("FalkorDB write failed: ...")`, with no gateway internals in the
 message, and FalkorDB connectivity health is recorded as the gateway records it (transient

@@ -1,5 +1,4 @@
-"""Tests for `ps_service.company_merge.preconditions` (Issue #28 slice 1,
-AC-BI-002/AC-BI-003).
+"""Tests for `ps_service.company_merge.preconditions`.
 
 Hand-written fake `GraphHandle`/`GraphQueryResult`, no live dependency --
 mirrors `tests/company_merge/test_graph_reader.py`'s `_FakeQueryResult`
@@ -62,8 +61,8 @@ def test_returns_one_violation_when_one_obligation_has_zero_has_edges() -> None:
 
 
 def test_returns_one_violation_when_one_obligation_has_two_has_edges() -> None:
-    """The exact shape #34 hit: a live-capstone re-run against an
-    already-populated baseline left one Obligation with 2 `HAS` edges.
+    """A live-capstone re-run against an already-populated baseline
+    leaves one Obligation with 2 `HAS` edges.
     """
     graph = _FakeGraph([["obligation-1", 1], ["obligation-2", 2]])
 

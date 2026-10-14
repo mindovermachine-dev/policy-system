@@ -1,4 +1,4 @@
-"""`backfill_edge_identity` stamps the identity-less edges of a legacy graph (issue #208 S8, F1).
+"""`backfill_edge_identity` stamps the identity-less edges of a legacy graph.
 
 The reader is the graph handle itself (read-only queries); the write goes through the gateway as
 one `StampEdgeIdentity` group under the caller's audit event id.

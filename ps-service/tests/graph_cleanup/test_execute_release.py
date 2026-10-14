@@ -1,12 +1,11 @@
-"""Executor for `release-capability-governance` (issue #190, slice 14 c; AC-BI-013/021/022).
+"""Executor for `release-capability-governance`.
 
 Audit-first and fail-closed like the merges: re-check the role, re-read and compare the state
 digest, record `applied`, delete the edge, record `failed` (same approval id) on a guard miss
 or write failure. The audit row carries the before/after snapshot and the governed sets.
 
-Since #212 the edge is deleted by one gateway group (`CleanupRig`, the gateway over in-memory
-log and graph fakes); the assertions on outcomes, messages and audit rows are the ones from before
-that change, only the write-shape ones (Cypher call recorded) now name the group.
+The edge is deleted by one gateway group (`CleanupRig`, the gateway over in-memory log and graph
+fakes); outcomes, messages and audit rows are asserted directly, and the write shape is the group.
 """
 
 from __future__ import annotations

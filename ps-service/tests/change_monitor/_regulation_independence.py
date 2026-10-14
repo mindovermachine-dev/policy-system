@@ -1,4 +1,4 @@
-"""Shared AST-scan helpers for the regulation-independence check (AC-011).
+"""Shared AST-scan helpers for the regulation-independence check.
 
 An AST-based scan (not a substring grep) of every `.py` file actually
 delivered under a package, asserting that no string literal naming a
@@ -10,18 +10,16 @@ decision subtree of a conditional construct (an `if`/`elif` test, a
 ternary's test, a `while`/`assert` condition, a bare `Compare` node, a
 `match` statement's case patterns) and a docstring statement can never
 structurally appear inside one; a `_docstring_constant_ids` exclusion is
-layered on top anyway, per PLAN_REVIEWED.md's requirement — defensive, not
-load-bearing given the above.
+layered on top anyway — defensive, not load-bearing given the above.
 
-**Why this module exists (PLAN_REVIEWED.md §1.6, flaw 13).** This is only
-the 2nd occurrence of the scan machinery — one short of L2's
-extract-on-3rd-repeat threshold. It is extracted early, deliberately,
-because (a) it is ~90 lines of non-obvious AST logic, not a 3-line idiom —
-a silently drifted copy is exactly the AC-011 failure mode; (b) AC-011's
-wording ("the scan is *extended to cover* `change_monitor`") asks for one
-scan run over two packages, not two independent scans; (c) it is the right
-abstraction: a single stable predicate with zero expected divergence
-between call sites. Both `tests/ingestion/test_pipeline.py` and
+**Why this module exists.** This is only the 2nd occurrence of the scan
+machinery — one short of L2's extract-on-3rd-repeat threshold. It is
+extracted early, deliberately, because (a) it is ~90 lines of non-obvious
+AST logic, not a 3-line idiom — a silently drifted copy is exactly the
+regulation-independence failure mode; (b) the scan is *extended to cover*
+`change_monitor`, so it is one scan run over two packages, not two
+independent scans; (c) it is the right abstraction: a single stable predicate with zero
+expected divergence between call sites. Both `tests/ingestion/test_pipeline.py` and
 `tests/change_monitor/test_regulation_independence.py` import from here.
 """
 

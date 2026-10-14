@@ -1,6 +1,6 @@
 """Tests for `ps_service.domain_mapper.adapters.cellar_eli`.
 
-Fixture rows mirror the exact shape #14's `ps_service.ingestion.adapters.
+Fixture rows mirror the exact shape `ps_service.ingestion.adapters.
 cellar_eli.structure` writes (cross-checked directly against that module
 and against `tests/ingestion/adapters/cellar_eli/test_structure.py`'s own
 fixtures) — `citation_ref` values like `"Art. 1"`/`"Art. 1(1)"`, node ids
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class _FakeNode:
-    """One native-graph node, labeled the same way #14's `structure.py`
+    """One native-graph node, labeled the same way `structure.py`
     labels it (`ARTICLE`, `PARAGRAPH`, `RECITAL`, `ANNEX`, `CHAPTER`,
     `SECTION`).
     """
@@ -191,7 +191,7 @@ def test_document_order_is_by_numeric_article_and_paragraph_number_not_id_string
 
 
 def test_annex_units_ordered_by_native_order_after_articles_and_paragraphs() -> None:
-    """AC-BI-002/AC-BI-012: ANNEX units always come after every ARTICLE/
+    """ANNEX units always come after every ARTICLE/
     PARAGRAPH unit, sorted by their own native `order` property -- never by
     a lexicographic or numeric reading of the Roman-numeral label. The
     fixture deliberately diverges label order from `order` value (label
@@ -234,7 +234,7 @@ def test_reads_one_unit_for_whole_annex_node() -> None:
 
 
 def test_no_annex_nodes_returns_only_article_paragraph_units() -> None:
-    """GH #25 CHANGES.md Row #4: zero `ANNEX` nodes in the native graph (GDPR's
+    """Zero `ANNEX` nodes in the native graph (GDPR's
     real shape) must not change ARTICLE/PARAGRAPH-only behavior -- an empty
     annex-units list is correctly appended, proven explicitly rather than
     assumed from unrelated tests continuing to pass.
@@ -285,7 +285,7 @@ def test_raises_on_malformed_annex_citation_ref() -> None:
 
 
 def test_raises_on_digit_only_annex_citation_ref() -> None:
-    """GH #25 CHANGES.md Row #1: a bare-digit annex label (e.g. `"Annex 1"`)
+    """A bare-digit annex label (e.g. `"Annex 1"`)
     must raise, not be silently accepted -- it would otherwise produce
     `article_number="1"`, colliding with a real numeric-article-derived id.
     """
@@ -301,10 +301,10 @@ def test_raises_on_digit_only_annex_citation_ref() -> None:
 
 
 def test_recital_chapter_section_nodes_are_ignored_but_annex_is_read() -> None:
-    """GH #25 revised the Open Question 4 scope decision: RECITAL/CHAPTER/
-    SECTION nodes present in the same native graph must still never surface
-    (structurally proven via the fake's label-filtered `MATCH (a:ARTICLE)`
-    query), but ANNEX now does — one whole-node `ExtractionUnit` per ANNEX.
+    """RECITAL/CHAPTER/SECTION nodes present in the same native graph never
+    surface (structurally proven via the fake's label-filtered
+    `MATCH (a:ARTICLE)` query), but ANNEX is read: one whole-node
+    `ExtractionUnit` per ANNEX.
     """
     graph = _FakeGraphHandle(
         nodes=[
@@ -328,7 +328,7 @@ def test_recital_chapter_section_nodes_are_ignored_but_annex_is_read() -> None:
 
 
 def test_reads_only_the_requested_instruments_subtree_when_two_versions_share_the_graph() -> None:
-    """A re-ingested amendment shares `{short}_native` with its prior version (#201)."""
+    """A re-ingested amendment shares `{short}_native` with its prior version."""
     graph = _FakeGraphHandle(
         nodes=[
             _FakeNode("ARTICLE", "v1#art_1", "Art. 1", text="Prior text.", heading="H", rid="v1"),

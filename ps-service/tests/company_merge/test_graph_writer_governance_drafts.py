@@ -1,8 +1,8 @@
-"""Tests for `ps_service.company_merge.graph_writer.persist_governance_drafts` (issues #183, #210).
+"""Tests for `ps_service.company_merge.graph_writer.persist_governance_drafts`.
 
 An internal instrument's Policy/Standard/Control tree is written into the single-tenant graph as
 `draft`, owned by the importing caller, without ever converging onto an existing canonical node.
-Since issue #210 the write is ONE Graph Write Gateway group: each node is a create-only
+The write is ONE Graph Write Gateway group: each node is a create-only
 `UpsertNode` (an id the graph already holds is decided BEFORE submission, from one batched
 existing-id read per label, and left out, so a node a user has since approved is never touched and
 nothing is logged for it). The Policy `created_at` is drawn from the injected `ValueSource` once,
@@ -80,7 +80,7 @@ def _properties(entry: GraphLogEntry) -> dict[str, object]:
 def test_drafts_are_one_group_with_status_owner_version_and_one_shared_created_at(
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-003/001/007: one group; Policy, Standard, Control in that order; one `created_at`."""
+    """One group; Policy, Standard, Control in that order; one `created_at`."""
     _persist(
         merge_rig,
         (_policy("pol_a"), _policy("pol_b")),
@@ -107,7 +107,7 @@ def test_drafts_are_one_group_with_status_owner_version_and_one_shared_created_a
 
 
 def test_standard_and_control_without_status_default_to_draft(merge_rig: MergeRig) -> None:
-    """AC-BI-004: an artifact node with no `status` is written as `draft`."""
+    """An artifact node with no `status` is written as `draft`."""
     _persist(merge_rig, (_policy(),), (_standard(),), (_control(),))
 
     assert "status" not in _standard().properties
@@ -118,7 +118,7 @@ def test_standard_and_control_without_status_default_to_draft(merge_rig: MergeRi
 def test_artifact_authored_status_is_overridden_and_counted_even_when_the_node_exists(
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-005: `approved`/`proposed` is written `draft` and counted, present or not."""
+    """`approved`/`proposed` is written `draft` and counted, present or not."""
     merge_rig.policy_system.seed_node(("Standard",), "std_a", {"status": "approved"})
 
     counts = _persist(
@@ -136,7 +136,7 @@ def test_artifact_authored_status_is_overridden_and_counted_even_when_the_node_e
 
 
 def test_an_existing_approved_policy_is_neither_changed_nor_logged(merge_rig: MergeRig) -> None:
-    """AC-BI-005/010: a node that already exists keeps status, owner and content; no entry."""
+    """A node that already exists keeps status, owner and content; no entry."""
     merge_rig.policy_system.seed_node(
         ("Policy",),
         "pol_a",
@@ -228,7 +228,7 @@ def test_counts_describe_the_input_not_the_nodes_actually_created(merge_rig: Mer
 
 
 def test_second_restore_adds_no_nodes_and_logs_nothing(merge_rig: MergeRig) -> None:
-    """AC-BI-011: repeating the same import leaves the same node set; the second group is empty."""
+    """Repeating the same import leaves the same node set; the second group is empty."""
     args = ((_policy(),), (_standard(),), (_control(),))
 
     _persist(merge_rig, *args)
@@ -243,7 +243,7 @@ def test_second_restore_adds_no_nodes_and_logs_nothing(merge_rig: MergeRig) -> N
 def test_empty_input_issues_no_queries_submits_nothing_and_counts_zero(
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-007: an external-sourced import (no governance content) writes nothing."""
+    """An external-sourced import (no governance content) writes nothing."""
     counts = _persist(merge_rig, ())
 
     assert merge_rig.legacy.statements == []

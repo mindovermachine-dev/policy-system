@@ -1,4 +1,4 @@
-"""Label allow-list of the Graph Write Gateway (issue #206, AC-BI-001).
+"""Label allow-list of the Graph Write Gateway.
 
 The allow-list is derived from `DOMAIN_SCHEMA` plus the three named exception sets; these tests
 recompute it independently, drive rejection through the public `submit_group`, and check the

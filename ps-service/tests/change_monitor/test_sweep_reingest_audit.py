@@ -1,4 +1,4 @@
-"""AC-BI-011: the sweep's audited counts equal the graph delta of an amended re-ingest.
+"""The sweep's audited counts equal the graph delta of an amended re-ingest.
 
 Runs the REAL `will_reingest` / `trigger_reingestion` / `succession` over the gateway rig's native
 and `policy_system` graphs with the hand-written pipeline stage doubles, and a single-tenant

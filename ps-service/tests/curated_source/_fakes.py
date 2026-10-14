@@ -1,4 +1,4 @@
-"""Shared test doubles for `ps_service.curated_source` and its consumers (issue #130).
+"""Shared test doubles for `ps_service.curated_source` and its consumers.
 
 `tests/curated_source/` is an importable package, so `tests/mcp_interface/` imports these
 instead of redeclaring them, mirroring `tests/authz/_fakes.py`. (They live here, not under

@@ -1,4 +1,4 @@
-"""AST-scan proof (PLAN.md Slice 5.4, D6) that
+"""AST-scan proof that
 `ps_service.company_merge.dedup.resolve_capability_convergence_offline`
 never references `route_embedding`/`EmbeddingCaller` anywhere in its own
 body -- mirrors `tests/company_merge/test_identity_reuse.py`'s AST-scan
@@ -6,11 +6,10 @@ convention (`ast.parse`/`ast.walk`, not a substring grep), scoped to this
 one function's subtree rather than the whole module, since `dedup.py`'s
 module scope legitimately imports `route_embedding`/`EmbeddingCaller` for
 `find_best_semantic_match`/`dedupe_canonical_nodes` (the LIVE dedup path) --
-only `resolve_capability_convergence_offline` itself (the OFFLINE path, D6)
+only `resolve_capability_convergence_offline` itself (the OFFLINE path)
 must never touch either name.
 
-Issue #54, S6/B6 widened `resolve_capability_convergence_offline`'s own
-`kind` parameter from `Literal["Capability"]` to
+`resolve_capability_convergence_offline`'s own `kind` parameter is
 `Literal["Capability", "Policy"]` -- `kind` is a runtime parameter of this
 ONE function, not a separate function per kind, so the AST scan above
 already structurally covers the `kind="Policy"` call path (there is no
@@ -122,7 +121,7 @@ class _NoEmbeddingCallerSingleTenantGraph:
 def test_resolve_capability_convergence_offline_kind_policy_never_needs_an_embedding_caller() -> (
     None
 ):
-    """Runtime companion (issue #54, S6) to the AST scan above: exercising
+    """Runtime companion to the AST scan above: exercising
     `resolve_capability_convergence_offline(..., kind="Policy", ...)`
     end-to-end -- semantic match via an artifact-supplied incoming embedding
     scored against the existing node's own cached embedding -- succeeds with

@@ -1,6 +1,6 @@
-"""Live FalkorDB proof of the capability-unmerge statement A5 (issue #190, slice 15).
+"""Live FalkorDB proof of the capability-unmerge statement.
 
-Since #212 the production unmerge is a gateway group; this file runs the FROZEN pre-migration
+The production unmerge is a gateway group; this file runs the FROZEN pre-migration
 statement raw (`_legacy_reference.run_frozen_unmerge_capability`) as the live anchor for the
 in-memory interpreter that the equivalence tests compare the gateway group against.
 

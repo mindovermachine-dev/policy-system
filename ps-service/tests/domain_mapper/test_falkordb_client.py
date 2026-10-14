@@ -1,7 +1,7 @@
 """Tests for `ps_service.domain_mapper.falkordb_client`.
 
-Mirrors `ps_service.ingestion.tests.test_falkordb_client`'s shape exactly
-(PLAN_REVIEWED.md §11 Increment 4) — this is a deliberate near-duplicate
+Mirrors `ps_service.ingestion.tests.test_falkordb_client`'s shape exactly;
+this is a deliberate near-duplicate
 component (own copy, not a shared import; see the module's own docstring),
 so its tests are a deliberate near-duplicate too.
 """

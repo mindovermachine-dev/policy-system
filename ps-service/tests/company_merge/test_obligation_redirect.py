@@ -1,4 +1,4 @@
-"""Company Merge follows `MergedObligation` markers (issue #190, H1 / CHANGES.md A7, AC-BI-007).
+"""Company Merge follows `MergedObligation` markers.
 
 A cleanup obligation merge deletes the absorbed Obligation but leaves a
 `MergedObligation {id, merged_into}` marker. A later merge whose baseline regenerates the
@@ -71,7 +71,7 @@ class _SingleTenant:
         self._gateway_graph = gateway_graph
         self.calls: list[tuple[str, dict[str, object] | None]] = []
         # the existing Obligations are nodes the graph holds, so an edge to one is valid (the
-        # gateway rejects a group edge whose endpoint is missing; issue #210)
+        # gateway rejects a group edge whose endpoint is missing)
         for node_id in existing:
             if gateway_graph is not None:
                 gateway_graph.seed_node(("Obligation",), node_id, {})

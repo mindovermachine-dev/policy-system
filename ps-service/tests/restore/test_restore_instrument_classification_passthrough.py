@@ -1,4 +1,4 @@
-"""Offline restore-path parity for issue #106's PracticeArea/RiskPath/classification passthrough.
+"""Offline restore-path parity for the PracticeArea/RiskPath/classification passthrough.
 
 The restore's `policy_system` leg (`merge_primitives.build_policy_system_leg`) mirrors
 `company_merge.merge.merge_baseline_graph`'s live-path classification pass exactly: after
@@ -8,7 +8,7 @@ upstream by `internal_seed`), every COVERS/OWNS/MITIGATED_BY/VERIFIED_BY edge en
 validated before any classification edge is built, and `classification_edges` are folded into the
 same rewired-edge build as the regulatory-spine and governance edges.
 
-Since #214 that leg is a tuple of gateway primitives built from reads of the live graph, so these
+That leg is a tuple of gateway primitives built from reads of the live graph, so these
 expectations are asserted on primitives. The live graph is a hand-written fake satisfying
 `GraphHandle` structurally.
 """
@@ -102,7 +102,7 @@ def _edges(leg: PolicySystemLeg, edge_type: str) -> list[UpsertEdge]:
 
 
 def test_practice_area_and_risk_path_nodes_pass_through_with_every_property() -> None:
-    """AC-BI-003 (restore path): PracticeArea/RiskPath nodes are built with every property."""
+    """PracticeArea/RiskPath nodes are built with every property."""
     pa_id = "pa_secure_sdlc_4a7c1d"
     rp_id = "rp_secure_build_release_d93f8a"
     baseline = _baseline(
@@ -154,7 +154,7 @@ def test_practice_area_and_risk_path_nodes_pass_through_with_every_property() ->
 
 
 def test_practice_area_and_risk_path_untouched_when_the_node_already_exists() -> None:
-    """AC-BI-007 (restore path): an existing PracticeArea/RiskPath keeps its properties.
+    """An existing PracticeArea/RiskPath keeps its properties.
 
     Create-only: the incoming node shares the id but carries other values, and no primitive is
     built for it, so the live node is never overwritten.
@@ -182,7 +182,7 @@ def test_practice_area_and_risk_path_untouched_when_the_node_already_exists() ->
 
 
 def test_covers_edge_target_rewritten_to_canonical_capability_id_in_restore() -> None:
-    """AC-BI-005 (restore path): a COVERS edge's Capability target follows the dedup.
+    """A COVERS edge's Capability target follows the dedup.
 
     The OFFLINE dedup (`resolve_capability_convergence_offline`) matches the incoming Capability
     to an already-existing canonical one through an artifact-supplied embedding, so the edge is
@@ -226,12 +226,12 @@ def test_covers_edge_target_rewritten_to_canonical_capability_id_in_restore() ->
 
 
 def test_names_converge_on_one_content_hashed_id_across_two_restores() -> None:
-    """AC-BI-006 (restore path): two restores authoring a PracticeArea of one name converge.
+    """Two restores authoring a PracticeArea of one name converge.
 
-    Both baselines carry the id content-hashed from the name (where real convergence happens,
-    per PLAN.md §1.1). The first restore builds it, the second finds it in the live graph and
-    builds nothing for it; neither build reaches a dedup call for PracticeArea/RiskPath (the
-    offline dedup supports only Capability and Policy, so a call would raise instead of finish).
+    Both baselines carry the id content-hashed from the name (where real convergence happens).
+    The first restore builds it, the second finds it in the live graph and builds nothing for it;
+    neither build reaches a dedup call for PracticeArea/RiskPath (the offline dedup
+    supports only Capability and Policy, so a call would raise instead of finish).
     """
     shared_pa_id = practice_area_id("Secure SDLC")
     first = _build(
@@ -252,7 +252,7 @@ def test_names_converge_on_one_content_hashed_id_across_two_restores() -> None:
 def test_missing_classification_edge_endpoint_raises_before_anything_is_built(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008 (restore path): an endpoint absent from the baseline and the live graph raises.
+    """An endpoint absent from the baseline and the live graph raises.
 
     Nothing is returned, so no classification edge reaches the gateway; the restore fails with
     the log empty (the all-or-nothing guarantee, checked end to end in `test_restore_gateway.py`).
@@ -267,7 +267,7 @@ def test_missing_classification_edge_endpoint_raises_before_anything_is_built(
         dangling = BareEdge("COVERS", pa_id, "cap_never_persisted_anywhere")
         return replace(found, classification_edges=(dangling,))
 
-    # detroit-exception: dangling edge is unreachable from a real graph; the read is the seam (§1.2)
+    # detroit-exception: dangling edge is unreachable from a real graph; the read is the seam
     monkeypatch.setattr(
         merge_primitives.graph_reader, "read_baseline_graph", read_with_dangling_edge
     )
@@ -278,7 +278,7 @@ def test_missing_classification_edge_endpoint_raises_before_anything_is_built(
 
 
 def test_external_baseline_restore_unaffected_by_classification_pass() -> None:
-    """AC-BI-009 (restore path): an external-sourced restore reads nothing classification-shaped."""
+    """An external-sourced restore reads nothing classification-shaped."""
     baseline = _baseline(
         nodes=(
             SerializedNode(

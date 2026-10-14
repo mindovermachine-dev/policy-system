@@ -1,6 +1,6 @@
-"""`postgres_live` twin of the multi-graph group (issue #214 S2, AC-BI-001/002/010).
+"""`postgres_live` twin of the multi-graph group.
 
-Not run in the implementation sandbox (no Postgres). Runs the real store as the `ps_state` role
+Runs the real store as the `ps_state` role
 against a scratch PS Postgres: one transaction over several graphs, a real rollback when a later
 leg fails inside the database, and two overlapping sets submitted from two connections.
 

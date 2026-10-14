@@ -1,9 +1,9 @@
-"""`merge-capabilities` writes through the Graph Write Gateway (issue #212, slice S3).
+"""`merge-capabilities` writes through the Graph Write Gateway.
 
 One approved merge is one gateway group: the absorbed Capability's edges move onto the survivor
 (an upsert per edge, a delete per old one), the absorbed node becomes a `merged` tombstone with a
 `MERGED_INTO` edge. The group is linked to the `applied` audit row and guarded by the log position
-read BEFORE the guard reads (AC-BI-003/005/006/008). The guard is the old statement's `WHERE`,
+read BEFORE the guard reads. The guard is the statement's `WHERE` condition,
 evaluated in Python on a fresh read, for each of the four governance cases.
 """
 
@@ -126,7 +126,7 @@ def _rows(rig: CleanupRig) -> list[tuple[str, str]]:
     return [(r.action, r.outcome) for r in rig.audit.rows]
 
 
-# -- the group (AC-BI-005, AC-BI-006) -------------------------------------------------------------
+# -- the group -------------------------------------------------------------
 
 
 @pytest.mark.parametrize("case", sorted(_CASES))
@@ -237,7 +237,7 @@ def test_an_absorbed_capability_with_no_edges_is_only_tombstoned(cleanup_rig: Cl
     assert group.primitives == _TOMBSTONE
 
 
-# -- the guard: the old WHERE, in Python (AC-BI-003) ----------------------------------------------
+# -- the guard: the WHERE condition, in Python ----------------------------------------------
 
 
 def _holds(rig: CleanupRig) -> bool:
@@ -439,7 +439,7 @@ def test_an_unrelated_write_between_the_position_read_and_the_append_is_refused(
     assert cleanup_rig.graph.nodes[("Capability", ABSORBED)]["status"] == "active"
 
 
-# -- legacy identity-less edges (AC-BI-005, F4) ---------------------------------------------------
+# -- legacy identity-less edges ---------------------------------------------------
 
 
 def test_legacy_edges_are_stamped_first_so_no_parallel_edge_results(
@@ -473,7 +473,7 @@ def test_a_refused_position_may_leave_the_legacy_stamp_in_the_log_and_no_merge_g
     assert cleanup_rig.graph.nodes[("Capability", ABSORBED)]["status"] == "active"
 
 
-# -- the failure matrix (AC-BI-008) ---------------------------------------------------------------
+# -- the failure matrix ---------------------------------------------------------------
 
 
 def _reject_the_group(rig: CleanupRig) -> None:

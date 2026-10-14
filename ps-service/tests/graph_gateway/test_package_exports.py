@@ -1,4 +1,4 @@
-"""The package front door exposes the gateway's public surface (issue #206, S14)."""
+"""The package front door exposes the gateway's public surface."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""The external ingestion pipeline writes its native graph through the gateway (#208, slice 6).
+"""The external ingestion pipeline writes its native graph through the gateway.
 
 `ingest_regulatory_instrument` submits one native group (the RegulatoryInstrument, the structural
 nodes, then the `HAS` edges) under the caller's audit event id, and only reads through the graph
@@ -318,7 +318,7 @@ def test_a_re_ingest_with_fewer_properties_keeps_the_ones_the_graph_already_has(
 def test_the_native_group_requests_a_checkpoint_so_the_graph_has_a_head_checkpoint(
     rig: GatewayRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-009: the native group is the terminal group of an external ingest (#215, S4b)."""
+    """The native group is the terminal group of an external ingest."""
     _Run(rig, emitter).ingest()
 
     assert_head_checkpoints(rig, [_GRAPH])

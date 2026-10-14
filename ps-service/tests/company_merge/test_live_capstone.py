@@ -1,5 +1,4 @@
-"""Increment 20 -- the live 3-regulation Company Merge capstone
-(PLAN_REVIEWED.md §10 Batch 11, §12).
+"""The live 3-regulation Company Merge capstone.
 
 `@pytest.mark.falkordb_live @pytest.mark.llm_live` (plus `cellar_live` and `postgres_live`):
 reads the `cra_baseline`/`gdpr_baseline`/`nis2_baseline` graphs the `live_baseline_graphs` fixture
@@ -8,8 +7,7 @@ builds fresh (Cellar ingest, then bounded Domain Mapper extraction and derivatio
 `route_embedding`'s default caller, real `RouteEmbedding` calls, no
 `call_embedding` override), and writes into a **dedicated, disposable**
 `policy_system_capstone_test` single-tenant graph -- never the real,
-shared `policy_system` graph (PLAN_REVIEWED.md §12's target-graph decision;
-mutating a database that has never before seen `ON CREATE SET`-based
+shared `policy_system` graph (mutating a database that has never before seen `ON CREATE SET`-based
 canonical writing or cross-run embedding backfill is exactly the kind of
 hard-to-reverse, shared-system action CLAUDE.md requires explicit user
 permission for -- already obtained for the disposable graph, not for the
@@ -19,28 +17,28 @@ Reached via `ps_service.company_merge.falkordb_client.single_tenant_graph_name()
 existing `PS_FALKORDB_GRAPH` env var override (`monkeypatch`), exactly as
 that function already supports -- no new mechanism.
 
-**S2's fix (§12), adapted for issue #42 -- a deliberate, deterministic
-seeded duplicate for AC-002, kept as an honest non-forcing caveat for
-AC-003/AC-004**: before any merge runs, one extra
-Role/Requirement/Obligation/Capability chain is additively `MERGE`d into
+**A deliberate, deterministic seeded duplicate for the exact-key convergence check, with an
+honest non-forcing caveat for the semantic-match and near-miss checks**: before any merge runs,
+one extra Role/Requirement/Obligation/Capability chain is additively `MERGE`d into
 `gdpr_baseline` and `nis2_baseline` (never `policy_system` or
 `policy_system_capstone_test` directly), using the REAL `role_id`/
-`requirement_id`/`obligation_id`/`capability_id` functions. Since #42 an
+`requirement_id`/`obligation_id`/`capability_id` functions. Because an
 Obligation is Role-scoped (a weak entity of exactly one Role), the two
 seeded Obligations are legitimately DISTINCT nodes -- the guaranteed
 exact-key collision is at **`Capability`** instead: both seeded chains
 `REQUIRES` a Capability whose name is the same literal string, and
 `capability_id(name)` is a pure function of name alone, so a real exact-key
 Capability collision across GDPR/NIS2 is guaranteed independent of real
-CRA/GDPR/NIS2 content -- closing AC-002's live check. AC-003/AC-004 keep the
-identical non-forcing caveat: whether real CRA/GDPR/NIS2 content contains a
+CRA/GDPR/NIS2 content -- closing the exact-key live check. The
+semantic-match and near-miss checks keep a non-forcing caveat: whether real CRA/GDPR/NIS2
+content contains a
 genuine near-or-above-threshold pair is not something this test controls or
 fakes; only that the comparison mechanism itself fires for real is
 asserted.
 
 **Safety property, the most important one in this file**: the real
 `policy_system` graph's total node count is read before anything runs and
-again after everything (including the AC-005 second pass) completes, and
+again after everything (including the second pass) completes, and
 asserted identical -- this is the live proof that this whole capstone never
 wrote a single node/edge/property into the real graph.
 """
@@ -84,7 +82,7 @@ from ps_service.logging import bind_run_context
 
 _CAPSTONE_GRAPH_NAME = "policy_system_capstone_test"
 _REAL_SINGLE_TENANT_GRAPH_NAME = "policy_system"
-_SIMILARITY_THRESHOLD = 0.59  # empirically recommended by issue #29's labeled sweep -- not
+_SIMILARITY_THRESHOLD = 0.59  # empirically recommended by a labeled sweep -- not
 # read from PS_COMPANYMERGE_SIMILARITY_THRESHOLD/ServiceConfig, passed directly to
 # merge_baseline_graph.
 _LOG_FILENAME = "company_merge_capstone.jsonl"
@@ -140,7 +138,7 @@ def _count(graph: GraphHandle, query: str, params: dict[str, object] | None = No
 def _seed_duplicate_obligation(
     baseline_graph: GraphHandle, regulatory_instrument_id: str
 ) -> _SeededIds:
-    """S2's fix (PLAN_REVIEWED.md §12), adapted for #42: additively `MERGE`
+    """Additively `MERGE`
     one extra Role/Requirement/Obligation/Capability chain into
     `baseline_graph` (a `{short}_baseline` graph -- never `policy_system`/
     `policy_system_capstone_test`), fully wired with its own
@@ -149,14 +147,14 @@ def _seed_duplicate_obligation(
     shapes -- additive-only, the same MERGE semantics every other write in
     this system already relies on for safety, targeting only a
     per-regulation baseline graph already treated as a disposable test
-    fixture (#15's own precedent).
+    fixture.
 
     The seeded `Capability`'s name is the SAME literal string for every
     caller (`_SEED_CAPABILITY_NAME`) -- since `capability_id(name)` is a
     pure function of name alone, this guarantees an identical canonical
     Capability id across whichever regulations this is called for,
-    independent of real CRA/GDPR/NIS2 content (AC-002's live proof, not left
-    to chance). The `Obligation` id is Role-scoped (#42), so the two seeded
+    independent of real CRA/GDPR/NIS2 content (the live exact-key proof, not left
+    to chance). The `Obligation` id is Role-scoped, so the two seeded
     Obligations are legitimately distinct -- convergence is at the shared
     Capability.
     """
@@ -276,7 +274,7 @@ def _assert_seeded_nodes_present(single_tenant_graph: GraphHandle, seeded: _Seed
 def _assert_ac002_exact_duplicate_converges(
     single_tenant_graph: GraphHandle, seeded_by_regulatory_instrument: dict[str, _SeededIds]
 ) -> None:
-    """#42: the guaranteed exact-key duplicate is a shared `Capability`.
+    """The guaranteed exact-key duplicate is a shared `Capability`.
     The two seeded `Obligation`s are legitimately distinct (Role-scoped);
     both `REQUIRES` the one canonical Capability.
     """
@@ -318,9 +316,9 @@ def _assert_ac002_exact_duplicate_converges(
 def _report_ac003_ac004_mechanism_presence(
     single_tenant_graph: GraphHandle, log_entries: list[dict[str, object]]
 ) -> dict[str, int]:
-    """AC-003/AC-004 non-forcing caveat (PLAN_REVIEWED.md §12): whether real
+    """Non-forcing caveat: whether real
     CRA/GDPR/NIS2 content contains a genuine cross-regulation semantic match
-    (AC-003) or near-miss (AC-004) is not something this test controls or
+    or near-miss is not something this test controls or
     fakes -- forcing one would require either mocking `route_embedding`
     (defeating the entire point of a `llm_live` capstone) or picking texts
     and hoping the real model agrees, which is not meaningfully different
@@ -365,7 +363,7 @@ def _report_ac003_ac004_mechanism_presence(
 
 
 def _live_audit_event_id(config: ServiceConfig, run_id: str) -> str:
-    """One system audit row for the run, the way production records it (#210).
+    """One system audit row for the run, the way production records it.
 
     The merge's gateway groups are logged under it. Not runnable in the implementation sandbox.
     """
@@ -417,7 +415,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
         for fixture in _REGULATIONS
     }
 
-    # --- S2's seeding fix: a guaranteed exact-key duplicate across GDPR/NIS2 ---
+    # --- Seeding: a guaranteed exact-key duplicate across GDPR/NIS2 ---
     seeded_by_regulatory_instrument: dict[str, _SeededIds] = {
         fixture.short_name: _seed_duplicate_obligation(
             baseline_graphs[fixture.short_name], fixture.regulatory_instrument_id
@@ -455,7 +453,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     counts_after_pass_1 = _snapshot_counts(single_tenant_graph)
     embeddings_after_pass_1 = _snapshot_embeddings(single_tenant_graph)
 
-    # --- AC-005: re-run the WHOLE capstone a second time against the SAME
+    # --- re-run the WHOLE capstone a second time against the SAME
     # policy_system_capstone_test state -- must be a structural no-op. ---
     _run_pass(2)
 
@@ -474,7 +472,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
         "no-op"
     )
 
-    # --- AC-001 / AC-006, per regulation ---
+    # --- per regulation ---
     for fixture in _REGULATIONS:
         _assert_ac001_every_node_type_present(
             single_tenant_graph, fixture.regulatory_instrument_id, graph_name=_CAPSTONE_GRAPH_NAME
@@ -486,13 +484,13 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     for seeded in seeded_by_regulatory_instrument.values():
         _assert_seeded_nodes_present(single_tenant_graph, seeded)
 
-    # --- AC-002: the seeded exact-key duplicate converges onto one canonical node ---
+    # --- the seeded exact-key duplicate converges onto one canonical node ---
     _assert_ac002_exact_duplicate_converges(single_tenant_graph, seeded_by_regulatory_instrument)
 
-    # --- AC-003 / AC-004: mechanism-presence only, non-forcing (see helper docstring) ---
+    # --- semantic-match / near-miss: mechanism presence only, non-forcing (see helper) ---
     _report_ac003_ac004_mechanism_presence(single_tenant_graph, log_entries)
 
-    # --- AC-007: distinct run_id per regulation (per pass), correlated dedup decisions ---
+    # --- distinct run_id per regulation (per pass), correlated dedup decisions ---
     assert len(set(run_ids)) == len(run_ids), f"expected 6 mutually distinct run_ids, got {run_ids}"
     for fixture in _REGULATIONS:
         merge_run_id = f"capstone-{fixture.short_name.lower()}-pass1"
@@ -504,7 +502,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
         )
         _assert_dedup_decisions_correlated(log_entries, merge_run_id)
 
-    # --- AC-008: no dedupe_canonical_nodes decision ever fires for a Role/Requirement id ---
+    # --- no dedupe_canonical_nodes decision ever fires for a Role/Requirement id ---
     _assert_ac008_no_role_or_requirement_dedup(log_entries)
 
     # --- Safety check (AFTER): the real policy_system graph must be provably untouched ---

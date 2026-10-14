@@ -1,4 +1,4 @@
-"""Marker region engine: only the bytes inside generated regions are rewritten (AC-BI-007)."""
+"""Marker region engine: only the bytes inside generated regions are rewritten."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _outside(text: str) -> list[str]:
 
 
 def test_replaces_only_the_region_bodies_and_keeps_outside_bytes() -> None:
-    """AC-BI-007: text outside the markers is returned byte-unchanged."""
+    """Text outside the markers is returned byte-unchanged."""
     updated = replace_regions(_DOC, _RENDERED)
 
     assert "| new |" in updated
@@ -51,7 +51,7 @@ def test_replacement_is_idempotent() -> None:
 
 
 def test_marker_text_says_generated_and_do_not_edit() -> None:
-    """AC-BI-018: the BEGIN marker names the source and the regenerate command."""
+    """The BEGIN marker names the source and the regenerate command."""
     marker = begin_marker("properties:Role")
 
     assert "Generated from ps_service.domain_schema" in marker

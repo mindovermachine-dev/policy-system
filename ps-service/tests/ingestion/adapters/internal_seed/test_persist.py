@@ -1,8 +1,8 @@
 """Tests for `ps_service.ingestion.adapters.internal_seed.persist`.
 
-S2's red-before-green tests 3-5 (PLAN.md S2): AC-BI-011 (dangling-edge
-fail-closed, zero writes), B5 (native verbatim / baseline minted dual write),
-D6 (Requirement.role_id omitted, never null, when ambiguous).
+Covers dangling-edge fail-closed with zero writes, the native-verbatim /
+baseline-minted dual write, and Requirement.role_id omitted (never null) when
+ambiguous.
 
 Fakes implement the `GraphHandle`/`GraphQueryResult` Protocols structurally --
 no mocking library, matching L2 Testing Patterns' "mock at component
@@ -191,10 +191,10 @@ def _baseline_edges(rig: GatewayRig, edge_type: str) -> list[tuple[str, str, str
 
 
 def test_dangling_requires_edge_fails_closed_no_partial_write(rig: GatewayRig) -> None:
-    """AC-BI-011: a dangling REQUIRES edge raises `InternalSeedError` with zero writes.
+    """A dangling REQUIRES edge raises `InternalSeedError` with zero writes.
 
     Uses the dedicated `engineering-practices-dangling-edge.json` fixture
-    (B1) -- schema-clean at the JSON-Schema layer, but referentially invalid
+    -- schema-clean at the JSON-Schema layer, but referentially invalid
     (its one REQUIRES edge targets a Capability id never declared as a node).
     """
     seed = InternalSeedIngestionAdapter().parse_seed(_DANGLING_EDGE_DOCUMENT)
@@ -219,7 +219,7 @@ def test_persists_native_verbatim_and_baseline_minted(rig: GatewayRig) -> None:
     assert result.obligation_count == 2
     assert result.capability_count == 1
 
-    # Native: local ids, verbatim, no minting; written through the gateway (#208).
+    # Native: local ids, verbatim, no minting; written through the gateway.
     native_node_ids = _native_node_ids(rig)
     assert native_node_ids == {
         "TESTREG-1.0",
@@ -292,7 +292,7 @@ def _practice_area(local_id: str, name: str, *, status: str = "active") -> SeedN
 
 
 def test_persists_authored_practice_area_node_verbatim(rig: GatewayRig) -> None:
-    """GH #93 AC-BI-004 (PracticeArea portion): a submitted PracticeArea persists
+    """A submitted PracticeArea persists
     verbatim, and `InternalIngestResult.practice_area_count == 1`. PracticeArea has
     no required edge to exist (unlike Policy's GOVERNED_BY).
     """
@@ -315,7 +315,7 @@ def test_persists_authored_practice_area_node_verbatim(rig: GatewayRig) -> None:
 def test_seed_with_no_practice_area_nodes_still_succeeds_with_zero_practice_area_count(
     rig: GatewayRig,
 ) -> None:
-    """AC-BI-005: omitting PracticeArea entirely still succeeds, persisting only the
+    """Omitting PracticeArea entirely still succeeds, persisting only the
     regulatory spine, with zero PracticeArea nodes invented in their place.
     """
     seed = _build_seed()
@@ -332,7 +332,7 @@ def _risk_path(local_id: str, name: str, *, status: str = "active") -> SeedNode:
 
 
 def test_persists_authored_risk_path_node_verbatim(rig: GatewayRig) -> None:
-    """GH #93 AC-BI-004 (RiskPath portion): a submitted RiskPath persists
+    """A submitted RiskPath persists
     verbatim, and `InternalIngestResult.risk_path_count == 1`. RiskPath has
     no required edge to exist (unlike Policy's GOVERNED_BY).
     """
@@ -355,7 +355,7 @@ def test_persists_authored_risk_path_node_verbatim(rig: GatewayRig) -> None:
 def test_seed_with_no_risk_path_nodes_still_succeeds_with_zero_risk_path_count(
     rig: GatewayRig,
 ) -> None:
-    """AC-BI-005: omitting RiskPath entirely still succeeds, persisting only the
+    """Omitting RiskPath entirely still succeeds, persisting only the
     regulatory spine, with zero RiskPath nodes invented in their place.
     """
     seed = _build_seed()
@@ -368,7 +368,7 @@ def test_seed_with_no_risk_path_nodes_still_succeeds_with_zero_risk_path_count(
 
 
 def test_persists_mitigated_by_edge_risk_path_to_capability(rig: GatewayRig) -> None:
-    """GH #93 (MITIGATED_BY portion): a submitted RiskPath + MITIGATED_BY edge to a
+    """A submitted RiskPath + MITIGATED_BY edge to a
     Capability persists both the node and the edge (mirrors
     `test_persists_covers_edge_practice_area_to_capability`).
     """
@@ -388,11 +388,10 @@ def test_persists_mitigated_by_edge_risk_path_to_capability(rig: GatewayRig) -> 
 
 
 def test_capability_mitigated_by_two_risk_paths_succeeds(rig: GatewayRig) -> None:
-    """Directly proves AC-BI-011's no-cap clause for MITIGATED_BY -- the AC's explicit
-    "mitigated by more than one RiskPath" clause: two RiskPath nodes both
-    `MITIGATED_BY` the same Capability succeeds. Mirrors
-    `test_capability_covered_by_two_practice_areas_succeeds` -- do not "fix" this by
-    analogy into a cap; see PLAN.md Slice 5's gotcha against copying
+    """Proves the no-cap clause for MITIGATED_BY -- "mitigated by more than one
+    RiskPath": two RiskPath nodes both `MITIGATED_BY` the same Capability
+    succeeds. Mirrors `test_capability_covered_by_two_practice_areas_succeeds` --
+    do not "fix" this by analogy into a cap, and do not copy
     `_index_policy_governors`'s at-most-one pattern.
     """
     seed = _build_seed()
@@ -434,7 +433,7 @@ def test_dangling_mitigated_by_edge_fails_closed(rig: GatewayRig) -> None:
 
 
 def test_persists_covers_edge_practice_area_to_capability(rig: GatewayRig) -> None:
-    """GH #93 (COVERS portion): a submitted PracticeArea + COVERS edge to a
+    """A submitted PracticeArea + COVERS edge to a
     Capability persists both the node and the edge (mirrors
     `test_persists_authored_policy_node_and_governed_by_edge_verbatim`).
     """
@@ -454,12 +453,12 @@ def test_persists_covers_edge_practice_area_to_capability(rig: GatewayRig) -> No
 
 
 def test_capability_covered_by_two_practice_areas_succeeds(rig: GatewayRig) -> None:
-    """Directly proves AC-BI-011's no-cap clause for COVERS: two PracticeArea
+    """Proves the no-cap clause for COVERS: two PracticeArea
     nodes both `COVERS` the same Capability. This is the negative-space
     counterpart of `test_capability_with_two_governed_by_edges_fails_closed_no_partial_write`
     -- same shape, but COVERS has no one-parent limit (unlike GOVERNED_BY), so
     this must succeed rather than raise. Do not "fix" this by analogy into a
-    cap -- see PLAN.md Slice 3's explicit gotcha against an
+    cap, and do not add an
     `_index_practice_area_coverers`-style count check.
     """
     seed = _build_seed()
@@ -501,7 +500,7 @@ def test_dangling_covers_edge_fails_closed(rig: GatewayRig) -> None:
 
 
 def test_persists_owns_edge_practice_area_to_policy(rig: GatewayRig) -> None:
-    """GH #93 (OWNS portion, Slice 4): a submitted PracticeArea + OWNS edge to a
+    """A submitted PracticeArea + OWNS edge to a
     Policy persists both the node and the edge (mirrors
     `test_persists_covers_edge_practice_area_to_capability`).
     """
@@ -525,21 +524,13 @@ def test_persists_owns_edge_practice_area_to_policy(rig: GatewayRig) -> None:
 
 
 def test_policy_owned_by_two_practice_areas_succeeds(rig: GatewayRig) -> None:
-    """Directly proves AC-BI-011's no-cap clause for OWNS: two PracticeArea nodes
-    both `OWNS` the same Policy. This is the one edge in this issue where the
-    no-cap decision explicitly contradicts a pre-existing doc line:
-    `docs/artifacts/ps-domain-concepts.md` line 430 (Policy's Relationships
-    table, `OWNS` row) used to read "`0..* : 1`" and claimed "Starter baseline
-    should enforce exactly one owning PracticeArea per active Policy" -- that
-    wording is corrected in this same slice (CHANGES.md Row 1/Appendix A) to
-    match the no-cap design. The issue's own Discussion section is explicit
-    that "COVERS/OWNS/MITIGATED_BY/VERIFIED_BY have NO upper bound on the
-    inbound side... AC-BI-011 exists specifically to prevent wrongly copying
-    GOVERNED_BY's 'at most one' pattern by analogy" -- so this test locks in
-    the no-cap decision rather than the old doc's cap, mirroring
+    """Proves the no-cap clause for OWNS: two PracticeArea nodes
+    both `OWNS` the same Policy. `OWNS` has no upper bound on the inbound
+    side (as with COVERS/MITIGATED_BY/VERIFIED_BY), so this test locks in the
+    no-cap behavior, mirroring
     `test_capability_covered_by_two_practice_areas_succeeds`. Do not "fix"
-    this by analogy into a cap -- see PLAN.md Slice 4's explicit gotcha
-    against copying Slice 3's "no `_index_*` function" mistake.
+    this by analogy into a cap, and do not copy GOVERNED_BY's at-most-one
+    pattern or add an `_index_*` function.
     """
     seed = _build_seed()
     nodes = (
@@ -581,7 +572,7 @@ def test_dangling_owns_edge_fails_closed(rig: GatewayRig) -> None:
 
 
 def test_persists_authored_policy_node_and_governed_by_edge_verbatim(rig: GatewayRig) -> None:
-    """GH #76 AC-BI-004 (Policy portion): a submitted Policy + GOVERNED_BY edge
+    """A submitted Policy + GOVERNED_BY edge
     from a Capability persists verbatim, and `InternalIngestResult.policy_count == 1`.
     """
     seed = _build_seed()
@@ -605,7 +596,7 @@ def test_persists_authored_policy_node_and_governed_by_edge_verbatim(rig: Gatewa
 
 
 def test_seed_with_no_policy_nodes_still_succeeds_with_zero_policy_count(rig: GatewayRig) -> None:
-    """AC-BI-005: omitting Policy/GOVERNED_BY entirely still succeeds, persisting
+    """Omitting Policy/GOVERNED_BY entirely still succeeds, persisting
     only the regulatory spine, with zero governance nodes invented in their place.
     """
     seed = _build_seed()
@@ -620,7 +611,7 @@ def test_seed_with_no_policy_nodes_still_succeeds_with_zero_policy_count(rig: Ga
 def test_capability_with_two_governed_by_edges_fails_closed_no_partial_write(
     rig: GatewayRig,
 ) -> None:
-    """AC-BI-008/009 for GOVERNED_BY: a Capability with two outbound GOVERNED_BY
+    """For GOVERNED_BY: a Capability with two outbound GOVERNED_BY
     edges raises `InternalSeedError` naming the Capability, zero writes.
     """
     seed = _build_seed()
@@ -658,7 +649,7 @@ def test_dangling_governed_by_edge_fails_closed(rig: GatewayRig) -> None:
 
 
 def test_persists_authored_standard_node_and_supported_by_edge_verbatim(rig: GatewayRig) -> None:
-    """GH #76 AC-BI-004 (Standard portion): a submitted Standard + SUPPORTED_BY edge
+    """A submitted Standard + SUPPORTED_BY edge
     from a Policy persists verbatim, and `InternalIngestResult.standard_count == 1`.
     """
     seed = _build_seed()
@@ -695,7 +686,7 @@ def test_persists_authored_standard_node_and_supported_by_edge_verbatim(rig: Gat
 def test_standard_with_zero_or_two_supported_by_edges_fails_closed_no_partial_write(
     supported_by_count: int, rig: GatewayRig
 ) -> None:
-    """AC-BI-008/009 for SUPPORTED_BY: a Standard with zero or two-or-more inbound
+    """For SUPPORTED_BY: a Standard with zero or two-or-more inbound
     SUPPORTED_BY edges raises `InternalSeedError` naming the Standard, zero writes.
     """
     seed = _build_seed()
@@ -742,7 +733,7 @@ def test_dangling_supported_by_edge_fails_closed(rig: GatewayRig) -> None:
 def test_policy_with_two_supported_by_edges_persists_two_distinct_standards(
     rig: GatewayRig,
 ) -> None:
-    """AC-BI-006's literal proof: one Policy, two SUPPORTED_BY edges to two
+    """Proof of distinct identity: one Policy, two SUPPORTED_BY edges to two
     differently-titled Standards -- both persist as distinct nodes with distinct ids.
     """
     seed = _build_seed()
@@ -775,7 +766,7 @@ def test_policy_with_two_supported_by_edges_persists_two_distinct_standards(
 
 
 def test_persists_authored_control_node_and_implemented_by_edge_verbatim(rig: GatewayRig) -> None:
-    """GH #76 AC-BI-004 (Control portion): a submitted Control + IMPLEMENTED_BY edge
+    """A submitted Control + IMPLEMENTED_BY edge
     from a Standard persists verbatim (including optional operational fields), and
     `InternalIngestResult.control_count == 1`.
     """
@@ -832,7 +823,7 @@ def test_persists_authored_control_node_and_implemented_by_edge_verbatim(rig: Ga
 def test_standard_and_control_status_mirrors_root_policy_status_at_mint_time(
     rig: GatewayRig,
 ) -> None:
-    """GH #134 S7: a minted Standard/Control's `status` mirrors its root Policy's
+    """A minted Standard/Control's `status` mirrors its root Policy's
     `status` -- not hardcoded to `"draft"` -- proven with a Policy whose own
     `status` is `"approved"`. The Control reaches its root Policy transitively
     (Control -> IMPLEMENTED_BY -> Standard -> SUPPORTED_BY -> Policy).
@@ -864,7 +855,7 @@ def test_standard_and_control_status_mirrors_root_policy_status_at_mint_time(
 def test_control_with_zero_or_two_implemented_by_edges_fails_closed_no_partial_write(
     implemented_by_count: int, rig: GatewayRig
 ) -> None:
-    """AC-BI-008/009 for IMPLEMENTED_BY: a Control with zero or two-or-more inbound
+    """For IMPLEMENTED_BY: a Control with zero or two-or-more inbound
     IMPLEMENTED_BY edges raises `InternalSeedError` naming the Control, zero writes.
     """
     seed = _build_seed()
@@ -915,17 +906,13 @@ def test_dangling_implemented_by_edge_fails_closed(rig: GatewayRig) -> None:
 def test_standard_with_two_implemented_by_edges_same_type_persists_two_distinct_controls(
     rig: GatewayRig,
 ) -> None:
-    """AC-BI-007's literal proof: one Standard, two IMPLEMENTED_BY edges to two Controls
+    """Proof of distinct identity: one Standard, two IMPLEMENTED_BY edges to two Controls
     both `type: "automated"` but differently titled -- both persist as distinct nodes
     with distinct ids.
 
-    This is the test that would have been silently broken -- one Control clobbering
-    the other via `MERGE` -- before the AC-BI-003 identity fix (the old
-    `control_id(standard_node_id, control_type)` formula keyed identity on `type`
-    alone, so two same-typed Controls under the same Standard collided onto one
-    node). Confirmed as a genuine regression test (not a tautology) by running it
-    against the pre-fix `control_id` first -- see IMPL_SLICE_3.md's evidence block
-    for the red run.
+    This guards against one Control clobbering the other via `MERGE`: an
+    identity formula keyed on `type` alone would collide two same-typed
+    Controls under the same Standard onto one node.
     """
     seed = _build_seed()
     nodes = (
@@ -1009,9 +996,9 @@ def test_full_capability_policy_standard_control_chain_persists_every_node_and_e
 
 
 def test_persists_verified_by_edge_risk_path_to_control(rig: GatewayRig) -> None:
-    """GH #93 (Slice 6): a `VERIFIED_BY` edge from a `RiskPath` to a `Control`
+    """A `VERIFIED_BY` edge from a `RiskPath` to a `Control`
     persists on the baseline graph, keyed on Control's weak-entity identity --
-    a full Capability -> Policy -> Standard -> Control chain (GH #76) must exist
+    a full Capability -> Policy -> Standard -> Control chain must exist
     first for a Control to mint at all.
     """
     seed = _build_seed()
@@ -1053,7 +1040,7 @@ def test_persists_verified_by_edge_risk_path_to_control(rig: GatewayRig) -> None
 
 
 def test_control_verified_by_two_risk_paths_succeeds(rig: GatewayRig) -> None:
-    """No-cap regression (mirrors Slice 4/5): a Control `VERIFIED_BY` two distinct
+    """No-cap regression: a Control `VERIFIED_BY` two distinct
     RiskPaths succeeds -- VERIFIED_BY's inbound side carries no artificial cap.
     """
     seed = _build_seed()

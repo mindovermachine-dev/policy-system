@@ -1,4 +1,4 @@
-"""Every Graph Cleanup group requests a digest checkpoint (issue #215, S4d; AC-BI-009).
+"""Every Graph Cleanup group requests a digest checkpoint.
 
 Each of the five cleanup operations is one group on `policy_system`, so each is its own terminal
 group. The real executors run over the `CleanupRig`; a checkpoint that cannot be recorded never

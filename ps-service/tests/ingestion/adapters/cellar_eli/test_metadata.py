@@ -3,8 +3,7 @@
 Fixture XHTML snippets are small, hand-trimmed, but structurally realistic
 against real Cellar/ELI markup (`eli-container`/`eli-main-title`/
 `eli-subdivision`/`eli-title` classes, `art_NN`/`art_NN.tit_1` id
-convention) — see `spikes/cellar1/LEARNINGS.md` for the real structure
-these mirror.
+convention), mirroring the real structure.
 """
 
 from __future__ import annotations
@@ -88,13 +87,13 @@ def _rdf_root(rdf: bytes) -> ET.Element:
 
 
 # RDF/XML fixtures below mirror the real, live-captured NIS2 shape quoted in
-# SLICE_0_FINDINGS.md §2(a)/(b)/(c): subject IRI
+# captured data: subject IRI
 # `http://publications.europa.eu/resource/oj/JOL_2022_333_R_0002`, predicate
 # `cdm:date_transposition` (local name `date_transposition`) asserted twice
 # with real values `2024-10-18`/`2024-10-17`, and `resource_legal_id_celex`
 # `32022L2555` on that same subject. The plain
 # `http://publications.europa.eu/resource/celex/32022L2555` subject is real
-# too (SLICE_0_FINDINGS.md §2(c)) but, in real data, carries neither
+# too but, in real data, carries neither
 # predicate — here it is deliberately given a conflicting `date_transposition`
 # value to prove subject-scoped grouping, not flattening.
 _RDF_TWO_SUBJECTS_FIXTURE = b"""<rdf:RDF
@@ -111,14 +110,13 @@ _RDF_TWO_SUBJECTS_FIXTURE = b"""<rdf:RDF
 </rdf:RDF>
 """
 
-# Models fact #2's shape (PLAN_REVISED.md §0/§2.4): the CELEX's own subject
-# asserts `resource_legal_id_celex` but no entry-into-force date; a distinct,
-# unrelated-looking subject (no `resource_legal_id_celex` of its own) asserts
-# the target predicate -- the Tier-2 widen case. (Live data since Slice 0
-# suggests `32025R0038` may actually resolve via Tier 1 -- see
-# PLAN_REVISED.md's "Changes ... post-Slice-0" note -- but the algorithm is
-# documented as tier-agnostic, so this fixture is kept as a deliberate,
-# synthetic Tier-2 exerciser regardless of which tier real data hits.)
+# The CELEX's own subject asserts `resource_legal_id_celex` but no
+# entry-into-force date; a distinct, unrelated-looking subject (no
+# `resource_legal_id_celex` of its own) asserts the target predicate -- the
+# Tier-2 widen case. Live data suggests `32025R0038` may actually resolve via
+# Tier 1, but the algorithm is tier-agnostic, so this fixture is kept as a
+# deliberate, synthetic Tier-2 exerciser regardless of which tier real data
+# hits.
 _RDF_WIDEN_FIXTURE = b"""<rdf:RDF
     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
     xmlns:j.0="http://publications.europa.eu/ontology/cdm#">
@@ -133,8 +131,8 @@ _RDF_WIDEN_FIXTURE = b"""<rdf:RDF
 
 # Same as _RDF_WIDEN_FIXTURE, plus a 3rd subject that asserts an unrelated
 # CELEX's own id (`32019R0881`) AND a same-named target predicate -- the
-# direct regression fixture for BLOCKING #1's contamination risk (PLAN_REVISED.md
-# §2.3/§2.4). That 3rd subject's value must never be picked up.
+# direct regression fixture for the contamination risk. That 3rd subject's
+# value must never be picked up.
 _RDF_WIDEN_WITH_CONTAMINATION_FIXTURE = b"""<rdf:RDF
     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
     xmlns:j.0="http://publications.europa.eu/ontology/cdm#">
@@ -168,9 +166,8 @@ _RDF_NO_MATCH_FIXTURE = b"""<rdf:RDF
 """
 
 # Two widened subjects (neither the CELEX's own, neither excluded) both
-# assert the target predicate -- PLAN_REVISED.md §2.3's "more than one
-# surviving subject" pooling branch, a documented secondary rule distinct
-# from Tier 1's same-subject tie-break.
+# assert the target predicate -- the "more than one surviving subject" pooling
+# branch, a secondary rule distinct from Tier 1's same-subject tie-break.
 _RDF_WIDEN_MULTIPLE_MATCHES_FIXTURE = b"""<rdf:RDF
     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
     xmlns:j.0="http://publications.europa.eu/ontology/cdm#">
@@ -186,13 +183,12 @@ _RDF_WIDEN_MULTIPLE_MATCHES_FIXTURE = b"""<rdf:RDF
 </rdf:RDF>
 """
 
-# Real, live-confirmed shape for 32025R0038 (PLAN_REVISED.md §10 item 9/10 and
-# "Changes ... post-Slice-0"): the own subject asserts both
+# Real, live-confirmed shape for 32025R0038: the own subject asserts both
 # `resource_legal_id_celex` and the date under the *non-generalized*
 # `resource_legal_date_entry-into-force` name -- Cellar's `notice=non-inferred`
 # fetch profile never emits the bare `date_entry-into-force` name for a
-# regulation. This is the direct regression fixture for the §10 item 9 fix:
-# without both names in the `regulation` predicate tuple, this fixture's date
+# regulation. This is the direct regression fixture for resolving the
+# non-generalized name: without both names in the `regulation` predicate tuple, this fixture's date
 # would never resolve.
 _RDF_REGULATION_RESOURCE_LEGAL_PREDICATE_FIXTURE = b"""<rdf:RDF
     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -217,7 +213,7 @@ _RDF_DIRECTIVE_ALT_PREDICATE_NAME_FIXTURE = b"""<rdf:RDF
 </rdf:RDF>
 """
 
-# `extract_metadata`'s regulation-CELEX fixture (Slice 5): own subject
+# `extract_metadata`'s regulation-CELEX fixture: own subject
 # asserts both `resource_legal_id_celex` and `date_entry-into-force` --
 # used wherever a test needs `extract_metadata` to succeed for a regulation
 # CELEX without exercising the Tier-2 widen path specifically.
@@ -234,17 +230,16 @@ _RDF_REGULATION_OWN_SUBJECT_FIXTURE = b"""<rdf:RDF
 # No subject at all -- a placeholder for tests where `extract_metadata`
 # raises before ever reaching RDF parsing (an unsupported CELEX type code),
 # or is deliberately used to prove no admissible subject means
-# `CellarParseError` (Slice 5's replacement for the old heading-based
-# unresolvable-date test).
+# `CellarParseError`.
 _RDF_EMPTY_FIXTURE = b"""<rdf:RDF
     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 </rdf:RDF>
 """
 
 
-# --- Post-Slice-10, Defect 1/2 fixtures (§11, §12, §13) --------------------
+# --- Reified-date and normalized-CELEX fixtures ----------------------------
 
-# CRA-shaped (PLAN_REVISED.md's "Defect 1 -- live evidence", CRA section):
+# CRA-shaped, from live evidence:
 # 4 `owl:Axiom` blocks, `rdf:nodeID`-keyed, all `owl:annotatedSource` =
 # `oj/L_202402847`, all `owl:annotatedProperty` =
 # `cdm#resource_legal_date_entry-into-force`. Values/tokens reproduce the
@@ -339,7 +334,7 @@ _RDF_CRA_REIFIED_FIXTURE = b"""<rdf:RDF
 # GDPR's 2 `owl:Axiom` blocks (MA-without-MA/PART + EV) and NIS2's 2
 # (ADOPTION/APPLICATION, no `type_of_date` at all -- a different vocabulary,
 # `fd_361` not `fd_335`) together in one document, proving token extraction
-# generalizes across both vocabularies (PLAN_REVISED.md §8 item 11).
+# generalizes across both vocabularies.
 _RDF_GDPR_NIS2_AXIOM_BLOCKS_FIXTURE = b"""<rdf:RDF
     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
     xmlns:owl="http://www.w3.org/2002/07/owl#"
@@ -450,17 +445,16 @@ _RDF_NIS2_REIFIED_FIXTURE = b"""<rdf:RDF
 </rdf:RDF>
 """
 
-# GDPR's live, reified, cross-subject ("related resource") shape (Slice 14,
-# post-Slice-10 Defect 1 evidence, GDPR section): the CELEX's own subject
-# (`celex/32016R0679`) asserts only `resource_legal_id_celex` -- no date --
+# GDPR's live, reified, cross-subject ("related resource") shape: the CELEX's
+# own subject (`celex/32016R0679`) asserts only `resource_legal_id_celex` -- no date --
 # so Tier 1 is empty and `_resolve_predicate_candidates` must widen to the
-# related `oj/JOL_2016_119_R_0001` subject (§2.3 Tier 2), which carries both
+# related `oj/JOL_2016_119_R_0001` subject (Tier 2), which carries both
 # `resource_legal_date_entry-into-force` values, each reified (`MA`, no
 # `MA/PART` -> `2018-05-25`; `EV` -> `2016-05-24`). This is the fixture
 # `test_extract_metadata_resolves_regulation_entry_into_force_date_from_
-# related_resource` now uses -- under the old blind-earliest-wins logic this
-# would have resolved `2016-05-24` (EV, domain-WRONG); the role-priority fix
-# must resolve the general `MA` value, `2018-05-25`.
+# related_resource` uses -- a blind earliest-wins rule would resolve
+# `2016-05-24` (EV, domain-WRONG); role-priority must resolve the general
+# `MA` value, `2018-05-25`.
 _RDF_GDPR_REIFIED_FIXTURE = b"""<rdf:RDF
     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
     xmlns:owl="http://www.w3.org/2002/07/owl#"
@@ -586,14 +580,11 @@ def test_returns_empty_when_no_admissible_subject_matches() -> None:
 
 
 def test_widen_pools_values_from_all_surviving_subjects_when_more_than_one_matches() -> None:
-    """§2.3's documented secondary rule: not a silent reuse of Tier 1's scope.
+    """The secondary rule: not a silent reuse of Tier 1's scope.
 
-    Not one of PLAN_REVISED.md §8 item 2's enumerated tests, but exercises a
-    branch of `_resolve_predicate_candidates` (the "more than one surviving
-    widened subject" pooling case) that item 2's list otherwise leaves
-    uncovered — item 3's test of the same scenario (a later slice) exercises
-    `_pick_effective_date` directly, not this function's own pooling
-    behavior.
+    Exercises the "more than one surviving widened subject" pooling branch of
+    `_resolve_predicate_candidates`; the `_pick_effective_date` tests of the
+    same scenario do not cover this function's own pooling behavior.
     """
     blocks = _parse_subject_blocks(_rdf_root(_RDF_WIDEN_MULTIPLE_MATCHES_FIXTURE))
 
@@ -637,8 +628,8 @@ def test_tie_break_applies_only_within_one_subjects_values_not_across_two_matchi
 ):
     """Two surviving Tier-2 subjects, each with one distinct, non-duplicate, untagged value.
 
-    Proves PLAN_REVISED.md §2.3's pooled-then-tie-break secondary rule is a
-    real application of the *same* `_pick_effective_date` tie-break (§3)
+    Proves the pooled-then-tie-break secondary rule is a
+    real application of the *same* `_pick_effective_date` tie-break
     applied to `_resolve_predicate_candidates`'s already-pooled output --
     not a silently different rule -- once two distinct, non-excluded
     subjects both assert the target predicate. Neither value is reified, so
@@ -665,7 +656,7 @@ def test_find_effective_date_uses_entry_into_force_predicate_for_regulation_inst
 ):
     """MUST use `resource_legal_date_entry-into-force`, not bare `date_entry-into-force`.
 
-    Regression test for PLAN_REVISED.md §10 item 9: Cellar's adopted
+    Cellar's adopted
     `notice=non-inferred` fetch profile never emits the bare
     `date_entry-into-force` name for a regulation -- only this
     non-generalized name, confirmed live for `32025R0038`.
@@ -685,17 +676,13 @@ def test_find_effective_date_checks_both_directive_predicate_names() -> None:
     assert result == date(2024, 10, 17)
 
 
-# --- Slice 14 (post-Slice-10): NIS2/CRA/GDPR extract_metadata-level fixtures
-# now carry realistic `owl:Axiom` reification, so the tests below exercise the
-# REAL role-priority path (`_pick_effective_date` grouping by `_date_role`),
-# not the untagged earliest-wins fallback the original Slice 5 fixtures
-# happened to pass under "by luck" (no reification data at all). NIS2 is
-# switched from `_RDF_TWO_SUBJECTS_FIXTURE` (no reification) to
-# `_RDF_NIS2_REIFIED_FIXTURE` (same own-subject/Tier-1 shape and same two
-# duplicate values, now each tagged `ADOPTION`/`APPLICATION` per the real live
-# `fd_361` vocabulary) -- the resolved value is unchanged (`2024-10-17`,
-# selected by tag here, not by numeric minimum) but the fixture is no longer
-# reification-blind.
+# --- NIS2/CRA/GDPR extract_metadata-level fixtures
+# These carry realistic `owl:Axiom` reification, so the tests below exercise
+# the REAL role-priority path (`_pick_effective_date` grouping by `_date_role`),
+# not the untagged earliest-wins fallback. NIS2 uses `_RDF_NIS2_REIFIED_FIXTURE`
+# (own-subject/Tier-1 shape, two duplicate values, each tagged
+# `ADOPTION`/`APPLICATION` per the real live `fd_361` vocabulary) -- the
+# resolved value is `2024-10-17`, selected by tag, not by numeric minimum.
 
 
 def test_extract_metadata_returns_title_from_eli_main_title() -> None:
@@ -754,11 +741,10 @@ def test_extract_metadata_resolves_regulation_entry_into_force_date_from_related
     (`oj/JOL_2016_119_R_0001`) -- discovered via `resource_legal_id_celex`,
     not the fetch URL -- carries BOTH `resource_legal_date_entry-into-force`
     values (`MA`=`2018-05-25`, `EV`=`2016-05-24`), each reified.
-    `extract_metadata` must widen to find them (§2.3 Tier 2) AND resolve the
+    `extract_metadata` must widen to find them (Tier 2) AND resolve the
     `MA`-general value specifically (`2018-05-25`), not whichever happens to
-    be earliest -- under the old blind-earliest-wins tie-break this would
-    have resolved `2016-05-24` (EV), the exact GDPR regression
-    IMPL_SLICE_10_LIVE.md confirmed live.
+    be earliest -- a blind earliest-wins tie-break would resolve
+    `2016-05-24` (EV), the exact GDPR regression confirmed live.
     """
     metadata = extract_metadata(_ENTRY_INTO_FORCE_FIXTURE, _RDF_GDPR_REIFIED_FIXTURE, "32016R0679")
 
@@ -808,14 +794,13 @@ def test_extract_metadata_sets_instrument_type_regulation_for_R_celex() -> None:
 
 
 def test_extract_metadata_resolves_regulation_ma_general_date_not_earliest_ev_date() -> None:
-    """Direct extract_metadata-level regression test for Defect 1 (CRA).
+    """Direct extract_metadata-level regression test for CRA.
 
     `_RDF_CRA_REIFIED_FIXTURE` reproduces CRA's live 4-value shape exactly:
     `MA/PART=2026-09-11`, `MA(general)=2027-12-11`, `MA/PART=2026-06-11`,
-    `EV=2024-12-10`. Under the old, reification-blind "earliest wins" logic
-    this would have resolved `2024-12-10` (EV) -- the domain-WRONG value, and
-    exactly IMPL_SLICE_10_LIVE.md's confirmed CRA regression. The
-    role-priority fix must resolve the general `MA` value, `2027-12-11`,
+    `EV=2024-12-10`. A reification-blind "earliest wins" rule
+    would resolve `2024-12-10` (EV) -- the domain-WRONG value. Role-priority
+    must resolve the general `MA` value, `2027-12-11`,
     matching `ps-domain-concepts.md` line 530 and
     `test_pipeline_live.py::_GROUND_TRUTH["CRA"]`.
     """
@@ -841,7 +826,7 @@ def test_extract_metadata_raises_before_building_node_for_unsupported_celex_code
         extract_metadata(_ENTRY_INTO_FORCE_FIXTURE, _RDF_EMPTY_FIXTURE, "32014D0123")
 
 
-# --- Follow-on A1: consolidated-expression CELEX acceptance ---------------
+# --- consolidated-expression CELEX acceptance ---------------
 
 
 @pytest.mark.parametrize(
@@ -880,10 +865,10 @@ def test_extract_metadata_accepts_consolidated_celex_and_stores_base_act_celex()
     assert metadata.effective_date == date(2027, 12, 11)
 
 
-# --- Slice 11 (Defect 1, §2.1b): _parse_reification_blocks -----------------
+# --- _parse_reification_blocks -----------------
 
 
-def test_parse_reification_blocks_associates_type_of_date_and_comment_on_date_with_the_reified_triple() -> (  # noqa: E501 — exact test name per PLAN_REVISED.md §8 item 11
+def test_parse_reification_blocks_associates_type_of_date_and_comment_on_date_with_the_reified_triple() -> (  # noqa: E501 — long descriptive test name
     None
 ):
     """CRA-shaped fixture, byte-for-byte modeled on the live A0/A2/A3/A10 blocks.
@@ -953,7 +938,7 @@ def test_parse_reification_blocks_returns_empty_for_a_document_with_no_axiom_blo
     assert _parse_reification_blocks(_rdf_root(_RDF_EMPTY_FIXTURE)) == {}
 
 
-# --- Slice 12 (Defect 1, §3): _date_role + rewritten _pick_effective_date --
+# --- _date_role + _pick_effective_date --
 
 
 @pytest.mark.parametrize(
@@ -989,8 +974,8 @@ def test_pick_effective_date_selects_regulation_ma_general_over_ev_and_ma_part()
     """CRA-shaped fixture reproducing the exact live 4 values/roles.
 
     Must resolve to the MA-general value (`2027-12-11`), never `EV`
-    (`2024-12-10`, the always-earliest value the old blind earliest-wins
-    rule always picked) nor either `MA/PART` value.
+    (`2024-12-10`, the always-earliest value a blind earliest-wins
+    rule would pick) nor either `MA/PART` value.
     """
     root = _rdf_root(_RDF_CRA_REIFIED_FIXTURE)
     blocks = _parse_subject_blocks(root)
@@ -1064,7 +1049,7 @@ def test_pick_effective_date_falls_back_to_earliest_when_no_candidate_has_a_reco
     assert result == date(2025, 1, 1)
 
 
-# --- Slice 13 (Defect 2, §2.2/§2.3): _base_celex_or_none + normalized -------
+# --- _base_celex_or_none + normalized -------
 # --- comparison --------------------------------------------------------
 
 
@@ -1093,9 +1078,9 @@ def test_own_subjects_matches_a_subject_asserting_the_unreduced_consolidated_exp
 
 
 def test_widen_still_excludes_a_foreign_subject_after_normalizing_both_sides() -> None:
-    """Re-run/extension of the existing BLOCKING-#1 contamination test.
+    """Extension of the contamination test.
 
-    Proves the normalize-both-sides change (Defect 2's fix) doesn't weaken
+    Proves normalizing both sides doesn't weaken
     the existing "unrelated cited/amending act" exclusion guard.
     """
     blocks = _parse_subject_blocks(_rdf_root(_RDF_WIDEN_WITH_CONTAMINATION_FIXTURE))

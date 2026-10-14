@@ -2,7 +2,7 @@
 
 Compared as parsed JSON (layout is out of scope here, see `test_intake_generation.py`).
 A mismatch means the base schema or the profile is missing a fact; the committed file is
-the expected side and is never edited to match (AC-BI-004, AC-BI-005).
+the expected side and is never edited to match.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _def_name(label: str) -> str:
 
 @pytest.mark.parametrize("label", _LABELS)
 def test_generated_property_def_equals_committed_def(label: str) -> None:
-    """AC-BI-004/005: parsed equality per label, including property key order."""
+    """Parsed equality per label, including property key order."""
     generated = intake_property_defs(DOMAIN_SCHEMA)[_def_name(label)]
     committed = _DEFS[_def_name(label)]
 
@@ -73,7 +73,7 @@ def test_profile_edge_order_is_the_committed_edge_type_order() -> None:
 
 
 def test_profile_omits_status_on_standard_control_and_capability() -> None:
-    """F3: `status` is omitted on Standard, Control and Capability in the intake profile."""
+    """`status` is omitted on Standard, Control and Capability in the intake profile."""
     omitted = {
         (op.label, op.property_name) for op in INTAKE_PROFILE.operations if isinstance(op, Omit)
     }

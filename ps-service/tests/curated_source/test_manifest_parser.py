@@ -1,4 +1,4 @@
-"""Tests for ``ps_service.curated_source.manifest_parser.parse_manifest_json`` (AC-BI-004/006)."""
+"""Tests for ``ps_service.curated_source.manifest_parser.parse_manifest_json``."""
 
 from __future__ import annotations
 

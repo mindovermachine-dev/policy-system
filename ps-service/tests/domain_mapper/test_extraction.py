@@ -1,7 +1,6 @@
 """Tests for ps_service.domain_mapper.extraction._extract_candidates_for_unit.
 
-Per PLAN_REVIEWED.md §11 Increment 7 / the binding testing convention
-(§0.3/§0.5): `call_completion` is faked with a hand-written structural fake
+Per the binding testing convention, `call_completion` is faked with a hand-written structural fake
 satisfying `CompletionCaller`'s Protocol (`llm_interface/client.py`), not
 `unittest.mock.Mock`/`MagicMock` — mirrors
 `tests/llm_interface/test_route_completion_mocked.py`'s exact style.
@@ -156,7 +155,7 @@ def test_extract_candidates_for_unit_propagates_llm_provider_error_unchanged(
 ) -> None:
     """An infra failure calling the LLM at all (route_completion's own
     LlmProviderError) is not caught here — it propagates unchanged, the
-    infra-vs-content failure split PLAN_REVIEWED.md §5.2 requires.
+    infra-vs-content failure split.
     """
     emitter, _log_path = make_emitter()
 
@@ -193,7 +192,7 @@ def test_extract_candidates_for_unit_propagates_extraction_error_for_malformed_r
     assert "Art. 13(1)" in str(exc_info.value)
 
 
-# --- _canonicalize_roles (Increment 8) -------------------------------------
+# --- _canonicalize_roles ---------------------------------------------------
 
 
 def _candidate(**overrides: object) -> RequirementCandidate:
@@ -261,7 +260,7 @@ def test_canonicalize_roles_stamps_first_candidates_confidence() -> None:
 
 
 def test_canonicalize_roles_uses_matched_defined_term_citation_ref() -> None:
-    """AC-BI-004: a matched defined term's citation_ref wins over the
+    """A matched defined term's citation_ref wins over the
     candidate's own unit_citation_ref, and no fallback is recorded.
     """
     candidate = _candidate(role_name="Manufacturer", unit_citation_ref="Art. 13(1)")
@@ -276,7 +275,7 @@ def test_canonicalize_roles_uses_matched_defined_term_citation_ref() -> None:
 
 
 def test_canonicalize_roles_matches_case_insensitively_and_whitespace_normalized() -> None:
-    """AC-BI-005: the role_name is normalized (casefold + whitespace
+    """The role_name is normalized (casefold + whitespace
     collapse) via `_normalize_term` before the `defined_terms` lookup.
     """
     candidate = _candidate(role_name="Data   Controller", unit_citation_ref="Art. 13(1)")
@@ -291,7 +290,7 @@ def test_canonicalize_roles_matches_case_insensitively_and_whitespace_normalized
 
 
 def test_canonicalize_roles_falls_back_when_defined_terms_map_is_empty() -> None:
-    """AC-BI-008: an empty defined_terms map falls back to the candidate's
+    """An empty defined_terms map falls back to the candidate's
     own unit_citation_ref, and records the fallback.
     """
     candidate = _candidate(role_name="Manufacturer", unit_citation_ref="Art. 13(1)")
@@ -305,7 +304,7 @@ def test_canonicalize_roles_falls_back_when_defined_terms_map_is_empty() -> None
 
 
 def test_canonicalize_roles_falls_back_for_role_with_no_matching_term() -> None:
-    """AC-BI-009: a non-empty defined_terms map that simply has no entry for
+    """A non-empty defined_terms map that simply has no entry for
     this role_name still falls back to the candidate's own unit_citation_ref.
     """
     candidate = _candidate(role_name="Manufacturer", unit_citation_ref="Art. 13(1)")
@@ -334,7 +333,7 @@ def test_canonicalize_roles_only_first_occurrence_determines_match_or_fallback()
     assert fallback_roles == ((role_nodes[0].id, "Manufacturer"),)
 
 
-# --- _build_requirement_graph (Increment 8, B2 fix) ------------------------
+# --- _build_requirement_graph ----------------------------------------------
 
 
 def test_build_requirement_graph_deduplicates_identical_id_and_text() -> None:
@@ -359,7 +358,7 @@ def test_build_requirement_graph_deduplicates_identical_id_and_text() -> None:
 
 def test_build_requirement_graph_disambiguates_same_id_different_text() -> None:
     """No exception is ever raised for a Requirement-id collision — two
-    Requirement nodes are persisted, the second carries id `f"{base_id}#2"`,
+    Requirement nodes are persisted, the second carries id `f"{base_id}#<ordinal>"`,
     both original texts are preserved unchanged, and collided_ids names the
     disambiguated id.
     """
@@ -414,7 +413,7 @@ def test_build_requirement_graph_stamps_role_id_bookkeeping_property() -> None:
 
 
 def test_build_requirement_graph_stamps_status_active_at_mint_time() -> None:
-    """AC-BI-001: every newly-minted RequirementNode carries status="active",
+    """Every newly-minted RequirementNode carries status="active",
     mirroring ingestion's RegulatoryInstrument.status pattern
     (ps_service.ingestion.adapters.cellar_eli.metadata.extract_metadata,
     graph_writer.py:163) — new entities are active by definition at
@@ -431,19 +430,17 @@ def test_build_requirement_graph_stamps_status_active_at_mint_time() -> None:
 
 
 def test_requirement_active_only_filter_returns_newly_minted_but_not_legacy_null_status() -> None:
-    """AC-BI-003 (Requirement half): filter-semantics proxy test
-    (documentation only — no production filter exists; see PLAN.md §0 /
-    CHANGES.md Resolution 2). This test does not call or exercise any
-    production filter code — none exists in ps-qna or
-    `ps_service/query_engine` (confirmed in §0/Critique); `active_only_filter()`
+    """Filter-semantics proxy test
+    (documentation only — no production filter exists). This test does not
+    call or exercise any production filter code — none exists in ps-qna or
+    `ps_service/query_engine`; `active_only_filter()`
     is a lambda defined locally inside the test purely to document and
-    verify the predicate semantics AC-BI-003 depends on, not to test a real
+    verify the predicate semantics the status filter depends on, not to test a real
     filter implementation. It mirrors the exact predicate ps-qna/SKILL.md:
     86-107 instructs the LLM to author freehand (`WHERE n.status = 'active'`)
     against the properties dict that would actually land on the graph node,
-    for both a newly-minted (post-fix) Requirement and a legacy (pre-fix,
-    out-of-scope-to-backfill per the issue's Discussion section) Requirement
-    whose status is null.
+    for both a newly-minted Requirement and a legacy (not backfilled)
+    Requirement whose status is null.
     """
     new_candidate = _candidate(unit_citation_ref="Art. 13(1)")
     nodes, _edges, _collided = _build_requirement_graph(
@@ -459,10 +456,10 @@ def test_requirement_active_only_filter_returns_newly_minted_but_not_legacy_null
     assert active_only_filter(legacy_pre_fix) is False
 
 
-# --- extract_roles_and_requirements (Increment 10) -------------------------
+# --- extract_roles_and_requirements ----------------------------------------
 #
 # Hand-written structural fakes throughout — no unittest.mock, per the
-# binding testing convention (PLAN_REVIEWED.md §0.3/§0.5).
+# binding testing convention.
 
 
 class _FakeQueryResult:
@@ -580,7 +577,7 @@ def test_extract_roles_and_requirements_ac001_produces_role_and_requirement_edge
     make_emitter: MakeEmitter,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-001: two units, two different roles -> Role/Requirement nodes with
+    """Two units, two different roles -> Role/Requirement nodes with
     DEFINES/EXPRESSES edges carrying source_ref == unit.citation_ref.
     """
     emitter, _log_path = make_emitter()
@@ -626,7 +623,7 @@ def test_extract_roles_and_requirements_ac002_persists_low_confidence_candidate(
     make_emitter: MakeEmitter,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-002: a candidate with confidence=0.1 is still persisted, not filtered."""
+    """A candidate with confidence=0.1 is still persisted, not filtered."""
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
     adapter = _FakeAdapter((_UNIT_MANUFACTURER,))
@@ -673,7 +670,7 @@ def test_extract_roles_and_requirements_persists_from_annex_unit(
     make_emitter: MakeEmitter,
     baseline_rig: BaselineRig,
 ) -> None:
-    """Slice 6 (GH #25): `extract_roles_and_requirements` is annex-agnostic —
+    """`extract_roles_and_requirements` is annex-agnostic —
     a single annex-derived `ExtractionUnit` (`citation_ref="Annex I"`,
     `article_number="I"`) flows through the same real orchestrating
     function, unmodified, as any ARTICLE-derived unit (mirrors
@@ -682,10 +679,10 @@ def test_extract_roles_and_requirements_persists_from_annex_unit(
 
     Proves end-to-end (adapter-shaped input -> extraction -> identity ->
     graph-write payload), not just in isolation: the persisted
-    `DEFINES`/`EXPRESSES` edges carry `source_ref == "Annex I"` verbatim
-    (AC-BI-001/003), and the persisted `RequirementNode.id` equals the real
+    `DEFINES`/`EXPRESSES` edges carry `source_ref == "Annex I"` verbatim,
+    and the persisted `RequirementNode.id` equals the real
     `identity.requirement_id()` formula computed independently here from
-    the unit's own `article_number`/`paragraph_number` (AC-BI-007) — not a
+    the unit's own `article_number`/`paragraph_number` — not a
     hardcoded string, so a regression in either the id formula or its
     annex-unit wiring would fail this assertion.
     """
@@ -735,7 +732,7 @@ def test_extract_roles_and_requirements_ac006_emits_log_entry_with_bound_run_id(
     read_lines: ReadLines,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-006: with a run context bound, the emitted outcome="succeeded"
+    """With a run context bound, the emitted outcome="succeeded"
     entry carries the bound run_id — mirrors
     test_route_completion_logs_run_id.py exactly.
     """
@@ -825,7 +822,7 @@ def test_malformed_annex_unit_response_is_skipped_and_logged(
     read_lines: ReadLines,
     baseline_rig: BaselineRig,
 ) -> None:
-    """Slice 7 (GH #25): the same per-unit failure isolation proven for two
+    """The same per-unit failure isolation proven for two
     ARTICLE units above (`..._isolates_per_unit_extraction_failure`) also
     covers an annex-derived unit correctly, with no production change --
     a malformed/unparseable LLM response for the annex unit
@@ -876,7 +873,7 @@ def test_extract_roles_and_requirements_logs_error_kind_without_raw_payload(
     read_lines: ReadLines,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-002: the outcome="error" log entry's `extra` carries `error_kind`
+    """The outcome="error" log entry's `extra` carries `error_kind`
     matching the raised `DomainMapperExtractionError`, and the raw LLM
     payload (or any substring of it) never reaches the logged line -- the
     catch site must never pass `str(exc)`/the exception's message (which
@@ -983,9 +980,9 @@ def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
     read_lines: ReadLines,
     baseline_rig: BaselineRig,
 ) -> None:
-    """B2 fix: two units whose candidates land on the same requirement_id
+    """Two units whose candidates land on the same requirement_id
     with different text -> both Requirement nodes persisted (one
-    #2-suffixed), requirement_id_collisions is non-empty, an
+    suffixed with a collision ordinal), requirement_id_collisions is non-empty, an
     outcome="collision" entry is emitted naming the base id — no exception,
     no aborted call.
     """
@@ -1051,7 +1048,7 @@ def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
 
 
 def test_read_regulatory_instrument_properties_includes_instrument_type() -> None:
-    """AC-BI-010 (Domain Mapper, read side): `_read_regulatory_instrument_properties`
+    """`_read_regulatory_instrument_properties`
     returns `dict(node.properties)` — the whole property bag, no field
     filter — so `instrument_type` is carried through with NO src change.
     """
@@ -1140,7 +1137,7 @@ def test_extract_reads_only_the_requested_versions_instrument_node_and_subtree(
     assert "1.0" not in written  # and the prior version's did not
 
 
-# --- _is_definitions_unit (issue #26, AC-BI-002) ---------------------------
+# --- _is_definitions_unit ---------------------------------------------------
 
 
 def _unit_with_heading(article_heading: str) -> ExtractionUnit:
@@ -1177,7 +1174,7 @@ def _scripted_call_completion_by_prompt_kind(
 ) -> CompletionCaller:
     """A `CompletionCaller` fake keyed on `(citation_ref, prompt_kind)`.
 
-    Per CHANGES.md's FLAW-1: `_scripted_call_completion` keys solely on
+    `_scripted_call_completion` keys solely on
     `citation_ref` (via the user message), so it cannot return different
     canned responses for the duty-pass and definitions-pass calls that both
     fire against the SAME unit's `citation_ref` within one test. This
@@ -1214,7 +1211,7 @@ def test_extract_roles_and_requirements_still_extracts_duties_from_a_definitions
     make_emitter: MakeEmitter,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-002: a definitions-headed unit is not excluded from the
+    """A definitions-headed unit is not excluded from the
     unchanged duty-extraction traversal — `_is_definitions_unit` is purely
     additive and does not reorder/filter `_extract_all_candidates`'s own
     unit traversal.
@@ -1264,14 +1261,14 @@ def test_extract_roles_and_requirements_still_extracts_duties_from_a_definitions
     assert len(result.requirement_ids) == 1
 
 
-# --- _normalize_term (issue #26, AC-BI-005) --------------------------------
+# --- _normalize_term --------------------------------------------------------
 
 
 def test_normalize_term_casefolds_and_collapses_whitespace() -> None:
     assert _normalize_term("  Data   Controller ") == "data controller"
 
 
-# --- _extract_defined_terms_for_unit (issue #26, AC-BI-001/003) ------------
+# --- _extract_defined_terms_for_unit ----------------------------------------
 
 _DEFINITIONS_UNIT = ExtractionUnit(
     citation_ref="Art. 2(1)",
@@ -1395,7 +1392,7 @@ def test_extract_defined_terms_for_unit_propagates_extraction_error_for_malforme
     assert _DEFINITIONS_UNIT.citation_ref in str(exc_info.value)
 
 
-# --- _extract_all_defined_terms (issue #26, AC-BI-003/007, design decision 4) --
+# --- _extract_all_defined_terms ---------------------------------------------
 
 
 def test_extract_all_defined_terms_issues_zero_llm_calls_for_zero_units(
@@ -1480,7 +1477,7 @@ def test_extract_all_defined_terms_isolates_per_unit_failure(
     assert error_entries[0]["entity_id"] == _DEFINITIONS_UNIT_2.citation_ref
 
 
-# --- _pool_defined_terms (issue #26, AC-BI-005/006, design decision 5) -----
+# --- _pool_defined_terms ----------------------------------------------------
 
 
 def test_pool_defined_terms_pools_across_multiple_candidates() -> None:
@@ -1513,13 +1510,13 @@ def test_pool_defined_terms_first_occurrence_wins_on_duplicate_normalized_term()
     assert pooled["manufacturer"] == "Art. 2(1)"
 
 
-# --- _build_defined_terms_map (issue #26, composes the above) --------------
+# --- _build_defined_terms_map (composes the above) --------------------------
 
 
 def test_build_defined_terms_map_end_to_end_with_mocked_llm(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-002/003/005/006/007 together: a duty unit + two definitions
+    """A duty unit + two definitions
     units -> the returned map has exactly 2 keys (the duty unit contributed
     nothing, proving the detection filter) and the LLM was called exactly
     twice (proving exactly the qualifying units were called, not the duty
@@ -1583,12 +1580,12 @@ def test_build_defined_terms_map_zero_definitions_units_issues_zero_llm_calls(
     assert result == {}
 
 
-# --- extract_roles_and_requirements: definitions wiring (issue #26, Slice 6) --
+# --- extract_roles_and_requirements: definitions wiring ---------------------
 #
 # End-to-end tests proving `_build_defined_terms_map` is actually wired into
 # `extract_roles_and_requirements`, its output threaded into
 # `_canonicalize_roles`, and the `definitions_fallback` log entries emitted
-# per AC-BI-010. Per CHANGES.md's FLAW-1, any test below that mixes a
+# per the definitions-fallback rule. Any test below that mixes a
 # definitions unit with duty units on the SAME citation_ref must use
 # `_scripted_call_completion_by_prompt_kind`; tests using separate units for
 # definitions vs. duty roles use the plain `_scripted_call_completion`.
@@ -1598,7 +1595,7 @@ def test_extract_roles_and_requirements_sets_defines_source_ref_from_definitions
     make_emitter: MakeEmitter,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-004, end-to-end: a dedicated definitions unit defines
+    """End-to-end: a dedicated definitions unit defines
     "Manufacturer" -> the persisted DEFINES edge's source_ref is the
     definitions unit's own citation_ref, not the duty unit's.
     """
@@ -1612,9 +1609,9 @@ def test_extract_roles_and_requirements_sets_defines_source_ref_from_definitions
         article_heading="Definitions",
     )
     adapter = _FakeAdapter((definitions_unit, _UNIT_MANUFACTURER))
-    # FLAW-1: `definitions_unit`'s citation_ref is fed to BOTH passes — the
-    # duty pass traverses ALL units (including definitions-headed ones, per
-    # AC-BI-002), and the definitions pass traverses just this one — so the
+    # `definitions_unit`'s citation_ref is fed to BOTH passes — the
+    # duty pass traverses ALL units (including definitions-headed ones),
+    # and the definitions pass traverses just this one — so the
     # compound-keyed fixture is required, not the plain single-keyed one.
     call_completion = _scripted_call_completion_by_prompt_kind(
         {
@@ -1641,12 +1638,12 @@ def test_extract_roles_and_requirements_sets_defines_source_ref_from_definitions
     assert entry_properties(defines_calls[0])["source_ref"] == definitions_unit.citation_ref
 
 
-def test_extract_roles_and_requirements_falls_back_to_first_duty_occurrence_when_no_definitions_unit_exists(  # noqa: E501 - name mirrors PLAN.md Slice 6 verbatim
+def test_extract_roles_and_requirements_falls_back_to_first_duty_occurrence_when_no_definitions_unit_exists(  # noqa: E501
     make_emitter: MakeEmitter,
     read_lines: ReadLines,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-008, end-to-end: no definitions-headed unit anywhere -> the
+    """End-to-end: no definitions-headed unit anywhere -> the
     DEFINES edge falls back to the Role's own first duty unit_citation_ref
     (regression-proves unchanged behavior), and exactly one
     outcome="definitions_fallback" log entry is emitted, naming the Role and
@@ -1696,7 +1693,7 @@ def test_extract_roles_and_requirements_falls_back_for_unmatched_role_when_defin
     read_lines: ReadLines,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-009, end-to-end: a definitions unit defines "Manufacturer" only;
+    """End-to-end: a definitions unit defines "Manufacturer" only;
     duty units name both "Manufacturer" and "Importer" -> Manufacturer's
     DEFINES source_ref is the definitions unit's citation_ref, Importer's
     falls back to its own first duty unit_citation_ref, and exactly one
@@ -1712,8 +1709,8 @@ def test_extract_roles_and_requirements_falls_back_for_unmatched_role_when_defin
         article_heading="Definitions",
     )
     adapter = _FakeAdapter((definitions_unit, _UNIT_MANUFACTURER, _UNIT_IMPORTER))
-    # FLAW-1: `definitions_unit`'s citation_ref is fed to BOTH passes (see
-    # the earlier AC-BI-004 test's comment) -> compound-keyed fixture.
+    # `definitions_unit`'s citation_ref is fed to BOTH passes (see
+    # the earlier end-to-end test's comment) -> compound-keyed fixture.
     call_completion = _scripted_call_completion_by_prompt_kind(
         {
             (definitions_unit.citation_ref, "definitions"): json.dumps({"terms": ["Manufacturer"]}),
@@ -1763,7 +1760,7 @@ def test_extract_roles_and_requirements_zero_definitions_units_issues_zero_extra
     make_emitter: MakeEmitter,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-007, end-to-end: only duty units present -> the total LLM call
+    """End-to-end: only duty units present -> the total LLM call
     count equals exactly the duty-unit count (no extra call for an empty
     definitions pass).
     """
@@ -1806,7 +1803,7 @@ def test_extract_roles_and_requirements_pools_terms_across_multiple_definitions_
     make_emitter: MakeEmitter,
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-006, end-to-end: two definitions-headed units (simulating
+    """End-to-end: two definitions-headed units (simulating
     one-per-paragraph), one defining "Manufacturer", the other "Importer" ->
     both roles' DEFINES edges get their respective definitions-unit
     citation_refs, proving pooling merges across units at the full pipeline
@@ -1839,8 +1836,8 @@ def test_extract_roles_and_requirements_pools_terms_across_multiple_definitions_
             _UNIT_IMPORTER,
         )
     )
-    # FLAW-1: both definitions units' citation_refs are fed to BOTH passes
-    # (see the earlier AC-BI-004 test's comment) -> compound-keyed fixture.
+    # Both definitions units' citation_refs are fed to BOTH passes
+    # (see the earlier end-to-end test's comment) -> compound-keyed fixture.
     call_completion = _scripted_call_completion_by_prompt_kind(
         {
             (definitions_unit_manufacturer.citation_ref, "definitions"): json.dumps(
@@ -1888,7 +1885,7 @@ def test_extract_roles_and_requirements_accepts_the_gateway_keywords_the_orchest
     make_emitter: MakeEmitter, baseline_rig: BaselineRig
 ) -> None:
     """The stage accepts `submitter`, `baseline_graph_name` and `audit_event_id` the orchestrator
-    hands over (they are required keywords since #209 slice 2a).
+    hands over (they are required keywords).
     """
     emitter, _log_path = make_emitter()
 
@@ -1905,13 +1902,13 @@ def test_extract_roles_and_requirements_accepts_the_gateway_keywords_the_orchest
     assert result.regulatory_instrument_id == _REGULATION_ID
 
 
-# --- the extraction group through the Graph Write Gateway (issue #209) --------
+# --- the extraction group through the Graph Write Gateway -------------------
 
 
-def test_extraction_submits_instrument_roles_requirements_and_edges_as_one_group_under_the_audit_event(  # noqa: E501 -- name fixed by the plan
+def test_extraction_submits_instrument_roles_requirements_and_edges_as_one_group_under_the_audit_event(  # noqa: E501
     make_emitter: MakeEmitter, baseline_rig: BaselineRig
 ) -> None:
-    """AC-BI-001/003/007/008: one group on the baseline graph under the supplied audit event.
+    """One group on the baseline graph under the supplied audit event.
 
     Order is instrument, Roles, DEFINES, Requirements, EXPRESSES (the write order of the direct
     path); edges carry `source_ref` and the identity `{type}:{source}->{target}`; the instrument
@@ -2048,7 +2045,7 @@ def test_an_unstorable_instrument_property_raises_the_persistence_error_with_an_
 def test_a_requirement_id_collision_keeps_its_hash_two_suffix_and_persisting_calls_no_llm(
     make_emitter: MakeEmitter, baseline_rig: BaselineRig
 ) -> None:
-    """AC-BI-003: the `#2` id is computed before submission and travels unchanged.
+    """The collision-suffixed id is computed before submission and travels unchanged.
 
     The LLM is called once per unit and never by the persistence step: the call count equals
     the number of units.

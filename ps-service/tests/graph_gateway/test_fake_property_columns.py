@@ -2,7 +2,7 @@
 
 `property_columns` is hot in the equivalence suites (a digest scan re-encodes every embedding of
 a 3,072-double list per scan), so it is memoised. This pins the encoding to a frozen, plain
-reference so the speed-up cannot change what the fake answers (issue #214, slice 9).
+reference so the speed-up cannot change what the fake answers.
 """
 
 from __future__ import annotations

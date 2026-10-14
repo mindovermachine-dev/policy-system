@@ -1,4 +1,4 @@
-"""`id` index management through the public gateway (issue #206, S9; AC-BI-008 index half).
+"""`id` index management through the public gateway.
 
 Each apply pass lists the graph's indexes once and creates the missing `id` indexes of the labels
 it is about to write, before the first load. Nothing is cached between passes, so a flushed or

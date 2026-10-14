@@ -1,6 +1,6 @@
-"""The periodic drift monitor: one pass per interval over every logged graph (issue #215, S5b).
+"""The periodic drift monitor: one pass per interval over every logged graph.
 
-AC-BI-007: the interval is configurable and `0` turns the monitor off. The thread is a perpetual
+The interval is configurable and `0` turns the monitor off. The thread is a perpetual
 daemon modelled on the reconciler's mechanics (interruptible wait, injectable pause, `stop`); a
 failing pass never ends it. Passes run on the gateway's own `check_drift`, so what a check finds is
 covered by `test_drift_check.py`; here only the schedule and the pass log are pinned.

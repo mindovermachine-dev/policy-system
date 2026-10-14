@@ -1,7 +1,7 @@
-"""Preview and pair-bound approval for `merge-capabilities` (issue #190, slice 10 sub-step d).
+"""Preview and pair-bound approval for `merge-capabilities`.
 
-AC-BI-005 (preview with no writes + approval bound to the exact pair), AC-BI-016 (rejections
-create no approval), AC-BI-017 (a swapped pair yields a different signing challenge).
+The preview makes no writes and the approval is bound to the exact pair; rejections create no
+approval; a swapped pair yields a different signing challenge.
 """
 
 from __future__ import annotations

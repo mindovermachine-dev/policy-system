@@ -1,4 +1,4 @@
-"""Run the frozen reference and the gateway path over the same baselines (issue #210, AC-BI-002).
+"""Run the frozen reference and the gateway path over the same baselines.
 
 `reference_graph` replays the pre-migration writer (`_legacy_reference`) in the original order --
 nodes, rewired edges, embedding backfills, pending reviews -- for each regulation of a scenario;

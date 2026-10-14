@@ -1,4 +1,4 @@
-"""`merge_baseline_graph` over the real engineering-practices seed (issue #227).
+"""`merge_baseline_graph` over the real engineering-practices seed.
 
 The seed is ingested by the real `ingest_internal_regulatory_instrument` into a gateway rig's
 `engprac_baseline` graph, then merged by the real `merge_baseline_graph`. Only the graph engines
@@ -95,7 +95,7 @@ def _merge(
 def test_seed_tree_is_written_as_drafts_owned_by_the_caller(
     baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-002/004: 11 Policies, 21 Standards, 39 Controls, all `draft`, with every edge."""
+    """11 Policies, 21 Standards, 39 Controls, all `draft`, with every edge."""
     store = merge_rig.legacy
 
     result = _merge(baseline, store, emitter, merge_rig)
@@ -124,7 +124,7 @@ def test_seed_tree_is_written_as_drafts_owned_by_the_caller(
 def test_every_governance_write_is_create_only(
     baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-006/005: one group of 71 nodes the first time, and nothing the second time."""
+    """One group of 71 nodes the first time, and nothing the second time."""
     store = merge_rig.legacy
 
     _merge(baseline, store, emitter, merge_rig)
@@ -152,7 +152,7 @@ def test_every_governance_write_is_create_only(
 def test_an_approved_tree_is_untouched_by_a_reingest(
     baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-006: a second merge leaves an approved Policy, its Standards and Controls alone."""
+    """A second merge leaves an approved Policy, its Standards and Controls alone."""
     store = merge_rig.legacy
     _merge(baseline, store, emitter, merge_rig)
     approved = {"status": "approved", "owner_subject": "someone-else"}
@@ -172,7 +172,7 @@ def test_an_approved_tree_is_untouched_by_a_reingest(
 def test_a_near_title_policy_is_a_separate_draft_and_nothing_is_embedded_for_it(
     baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-007: a different id is never converged onto, even with an embedding to compare."""
+    """A different id is never converged onto, even with an embedding to compare."""
     store = merge_rig.legacy
     store.nodes[("Policy", "pol_existing_engineering_practices")] = {
         "title": "Engineering Practice Policy",
@@ -214,7 +214,7 @@ def test_an_ownerless_merge_of_a_governance_baseline_is_refused_before_any_gover
 def test_an_edge_to_a_node_that_exists_nowhere_still_fails_the_merge(
     rig: GatewayRig, baseline: BaselineGraphReader, emitter: LogEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-008: a dangling endpoint is still `CompanyMergePersistenceError`."""
+    """A dangling endpoint is still `CompanyMergePersistenceError`."""
     graph = rig.graphs.open("engprac_baseline")
     verified_control = next(edge[4] for edge in graph.edges if edge[0] == "VERIFIED_BY")
     del graph.nodes[("Control", verified_control)]

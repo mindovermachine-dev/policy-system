@@ -1,5 +1,5 @@
-"""AC-011 — the regulation-independence AST scan, extended to cover the
-`ps_service.change_monitor` package (PLAN_REVIEWED.md §1.6, §3 test 20).
+"""The regulation-independence AST scan, extended to cover the
+`ps_service.change_monitor` package.
 
 Uses the shared `scan_package_for_forbidden_conditionals` helper — the same
 one `tests/ingestion/test_pipeline.py` runs over the ingestion package — so
@@ -45,7 +45,7 @@ def test_no_forbidden_literal_conditionals_in_change_monitor_package() -> None:
 def test_scan_covers_every_change_monitor_module() -> None:
     """Anti-narrowing: the scanner's `rglob('*.py')` walk must reach every
     module the package ships (listed explicitly), and the forbidden set it
-    keys on must still name every literal AC-011 forbids.
+    keys on must still name every literal the regulation-independence check forbids.
     """
     package_file = change_monitor_package.__file__
     assert package_file is not None

@@ -1,7 +1,7 @@
-"""Tests for the ingestion-run audit actions' registration, typed details and builders (issue #194).
+"""Tests for the ingestion-run audit actions' registration, typed details and builders.
 
-AC-BI-016 / AC-BI-017. `audit_events.outcome` is constrained to `applied|rejected|failed`, so
-"outcome=started" is stored as `outcome="applied"` plus `details.status="started"` (OQ-2).
+`audit_events.outcome` is constrained to `applied|rejected|failed`, so
+"outcome=started" is stored as `outcome="applied"` plus `details.status="started"`.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""A graph that failed or is in a replay refuses writes; other graphs do not (#207 S11, AC-RD-011).
+"""A graph that failed or is in a replay refuses writes; other graphs do not.
 
 Nothing is repaired: a failed replay leaves the rebuilt content exactly as built, and the graph
 stays closed until a later replay completes.

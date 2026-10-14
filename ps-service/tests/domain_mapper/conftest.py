@@ -1,4 +1,4 @@
-"""Fixtures shared by the Domain Mapper tests that write through the Graph Write Gateway (#209)."""
+"""Fixtures shared by the Domain Mapper tests that write through the Graph Write Gateway."""
 
 from __future__ import annotations
 

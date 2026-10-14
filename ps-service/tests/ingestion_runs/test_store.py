@@ -1,4 +1,4 @@
-"""Tests for the `IngestionRunStore` contract and `PsycopgIngestionRunStore` (issue #194).
+"""Tests for the `IngestionRunStore` contract and `PsycopgIngestionRunStore`.
 
 The contract tests run against the in-memory fake (fast) and, `postgres_live`-marked, the
 real store on an isolated schema with the migrations applied. The fast Psycopg tests prove
@@ -147,7 +147,7 @@ def test_get_run_of_a_non_uuid_returns_none(store: IngestionRunStore) -> None:
 
 
 def test_complete_run_wins_once_and_keeps_the_first_result(store: IngestionRunStore) -> None:
-    """AC-BI-008: the terminal write is a single-winner compare-and-swap."""
+    """The terminal write is a single-winner compare-and-swap."""
     run_id = _new_id()
     store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
 
@@ -253,7 +253,7 @@ def test_get_run_of_a_non_uuid_never_attempts_a_connection() -> None:
     )
 
 
-# --- S7: durable audit trail (AC-BI-016 / AC-BI-017), real Postgres + real `PsycopgAuditStore` ---
+# --- durable audit trail, real Postgres + real `PsycopgAuditStore` ---------------------------
 
 _SUBMIT_ACTION = "ingestion_run.submit"
 _COMPLETE_ACTION = "ingestion_run.complete"
@@ -303,7 +303,7 @@ class _RaisingAuditStore(RecordingAuditStore):
 def test_create_run_writes_one_submit_audit_row_in_the_same_transaction(
     live_config: ServiceConfig,
 ) -> None:
-    """AC-BI-016: one `applied` row, `details.status='started'`, under the submitting actor."""
+    """One `applied` row, `details.status='started'`, under the submitting actor."""
     config = live_config
     run_id = _new_id()
 
@@ -331,7 +331,7 @@ def test_create_run_writes_one_submit_audit_row_in_the_same_transaction(
 def test_each_run_has_exactly_one_submit_and_one_complete_row(
     live_config: ServiceConfig,
 ) -> None:
-    """AC-BI-014: a lost-race second completion and re-reads add no rows."""
+    """A lost-race second completion and re-reads add no rows."""
     config = live_config
     store = _live_store(config)
     run_id = _new_id()
@@ -347,7 +347,7 @@ def test_each_run_has_exactly_one_submit_and_one_complete_row(
 def test_complete_run_writes_one_complete_audit_row_and_a_lost_race_writes_none(
     live_config: ServiceConfig,
 ) -> None:
-    """AC-BI-017: the CAS winner audits under the submitter; a second completion adds no row."""
+    """The CAS winner audits under the submitter; a second completion adds no row."""
     config = live_config
     store = _live_store(config)
     run_id = _new_id()

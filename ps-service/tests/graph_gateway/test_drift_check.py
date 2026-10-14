@@ -1,10 +1,10 @@
-"""`check_drift`: compare a graph with its head checkpoint, alert, never repair (issue #215, S5a).
+"""`check_drift`: compare a graph with its head checkpoint, alert, never repair.
 
-AC-BI-005: a graph that changed outside the gateway since the checkpoint at its head raises an
+A graph that changed outside the gateway since the checkpoint at its head raises an
 alert (outcome `failed`, `error_class` `GraphDriftDetected`, naming graph, position and both
-digests, D-6); a graph without a checkpoint at its head is logged `no_baseline`.
-AC-BI-006: a graph with unapplied entries, a write in flight, a held lock or a closed gate is
-skipped without an alert and without waiting. AC-BI-007: an unreachable FalkorDB is a logged
+digests); a graph without a checkpoint at its head is logged `no_baseline`.
+A graph with unapplied entries, a write in flight, a held lock or a closed gate is
+skipped without an alert and without waiting. An unreachable FalkorDB is a logged
 failure that leaves the dependency health alone.
 """
 

@@ -1,4 +1,4 @@
-"""The real Graph Write Gateway for Export's `falkordb_live` + `postgres_live` tests (issue #213).
+"""The real Graph Write Gateway for Export's `falkordb_live` + `postgres_live` tests.
 
 Export writes its embedding backfill through the gateway, so the live tests that call
 `export_instrument` need a real one: the `PsycopgGraphLogStore` as the `ps_state` role of a scratch

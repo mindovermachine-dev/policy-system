@@ -1,4 +1,4 @@
-"""Offline exact-key redirect over `merged` Capability tombstones (issue #190, AC-BI-008/009).
+"""Offline exact-key redirect over `merged` Capability tombstones.
 
 Offline twin of `test_dedup_merged_redirect.py`: `resolve_capability_convergence_offline`
 follows `MERGED_INTO`, never scores a tombstone, and does not count a tombstone in

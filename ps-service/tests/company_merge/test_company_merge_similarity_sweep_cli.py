@@ -1,11 +1,11 @@
 """Tests for `tools/company-merge/company_merge_similarity_sweep.py`'s CLI surface
-(`main()`, issue #29, PLAN.md §1 Increment 5 / §4, CHANGES.md row M2).
+(`main()`).
 
 Loads the script by path via `importlib.util.spec_from_file_location`, exactly as
 `test_run_live_merge_cli.py` documents doing for `tools/company-merge/run_live_merge.py`
 (same non-package-script-by-path pattern, same `sys.modules` pre-registration).
 
-CHANGES.md row M2's binding correction: this file does NOT reuse the full 21-pair
+This file does NOT reuse the full 21-pair
 `DEFAULT_DATASET` to test the CLI itself -- it defines its own small, purpose-built 3-pair
 fixture, scored by a hand-scripted fake `call_embedding` covering only that fixture's
 texts, passed to `main()` via `--dataset`. `DEFAULT_DATASET`'s own 21-pair shape (10 match
@@ -119,7 +119,7 @@ def _stub_config_loader(embed_model: str | None) -> ServiceConfig:
 
 
 def _write_small_dataset_fixture(path: Path) -> dict[str, list[float]]:
-    """A small, purpose-built 3-pair fixture (CHANGES.md row M2) -- distinct from, and much
+    """A small, purpose-built 3-pair fixture -- distinct from, and much
     smaller than, the real 21-pair `DEFAULT_DATASET`. Writes the fixture as the sweep
     script's `--dataset` JSON shape and returns the `vectors_by_text` mapping a hermetic
     fake `call_embedding` needs to cover every unique text this fixture references.
@@ -161,7 +161,7 @@ def _write_small_dataset_fixture(path: Path) -> dict[str, list[float]]:
     }
 
 
-# --- CHANGES.md row M2, part 1: small fixture, hand-scripted embedding, DI'd config ------
+# --- small fixture, hand-scripted embedding, DI'd config ------
 
 
 def test_cli_prints_one_row_per_threshold_and_uses_the_config_resolved_model(
@@ -195,7 +195,7 @@ def test_cli_prints_one_row_per_threshold_and_uses_the_config_resolved_model(
     assert exit_code == 0
     output_lines = capsys.readouterr().out.strip().splitlines()
     # 1 header row + 3 threshold rows (0.70, 0.71, 0.72), followed by the printed
-    # recommendation block (PLAN.md §1 Increment 6) -- checked here only for the
+    # recommendation block -- checked here only for the
     # per-threshold table's own shape; the recommendation block's own content is
     # covered by test_main_prints_the_recommendation_to_stdout_in_addition_to_the_table.
     table_rows = output_lines[:4]
@@ -203,7 +203,7 @@ def test_cli_prints_one_row_per_threshold_and_uses_the_config_resolved_model(
     for expected_threshold in ("0.7000", "0.7100", "0.7200"):
         assert any(expected_threshold in line for line in table_rows[1:])
     # Every route_embedding call used the model resolved from the fake config_loader --
-    # never a hardcoded literal (AC-BI-005).
+    # never a hardcoded literal.
     called_models = {model for model, _text in call_embedding.calls}
     assert called_models == {"stub-embed-model-xyz"}
 
@@ -256,7 +256,7 @@ def test_cli_exits_1_when_model_unresolvable_and_never_calls_embedding(
     assert "PS_LLMINTERFACE_EMBED_MODEL" in capsys.readouterr().err
 
 
-# --- CHANGES.md row M2, part 2: --dataset's default is the built-in 21-pair dataset ------
+# --- --dataset's default is the built-in 21-pair dataset ------
 # (checked by length/composition directly -- never by re-scoring it through a fake).
 
 
@@ -272,7 +272,7 @@ def test_dataset_flag_defaults_to_none_selecting_the_built_in_dataset(
     cli_module: ModuleType,
 ) -> None:
     """The `--dataset` flag itself defaults to `None` -- `main()`'s own body (read
-    directly, not re-exercised here per CHANGES.md row M2) uses `DEFAULT_DATASET`
+    directly, not re-exercised here) uses `DEFAULT_DATASET`
     whenever `args.dataset is None`. Checked at the argparse level, cheaply, instead of
     re-running the full dataset through a fake embedding fixture.
     """
@@ -281,7 +281,7 @@ def test_dataset_flag_defaults_to_none_selecting_the_built_in_dataset(
     assert args.dataset is None
 
 
-# --- PLAN.md §1 Increment 6, AC-BI-009: main() writes the recommendation file ----------
+# --- main() writes the recommendation file ----------
 
 
 def test_main_writes_the_recommendation_file_at_the_given_recommendation_path(
@@ -289,13 +289,13 @@ def test_main_writes_the_recommendation_file_at_the_given_recommendation_path(
 ) -> None:
     """Uses `tmp_path`, never the real tracker path -- `--recommendation-path` is a real
     CLI flag precisely so a test never touches
-    `.orchestrator/tracker/issue-29-similarity-threshold/SWEEP_RECOMMENDATION.md`.
+    the real recommendation file.
 
     The small 3-pair fixture's true-match pair (`"Identity Verification..."` vs.
     `"Access Control & Authentication"`) scores ~0.994 cosine similarity -- at or above
     every threshold in `0.70`-`0.72`; both non-match pairs score `0.0` -- below every
     threshold in that range. So every swept threshold ties at precision=recall=f1=1.0,
-    and `select_recommendation`'s higher-threshold-on-tie rule (CHANGES.md row m3)
+    and `select_recommendation`'s higher-threshold-on-tie rule
     deterministically picks the highest threshold actually swept: `0.72`.
     """
     dataset_path = tmp_path / "small_dataset.json"

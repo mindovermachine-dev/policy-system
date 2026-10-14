@@ -1,5 +1,5 @@
 """Tests for `ps_service.company_merge.merge.merge_baseline_graph`
-(PLAN_REVIEWED.md §10 Increments 13-14): the top-level `MergeBaselineGraph`
+the top-level `MergeBaselineGraph`
 orchestration wiring `graph_reader`/`dedup`/`graph_writer` together.
 
 Fakes here are hand-written, satisfying `GraphHandle`/`EmbeddingCaller`
@@ -79,7 +79,7 @@ class _RecordedCall:
 
 
 # The one literal read query dedup.read_existing_canonical_index issues
-# (Capability only, since #42) -- used to distinguish a "read" call from a
+# (Capability only) -- used to distinguish a "read" call from a
 # "write" call in a fake single-tenant graph's call log (test (b)'s
 # call-order proof).
 _EXISTENCE_READ = re.compile(
@@ -100,12 +100,12 @@ _READ_MARKERS = (
 
 
 def _minted_capability_ids(rig: MergeRig) -> list[str]:
-    """The Capability nodes the merge created through the gateway (issue #210), in log order."""
+    """The Capability nodes the merge created through the gateway, in log order."""
     return [e.identity for g in rig.groups for e in g.entries if e.name == "Capability"]
 
 
 def _review_nodes(rig: MergeRig) -> list[dict[str, object]]:
-    """The `PendingReview` nodes the merge created through the gateway (issue #210)."""
+    """The `PendingReview` nodes the merge created through the gateway."""
     return [
         props for (label, _), props in rig.policy_system.nodes.items() if label == "PendingReview"
     ]
@@ -156,14 +156,14 @@ class _FakeBaselineGraph:
         self._role_rows = role_rows
         self._requirement_rows = requirement_rows
         self._obligation_rows = obligation_rows
-        # issue #31 -- a mutable table keyed by id, not a plain row list:
+        # A mutable table keyed by id, not a plain row list:
         # `MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL SET
         # n.embedding` (backfill_incoming_capability_embeddings) needs
         # somewhere to actually write a freshly-computed incoming embedding
         # back onto its own row, mirroring `_FakeSingleTenantGraph`'s own
-        # `_backfill` mechanism. A 4-element row (the pre-#31 shape, still
-        # used by most of this file's fixtures) is padded with a `None`
-        # embedding -- callers that care about AC-BI-001/005 pass a 5th
+        # `_backfill` mechanism. A 4-element row (the shape most of this
+        # file's fixtures use) is padded with a `None`
+        # embedding -- callers that care about the embedding pass a 5th
         # element explicitly instead.
         self._capabilities: dict[str, list[object]] = {}
         for row in capability_rows:
@@ -251,7 +251,7 @@ class _FakeBaselineGraph:
                 [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
         if "WHERE n.id IN $ids RETURN n.id, n.embedding IS NULL" in q:
-            # issue #210: backfill_incoming_capability_embeddings' read of which of its ids exist
+            # backfill_incoming_capability_embeddings' read of which of its ids exist
             # and still have no embedding (the write is a gateway group on the baseline graph).
             assert params is not None
             return _FakeQueryResult(
@@ -283,7 +283,7 @@ class _FakeBaselineGraph:
         ]
 
     def capability_embedding(self, node_id: str) -> tuple[float, ...] | None:
-        """Issue #31 test accessor: this baseline graph's own current cached
+        """Test accessor: this baseline graph's own current cached
         `embedding` for Capability `node_id`, or `None` if never backfilled.
         """
         row = self._capabilities.get(node_id)
@@ -300,14 +300,14 @@ class _FakeSingleTenantGraph:
     proof (test (b)) and the edge-level dedup-target reachability proof
     (test (c)).
 
-    Increments 15/16 (PLAN_REVIEWED.md §10 Batch 8) additionally require
+    The cross-regulation tests additionally require
     this fake to ACCUMULATE state ACROSS two separate `merge_baseline_graph`
     calls against the SAME instance -- simulating two regulations merged one
     after another into the same single-tenant graph, the way a real
-    FalkorDB graph would. Since #210 every write is a gateway group applied to the rig's
+    FalkorDB graph would. Every write is a gateway group applied to the rig's
     `policy_system` graph, and this fake answers its reads from that graph plus its seeded rows,
     so a SECOND call's `read_existing_canonical_index` read sees everything the FIRST call
-    wrote, exactly as AC-002/003/004 require. It refuses a write statement.
+    wrote. It refuses a write statement.
     """
 
     def __init__(
@@ -321,10 +321,10 @@ class _FakeSingleTenantGraph:
         merged_rows: list[object] | None = None,
         gateway_graph: InMemoryGraph | None = None,
     ) -> None:
-        # issue #210: the Obligation nodes a merge submits through the gateway live in the rig's
+        # The Obligation nodes a merge submits through the gateway live in the rig's
         # `policy_system` graph; the existence reads below are answered from it too.
         self._gateway_graph = gateway_graph
-        # issue #190: `[tombstone_id, survivor_id]` rows answering the
+        # `[tombstone_id, survivor_id]` rows answering the
         # tombstone redirect read; empty by default (no tombstones).
         self._merged_rows: list[object] = merged_rows or []
         self._obligations: dict[str, list[object]] = {}
@@ -339,12 +339,12 @@ class _FakeSingleTenantGraph:
         for row in policy_rows or []:
             row_list = list(cast("list[object]", row))
             self._policies[cast("str", row_list[0])] = row_list
-        # issue #106: `practice_area_rows`/`risk_path_rows` mirror
+        # `practice_area_rows`/`risk_path_rows` mirror
         # `capability_rows`/`policy_rows`'s "seed pre-existing rows" role,
         # but store the FULL properties dict per row (`[id, properties]`)
         # rather than a fixed `[id, text, embedding]` shape -- PracticeArea/
         # RiskPath have no embedding and richer properties than a single
-        # text field, and AC-BI-007 needs to assert individual property
+        # text field, and tests assert individual property
         # values (e.g. `description`) are unchanged after a merge.
         self._practice_areas: dict[str, dict[str, object]] = {}
         for row in practice_area_rows or []:
@@ -379,7 +379,7 @@ class _FakeSingleTenantGraph:
             self._gateway_graph.events.append(_DEDUP_READ_EVENT)
         if "MERGED_INTO" in q:
             return _FakeQueryResult([list(cast("list[object]", row)) for row in self._merged_rows])
-        if "MergedObligation" in q:  # issue #190: no cleanup-merge obligation markers
+        if "MergedObligation" in q:  # no cleanup-merge obligation markers
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult(self._capability_index_rows())
@@ -388,13 +388,13 @@ class _FakeSingleTenantGraph:
         existence = _EXISTENCE_READ.search(q)
         if existence is not None and "$ids" in q:
             # the existing-node reads (`_read_existing_ids`, `count_new_obligations`) of the labels
-            # whose writes are gateway groups since #210
+            # whose writes are gateway groups
             assert params is not None
             held = self._held_ids(existence.group(1))
             return _FakeQueryResult([[i] for i in cast("list[str]", params["ids"]) if i in held])
         state_read = _EMBEDDING_STATE_READ.search(q)
         if state_read is not None:
-            # issue #210: the backfills' read of which of their ids exist and have no embedding
+            # The backfills' read of which of their ids exist and have no embedding
             # (the write is a gateway group on `policy_system`)
             assert params is not None
             table = {
@@ -409,7 +409,7 @@ class _FakeSingleTenantGraph:
                 ]
             )
         if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
-            # issue #106, AC-BI-008: `validate_classification_edge_endpoints`'s
+            # `validate_classification_edge_endpoints`'s
             # batched existence check -- answer with whichever requested ids
             # are actually present in ANY of this fake's tracked node tables
             # (mirrors a real `MATCH (n {id: id})` with no label filter).
@@ -432,7 +432,7 @@ class _FakeSingleTenantGraph:
     def edges_of(self, relationship: str) -> list[dict[str, str]]:
         """The `relationship` edges the gateway has written, as `{"source_id", "target_id"}`.
 
-        Since issue #210 an edge is a gateway primitive, not a statement this fake receives.
+        An edge is a gateway primitive, not a statement this fake receives.
         """
         if self._gateway_graph is None:
             return []
@@ -443,7 +443,7 @@ class _FakeSingleTenantGraph:
         ]
 
     def policy_ids(self) -> set[str]:
-        """Issue #227: the ids of every Policy node currently held (seeded or gateway-written)."""
+        """The ids of every Policy node currently held (seeded or gateway-written)."""
         return set(self._policies) | {i for lbl, i in self._gateway_nodes() if lbl == "Policy"}
 
     def _capability_index_rows(self) -> list[object]:
@@ -494,7 +494,7 @@ class _FakeSingleTenantGraph:
         return frozenset(self._held_ids("Obligation"))
 
     def practice_area_properties(self, node_id: str) -> dict[str, object] | None:
-        """Issue #106: the current stored properties for a PracticeArea `node_id`.
+        """The current stored properties for a PracticeArea `node_id`.
 
         `None` if no PracticeArea with this id was ever seeded or written through the
         gateway -- a public read-back accessor,
@@ -506,7 +506,7 @@ class _FakeSingleTenantGraph:
         )
 
     def risk_path_properties(self, node_id: str) -> dict[str, object] | None:
-        """Issue #106: the current stored properties for a RiskPath `node_id`.
+        """The current stored properties for a RiskPath `node_id`.
 
         `None` if no RiskPath with this id was ever seeded or written through the
         gateway -- see `practice_area_properties`.
@@ -537,7 +537,7 @@ class _ScriptedCallEmbeddingWithFailure:
     """A hand-written `EmbeddingCaller` fake, scripted per input `text` --
     a scripted `Exception` value is raised instead of returning a response,
     mirroring `test_dedup_abort_on_embedding_failure.py`'s
-    `_ScriptedCallEmbedding` (AC-BI-010's own established idiom for this
+    `_ScriptedCallEmbedding` (the established idiom for this
     scenario). A separate class from `_ScriptedCallEmbedding` above, which
     every OTHER test in this file scripts with plain vectors only.
     """
@@ -561,7 +561,7 @@ class _ScriptedCallEmbeddingWithFailure:
 
 
 def _everything_new_baseline_graph() -> _FakeBaselineGraph:
-    """AC-001's "everything is new" fixture: one Role, one Requirement, one
+    """The "everything is new" fixture: one Role, one Requirement, one
     Obligation, one Capability, fully wired edges. No pre-existing canonical
     node exists anywhere, so nothing has anything to converge onto.
     """
@@ -598,10 +598,10 @@ def test_everything_new_writes_every_node_type_directly(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """(a) AC-001, "everything is new": an empty existing single-tenant
+    """(a) "everything is new": an empty existing single-tenant
     graph -> every node type present afterward in the fake single-tenant
-    graph's write log, directly (Obligation via create-only passthrough
-    since #42/#28 AC-BI-006; Capability via match_kind="new", nothing to
+    graph's write log, directly (Obligation via create-only passthrough;
+    Capability via match_kind="new", nothing to
     converge onto).
     """
     emitter, _log_path = make_emitter()
@@ -622,7 +622,7 @@ def test_everything_new_writes_every_node_type_directly(
     assert len(result.capability_canonical_ids) == 1
     assert result.near_misses == ()
 
-    # RegulatoryInstrument/Role/Requirement leave as one gateway group (issue #210)
+    # RegulatoryInstrument/Role/Requirement leave as one gateway group
     assert {entry.name for group in merge_rig.groups for entry in group.entries} >= {
         "RegulatoryInstrument",
         "Role",
@@ -656,8 +656,8 @@ def test_both_dedup_reads_complete_before_any_write_call(
     )
 
     read_positions = [i for i, call in enumerate(single_tenant.calls) if _is_read_call(call)]
-    assert len(read_positions) == 3  # index + tombstone + obligation-marker reads (issue #190)
-    # since #210 a write is a gateway group: its first log append must come after the last read
+    assert len(read_positions) == 3  # index + tombstone + obligation-marker reads
+    # A write is a gateway group: its first log append must come after the last read
     events = merge_rig.events
     assert events.count(_DEDUP_READ_EVENT) == 3
     assert max(i for i, event in enumerate(events) if event == _DEDUP_READ_EVENT) < events.index(
@@ -676,8 +676,8 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     name -> same capability_id hash) -> no new Capability node write, and the
     `REQUIRES` edge targets the pre-existing canonical id.
 
-    The Obligation, since #42, is a passthrough node: it is written with
-    create-only (issue #28 AC-BI-006's fix) under its own baseline-local
+    The Obligation is a passthrough node: it is written with
+    create-only under its own baseline-local
     (Role-scoped) id, and the Role's `HAS` / Requirement's `SATISFIED_BY`
     edges target that same id -- never a "canonical" id, because there is no
     Obligation dedup.
@@ -785,7 +785,7 @@ def test_missing_similarity_threshold_raises_before_any_call(merge_rig: MergeRig
 def test_succeeded_log_entry_carries_bound_run_id(
     make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
-    """Increment 14(a): with bind_run_context("run-x"), the
+    """With bind_run_context("run-x"), the
     outcome="succeeded" entry for action="merge_baseline_graph" carries
     run_id="run-x".
     """
@@ -818,7 +818,7 @@ def test_succeeded_log_entry_carries_bound_run_id(
 def test_dedup_decision_log_entries_carry_bound_run_id(
     make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
-    """Increment 14(b): at least one per-decision entry for
+    """At least one per-decision entry for
     action="dedupe_canonical_nodes" also carries run_id="run-x", with
     entity_id equal to one of the resolved nodes' incoming_id and outcome
     equal to its match_kind.
@@ -852,12 +852,11 @@ def test_dedup_decision_log_entries_carry_bound_run_id(
 
 
 # ---------------------------------------------------------------------------
-# Increments 15-16 (PLAN_REVIEWED.md §10 Batch 8), adapted for issue #42.
 # Across two separate merge_baseline_graph calls against the SAME
 # accumulating _FakeSingleTenantGraph instance (two regulations merged one
 # after another): Obligation is Role-scoped and passed through, never
 # deduped, so two sources' duties are always distinct nodes; only Capability
-# converges. The Capability REQUIRES-rewiring fix (Increment 12) is proven
+# converges. The Capability REQUIRES-rewiring is proven
 # cross-regulation at the end of this section.
 # ---------------------------------------------------------------------------
 
@@ -902,7 +901,7 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """#42: two regulations whose duty text is IDENTICAL but whose Roles
+    """Two regulations whose duty text is IDENTICAL but whose Roles
     differ (Roles are regulation-scoped) produce two DISTINCT Obligation
     nodes -- each written straight through under its own Role-scoped id, with
     its own single `HAS` edge. Company Merge runs no exact-key or semantic
@@ -966,17 +965,15 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """Increment 16, extra scenario (PLAN_REVIEWED.md §6.2's "Orchestrator
-    correction," found during Increment 12): Capability-side cross-regulation
-    convergence via a `REQUIRES` edge. An earlier `persist_rewired_edges`
-    design only ever rewrote an edge's Obligation-typed endpoint, leaving a
+    """Capability-side cross-regulation
+    convergence via a `REQUIRES` edge. A `persist_rewired_edges`
+    that only rewrote an edge's Obligation-typed endpoint would leave a
     `REQUIRES` edge's Capability-typed TARGET pointing at its baseline-local
     id whenever that Capability resolved onto an existing canonical node --
     a silent dangling reference, since a matched Capability is never minted
-    as its own node. Increment 12's own test suite proved the fix WITHIN one
-    call; this test proves it holds ACROSS two separate
-    `merge_baseline_graph` calls too -- the exact cross-regulation scenario
-    AC-002/003 describe, applied to Capability instead of Obligation.
+    as its own node. The rewiring is proven WITHIN one
+    call elsewhere; this test proves it holds ACROSS two separate
+    `merge_baseline_graph` calls too, applied to Capability instead of Obligation.
     """
     emitter, _log_path = make_emitter()
     shared_capability_name = "Multi-Factor Authentication Capability"
@@ -1017,7 +1014,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     )
     assert len(_minted_capability_ids(merge_rig)) == 1
 
-    # The Obligation side needs no special handling: since #42 Obligation is
+    # The Obligation side needs no special handling: Obligation is
     # a passthrough node (no dedup pass, no call_embedding), so REG-H's
     # Obligation lands under its own Role-scoped id regardless of text.
     second_obligation_text = "Enforce multi-factor authentication for all users."
@@ -1070,7 +1067,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
 
 
 # ---------------------------------------------------------------------------
-# Issue #54, S4 -- Policy convergence + Standard/Control passthrough +
+# Policy import + Standard/Control passthrough +
 # governance-edge rewiring, guarded by `if graph.policy_nodes:`.
 # ---------------------------------------------------------------------------
 
@@ -1117,10 +1114,10 @@ def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """S4, #227: an internal-sourced baseline (`graph.policy_nodes` non-empty)
+    """An internal-sourced baseline (`graph.policy_nodes` non-empty)
     is imported by the shared draft-governance pass -- Policy/Standard/Control
     written create-only -- and `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`
-    are rewritten, closing the loop to a real UC-3 `Capability-[:GOVERNED_BY]->
+    are rewritten, closing the loop to a real `Capability-[:GOVERNED_BY]->
     Policy-[:SUPPORTED_BY]->Standard-[:IMPLEMENTED_BY]->Control` traversal in
     the single-tenant graph.
     """
@@ -1183,9 +1180,8 @@ def _baseline_graph_with_classification_nodes(
     control_rows: list[object] | None = None,
 ) -> _FakeBaselineGraph:
     """`_everything_new_baseline_graph()`'s regulatory spine, plus
-    PracticeArea/RiskPath rows (issue #106) -- used by the AC-BI-003/007/
-    008/009/011 tests below, which only care about the classification-layer
-    behavior, not the regulatory spine itself. `extra_capability_rows`/
+    PracticeArea/RiskPath rows -- used by the classification tests below, which only care about the
+    classification-layer behavior, not the regulatory spine itself. `extra_capability_rows`/
     `covers_rows`/etc. let a test add classification-edge content without
     every caller having to restate the whole regulatory spine.
     """
@@ -1234,10 +1230,10 @@ def test_practice_area_and_risk_path_nodes_pass_through_to_single_tenant(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-003 (PracticeArea+RiskPath halves): a baseline carrying
+    """(PracticeArea+RiskPath halves): a baseline carrying
     PracticeArea/RiskPath nodes (with name/description/status/version/
     owner_id or risk_type) merges and both land in the single-tenant graph
-    with every property intact -- issue #106's exact-identity passthrough
+    with every property intact -- the exact-identity passthrough
     (`graph_writer.persist_practice_area_and_risk_path_passthrough`).
     """
     emitter, _log_path = make_emitter()
@@ -1300,13 +1296,13 @@ def test_practice_area_and_risk_path_properties_unchanged_when_node_already_exis
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-007 (both halves), CHANGES.md Appendix A3: a PracticeArea/
+    """(Both halves) a PracticeArea/
     RiskPath node that already exists in the single-tenant graph keeps its
     existing properties after the merge -- create-only
     semantics, not an overwrite -- even though the incoming baseline node
-    shares the same `id` but carries different property values. Since #210
-    the writer reads the existing ids first and leaves them out of its
-    gateway group, so nothing is logged for either node.
+    shares the same `id` but carries different property values. The writer
+    reads the existing ids first and leaves them out of its gateway group,
+    so nothing is logged for either node.
     """
     emitter, _log_path = make_emitter()
     practice_area_id_value = "pa_existing"
@@ -1394,11 +1390,10 @@ def test_practice_area_and_risk_path_properties_unchanged_when_node_already_exis
 def test_capability_near_miss_persists_pending_review_node(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """Issue #35, Slice 1 (AC-BI-001/AC-BI-002): a below-threshold near-miss
+    """A below-threshold near-miss
     surfaced during the Capability dedup pass is persisted as a
     `PendingReview` node -- wired at the same call site
-    `_log_dedup_decisions(capability_dedup, ...)` already logs it from
-    (PLAN.md §4.1).
+    `_log_dedup_decisions(capability_dedup, ...)` already logs it from.
     """
     emitter, _log_path = make_emitter()
     existing_capability_id = "capability_existing_conduct_risk_assessment"
@@ -1451,7 +1446,7 @@ def test_near_title_policy_is_a_separate_draft_with_no_embedding_call_and_no_rev
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """Issue #227 (AC-BI-007): a Policy whose title is only NEAR an existing Policy's is
+    """A Policy whose title is only NEAR an existing Policy's is
     not converged onto it. It gets its own draft node, no Policy embedding is computed
     (the scripted embedder would fail the test on any call) and no Policy
     `PendingReview` is raised -- convergence is gone from the live path.
@@ -1501,7 +1496,7 @@ def test_pending_review_count_covers_capability_near_misses_only(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """Issue #35, Slice 5 (AC-BI-010), #227: `MergeResult.pending_review_count` is the
+    """`MergeResult.pending_review_count` is the
     run-scoped count of `PendingReview` nodes THIS call persisted. Only Capability
     near-misses exist now: a below-threshold Capability pair and a near-title Policy
     both appear in the run, yet the count is 1, matching the one `CREATE (r:PendingReview
@@ -1590,17 +1585,17 @@ def test_external_baseline_unaffected_by_policy_pass(
 
 
 # ---------------------------------------------------------------------------
-# Issue #106 -- COVERS/OWNS/MITIGATED_BY/VERIFIED_BY edge rewiring,
-# AC-BI-006's structural no-dedup guarantee, AC-BI-008's pre-write
-# validation, AC-BI-009's structural no-op, AC-BI-010's abort-with-no-
-# partial-write, and AC-BI-011's semantic log counts.
+# COVERS/OWNS/MITIGATED_BY/VERIFIED_BY edge rewiring,
+# the structural no-dedup guarantee, the pre-write
+# validation, the structural no-op, the abort-with-no-
+# partial-write, and the semantic log counts.
 # ---------------------------------------------------------------------------
 
 
 def test_external_baseline_unaffected_by_classification_pass(
     make_emitter: MakeEmitter, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-009: an external-sourced baseline (no `internal_seed` content
+    """An external-sourced baseline (no `internal_seed` content
     at all) issues NO query matching any of the six classification-layer
     markers -- checked against `single_tenant.calls` (every call, read AND
     write), the stronger claim `validate_classification_edge_endpoints`'s
@@ -1631,11 +1626,11 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-006 (CHANGES.md Appendix A2): two independent baselines
+    """Two independent baselines
     (simulating two separate `internal_seed` mints of the same PracticeArea
     `name`) arrive with the SAME content-hashed id, computed via the REAL
     `practice_area_id` -- not hand-assigned -- because that is how real
-    convergence happens upstream of Company Merge (PLAN.md §1.1). A single
+    convergence happens upstream of Company Merge. A single
     `merge_baseline_graph` call never recomputes this id; two SEPARATE calls
     against the SAME `_FakeSingleTenantGraph` instance prove real
     cross-baseline convergence, using the fake's own documented cross-call
@@ -1713,25 +1708,18 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-006, within-a-single-call structural proof (PLAN.md §4.5): a
+    """Within-a-single-call structural proof: a
     baseline carrying two PracticeArea rows AND two RiskPath rows, each pair
     minting to the SAME content-hashed id (simulating two separate incoming
-    entries for the same `name`, converging structurally per PLAN §1.1),
+    entries for the same `name`, converging structurally),
     plus two COVERS edges from the shared PracticeArea id to two different
     Capabilities.
 
-    Issue #163 Slice 17: this used to prove the "never deduped" claim via a
-    `monkeypatch.setattr(dedup_module, "dedupe_canonical_nodes", ...)`
-    recording wrapper -- an internal-collaborator interaction check on core
-    business logic `merge_baseline_graph` itself directly orchestrates, with
-    no docstring-based "this interaction IS the spec" argument (unlike the
-    same function's other call site, `test_ac008_out_of_scope.py:348`).
-    Rewritten to the same technique the sibling test immediately above this
-    one already uses (real resulting graph/embedding-fake state, not a
-    patched collaborator): `merge.py`'s own `_persist_classification_
+    The proof uses the real resulting graph/embedding-fake state, not a patched
+    collaborator: `merge.py`'s own `_persist_classification_
     passthrough` never calls `dedup.dedupe_canonical_nodes` for PracticeArea/
     RiskPath at all -- it goes straight to `graph_writer.persist_practice_
-    area_and_risk_path_passthrough` (issue #106) -- so the real, unmodified
+    area_and_risk_path_passthrough` -- so the real, unmodified
     `merge_baseline_graph` run below proves the claim two ways: (1) each
     passthrough kind still converges to exactly ONE node from its two
     same-id incoming rows, purely structurally, with zero embedding calls
@@ -1755,7 +1743,7 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
         ],
         # Two rows, same id -- simulating two separate incoming PracticeArea
         # entries that both minted the identical practice_area_id("Secure
-        # SDLC") hash before Company Merge ever saw them (PLAN.md §1.1).
+        # SDLC") hash before Company Merge ever saw them.
         practice_area_rows=[
             [shared_pa_id, "Secure SDLC", "draft", None, None, None],
             [shared_pa_id, "Secure SDLC", "draft", None, None, None],
@@ -1777,7 +1765,7 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
     # capability's own semantic-match scan is scored against the growing
     # same-run working index (which now contains the first mint), so it
     # still needs its own embedding call even though same-run mints are
-    # never eligible merge targets (issue #30). Both names are scripted so
+    # never eligible merge targets. Both names are scripted so
     # neither call falls through to a real, unconfigured LLM provider --
     # and so that any (incorrect) PracticeArea/RiskPath embedding attempt
     # would raise `AssertionError` inside the fake instead of silently
@@ -1838,7 +1826,7 @@ def test_missing_classification_edge_endpoint_raises_before_any_classification_e
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-008 (CHANGES.md row 5): a `COVERS` edge referencing an endpoint
+    """A `COVERS` edge referencing an endpoint
     id absent from BOTH the baseline and the single-tenant graph raises
     `CompanyMergePersistenceError` before any of the four classification
     EDGE types is written -- checked via `calls_matching` on each of
@@ -1876,7 +1864,7 @@ def test_missing_classification_edge_endpoint_raises_before_any_classification_e
 
 
 def _baseline_graph_with_classification_content() -> _FakeBaselineGraph:
-    """AC-BI-010 fixture (CHANGES.md Appendix A1): one NEW Capability (no
+    """Fixture: one NEW Capability (no
     existing match in the single-tenant graph, forcing an embedding call),
     one PracticeArea, one RiskPath, one COVERS edge, one MITIGATED_BY edge
     -- so a false "no classification writes happened" pass can't hide a bug
@@ -1908,7 +1896,7 @@ def test_no_classification_writes_when_capability_embedding_fails(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-010 (CHANGES.md Appendix A1): if Capability dedup's embedding
+    """If Capability dedup's embedding
     call raises `LlmProviderError`, `merge_baseline_graph` never reaches
     `_persist_classification_passthrough` -- zero PracticeArea/RiskPath node
     writes and zero COVERS/OWNS/MITIGATED_BY/VERIFIED_BY edge writes have
@@ -1951,13 +1939,13 @@ def test_no_classification_writes_when_capability_embedding_fails(
         assert not any(label == marker for label, _ in merge_rig.policy_system.nodes)
     for relationship in ("COVERS", "OWNS", "MITIGATED_BY", "VERIFIED_BY"):
         assert single_tenant.edges_of(relationship) == []
-    assert merge_rig.groups == []  # since #210 the node writes are gateway groups
+    assert merge_rig.groups == []  # the node writes are gateway groups
 
 
 def test_succeeded_log_entry_carries_classification_write_counts(
     make_emitter: MakeEmitter, read_lines: ReadLines, merge_rig: MergeRig
 ) -> None:
-    """AC-BI-011: the `outcome="succeeded"` `merge_baseline_graph` log entry
+    """The `outcome="succeeded"` `merge_baseline_graph` log entry
     carries the six PracticeArea/RiskPath/classification-edge write counts
     via `extra=`, computed from a baseline fixture with a KNOWN, DIFFERENT
     count of each (2 PracticeArea, 1 RiskPath, 3 COVERS, 1 OWNS, 1
@@ -1997,7 +1985,7 @@ def test_succeeded_log_entry_carries_classification_write_counts(
     # Capability plus cap_1/cap_2/cap_3): the single-tenant graph starts
     # empty, so the FIRST one minted needs no embedding call, but every
     # SUBSEQUENT one is scored against the growing same-run working index
-    # (issue #30 -- a same-run mint is never an eligible merge target, but
+    # (a same-run mint is never an eligible merge target, but
     # scoring against it still requires an embedding call for both sides).
     # All four names are scripted so none falls through to a real,
     # unconfigured LLM provider.
@@ -2053,7 +2041,7 @@ def _classification_only_baseline_graph(
     """A minimal fixture carrying only Capability + PracticeArea/COVERS
     (optionally RiskPath) content -- no Role/Requirement/Obligation spine
     needed, mirroring `_internal_baseline_with_governance`'s own
-    "governance-layer-only" shape. Used by the AC-BI-006 tests above, which
+    "governance-layer-only" shape. Used by the convergence tests above, which
     only care about PracticeArea/RiskPath/Capability convergence.
     """
     return _FakeBaselineGraph(
@@ -2080,7 +2068,7 @@ def test_incoming_capability_matching_a_tombstone_attaches_requires_to_the_survi
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """Issue #190, AC-BI-008 (live half): the baseline regenerates a Capability whose id
+    """The baseline regenerates a Capability whose id
     is a `merged` tombstone in the single-tenant graph. No node is minted for it and the
     incoming `REQUIRES` edge lands on the survivor.
     """

@@ -1,9 +1,8 @@
-"""Pure planner for merge case 2, exactly one capability governed (issue #190, slice 12 a).
+"""Pure planner for merge case 2, exactly one capability governed.
 
-AC-BI-010 (preview names the policy, its status and the count of obligations whose coverage
-changes; acknowledgment required), CHANGES.md D-A1 (GOVERNED_BY moves with an absorbed
-governed capability), M3 (policy status and before/after governed set are recorded), and the
-removal of the slice-10 "governed capabilities are not supported yet" restriction for case 2.
+The preview names the policy, its status and the count of obligations whose coverage changes, and
+an acknowledgment is required. `GOVERNED_BY` moves with an absorbed governed capability, and the
+policy status and before/after governed set are recorded.
 """
 
 from __future__ import annotations

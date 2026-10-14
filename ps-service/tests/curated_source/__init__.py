@@ -1,1 +1,1 @@
-"""Tests for ``ps_service.curated_source`` (issue #125)."""
+"""Tests for ``ps_service.curated_source``."""

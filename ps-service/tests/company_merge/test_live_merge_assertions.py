@@ -1,5 +1,5 @@
-"""Tests for the 3 NEW snapshot functions in `_live_merge_assertions.py`
-(issue #28, CHANGES.md #1): `_snapshot_node_properties`/
+"""Tests for the 3 snapshot functions in `_live_merge_assertions.py`:
+`_snapshot_node_properties`/
 `_snapshot_edge_properties`/`_snapshot_edge_ids`.
 
 The other 7 functions in that module are extracted VERBATIM out of
@@ -91,7 +91,7 @@ def test_snapshot_node_properties_strips_embedding_from_capability() -> None:
 
 
 def test_snapshot_node_properties_does_not_strip_embedding_from_non_capability() -> None:
-    # Only Capability's embedding is stripped (CHANGES.md #1) -- an
+    # Only Capability's embedding is stripped -- an
     # Obligation carrying a stray "embedding"-named property (not a real
     # shape, but the stripping must be Capability-specific, not blanket)
     # passes through unchanged.

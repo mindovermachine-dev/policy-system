@@ -1,4 +1,5 @@
-"""Frozen copy of Change Monitor's five succession write statements as they were before issue #213.
+"""Frozen copy of Change Monitor's five succession write statements as they were before the
+gateway migration.
 
 The statement texts are the Cypher of the pre-migration `change_monitor/succession.py`, verbatim.
 Each is pinned by a sha256 taken from the rendered constants at commit 730f843 at freeze time

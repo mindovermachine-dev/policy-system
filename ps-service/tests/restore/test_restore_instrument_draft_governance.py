@@ -1,15 +1,14 @@
-"""Tests for the restore's draft-governance import (issue #183).
+"""Tests for the restore's draft-governance import.
 
 Restoring an internal curated instrument imports its Policy/Standard/Control tree as `draft`,
-owned by the restoring caller. This replaces the restore path's earlier Policy *convergence*
-(issue #54, S6, AC-BI-021): a draft must never converge onto an existing canonical Policy,
-because its draft Standards/Controls would then hang under a possibly-approved parent. Since issue
-#227 the live ingestion-to-merge path (`merge_baseline_graph`) imports through the same shared
-function (`governance_import.import_draft_governance`); that it does is proven in
+owned by the restoring caller. A draft must never converge onto an existing canonical Policy,
+because its draft Standards/Controls would then hang under a possibly-approved parent. The live
+ingestion-to-merge path (`merge_baseline_graph`) imports through the same shared function
+(`governance_import.import_draft_governance`); that it does is proven in
 `tests/restore/test_restore_merge_governance_parity.py` and
 `tests/company_merge/test_merge_internal_seed_draft_governance.py`.
 
-Since #214 the restore's `policy_system` leg is a tuple of gateway primitives built from reads of
+The restore's `policy_system` leg is a tuple of gateway primitives built from reads of
 the live graph (`merge_primitives.build_policy_system_leg`), so the expectations are asserted on
 primitives. The live graph is a hand-written fake satisfying `GraphHandle` structurally.
 """
@@ -107,7 +106,7 @@ def _edges(leg: PolicySystemLeg, edge_type: str) -> list[UpsertEdge]:
 def test_restore_mints_draft_policy_owned_by_the_caller_instead_of_converging(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-001/003: an incoming Policy that would semantically match an existing
+    """An incoming Policy that would semantically match an existing
     canonical Policy is still minted as its own `draft` node, owned by the caller.
     """
     emitter, _log_path = make_emitter()
@@ -160,7 +159,7 @@ def test_restore_mints_draft_policy_owned_by_the_caller_instead_of_converging(
 def test_restore_writes_standard_and_control_as_draft_and_wires_their_edges(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-003/006: the whole tree lands as draft with its SUPPORTED_BY/IMPLEMENTED_BY edges."""
+    """The whole tree lands as draft with its SUPPORTED_BY/IMPLEMENTED_BY edges."""
     emitter, _log_path = make_emitter()
     instrument_id = "ENGPRAC-3.0"
     baseline = _governance_baseline(
@@ -182,7 +181,7 @@ def test_restore_writes_standard_and_control_as_draft_and_wires_their_edges(
 
 
 def test_restore_returns_governance_counts_for_the_audit_entry(make_emitter: MakeEmitter) -> None:
-    """AC-BI-014: the returned counts (folded into the audit log) include the draft counts."""
+    """The returned counts (folded into the audit log) include the draft counts."""
     emitter, _log_path = make_emitter()
     instrument_id = "ENGPRAC-3.0"
     baseline = _governance_baseline(
@@ -225,7 +224,7 @@ def test_restore_with_governance_content_and_no_owner_is_refused_before_any_read
 def test_external_baseline_restore_needs_no_owner_and_writes_no_governance(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-007: an external-sourced restore (no Policy nodes) is a no-op for the whole pass."""
+    """An external-sourced restore (no Policy nodes) is a no-op for the whole pass."""
     emitter, _log_path = make_emitter()
     instrument_id = "RT60-1.0"
     baseline = SerializedGraph(

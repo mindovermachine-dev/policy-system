@@ -1,4 +1,4 @@
-"""Export writes the baseline graph only through the Graph Write Gateway (issue #213).
+"""Export writes the baseline graph only through the Graph Write Gateway.
 
 Every test enters at `run_export` (the function behind `POST /exports`), runs the REAL
 `export_instrument` and embedding backfill over the gateway rig (in-memory log and FalkorDB, the
@@ -158,13 +158,13 @@ def _run(deps: ExportDependencies, emitter: LogEmitter) -> object:
     )
 
 
-# --- S10: the gateway is resolved before any graph is opened (AC-BI-008) ------------------------
+# --- the gateway is resolved before any graph is opened ------------------------
 
 
 def test_export_without_a_gateway_fails_before_any_graph_is_opened(
     export_rig: ExportRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-008: no gateway installed -> GraphWriteUnavailableError; nothing opened or computed."""
+    """No gateway installed -> GraphWriteUnavailableError; nothing opened or computed."""
     install_graph_write_gateway(None)
     embedder = _Embedder(export_rig)
     opened: list[str] = []
@@ -178,13 +178,13 @@ def test_export_without_a_gateway_fails_before_any_graph_is_opened(
     assert export_rig.baseline_reader().statements == []
 
 
-# --- S11: one system audit row, recorded first and fail-closed (AC-BI-010) ----------------------
+# --- one system audit row, recorded first and fail-closed ----------------------
 
 
 def test_export_records_one_system_audit_row_before_any_embedding_is_computed(
     gateway: ProcessGateway, export_rig: ExportRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-010: exactly one row, naming the instrument, exists before the first embedding call."""
+    """Exactly one row, naming the instrument, exists before the first embedding call."""
     embedder = _Embedder(export_rig, gateway.system_audit)
 
     _run(_dependencies(export_rig, call_embedding=embedder), emitter)
@@ -202,7 +202,7 @@ def test_export_records_one_system_audit_row_before_any_embedding_is_computed(
 def test_export_fails_closed_when_the_system_audit_row_cannot_be_written(
     gateway: ProcessGateway, export_rig: ExportRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-010: the row cannot be written -> AuditTrailUnavailableError; nothing is computed."""
+    """The row cannot be written -> AuditTrailUnavailableError; nothing is computed."""
     failing = RecordingSystemAudit(
         export_rig.rig,
         error=AuditTrailUnavailableError("The audit trail is temporarily unavailable."),
@@ -218,13 +218,13 @@ def test_export_fails_closed_when_the_system_audit_row_cannot_be_written(
     assert all("embedding" not in props for props in export_rig.baseline.nodes.values())
 
 
-# --- S12: the embedding backfill is ONE `{short}_baseline` group (AC-BI-003, AC-BI-010) ---------
+# --- the embedding backfill is ONE `{short}_baseline` group ---------
 
 
 def test_the_backfill_computes_every_embedding_before_one_group_is_submitted(
     gateway: ProcessGateway, export_rig: ExportRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-003: compute first; the log holds nothing while any embedding is being computed."""
+    """Compute first; the log holds nothing while any embedding is being computed."""
     embedder = _Embedder(export_rig, gateway.system_audit)
 
     _run(_dependencies(export_rig, call_embedding=embedder), emitter)
@@ -237,7 +237,7 @@ def test_the_backfill_computes_every_embedding_before_one_group_is_submitted(
 def test_the_backfill_is_one_embedding_only_group_anchored_to_the_audit_row(
     gateway: ProcessGateway, export_rig: ExportRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-003/AC-BI-010: one group of embedding-only upserts, carrying the recorded row's id."""
+    """One group of embedding-only upserts, carrying the recorded row's id."""
     embedder = _Embedder(export_rig, gateway.system_audit)
 
     _run(_dependencies(export_rig, call_embedding=embedder), emitter)
@@ -271,13 +271,13 @@ def test_the_embeddings_land_on_the_nodes_and_nothing_else_changes(
         assert node["name"] == name
 
 
-# --- S13: embedded nodes are untouched, a re-run submits nothing, a failure writes nothing ------
+# --- embedded nodes are untouched, a re-run submits nothing, a failure writes nothing ------
 
 
 def test_a_node_that_already_has_an_embedding_is_untouched_and_not_logged(
     gateway: ProcessGateway, export_rig: ExportRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-003: only the node lacking an embedding is embedded, submitted and logged."""
+    """Only the node lacking an embedding is embedded, submitted and logged."""
     export_rig.seed_node(
         export_rig.baseline, "Capability", "cap_3", {"name": "Key Rotation", "embedding": [0.9]}
     )
@@ -294,7 +294,7 @@ def test_a_node_that_already_has_an_embedding_is_untouched_and_not_logged(
 def test_a_rerun_embeds_nothing_and_adds_no_log_entry(
     gateway: ProcessGateway, export_rig: ExportRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-003: everything already has an embedding -> no embedding call, no group, no entry."""
+    """Everything already has an embedding -> no embedding call, no group, no entry."""
     embedder = _Embedder(export_rig, gateway.system_audit)
     _run(_dependencies(export_rig, call_embedding=embedder), emitter)
     calls_after_first = len(embedder.calls)
@@ -309,7 +309,7 @@ def test_a_rerun_embeds_nothing_and_adds_no_log_entry(
 def test_a_failed_embedding_call_writes_nothing(
     gateway: ProcessGateway, export_rig: ExportRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-003: the second embedding call fails -> no group, no embedding on any node."""
+    """The second embedding call fails -> no group, no embedding on any node."""
     embedder = _Embedder(export_rig, gateway.system_audit, fail_on_call=2)
 
     with pytest.raises(ExportStageFailedError):
@@ -350,7 +350,7 @@ def test_policy_nodes_are_embedded_only_for_an_internal_source(
     ]
 
 
-# --- S14: failure semantics (error mapping) ----------------------------------------------------
+# --- failure semantics (error mapping) ----------------------------------------------------
 
 
 def test_a_gateway_refusal_is_an_embedding_stage_failure_and_nothing_is_written(

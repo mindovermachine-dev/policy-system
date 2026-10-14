@@ -1,6 +1,6 @@
 """`merge_baseline_graph` reports net-new / matched Capability counts and the new-Obligation count.
 
-Issue #195, Slice 6. `MergeResult.new_capability_count`, `matched_capability_count` and
+`MergeResult.new_capability_count`, `matched_capability_count` and
 `new_obligation_count` are facts derived from the dedup resolutions and one pre-write existence
 probe (never driver statistics: `GraphQueryResult` exposes only `result_set`). They default to 0 so
 every pre-existing `MergeResult(...)` construction stays valid.
@@ -104,7 +104,7 @@ class _SingleTenant:
         markers: dict[str, str] | None = None,
         gateway_graph: InMemoryGraph | None = None,
     ) -> None:
-        # issue #210: Obligations a merge submits through the gateway land in the rig's
+        # Obligations a merge submits through the gateway land in the rig's
         # `policy_system` graph; the existence reads see them there.
         self._gateway_graph = gateway_graph
         self.gateway_obligations_at_probe: list[set[str]] = []

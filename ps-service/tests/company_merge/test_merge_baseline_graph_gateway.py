@@ -1,6 +1,6 @@
-"""`merge_baseline_graph` writes the regulatory spine through the Graph Write Gateway (issue #210).
+"""`merge_baseline_graph` writes the regulatory spine through the Graph Write Gateway.
 
-Slice 2b: the RegulatoryInstrument, the create-only Role and Requirement nodes and the
+The RegulatoryInstrument, the create-only Role and Requirement nodes and the
 `DEFINES`/`EXPRESSES` provenance edges leave Company Merge as ONE gateway group on
 `policy_system`, under the run's audit event. The single-tenant handle Company Merge is given is a
 READ handle for this family: it never receives a write statement for these labels.
@@ -146,7 +146,7 @@ def test_first_merge_submits_instrument_roles_requirements_and_provenance_edges_
 def test_a_role_that_already_exists_keeps_its_properties_and_nothing_is_logged_for_it(
     merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-005: create-only is decided before submission; the group never mentions the node."""
+    """Create-only is decided before submission; the group never mentions the node."""
     _merge(merge_rig, _CRA, emitter)
 
     _merge(merge_rig, _CRA_DRIFTED, emitter)

@@ -1,4 +1,4 @@
-"""Extraction and derivation driven end to end against a `BaselineRig` (issue #209).
+"""Extraction and derivation driven end to end against a `BaselineRig`.
 
 The real `extract_roles_and_requirements` and `derive_obligations_and_capabilities` run over the
 rig (the gateway with in-memory log and graph fakes). Only the LLM is scripted, and the native

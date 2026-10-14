@@ -1,4 +1,4 @@
-"""A group over several graphs commits in one transaction (issue #214 S2, AC-BI-001/002/010).
+"""A group over several graphs commits in one transaction.
 
 Every test enters at `GraphWriteGateway.submit_multi_graph_group` against the Protocol fakes.
 The fake store stages every leg on one transaction, so "one transaction" is observable as one
@@ -352,7 +352,7 @@ def test_the_pending_leg_is_completed_by_catch_up() -> None:
     assert set(rig.graphs.open("native").nodes) == {("Capability", "n-1")}
 
 
-# -- concurrency: ascending order, no deadlock (AC-BI-010) -------------------------------------
+# -- concurrency: ascending order, no deadlock -------------------------------------
 
 
 class _Gate:

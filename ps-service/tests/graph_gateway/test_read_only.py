@@ -1,8 +1,8 @@
-"""`ReadOnlyGraph`: every read goes to the server-side read-only call (issue #215, AC-BI-002).
+"""`ReadOnlyGraph`: every read goes to the server-side read-only call.
 
 The driver is the only fake: a graph that records which method was invoked. `GRAPH.RO_QUERY`
 refuses a write on the server, so a handle that only ever sends `ro_query` cannot mutate a graph
-(AC-BI-003 is proven live in `query_engine/test_ro_query_rejects_write_live.py`).
+(that is proven live in `query_engine/test_ro_query_rejects_write_live.py`).
 """
 
 from __future__ import annotations

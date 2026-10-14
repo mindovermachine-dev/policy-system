@@ -1,4 +1,4 @@
-"""`write-docs` regenerates the canonical document and its packaged copy (S12, F4)."""
+"""`write-docs` regenerates the canonical document and its packaged copy."""
 
 from __future__ import annotations
 

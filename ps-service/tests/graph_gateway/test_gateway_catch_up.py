@@ -1,4 +1,4 @@
-"""`catch_up`, `is_caught_up` and submit-time catch-up (issue #206, S12; AC-BI-010, AC-BI-012).
+"""`catch_up`, `is_caught_up` and submit-time catch-up.
 
 `catch_up(graph)` applies every logged entry beyond the applied marker, in order. `is_caught_up`
 is a read-only predicate that answers True only when the marker equals the last logged position

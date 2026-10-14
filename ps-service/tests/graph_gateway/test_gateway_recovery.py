@@ -1,4 +1,4 @@
-"""Startup recovery of the Graph Write Gateway (issue #206, S13b; AC-BI-011, AC-BI-010).
+"""Startup recovery of the Graph Write Gateway .
 
 `recover()` finds every graph whose log is ahead of its applied marker and applies the owed
 entries. It never raises for a graph that is down or refuses an entry: that graph stays gated
@@ -68,7 +68,7 @@ def _lag_while_down(rig: GatewayRig, graph: str, node_id: str = "cap-1") -> None
     assert outcome.status == "committed_apply_pending"
 
 
-def test_new_gateway_on_log_with_unapplied_entries_applies_them_before_accepting_a_write_to_that_graph() -> (  # noqa: E501 - name mirrors PLAN S13 verbatim
+def test_new_gateway_on_log_with_unapplied_entries_applies_them_before_accepting_a_write_to_that_graph() -> (  # noqa: E501 - long descriptive test name
     None
 ):
     rig = GatewayRig()
@@ -113,7 +113,7 @@ def test_recover_on_a_log_with_nothing_pending_does_nothing() -> None:
     assert rig.events == []
 
 
-def test_startup_recovery_with_graph_down_does_not_block_startup_and_leaves_graph_gated_until_applied() -> (  # noqa: E501 - name mirrors PLAN S13 verbatim
+def test_startup_recovery_with_graph_down_does_not_block_startup_and_leaves_graph_gated_until_applied() -> (  # noqa: E501 - long descriptive test name
     None
 ):
     rig = GatewayRig()

@@ -1,4 +1,4 @@
-"""`python -m ps_service.domain_schema measure` reports the before/after size (AC-BI-011)."""
+"""`python -m ps_service.domain_schema measure` reports the before/after size."""
 
 from __future__ import annotations
 

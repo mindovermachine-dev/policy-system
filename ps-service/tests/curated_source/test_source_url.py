@@ -9,14 +9,14 @@ from ps_service.curated_source.source_url import validate_source_url
 
 
 def test_validate_source_url_accepts_https_url() -> None:
-    """AC-BI-010: a plain `https://` URL is always accepted."""
+    """A plain `https://` URL is always accepted."""
     url = "https://raw.githubusercontent.com/example/repo/main/curated-content"
 
     assert validate_source_url(url, allow_insecure_http=False) == url
 
 
 def test_validate_source_url_rejects_plain_http_by_default() -> None:
-    """AC-BI-010: TLS is required by default -- plain `http://` needs explicit opt-in."""
+    """TLS is required by default -- plain `http://` needs explicit opt-in."""
     with pytest.raises(CuratedSourceConfigurationError) as excinfo:
         validate_source_url("http://example.com/curated-content", allow_insecure_http=False)
 
@@ -24,7 +24,7 @@ def test_validate_source_url_rejects_plain_http_by_default() -> None:
 
 
 def test_validate_source_url_accepts_plain_http_when_explicitly_allowed() -> None:
-    """AC-BI-010: `allow_insecure_http=True` is the documented opt-in."""
+    """`allow_insecure_http=True` is the documented opt-in."""
     url = "http://example.com/curated-content"
 
     assert validate_source_url(url, allow_insecure_http=True) == url
@@ -39,7 +39,7 @@ def test_validate_source_url_accepts_plain_http_when_explicitly_allowed() -> Non
     ],
 )
 def test_validate_source_url_rejects_non_http_schemes(disallowed_url: str) -> None:
-    """AC-BI-008: only http(s) schemes are ever accepted, e.g. never `file://`."""
+    """Only http(s) schemes are ever accepted, e.g. never `file://`."""
     with pytest.raises(CuratedSourceConfigurationError) as excinfo:
         validate_source_url(disallowed_url, allow_insecure_http=True)
 

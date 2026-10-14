@@ -1,9 +1,9 @@
 """Preview and pair-bound approval for `merge-obligations`, plus `check-cleanup-approval`
-for an obligation approval (issue #190, slice 11 sub-step d).
+for an obligation approval.
 
-AC-BI-005 (preview with no writes + approval bound to the exact pair), AC-BI-015 (cross-role
-rejected, no approval), AC-BI-016 (self / nonexistent rejected, no approval), AC-BI-017 (a
-swapped pair yields a different signing challenge), A9 (reconciliation of an orphan row).
+Covers preview with no writes and an approval bound to the exact pair, cross-role and self /
+nonexistent rejection (no approval), a swapped pair yielding a different signing challenge, and
+reconciliation of an orphan row.
 """
 
 from __future__ import annotations

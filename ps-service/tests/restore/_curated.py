@@ -1,4 +1,4 @@
-"""The repository's curated artifacts, parsed the way Restore parses them (issue #214, slice 7)."""
+"""The repository's curated artifacts, parsed the way Restore parses them."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
-"""Content lint: the docs, skill and docstrings describe the full UC-4 re-ingest (issue #201).
+"""Content lint: the docs, skill and docstrings describe the full UC-4 re-ingest.
 
-`check_regulations` used to re-run only the Ingestion stage, and several documents said so. These
-tests pin the opposite on every place that describes the behaviour (UC-4, the container
+`check_regulations` re-runs the full pipeline, not only the Ingestion stage. These
+tests pin that on every place that describes the behaviour (UC-4, the container
 architecture, the solution architecture, the user guide, the `ps-check-regulations` skill and the
 `trigger_reingestion` / package docstrings), and that no source file still cites the issue number.
 """
@@ -25,7 +25,7 @@ _DOCS = {
     "skill": _REPO / "ps-skills" / "ps-plugin" / "skills" / "ps-check-regulations" / "SKILL.md",
 }
 
-# Wording that described the old ingestion-only behaviour; it must not come back.
+# Wording that describes an ingestion-only re-run; it must not appear.
 _BANNED = (
     "only the Ingestion stage",
     "counts are always 0",
@@ -109,7 +109,7 @@ def test_no_source_file_cites_the_issue_number() -> None:
 
 
 def test_container_architecture_states_the_merge_only_resume_needs_the_gateway() -> None:
-    """Issue #210: the audit anchor, fail-closed and difference entries name merge-only resume."""
+    """The audit anchor, fail-closed and difference entries name merge-only resume."""
     text = _text(_DOCS["container"])
 
     assert "extraction, derivation (#209) or merge (#210)" in text

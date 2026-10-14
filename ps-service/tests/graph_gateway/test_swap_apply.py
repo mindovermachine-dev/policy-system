@@ -1,10 +1,10 @@
-"""A multi-graph group applied by swap (issue #214 S4, AC-BI-003, AC-BI-001 replay equality).
+"""A multi-graph group applied by swap.
 
 Every test enters at `GraphWriteGateway.submit_multi_graph_group(apply="swap")` against the
 Protocol fakes. The in-memory key port records every copy, discard and rename and offers hooks at
 the observation points, so "the live graphs are untouched until the flip" and "the flip changes all
-legs together" are asserted at the points where a reader could look. AC-BI-003 is protocol-only
-here (true by construction on the fake); it is closed live in S6 and S8b.
+legs together" are asserted at the points where a reader could look. Leg atomicity is protocol-only
+here (true by construction on the fake); the live twin closes it.
 """
 
 from __future__ import annotations

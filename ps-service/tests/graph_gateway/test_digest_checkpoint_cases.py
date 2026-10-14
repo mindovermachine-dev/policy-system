@@ -1,4 +1,4 @@
-"""The checkpoint recorder's edge cases (#207 S6, AC-RD-003).
+"""The checkpoint recorder's edge cases.
 
 A checkpoint is taken only for a group that was applied, under the graph's lock, and a failure to
 take it never fails a group that is already committed. The store keeps the first checkpoint at a

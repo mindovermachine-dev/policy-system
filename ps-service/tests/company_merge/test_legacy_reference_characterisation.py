@@ -1,6 +1,6 @@
-"""The frozen legacy reference and today's production build the same graph (issue #210, AC-BI-002).
+"""The frozen legacy reference and today's production build the same graph.
 
-`_legacy_reference` is the pre-#210 writer's Cypher, frozen, run against an interpreter. This file
+`_legacy_reference` is the former writer's Cypher, frozen, run against an interpreter. This file
 proves three things about family A (RegulatoryInstrument, create-only Role/Requirement, the
 DEFINES/EXPRESSES provenance edges):
 
@@ -9,8 +9,7 @@ DEFINES/EXPRESSES provenance edges):
   overwrites, a `MATCH` with a missing endpoint writes nothing, a repeated edge folds), and rejects
   any shape it was not taught;
 * CURRENT `merge_baseline_graph`, fed the same baseline graphs, issues the same statements and
-  leaves the same graph (digest, node and edge facts, call order) as the reference. Later slices
-  keep this comparison green while the production path moves onto the gateway.
+  leaves the same graph (digest, node and edge facts, call order) as the reference.
 
 Met modulo edge identity; the live digest and live interpreter agreement are not verifiable here
 (no FalkorDB in this sandbox).
@@ -242,7 +241,7 @@ def test_the_interpreter_agrees_with_the_old_fake_on_the_nodes_both_build() -> N
 def test_the_frozen_reference_and_the_gateway_path_build_the_same_graph_for_family_a(
     scenario: str, merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """Slice 2b: the migrated writer, through the gateway, against the frozen reference.
+    """The migrated writer, through the gateway, against the frozen reference.
 
     Met modulo edge identity (the reference graph is stamped `TYPE:source->target` by
     `as_gateway_graph`); live digest and live interpreter agreement are not verifiable here.

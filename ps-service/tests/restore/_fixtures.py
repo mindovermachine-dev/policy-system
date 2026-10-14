@@ -35,7 +35,7 @@ def build_restore_artifact(
     Encodes both graphs via the real `export.serialize.to_json_bytes` (the
     same codec `export_instrument` itself uses) and computes each blob's
     real SHA-256 via `checksum_bytes`, so every test using this helper
-    exercises `restore_instrument`'s real D9 checksum check, never a
+    exercises `restore_instrument`'s real checksum check, never a
     pre-faked digest.
     """
     native_blob = to_json_bytes(native_graph)

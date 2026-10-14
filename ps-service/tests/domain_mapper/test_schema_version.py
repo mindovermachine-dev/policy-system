@@ -6,9 +6,8 @@ from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 
 
 def test_domain_schema_version_is_two() -> None:
-    """GH #76 bumped this from "1" to "2": `derive_governance_artifacts`
-    (issue #54 S3) was deleted outright, so this package's public actions now
-    write strictly less graph content than a version-"1"-tagged curated
-    artifact's replay would have produced.
+    """The schema version is "2": this package's public actions write
+    strictly less graph content than a version-"1"-tagged curated
+    artifact's replay would produce (governance-artifact derivation is gone).
     """
     assert DOMAIN_SCHEMA_VERSION == "2"

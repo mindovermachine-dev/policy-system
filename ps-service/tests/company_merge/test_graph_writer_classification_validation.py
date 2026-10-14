@@ -1,8 +1,8 @@
 """Tests for `ps_service.company_merge.graph_writer.validate_classification_edge_endpoints`
-and `.classification_write_counts` (issue #106, AC-BI-008/AC-BI-011).
+and `.classification_write_counts`.
 
-`validate_classification_edge_endpoints` is a genuinely new mechanism in this
-module (PLAN.md §4.3 point 4): every other validation function here only
+`validate_classification_edge_endpoints` is a genuinely distinct mechanism in this
+module: every other validation function here only
 ever checks in-memory dict membership; this one issues a real (batched) read
 against `single_tenant_graph` for whichever endpoints have no
 `canonical_id_by_incoming_id` entry, since PracticeArea/RiskPath sources and
@@ -75,7 +75,7 @@ def test_no_unresolved_endpoints_issues_zero_calls() -> None:
 
 
 def test_empty_classification_edges_issues_zero_calls() -> None:
-    """AC-BI-009's structural no-op, at this function's own level: an empty
+    """A structural no-op at this function's own level: an empty
     `classification_edges` tuple has no endpoints to resolve.
     """
     graph = _FakeGraph()
@@ -104,7 +104,7 @@ def test_unresolved_endpoint_found_in_single_tenant_graph_does_not_raise() -> No
 
 
 def test_unresolved_endpoint_missing_everywhere_raises_before_any_write() -> None:
-    """AC-BI-008: an endpoint absent from BOTH `canonical_id_by_incoming_id`
+    """An endpoint absent from BOTH `canonical_id_by_incoming_id`
     AND `single_tenant_graph` raises `CompanyMergePersistenceError` -- the
     one call made is the read itself, never a write.
     """
@@ -153,7 +153,7 @@ def _minimal_baseline_graph(**overrides: object) -> BaselineGraph:
 
 
 def test_classification_write_counts_reports_every_key_correctly() -> None:
-    """AC-BI-011: all six counts computed correctly from a baseline carrying
+    """All six counts computed correctly from a baseline carrying
     a known, DIFFERENT count of each -- so a bug that swaps two counts (e.g.
     `owns_count`/`covers_count`) cannot pass by coincidence.
     """

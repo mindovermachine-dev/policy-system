@@ -1,6 +1,6 @@
-"""A resubmitted internal-seed document retires what it no longer contains (GH #99, S1 and S2).
+"""A resubmitted internal-seed document retires what it no longer contains.
 
-The Capability rename of issue #95: the old Capability node (and so its edges) must be gone from
+The Capability rename: the old Capability node (and so its edges) must be gone from
 both `{short}_native` and `{short}_baseline` once the resubmission completes, the new one must
 stay, and each retired edge is deleted explicitly before the node that carried it.
 """

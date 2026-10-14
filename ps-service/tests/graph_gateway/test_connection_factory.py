@@ -1,4 +1,4 @@
-"""The gateway-owned FalkorDB connection factory and `/ready` probe (issue #215, slice S1).
+"""The gateway-owned FalkorDB connection factory and `/ready` probe.
 
 `ps_service.graph_gateway.connection` is the one module that builds a FalkorDB client and probes
 connectivity; the gateway package no longer depends on Ingestion or Export for either.

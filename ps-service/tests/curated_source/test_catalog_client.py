@@ -1,4 +1,4 @@
-"""Tests for ``ps_service.curated_source.catalog_client.fetch_catalog`` (AC-BI-003/006)."""
+"""Tests for ``ps_service.curated_source.catalog_client.fetch_catalog``."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def test_fetch_catalog_returns_every_entry_unfiltered_in_file_order(
 def test_fetch_catalog_raises_curated_source_fetch_error_naming_source_on_transport_failure(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-006: an unreachable source names the source and the failure, no stale fallback."""
+    """An unreachable source names the source and the failure, no stale fallback."""
     emitter, _ = make_emitter()
 
     with pytest.raises(CuratedSourceFetchError) as excinfo:
@@ -109,7 +109,7 @@ def test_fetch_catalog_raises_curated_source_fetch_error_naming_source_on_transp
 def test_fetch_catalog_raises_curated_source_fetch_error_on_non_json_body(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-006: a malformed (non-JSON) response body is refused, naming the source."""
+    """A malformed (non-JSON) response body is refused, naming the source."""
     emitter, _ = make_emitter()
     transport = _RecordingTransport(b"not json at all")
 

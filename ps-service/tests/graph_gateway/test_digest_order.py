@@ -1,4 +1,4 @@
-"""The digest does not depend on insertion order or FalkorDB internal ids (#207 S2, AC-RD-001)."""
+"""The digest does not depend on insertion order or FalkorDB internal ids."""
 
 from __future__ import annotations
 

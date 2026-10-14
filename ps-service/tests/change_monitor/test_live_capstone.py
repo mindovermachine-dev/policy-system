@@ -1,5 +1,4 @@
-"""Live end-to-end capstone for issue #19 (PLAN_REVIEWED.md §3 test 21,
-§1.4; PLAN_A.md §1.5) — run for real against the live CELLAR/ELI service
+"""Live end-to-end capstone — run for real against the live CELLAR/ELI service
 (`publications.europa.eu`) and a real, reachable FalkorDB instance.
 
 `@pytest.mark.cellar_live @pytest.mark.falkordb_live` on every test in this
@@ -10,10 +9,9 @@ real data to FalkorDB — they are excluded from the fast regression suite
     uv run pytest ps-service/tests/change_monitor/test_live_capstone.py \
         -m "cellar_live and falkordb_live" -q
 
-What the capstone proves (PLAN_A.md §1.5 — full-fidelity consolidated
-re-ingestion, Follow-on A folded into #19):
+What the capstone proves (full-fidelity consolidated re-ingestion):
 
-- **AC-001**: `fetch_consolidated_versions` genuinely reaches the CELLAR
+- **Live detection**: `fetch_consolidated_versions` genuinely reaches the CELLAR
   SPARQL endpoint and returns the real consolidated-expression state.
 - **Consolidated re-ingestion end-to-end**: a real `ingest_regulatory_instrument`
   seed of GDPR's *base act* (`32016R0679`, 372 PARAGRAPH / 173 RECITAL),
@@ -30,7 +28,7 @@ Module-level constants (not conditionals) identify the base act to seed
 with. `_CAPSTONE_SHORT` is a deliberately unique throwaway short name so
 the `{short}_native` graph this test seeds and cleans is its own, never
 colliding with a real seeded graph (`cra_native` / `gdpr_native` / ...).
-The AC-011 "no regulation literal in a conditional" scan covers
+The "no regulation literal in a conditional" scan covers
 `change_monitor/*` source only, not this tests directory, but nothing
 here branches on these values regardless.
 """
@@ -65,7 +63,7 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
 # GDPR's base-act CELEX: one consolidated expression, `02016R0679-20160504`,
-# stable since 2016 — a fixed, well-understood live target for AC-001.
+# stable since 2016 — a fixed, well-understood live target for consolidated detection.
 _BASE_CELEX = "32016R0679"
 _LATEST_CONSOLIDATED_CELEX = "02016R0679-20160504"
 
@@ -178,11 +176,11 @@ def _reachable_node_ids(graph: GraphHandle, instrument_id: str, label: str) -> l
 
 
 def test_ac001_live_consolidated_version_detection() -> None:
-    """AC-001: the real CELLAR SPARQL endpoint reports GDPR's one
+    """The real CELLAR SPARQL endpoint reports GDPR's one
     consolidated expression, `02016R0679-20160504`.
 
     Overlaps `test_cellar_consolidated.py::test_ac001_live_consolidated_detection`
-    (Increment 4c) by design — kept here as the first beat of the capstone
+    by design — kept here as the first beat of the capstone
     story so the end-to-end proof is readable in one place.
     """
     info = fetch_consolidated_versions(_BASE_CELEX)
@@ -198,7 +196,7 @@ def test_consolidated_reingestion_end_to_end(
 ) -> None:
     """Seed a throwaway `{short}_native` graph with a real base-act ingest,
     then run a real `trigger_reingestion` of the *consolidated expression*
-    and assert the full re-ingestion outcome (PLAN_A.md §1.5).
+    and assert the full re-ingestion outcome.
 
     Asserts:
 

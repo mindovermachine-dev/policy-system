@@ -1,4 +1,4 @@
-"""The frozen legacy reference is what the pre-#212 writer was (issue #212, AC-BI-002).
+"""The frozen legacy reference is what the direct writer was.
 
 The equivalence tests compare the gateway-backed cleanup against these statements, so the
 statements must be the original ones and the interpreter must model only what it was taught.

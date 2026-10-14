@@ -1,6 +1,5 @@
 """Tests for `tools/company-merge/company_merge_similarity_sweep.py`'s recommendation
-writer (issue #29, PLAN.md §1 Increment 6, AC-BI-009, CHANGES.md row m3's accepted
-higher-threshold F1 tie-break).
+writer.
 
 Loads the script by path via `importlib.util.spec_from_file_location`, exactly as
 `test_similarity_threshold_sweep_scoring.py`/`test_similarity_threshold_dataset.py`
@@ -9,7 +8,7 @@ already do for this same script.
 Covers, hermetically (hand-constructed `ThresholdResult`s, no embedding calls):
 
 - `select_recommendation` picks the unambiguous highest-`f1` entry when there is one.
-- `select_recommendation`'s tie-break rule (CHANGES.md row m3): on an F1 tie, the
+- `select_recommendation`'s tie-break rule: on an F1 tie, the
   HIGHER threshold wins -- proven with a deliberate tie case, not merely documented.
 - `select_recommendation` raises on an empty `results` list -- nothing to recommend.
 - `render_recommendation`'s output string names the exact recommended threshold value
@@ -99,7 +98,7 @@ def test_select_recommendation_picks_the_unambiguous_highest_f1_entry(
     assert picked is best_f1
 
 
-# --- select_recommendation: tie-break rule (CHANGES.md row m3) -------------------------
+# --- select_recommendation: tie-break rule -------------------------
 
 
 def test_select_recommendation_breaks_an_f1_tie_toward_the_higher_threshold(
@@ -201,7 +200,7 @@ def test_render_recommendation_contains_the_exact_threshold_and_all_three_metric
 
 
 def test_render_recommendation_returns_a_short_markdown_block(sweep_module: ModuleType) -> None:
-    """Sanity check on the "short Markdown block" shape PLAN.md/AC-BI-009 call for --
+    """Sanity check on the "short Markdown block" shape --
     a Markdown heading and a bounded line count, not an essay.
     """
     result = sweep_module.ThresholdResult(

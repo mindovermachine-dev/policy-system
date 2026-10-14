@@ -1,10 +1,9 @@
-"""Generated values are fixed before submission and replay-identical (issue #210, AC-BI-007).
+"""Generated values are fixed before submission and replay-identical.
 
-A Capability's (and a draft Policy's) `created_at` used to be drawn by the writer at apply
-time. Now the group carries it as a literal: submitting the group twice leaves exactly one
-node with the original value, and a
-replay of the log reproduces identical values (digest equal, `created_at` equal to the logged
-text).
+A Capability's (and a draft Policy's) `created_at` is carried by the group as a literal, not
+drawn by the writer at apply time: submitting the group twice leaves exactly one node with the
+original value, and a replay of the log reproduces identical values (digest equal, `created_at`
+equal to the logged text).
 """
 
 from __future__ import annotations

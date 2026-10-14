@@ -1,15 +1,15 @@
 """Tests for `ps_service.change_monitor.trigger.trigger_reingestion` and `will_reingest`.
 
-Issue #201: a detected amendment runs the full UC-4 pipeline (Ingestion -> Domain Mapper ->
+A detected amendment runs the full UC-4 pipeline (Ingestion -> Domain Mapper ->
 Company Merge) through an injected `PipelineRunner`, and the succession (`SUPERSEDED_BY`,
 `prior.status='superseded'`, `absorbed`) is the LAST write, only after the merge stage
-returned. Issue #213: every write is a Graph Write Gateway group; the `{short}_native` and
+returned. Every write is a Graph Write Gateway group; the `{short}_native` and
 `policy_system` graphs are the process gateway rig's in-memory graphs (the true FalkorDB and
 Postgres boundaries), read through `SuccessionReadGraph`, and the runner is the hand-written
 `RigRunner` seam double. The code under test (`trigger`, `succession`, `classify_reingestion`) is
 real, and the assertions are on the rig graphs and its log.
 
-The `national_transposition` guard (AC-010) runs before any stage or write for every state
+The `national_transposition` guard runs before any stage or write for every state
 that has stages to run: its prior-type limb always, its metadata-fetch limb on `fresh` only.
 """
 
@@ -116,7 +116,7 @@ def _trigger(
     )
 
 
-# --- fresh: all four stages in order, succession is the LAST write (AC-BI-001, AC-BI-003) ---
+# --- fresh: all four stages in order, succession is the LAST write ---
 
 
 @pytest.mark.parametrize("prior_instrument_type", ["regulation", "directive"])
@@ -184,7 +184,7 @@ def test_fresh_mints_a_run_id_when_the_caller_gives_none(
 def test_fresh_guard_uses_the_metadata_fetch_only(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-004/011: the guard fetches metadata only; only the stages fetch structure."""
+    """The guard fetches metadata only; only the stages fetch structure."""
     emitter, _ = make_emitter()
     rig = _world(succession_rig)
     adapter = FakeAdapter({_IDENTIFIER: _structure("regulation")})
@@ -226,7 +226,7 @@ def test_fresh_emits_one_link_entry_and_one_entry_per_completed_stage(
     ]
 
 
-# --- failure and retry (AC-BI-007, AC-BI-008) ---
+# --- failure and retry ---
 
 
 @pytest.mark.parametrize("failing_stage", _ALL)
@@ -402,7 +402,7 @@ def test_a_missing_prior_in_policy_system_is_an_inconsistent_graph_and_keeps_the
     assert rig.groups("policy_system") == []
 
 
-# --- already_processed (AC-BI-009) ---
+# --- already_processed ---
 
 
 def test_already_processed_runs_no_stage_writes_nothing_and_logs_no_link(
@@ -427,7 +427,7 @@ def test_already_processed_runs_no_stage_writes_nothing_and_logs_no_link(
     assert [line["action"] for line in read_lines(log_path)] == ["classify_reingestion"]
 
 
-# --- national_transposition guard (AC-010 / AC-BI-005) ---
+# --- national_transposition guard ---
 
 
 @pytest.mark.parametrize(

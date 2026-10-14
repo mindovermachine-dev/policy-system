@@ -1,10 +1,10 @@
-"""`merge-obligations` writes through the Graph Write Gateway (issue #212, slice S4).
+"""`merge-obligations` writes through the Graph Write Gateway.
 
 One approved merge is one gateway group: the absorbed Obligation's `SATISFIED_BY` and `REQUIRES`
 edges are unioned onto the survivor, a `MergedObligation` marker is upserted and the absorbed node
 is deleted LAST, in the same group, so a delete without a redirect cannot be logged. The group is
 linked to the `applied` audit row and guarded by the log position read BEFORE the guard reads
-(AC-BI-003/005/006/008). The guard is the old statement's `WHERE`, evaluated in Python.
+(guard, group, failure matrix). The guard is the old statement's `WHERE`, evaluated in Python.
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def _edges_of(rig: CleanupRig, node_id: str) -> list[tuple[str, str, str]]:
     return [(k[0], k[2], k[4]) for k in rig.graph.edges if node_id in {k[2], k[4]}]
 
 
-# -- the group (AC-BI-005, AC-BI-006) -------------------------------------------------------------
+# -- the group ------------------------------------------------------------------------------------
 
 
 def test_one_merge_is_exactly_one_group_with_the_ordered_primitives_and_the_delete_last(
@@ -216,7 +216,7 @@ def test_the_marker_label_is_one_the_gateway_allows() -> None:
     assert "MergedObligation" in ALLOWED_NODE_LABELS
 
 
-# -- the guard: the old WHERE, in Python (AC-BI-003) ----------------------------------------------
+# -- the guard: the old WHERE, in Python ----------------------------------------------------------
 
 
 def _holds_after(rig: CleanupRig, break_it: Callable[[CleanupRig], None]) -> bool:
@@ -365,7 +365,7 @@ def test_an_unrelated_write_between_the_position_read_and_the_append_is_refused(
     assert ("MergedObligation", OBL_ABSORBED) not in cleanup_rig.graph.nodes
 
 
-# -- legacy identity-less edges (AC-BI-005, F4) ---------------------------------------------------
+# -- legacy identity-less edges -------------------------------------------------------------------
 
 
 def test_legacy_edges_are_stamped_first_so_no_parallel_edge_results(
@@ -399,7 +399,7 @@ def test_a_refused_position_may_leave_the_legacy_stamp_in_the_log_and_no_merge_g
     assert ("Obligation", OBL_ABSORBED) in cleanup_rig.graph.nodes
 
 
-# -- the failure matrix (AC-BI-008) ---------------------------------------------------------------
+# -- the failure matrix ---------------------------------------------------------------------------
 
 
 def _reject_the_group(rig: CleanupRig) -> None:

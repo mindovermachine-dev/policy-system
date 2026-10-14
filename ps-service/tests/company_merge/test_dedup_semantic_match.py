@@ -1,8 +1,6 @@
-"""Tests for `ps_service.company_merge.dedup.find_best_semantic_match`
-(PLAN_REVIEWED.md §10 Increment 8, B2's fix).
+"""Tests for `ps_service.company_merge.dedup.find_best_semantic_match`.
 
-Per the binding testing convention (PLAN_REVIEWED.md §0.5): `call_embedding`
-is faked with a hand-written structural fake satisfying `EmbeddingCaller`'s
+`call_embedding` is faked with a hand-written structural fake satisfying `EmbeddingCaller`'s
 Protocol (`llm_interface/client.py`), never `unittest.mock`/`MagicMock` --
 mirrors `tests/llm_interface/test_route_embedding_mocked.py`'s and
 `tests/domain_mapper/test_extraction.py`'s exact style.
@@ -255,7 +253,7 @@ def test_find_best_semantic_match_newly_computed_embeddings_excludes_cached_entr
 def test_find_best_semantic_match_eligible_ids_restricts_best_eligible_but_not_overall_best(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #30 (AC-BI-001/004 foundation): passing `eligible_ids` containing
+    """Passing `eligible_ids` containing
     only some scanned ids restricts `best_eligible_id`/`best_eligible_similarity`
     to that subset, while `best_existing_id`/`best_similarity` keep reflecting
     the unrestricted overall max across every entry scanned.
@@ -293,7 +291,7 @@ def test_find_best_semantic_match_eligible_ids_restricts_best_eligible_but_not_o
 def test_find_best_semantic_match_empty_eligible_ids_yields_none_eligible_best(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #30: `eligible_ids=frozenset()` yields `best_eligible_id=None`,
+    """`eligible_ids=frozenset()` yields `best_eligible_id=None`,
     `best_eligible_similarity=None`, while `best_existing_id`/`best_similarity`
     are still populated from the unrestricted scan.
     """
@@ -326,7 +324,7 @@ def test_find_best_semantic_match_empty_eligible_ids_yields_none_eligible_best(
 def test_find_best_semantic_match_omitted_eligible_ids_defaults_to_overall_best(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #30: omitting `eligible_ids` (the pre-existing call style, used
+    """Omitting `eligible_ids` (the call style used
     by all other tests in this file) yields `best_eligible_id ==
     best_existing_id` and `best_eligible_similarity == best_similarity` --
     proves the default is fully backward compatible.
@@ -358,10 +356,10 @@ def test_find_best_semantic_match_omitted_eligible_ids_defaults_to_overall_best(
 def test_find_best_semantic_match_reuses_cached_incoming_embedding_with_zero_calls_for_it(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #31 (AC-BI-003): passing `incoming_embedding` (e.g. a
+    """Passing `incoming_embedding` (e.g. a
     Capability's own cached `BaselineNode.embedding`) means the incoming
     side costs ZERO `route_embedding` calls too -- not just the existing
-    side (B2's original fix, proven by the sibling test above). The
+    side (proven by the sibling test above). The
     returned `SemanticMatchResult.incoming_embedding` is that same cached
     value, unchanged.
     """
@@ -393,9 +391,9 @@ def test_find_best_semantic_match_reuses_cached_incoming_embedding_with_zero_cal
 def test_find_best_semantic_match_incoming_embedding_ignored_when_existing_index_empty(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #31: even with a cached `incoming_embedding`, an empty
-    `existing_index` still returns `None` and makes ZERO calls -- unchanged
-    from the pre-#31 "nothing to compare against" contract (the caller's
+    """Even with a cached `incoming_embedding`, an empty
+    `existing_index` still returns `None` and makes ZERO calls -- per the
+    "nothing to compare against" contract (the caller's
     own mint-time fallback to the cached value, not this function, is what
     ends up carrying it forward -- see `dedup.dedupe_canonical_nodes`).
     """

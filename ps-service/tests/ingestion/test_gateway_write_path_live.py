@@ -1,4 +1,4 @@
-"""`falkordb_live` + `postgres_live`: ingestion's gateway write path against real stores (#208).
+"""`falkordb_live` + `postgres_live`: ingestion's gateway write path against real stores.
 
 The live twins of the fast equivalence, rerun, backfill, replay and embedding tests. The gateway
 is the production wiring in miniature: the real `PsycopgGraphLogStore` as the `ps_state` role on a
@@ -7,15 +7,15 @@ the `stack` fixture deletes afterwards.
 
 What these prove that the fast tests (in-memory fakes) cannot:
 
-* AC-BI-002, modulo identity (D2): the digest of the graph the migrated writers build equals the
-  digest of the graph the frozen pre-#208 Cypher builds on the same FalkorDB, once the legacy
+* Modulo identity: the digest of the graph the migrated writers build equals the
+  digest of the graph the frozen legacy Cypher builds on the same FalkorDB, once the legacy
   edges are given the gateway's deterministic `identity` (the one stamp Cypher below).
-* AC-BI-003 / R-embed: an embedding-less node stays embedding-free, and an existing embedding
+* Embeddings: an embedding-less node stays embedding-free, and an existing embedding
   survives a re-ingest (`SET n.embedding = coalesce(row.embedding, n.embedding)`).
-* AC-BI-005: a re-ingest changes nothing and logs nothing; a wiped graph is rebuilt from the log
+* Rerun: a re-ingest changes nothing and logs nothing; a wiped graph is rebuilt from the log
   to the digest it had.
-* AC-BI-004 (G1): an edge to a node that is nowhere is dropped silently, nothing logged for it.
-* F1: re-ingesting onto a graph written before the gateway (edges without `identity`) adds no
+* Dangling edge: an edge to a node that is nowhere is dropped silently, nothing logged for it.
+* Backfill: re-ingesting onto a graph written before the gateway (edges without `identity`) adds no
   parallel edge.
 
 Not runnable in the implementation sandbox (no FalkorDB module, no Postgres). To run: start a
@@ -179,13 +179,13 @@ def _ingest_seed(stack: _Stack, seed: InternalRegulationSeed) -> tuple[str, str]
 
 
 def _write_legacy_graphs(stack: _Stack, seed: InternalRegulationSeed) -> tuple[str, str]:
-    """The graphs the pre-#208 writer built: its own Cypher, edges without `identity`."""
+    """The graphs the legacy writer built: its own Cypher, edges without `identity`."""
     native, baseline = stack.graph_name("legacy_native"), stack.graph_name("legacy_baseline")
     write_legacy(seed, stack.handle(native), stack.handle(baseline))
     return native, baseline
 
 
-# --- AC-BI-002 (modulo identity), internal seed ----------------------------------------
+# --- modulo identity, internal seed ----------------------------------------
 
 
 @pytest.mark.parametrize("make_seed", _SEEDS)
@@ -204,7 +204,7 @@ def test_internal_seed_digest_equals_the_legacy_writers_modulo_edge_identity(
     assert sum(stack.edge_shape(native).values()) > 0
 
 
-# --- AC-BI-002 (modulo identity), external native graph --------------------------------
+# --- modulo identity, external native graph --------------------------------
 
 _CELEX = "32024R2847"
 _PROPS: dict[str, str | int] = {"text": "t", "citation_ref": "Art. 1", "order": 1}
@@ -270,7 +270,7 @@ class _External:
         )
 
     def write_legacy(self, name: str, structure: FetchedRegulatoryInstrumentStructure) -> None:
-        """The pre-#208 external writer's Cypher for `structure`, into the graph `name`."""
+        """The legacy external writer's Cypher for `structure`, into the graph `name`."""
         graph = self.stack.handle(name)
         metadata = structure.metadata
         graph.query(
@@ -321,7 +321,7 @@ def test_external_native_digest_equals_the_legacy_writers_modulo_edge_identity(
     assert sum(stack.edge_shape(run.graph).values()) == 2
 
 
-# --- AC-BI-004 (G1): a dangling edge is dropped silently ----------------------------------
+# --- a dangling edge is dropped silently ----------------------------------
 
 
 def test_an_edge_to_a_node_that_is_nowhere_is_dropped_and_nothing_is_logged_for_it(
@@ -336,7 +336,7 @@ def test_an_edge_to_a_node_that_is_nowhere_is_dropped_and_nothing_is_logged_for_
     assert stack.store.last_position(run.graph) == 5  # instrument, two nodes, two surviving edges
 
 
-# --- AC-BI-005: rerun and replay ----------------------------------------------------------
+# --- rerun and replay ----------------------------------------------------------
 
 
 @pytest.mark.parametrize("make_seed", _SEEDS)
@@ -385,7 +385,7 @@ def test_a_wiped_internal_graph_is_rebuilt_from_the_log_to_the_digest_it_had(
     assert {name: stack.digest(name) for name in expected} == expected
 
 
-# --- R-embed: AC-BI-003 for embeddings ---------------------------------------------------
+# --- embeddings ---------------------------------------------------
 
 
 def test_an_embedding_less_node_stays_embedding_free_and_a_stored_embedding_survives_reingest(

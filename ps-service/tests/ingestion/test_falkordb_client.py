@@ -55,7 +55,7 @@ def test_check_connectivity_raises_falkordb_connection_error_on_failure() -> Non
 
 def test_falkordb_connection_error_is_ingestion_configuration_error_subclass() -> None:
     """Catchable via the broader `IngestionConfigurationError` family per
-    that type's own docstring (Increment 1).
+    that type's own docstring.
     """
     assert issubclass(FalkorDBConnectionError, IngestionConfigurationError)
 
@@ -100,7 +100,7 @@ def test_native_graph_name_lowercases_and_appends_native_suffix(
 def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """S4 proof (PLAN_REVIEWED.md §6.4/Increment 12): `connect_from_config`
+    """`connect_from_config`
     threads `ServiceConfig.falkordb_host`/`falkordb_port` — resolved from
     `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` by `load_config()` — into
     `connect()`, not `config_module._DEFAULT_FALKORDB_HOST`/
@@ -136,7 +136,7 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
 def test_check_connectivity_from_config_marks_falkordb_unhealthy_when_connect_itself_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression for the gap `main.py`'s startup probe used to have: `connect()`
+    """Guards a gap in `main.py`'s startup probe: `connect()`
     (via the real `falkordb` client's eager handshake, not the lazy connect its
     docstring implies) can raise before `check_connectivity`'s own try/except
     ever runs. `connect_from_config`/`connect` failing must still mark FALKORDB

@@ -1,4 +1,4 @@
-"""The frozen legacy reference is what the pre-#213 succession writer was (issue #213, AC-BI-002).
+"""The frozen legacy reference is what the pre-gateway succession writer was.
 
 The equivalence tests compare the gateway-backed succession against these statements, so the
 statements must be the original ones and the interpreter must model only what it was taught.

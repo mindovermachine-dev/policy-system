@@ -1,4 +1,4 @@
-"""The internal-seed baseline graph goes through the gateway (#208, slices S3 and S4).
+"""The internal-seed baseline graph goes through the gateway.
 
 `{short}_baseline` receives the minted spine as one gateway group submitted after the native
 group: first the RegulatoryInstrument, then Role, Capability, Policy, Standard and Control (the

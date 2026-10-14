@@ -1,12 +1,12 @@
-"""Live FalkorDB proof of the FROZEN capability-merge statement (issue #190 A1, kept by #212).
+"""Live FalkorDB proof of the FROZEN capability-merge statement.
 
 Scripted fakes prove only call shape; this is the proof the statement is valid Cypher
 and that its semantics hold: edges move with no duplicate, the absorbed node is kept as a
-`merged` tombstone with `MERGED_INTO`, an active-status filter no longer matches it, and a
+`merged` tombstone with `MERGED_INTO`, an active-status filter does not match it, and a
 guard miss leaves the graph identical. UNVERIFIED where no FalkorDB is available (collected,
 deselected by default).
 
-Since #212 a capability merge is a gateway group; the pre-migration statement lives in
+A capability merge is a gateway group; the pre-migration statement lives in
 `_legacy_reference` and is run raw here, so the semantics the reference's interpreter models
 (and the equivalence tests compare against) stay anchored on a real FalkorDB.
 
@@ -40,7 +40,7 @@ _GRAPH = "graph_cleanup_capability_merge_live_test"
 def _frozen_merge_capabilities(
     graph: GraphHandle, *, survivor_id: str, absorbed_id: str, expected: ExpectedCounts
 ) -> None:
-    """Run the FROZEN pre-#212 merge statement raw; no row is a guard miss (issue #212)."""
+    """Run the FROZEN pre-migration merge statement raw; no row is a guard miss."""
     if not run_frozen_merge_capabilities(
         graph, survivor_id=survivor_id, absorbed_id=absorbed_id, expected=expected
     ):
@@ -274,9 +274,9 @@ def test_case_three_different_policies_are_a_guard_miss(graph: GraphHandle) -> N
 
 
 def _frozen_release(graph: GraphHandle, *, capability_id: str, policy_id: str) -> bool:
-    """Run the FROZEN pre-#212 release statement raw; `True` when it matched (issue #212).
+    """Run the FROZEN pre-migration release statement raw; `True` when it matched.
 
-    Since #212 a release is a gateway group; the statement is kept in `_legacy_reference` as the
+    A release is a gateway group; the statement is kept in `_legacy_reference` as the
     reference the equivalence tests compare against, and these live tests anchor the semantics
     the reference's interpreter models.
     """

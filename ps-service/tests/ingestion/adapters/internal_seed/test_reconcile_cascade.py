@@ -1,4 +1,4 @@
-"""Whole-document reconciliation across labels and rename cycles (GH #99, S3).
+"""Whole-document reconciliation across labels and rename cycles.
 
 A Policy rename strands its Standard/Control subtree, every label the seed carries can be dropped,
 a rename-and-retire cycle leaves exactly what a fresh ingest of the new document leaves, and an
@@ -202,7 +202,7 @@ def test_a_submission_that_only_adds_nodes_keeps_everything_and_adds_them(rig: G
 def test_resubmitting_under_a_new_version_id_retires_the_previous_version_subtree(
     rig: GatewayRig,
 ) -> None:
-    """Characterization of issue #99: ownership is graph membership, so a version bump replaces.
+    """Characterization: ownership is graph membership, so a version bump replaces.
 
     The graphs are per short name; `TESTREG-2.0` lands in the same `testreg_*` graphs and the
     submission is the whole document, so everything of `TESTREG-1.0` is retired.

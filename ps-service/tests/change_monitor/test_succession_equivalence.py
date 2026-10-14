@@ -1,9 +1,9 @@
-"""The gateway-backed succession builds the graph the frozen legacy writer built (issue #213).
+"""The gateway-backed succession builds the graph the frozen legacy writer built.
 
 Each scenario seeds a graph as a pre-gateway writer left it (edges without an identity), runs the
 FROZEN legacy statement (`_legacy_reference`, against its interpreter) on a copy, runs the real
-writer over the gateway rig on the other, and compares the two graphs with the equivalence
-harness of #207, by `canonical_digest` (AC-BI-002, AC-BI-005). "Modulo edge identity": the
+writer over the gateway rig on the other, and compares the two graphs with the graph-equivalence
+harness, by `canonical_digest`. "Modulo edge identity": the
 legacy graph's edges are stamped by the same `{type}:{source}->{target}` formula before the
 comparison, as the gateway stamps its own.
 
@@ -305,7 +305,7 @@ def test_the_gateway_succession_equals_the_frozen_legacy_writer_modulo_edge_iden
 def test_a_missing_node_is_a_state_error_where_the_old_match_was_a_silent_no_op(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Documented difference (AC-BI-006): same graph on both sides, the new side also raises."""
+    """Documented difference: same graph on both sides, the new side also raises."""
     emitter, _ = make_emitter()
     missing_prior = _Scenario(
         native=_seed_new_version,

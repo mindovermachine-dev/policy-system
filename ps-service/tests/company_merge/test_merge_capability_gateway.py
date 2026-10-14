@@ -1,8 +1,8 @@
-"""`merge_baseline_graph` mints canonical Capability nodes through the Graph Write Gateway (#210).
+"""`merge_baseline_graph` mints canonical Capability nodes through the Graph Write Gateway.
 
-Slice 5a: a `match_kind="new"` Capability is one create-only group on `policy_system`, with
+A `match_kind="new"` Capability is one create-only group on `policy_system`, with
 `created_at` fixed from the injected `ValueSource` and the embedding carried in the primitive.
-Equivalence (AC-BI-002) against the frozen legacy reference is met modulo edge identity, with the
+Equivalence against the frozen legacy reference is met modulo edge identity, with the
 reference and the gateway path given the same generated values; live digest and live interpreter
 agreement are not verifiable here (no FalkorDB in this sandbox).
 """
@@ -131,7 +131,7 @@ def _production(steps: tuple[FamilyABaseline, ...], rig: MergeRig, emitter: LogE
 def test_the_frozen_reference_and_the_gateway_path_build_the_same_graph_for_capabilities(
     scenario: str, merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-002, family C (Capability), same generated values; modulo edge identity."""
+    """Family C (Capability), same generated values; modulo edge identity."""
     steps = _SCENARIOS[scenario]
 
     reference = _reference(steps, emitter)
@@ -242,7 +242,7 @@ def test_the_frozen_backfill_statement_matches_its_pinned_hash() -> None:
 def test_the_second_regulation_backfills_the_first_mint_and_logs_it_once(
     merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-006 end to end: the unembedded first mint gets its vector, a re-run logs nothing."""
+    """End to end: the unembedded first mint gets its vector, a re-run logs nothing."""
     _production(_SCENARIOS["S-capability-second-regulation"], merge_rig, emitter)
     node = merge_rig.policy_system.nodes[("Capability", _CAP_A)]
     assert node["embedding"] is not None

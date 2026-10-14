@@ -1,6 +1,5 @@
 """Live end-to-end test for `ps_service.ingestion.pipeline.ingest_regulatory_instrument`
-(PLAN_REVIEWED.md §7 Increment 13) — the capstone acceptance proof for all
-7 of issue #14's acceptance criteria, run for real against the live
+— the capstone acceptance proof, run for real against the live
 Cellar/ELI service (`publications.europa.eu`) and a real, reachable
 FalkorDB instance.
 
@@ -9,25 +8,24 @@ in this module (via `pytestmark`): these tests make real network calls and write
 real data to FalkorDB — they are excluded from the fast regression suite
 (`-m "not cellar_live and not falkordb_live"`) and must be run explicitly.
 
-Connection is built via `connect_from_config(<provisioned state config>)` (Increment 12,
-S4 fix) — never hardcoded `"127.0.0.1"`/`6379` literals — proving the
-config surface Increment 7 added is genuinely load-bearing.
+Connection is built via `connect_from_config(<provisioned state config>)` — never hardcoded
+`"127.0.0.1"`/`6379` literals — proving the config surface is genuinely
+load-bearing.
 
 `live_runs`, below, is a module-scoped fixture: it pays the real
 network/DB cost of ingesting all three regulations exactly once; every
 `test_ac_0*` function then asserts one slice of that same real run's
-results against `spikes/cellar1/LEARNINGS.md`'s independently-confirmed
-ground truth. This keeps each AC's evidence separately readable (and
+results against independently-confirmed
+ground truth. This keeps each criterion's evidence separately readable (and
 separately reportable in pytest's output) without re-running the live
 ingestion three times over.
 
-AC-006 note (regulation-independence): already proven at the code level by
-`test_pipeline.py`'s AST scan (Increment 11) — this file does not
+Regulation independence is already proven at the code level by
+`test_pipeline.py`'s AST scan — this file does not
 re-litigate that proof. This file's own module-level `_GROUND_TRUTH` dict,
 keyed by regulation short name, is test code identifying which regulation
-to assert against — expected and explicitly not what AC-006 restricts
-(CONTEXT.md's task brief for this batch says so directly); AC-006's scan
-only walks `ps_service/ingestion/` source, never `tests/`.
+to assert against — expected and explicitly not what that scan restricts;
+the scan only walks `ps_service/ingestion/` source, never `tests/`.
 """
 
 from __future__ import annotations
@@ -59,10 +57,9 @@ pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live, pytest.mark.po
 
 _VERSION = "1.0"
 
-# Ground truth cross-checked against spikes/cellar1/LEARNINGS.md's
-# independently-confirmed table (fetched live, verified against public
-# knowledge of each regulation's real structure — see LEARNINGS.md's own
-# cross-check notes for CRA's PDF-based extraction and GDPR's known-zero
+# Ground truth cross-checked against an independently-confirmed table
+# (fetched live, verified against public knowledge of each regulation's
+# real structure; includes CRA's PDF-based extraction and GDPR's known-zero
 # annex count).
 _GROUND_TRUTH: dict[str, dict[str, object]] = {
     "CRA": {
@@ -112,7 +109,7 @@ def live_runs(
     reproducible run — local dev FalkorDB data, safe to reset.
     """
     # The state Postgres (graph log + audit trail) is the provisioned scratch cluster's `ps_state`
-    # role: the gateway-only write path (issue #208) needs it, and it must not be ambient env.
+    # role: the gateway-only write path needs it, and it must not be ambient env.
     config = provisioned_graph_log.state_config()
     db = connect_from_config(config)
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)
@@ -128,7 +125,7 @@ def live_runs(
     # Real, default `fetch_xhtml` transport — genuinely live, no mocking.
     adapter = CellarEliAdapter()
 
-    # The native graph is written through the Graph Write Gateway (issue #208): the real log store
+    # The native graph is written through the Graph Write Gateway: the real log store
     # (PS state Postgres) and the real FalkorDB opener, one system audit row per run.
     gateway = build_default_graph_write_gateway(config)
     record_audit = build_system_audit_recorder(config)
@@ -136,7 +133,7 @@ def live_runs(
     runs: dict[str, _LiveRun] = {}
     for short_name, spec in _GROUND_TRUTH.items():
         graph = select_graph(db, native_graph_name(short_name))
-        # AC-001: this call's own path is
+        # This call's own path is
         #   ingest_regulatory_instrument -> adapter.fetch_regulatory_instrument_structure
         #   (CellarEliAdapter) -> fetch_xhtml (real HTTP GET to
         #   publications.europa.eu/resource/celex/{identifier}) ->
@@ -186,7 +183,7 @@ def _regulatory_instrument_row(run: _LiveRun) -> list[object]:
     return rows[0]
 
 
-# --- AC-001: live fetch, all 3, no local file/fixture/PDF ------------------
+# --- live fetch, all 3, no local file/fixture/PDF ------------------
 
 
 def test_ac001_ingestion_succeeds_live_for_all_three_regulations(
@@ -202,7 +199,7 @@ def test_ac001_ingestion_succeeds_live_for_all_three_regulations(
         assert run.ingest_result.regulatory_instrument_id == f"{short_name}-{_VERSION}"
 
 
-# --- AC-002: Regulation node id + 6 bibliographic fields --------------------
+# --- Regulation node id + 6 bibliographic fields --------------------
 
 
 @pytest.mark.parametrize("short_name", sorted(_GROUND_TRUTH))
@@ -239,7 +236,7 @@ def test_ac002_regulation_node_id_and_bibliographic_fields(
     assert instrument_type == _GROUND_TRUTH[short_name]["instrument_type"]
 
 
-# --- AC-003: every recital/article/annex persisted --------------------------
+# --- every recital/article/annex persisted --------------------------
 
 
 @pytest.mark.parametrize("short_name", sorted(_GROUND_TRUTH))
@@ -263,7 +260,7 @@ def test_ac003_structural_element_counts_match_learnings_ground_truth(
         )
 
 
-# --- AC-004: every Article/Annex/... reachable from Regulation --------------
+# --- every Article/Annex/... reachable from Regulation --------------
 
 
 @pytest.mark.parametrize("short_name", sorted(_GROUND_TRUTH))
@@ -291,7 +288,7 @@ def test_ac004_every_structural_label_fully_reachable_from_regulation_node(
         assert counts[element_type].total == expected_count
 
 
-# --- AC-005: 3 distinct run_ids, correlated in structured logs -------------
+# --- 3 distinct run_ids, correlated in structured logs -------------
 
 
 def test_ac005_three_distinct_run_ids_captured_across_the_three_runs(
@@ -317,7 +314,7 @@ def test_ac005_three_distinct_run_ids_captured_across_the_three_runs(
         )
 
 
-# --- AC-007: NIS2 transposition deadline vs. CRA/GDPR application dates ----
+# --- NIS2 transposition deadline vs. CRA/GDPR application dates ----
 
 
 def test_ac007_nis2_effective_date_is_the_transposition_deadline(
@@ -326,7 +323,7 @@ def test_ac007_nis2_effective_date_is_the_transposition_deadline(
     """The Directive-specific case: NIS2's `effective_date` must be the
     Member-State transposition deadline (Art. 41), not the Directive's own
     EU-level entry-into-force date — the CA doc's Regulation mapping row
-    convention (PLAN_REVIEWED.md §0.1/§3.2).
+    convention.
     """
     _, _, effective_date_raw, _, _, _, _ = _regulatory_instrument_row(live_runs["NIS2"])
     assert isinstance(effective_date_raw, str)

@@ -1,4 +1,4 @@
-"""`GraphWriteGateway.read_persisted_elements` enumerates a graph's ids and edge identities (#99).
+"""`GraphWriteGateway.read_persisted_elements` enumerates a graph's ids and edge identities.
 
 Read-only: the node ids and edge identities the graph holds, the edges that carry no identity,
 and the log position the read stands at. The reply shape is checked, so a row that cannot be

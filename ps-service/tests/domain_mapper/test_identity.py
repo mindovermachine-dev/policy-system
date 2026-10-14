@@ -43,10 +43,9 @@ def test_requirement_id_shape_with_letter() -> None:
 
 
 def test_requirement_id_for_annex_derived_article_number() -> None:
-    """GH #25 decision 1.4's plausibility argument, pinned down as an
-    executable fact: an annex-shaped `(article="I", paragraph="1")` input
-    -- fed through the real, UNCHANGED `requirement_id` formula (AC-BI-007,
-    no new identity function) -- produces the expected id shape and never
+    """An annex-shaped `(article="I", paragraph="1")` input
+    -- fed through the real `requirement_id` formula, with no
+    annex-specific identity function -- produces the expected id shape and never
     collides with a real numeric-Article-derived id.
     """
     assert requirement_id("CRA-1.0", "I", "1", None) == "CRA-1.0_req_art_I.1"
@@ -67,7 +66,7 @@ def test_obligation_id_is_deterministic() -> None:
 
 def test_obligation_id_is_role_scoped() -> None:
     """Same duty text under two different Roles is two distinct Obligation
-    nodes — the resolution of issue #42. An Obligation is a weak entity of
+    nodes — so an Obligation is a weak entity of
     exactly one Role, so `Role -[:HAS]-> Obligation` `1 : 0..*` holds
     structurally rather than by a runtime collision check.
     """
@@ -108,7 +107,7 @@ def test_capability_id_differs_for_different_names() -> None:
     assert first != second
 
 
-# --- practice_area_id (issue #93 Slice 1) ---------------------------------
+# --- practice_area_id -------------------------------------------------------
 
 
 def test_practice_area_id_is_deterministic() -> None:
@@ -124,7 +123,7 @@ def test_practice_area_id_differs_for_different_names() -> None:
     assert first != second
 
 
-# --- risk_path_id (issue #93 Slice 2) -------------------------------------
+# --- risk_path_id -----------------------------------------------------------
 
 
 def test_risk_path_id_is_deterministic() -> None:
@@ -140,9 +139,9 @@ def test_risk_path_id_differs_for_different_names() -> None:
     assert first != second
 
 
-# --- policy_id / standard_id / control_id (issue #54, F4 -- moved from S1) ---
+# --- policy_id / standard_id / control_id -----------------------------------
 #
-# B3 (FLAWS2.md BLOCKER-3): the starting blueprint's worked example ids
+# The starting blueprint's worked example ids
 # (`pol_engineering_policy_governance_6b0f1a`, ps-domain-concepts.md's
 # `pol_data_protection_a8f3b1`) are hand-authored illustrations, not formula
 # output -- asserting `policy_id(title) == <hand-authored id>` would fail
@@ -166,8 +165,7 @@ _STANDARD_ID_SHAPE_RE = re.compile(r"^std_[a-z0-9_]+_[0-9a-f]{6}$")
 
 
 def test_standard_id_shape_and_determinism() -> None:
-    """GH #76 Slice 2: `standard_id` is now `(policy_node_id, title)`-keyed (the old
-    `(policy_node_id, version)` signature no longer exists) -- mirrors
+    """`standard_id` is `(policy_node_id, title)`-keyed -- mirrors
     `obligation_id`'s own shape: the child's own title is the visible slug, the
     parent Policy id enters only the opaque hash.
     """
@@ -191,8 +189,8 @@ def test_standard_id_slug_is_title_only() -> None:
 
 
 def test_standard_id_differs_for_different_titles_under_same_policy() -> None:
-    """AC-BI-002's literal proof: two different titles under the same Policy yield
-    two different ids -- the fix for the version-keyed collision this issue resolves
+    """Two different titles under the same Policy yield
+    two different ids, so identity is not version-keyed
     (`SUPPORTED_BY` is `1 : 1..*`, so a Policy may have several Standards).
     """
     pid = policy_id("Data Protection Policy")
@@ -203,8 +201,7 @@ _CONTROL_ID_SHAPE_RE = re.compile(r"^ctrl_[a-z0-9_]+_[0-9a-f]{6}$")
 
 
 def test_control_id_shape_and_determinism() -> None:
-    """GH #76 Slice 3: `control_id` is now `(standard_node_id, title)`-keyed (the old
-    `(standard_node_id, control_type)` signature no longer exists) -- mirrors
+    """`control_id` is `(standard_node_id, title)`-keyed -- mirrors
     `standard_id`'s own shape: the child's own title is the visible slug, the
     parent Standard id enters only the opaque hash.
     """
@@ -228,10 +225,9 @@ def test_control_id_slug_is_title_only() -> None:
 
 
 def test_policy_id_v1_is_byte_for_byte_unchanged_by_prior_policy_id_extension() -> None:
-    """Issue #134 D-4: `prior_policy_id=None` reproduces today's formula
-    byte-for-byte -- AC-BI-012's "returns exactly today's id for every
-    existing Policy." Pinned to the literal value computed before this
-    slice's change, not merely self-consistency, so a future regression in
+    """`prior_policy_id=None` reproduces the unversioned formula
+    byte-for-byte, returning the same id for every existing Policy.
+    Pinned to a literal value, not merely self-consistency, so a future regression in
     the `prior_policy_id is None` branch would actually be caught.
     """
     assert policy_id("Data Protection Policy") == "pol_data_protection_policy_a0acad"
@@ -255,11 +251,11 @@ def test_policy_id_with_prior_policy_id_differs_from_v1_and_is_prior_scoped() ->
 
 
 def test_control_id_differs_for_different_titles_under_same_standard_even_same_type() -> None:
-    """AC-BI-003's literal proof: two different titles under the same Standard yield
-    two different ids, even when both would-be Controls share the same `type` --
-    the fix for the type-keyed collision this issue resolves (`IMPLEMENTED_BY` is
+    """Two different titles under the same Standard yield
+    two different ids, even when both would-be Controls share the same `type`,
+    so identity is not type-keyed (`IMPLEMENTED_BY` is
     `1 : 0..*`, so a Standard may have several Controls). `type` is not even an
-    argument to `control_id` any more -- both Controls below would carry
+    argument to `control_id` -- both Controls below would carry
     `type: "automated"` as a submitted node property, entirely independent of
     this identity check, which is exactly the point: distinctness comes from
     title alone, never from type.

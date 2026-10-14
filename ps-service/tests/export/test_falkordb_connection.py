@@ -1,4 +1,4 @@
-"""Tests for Export's read handle and the gateway key port's handles (PLAN.md Slice 2.1)."""
+"""Tests for Export's read handle and the gateway key port's handles."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from falkordb import FalkorDB
 
     # Cross-module import of these module-private Protocols is deliberate here: the staged-write
-    # swap imports them from the gateway's key port (#215).
+    # swap imports them from the gateway's key port.
     from ps_service.export.falkordb_connection import (
         _GraphQueryHandle,  # pyright: ignore[reportPrivateUsage]
     )
@@ -82,7 +82,7 @@ class _FakeFalkorDB:
 
 
 def test_fake_connection_satisfies_raw_graph_connection_protocol_shape() -> None:
-    """Static-shape proof (PLAN.md Slice 2.1, CHANGES2.md §3.2 amendment).
+    """Static-shape proof.
 
     Fails `basedpyright`, not this assert, if wrong.
     """
@@ -93,7 +93,7 @@ def test_fake_connection_satisfies_raw_graph_connection_protocol_shape() -> None
 
 
 def test_fake_pipeline_satisfies_watchable_pipeline_protocol_shape() -> None:
-    """Static-shape proof (CHANGES.md B1): fails `basedpyright`, not this assertion, if wrong."""
+    """Static-shape proof fails `basedpyright`, not this assertion, if wrong."""
     pipe: _WatchablePipeline = _FakePipeline()
 
     pipe.watch("watched_key")

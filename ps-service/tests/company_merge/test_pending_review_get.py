@@ -1,4 +1,4 @@
-"""`pending_review.get_pending_review` (issue #195): a single review by id, WITHOUT the resolvable
+"""`pending_review.get_pending_review`: a single review by id, WITHOUT the resolvable
 predicate of `list_pending_reviews`, so a stale review still yields its entity ids for auditing.
 """
 

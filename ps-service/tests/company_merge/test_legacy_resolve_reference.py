@@ -1,18 +1,17 @@
-"""The frozen near-miss resolution statements and their interpreter (issue #210, slice 10a).
+"""The frozen near-miss resolution statements and their interpreter.
 
-`_legacy_resolve_reference` keeps the pre-#210 `CASE`-winner merge statement verbatim and applies it
+`_legacy_resolve_reference` keeps the former `CASE`-winner merge statement verbatim and applies it
 clause by clause. This file proves:
 
 * the frozen texts are the original ones (sha256 pins taken from `git show HEAD:`);
 * each clause does what Cypher does: the winner rule (older `created_at` wins, a missing one wins,
   a tie and both-missing go to the incoming node), the five `FOREACH` rewires, `DETACH DELETE`,
   the silent no-ops of the leading and trailing `MATCH`;
-* each clause of the winner predicate matters: the four mutations of CHANGES.md F5d (`<=` to `<`,
+* each clause of the winner predicate matters: the four mutations (`<=` to `<`,
   `coalesce` dropped on either side or on both) change the outcome of a scenario, and change the
   pinned hash;
-* `pending_review.resolve_review` leaves the same graph as the reference (A2). Slice 10a made the
-  comparison against the then-current legacy write (same statements, same graph); slice 10b moved
-  production onto the gateway and the comparison became the digest, modulo edge identity.
+* `pending_review.resolve_review` leaves the same graph as the reference: the comparison is the
+  digest, modulo edge identity.
 
 Met modulo edge identity; the live digest and live interpreter agreement are not verifiable here
 (no FalkorDB in this sandbox).
@@ -347,9 +346,9 @@ def test_the_frozen_reference_and_current_production_build_the_same_graph_for_re
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """Slice 10a compared today's legacy write with the reference; since 10b production writes a
-    gateway group, so the comparison is the digest modulo edge identity (met modulo identity; live
-    digest not verifiable here), over a graph with an edge of three families and one that dies.
+    """Production writes a gateway group, so the comparison against the reference is the digest
+    modulo edge identity (met modulo identity; live digest not verifiable here), over a
+    graph with an edge of three families and one that dies.
     """
     emitter, _log_path = make_emitter()
     reference = _graph(

@@ -1,4 +1,4 @@
-"""Tests for `ps_service.curated_source.store`, the thin catalog-override adapter (issue #130).
+"""Tests for `ps_service.curated_source.store`, the thin catalog-override adapter.
 
 The adapter maps the three override operations onto the one registered runtime-config key
 (`CATALOG_SOURCE_KEY`). Value validation, the audit row and transactionality belong to the

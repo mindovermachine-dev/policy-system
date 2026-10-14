@@ -1,4 +1,4 @@
-"""Tests for `ps_service.export.serialize` (PLAN.md Slice 2.2, CHANGES2.md §3.3).
+"""Tests for `ps_service.export.serialize`.
 
 The fake `_GraphQueryHandle` dispatches by a distinctive substring of each
 query -- mirroring `tests/company_merge/test_graph_reader.py`'s own

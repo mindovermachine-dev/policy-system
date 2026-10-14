@@ -1,13 +1,9 @@
-"""Live FalkorDB proof for `restore_instrument`'s native leg (PLAN.md Slice 5.5, D20).
+"""Live FalkorDB proof for `restore_instrument`'s native leg.
 
-Real FalkorDB, a `RestoreArtifact` with a valid native graph and an
-EMPTY baseline graph (this slice's own "baseline processing stubbed as a
-no-op" scope -- Slice 5.6 is what exercises a real baseline merge) --
-`restore_instrument` stages the native blob (`staging.stage_graph`) and, on
-the finalize path (`staging.stage_and_finalize_policy_system_leg`, CHANGES.md
-B1), installs it at `{short}_native`; the restored graph is queryable with
-exactly the same content as the original artifact (D20: a straight load, no
-dedup step at all for this leg).
+Real FalkorDB, a `RestoreArtifact` with a valid native graph and an EMPTY baseline graph --
+`restore_instrument` installs the native blob at `{short}_native`; the restored graph is queryable
+with exactly the same content as the original artifact (a straight load, no dedup step at all for
+this leg).
 """
 
 from __future__ import annotations

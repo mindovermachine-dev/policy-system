@@ -1,4 +1,4 @@
-"""Tests for `ps_service.company_merge.governance_import` (issues #227, #210, AC-BI-005).
+"""Tests for `ps_service.company_merge.governance_import`.
 
 The draft-governance pass is shared by restore and live internal ingest: a Policy/Standard/Control
 tree is imported as `draft`, owned by the importing caller, create-only. The persistence step is
@@ -171,7 +171,7 @@ def test_count_fields_carry_the_written_counts() -> None:
 
 
 def test_the_draft_writer_is_the_one_the_caller_supplies(merge_rig: MergeRig) -> None:
-    """Restore passes its snapshot writer (issue #210, D1); the pass must use it."""
+    """Restore passes its snapshot writer; the pass must use it."""
     seen: list[tuple[object, tuple[str, ...]]] = []
     sentinel = GovernanceDraftCounts(policies=7, standards=0, controls=0, status_overridden=0)
 

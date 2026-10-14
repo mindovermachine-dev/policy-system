@@ -1,4 +1,4 @@
-"""`instrument.restore` typed audit details and failure classification (issue #195, Slice 4)."""
+"""`instrument.restore` typed audit details and failure classification."""
 
 from __future__ import annotations
 

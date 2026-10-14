@@ -1,8 +1,8 @@
-"""`release-capability-governance` writes through the Graph Write Gateway (issue #212).
+"""`release-capability-governance` writes through the Graph Write Gateway.
 
 One approved release is one gateway group: a `DeleteEdge` of the `GOVERNED_BY` edge, linked to the
 `applied` audit row, guarded by the log position read BEFORE the guard reads
-(AC-BI-003/005/006/008).
+(guard, group, failure matrix).
 The guard is the old statement's `WHERE`, now evaluated in Python on a fresh read.
 """
 
@@ -118,7 +118,7 @@ def _rows(rig: CleanupRig) -> list[tuple[str, str]]:
     return [(r.action, r.outcome) for r in rig.audit.rows]
 
 
-# -- the group (AC-BI-005, AC-BI-006) -------------------------------------------------------------
+# -- the group ------------------------------------------------------------------------------------
 
 
 def test_one_release_is_exactly_one_group_deleting_the_governed_by_edge_by_identity(
@@ -186,7 +186,7 @@ def test_the_build_is_pure_and_names_nothing_but_the_edge() -> None:
     )
 
 
-# -- the guard: the old WHERE, in Python (AC-BI-003) ----------------------------------------------
+# -- the guard: the old WHERE, in Python ----------------------------------------------------------
 
 
 def _state(rig: CleanupRig) -> ReleaseState:
@@ -277,7 +277,7 @@ def test_an_unrelated_write_between_the_position_read_and_the_append_is_refused(
     )
 
 
-# -- legacy identity-less edges (AC-BI-005, F4) ---------------------------------------------------
+# -- legacy identity-less edges -------------------------------------------------------------------
 
 
 def test_a_legacy_edge_is_stamped_first_so_no_parallel_edge_results(
@@ -317,7 +317,7 @@ def test_a_refused_position_may_leave_the_legacy_stamp_in_the_log_and_no_release
     )  # stamped, and the delete never ran
 
 
-# -- the failure matrix (AC-BI-008) ---------------------------------------------------------------
+# -- the failure matrix ---------------------------------------------------------------------------
 
 
 def _reject_the_group(rig: CleanupRig) -> None:

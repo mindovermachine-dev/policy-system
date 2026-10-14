@@ -1,9 +1,8 @@
-"""Pure planner for `release-capability-governance` (issue #190, slice 14 a).
+"""Pure planner for `release-capability-governance`.
 
-AC-BI-013 (a draft policy's `GOVERNED_BY` edge may be released), AC-BI-014 (an approved policy
-is rejected with a pointer to the policy lifecycle), D12 (`deprecated` is rejected like
-`approved`), Decision 2 / E1 (a fork carries the whole governed set, so the pointer says so), and
-the AC-BI-021 before/after snapshot.
+A draft policy's `GOVERNED_BY` edge may be released; an approved policy is rejected with a
+pointer to the policy lifecycle, and `deprecated` is rejected like `approved`; a fork carries the
+whole governed set, so the pointer says so; the plan carries a before/after snapshot.
 """
 
 from __future__ import annotations

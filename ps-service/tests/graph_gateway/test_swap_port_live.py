@@ -1,7 +1,6 @@
-"""`falkordb_live` twin of the swap key port (issue #214 S6, AC-BI-003, AC-BI-009).
+"""`falkordb_live` twin of the swap key port.
 
-NOT RUN in the implementation sandbox (no FalkorDB, no Postgres): written for the user's
-environment. Part 1 proves the real `FalkorDBKeyPort` commands (copy independent of later writes,
+Part 1 proves the real `FalkorDBKeyPort` commands (copy independent of later writes,
 an absent key copying as empty, discard of a missing key, an atomic three-key rename that
 overwrites, a refused WATCH). Part 2 runs a real swap set through the gateway against a real
 FalkorDB (in-memory log) with a reader polling the three graphs. Part 3 (`postgres_live` too)

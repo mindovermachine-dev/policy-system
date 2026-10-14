@@ -1,4 +1,4 @@
-"""The slim output contract on the real `DOMAIN_SCHEMA` (AC-BI-009, 011, 012 proxy, 019).
+"""The slim output contract on the real `DOMAIN_SCHEMA`.
 
 To regenerate the golden after a deliberate schema or format change:
 write `render_slim_schema(DOMAIN_SCHEMA)` (no trailing newline added) to
@@ -46,7 +46,7 @@ def _edge_line_prefix(edge: Edge) -> str:
 
 
 def test_every_label_property_and_edge_is_present() -> None:
-    """AC-BI-009: names, type text, enum values, required marks, edge ends and cardinality."""
+    """Names, type text, enum values, required marks, edge ends and cardinality."""
     text = render_slim_schema(DOMAIN_SCHEMA)
     lines = text.splitlines()
 
@@ -69,7 +69,7 @@ def test_every_label_property_and_edge_is_present() -> None:
 
 
 def test_slim_output_has_no_notes_and_no_prose() -> None:
-    """AC-BI-009: no note / rule text from the schema and no document sections."""
+    """No note / rule text from the schema and no document sections."""
     text = render_slim_schema(DOMAIN_SCHEMA)
 
     notes = [prop.note for node in DOMAIN_SCHEMA.nodes for prop in node.properties if prop.note]
@@ -85,30 +85,30 @@ def test_slim_output_has_no_notes_and_no_prose() -> None:
 
 
 def test_slim_is_strictly_shorter_than_full_document() -> None:
-    """AC-BI-011: the tool result is smaller than the document it replaces."""
+    """The tool result is smaller than the document it replaces."""
     assert len(render_slim_schema(DOMAIN_SCHEMA)) < len(_packaged_doc())
 
 
 def test_slim_output_is_deterministic() -> None:
-    """AC-BI-009: rendering twice yields identical text."""
+    """Rendering twice yields identical text."""
     assert render_slim_schema(DOMAIN_SCHEMA) == render_slim_schema(DOMAIN_SCHEMA)
 
 
 def test_slim_output_matches_golden() -> None:
-    """AC-BI-009: the whole output is pinned; see the module docstring to regenerate."""
+    """The whole output is pinned; see the module docstring to regenerate."""
     assert render_slim_schema(DOMAIN_SCHEMA) == _GOLDEN.read_text(encoding="utf-8")
 
 
 def test_legend_states_tombstone_and_active_default() -> None:
-    """F7: the legend explains `merged` tombstones and the `status = "active"` default."""
+    """The legend explains `merged` tombstones and the `status = "active"` default."""
     lines = render_slim_schema(DOMAIN_SCHEMA).splitlines()
 
     assert _LEGEND in lines
-    assert len(_LEGEND) <= 200  # legend length cap from CHANGES A7
+    assert len(_LEGEND) <= 200  # legend length cap
     assert lines.index(_LEGEND) == 3  # fourth header line, after cardinality legend
     assert lines[2].startswith('Cardinality "S : T"')
 
 
 def test_slim_size_stays_within_the_recorded_ceiling() -> None:
-    """AC-BI-012 proxy: the result stays near the measured size so it stays inline."""
+    """The result stays near the measured size so it stays inline."""
     assert len(render_slim_schema(DOMAIN_SCHEMA)) <= _CEILING_FACTOR * _MEASURED_SLIM_CHARS

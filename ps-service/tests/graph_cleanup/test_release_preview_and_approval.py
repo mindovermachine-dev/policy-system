@@ -1,9 +1,9 @@
 """Preview and approval for `release-capability-governance`, plus `check-cleanup-approval`
-for a release approval (issue #190, slice 14 d).
+for a release approval.
 
-AC-BI-013 (a draft policy: preview, no writes, approval bound to the capability and policy),
-AC-BI-014 / D12 (approved, deprecated and proposed rejected before any approval, with a pointer),
-AC-BI-016-style validation (nonexistent, tombstone, ungoverned), A9 (reconciliation).
+Covers a draft policy (preview, no writes, approval bound to the capability and policy),
+approved, deprecated and proposed policies rejected before any approval with a pointer,
+validation of nonexistent, tombstone and ungoverned targets, and reconciliation.
 """
 
 from __future__ import annotations

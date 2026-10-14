@@ -1,4 +1,4 @@
-"""The Domain Mapper reads through `ReadOnlyGraph` and imports no driver (#215, S3c)."""
+"""The Domain Mapper reads through `ReadOnlyGraph` and imports no driver."""
 
 from __future__ import annotations
 

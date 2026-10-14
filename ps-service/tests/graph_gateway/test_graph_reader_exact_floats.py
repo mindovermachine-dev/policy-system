@@ -1,4 +1,4 @@
-"""State reads give back stored 64-bit floats bit-identically (#207 S2L baseline fix, AC-RD-007).
+"""State reads give back stored 64-bit floats bit-identically.
 
 FalkorDB prints a double with 15 significant digits in every reply; the fake graph does the same.
 Without the exact-float columns the no-op filter would compare a lossy read against the exact

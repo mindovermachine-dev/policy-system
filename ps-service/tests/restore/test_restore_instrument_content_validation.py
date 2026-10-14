@@ -1,11 +1,10 @@
-"""Tests for `restore_instrument`'s content-validation ordering (GH #104, AC-BI-006).
+"""Tests for `restore_instrument`'s content-validation ordering.
 
 A label/relationship-type violation in EITHER leg is refused before any
 FalkorDB call of any kind. Proven with a `db` spy that records, then refuses,
 every attribute access, and a baseline-ONLY violation (the native leg is
-valid) -- the exact case the pre-#104 order (stage native, then validate
-baseline inside `stage_graph`) got wrong: `{short}_native__restoring__*` had
-already been populated by the time the baseline leg was rejected.
+valid) -- so validation must cover both legs before any graph is
+touched.
 """
 
 from __future__ import annotations
@@ -126,7 +125,7 @@ def test_content_violation_emits_started_then_failed_audit_entries(
 def test_baseline_with_a_merged_capability_is_rejected_before_any_db_call(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #190: an artifact cannot mint an orphan tombstone via `ON CREATE SET`."""
+    """An artifact cannot mint an orphan tombstone via `ON CREATE SET`."""
     emitter, _log_path = make_emitter()
     spy_db = _SpyDb()
     baseline = SerializedGraph(

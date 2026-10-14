@@ -1,11 +1,9 @@
-"""The reads that precede a write do not drag node payloads over the wire (#207 S19).
+"""The reads that precede a write do not drag node payloads over the wire.
 
-Found by the CRA x10 load.
-
-A group of edges used to read the full state of every endpoint, `properties(n)` with its
+A group of edges must not read the full state of every endpoint, `properties(n)` with its
 3,072-double embedding included, only to prove the endpoint exists. 500 such rows took 1.1 s on a
 real FalkorDB, past its default 1000 ms query timeout, so a bulk load failed with
-`Query timed out`. Endpoints that the group does not otherwise act on are now checked by id only,
+`Query timed out`. Endpoints that the group does not otherwise act on are checked by id only,
 and the reads that do need the state are bounded in rows per statement.
 """
 

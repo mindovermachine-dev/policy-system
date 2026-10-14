@@ -1,9 +1,7 @@
-"""Tests for `tools/domain-mapper/exclusion_audit.py`'s row rendering (issue #27, Slice 1).
+"""Tests for `tools/domain-mapper/exclusion_audit.py`'s row rendering and report assembly.
 
-Row-rendering only at this slice — the aggregate-table/recommendation tests land in
-Slice 4 (PLAN.md §3 Slice 1). Also carries this slice's end-to-end proof (per the
-implementation brief: the full capture -> flag -> propose(AI-labeled) -> report-row chain,
-exercised hermetically over the 3 fixture units `test_exclusion_audit_capture.py`
+Also carries an end-to-end proof: the full capture -> flag -> propose(AI-labeled) -> report-row
+chain, exercised hermetically over the 3 fixture units `test_exclusion_audit_capture.py`
 defines), since `render_report_row` is the chain's final consumer.
 
 Loads `exclusion_audit.py` by path exactly as the sibling `test_exclusion_audit_*.py`
@@ -87,7 +85,7 @@ def test_render_report_row_without_proposal_includes_capture_fields(
 def test_render_report_row_standalone_still_carries_ai_proposed_tag(
     make_emitter: MakeEmitter,
 ) -> None:
-    """CHANGES.md row 4: a single row, rendered standalone (outside any aggregate report
+    """A single row, rendered standalone (outside any aggregate report
     table), still carries the `*(AI-proposed)*` tag — not only the final Markdown
     report's table header.
     """
@@ -129,12 +127,12 @@ def _scripted_call_completion(responses: dict[str, str]):
 
 
 def test_full_pipeline_end_to_end_over_three_fixture_units(make_emitter: MakeEmitter) -> None:
-    """The vertical slice this issue's Slice 1 exists to prove: capture -> flag ->
+    """The vertical slice: capture -> flag ->
     propose(AI-labeled) -> report-row, chained end-to-end over 3 hermetic fixture units —
     one that extracts 0 candidates (flagged, then classified), one that extracts >0
     (not flagged, no classification attempted), and one whose extraction response is
     malformed (captured as an error, never conflated with a genuine zero-candidate flag,
-    and likewise never sent to classification — PLAN.md §4's design note).
+    and likewise never sent to classification).
     """
     module = _load_exclusion_audit_module()
     emitter, _log_path = make_emitter()
@@ -242,15 +240,15 @@ def test_full_pipeline_end_to_end_over_three_fixture_units(make_emitter: MakeEmi
 #
 # The canonical `summarize_regulation`/`render_findings_report` hermetic tests
 # (`test_summarize_regulation_counts`, `test_recommendation_reflects_miss_rate`,
-# `test_report_labels_classifications_as_ai_proposed`, PLAN.md §3 Slice 4's own named
-# tests) live further below in this file — this section only adds the one thing they
-# don't cover: `main()`'s cached-mode file-IO wiring (CHANGES.md row 1b).
+# `test_report_labels_classifications_as_ai_proposed`) live further below in this file —
+# this section only adds the one thing they
+# don't cover: `main()`'s cached-mode file-IO wiring.
 
 
 def test_main_cached_mode_assembles_report_from_json_with_zero_extraction_calls(
     tmp_path: Path, make_emitter: MakeEmitter
 ) -> None:
-    """CHANGES.md row 1b: `main()` in its (default) cached mode reads
+    """`main()` in its (default) cached mode reads
     `records/{regulation}.json` and assembles the report WITHOUT calling
     `capture_unit_record`/`propose_classification`/`route_completion` at all. Proven here
     by never providing a working `call_completion` — if cached mode ever tried a live
@@ -321,7 +319,7 @@ def test_main_cached_mode_assembles_report_from_json_with_zero_extraction_calls(
     assert "Provisional" in report_text
 
 
-# --- Slice 4: summarize_regulation / render_findings_report (AC-BI-008/009) -
+# --- summarize_regulation / render_findings_report ---------------------------
 
 
 def _record(
@@ -352,9 +350,9 @@ def _proposal(*, citation_ref: str, label: str, rationale: str = "Because.") -> 
 
 def test_summarize_regulation_counts(make_emitter: MakeEmitter) -> None:
     """`summarize_regulation` rolls up a regulation's records + AI-proposed proposals into
-    the AC-BI-008 per-regulation totals: units processed, zero-candidate count, and a
-    classification breakdown covering the 3 AC-BI-006 labels plus a flagged-but-
-    unclassified count and an error count (PLAN.md §4's design note: an errored capture
+    the per-regulation totals: units processed, zero-candidate count, and a
+    classification breakdown covering the 3 classification labels plus a flagged-but-
+    unclassified count and an error count (an errored capture
     never folds into the 3-way classification breakdown).
     """
     module = _load_exclusion_audit_module()
@@ -386,10 +384,10 @@ def test_summarize_regulation_counts(make_emitter: MakeEmitter) -> None:
 
 
 def test_recommendation_reflects_miss_rate(make_emitter: MakeEmitter) -> None:
-    """AC-BI-009: the report's recommendation wording is keyed to the observed
+    """The report's recommendation wording is keyed to the observed
     (AI-proposed, unreviewed) miss rate — 0 misses states "no action"; >=1 miss states
-    "open a follow-up issue to narrow the prompt", matching AC-BI-009's own two named
-    outcomes verbatim.
+    "open a follow-up issue to narrow the prompt", matching the two expected
+    outcomes.
     """
     module = _load_exclusion_audit_module()
 
@@ -423,8 +421,7 @@ def test_recommendation_reflects_miss_rate(make_emitter: MakeEmitter) -> None:
 def test_report_labels_classifications_as_ai_proposed(make_emitter: MakeEmitter) -> None:
     """The assembled findings report never presents a classification as human-confirmed:
     every classification-carrying row is tagged AI-proposed/unreviewed, and the
-    recommendation section carries the provisional-pending-human-review heading
-    (CHANGES.md row 4, CONTEXT.md user decision 2).
+    recommendation section carries the provisional-pending-human-review heading.
     """
     module = _load_exclusion_audit_module()
 

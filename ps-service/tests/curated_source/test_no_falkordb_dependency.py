@@ -1,4 +1,4 @@
-"""AC-BI-009 (issue #130): `curated_source` has no FalkorDB/`redis` dependency of its own.
+"""`curated_source` has no FalkorDB/`redis` dependency of its own.
 
 The override moved to the PS state Postgres (`runtime_config`); `GET /catalog` therefore needs
 no graph handle. Checked structurally on the real source tree: no import of, and no token

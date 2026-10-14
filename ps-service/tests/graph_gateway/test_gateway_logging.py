@@ -1,4 +1,4 @@
-"""The Graph Write Gateway's structured logging, across every path (issue #206, S14; AC-BI-013).
+"""The Graph Write Gateway's structured logging, across every path.
 
 Only identifiers and positions may be logged: never a payload, an embedding, a label, an
 identity, a property key or value, exception text, a host or a credential. One driver exercises

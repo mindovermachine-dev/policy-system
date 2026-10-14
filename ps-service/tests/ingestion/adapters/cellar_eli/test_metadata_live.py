@@ -1,6 +1,5 @@
 r"""Live verification: `extract_metadata`'s RDF-based `effective_date` resolution
-(issue #62, `.orchestrator/tracker/issue-62-cellar-effective-date/PLAN_REVISED.md`
-§8 item 10 / §9 Slice 10) against the real Cellar/ELI service.
+against the real Cellar/ELI service.
 
 `@pytest.mark.cellar_live` on every test in this module (via `pytestmark`):
 real network calls to `publications.europa.eu` -- excluded from the fast
@@ -9,18 +8,12 @@ regression suite (`-m "not cellar_live"`) and must be run explicitly:
     uv run pytest ps-service/tests/ingestion/adapters/cellar_eli/test_metadata_live.py \
         -m cellar_live -v
 
-Placed alongside `test_structure_live.py` (same directory, same
-`@pytest.mark.cellar_live` convention) rather than extending
-`ps-service/tests/api/test_ingestion_orchestration_live.py`: that module's
-own purpose is `resolve_via_cellar` (the API-orchestration layer -- catalog
-lookup, fetch-once caching, `PipelineStageError` wrapping); this module's
-purpose is `extract_metadata` itself (`fetch_xhtml` + `fetch_rdf` +
-`extract_metadata`, no orchestration layer involved) -- a cleaner match for
-this issue's actual surface, and consistent with `test_structure_live.py`'s
-existing precedent of testing `cellar_eli` adapter internals directly against
-live data in this same directory.
+Placed alongside `test_structure_live.py` (same `@pytest.mark.cellar_live`
+convention): this module tests `extract_metadata` itself (`fetch_xhtml` +
+`fetch_rdf` + `extract_metadata`, no orchestration layer involved) directly
+against live data.
 
-## Headline finding from this slice (read before trusting any single date below)
+## Headline finding (read before trusting any single date below)
 
 Cellar's RDF `cdm:resource_legal_date_entry-into-force` /
 `cdm:resource_legal_date_entry-into-force` predicate is **not a single
@@ -28,7 +21,7 @@ canonical value** for a regulation -- inspecting the live RDF's OWL
 reification blocks (`owl:Axiom` wrapping `owl:annotatedProperty` /
 `owl:annotatedTarget`, with `j.2:type_of_date` / `j.2:comment_on_date`
 qualifiers Cellar attaches to each assertion) shows every regulation checked
-in this slice asserts **multiple** dates under this one predicate name, each
+in these tests asserts **multiple** dates under this one predicate name, each
 tagged with a distinct semantic role:
 
 - `type_of_date = EV` ("Entrée en Vigueur" / entry into force) -- the
@@ -46,18 +39,15 @@ tagged with a distinct semantic role:
   Art. 71.2's `2026-06-11`/`2026-09-11` partial dates; the AI Act's four
   `MA/PART` dates for Art. 113(a)/(b)/(c)).
 
-`metadata.py`'s current `_pick_effective_date` (PLAN_REVISED.md §3, "earliest
-of all candidate values wins") has **no awareness of `type_of_date` at
-all** -- it pools every value under the predicate name, regardless of role,
-and takes the minimum. Because `EV` is by construction always the earliest
-(it is fixed at `publication + 20 days`, before any `MA` date), this means
-**the current mechanism always resolves a multi-valued regulation to its EV
+A pooled "earliest of all candidate values wins" tie-break has **no awareness
+of `type_of_date`** -- it pools every value under the predicate name,
+regardless of role, and takes the minimum. Because `EV` is by construction
+always the earliest (it is fixed at `publication + 20 days`, before any `MA`
+date), such a rule **always resolves a multi-valued regulation to its EV
 (legal entry-into-force) date, never its MA (application) date** -- the
-opposite of what `ps-domain-concepts.md` and the pre-existing GDPR ground
-truth define `effective_date` to mean for a `regulation`. This is confirmed
-as a real regression below (AC-BI-012's CRA/GDPR assertions) -- not a
-hypothetical. See `IMPL_SLICE_10_LIVE.md` for the full evidence and every
-CELEX's raw reification data.
+opposite of what `ps-domain-concepts.md` and the GDPR ground truth define
+`effective_date` to mean for a `regulation`. The CRA/GDPR assertions below
+show this is real, not hypothetical.
 
 NIS2 (a `directive`) is unaffected: its predicate (`directive_date_transposition`)
 uses a different, 2-value `ADOPTION`/`APPLICATION` `comment_on_date` scheme
@@ -65,11 +55,6 @@ uses a different, 2-value `ADOPTION`/`APPLICATION` `comment_on_date` scheme
 `ADOPTION`) happens to already be the earlier of the two -- so the existing
 min-wins tie-break is correct for NIS2, coincidentally, not because the rule
 generalizes.
-
-Fixing `_pick_effective_date`/`_EFFECTIVE_DATE_PREDICATES_BY_INSTRUMENT_TYPE`
-to be `type_of_date`-aware is out of this slice's scope (Slice 10 is live
-verification only, per the task brief) -- reported here as acceptance-gating
-evidence for the orchestrator, not fixed in place.
 """
 
 from __future__ import annotations
@@ -82,7 +67,7 @@ from defusedxml.ElementTree import fromstring as parse_xml
 
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_rdf, fetch_xhtml
 from ps_service.ingestion.adapters.cellar_eli.metadata import (
-    _own_subjects,  # pyright: ignore[reportPrivateUsage] -- live proof of §2.2's own-subject discovery, not just extract_metadata's end-to-end result
+    _own_subjects,  # pyright: ignore[reportPrivateUsage] -- live proof of own-subject discovery, not just extract_metadata's end-to-end result
     _parse_subject_blocks,  # pyright: ignore[reportPrivateUsage] -- same reason
     extract_metadata,
 )
@@ -101,11 +86,11 @@ def _resolve(celex: str) -> RegulatoryInstrumentMetadata:
     return extract_metadata(fetch_xhtml(celex), fetch_rdf(celex), celex)
 
 
-# --- Part 1: core mechanism (PLAN_REVISED.md §8 item 10, §9 Slice 10) -------
+# --- Part 1: core mechanism -------
 
 
 def test_nis2_transposition_tie_break_resolves_the_earliest_duplicate_value() -> None:
-    """NIS2 (`32022L2555`) is fact #1's real tie-break-under-duplicate-values
+    """NIS2 (`32022L2555`) is the real tie-break-under-duplicate-values
     case: `cdm:directive_date_transposition` is asserted twice on the same
     subject (`oj/JOL_2022_333_R_0002`) -- `2024-10-17` (comment_on_date tag
     `ADOPTION`, Art. 41.1: the Member-State transposition deadline) and
@@ -122,11 +107,10 @@ def test_nis2_transposition_tie_break_resolves_the_earliest_duplicate_value() ->
 def test_32025r0038_resolves_the_related_subject_entry_into_force_date() -> None:
     """`32025R0038`'s usable `cdm:resource_legal_date_entry-into-force` lives
     on a related resource (`oj/L_202500038`), not the CELEX's own trivial
-    `resource/celex/32025R0038` node (fact #2) -- Tier 2 widening, no
+    `resource/celex/32025R0038` node -- Tier 2 widening, no
     ambiguity (exactly one value asserted: `2025-02-04`, `type_of_date=EV`,
     `DATPUB +20`, Art. 26). This value was independently live-confirmed
-    during planning (PLAN_REVISED.md §1's Slice-0 follow-up); re-asserted
-    here as this issue's actual acceptance evidence, not carried on trust.
+    and is re-asserted here, not carried on trust.
     """
     metadata = _resolve("32025R0038")
     assert metadata.effective_date == date(2025, 2, 4)
@@ -134,7 +118,7 @@ def test_32025r0038_resolves_the_related_subject_entry_into_force_date() -> None
 
 
 def test_32019r0881_resolves_the_general_date_not_the_narrower_subset_date() -> None:
-    """Live test of PLAN_REVISED.md §5's hypothesis for the ENISA Regulation
+    """Live test of the hypothesis for the ENISA Regulation
     (`32019R0881`): does Cellar's RDF metadata record only the *general*
     entry-into-force date, or does a narrower named-subset date leak in too?
 
@@ -175,30 +159,28 @@ def test_32019r0881_resolves_the_general_date_not_the_narrower_subset_date() -> 
     assert metadata.instrument_type == "regulation"
 
 
-# --- Part 2: AC-BI-005 verify-then-select ------------------------------------
+# --- Part 2: verify-then-select ------------------------------------
 
 
-# Verify-then-select procedure (PLAN_REVISED.md Change #2 / FLAWS.md MAJOR #2):
-# do not pre-commit to DORA. Checked, in order, whether each AC-BI-011
-# candidate's date lives trivially on its own literal
+# Verify-then-select procedure: do not pre-commit to DORA. Checked, in order,
+# whether each regression candidate's date lives trivially on its own literal
 # `resource/celex/{CELEX}` fetch-URL subject (which would mean even a naive,
 # undiscovered "treat the fetch URL as the subject" implementation would
-# succeed, proving nothing about §2.2's real discovery mechanism):
+# succeed, proving nothing about the real discovery mechanism):
 #
 #   DORA (32022R2554): own subject discovered via `resource_legal_id_celex`
 #   matching is `oj/JOL_2022_333_R_0001` -- NOT the literal fetch-URL subject
 #   (`resource/celex/32022R2554`), which was live-confirmed to assert
 #   neither `resource_legal_id_celex` nor any date predicate at all. DORA
-#   genuinely requires §2.2's discovery mechanism -- checked first (it is
-#   listed first among the six AC-BI-011 regression CELEX) and found
+#   genuinely requires the discovery mechanism -- checked first (it is
+#   listed first among the six regression CELEX) and found
 #   non-trivial on the first check, so no further candidates were needed.
 #
 # Selected: DORA (32022R2554).
 def test_ac_bi_005_dora_requires_own_subject_discovery_not_a_naive_fetch_url_subject() -> None:
-    """AC-BI-005's "additional real CELEX not yet checked in this issue,"
-    selected via the verify-then-select procedure documented immediately
-    above -- proves the *mechanism* (own-subject discovery + resolution),
-    not merely that resolution succeeds.
+    """An additional real CELEX, selected via the verify-then-select procedure
+    documented immediately above -- proves the *mechanism* (own-subject
+    discovery + resolution), not merely that resolution succeeds.
     """
     rdf = fetch_rdf("32022R2554")
     blocks = _parse_subject_blocks(parse_xml(rdf))
@@ -219,23 +201,19 @@ def test_ac_bi_005_dora_requires_own_subject_discovery_not_a_naive_fetch_url_sub
     # NOT asserted against a specific expected date here: DORA's RDF asserts
     # two entry-into-force-type values (EV 2023-01-16, general MA
     # 2025-01-17 -- see this module's docstring); which one is domain-correct
-    # is the EV/MA finding this slice surfaces, tracked under AC-BI-011
-    # below, not this AC-BI-005 subject-resolution-mechanism test.
+    # is the EV/MA question covered by the regression cases below, not this
+    # subject-resolution-mechanism test.
 
 
-# --- Part 3: AC-BI-011 regression (6 CELEX) + AC-BI-012 regression (3 curated) --
+# --- Part 3: regression (6 CELEX) + curated catalog regression (3 curated) --
 
-# AC-BI-011: the 6 already-clean CELEX. IMPORTANT, itself a finding: no
-# per-CELEX expected `effective_date` value is actually recorded anywhere in
-# this codebase for these six -- `test_ingestion_orchestration_live.py`'s
-# docstring (issue #61) only records that they "resolve cleanly" (i.e. don't
-# raise) under the *old*, now-deleted heading-based mechanism, never the
-# specific date each resolved to. The premise that these values were
-# "already in this codebase's test fixtures/docstrings" does not hold up --
-# reported here rather than silently assumed. Consequently this module only
-# regression-tests the one thing that genuinely *was* established (successful
-# resolution, no exception) for these six; it does not assert a byte-exact
-# prior value that was never recorded.
+# The 6 already-clean CELEX. IMPORTANT, itself a finding: no per-CELEX
+# expected `effective_date` value is recorded anywhere in this codebase for
+# these six -- `test_ingestion_orchestration_live.py`'s docstring only records
+# that they "resolve cleanly" (i.e. don't raise), never the specific date
+# each resolved to. This module therefore only regression-tests the one thing
+# that was established (successful resolution, no exception) for these six;
+# it does not assert a byte-exact prior value that was never recorded.
 _AC_BI_011_CELEX = [
     pytest.param("32022R2554", id="dora"),
     pytest.param("32022R2065", id="dsa"),
@@ -248,20 +226,20 @@ _AC_BI_011_CELEX = [
 
 @pytest.mark.parametrize("celex", _AC_BI_011_CELEX)
 def test_ac_bi_011_regulation_resolves_successfully(celex: str) -> None:
-    """Regression re-run: each of the 6 already-clean CELEX must still
-    resolve without raising under the new RDF-based mechanism. See this
-    module's docstring and `IMPL_SLICE_10_LIVE.md` for the separate,
-    substantial finding that the *specific* date each resolves to is very
-    likely semantically wrong (EV instead of general MA) -- not asserted as
-    a pass/fail here since no prior expected value exists to regress
-    against; reported as diagnostic evidence instead.
+    """Each of the 6 already-clean CELEX must still
+    resolve without raising under the RDF-based mechanism. See this
+    module's docstring for the separate, substantial finding that the
+    *specific* date each resolves to is very likely semantically wrong (EV
+    instead of general MA) -- not asserted as a pass/fail here since no prior
+    expected value exists to regress against; reported as diagnostic evidence
+    instead.
     """
     metadata = _resolve(celex)
     assert metadata.effective_date is not None
     assert metadata.instrument_type == "regulation"
 
 
-# AC-BI-012: the 3 curated catalog entries, against ps-domain-concepts.md's
+# The 3 curated catalog entries, against ps-domain-concepts.md's
 # worked examples (CRA line 530, NIS2 line 624) and -- for GDPR, which has no
 # worked example in ps-domain-concepts.md -- this repo's own
 # `ps-service/tests/ingestion/test_pipeline_live.py::_GROUND_TRUTH["GDPR"]`
@@ -285,8 +263,9 @@ def test_ac_bi_012_curated_catalog_effective_dates(
     is the same live assertion as
     `test_nis2_transposition_tie_break_resolves_the_earliest_duplicate_value`
     above (not a fresh HTTP fetch's worth of new evidence) -- included in
-    this parametrization so AC-BI-012 has its own explicit, correctly-labeled
-    assertion rather than only an incidental Part-1 pass-through.
+    this parametrization so the curated entries have their own explicit,
+    correctly-labeled assertion rather than only an incidental Part-1
+    pass-through.
     """
     metadata = _resolve(celex)
     assert metadata.instrument_type == expected_instrument_type

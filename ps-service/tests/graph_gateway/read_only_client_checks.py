@@ -1,4 +1,4 @@
-"""Shared checks for the per-package read-only client tests (issue #215, S3a-e).
+"""Shared checks for the per-package read-only client tests.
 
 Each package that reads the graph (`company_merge`, `ingestion`, `domain_mapper`,
 `change_monitor`, `export`) must reach FalkorDB only through the gateway's `ReadOnlyGraph`. The

@@ -1,6 +1,6 @@
-"""Tests for `tools/domain-mapper/exclusion_audit.py`'s capture stage (issue #27, Slice 1).
+"""Tests for `tools/domain-mapper/exclusion_audit.py`'s capture stage.
 
-Slice 1 is hermetic end-to-end at tiny scope (PLAN.md §3): a hand-written structural fake
+The capture stage is hermetic end-to-end at tiny scope: a hand-written structural fake
 `CompletionCaller` (mirrors `test_extraction.py`'s established style — never
 `unittest.mock`), 3 hand-built `ExtractionUnit`s (one scripted to "extract" 0 candidates,
 one >0, one that raises `DomainMapperExtractionError` to prove isolation).
@@ -48,7 +48,7 @@ def _load_exclusion_audit_module() -> ModuleType:
     return module
 
 
-# --- 3 fixture units (PLAN.md §3 Slice 1) ----------------------------------
+# --- 3 fixture units --------------------------------------------------------
 
 _UNIT_ZERO_CANDIDATES = ExtractionUnit(
     citation_ref="CRA-1.0 Art. 1(1)",
@@ -123,7 +123,7 @@ def _one_candidate_json() -> str:
 
 
 def test_capture_unit_record_shape_for_nonzero_candidate_unit(make_emitter: MakeEmitter) -> None:
-    """AC-BI-004: citation_ref, article/paragraph numbers, and candidate_count are captured
+    """citation_ref, article/paragraph numbers, and candidate_count are captured
     verbatim from the unit and the real (scripted) LLM response.
     """
     module = _load_exclusion_audit_module()
@@ -149,7 +149,7 @@ def test_capture_unit_record_shape_for_nonzero_candidate_unit(make_emitter: Make
 
 
 def test_zero_candidate_unit_is_flagged(make_emitter: MakeEmitter) -> None:
-    """AC-BI-005: a unit whose real extraction call produced zero candidates is flagged."""
+    """A unit whose real extraction call produced zero candidates is flagged."""
     module = _load_exclusion_audit_module()
     emitter, _log_path = make_emitter()
     call_completion = _scripted_call_completion(

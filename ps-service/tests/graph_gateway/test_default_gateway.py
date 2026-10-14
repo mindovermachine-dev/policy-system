@@ -1,4 +1,4 @@
-"""The production composition of the Graph Write Gateway (issue #206, S13b).
+"""The production composition of the Graph Write Gateway.
 
 `build_default_graph_write_gateway(config)` wires the real log store and a FalkorDB opener from
 the service config without touching either service: building must never fail because Postgres

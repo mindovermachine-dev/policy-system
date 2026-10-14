@@ -1,11 +1,9 @@
-"""`restore.merge_primitives`: the `policy_system` leg of a restore as primitives (issue #214).
+"""`restore.merge_primitives`: the `policy_system` leg of a restore as primitives.
 
-D-1 Option A: the leg is built in memory from reads made against the live graph at one log
-position, over an overlay (ids at that position plus ids of the primitives built so far), and
-nothing is written. These are the behaviours of the pre-#214 offline merge
-(`restore_instrument._run_baseline_merge` over the interim snapshot writer), asserted on the
-primitives. Digest equality with the old path on every curated artifact is in
-`test_restore_legs_equivalence.py`.
+The leg is built in memory from reads made against the live graph at one log position, over an
+overlay (ids at that position plus ids of the primitives built so far), and nothing is written.
+These are the behaviours of an offline merge of the artifact's baseline, asserted on the
+primitives. Digest equality on every curated artifact is in `test_restore_legs_equivalence.py`.
 """
 
 from __future__ import annotations
@@ -354,7 +352,7 @@ def test_a_classification_edge_with_a_missing_endpoint_fails_the_whole_leg(
             classification_edges=(ghost,),
         )
 
-    # detroit-exception: dangling edge is unreachable from a real graph; the read is the seam (§1.2)
+    # detroit-exception: dangling edge is unreachable from a real graph; the read is the seam
     monkeypatch.setattr(
         merge_primitives.graph_reader, "read_baseline_graph", read_with_dangling_edge
     )

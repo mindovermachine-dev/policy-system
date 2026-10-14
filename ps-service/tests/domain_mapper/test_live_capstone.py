@@ -1,5 +1,4 @@
-"""Increment 19 — the live 3-regulation end-to-end capstone
-(PLAN_REVIEWED.md §11 Batch 11).
+"""The live 3-regulation end-to-end capstone.
 
 `@pytest.mark.falkordb_live @pytest.mark.llm_live` (plus `cellar_live` and `postgres_live`):
 reads the `cra_native`/`gdpr_native`/`nis2_native` graphs the `live_native_graphs` fixture ingests
@@ -9,7 +8,7 @@ real Azure OpenAI (via `route_completion`'s default caller), and writes to the
 `cra_baseline`/`gdpr_baseline`/`nis2_baseline` graphs. The fixture deletes all six graphs before
 and after, so the module neither depends on nor leaves behind ambient state.
 
-**Bounded, not exhaustive** (Open Question 2's mitigation): each
+**Bounded, not exhaustive**: each
 regulation's extraction is capped to the first `_LIMIT_PER_REGULATORY_INSTRUMENT`
 `ExtractionUnit`s (document order) via `_LimitedDomainMappingAdapter`, a
 thin wrapper written here rather than a production-code change —
@@ -18,7 +17,7 @@ thin wrapper written here rather than a production-code change —
 result, so slicing at the adapter boundary is equivalent to, and simpler
 than, plumbing a new `limit` parameter through the action's own signature.
 
-Verifies AC-001 through AC-008 against real FalkorDB state via direct
+Verifies the two actions' outcomes against real FalkorDB state via direct
 Cypher reads — not just the two actions' in-memory return values.
 """
 
@@ -55,7 +54,7 @@ if TYPE_CHECKING:
 
 _LIMIT_PER_REGULATORY_INSTRUMENT = 15
 _LOG_FILENAME = "capstone.jsonl"
-_GOVERNANCE_LABELS = ("Policy", "Standard", "Control")  # AC-008
+_GOVERNANCE_LABELS = ("Policy", "Standard", "Control")
 
 # Captured at module-import time (collection), before tests/conftest.py's autouse
 # `_isolate_logging` fixture runs `monkeypatch.delenv("PS_LLMINTERFACE_MODEL", ...)`
@@ -186,7 +185,7 @@ def _native_citation_refs(native_graph: GraphHandle) -> set[str]:
 def _live_gateway_keywords(
     config: ServiceConfig, short_name: str, run_id: str
 ) -> _LiveGatewayKeywords:
-    """The gateway keywords of an extraction stage, built the way production builds them (#209).
+    """The gateway keywords of an extraction stage, built the way production builds them.
 
     The real gateway over the PS state Postgres and FalkorDB, and one system audit row for the
     run (the stage's group is logged under it). Not runnable in the implementation sandbox.
@@ -221,9 +220,9 @@ def _run_pipeline_for_regulatory_instrument(
 ) -> _RegulatoryInstrumentOutcome:
     """Runs both actions for one regulation, each inside its own bound run
     context. A different `run_id` is bound for extraction vs. derivation —
-    no orchestrator wires a single shared `run_id` across both actions yet
-    (Open Question 6), so this test binds one per action per regulation
-    (6 distinct run_ids total) to exercise AC-006/AC-007 unambiguously
+    no orchestrator wires a single shared `run_id` across both actions, so
+    this test binds one per action per regulation
+    (6 distinct run_ids total) to exercise run-id logging unambiguously
     rather than leave the "same or different" choice implicit.
     """
     native_graph = select_graph(db, native_graph_name(fixture.short_name))
@@ -438,8 +437,8 @@ def test_live_three_regulation_capstone_extracts_and_derives_across_cra_gdpr_nis
             outcome.derivation_result.unmatched_obligation_ids,
             fixture.regulatory_instrument_id,
         )
-        assert isinstance(outcome.derivation_result.unmatched_requirement_ids, tuple)  # AC-004
-        assert isinstance(outcome.derivation_result.unmatched_obligation_ids, tuple)  # AC-BI-002
+        assert isinstance(outcome.derivation_result.unmatched_requirement_ids, tuple)
+        assert isinstance(outcome.derivation_result.unmatched_obligation_ids, tuple)
         _assert_ac005_regulatory_instrument_scope(baseline_graph, fixture.regulatory_instrument_id)
         _assert_ac008_no_governance_nodes(baseline_graph, fixture.regulatory_instrument_id)
         _assert_run_id_logged(
@@ -495,7 +494,7 @@ def test_live_cra_annex_i_produces_at_least_one_role_and_requirement(
     make_emitter: MakeEmitter,
     live_native_graphs: ServiceConfig,
 ) -> None:
-    """AC-BI-006: running `ExtractRolesAndRequirements` against CRA's real
+    """Running `ExtractRolesAndRequirements` against CRA's real
     native graph, scoped to only its ANNEX units via
     `_AnnexOnlyDomainMappingAdapter`, persists at least one Role and one
     Requirement to `cra_baseline` whose `DEFINES`/`EXPRESSES` `source_ref`
@@ -503,11 +502,11 @@ def test_live_cra_annex_i_produces_at_least_one_role_and_requirement(
 
     The Requirement `confidence` values collected here are also persisted
     to a module-level cache (`_CRA_ANNEX_I_REQUIREMENT_CONFIDENCES`) that
-    Slice 11's `test_live_nis2_annex_content_yields_no_hallucinated_duties`
+    `test_live_nis2_annex_content_yields_no_hallucinated_duties`
     reads, so the "materially lower-confidence" comparison in that test has
     real CRA Annex I confidences to compare against without re-running
     extraction. If this test has not run in the same pytest session (e.g.
-    it was deselected via `-k`), Slice 11's test falls back to re-querying
+    it was deselected via `-k`), that test falls back to re-querying
     `cra_baseline` directly for the same values — see that test's docstring.
     """
     assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
@@ -552,7 +551,7 @@ def test_live_cra_annex_i_produces_at_least_one_role_and_requirement(
 # before falling back to a direct `cra_baseline` re-query. Both tests share this module's
 # `.env`-presence skipif, so either both run or both skip together in a normal invocation
 # (e.g. `-m "llm_live and falkordb_live"` with no `-k` filter) — the fallback exists only
-# to keep Slice 11's test correct under an unusual `-k`-filtered or single-test invocation.
+# to keep that NIS2 test correct under an unusual `-k`-filtered or single-test invocation.
 _CRA_ANNEX_I_REQUIREMENT_CONFIDENCES: list[float] = []
 
 
@@ -568,13 +567,13 @@ def test_live_nis2_annex_content_yields_no_hallucinated_duties(
     make_emitter: MakeEmitter,
     live_native_graphs: ServiceConfig,
 ) -> None:
-    """AC-BI-011 (and the runtime half of AC-BI-005): running the identical
+    """Running the identical
     `_AnnexOnlyDomainMappingAdapter` code path — no regulation-specific
     branch anywhere in `cellar_eli.py` or `extraction.py` — against NIS2's
     real native graph extracts no hallucinated Requirement duties from its
     non-operative annex content.
 
-    Concrete, non-arbitrary threshold (per PLAN.md Slice 11): this test
+    Concrete, non-arbitrary threshold: this test
     passes if EITHER (a) zero `Requirement` nodes whose `EXPRESSES.source_ref`
     starts with `"Annex "` exist in `nis2_baseline`, OR (b) at least one
     such Requirement exists but

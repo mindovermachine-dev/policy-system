@@ -1,6 +1,6 @@
 """`restore.baseline_reader`: the baseline reader's fixed queries answered from a parsed artifact.
 
-Restore reads the artifact's baseline leg without a staged graph key (issue #214, D-1 Option A),
+Restore reads the artifact's baseline leg without a staged graph key (the leg is read-only),
 so `company_merge.graph_reader.read_baseline_graph` is pointed at a read-only handle over the
 parsed `SerializedGraph`. The reader stays the single source of the projections; this handle only
 answers its fixed queries.

@@ -171,7 +171,7 @@ def test_parse_extraction_response_non_object_item_raises_typed_error() -> None:
     assert exc_info.value.error_kind == "non_object_item"
 
 
-# --- parse_definitions_response (Issue #26, Slice 2) ------------------------
+# --- parse_definitions_response ---------------------------------------------
 
 _DEFINITIONS_UNIT = ExtractionUnit(
     citation_ref="Art. 2(1)",
@@ -235,7 +235,7 @@ def test_parse_definitions_response_empty_string_term_item_raises_typed_error() 
     assert exc_info.value.error_kind == "invalid_defined_term_item"
 
 
-# --- parse_obligation_response (Increment 11) -------------------------------
+# --- parse_obligation_response ----------------------------------------------
 
 _REQUIREMENT_ID = "CRA_req_art_13.1"
 _ROLE_NODE_ID = "role_manufacturer_abc123"
@@ -354,7 +354,7 @@ def test_parse_obligation_response_missing_confidence_raises_typed_error() -> No
     assert _REQUIREMENT_ID in str(exc_info.value)
 
 
-# --- parse_capability_response (Increment 13) -------------------------------
+# --- parse_capability_response ----------------------------------------------
 
 _OBLIGATION_NODE_ID = "obl_conduct_risk_assessment_abc123"
 _EXISTING_CAPABILITY_NAME = "Data Encryption"
@@ -423,8 +423,7 @@ def test_parse_capability_response_single_mint_derives_id_from_new_name() -> Non
 def test_parse_capability_response_multi_capability_response_returns_two_decisions() -> None:
     """Proves the list-of-decisions shape actually supports >1 -- a single
     Obligation may bundle more than one distinct Capability requirement
-    (PLAN_REVIEWED.md §7.4, multi-capability-per-Obligation ported from
-    spikes/cellar2/derive_capabilities.py).
+    (multi-capability-per-Obligation).
     """
     payload = _capability_payload(
         _mint_item("Incident Detection", "Detects security incidents in real time."),
@@ -493,7 +492,7 @@ def test_parse_capability_response_missing_confidence_raises_typed_error() -> No
 
 
 def test_capability_derivation_prompt_requires_whole_duty_coverage_for_reuse() -> None:
-    """AC-BI-002: reuse only when the description covers the whole duty;
+    """Reuse only when the description covers the whole duty;
     otherwise mint a more specific Capability. JSON contract unchanged.
     """
     assert "whole duty" in CAPABILITY_DERIVATION_SYSTEM_PROMPT
@@ -503,7 +502,7 @@ def test_capability_derivation_prompt_requires_whole_duty_coverage_for_reuse() -
 
 
 def test_parse_capability_response_match_item_is_marked_as_reuse() -> None:
-    """#187 AC-BI-003: a matched-existing item is a reuse proposal, so it is
+    """A matched-existing item is a reuse proposal, so it is
     marked for verification.
     """
     payload = _capability_payload(_match_item(_EXISTING_CAPABILITY_ID))
@@ -514,7 +513,7 @@ def test_parse_capability_response_match_item_is_marked_as_reuse() -> None:
 
 
 def test_parse_capability_response_mint_of_registry_name_is_marked_as_reuse() -> None:
-    """#187 A-M1: a "mint" whose capability_id is already registered attaches
+    """A "mint" whose capability_id is already registered attaches
     to the existing Capability, so it is a reuse carrying the registry's own
     name and description (the model's new_description is discarded).
     """
@@ -537,7 +536,7 @@ def test_capability_reuse_verification_prompt_states_whole_duty_rule_and_json_co
 def test_capability_reuse_verification_prompt_lets_broader_description_cover_narrower_duty() -> (
     None
 ):
-    """#191 AC-BI-001: the verifier is told that a broader description can
+    """The verifier is told that a broader description can
     cover a narrower duty, judged by the description rather than the name,
     while partial overlap and over-general descriptions still do not count.
     """
@@ -556,7 +555,7 @@ def test_capability_reuse_verification_prompt_lets_broader_description_cover_nar
 def test_capability_reuse_verification_prompt_treats_domain_qualifier_alone_as_not_distinct() -> (
     None
 ):
-    """#191 AC-BI-002: the verifier is told that a domain qualifier such as
+    """The verifier is told that a domain qualifier such as
     "ICT" names the setting, not a different ability, in either direction,
     while capacities naming different domains are still distinct.
     """
@@ -573,8 +572,8 @@ def test_capability_reuse_verification_prompt_treats_domain_qualifier_alone_as_n
 def test_parse_capability_reuse_verdict_accepts_ict_incident_reporting_under_eu_regulatory_reporting() -> (  # noqa: E501
     None
 ):
-    """#191 AC-BI-003: characterisation pin (green from the start). An
-    "accept" for the #187 DORA subsumption pair parses to an accept verdict
+    """Characterisation pin. An
+    "accept" for the DORA subsumption pair parses to an accept verdict
     under the real Obligation and Capability ids.
     """
     text = json.dumps(

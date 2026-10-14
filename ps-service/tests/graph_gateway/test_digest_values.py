@@ -1,4 +1,4 @@
-"""Property and embedding values are compared exactly by the digest (#207 S4, AC-RD-002)."""
+"""Property and embedding values are compared exactly by the digest."""
 
 from __future__ import annotations
 

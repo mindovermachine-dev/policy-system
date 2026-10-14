@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse
-    """Install a rig gateway as the process's for one test (issue #208).
+    """Install a rig gateway as the process's for one test.
 
     The amendment re-ingest obtains its Graph Write Gateway from the process, as the app
     lifespan installs it in production. The import is lazy: `tests/api` is an importable package

@@ -1,4 +1,4 @@
-"""Throwaway FalkorDB graphs and a gateway over them for the `falkordb_live` tests (#207).
+"""Throwaway FalkorDB graphs and a gateway over them for the `falkordb_live` tests.
 
 The log store stays the in-memory fake (Postgres has its own live files); the graph is a real,
 uniquely named FalkorDB graph that the `live_graphs` fixture deletes afterwards.

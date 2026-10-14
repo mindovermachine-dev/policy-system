@@ -1,4 +1,4 @@
-"""The background reconciler applies committed-but-pending entries on recovery (issue #206, S12).
+"""The background reconciler applies committed-but-pending entries on recovery.
 
 The reconciler starts lazily when a graph first goes pending, runs on a daemon thread, backs off
 with a capped schedule, retires when nothing is pending and stops promptly on request. Its waits

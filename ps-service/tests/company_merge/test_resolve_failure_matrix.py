@@ -1,11 +1,11 @@
-"""Both `resolve_review` decisions map a gateway failure like every stage writer (issue #210, 11b).
+"""Both `resolve_review` decisions map a gateway failure like every stage writer.
 
-AC-BI-008, for `keep-separate` and `merge`: a group the gateway rejects, a group committed to the
+For `keep-separate` and `merge`: a group the gateway rejects, a group committed to the
 log but not applied (`committed_apply_pending`) and a log that cannot be reached all surface as
 `CompanyMergePersistenceError("FalkorDB write failed: ...")`, with no gateway internals in the
 message; FalkorDB connectivity health is recorded as the gateway records it (transient exhaustion
 marks FALKORDB unhealthy; a rejection or an unreachable log does not). The stage writers are in
-`test_merge_writer_failure_matrix.py` (11a); the API classification is in
+`test_merge_writer_failure_matrix.py`; the API classification is in
 `tests/api/test_routes_near_misses.py`.
 
 The submitter seam is the gateway rig (in-memory log and FalkorDB fakes, the true boundaries); a

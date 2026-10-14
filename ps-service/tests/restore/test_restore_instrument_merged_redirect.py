@@ -1,8 +1,8 @@
-"""Offline restore follows `MERGED_INTO` tombstone redirects (issue #190, AC-BI-008/009).
+"""Offline restore follows `MERGED_INTO` tombstone redirects.
 
 A restored baseline artifact regenerates a Capability whose id is a `merged` tombstone in the
 target deployment. The restore resolves it through `MERGED_INTO` to the survivor: the incoming
-`REQUIRES` edge attaches to the survivor and no Capability node is minted. Since #214 the
+`REQUIRES` edge attaches to the survivor and no Capability node is minted. The
 `policy_system` leg is a tuple of gateway primitives built from reads of the live graph, so the
 expectations are asserted on primitives. The live graph is a hand-written fake satisfying
 `GraphHandle` structurally, mirroring the sibling restore tests.
@@ -121,7 +121,7 @@ def test_restore_attaches_requires_to_survivor_and_mints_no_capability() -> None
 
 
 def test_restore_never_scores_a_tombstone_as_a_semantic_candidate() -> None:
-    """AC-BI-009 offline half: a tombstone's cached embedding is not in the candidate pool."""
+    """A tombstone's cached embedding is not in the candidate pool."""
     tomb_id = capability_id("Absorbed")
     survivor_id = capability_id("Survivor")
     new_id = capability_id("Brand New")

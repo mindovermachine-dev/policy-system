@@ -1,7 +1,7 @@
-"""Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`
-(PLAN.md Slice 5.3, D6): exact-match-first behavior.
+"""Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`:
+exact-match-first behavior.
 
-`resolve_capability_convergence_offline` is D6's offline counterpart to
+`resolve_capability_convergence_offline` is the offline counterpart to
 `dedupe_canonical_nodes` -- it never accepts an `EmbeddingCaller`/
 `call_embedding` collaborator at all (embeddings, if any, are
 artifact-supplied via `incoming_embeddings`), so "zero calls to any
@@ -98,7 +98,7 @@ def test_exact_match_issues_no_write_query() -> None:
         threshold=_THRESHOLD,
     )
 
-    assert len(graph.calls) == 2  # index read + tombstone redirect read (issue #190)
+    assert len(graph.calls) == 2  # index read + tombstone redirect read
     assert all("MERGED_INTO" in c or "RETURN n.id, n.name" in c for c in graph.calls)
 
 
@@ -123,12 +123,12 @@ def test_exact_match_produces_no_near_miss_and_no_backfill() -> None:
 def test_resolve_capability_convergence_offline_second_same_run_mint_resolves_via_exact_match() -> (
     None
 ):
-    """AC-TE-001 (offline, end-to-end, issue #30): `resolve_exact_match`'s
+    """Offline, end-to-end: `resolve_exact_match`'s
     candidate pool is the FULL, growing `working_index` -- never restricted
     to `original_existing_ids` -- so two incoming nodes sharing the
     identical id still collapse via exact-key match regardless of same-run
-    timing, unaffected by the semantic-match eligibility restriction this
-    issue adds. The first occurrence mints (`match_kind="new"`); the second
+    timing, unaffected by the semantic-match eligibility restriction. The first occurrence
+    mints (`match_kind="new"`); the second
     (same id) resolves `match_kind="exact"` onto it, never reaching
     `_best_offline_match` at all.
     """

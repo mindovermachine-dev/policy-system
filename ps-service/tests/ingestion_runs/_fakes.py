@@ -1,4 +1,4 @@
-"""Test doubles for `ps_service.ingestion_runs` (issue #194)."""
+"""Test doubles for `ps_service.ingestion_runs`."""
 
 from __future__ import annotations
 

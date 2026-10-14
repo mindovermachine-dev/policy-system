@@ -1,6 +1,6 @@
-"""`merge_baseline_graph` end to end against the frozen legacy reference (issue #210, slice 8c).
+"""`merge_baseline_graph` end to end against the frozen legacy reference.
 
-AC-BI-002, merge half. The per-family slices (2c-8a) compared one writer family at a time; here a
+The per-family tests compare one writer family at a time; here a
 composite baseline carrying EVERY family at once (instrument, Roles, Requirements, DEFINES and
 EXPRESSES provenance, Obligations, Capabilities with an exact, a semantic and a new match,
 PracticeArea/RiskPath, all edge types, near-miss PendingReviews) is merged through the gateway and
@@ -8,10 +8,10 @@ through the frozen writer, with the same generated values and embeddings, and th
 digests must be equal (modulo edge identity; live digest and live interpreter agreement are not
 verifiable here, the `falkordb_live` tests stay as the live anchor).
 
-The two cases the issue names are the CASE-winner rule's neighbours in the merge stage, where
-there is no winner statement (that is the resolve route, slices 10a-10c):
+Two edge cases are the CASE-winner rule's neighbours in the merge stage, where
+there is no winner statement (that is the resolve route):
 - tie: two existing Capabilities at the SAME similarity to the incoming one. The dedup decision
-  logic is read-only and unchanged (#88); what is proved is that the write for whichever one it
+  logic is read-only and unchanged; what is proved is that the write for whichever one it
   picks is the one the frozen writer made.
 - missing `created_at`: an existing canonical node that never had one. Create-only upserts must
   leave it without (a "backfill" would be a behaviour change); a node that has one keeps it.
@@ -124,7 +124,7 @@ def emitter(make_emitter: MakeEmitter) -> LogEmitter:
 def test_merge_baseline_graph_and_the_frozen_reference_build_the_same_policy_system(
     scenario: str, merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-002: the `policy_system` digest equals the frozen reference's, per scenario."""
+    """The `policy_system` digest equals the frozen reference's, per scenario."""
     steps, seeded = _SCENARIOS[scenario]
 
     reference = reference_graph(steps, emitter, seeded)

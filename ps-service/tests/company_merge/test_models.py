@@ -48,14 +48,12 @@ def test_baseline_node_constructs_with_valid_fields() -> None:
     )
     assert node.id == "obl_risk_assessment_a1b2c3"
     assert node.properties == {"text": "Assess risk", "confidence": 0.9}
-    # Issue #31: defaults to `None` when the caller doesn't pass one --
-    # every pre-#31 `BaselineNode(...)` construction in this codebase stays
-    # valid unchanged.
+    # defaults to `None` when the caller doesn't pass one
     assert node.embedding is None
 
 
 def test_baseline_node_carries_optional_embedding() -> None:
-    """Issue #31 (AC-BI-001): a Capability node's own cached embedding,
+    """A Capability node's own cached embedding,
     once read back by `graph_reader._read_capability_nodes`, lives here.
     """
     node = BaselineNode(
@@ -234,7 +232,7 @@ def test_semantic_match_result_constructs_with_valid_fields() -> None:
 
 
 def test_semantic_match_result_accepts_non_empty_newly_computed_existing_embeddings() -> None:
-    """The direct proof (S1/B2) that this field's type shape --
+    """The direct proof that this field's type shape --
     `dict[str, tuple[float, ...]]` -- actually accepts a real, non-empty
     embedding value, unlike a naive `dict[str, str | float]` that could not
     legally carry a tuple-of-floats value at all.
@@ -262,13 +260,12 @@ def test_dedup_result_mutation_raises() -> None:
 def test_dedup_result_constructs_with_valid_fields() -> None:
     result = DedupResult(resolutions=(), near_misses=(), embedding_backfills={})
     assert result.embedding_backfills == {}
-    # Issue #31: defaults to `{}` when omitted -- every pre-#31
-    # `DedupResult(...)` construction in this codebase stays valid unchanged.
+    # defaults to `{}` when omitted
     assert result.incoming_embedding_backfills == {}
 
 
 def test_dedup_result_accepts_non_empty_incoming_embedding_backfills() -> None:
-    """Issue #31 (AC-BI-005): `incoming_embedding_backfills` -- distinct from
+    """`incoming_embedding_backfills` -- distinct from
     `embedding_backfills` above -- carries a freshly-computed INCOMING
     Capability's own embedding, for `graph_writer.
     backfill_incoming_capability_embeddings` to persist onto its own
@@ -285,7 +282,7 @@ def test_dedup_result_accepts_non_empty_incoming_embedding_backfills() -> None:
 
 
 def test_dedup_result_accepts_non_empty_embedding_backfills() -> None:
-    """The direct proof (B2) that `embedding_backfills` -- `dict[str,
+    """The direct proof that `embedding_backfills` -- `dict[str,
     tuple[float, ...]]` -- legitimately carries a real embedding value for
     a pre-existing canonical node whose embedding was freshly computed this
     run.

@@ -1,13 +1,11 @@
 """Tests for `ps_service.ingestion.adapters.internal_seed.adapter.InternalSeedIngestionAdapter`.
 
-S2's red-before-green tests 1/2 (PLAN.md S2): AC-BI-002 (unknown edge type
-rejected) and AC-BI-003 (non-"internal" source_type rejected), both exercised
+Unknown edge types and non-"internal" source_type values are rejected, both exercised
 through the real `parse_seed` composition (JSON Schema structural layer +
 Pydantic parse), not just the schema layer alone (already covered by
 `tests/ingestion/adapters/internal_seed/test_schema.py`).
 
-Issue #91 retypes `read_seed(identifier: str)` to `parse_seed(document:
-dict[str, object])` -- the adapter no longer does any file I/O, so these
+`parse_seed(document: dict[str, object])` does no file I/O, so these
 tests pass a document dict directly rather than writing one to `tmp_path`.
 """
 
@@ -72,13 +70,12 @@ def test_parse_seed_accepts_a_well_formed_document() -> None:
 
 
 def test_parse_seed_rejects_unknown_edge_type() -> None:
-    """AC-BI-002: an edge `type` outside the allow-list is rejected.
+    """An edge `type` outside the allow-list is rejected.
 
-    `"NOT_A_REAL_EDGE_TYPE"` is a fictional placeholder: every previously-used
-    placeholder here (`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` from GH
-    #76 Slices 1-3, and `VERIFIED_BY` from GH #93 Slice 6, alongside
-    `COVERS`/`OWNS`/`MITIGATED_BY`) is now a valid edge type in this intake
-    format's allow-list.
+    `"NOT_A_REAL_EDGE_TYPE"` is a fictional placeholder: real edge names such as
+    `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`/`VERIFIED_BY`/`COVERS`/
+    `OWNS`/`MITIGATED_BY` are valid edge types in this intake format's
+    allow-list, so they cannot serve as an unknown one.
     """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["edges"].append(
@@ -94,7 +91,7 @@ def test_parse_seed_rejects_unknown_edge_type() -> None:
 
 
 def test_parse_seed_rejects_non_internal_source_type() -> None:
-    """AC-BI-003: a `RegulatoryInstrument.source_type` other than `"internal"` is rejected."""
+    """A `RegulatoryInstrument.source_type` other than `"internal"` is rejected."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"][0]["properties"]["source_type"] = "external"
 

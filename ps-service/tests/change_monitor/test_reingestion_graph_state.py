@@ -1,4 +1,4 @@
-"""Hermetic graph-level proof of an amendment re-ingest, on stateful graphs (issue #201).
+"""Hermetic graph-level proof of an amendment re-ingest, on stateful graphs.
 
 Entry is the real `run_change_check_sweep`; the code under test includes the REAL
 `will_reingest` / `trigger_reingestion` / `classify_reingestion` / `succession` and the REAL
@@ -177,7 +177,7 @@ def _all_snapshots(graphs: StatefulGraphSet) -> tuple[GraphSnapshot, GraphSnapsh
 def test_amendment_adds_new_obligation_and_capability_to_single_tenant_graph(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-002 (+ AC-BI-001 order, AC-BI-003 succession after merge, AC-BI-011 counts)."""
+    """Four stages run in order, the succession follows merge, audited counts equal the delta."""
     emitter, _ = make_emitter()
     graphs, stages = _seeded(succession_rig)
     assert graphs.single_tenant.count_nodes("Obligation") == 1
@@ -197,7 +197,7 @@ def test_amendment_adds_new_obligation_and_capability_to_single_tenant_graph(
         "OBL-B",
     }
     assert {node_id for label, node_id in tenant.nodes if label == "Capability"} == {"CAP-C"}
-    # AC-BI-001 / AC-BI-003: the four stages in order, and no succession write before merge.
+    # The four stages in order, and no succession write before merge.
     stage_and_link = [
         e for e in graphs.rig.timeline() if e.startswith("stage:") or "SUPERSEDED_BY" in e
     ]
@@ -207,7 +207,7 @@ def test_amendment_adds_new_obligation_and_capability_to_single_tenant_graph(
     ]
     assert graphs.native.edges[("SUPERSEDED_BY", _PRIOR, _NEW)] == {"absorbed": True}
     assert graphs.native.marker_stage(_NEW) is None
-    # AC-BI-011: the audited counts are the graph delta (A already existed, B and C are new).
+    # The audited counts are the graph delta (A already existed, B and C are new).
     complete = store.rows[1].details
     assert (complete["new_obligations"], complete["new_capabilities"]) == (1, 1)
 
@@ -215,7 +215,7 @@ def test_amendment_adds_new_obligation_and_capability_to_single_tenant_graph(
 def test_an_amendment_sweep_leaves_a_head_checkpoint_on_every_graph_the_succession_logged(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-009 (#215, S4e): the succession's terminal groups checkpoint native and policy_system.
+    """The succession's terminal groups checkpoint native and policy_system.
 
     The stage doubles write MERGE-by-key, outside the log, so the log holds only the succession's
     own groups; the last of each graph's groups is `clear_marker` / `supersede_in_single_tenant`.
@@ -232,9 +232,9 @@ def test_an_amendment_sweep_leaves_a_head_checkpoint_on_every_graph_the_successi
 def test_prior_version_nodes_edges_and_properties_unchanged_except_status_and_succession_edge(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-004: nothing the prior version owns is modified or deleted.
+    """Nothing the prior version owns is modified or deleted.
 
-    The one intended exception (AC-BI-003): the sweep flips the prior `RegulatoryInstrument`'s
+    The one intended exception: the sweep flips the prior `RegulatoryInstrument`'s
     `status` active -> superseded in the native and `policy_system` graphs and adds the one
     `SUPERSEDED_BY` edge there (the native edge also carries `absorbed`). Every other node, edge
     and property present before the sweep is equal afterwards, in all three graphs.
@@ -266,7 +266,7 @@ def test_prior_version_nodes_edges_and_properties_unchanged_except_status_and_su
 def test_retry_after_partial_failure_creates_no_duplicates(
     stage: str, succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-008: a stage that wrote half its nodes then raised leaves the prior active, and the
+    """A stage that wrote half its nodes then raised leaves the prior active, and the
     next sweep re-runs it without duplicating anything: the three graphs end exactly as a run
     that never failed (node and edge counts included).
     """
@@ -298,7 +298,7 @@ def test_retry_after_partial_failure_creates_no_duplicates(
 def test_already_processed_sweep_touches_no_graph(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-009: once absorbed, a further sweep issues no stage and no graph write at all."""
+    """Once absorbed, a further sweep issues no stage and no graph write at all."""
     emitter, _ = make_emitter()
     graphs, stages = _seeded(succession_rig)
     _sweep(graphs, stages, emitter)
@@ -323,9 +323,9 @@ def test_already_processed_sweep_touches_no_graph(
 
 
 def _legacy_ingestion_only_state(graphs: StatefulGraphSet, stages: StatefulStages) -> None:
-    """The graph exactly as the earlier ingestion-only sweep left it (AC-BI-010).
+    """The graph as an ingestion-only sweep leaves it.
 
-    The new version was ingested into native and the old code then wrote the succession: the
+    The new version was ingested into native and the succession was then written: the
     prior flipped to `superseded` in native only, and the `SUPERSEDED_BY` edge has NO `absorbed`
     property. Nothing was extracted, derived or merged, and `policy_system` still shows the
     prior as active.
@@ -339,7 +339,7 @@ def _legacy_ingestion_only_state(graphs: StatefulGraphSet, stages: StatefulStage
 def test_repair_runs_extract_derive_merge_once_for_legacy_edge_and_second_sweep_runs_nothing(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-010: a legacy-linked new version is mapped and merged once, then left alone."""
+    """A legacy-linked new version is mapped and merged once, then left alone."""
     emitter, _ = make_emitter()
     graphs, stages = _seeded(succession_rig)
     _legacy_ingestion_only_state(graphs, stages)
@@ -409,7 +409,7 @@ def test_repair_that_fails_at_derive_resumes_at_derive_and_ends_as_a_clean_repai
 def test_an_audit_outage_blocks_a_merge_only_resume_and_the_next_sweep_resumes_it(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """Issue #210 (CHANGES F4 difference 3): a merge-only resume needs its one audit row.
+    """A merge-only resume needs its one audit row.
 
     The merge stage failed once, leaving the marker at `derivation`. While the audit trail is
     down the resume fails closed before the merge runs (`reingest_failed`, marker untouched, no

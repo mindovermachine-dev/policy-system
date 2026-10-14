@@ -1,4 +1,4 @@
-"""`falkordb_live`: exact 64-bit float reads against a real FalkorDB (#207, AC-RD-007).
+"""`falkordb_live`: exact 64-bit float reads against a real FalkorDB.
 
 Proves the Cypher fragments of `exact_floats` give back every stored double bit-identically
 where a plain read does not, and that the hermetic mirror in `_fakes` encodes the same values.
@@ -138,7 +138,7 @@ def test_exact_list_columns_of_embedding_nodes_cost_time_linear_in_the_list_leng
     live_graphs: LiveGraphs,
 ) -> None:
     # `p[k][i]` copied the whole list `p[k]` for every index, so a 3,072-double embedding cost
-    # 145 ms and a CRA x10 digest (5,220 embeddings) over 12 minutes. Found by the S19 load.
+    # 145 ms and a CRA x10 digest (5,220 embeddings) over 12 minutes.
     graph = live_graphs.new()
     embedding = _random_doubles(_EMBEDDING_LENGTH)
     graph.rows(

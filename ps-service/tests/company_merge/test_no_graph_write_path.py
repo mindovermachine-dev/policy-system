@@ -1,4 +1,4 @@
-"""Company Merge holds no write path to FalkorDB (issue #210, AC-BI-001).
+"""Company Merge holds no write path to FalkorDB.
 
 Every `policy_system` and `{short}_baseline` mutation goes through the Graph Write Gateway, so no
 module under `ps_service.company_merge` may open a FalkorDB connection of its own, name the

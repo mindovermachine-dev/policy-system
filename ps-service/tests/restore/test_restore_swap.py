@@ -1,10 +1,10 @@
-"""A restore is applied by swap: readers see none or all of it (issue #214 S8b).
+"""A restore is applied by swap: readers see none or all of it.
 
-AC-BI-003 (a reader sees none or all of the instrument), AC-BI-009 (a restore that dies after the
-log commit is completed by recovery and no reader sees a partial instrument before or after) and
-AC-BI-010 (restores and other writers on overlapping graphs serialize without a deadlock), all on
-the Protocol fakes. The gateway rig's in-memory key space records every copy, staged write and
-rename and lets a test look at the three live graphs at each of those points, as a reader could.
+Covered: a reader sees none or all of the instrument; a restore that dies after the log commit is
+completed by recovery and no reader sees a partial instrument before or after; restores and other
+writers on overlapping graphs serialize without a deadlock. All on the Protocol fakes. The gateway
+rig's in-memory key space records every copy, staged write and rename and lets a test look at the
+three live graphs at each of those points, as a reader could.
 A `Crash` (a `BaseException`) raised from a hook stops the restore the way a killed process
 would; `restart()` builds a fresh gateway over the same log and key space.
 """
@@ -108,7 +108,7 @@ def _replayed_digests_equal_live(rig: RestoreRig, short: str) -> bool:
     return live == tuple(canonical_digest(rig.graph(graph)) for graph in _graphs(short))
 
 
-# -- AC-BI-003: none or all ------------------------------------------------------------------
+# -- none or all ------------------------------------------------------------------
 
 
 def test_a_restore_is_applied_by_one_swap_of_all_three_graphs(restore_rig: RestoreRig) -> None:
@@ -155,7 +155,7 @@ def test_a_restore_over_an_existing_copy_is_also_none_or_all(restore_rig: Restor
     assert restore_rig.graph("new214_baseline").nodes[("Capability", "cap_1")]["name"] == "Renamed"
 
 
-# -- AC-BI-009: a restore that dies after the commit is completed ------------------------------
+# -- a restore that dies after the commit is completed ------------------------------
 
 
 @pytest.mark.parametrize("point", _CRASH_POINTS)
@@ -219,7 +219,7 @@ def test_a_swap_the_engine_keeps_refusing_leaves_the_restore_invisible_and_block
     assert _state(restore_rig, "NEW214") != before
 
 
-# -- AC-BI-010: serialization ------------------------------------------------------------------
+# -- serialization ------------------------------------------------------------------
 
 
 def test_two_restores_of_different_instruments_both_land_without_a_deadlock(

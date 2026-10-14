@@ -1,5 +1,5 @@
 """Tests for `tools/company-merge/company_merge_similarity_sweep.py`'s curated-content
-Capability loader (issue #100, PLAN.md Slice 1).
+Capability loader.
 
 Loads the script by path via `importlib.util.spec_from_file_location`, exactly as
 `test_similarity_threshold_dataset.py`/`test_similarity_threshold_sweep_scoring.py`
@@ -7,11 +7,11 @@ already do for this same script.
 
 Covers:
 
-- AC-BI-001: `_load_curated_content_capability_nodes()` reads
+- `_load_curated_content_capability_nodes()` reads
   `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` via
   `export.serialize.parse_serialized_graph_json`, returning all 778 real Capability
   nodes.
-- AC-BI-003: a missing, malformed, or wrong-shaped `baseline.json` raises
+- A missing, malformed, or wrong-shaped `baseline.json` raises
   `CuratedContentCorpusError` -- never a silent empty/partial result.
 """
 
@@ -67,7 +67,7 @@ def _configure_logging_for_route_embedding() -> None:  # pyright: ignore[reportU
     configure_logging()
 
 
-# --- AC-BI-001: loads the real curated-content corpus via parse_serialized_graph_json --
+# --- loads the real curated-content corpus via parse_serialized_graph_json --
 
 
 def test_loads_capability_nodes_via_parse_serialized_graph_json(
@@ -90,7 +90,7 @@ def test_loads_capability_nodes_via_parse_serialized_graph_json(
     assert sweep_module.parse_serialized_graph_json is real_parse_serialized_graph_json
 
 
-# --- AC-BI-003: missing/malformed/wrong-shaped baseline.json -> CuratedContentCorpusError --
+# --- missing/malformed/wrong-shaped baseline.json -> CuratedContentCorpusError --
 
 
 def test_raises_curated_content_corpus_error_when_a_baseline_json_is_missing(

@@ -1,4 +1,4 @@
-"""Regulatory Change Monitor holds no write path to FalkorDB (issue #213, AC-BI-001, AC-BI-007).
+"""Regulatory Change Monitor holds no write path to FalkorDB.
 
 Every succession mutation goes through the Graph Write Gateway, so no module under
 `ps_service.change_monitor` may open a FalkorDB connection of its own, name the gateway's apply
@@ -10,7 +10,7 @@ Positive half: each of the five succession writers reaches `submit_succession_gr
 reaches the gateway sink `submit_group` through `submit_or_raise` (same-module call graphs by
 name, no mock).
 
-Symbol absence (AC-BI-001): the five pre-#213 write constants are named neither in the source nor
+Symbol absence: the five pre-gateway write constants are named neither in the source nor
 in the tests, outside the frozen reference.
 
 The guard is itself guarded: planted violations must be found, and prose must not be.
@@ -97,7 +97,7 @@ def test_the_orchestrator_calls_every_writer() -> None:
     assert [w for w in _WRITERS if f"{w}(" not in trigger] == []
 
 
-# --- AC-BI-001: the direct writers' symbols are gone ---
+# --- the direct writers' symbols are gone ---
 
 
 def test_no_removed_symbol_is_named_in_the_source_or_the_tests() -> None:

@@ -1,4 +1,4 @@
-"""Profiles derive a narrower schema from the base one (AC-BI-004, unit level)."""
+"""Profiles derive a narrower schema from the base one (unit level)."""
 
 from __future__ import annotations
 

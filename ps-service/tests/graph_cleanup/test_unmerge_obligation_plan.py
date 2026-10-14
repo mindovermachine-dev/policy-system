@@ -1,4 +1,4 @@
-"""Pure planner for obligation `unmerge` (issue #190, slice 16 sub-step a; AC-BI-019/020/021).
+"""Pure planner for obligation `unmerge`.
 
 The merge audit details are produced by the REAL obligation-merge planner, so the unmerge planner
 is proven against the snapshot shape the executor actually records.
@@ -170,7 +170,7 @@ def test_a_merge_record_without_a_snapshot_cannot_be_reversed() -> None:
         derive_obligation_unmerge_inputs(details)
 
 
-# --- conflicts (AC-BI-020), each explained -------------------------------------------------------
+# --- conflicts, each explained -------------------------------------------------------------------
 
 
 def test_an_obligation_that_exists_again_has_nothing_to_unmerge() -> None:

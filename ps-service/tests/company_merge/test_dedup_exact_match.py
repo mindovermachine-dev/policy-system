@@ -1,7 +1,7 @@
-"""Tests for `ps_service.company_merge.dedup` (PLAN_REVIEWED.md §10
-Increments 6-7): `read_existing_canonical_index` and `resolve_exact_match`.
+"""Tests for `ps_service.company_merge.dedup`: `read_existing_canonical_index` and
+`resolve_exact_match`.
 
-Since issue #42 Company Merge dedupes Capability only -- Obligation is
+Company Merge dedupes Capability only -- Obligation is
 Role-scoped and passed through, not deduped.
 """
 
@@ -102,12 +102,12 @@ def test_resolve_exact_match_returns_false_for_empty_existing_ids() -> None:
 def test_dedupe_canonical_nodes_second_same_run_mint_resolves_via_exact_match(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-TE-001 (live, end-to-end, issue #30): `resolve_exact_match`'s
+    """Live, end-to-end: `resolve_exact_match`'s
     candidate pool is the FULL, growing `working_index` -- never restricted
     to `original_existing_ids` -- so two incoming nodes sharing the
     identical id still collapse via exact-key match regardless of same-run
-    timing, unaffected by the semantic-match eligibility restriction this
-    issue adds. The first occurrence mints (`match_kind="new"`); the second
+    timing, unaffected by the semantic-match eligibility restriction. The first
+    occurrence mints (`match_kind="new"`); the second
     (same id) resolves `match_kind="exact"` onto it, never reaching
     `find_best_semantic_match` at all.
     """

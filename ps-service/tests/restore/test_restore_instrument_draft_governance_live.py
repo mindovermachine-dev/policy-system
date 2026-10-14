@@ -1,4 +1,4 @@
-"""Live FalkorDB proof that a restored internal tree is a normal draft (issue #183).
+"""Live FalkorDB proof that a restored internal tree is a normal draft.
 
 Restores the shipped `ENGPRAC-1.0` curated artifact into tokened scratch graphs (the
 permanent `engprac_*`/`policy_system` graphs are never touched) and drives the REAL
@@ -6,9 +6,9 @@ policy-lifecycle service against the result:
 
 - the restoring caller owns the imported drafts, proposes one, cannot approve their own
   import (four-eyes), and a different `PolicyManager` can -- approval cascades the whole
-  tree and leaves every other restored Policy `draft` (AC-BI-009);
+  tree and leaves every other restored Policy `draft`;
 - restoring the same instrument again after that approval changes nothing: the approved
-  tree keeps its status and owner, and no node or edge is duplicated (AC-BI-010/011).
+  tree keeps its status and owner, and no node or edge is duplicated.
 """
 
 from __future__ import annotations
@@ -173,7 +173,7 @@ def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
 ) -> None:
-    """AC-BI-009: a restored draft is a normal draft; approval cascades its whole tree only."""
+    """A restored draft is a normal draft; approval cascades its whole tree only."""
     emitter, _log_path = make_emitter()
     config = provisioned_graph_log.state_config()
     token = uuid.uuid4().hex[:12]
@@ -212,7 +212,7 @@ def test_second_restore_after_approval_leaves_the_approved_tree_and_counts_untou
     make_emitter: MakeEmitter,
     query_result_rows: Callable[[FalkorDB, str, str], list[list[object]]],
 ) -> None:
-    """AC-BI-010/011: a re-restore never resets an approved tree, owner, or duplicates anything."""
+    """A re-restore never resets an approved tree, owner, or duplicates anything."""
     emitter, _log_path = make_emitter()
     config = provisioned_graph_log.state_config()
     token = uuid.uuid4().hex[:12]

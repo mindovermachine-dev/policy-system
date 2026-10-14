@@ -1,4 +1,4 @@
-"""`MutationGroup.audit_event_id` is optional: a group with no audit event carries no link (#211).
+"""`MutationGroup.audit_event_id` is optional: a group with no audit event carries no link.
 
 Policy Lifecycle's draft edits and status/version backfills have no `audit_events` row today, so
 their groups are logged with a null link (the store and the nullable column already allow it). A

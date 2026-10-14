@@ -1,4 +1,4 @@
-"""`graphs_with_pending_entries` on the in-memory log store (issue #206, S13a).
+"""`graphs_with_pending_entries` on the in-memory log store.
 
 The read-only question startup recovery asks: which graphs have logged entries beyond their
 applied marker? The `postgres_live` twin in `test_store_pending_graphs_live.py` proves the same

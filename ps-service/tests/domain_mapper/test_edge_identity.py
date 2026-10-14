@@ -1,4 +1,4 @@
-"""Edge identity of the Domain Mapper's baseline writes (issue #209, AC-BI-008).
+"""Edge identity of the Domain Mapper's baseline writes.
 
 Every DEFINES, EXPRESSES, HAS, SATISFIED_BY and REQUIRES edge the stages submit carries the
 identity `{type}:{source}->{target}`, the scheme of the internal-seed path (whose
@@ -51,7 +51,7 @@ def _edge_entries(rig: BaselineRig) -> list[GraphLogEntry]:
 def test_each_edge_type_carries_type_source_arrow_target_identity(
     make_emitter: MakeEmitter, baseline_rig: BaselineRig
 ) -> None:
-    """AC-BI-008: all five edge types, identity equal to the internal-seed scheme's output."""
+    """All five edge types, identity equal to the internal-seed scheme's output."""
     emitter, _ = make_emitter()
 
     _run_pipeline(baseline_rig, emitter)
@@ -124,7 +124,7 @@ def _legacy_copy_of(rig: BaselineRig) -> LegacyRecordingGraph:
 def test_a_legacy_baseline_graph_has_its_identityless_edges_stamped_not_duplicated(
     make_emitter: MakeEmitter, baseline_rig: BaselineRig, other_baseline_rig: BaselineRig
 ) -> None:
-    """AC-BI-008: DEFINES, EXPRESSES, HAS, SATISFIED_BY and REQUIRES written before the gateway.
+    """DEFINES, EXPRESSES, HAS, SATISFIED_BY and REQUIRES written before the gateway.
 
     The reference rig runs the stages on an empty graph. The legacy graph is that same content in
     the legacy writer's shape (no `identity` on any edge). Running the stages on it stamps every

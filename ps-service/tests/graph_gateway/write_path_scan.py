@@ -1,4 +1,4 @@
-"""The AST scan behind the "no write path to FalkorDB" guards (issues #212 and #213).
+"""The AST scan behind the "no write path to FalkorDB" guards.
 
 Every component whose graph writes were routed through the Graph Write Gateway has a guard test
 that scans its package with `scan_source`: no module may open a FalkorDB connection of its own,
@@ -53,7 +53,7 @@ _FORBIDDEN_NAMES = frozenset({"apply_entries"})
 
 def iter_service_modules(root: Path) -> list[Path]:
     """Every Python module under `root`, sorted: the one walk shared by the architecture guard
-    (`test_gateway_only_graph_access.py`) and the Cypher vocabulary scan (#198), so they cannot
+    (`test_gateway_only_graph_access.py`) and the Cypher vocabulary scan, so they cannot
     diverge on which files make up the service.
     """
     return sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)

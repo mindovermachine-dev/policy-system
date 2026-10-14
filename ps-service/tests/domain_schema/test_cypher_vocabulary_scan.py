@@ -1,4 +1,4 @@
-"""AC-BI-016: every label and relationship type written in Cypher in
+"""Every label and relationship type written in Cypher in
 `ps-service/src` is in `DOMAIN_SCHEMA` or in a named, justified exception set.
 
 The scanner walks the source with `ast`, so docstrings are skipped and
@@ -221,9 +221,9 @@ def test_scan_flags_an_unknown_label_in_a_copied_source_tree(tmp_path: Path) -> 
 # here is a conscious edit: a new dynamic site is invisible to the scan.
 _DYNAMIC_SITES: dict[str, int] = {
     "company_merge/dedup.py": 2,
-    "company_merge/graph_writer.py": 2,  # the existing-id and embedding-state reads (#210)
-    "domain_mapper/graph_writer.py": 1,  # the existing-node read, fixed labels only (#209)
-    "export/embeddings.py": 2,  # the missing-embedding read; the write is the gateway (#213)
+    "company_merge/graph_writer.py": 2,  # the existing-id and embedding-state reads
+    "domain_mapper/graph_writer.py": 1,  # the existing-node read, fixed labels only
+    "export/embeddings.py": 2,  # the missing-embedding read; the write is the gateway
     "export/serialize.py": 2,
     "graph_gateway/cypher.py": 5,
     "ingestion/graph_writer.py": 3,

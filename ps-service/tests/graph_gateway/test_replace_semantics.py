@@ -1,4 +1,4 @@
-"""A replacing leg leaves its graph holding exactly the leg's content (issue #214 S3, AC-BI-011).
+"""A replacing leg leaves its graph holding exactly the leg's content.
 
 The gateway expands a leg, under the graph's lock and at the group's position, into ordinary
 logged primitives placed before the caller's upserts: a stamp for every identity-less edge, a

@@ -1,10 +1,10 @@
-"""`unmerge` of an Obligation writes through the Graph Write Gateway (issue #212, slice S6).
+"""`unmerge` of an Obligation writes through the Graph Write Gateway.
 
 One approved unmerge is one gateway group: the deleted Obligation is recreated by an idempotent
-upsert by id (AC-BI-004) with its `HAS`, `SATISFIED_BY` and `REQUIRES` edges, and the
+upsert by id with its `HAS`, `SATISFIED_BY` and `REQUIRES` edges, and the
 `MergedObligation` marker is deleted in the same group, so a recreate without the marker removal
 (or the reverse) cannot be logged. The group is linked to the `applied` audit row and guarded by
-the log position read BEFORE the guard reads (AC-BI-003/005/006/008). The guard is the old
+the log position read BEFORE the guard reads (guard, group, failure matrix). The guard is the old
 statement's `WHERE`, evaluated in Python.
 """
 
@@ -98,7 +98,7 @@ def _edges_of(rig: CleanupRig, node_id: str) -> list[tuple[str, str, str]]:
     return sorted((k[0], k[2], k[4]) for k in rig.graph.edges if node_id in {k[2], k[4]})
 
 
-# -- the group (AC-BI-004, AC-BI-005, AC-BI-006) --------------------------------------------------
+# -- the group ------------------------------------------------------------------------------------
 
 
 def test_one_unmerge_is_exactly_one_group_with_the_recreate_the_edges_and_the_marker_removal(
@@ -207,7 +207,7 @@ def test_the_survivors_edges_are_never_touched(cleanup_rig: CleanupRig) -> None:
     assert outcome["unmerged"] is True
 
 
-# -- the recreate is idempotent by id (AC-BI-004) -------------------------------------------------
+# -- the recreate is idempotent by id -------------------------------------------------------------
 
 
 def test_replaying_the_logged_group_recreates_the_same_graph(cleanup_rig: CleanupRig) -> None:
@@ -249,7 +249,7 @@ def test_an_unstorable_property_is_a_generic_persistence_error_with_no_content(
     assert cleanup_rig.logged_groups == []
 
 
-# -- the guard: the old WHERE, in Python (AC-BI-003) ----------------------------------------------
+# -- the guard: the old WHERE, in Python ----------------------------------------------------------
 
 
 def _holds_after(rig: CleanupRig, break_it: Callable[[CleanupRig], None]) -> bool:
@@ -354,7 +354,7 @@ def test_an_unrelated_write_between_the_position_read_and_the_append_is_refused(
     assert ("MergedObligation", OBL_ABSORBED) in cleanup_rig.graph.nodes
 
 
-# -- legacy identity-less edges (AC-BI-005, F4) ---------------------------------------------------
+# -- legacy identity-less edges -------------------------------------------------------------------
 
 
 def test_legacy_edges_are_stamped_first_so_no_parallel_edge_results(
@@ -388,7 +388,7 @@ def test_a_refused_position_may_leave_the_legacy_stamp_in_the_log_and_no_unmerge
     assert ("MergedObligation", OBL_ABSORBED) in cleanup_rig.graph.nodes
 
 
-# -- the failure matrix (AC-BI-008) ---------------------------------------------------------------
+# -- the failure matrix ---------------------------------------------------------------------------
 
 
 def _reject_the_group(rig: CleanupRig) -> None:

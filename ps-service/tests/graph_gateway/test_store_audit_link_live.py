@@ -1,7 +1,7 @@
-"""`postgres_live` tests for the same-transaction audit link of the graph log (issue #205, slice 4).
+"""`postgres_live` tests for the same-transaction audit link of the graph log.
 
 A caller records the audit row and appends the log group on ONE transaction; the group carries
-the audit event id as a foreign key, so both commit or neither does (AC-BI-004), and the log is
+the audit event id as a foreign key, so both commit or neither does, and the log is
 retrievable by that id.
 
 Deselected by default -- run with `uv run pytest -m postgres_live`; needs

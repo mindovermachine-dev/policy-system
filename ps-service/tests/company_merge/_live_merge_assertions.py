@@ -1,45 +1,23 @@
 """Shared snapshot/assertion helpers for `company_merge`'s live-graph tests.
 
-Issue #28 (CHANGES.md #6): `_snapshot_counts`/`_snapshot_embeddings`/
-`_assert_ac001_every_node_type_present`/`_assert_ac006_traversal_reachable`/
-`_assert_run_id_logged`/`_assert_dedup_decisions_correlated`/
-`_assert_ac008_no_role_or_requirement_dedup` are extracted VERBATIM out of
-`test_live_capstone.py` -- a pure, behavior-preserving refactor. DRY (L1):
-this issue's own real-`policy_system` verification needs the *identical*
-assertion logic #16's own capstone already proved out, not a re-typed copy
-that could silently drift from that proof's shape. `test_live_capstone.py`
-re-imports these from here; its own test behavior/output is unchanged.
+Used by the live capstone and by the real-`policy_system` verification: both need identical
+assertion logic, not re-typed copies that could drift apart. The every-node-type and
+traversal assertions take a keyword-only `graph_name` so a failing assertion names the graph
+actually checked.
 
-`_assert_ac001_every_node_type_present`/`_assert_ac006_traversal_reachable`
-gained a new required `graph_name` keyword-only parameter here, replacing
-`test_live_capstone.py`'s own hardcoded `_CAPSTONE_GRAPH_NAME` module
-constant inside their failure-message f-strings -- every call site in
-`test_live_capstone.py` now passes `graph_name=_CAPSTONE_GRAPH_NAME`
-explicitly, reproducing byte-identical failure-message output. This issue's
-own new real-graph verification test passes `graph_name="policy_system"`
-instead, so a failing assertion correctly names the graph actually checked.
+Not collected by pytest: the default `python_files` pattern (`test_*.py`, this repo's root
+`pyproject.toml`) never matches this filename. The leading underscore is a convention mirroring
+the package's `_fakes.py`: a shared support module, not a test module.
 
-Non-test-collected: pytest's default `python_files` pattern (`test_*.py`,
-this repo's root `pyproject.toml`) never matches this filename regardless of
-the leading underscore -- the underscore is a human-readable convention
-mirroring this same package's existing `_fakes.py`, signalling "shared
-support module, not a test module" rather than being the collection-blocking
-mechanism itself.
+`_snapshot_node_properties`/`_snapshot_edge_properties`/`_snapshot_edge_ids` take property-level
+and edge-existence snapshots, scoped to what `ps_service/company_merge/graph_writer.py` writes:
 
-`_snapshot_node_properties`/`_snapshot_edge_properties`/`_snapshot_edge_ids`
-are NEW (issue #28, CHANGES.md #1) -- #16's own capstone never needed
-property-level or edge-existence snapshots, only counts/embeddings. Used by
-this issue's live-merge runner (AC-BI-006's before/after integrity proof)
-and by `test_live_merge_assertions.py`. Scoped per a direct read of
-`ps_service/company_merge/graph_writer.py`:
-
-- `persist_rewired_edges` (graph_writer.py ~443-499) writes `HAS`/
-  `SATISFIED_BY`/`REQUIRES` via a bare `MATCH ... MERGE (s)-[:TYPE]->(t)`
-  with no `SET` clause at all -- confirmed these three relationship types
-  never carry any edge property. Existence-survival only.
-- `_upsert_provenance_edge` (graph_writer.py ~159-185), used for `DEFINES`/
-  `EXPRESSES`, always issues `SET e.source_ref = $source_ref` -- confirmed
-  these two DO carry properties, so they get a real property-level snapshot.
+- `persist_rewired_edges` writes `HAS`/`SATISFIED_BY`/`REQUIRES` via a bare
+  `MATCH ... MERGE (s)-[:TYPE]->(t)` with no `SET` clause, so these three relationship types
+  never carry an edge property. Existence-survival only.
+- `_upsert_provenance_edge`, used for `DEFINES`/`EXPRESSES`, always issues
+  `SET e.source_ref = $source_ref`, so these two DO carry properties and get a real
+  property-level snapshot.
 """
 
 from __future__ import annotations
@@ -52,7 +30,7 @@ if TYPE_CHECKING:
 _NODE_LABELS = ("RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability")
 _EDGE_TYPES = ("DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES")
 
-# graph_writer.py-confirmed split (module docstring above): only these two
+# Split confirmed against graph_writer.py (module docstring above): only these two
 # relationship types ever carry an edge property.
 _PROPERTY_BEARING_EDGE_TYPES = ("DEFINES", "EXPRESSES")
 # ... and these three never do -- existence-survival only.
@@ -70,7 +48,7 @@ def _count(graph: GraphHandle, query: str, params: dict[str, object] | None = No
 
 
 def _snapshot_counts(single_tenant_graph: GraphHandle) -> dict[str, int]:  # pyright: ignore[reportUnusedFunction]
-    """Per-label node counts + per-relationship-type edge counts -- AC-005's
+    """Per-label node counts + per-relationship-type edge counts -- the
     "no growth" proof operates on this whole snapshot, not just a single
     total.
     """
@@ -89,7 +67,7 @@ def _snapshot_counts(single_tenant_graph: GraphHandle) -> dict[str, int]:  # pyr
 
 def _snapshot_embeddings(single_tenant_graph: GraphHandle) -> dict[str, tuple[float, ...] | None]:  # pyright: ignore[reportUnusedFunction]
     """Id -> embedding (or None) for every Obligation/Capability node --
-    AC-005's "zero further embedding-backfill writes" proof compares this
+    the "zero further embedding-backfill writes" proof compares this
     whole map before/after the second pass, not just the seeded pair.
     """
     embeddings: dict[str, tuple[float, ...] | None] = {}
@@ -222,14 +200,13 @@ def _assert_ac008_no_role_or_requirement_dedup(log_entries: list[dict[str, objec
 def _snapshot_node_properties(  # pyright: ignore[reportUnusedFunction]
     single_tenant_graph: GraphHandle,
 ) -> dict[str, dict[str, dict[str, object]]]:
-    """Per-label `{id: properties}` for every node label this issue's
-    before/after property-level integrity proof needs (issue #28,
-    CHANGES.md #1): `RegulatoryInstrument`/`Role`/`Requirement`/`Obligation`/
-    `Capability`.
+    """Per-label `{id: properties}` for every node label the
+    before/after property-level integrity proof needs:
+    `RegulatoryInstrument`/`Role`/`Requirement`/`Obligation`/`Capability`.
 
     The `embedding` key is stripped at CAPTURE time (not comparison time)
     for `Capability` -- a semantic match's embedding can legitimately be
-    backfilled between two snapshots (AC-005's own already-proven backfill
+    backfilled between two snapshots (the existing backfill
     mechanism) without that being a genuine before/after integrity
     violation for this proof's purposes.
     """
@@ -251,7 +228,7 @@ def _snapshot_edge_properties(  # pyright: ignore[reportUnusedFunction]
     single_tenant_graph: GraphHandle,
 ) -> dict[str, dict[str, dict[str, object]]]:
     """Per-relationship-type `{"source_id|target_id": properties}` for the
-    only two relationship types that carry any (issue #28, CHANGES.md #1) --
+    only two relationship types that carry any --
     `DEFINES`/`EXPRESSES`, confirmed against `graph_writer._upsert_provenance_edge`'s
     `SET e.source_ref = $source_ref`. `HAS`/`SATISFIED_BY`/`REQUIRES` carry
     none at all -- see `_snapshot_edge_ids`.
@@ -271,10 +248,10 @@ def _snapshot_edge_properties(  # pyright: ignore[reportUnusedFunction]
 
 def _snapshot_edge_ids(single_tenant_graph: GraphHandle) -> dict[str, list[list[str]]]:  # pyright: ignore[reportUnusedFunction]
     """Per-relationship-type `(source_id, target_id)` existence pairs for the
-    three relationship types that carry NO properties (issue #28,
-    CHANGES.md #1) -- `HAS`/`SATISFIED_BY`/`REQUIRES`, confirmed against
+    three relationship types that carry NO properties --
+    `HAS`/`SATISFIED_BY`/`REQUIRES`, confirmed against
     `graph_writer.persist_rewired_edges`'s bare `MERGE (s)-[:TYPE]->(t)`
-    (no `SET` clause at all). Existence-survival only: AC-BI-006's
+    (no `SET` clause at all). Existence-survival only: the
     before/after proof for these three checks `before[rel_type]` is a subset
     of `after[rel_type]`, never a property-level comparison, since there is
     no property to compare.

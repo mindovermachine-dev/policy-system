@@ -1,4 +1,4 @@
-"""`falkordb_live` tests: the gateway's Cypher against a real FalkorDB (issue #206).
+"""`falkordb_live` tests: the gateway's Cypher against a real FalkorDB.
 
 The fake graph of the unit tests interprets the exported templates; only a real FalkorDB proves
 the templates are valid Cypher and behave as the fake assumes. The log store stays the in-memory

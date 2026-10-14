@@ -1,12 +1,12 @@
-"""The migrated internal-seed writer builds the same graphs the pre-#208 writer did (AC-BI-002).
+"""The migrated internal-seed writer builds the same graphs the pre-migration writer did.
 
 The reference is `_legacy_reference.write_legacy`, a frozen copy of the old writer's Cypher run
 against a recording graph. Two independent checks, per graph (native and baseline):
 
-* Structural cross-check (F2, independent of the gateway fake): the multiset of node writes
+* Structural cross-check (independent of the gateway fake): the multiset of node writes
   (label, id, properties) and edge writes (type, endpoints, properties) read from the legacy
   call parameters equals the multiset of primitives in the group the new writer submitted.
-* Digest equivalence modulo identity (D2): `ps-graph-digest-v1` of the graph the legacy calls
+* Digest equivalence modulo identity: `ps-graph-digest-v1` of the graph the legacy calls
   build, with every edge stamped with the gateway's deterministic identity, equals the digest of
   the graph the gateway built. Anything else that differs still fails the digest.
 

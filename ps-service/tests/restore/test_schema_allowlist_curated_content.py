@@ -1,5 +1,5 @@
 """DB-free proof that every shipped ``curated-content/*/{baseline,native}.json`` passes
-``restore.schema_allowlist.validate_serialized_graph`` (GH #104, AC-BI-005) and matches its
+``restore.schema_allowlist.validate_serialized_graph`` and matches its
 manifest checksum. Discovery is cross-checked against ``catalog.json`` so a moved directory can
 never degrade this module to zero parametrised cases.
 """

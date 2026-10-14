@@ -1,4 +1,4 @@
-"""A replay that failed leaves its graph gated across a restart (#207 S18, AC-RD-011 persistence).
+"""A replay that failed leaves its graph gated across a restart.
 
 The failure is written into the graph's progress record (`state="failed"`, `kind` = the error
 class, `position` = the position the failure names), so a restarted service finds it by probing the

@@ -35,12 +35,12 @@ def region_body(text: str, region_id: str) -> str:
 
 
 def test_edge_catalog_region_is_fresh() -> None:
-    """AC-BI-007: the doc's edge-catalog region equals the rendered catalog."""
+    """The doc's edge-catalog region equals the rendered catalog."""
     assert region_body(doc_text(), "edge-catalog") == render_edge_catalog(DOMAIN_SCHEMA)
 
 
 def test_every_marker_says_generated_and_do_not_edit() -> None:
-    """AC-BI-018: each BEGIN marker names the generator and says not to edit by hand."""
+    """Each BEGIN marker names the generator and says not to edit by hand."""
     text = doc_text()
     region_ids = find_region_ids(text)
 
@@ -53,7 +53,7 @@ def test_every_marker_says_generated_and_do_not_edit() -> None:
 
 
 def test_edge_catalog_has_one_row_per_schema_edge_and_the_arrow_header() -> None:
-    """F6: header uses U+2192; every one of the 16 schema edges has a row."""
+    """Header uses U+2192; every one of the 16 schema edges has a row."""
     lines = region_body(doc_text(), "edge-catalog").splitlines()
 
     assert lines[0].startswith("| Edge | Source → Target | Cardinality |")
@@ -61,7 +61,7 @@ def test_edge_catalog_has_one_row_per_schema_edge_and_the_arrow_header() -> None
 
 
 def test_classification_edges_show_the_many_to_many_cardinality() -> None:
-    """D-F1: COVERS, OWNS, MITIGATED_BY, VERIFIED_BY read many-to-many in the catalog."""
+    """COVERS, OWNS, MITIGATED_BY, VERIFIED_BY read many-to-many in the catalog."""
     lines = region_body(doc_text(), "edge-catalog").splitlines()
 
     for edge_type in _CLASSIFICATION_EDGES:
@@ -71,27 +71,27 @@ def test_classification_edges_show_the_many_to_many_cardinality() -> None:
 
 @pytest.mark.parametrize("label", [node.label for node in DOMAIN_SCHEMA.nodes])
 def test_properties_region_is_fresh(label: str) -> None:
-    """AC-BI-007: each node's properties region equals the rendered table."""
+    """Each node's properties region equals the rendered table."""
     node = next(n for n in DOMAIN_SCHEMA.nodes if n.label == label)
 
     assert region_body(doc_text(), f"properties:{label}") == render_properties_table(node)
 
 
 def test_policy_lifecycle_prose_names_the_proposed_step() -> None:
-    """D4: the Policy status prose lists draft -> proposed -> approved -> deprecated."""
+    """The Policy status prose lists draft -> proposed -> approved -> deprecated."""
     assert "`draft` → `proposed` → `approved` → `deprecated`" in doc_text()
 
 
 @pytest.mark.parametrize("label", [node.label for node in DOMAIN_SCHEMA.nodes])
 def test_relationships_region_is_fresh(label: str) -> None:
-    """AC-BI-007: each node's relationships region equals the rendered table."""
+    """Each node's relationships region equals the rendered table."""
     body = region_body(doc_text(), relationships_region_id(label))
 
     assert body == render_relationships_table(DOMAIN_SCHEMA, label)
 
 
 def test_inbound_cardinality_is_flip_of_catalog() -> None:
-    """D7: every inbound row shows the flip of the catalog cardinality of its edge."""
+    """Every inbound row shows the flip of the catalog cardinality of its edge."""
     text = doc_text()
     for edge in DOMAIN_SCHEMA.edges:
         rows = region_body(text, relationships_region_id(edge.target)).splitlines()
@@ -101,7 +101,7 @@ def test_inbound_cardinality_is_flip_of_catalog() -> None:
 
 
 def test_section_anchors_exist_in_doc() -> None:
-    """D7: each `#anchor` linked from an inbound note is a heading in the document."""
+    """Each `#anchor` linked from an inbound note is a heading in the document."""
     text = doc_text()
     headings = {
         re.sub(r"[^a-z0-9 -]", "", line.removeprefix("### ").lower()).replace(" ", "-")

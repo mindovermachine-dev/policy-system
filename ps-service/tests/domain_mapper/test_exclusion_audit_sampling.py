@@ -1,16 +1,15 @@
-"""Tests for `tools/domain-mapper/exclusion_audit.py`'s sample-selection stage (issue #27,
-Slice 3, PLAN.md §3 "Slice 3 — Widen sampling to the real Tier A + Tier B strategy, CRA
-only", AC-BI-003).
+"""Tests for `tools/domain-mapper/exclusion_audit.py`'s sample-selection stage
+(Tier A + Tier B strategy).
 
 Hermetic and pure: `select_sample_units` takes only a `tuple[ExtractionUnit, ...]` and two
 size parameters — no LLM/IO. A fixture list of 50 synthetic `ExtractionUnit`s proves:
 Tier A is exactly the first `tier_a_size` in document order; a Tier-A-window unit whose
 text also matches the Tier B regex is tagged `"A"`, never separately re-selected by Tier B
-(CHANGES.md row 1a: "don't double-count/double-call it"); Tier B never re-selects a Tier A
+(no double-count, no double-call); Tier B never re-selects a Tier A
 unit; Tier B stops at `tier_b_size` even when more candidates exist; a unit matching
 neither tier is excluded from the sample entirely; the regex neither over-matches a bare
 "may" with no conditional clause nor matches across a gap wider than the 80-char lookahead
-window (PLAN.md §1 Open Question 4 — documented as a known, accepted boundary, not a bug).
+window (a known, accepted boundary, not a bug).
 
 Loads `exclusion_audit.py` by path, same pattern as the sibling `test_exclusion_audit_*.py`
 files (`tools/domain-mapper/` is hyphenated, not an importable dotted package).
@@ -69,8 +68,8 @@ _TIER_A_WINDOW_CONDITIONAL_TEXT = (
 # over-match a bare possibility with no conditional clause).
 _BARE_MAY_TEXT = "The authority may suspend the certificate immediately for serious non-compliance."
 
-# "may" ... "where", but the gap between them is >80 chars -- must NOT match (PLAN.md §1
-# Open Question 4's accepted false-negative boundary).
+# "may" ... "where", but the gap between them is >80 chars -- must NOT match (the accepted
+# false-negative boundary).
 _LONG_GAP_TEXT = "The regulator may " + ("x" * 90) + " decide where appropriate in the case."
 
 # No "may" at all -- an ordinary substantive duty, must not land in either tier.
@@ -123,7 +122,7 @@ def test_tier_a_is_exactly_first_30_units_in_document_order() -> None:
 
 
 def test_tier_a_window_unit_matching_the_regex_stays_tagged_a_not_double_selected() -> None:
-    """CHANGES.md row 1a: a Tier-A-window unit whose text also matches the Tier B regex is
+    """A Tier-A-window unit whose text also matches the Tier B regex is
     never double-counted/double-called as a separate Tier B entry.
     """
     module = _load_exclusion_audit_module()
@@ -173,7 +172,7 @@ def test_regex_does_not_overmatch_bare_may_with_no_conditional_clause() -> None:
 
 
 def test_regex_does_not_match_across_a_gap_wider_than_the_lookahead_window() -> None:
-    """PLAN.md §1 Open Question 4: an accepted false-negative boundary, not a bug."""
+    """An accepted false-negative boundary, not a bug."""
     module = _load_exclusion_audit_module()
     assert module._CONDITIONAL_PERMISSIVE_PATTERN.search(_LONG_GAP_TEXT) is None
 

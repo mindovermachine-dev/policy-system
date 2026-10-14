@@ -1,10 +1,10 @@
-"""Tests for `ps_service.company_merge.pending_review.list_pending_reviews`
-(issue #35, Slice 2, AC-BI-003): every unresolved `PendingReview` node is read
+"""Tests for `ps_service.company_merge.pending_review.list_pending_reviews`:
+every unresolved `PendingReview` node is read
 back from FalkorDB, mapped to a `PendingReviewRecord` field-for-field. Every
 `PendingReview` node IS unresolved by construction (a resolved one is deleted
-outright, never soft-status-changed -- PLAN.md §2.1/§4.2).
+outright, never soft-status-changed).
 
-Since issue #196 (Cause 8) the read is nevertheless a *filtered* one: being
+The read is nevertheless a *filtered* one: being
 unresolved is not the same as being resolvable, so the query also requires
 both referenced nodes to still exist under the review's own `kind` and
 neither to be a `merged` tombstone -- the same predicate the merge path
@@ -124,25 +124,24 @@ def test_list_pending_reviews_orders_by_created_at_ascending_in_the_query() -> N
     assert "ORDER BY r.created_at ASC" in graph.calls[0].query
 
 
-# --- falkordb_live (issue #196, Cause 8): the list and the merge must agree ---------
+# --- falkordb_live: the list and the merge must agree ---------
 
 _LIVE_TEST_GRAPH = "policy_system_issue196_stale_review_live_test"
 
 
 @pytest.mark.falkordb_live
 def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -> None:
-    """Issue #196 Cause 8, against a REAL FalkorDB instance.
+    """The list agrees with the merge path, against a REAL FalkorDB instance.
 
-    `list_pending_reviews` applied no predicate at all while
     `_MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE` requires both referenced nodes to
-    exist *and* not be a `merged` tombstone. A review only the list accepted
-    was therefore offered to a Compliance Officer, consumed a passkey
-    approval, raised `StalePendingReviewError` at sign time -- and, because
-    the stale path deliberately makes no graph changes, was never retired.
-    It stayed listed forever and every retry failed identically.
+    exist *and* not be a `merged` tombstone, so `list_pending_reviews` must
+    not offer a review only the list would accept: it would consume a
+    passkey approval and raise `StalePendingReviewError` at sign time, and,
+    because the stale path deliberately makes no graph changes, would stay
+    listed forever with every retry failing identically.
 
     Only a live instance can prove this: a scripted `_FakeGraph` cannot
-    execute Cypher, so it can neither show the old query over-reporting nor
+    execute Cypher, so it can neither show the query over-reporting nor
     that `labels()`/`coalesce(status, 'active')` behave as assumed here.
 
     Writes into a dedicated, disposable graph name, NEVER the real shared

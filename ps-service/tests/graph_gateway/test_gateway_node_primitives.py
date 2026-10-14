@@ -1,8 +1,8 @@
-"""Property and delete-node primitives through the Graph Write Gateway (issue #206 S4, AC-BI-003).
+"""Property and delete-node primitives through the Graph Write Gateway.
 
 Drives the public `submit_group` with `MergeProperty`, `RemoveProperty` and `DeleteNode` against
 the Protocol fakes; the Cypher builder is also hit directly where the hostile-key defence has a
-second layer (F5).
+second layer.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Capability merge-candidate discovery, name basis (issue #190, slice 6, AC-BI-003 partial).
+"""Capability merge-candidate discovery, name basis.
 
 Detroit-style: the real reader + grouping run against a scripted single-tenant
 graph (the approved FalkorDB boundary shape); only the rows it returns are canned.

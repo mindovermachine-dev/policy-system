@@ -1,9 +1,9 @@
-"""Slice 8b (issue #210): the merge test doubles no longer interpret graph writes.
+"""The merge test doubles refuse graph writes instead of interpreting them.
 
 Company Merge submits every `policy_system` write as a gateway group, so the stand-in the merge
 READS through must refuse a write statement instead of silently applying it (a write that reached
 it would be a production write path that skipped the gateway). The old-Cypher interpreter that
-still has a job -- Restore's interim snapshot writer (#214) and the frozen-reference agreement
+still has a job -- Restore's interim snapshot writer and the frozen-reference agreement
 test -- lives in `_legacy_reference.SnapshotWriteStore`.
 """
 

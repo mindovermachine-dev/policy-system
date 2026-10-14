@@ -1,4 +1,4 @@
-"""The pure builders of the external (Cellar/ELI) native write (#208, slice 5).
+"""The pure builders of the external (Cellar/ELI) native write.
 
 Nothing here submits a group to the pipeline: each builder turns adapter output into gateway
 primitives, and the one test that submits uses the gateway rig to prove the group the builders
@@ -165,7 +165,7 @@ def test_has_edges_have_the_identity_of_type_parent_and_child() -> None:
 
 
 def test_the_instrument_placeholder_parent_id_is_replaced_by_the_real_instrument_id() -> None:
-    """The adapter stamps the CELEX as the parent of every top-level edge (Increment 13)."""
+    """The adapter stamps the CELEX as the parent of every top-level edge."""
     nodes = (_node("ANNEX", "32024R2847#anx_I"),)
     edges = (_edge("RegulatoryInstrument", "32024R2847", "ANNEX", "32024R2847#anx_I"),)
 
@@ -193,7 +193,7 @@ def test_an_unknown_parent_element_type_raises() -> None:
         _writes((_node("ARTICLE", "CRA#art_1"),), edges)
 
 
-# --- endpoints outside the group (AC-BI-004) ---------------------------------------------
+# --- endpoints outside the group ---------------------------------------------
 
 
 def test_nothing_is_read_when_every_edge_endpoint_is_in_the_group() -> None:

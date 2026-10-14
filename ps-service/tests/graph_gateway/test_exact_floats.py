@@ -1,4 +1,4 @@
-"""Exact 64-bit float reads from FalkorDB (issue #207, AC-RD-007).
+"""Exact 64-bit float reads from FalkorDB.
 
 FalkorDB stores doubles exactly but answers a query with at most 15 significant digits, so a plain
 read loses bits (`0.30000000000000004` comes back `0.3`, the largest double comes back `inf`).

@@ -1,4 +1,4 @@
-"""Only the gateway package may build a write-capable FalkorDB client (issue #215, AC-BI-001).
+"""Only the gateway package may build a write-capable FalkorDB client.
 
 Every module under `ps-service/src/ps_service` outside `graph_gateway/` is scanned with the shared
 `write_path_scan.scan_source`: no `falkordb` / `redis` import (beyond `redis.exceptions`), no
@@ -10,11 +10,11 @@ There is no allow-list and no per-package exemption: the connection helpers of t
 read-only delegates and the per-package guards (`test_no_graph_write_path.py`) use this same scan.
 Excluded by construction (they lie outside the scanned tree): test code and the disposable
 container fixtures under `ps-service/tests`, `tools/` (the curated-export CLI keeps its own
-FalkorDB use by specification) and `spikes/`. The only package excluded inside the tree is
-`graph_gateway/` itself.
+FalkorDB use by specification) and the spike directories. The only package excluded inside the
+tree is `graph_gateway/` itself.
 
 The guard walks the tree with the same `iter_service_modules` helper as the Cypher vocabulary scan
-(`domain_schema/test_cypher_vocabulary_scan.py`, #198, AC-BI-016), so the two cannot diverge.
+(`domain_schema/test_cypher_vocabulary_scan.py`), so the two cannot diverge.
 """
 
 from __future__ import annotations

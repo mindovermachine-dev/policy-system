@@ -1,11 +1,10 @@
-"""Fake-wiring proof for `tools/company-merge/run_live_merge.py` (issue #28, PLAN.md §4,
-amended by CHANGES.md #1/#2/#3).
+"""Fake-wiring proof for `tools/company-merge/run_live_merge.py`.
 
 Every collaborator `main()` needs beyond argv is dependency-injected here (`graph_provider`,
 `merge_fn`, `clock`) -- NO live FalkorDB/LLM dependency, no `falkordb_live`/`llm_live` marker.
-This suite proves the runner's own orchestration logic correct -- including AC-BI-003's "zero
-merge_fn calls on a precondition violation" and AC-BI-001's "zero merge_fn calls without a
-valid approval" -- entirely before slice 6 ever grants this script a real approval file. The
+This suite proves the runner's own orchestration logic correct -- including "zero
+merge_fn calls on a precondition violation" and "zero merge_fn calls without a
+valid approval" -- entirely without a real approval file. The
 real end-to-end wiring proof (real FalkorDB, real config, real logging, only `merge_fn` faked
 to raise before any write) is `test_run_live_merge_cli_live.py`'s `falkordb_live` test.
 
@@ -16,7 +15,7 @@ module-level constructs to resolve their defining module during `exec_module`).
 
 No real `APPROVAL_LIVE_MERGE_*.md` file is ever written anywhere in this repo by these tests
 -- every approval fixture lives under `tmp_path`, and every `--report-path` passed here also
-lives under `tmp_path`, never under this issue's own tracker directory.
+lives under `tmp_path`.
 """
 
 from __future__ import annotations
@@ -386,7 +385,7 @@ def _unreachable_graph_provider(graph_name: str) -> object:
 def test_rerun_phrase_rejected_when_run_kind_is_initial(
     cli_module: ModuleType, tmp_path: Path
 ) -> None:
-    """CHANGES.md #3: the phrase is looked up from `--run-kind`, never taken as a CLI value --
+    """The phrase is looked up from `--run-kind`, never taken as a CLI value --
     a valid RERUN approval must not satisfy an `--run-kind initial` invocation.
     """
     approval_path = _write_approval_file(
@@ -407,7 +406,7 @@ def test_rerun_phrase_rejected_when_run_kind_is_initial(
     assert merge_fn.calls == []
 
 
-# --- Case 3: approval valid, a precondition violation blocks the merge (AC-BI-003) --------
+# --- Case 3: approval valid, a precondition violation blocks the merge --------
 
 
 def test_precondition_violation_exits_3_with_zero_merge_calls(
@@ -482,7 +481,7 @@ def test_happy_path_calls_merge_fn_three_times_in_order_and_writes_report(
     single_tenant_graph = _FakeSingleTenantGraph()
     # Seed a Capability WITH an embedding, and a property-bearing DEFINES edge plus a
     # propertyless HAS edge, so the before-snapshot's node_properties/edge_properties/
-    # edge_ids shapes are exercised meaningfully (CHANGES.md #1's dependent test update).
+    # edge_ids shapes are exercised meaningfully.
     single_tenant_graph.seed_capability(
         "cap_existing", name="Existing Capability", embedding=[0.1, 0.2, 0.3]
     )
@@ -539,7 +538,7 @@ def test_happy_path_calls_merge_fn_three_times_in_order_and_writes_report(
             "edge_properties",
             "edge_ids",
         }
-        # CHANGES.md #1's dependent test: `embedding` must be absent from the captured
+        # `embedding` must be absent from the captured
         # Capability properties even though the fake graph carries one -- stripped at
         # CAPTURE time, not comparison time.
         assert "embedding" not in snapshot["node_properties"]["Capability"]["cap_existing"]
@@ -595,7 +594,7 @@ def test_merge_fn_raises_on_second_call_stops_before_third_and_leaves_approval_u
     assert report["errors"][0]["regulatory_instrument_id"] == "NIS2-1.0"
 
 
-# --- Issue #210: the merge writes through the Graph Write Gateway ---------------------------
+# --- The merge writes through the Graph Write Gateway ---------------------------
 
 
 def _passing_run(

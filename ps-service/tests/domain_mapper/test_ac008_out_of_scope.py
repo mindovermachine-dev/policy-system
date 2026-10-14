@@ -1,48 +1,24 @@
-"""AC-BI-009 / AC-BI-012 proof: `ps_service.domain_mapper` never names a
-Policy/Standard/Control governance artifact anywhere in the package.
+"""Proof that `ps_service.domain_mapper` never names a Policy/Standard/Control governance
+artifact anywhere in the package.
 
-**History (why this file reverted to its pre-issue-#54 shape here, in GH
-#76):** before issue #54, `DeriveGovernanceArtifacts` did not exist anywhere
-in `ps_service.domain_mapper`, so a whole-package literal ban
-(`test_no_governance_artifact_literals_in_domain_mapper_package`) was a
-correct proxy for "governance derivation is out of scope." Issue #54 added
-`governance.py`, which legitimately minted `Policy`/`Standard`/`Control`
-nodes and wrote `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` edges
-(D1/AC-BI-005/006) -- a whole-package ban would have been a false positive
-on that module, so this file was narrowed to scan only the three external
-(catalog) pipeline stage files instead. GH #76 deleted `governance.py` (and
-the LLM mint/match path it implemented) outright: Policy/Standard/Control
-are now authored directly in the internal-seed intake document and
-minted/persisted by `ps_service.ingestion.adapters.internal_seed`, a
-DIFFERENT package. There is no longer any file under `ps_service.domain_
-mapper/` that legitimately names any of these literals, so the whole-
-package ban is correct again -- **this is the concrete AC-BI-012 regression
-test**: it fails the moment `derive_governance_artifacts` (or any of the
-three governance-derivation system prompts) reappears anywhere in this
-package's production source.
+Governance artifacts are authored directly in the internal-seed intake document and minted and
+persisted by `ps_service.ingestion.adapters.internal_seed`, a different package. No file under
+`ps_service.domain_mapper/` legitimately names any of these literals, so the whole-package ban is
+correct: it fails the moment `derive_governance_artifacts` (or any of the three
+governance-derivation system prompts) reappears anywhere in this package's production source.
 
-An AST-based scan (not a substring grep) of every `.py` file actually
-delivered under `ps_service/domain_mapper/` (source only, found by walking
-the real filesystem -- `_files_to_scan`), asserting no string-literal
-`Constant` node whose value is one of `"Policy"`/`"Standard"`/`"Control"`/
-`"GOVERNED_BY"`/`"SUPPORTED_BY"`/`"IMPLEMENTED_BY"` appears ANYWHERE in any
-of those files (module/class/function/docstrings excluded).
+An AST-based scan (not a substring grep) of every `.py` file actually delivered under
+`ps_service/domain_mapper/` (source only, found by walking the real filesystem --
+`_files_to_scan`), asserting no string-literal `Constant` node whose value is one of
+`"Policy"`/`"Standard"`/`"Control"`/`"GOVERNED_BY"`/`"SUPPORTED_BY"`/`"IMPLEMENTED_BY"` appears
+ANYWHERE in any of those files (module/class/function docstrings excluded).
 
-**Deliberate divergence from #14's own scan mechanism, and why:** #14's
-`test_no_regulation_name_conditionals_in_ingestion_package` only ever walks
-a conditional/branching construct's *decision* subtree (`ast.If`/`IfExp`/
-`While`/`Assert`/`Compare`/`Match`) -- appropriate for THAT check, whose
-concern was regulation-name-conditional branching logic specifically. This
-file's concern (AC-BI-009/AC-BI-012) is broader: no `Policy`/`Standard`/
-`Control`/`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` string literal
-ANYWHERE in the package, not only inside a conditional's decision -- so
-this scan walks the ENTIRE module tree for a matching `ast.Constant`, not
-just conditional subtrees. The docstring-exclusion mechanism itself
-(`_docstring_constant_ids`) is copied verbatim from #14's precedent, per
-this batch's explicit instruction to reuse the same AST-based exclusion
-mechanism, not invent a different one. Comments are already invisible to
-`ast` (discarded at tokenization) -- no separate mechanism is needed for
-those, exactly as in #14's own scan.
+The scan walks the ENTIRE module tree for a matching `ast.Constant`, not just a conditional
+construct's *decision* subtree (`ast.If`/`IfExp`/`While`/`Assert`/`Compare`/`Match`): the concern
+here is broader than regulation-name-conditional branching logic -- no such string literal
+ANYWHERE in the package. The docstring-exclusion mechanism itself (`_docstring_constant_ids`)
+follows the ingestion package's scan. Comments are already invisible to `ast` (discarded at
+tokenization), so no separate mechanism is needed for those.
 """
 
 from __future__ import annotations
@@ -63,11 +39,8 @@ def _files_to_scan() -> list[Path]:
     """Every `.py` file actually delivered under `ps_service/domain_mapper/`
     (source only -- `ps-service/src/ps_service/domain_mapper/`, never
     `tests/`), found by walking the real filesystem (`rglob("*.py")`)
-    rather than a hardcoded list -- mirrors #14's `_files_to_scan`
-    precedent exactly. Used by both the literal-ban test and
-    `test_files_to_scan_covers_every_known_domain_mapper_module` (GH #76
-    reverted the narrower `_external_files_to_scan` split issue #54 S3
-    introduced -- see this module's own docstring for why).
+    rather than a hardcoded list. Used by both the literal-ban test and
+    `test_files_to_scan_covers_every_known_domain_mapper_module`.
     """
     domain_mapper_root = Path(domain_mapper_package.__file__).parent
     return sorted(domain_mapper_root.rglob("*.py"))
@@ -78,10 +51,8 @@ def _docstring_constant_ids(tree: ast.AST) -> set[int]:
     node -- the first statement of a `Module`/`ClassDef`/`FunctionDef`/
     `AsyncFunctionDef` body, when it is a bare string-literal expression.
 
-    Copied verbatim (same mechanism, same exclusion rule) from #14's own
-    `ps-service/tests/ingestion/test_pipeline.py::_docstring_constant_ids`
-    -- this batch's instructions require staying consistent with that
-    precedent rather than inventing a different exclusion rule.
+    Same mechanism and exclusion rule as
+    `ps-service/tests/ingestion/test_pipeline.py::_docstring_constant_ids`.
     """
     docstring_ids: set[int] = set()
     for node in ast.walk(tree):
@@ -101,9 +72,8 @@ def _find_forbidden_literals(tree: ast.AST) -> list[ast.Constant]:
     check. Flags every string-literal `Constant` node whose value is one of
     `_FORBIDDEN_LITERALS`, anywhere in the module -- not restricted to a
     conditional construct's decision subtree (see this module's own
-    docstring for why that restriction, present in #14's own scan, does not
-    apply to this broader AC-008 check). Docstring `Expr` nodes are
-    excluded via `_docstring_constant_ids`, same mechanism as #14's scan.
+    docstring for why that restriction does not apply to this check).
+    Docstring `Expr` nodes are excluded via `_docstring_constant_ids`.
     """
     docstring_ids = _docstring_constant_ids(tree)
     violations: list[ast.Constant] = []
@@ -119,12 +89,8 @@ def _find_forbidden_literals(tree: ast.AST) -> list[ast.Constant]:
 
 
 def test_domain_mapper_package_never_names_governance_artifacts() -> None:
-    """AC-BI-012's literal-search proof: GH #76 deleted `governance.py` (and
-    the LLM mint/match path it implemented) outright, so no file anywhere
-    under `ps_service.domain_mapper` may legitimately name a Policy/Standard/
-    Control governance artifact any more -- the whole-package ban restored,
-    replacing the narrower three-file scan issue #54 S3 introduced (see this
-    module's docstring for the full history).
+    """Literal-search proof: no file anywhere under `ps_service.domain_mapper`
+    may name a Policy/Standard/Control governance artifact (whole-package ban).
     """
     for path in _files_to_scan():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -137,11 +103,8 @@ def test_domain_mapper_package_never_names_governance_artifacts() -> None:
 
 def test_files_to_scan_covers_every_known_domain_mapper_module() -> None:
     """Guards against `_files_to_scan` silently narrowing down to a
-    hardcoded-looking subset -- mirrors #14's own
-    `test_files_to_scan_covers_every_known_ingestion_module` regression
-    guard, asserting the rglob walk actually finds every module this
-    package ships. `governance.py` is gone (GH #76) so it is no longer in
-    the expected set.
+    hardcoded-looking subset: the filesystem walk must find every module
+    this package ships.
     """
     scanned_relative_paths = {
         str(path.relative_to(Path(domain_mapper_package.__file__).parent))
@@ -168,8 +131,7 @@ def test_find_forbidden_literals_flags_a_hypothetical_literal_anywhere_in_the_mo
     """Positive case: an ordinary (non-conditional, non-docstring) string
     literal assignment naming a forbidden governance-artifact term is
     flagged -- proving the scan is NOT restricted to a conditional's
-    decision subtree (the deliberate divergence from #14's own scan, see
-    this module's docstring).
+    decision subtree (see this module's docstring).
     """
     tree = ast.parse('_LABEL = "Policy"\n')
 
@@ -180,8 +142,8 @@ def test_find_forbidden_literals_flags_a_hypothetical_literal_anywhere_in_the_mo
 
 def test_find_forbidden_literals_flags_a_hypothetical_conditional_too() -> None:
     """A forbidden literal used inside a conditional's decision is also
-    flagged -- the broader whole-tree scan is a superset of #14's own
-    conditional-only check, not a replacement that narrows coverage.
+    flagged -- the whole-tree scan is a superset of a conditional-only
+    check, not a narrower one.
     """
     tree = ast.parse(
         "def f(label):\n    if label == 'Control':\n        return True\n    return False\n"
@@ -194,8 +156,7 @@ def test_find_forbidden_literals_flags_a_hypothetical_conditional_too() -> None:
 
 def test_find_forbidden_literals_ignores_docstring_examples() -> None:
     """Negative case: a docstring mentioning these terms as illustrative
-    prose (e.g. explaining what AC-008 excludes, exactly like this test
-    module's own docstring) is not flagged.
+    prose (exactly like this test module's own docstring) is not flagged.
     """
     tree = ast.parse(
         '"""This component never derives Policy, Standard, or Control '

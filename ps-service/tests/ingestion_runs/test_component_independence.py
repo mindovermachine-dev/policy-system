@@ -1,4 +1,4 @@
-"""AC-BI-016/017 (issue #194): `ingestion_runs` writes audit rows only via `AuditStore`.
+"""`ingestion_runs` writes audit rows only via `AuditStore`.
 
 Mirrors `tests/runtime_config/test_component_independence.py`: structural checks on the real
 source tree, so a later edit cannot quietly add a raw `INSERT INTO audit_events` or reach into

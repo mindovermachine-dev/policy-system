@@ -1,4 +1,4 @@
-"""Persistence failures of the Domain Mapper stages through the gateway (issue #209, AC-BI-005).
+"""Persistence failures of the Domain Mapper stages through the gateway.
 
 The real extraction and derivation stages run over the gateway rig (in-memory log and graph
 fakes). A group that cannot be logged, that FalkorDB refuses, or that is committed but not
@@ -132,7 +132,7 @@ def test_failure_in_derivation_after_extraction_committed_leaves_the_extraction_
     other_baseline_rig: BaselineRig,
     variant: str,
 ) -> None:
-    """AC-BI-005: extraction's content survives; the re-run ends where an uninterrupted run does.
+    """Extraction's content survives; the re-run ends where an uninterrupted run does.
 
     The reference is a second, fresh rig running extraction and derivation with the same scripted
     LLM answers. After the fault is healed (and, when FalkorDB was the one down, the committed

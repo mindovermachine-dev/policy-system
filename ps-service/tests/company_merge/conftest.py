@@ -1,4 +1,4 @@
-"""Fixtures for the Company Merge tests that write through the Graph Write Gateway (#210)."""
+"""Fixtures for the Company Merge tests that write through the Graph Write Gateway."""
 
 from __future__ import annotations
 

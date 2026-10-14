@@ -1,6 +1,6 @@
-"""Gateway failures reach Company Merge callers as `CompanyMergePersistenceError` (issue #210, 2d).
+"""Gateway failures reach Company Merge callers as `CompanyMergePersistenceError`.
 
-AC-BI-008: a refused group, a group committed but not applied, a graph that is behind its log and
+A refused group, a group committed but not applied, a graph that is behind its log and
 a failed stamp all surface as `CompanyMergePersistenceError("FalkorDB write failed: ...")`, with
 no gateway internals in the message, and FalkorDB connectivity health is recorded as the gateway
 records it (transient exhaustion marks FALKORDB unhealthy; a permanent refusal does not). Read

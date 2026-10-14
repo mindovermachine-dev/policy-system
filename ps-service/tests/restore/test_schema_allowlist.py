@@ -1,4 +1,4 @@
-"""Tests for `ps_service.restore.schema_allowlist` (CHANGES2.md §2.3/§2.4).
+"""Tests for `ps_service.restore.schema_allowlist`.
 
 Mirrors `ingestion/graph_writer.py::_validate_element_types`'s exact shape:
 whole-collection validation, raise on the first violation, zero
@@ -81,7 +81,7 @@ _DOCUMENTED_EDGE_ENDPOINTS: tuple[tuple[str, str, str], ...] = (
 
 
 def test_baseline_allow_lists_equal_the_internal_seed_vocabulary() -> None:
-    """AC-BI-003 (baseline half): the hand-written baseline lists must equal the
+    """Baseline half: the hand-written baseline lists must equal the
     intake boundary's `NodeLabel`/`EdgeType` vocabulary exactly, so any future
     vocabulary drift on either side fails here and is widened deliberately.
     """
@@ -100,7 +100,7 @@ _ALLOW_LIST_CONSTANTS = (
 
 
 def test_baseline_allow_lists_are_subsets_of_the_domain_schema() -> None:
-    """AC-BI-014: a baseline name the schema lacks fails; the schema stays the superset."""
+    """A baseline name the schema lacks fails; the schema stays the superset."""
     assert find_unpinned(BASELINE_ALLOWED_LABELS, _SCHEMA_LABELS, ()) == ()
     assert find_unpinned(BASELINE_ALLOWED_RELATIONSHIP_TYPES, _SCHEMA_EDGE_TYPES, ()) == ()
     # Schema-only edges are exactly the named system-minted ones (not stale).
@@ -140,7 +140,7 @@ def _allowlist_tree() -> ast.Module:
 
 
 def test_allow_lists_do_not_import_the_schema_package() -> None:
-    """AC-BI-014: the sink-side lists stay independent of the schema (defence in depth)."""
+    """The sink-side lists stay independent of the schema (defence in depth)."""
     imported: list[str] = []
     for node in ast.walk(_allowlist_tree()):
         if isinstance(node, ast.Import):
@@ -176,7 +176,7 @@ def test_allow_lists_are_hand_written_literals() -> None:
 
 
 def test_baseline_allow_lists_accept_the_practice_area_and_risk_path_classification_layer() -> None:
-    """AC-BI-001: the GH #93 classification layer (endpoint pairs per
+    """The classification layer (endpoint pairs per
     `docs/artifacts/ps-domain-concepts.md`) passes baseline content validation.
     """
     graph = _graph(
@@ -205,7 +205,7 @@ def test_baseline_allow_lists_accept_the_practice_area_and_risk_path_classificat
 def test_native_allow_lists_equal_the_internal_seed_vocabulary_united_with_cellar_eli_members() -> (
     None
 ):
-    """AC-BI-003 (native half): the native lists equal the full intake vocabulary
+    """Native half: the native lists equal the full intake vocabulary
     united with the Cellar/ELI structural members (`ingestion/graph_writer.py::
     _KNOWN_ELEMENT_TYPES`, private -- restated here as a literal on purpose).
     """
@@ -219,7 +219,7 @@ def test_native_allow_lists_equal_the_internal_seed_vocabulary_united_with_cella
 
 
 def test_native_allow_lists_accept_every_internal_seed_node_label_and_edge_type() -> None:
-    """AC-BI-002: an internal instrument's native leg carries the full intake
+    """An internal instrument's native leg carries the full intake
     vocabulary verbatim -- all node labels and all edge types (documented
     endpoint pairs per `docs/artifacts/ps-domain-concepts.md`) pass native
     content validation.
@@ -302,7 +302,7 @@ def test_validate_serialized_graph_rejects_an_edge_relationship_type_outside_the
 def test_validate_serialized_graph_rejects_a_relationship_type_outside_the_native_allow_list() -> (
     None
 ):
-    """AC-BI-006 on the native leg: widening never admits an unknown type."""
+    """On the native leg: widening never admits an unknown type."""
     graph = _graph(
         nodes=(
             SerializedNode(label="ARTICLE", properties={"id": "art_1"}),
@@ -393,7 +393,7 @@ def test_validate_serialized_graph_makes_no_graph_query_calls_before_raising() -
 
 
 def test_merged_into_is_in_no_allow_list() -> None:
-    """Issue #190: tombstones and redirects are never part of an artifact vocabulary."""
+    """Tombstones and redirects are never part of an artifact vocabulary."""
     assert "MERGED_INTO" not in BASELINE_ALLOWED_RELATIONSHIP_TYPES
     assert "MERGED_INTO" not in NATIVE_ALLOWED_RELATIONSHIP_TYPES
     assert "MergedObligation" not in BASELINE_ALLOWED_LABELS
@@ -438,7 +438,7 @@ def test_validate_serialized_graph_accepts_a_non_merged_capability(status: str |
 def test_validate_serialized_graph_rejects_a_merged_obligation_marker(
     labels: frozenset[str], relationships: frozenset[str]
 ) -> None:
-    """Issue #190 (H1): a `MergedObligation` marker exists only in a deployment's own graph."""
+    """A `MergedObligation` marker exists only in a deployment's own graph."""
     graph = _graph(
         nodes=(
             SerializedNode(

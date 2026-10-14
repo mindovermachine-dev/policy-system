@@ -1,14 +1,13 @@
-"""The capability-merge flow end to end: preview, passkey signature, executor, gateway group (#212).
+"""The capability-merge flow end to end: preview, passkey signature, executor, gateway group.
 
-One continuity test per flow (CHANGES A1). Everything real runs: the `merge-capabilities` MCP tool
+One continuity test per flow. Everything real runs: the `merge-capabilities` MCP tool
 creates the approval, the signing router verifies the passkey assertion and runs the registered
 executor, the executor writes ONE gateway group, `check-cleanup-approval` reports the outcome and
 `list-audit-events` returns the `applied` row. Only the graph (the gateway rig's in-memory log and
 FalkorDB fakes), the stores and the role grants are fakes.
 
-The assertions on messages, outcomes and audit-row shape are the ones from before #212; what is
-new is the join: the group's `audit_event_id` is the id `list-audit-events` returns for the
-`applied` row.
+The assertions cover messages, outcomes and audit-row shape and the join: the group's
+`audit_event_id` is the id `list-audit-events` returns for the `applied` row.
 """
 
 from __future__ import annotations

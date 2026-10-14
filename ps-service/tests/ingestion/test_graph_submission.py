@@ -1,4 +1,4 @@
-"""The ingestion-side seam to the Graph Write Gateway (issue #208, slice 1).
+"""The ingestion-side seam to the Graph Write Gateway.
 
 `submit_or_raise` is the one place gateway outcomes and errors become the error type of the
 ingestion module that submitted the group, so callers keep their existing failure contract

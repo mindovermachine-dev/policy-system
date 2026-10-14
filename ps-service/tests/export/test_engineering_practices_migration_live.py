@@ -1,19 +1,17 @@
-"""Live proof for PLAN.md Slice 3.6 (D15): the engineering-practices `{short}_baseline`/
+"""Live proof: the engineering-practices `{short}_baseline`/
 `{short}_native` graph pair, built by the real internal-seed adapter from the shipped
 `internal-sources/engineering-practices/engineering-practices-seed.json`, is a shape-correct
-baseline graph, and Slice 3.5's `export_instrument` orchestration runs against it end to end.
+baseline graph, and the `export_instrument` orchestration runs against it end to end.
 
 The pair is seeded by the `engprac_graphs` fixture into uniquely named graphs (deleted
-afterwards) through the real Graph Write Gateway on a scratch PS Postgres. The test used to
-read permanently seeded `engprac_baseline`/`engprac_native` graphs that only a hand-seeded dev
-FalkorDB had, so it failed in any clean environment; it now owns its data and never reads or
-writes those shared keys.
+afterwards) through the real Graph Write Gateway on a scratch PS Postgres.
+The test owns its data and never reads or writes the shared permanent `engprac_baseline`/
+`engprac_native` keys, so it runs in any clean environment.
 
 It does not use a live LLM provider (no `llm_live` marker): `export_instrument` is called with a
-fake, deterministic `EmbeddingCaller`, exactly like `CHANGES.md` MA5's own synthetic round-trip
-test. Every other part of the pipeline (real FalkorDB reads, real `SET n.embedding = ...`
-writes, real serialize/checksum/manifest/catalog logic) runs against genuinely shaped
-internal-source content.
+fake, deterministic `EmbeddingCaller`, like the synthetic round-trip test. Every other part of the
+pipeline (real FalkorDB reads, real `SET n.embedding = ...` writes, real
+serialize/checksum/manifest/catalog logic) runs against genuinely shaped internal-source content.
 """
 
 from __future__ import annotations
@@ -136,9 +134,9 @@ def test_engprac_baseline_passes_company_merges_own_baseline_graph_shape_asserti
     assert len(result.requirement_nodes) > 0
     assert len(result.obligation_nodes) > 0
     assert len(result.capability_nodes) > 0
-    # `read_baseline_graph` reads only through Capability (Company Merge's own scope,
-    # PLAN.md §0.3) -- Policy/Standard/Control depth is proven directly below via a
-    # generic query, not through this reader.
+    # `read_baseline_graph` reads only through Capability (Company Merge's own scope) --
+    # Policy/Standard/Control depth is proven directly below via a generic query, not through this
+    # reader.
     assert _count(baseline_graph.query("MATCH (n:Policy) RETURN count(n)")) > 0
     assert _count(baseline_graph.query("MATCH (n:Standard) RETURN count(n)")) > 0
     assert _count(baseline_graph.query("MATCH (n:Control) RETURN count(n)")) > 0
@@ -153,7 +151,7 @@ def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
     tmp_path: Path,
     make_emitter: MakeEmitter,
 ) -> None:
-    """The real `export_instrument()` orchestration (Slice 3.5), run against
+    """The real `export_instrument()` orchestration, run against
     the seeded engineering-practices graphs -- a real-content
     proof of the whole export pipeline, not just a fakes-only proof (module
     docstring). Writes into a `tmp_path` repo root, never the real

@@ -1,4 +1,4 @@
-"""A node's label set is part of the digest (#207 S5, AC-RD-002)."""
+"""A node's label set is part of the digest."""
 
 from __future__ import annotations
 

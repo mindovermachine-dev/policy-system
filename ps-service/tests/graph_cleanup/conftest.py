@@ -1,4 +1,4 @@
-"""Fixtures for the Graph Cleanup tests that write through the Graph Write Gateway (#212)."""
+"""Fixtures for the Graph Cleanup tests that write through the Graph Write Gateway."""
 
 from __future__ import annotations
 

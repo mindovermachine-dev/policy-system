@@ -1,4 +1,4 @@
-"""Shared assertions for "a writer left a head checkpoint" (issue #215, S4; AC-BI-009).
+"""Shared assertions for "a writer left a head checkpoint".
 
 A head checkpoint is the stored digest at a graph's last log position. Writers request one on their
 terminal group; each flow's test asserts it through these helpers on the `GatewayRig` it ran on.

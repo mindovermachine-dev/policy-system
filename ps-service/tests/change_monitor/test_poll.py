@@ -1,6 +1,6 @@
-"""Tests for `ps_service.change_monitor.poll` (AC-002, AC-003, AC-009, AC-010).
+"""Tests for `ps_service.change_monitor.poll`.
 
-Tests 5-11 (PLAN_REVIEWED.md §3): newer-consolidation detection, the
+Newer-consolidation detection, the
 up-to-date case, `regulation` == `directive` path parity, per-instrument
 CELLAR-failure isolation, `not_configured` vs `poll_failed`, the
 conservative `baseline_unknown` fallback, and the one-log-entry-per-instrument
@@ -59,9 +59,6 @@ class _FakeConsolidatedVersions:
 def _graph(*rows: list[object]) -> GraphHandle:
     """A `FakeGraph` primed with one enumeration result holding `rows`."""
     return FakeGraph([FakeQueryResult(list(rows))])
-
-
-# --- Increment 6: tests 5, 6, 7 --------------------------------------------
 
 
 def test_reports_instrument_with_newer_consolidation(make_emitter: MakeEmitter) -> None:
@@ -125,9 +122,6 @@ def test_directive_and_regulation_take_identical_path(
     (line,) = read_lines(log_path)
     assert line["action"] == "poll_for_amendments"
     assert line["outcome"] == "amendment_detected"
-
-
-# --- Increment 7: tests 8, 9, 10, 11 -------------------------------------
 
 
 def test_per_instrument_cellar_failure_is_isolated(

@@ -1,12 +1,11 @@
-"""Live proof for AC-BI-008: an interruption before the group is submitted leaves nothing behind.
+"""Live proof that an interruption before the group is submitted leaves nothing behind.
 
 The REAL `restore_instrument` runs against the real gateway (Postgres graph log, FalkorDB) with
-a gateway whose multi-graph submit is interrupted, simulating a hard process stop after every
-leg was built and before the log transaction. Asserts the live `{short}_native`/`{short}_baseline`
-and single-tenant graphs are unchanged, the log holds nothing for them, and -- unlike the
-pre-#214 staging, which left inert `__restoring__` orphan keys -- NO extra graph key exists at
-all (a restore stages nothing in FalkorDB). The post-commit interruption matrix (AC-BI-009) comes
-with the swap strategy in slice 8b.
+a gateway whose multi-graph submit is interrupted, simulating a hard process stop after every leg
+was built and before the log transaction. Asserts the live `{short}_native`/`{short}_baseline` and
+single-tenant graphs are unchanged, the log holds nothing for them, and no extra graph key exists
+at all (a restore stages nothing in FalkorDB). The post-commit interruption matrix is in
+`test_restore_swap.py`.
 
 Not run in the implementation sandbox (no FalkorDB, no Postgres).
 """

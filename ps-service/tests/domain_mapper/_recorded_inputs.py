@@ -1,4 +1,4 @@
-"""Recorded baseline artifacts as the inputs of the Domain Mapper's two writers (#209, AC-BI-002).
+"""Recorded baseline artifacts as the inputs of the Domain Mapper's two writers.
 
 `recorded_inputs` reads a baseline artifact in the curated `baseline.json` shape (the committed
 trimmed CRA subset, or the whole curated artifact) and returns the Role/Requirement/Obligation/

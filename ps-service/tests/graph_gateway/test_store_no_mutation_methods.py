@@ -1,4 +1,4 @@
-"""Structural proof that the graph log store exposes no rewrite method (issue #205, AC-BI-005).
+"""Structural proof that the graph log store exposes no rewrite method.
 
 Fast, hermetic: checks the public method names of the `GraphLogStore` Protocol and of the real
 implementation. The database refuses the rewrite regardless (see `test_provision_live.py`); this

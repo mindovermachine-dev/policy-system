@@ -2,8 +2,7 @@
 
 All fixtures live under `tmp_path` -- no live dependency, and no real
 `APPROVAL_LIVE_MERGE_*.md` file is ever written anywhere in this repo by
-these tests (per issue #28's own approval-gate design: that file may only
-ever be authored by a human).
+these tests (that file may only ever be authored by a human).
 """
 
 from __future__ import annotations

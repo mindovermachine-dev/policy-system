@@ -1,4 +1,4 @@
-"""The Graph Write Gateway rig, seen from Export (issue #213).
+"""The Graph Write Gateway rig, seen from Export.
 
 Export reads the `{short}_baseline` and `{short}_native` graphs through a query handle and writes
 the baseline graph only as a gateway group (the embedding backfill). `ExportRig` is the process's

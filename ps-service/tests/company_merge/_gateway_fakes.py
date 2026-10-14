@@ -1,4 +1,4 @@
-"""The Graph Write Gateway rig, seen from Company Merge (issue #210).
+"""The Graph Write Gateway rig, seen from Company Merge.
 
 Company Merge submits its graph writes as gateway groups and only reads the graphs through a
 handle. `MergeRig` is the gateway rig (in-memory log and FalkorDB fakes, the true boundaries) plus

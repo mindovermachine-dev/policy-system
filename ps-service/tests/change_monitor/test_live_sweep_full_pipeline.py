@@ -1,4 +1,4 @@
-"""Live FalkorDB proof of the full-pipeline amendment re-ingest (issue #201, AC-BI-002/004/008).
+"""Live FalkorDB proof of the full-pipeline amendment re-ingest.
 
 Entry is the REAL `run_change_check_sweep`; everything below it is real: `read_tracked_instruments`,
 `will_reingest` / `trigger_reingestion` / `classify_reingestion`, the succession's gateway groups,
@@ -17,11 +17,11 @@ What the real run proves that the hermetic `test_reingestion_graph_state.py` can
 
 - version scoping: extract and derive read ONLY the new version's Articles and Requirements
   (the new version's `EXPRESSES` edges exist in the real baseline and the derive query follows
-  them), so the prior version's subtree is untouched in all three graphs (AC-BI-004);
+  them), so the prior version's subtree is untouched in all three graphs;
 - the new Obligation and Capability exist in the single-tenant graph and the audited counts equal
-  the graph delta (AC-BI-002, AC-BI-011);
+  the graph delta;
 - a derive failure followed by a retry re-runs only the missing stages and ends exactly like a clean
-  run, with no duplicate node or edge (AC-BI-008);
+  run, with no duplicate node or edge;
 - the succession groups run on real FalkorDB and the real graph log, anchored to the sweep's real
   `ingestion_run.submit` audit row: edge with `absorbed`, prior `superseded` in the native and
   single-tenant graphs, no marker left behind.
@@ -292,8 +292,8 @@ class _LiveAuditStore:
     """The REAL Postgres audit store, mirroring each row it wrote for the test to read back.
 
     The succession's graph groups are anchored to the sweep's `ingestion_run.submit` audit row, and
-    the real graph log's foreign key accepts only a row that exists in PS state Postgres (issue
-    #213); an in-memory store's ids would be refused.
+    the real graph log's foreign key accepts only a row that exists in PS state Postgres;
+    an in-memory store's ids would be refused.
     """
 
     def __init__(self, config: ServiceConfig) -> None:
@@ -374,7 +374,7 @@ class _World:
         amend: bool = True,
     ) -> ChangeCheckResult:
         """One REAL sweep. `force_tracked` overrides only the tracked read (a lagging poll)."""
-        # The re-ingest writes through the REAL Graph Write Gateway (issue #208): the real log
+        # The re-ingest writes through the REAL Graph Write Gateway: the real log
         # store (PS state Postgres) and FalkorDB, in place of the fast suite's rig.
         install_graph_write_gateway(build_default_graph_write_gateway(self.config))
         real = build_default_change_check_dependencies()
@@ -449,7 +449,7 @@ def _build_world(
     monkeypatch.setattr("ps_service.llm_interface.client.litellm.completion", llm.completion)
     monkeypatch.setattr("ps_service.llm_interface.client.litellm.embedding", llm.embedding)
     adapter = _ScriptedAdapter()
-    # Ingestion writes through the REAL Graph Write Gateway (issue #208) on the scratch state
+    # Ingestion writes through the REAL Graph Write Gateway on the scratch state
     # Postgres, seed included, so it is installed before v1 is seeded.
     install_graph_write_gateway(build_default_graph_write_gateway(config))
     try:
@@ -524,9 +524,9 @@ def test_seeded_prior_version_is_a_complete_single_version_spine(world: _World) 
 def test_amendment_runs_the_real_stages_and_absorbs_without_touching_the_prior_version(
     world: _World, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-002, AC-BI-003, AC-BI-004, AC-BI-011 against real FalkorDB.
+    """An amendment adds its new nodes and absorbs the prior without touching its subtree.
 
-    AC-BI-004 precise statement: the sweep's succession write intentionally flips the prior
+    Precisely: the sweep's succession write intentionally flips the prior
     `RegulatoryInstrument.status` active -> superseded (native and single-tenant graphs) and adds
     the one `SUPERSEDED_BY` edge. Every other node, edge and property that existed before the sweep
     (all three graphs, including the baseline where the prior stays `active`) is equal afterwards.
@@ -554,7 +554,7 @@ def test_amendment_runs_the_real_stages_and_absorbs_without_touching_the_prior_v
     )
     # Succession statements (real Cypher): edge + absorbed, prior superseded, no marker left.
     native_after, baseline_after, tenant_after = world.snapshots()
-    # The gateway stamps the edge with the repo-wide identity `TYPE:source->target` (#213).
+    # The gateway stamps the edge with the repo-wide identity `TYPE:source->target`.
     assert native_after[1][("SUPERSEDED_BY", _PRIOR, _NEW)] == {
         "absorbed": True,
         "identity": f"SUPERSEDED_BY:{_PRIOR}->{_NEW}",
@@ -565,7 +565,7 @@ def test_amendment_runs_the_real_stages_and_absorbs_without_touching_the_prior_v
     assert _count(world.native, "MATCH (m:ReingestProgress) RETURN count(m)") == 0
     assert _count(world.single_tenant, "MATCH ()-[e:SUPERSEDED_BY]->() RETURN count(e)") == 1
 
-    # AC-BI-002: the amendment's new Obligation and Capability exist in the single-tenant graph.
+    # The amendment's new Obligation and Capability exist in the single-tenant graph.
     new_obligations = _ids(world.single_tenant, "Obligation") - obligations_before
     new_capabilities = _ids(world.single_tenant, "Capability") - capabilities_before
     obligation_texts = {
@@ -597,14 +597,14 @@ def test_amendment_runs_the_real_stages_and_absorbs_without_touching_the_prior_v
             )
             == expected
         )
-    # AC-BI-011: the audited counts are the graph delta; matched_capabilities is inclusive of the
+    # The audited counts are the graph delta; matched_capabilities is inclusive of the
     # prior version's Capability that the new version's Article 1 converges onto.
     complete = store.rows[1].details
     assert complete["new_obligations"] == len(new_obligations)
     assert complete["new_capabilities"] == len(new_capabilities) == 1
     assert cast("int", complete["matched_capabilities"]) >= 1
 
-    # AC-BI-004: nothing the prior version owns changed, in any of the three graphs.
+    # Nothing the prior version owns changed, in any of the three graphs.
     flipped = ("RegulatoryInstrument", _PRIOR)
     for index, (was, now) in enumerate(zip(before, world.snapshots(), strict=True)):
         for key, props in was[0].items():
@@ -667,7 +667,7 @@ def test_second_sweep_polls_the_new_version_current_and_a_lagging_poll_runs_noth
 def test_derive_failure_then_retry_reruns_only_missing_stages_and_creates_no_duplicates(
     world: _World, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-007 / AC-BI-008 on real graphs: the retried run ends exactly like a clean one."""
+    """On real graphs, the retried run ends exactly like a clean one."""
     emitter, _ = make_emitter(filename="retry.jsonl")
     world.llm.fail_derivation_once = True
 

@@ -1,4 +1,4 @@
-"""Tests for the `ingestion_runs` migration (issue #194)."""
+"""Tests for the `ingestion_runs` migration."""
 
 from __future__ import annotations
 

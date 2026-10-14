@@ -1,4 +1,4 @@
-"""Edges, their direction and parallel edges are part of the digest (#207 S3, AC-RD-002)."""
+"""Edges, their direction and parallel edges are part of the digest."""
 
 from __future__ import annotations
 
@@ -23,9 +23,6 @@ _AUDIT_EVENT_ID = "3f2b8c1e-5d4a-4b7e-9a61-0c2d7e8f9a10"
 _GRAPH = "g"
 _NODES_ONLY_DIGEST = "sha256:3c5c7617dca6844d2a4dc34250c5ea6af6ac957c4c7c4bc3f15c6f7e94946b1c"
 """Pinned digest format v1 of two nodes and no edge: a change of encoding must bump the domain.
-
-(Before labels joined the node element in S5 the value was sha256:53c609ed..., and S3 proved a
-graph without edges digests the same as before edge support existed.)
 """
 
 

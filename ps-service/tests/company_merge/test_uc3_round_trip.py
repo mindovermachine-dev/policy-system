@@ -1,8 +1,8 @@
-"""The real UC-3 round-trip query proof for issue #54's S4.
+"""The real governance round-trip query proof.
 
-PLAN.md §6 S4, red-before-green item 4: after `merge_baseline_graph` merges an
+After `merge_baseline_graph` merges an
 internal-sourced baseline into the single-tenant graph, a Cypher query
-shaped exactly like the plan's own UC-3 proof --
+shaped like the governance round-trip --
 
     MATCH (c:Capability)-[:GOVERNED_BY]->(p:Policy)-[:SUPPORTED_BY]->(s:Standard)
     -[:IMPLEMENTED_BY]->(ctrl:Control)
@@ -16,11 +16,11 @@ instance): `_TraversableSingleTenantGraph` below is not a scripted/canned
 responder like every other fake `GraphHandle` in this package -- it
 genuinely interprets the MERGE node/edge Cypher `merge_baseline_graph`'s
 real `graph_writer.py` issues (via regex matching the exact shapes those
-functions emit) into an in-memory node/edge store, and answers the UC-3
+functions emit) into an in-memory node/edge store, and answers the round-trip
 query above by actually traversing that store, filtering by
 `p.title CONTAINS 'Engineering'` -- the same computation a real FalkorDB
 engine would perform, just executed in Python. This proves `merge_baseline_
-graph`'s writes are shaped correctly for the real UC-3 traversal, not merely
+graph`'s writes are shaped correctly for the real round-trip traversal, not merely
 that the individual MERGE calls look right in isolation (which
 `test_merge_baseline_graph.py`'s param-level assertions already cover).
 """
@@ -111,9 +111,9 @@ class _ScriptedBaselineGraph:
         self._role_rows = role_rows
         self._requirement_rows = requirement_rows
         self._obligation_rows = obligation_rows
-        # issue #31 -- mutable, keyed by id, so backfill_incoming_capability_
-        # embeddings' write has somewhere to land. A 4-element row (this
-        # fixture's pre-#31 shape) is padded with a `None` embedding.
+        # mutable, keyed by id, so backfill_incoming_capability_
+        # embeddings' write has somewhere to land. A 4-element row is padded
+        # with a `None` embedding.
         self._capabilities: dict[str, list[object]] = {}
         for row in capability_rows:
             row_list = list(cast("list[object]", row))
@@ -172,7 +172,7 @@ class _ScriptedBaselineGraph:
         if "(n:RiskPath) RETURN" in q:
             return _FakeQueryResult([])
         if "[:COVERS]" in q or "[:OWNS]" in q or "[:MITIGATED_BY]" in q or "[:VERIFIED_BY]" in q:
-            # issue #106 -- this fixture carries no classification-layer
+            # this fixture carries no classification-layer
             # content; the four new edge queries `read_baseline_graph` now
             # always issues answer empty (external-baseline shape).
             return _FakeQueryResult([])
@@ -189,7 +189,7 @@ class _ScriptedBaselineGraph:
                 [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
         if "WHERE n.id IN $ids RETURN n.id, n.embedding IS NULL" in q:
-            # issue #31, #210 -- backfill_incoming_capability_embeddings' read of which of its ids
+            # backfill_incoming_capability_embeddings' read of which of its ids
             # exist on THIS (incoming) baseline graph and have no embedding yet (the write is a
             # gateway group on the rig's baseline graph).
             assert params is not None
@@ -239,7 +239,7 @@ class _TraversableSingleTenantGraph:
     def __init__(self, gateway_graph: InMemoryGraph | None = None) -> None:
         self.nodes: dict[str, dict[str, dict[str, object]]] = defaultdict(dict)
         self.calls: list[str] = []
-        # issue #210: the nodes the merge writes through the gateway (Capability so far) live in
+        # the nodes the merge writes through the gateway (Capability so far) live in
         # the rig's graph; this fake's own store holds the ones still written with Cypher.
         self._gateway_graph = gateway_graph
 
@@ -278,7 +278,7 @@ class _TraversableSingleTenantGraph:
 
         existence_match = self._EXISTENCE_RE.match(q)
         if existence_match is not None:
-            # issue #210: the existing-node reads (create-only upserts, edge endpoints); every
+            # the existing-node reads (create-only upserts, edge endpoints); every
             # write is a gateway group, so the rig's graph answers
             assert params is not None
             label = existence_match.group(1)
@@ -302,7 +302,7 @@ class _TraversableSingleTenantGraph:
 
         state_match = self._EMBEDDING_STATE_RE.match(q)
         if state_match is not None:
-            # issue #210: the backfill's read of which ids exist and have no embedding (its write
+            # the backfill's read of which ids exist and have no embedding (its write
             # is a gateway group on `policy_system`)
             assert params is not None
             label = state_match.group(1)
@@ -315,7 +315,7 @@ class _TraversableSingleTenantGraph:
             )
 
         # Provenance-edge / RegulatoryInstrument writes: irrelevant to the
-        # UC-3 traversal, safely ignored (never asserted on here).
+        # round-trip traversal, safely ignored (never asserted on here).
         return _FakeQueryResult([])
 
     def _write_node(
@@ -329,7 +329,7 @@ class _TraversableSingleTenantGraph:
             self.nodes[label].setdefault(node_id, {}).update(properties)
 
     def _run_uc3(self) -> list[object]:
-        """Actually traverse the in-memory store for the UC-3 pattern -- not scripted."""
+        """Actually traverse the in-memory store for the round-trip pattern -- not scripted."""
         governed_by = [(s, t) for rel, s, t in self.edges if rel == "GOVERNED_BY"]
         supported_by = {s: t for rel, s, t in self.edges if rel == "SUPPORTED_BY"}
         implemented_by = {s: t for rel, s, t in self.edges if rel == "IMPLEMENTED_BY"}
@@ -364,7 +364,7 @@ class _TraversableSingleTenantGraph:
 def _engineering_practices_baseline() -> _ScriptedBaselineGraph:
     """One fully-wired internal instrument: Role/Requirement/Obligation/
     Capability spine plus Policy/Standard/Control governance layer, titled
-    so the Policy matches the UC-3 query's `WHERE p.title CONTAINS
+    so the Policy matches the round-trip query's `WHERE p.title CONTAINS
     'Engineering'` filter.
     """
     rid = _REGULATION_ID
@@ -415,10 +415,9 @@ def test_uc3_capability_policy_standard_control_query_returns_real_rows(
     make_emitter: MakeEmitter,
     merge_rig: MergeRig,
 ) -> None:
-    """S4's closing proof: after `merge_baseline_graph` merges the
-    Engineering Practices baseline into `policy_system`, the exact UC-3
-    Cypher query from PLAN.md §6 S4 returns the real merged row -- closing
-    UC-3 for this instrument.
+    """After `merge_baseline_graph` merges the
+    Engineering Practices baseline into `policy_system`, the exact round-trip
+    Cypher query returns the real merged row.
     """
     emitter, _log_path = make_emitter()
     baseline = _engineering_practices_baseline()

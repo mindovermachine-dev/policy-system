@@ -1,14 +1,13 @@
-"""Tests for issue #31: caching the INCOMING side of Company Merge's
+"""Tests for caching the INCOMING side of Company Merge's
 Capability embedding comparison, at the `dedup.dedupe_canonical_nodes`
 level.
 
 Mirrors `test_dedup_combined_resolution.py`'s own fakes/style exactly
 (`_ScriptedSingleTenantGraph`/`_ScriptedCallEmbedding`) -- these tests only
 add `BaselineNode.embedding` to the incoming side of that same picture,
-proving `DedupResult.incoming_embedding_backfills` (AC-BI-005) is populated
+proving `DedupResult.incoming_embedding_backfills` is populated
 (or not) exactly when `find_best_semantic_match` did (or didn't) need a
-fresh `route_embedding` call for the incoming node's own text (AC-BI-002/
-AC-BI-003/AC-BI-004).
+fresh `route_embedding` call for the incoming node's own text.
 """
 
 from __future__ import annotations
@@ -86,12 +85,12 @@ def _capability(
 def test_uncached_incoming_capability_merging_semantically_records_one_backfill(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-002/AC-BI-004: an incoming Capability with `embedding=None`
+    """An incoming Capability with `embedding=None`
     (never cached before) that resolves via a semantic merge costs exactly
     one `route_embedding` call for its own text, and that freshly-computed
     embedding is recorded into `incoming_embedding_backfills` -- for
-    `merge.py` to persist onto this Capability's own `{short}_baseline` node
-    (AC-BI-005), regardless of the merge/mint outcome.
+    `merge.py` to persist onto this Capability's own `{short}_baseline` node,
+    regardless of the merge/mint outcome.
     """
     emitter, _log_path = make_emitter()
     existing_id = "cap_existing_risk_assessment"
@@ -123,7 +122,7 @@ def test_uncached_incoming_capability_merging_semantically_records_one_backfill(
 def test_cached_incoming_capability_costs_zero_calls_and_records_no_backfill(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-003: an incoming Capability whose `BaselineNode.embedding` is
+    """An incoming Capability whose `BaselineNode.embedding` is
     already cached (e.g. from a prior run's backfill) is reused directly --
     ZERO `route_embedding` calls for it -- and, since nothing new was
     computed, `incoming_embedding_backfills` carries no entry for it either
@@ -167,7 +166,7 @@ def test_cached_incoming_capability_costs_zero_calls_and_records_no_backfill(
 def test_uncached_incoming_capability_minting_still_records_backfill(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-005: the backfill is recorded whenever a fresh embedding was
+    """The backfill is recorded whenever a fresh embedding was
     actually computed, independent of whether the node goes on to mint or
     merge -- here the incoming node scores below `_THRESHOLD` against the
     one pre-existing entry, so it mints (`match_kind="new"`), but its own
@@ -201,9 +200,9 @@ def test_uncached_incoming_capability_minting_still_records_backfill(
 
 def test_empty_existing_index_records_no_incoming_backfill(make_emitter: MakeEmitter) -> None:
     """No pre-existing Capability at all: `find_best_semantic_match` returns
-    `None` without computing anything (its own pre-#31 contract, unchanged),
+    `None` without computing anything (its own contract),
     so there is nothing to backfill either -- an uncached incoming node's
-    `embedding` stays `None` at mint time, exactly as before #31, and zero
+    `embedding` stays `None` at mint time, and zero
     `route_embedding` calls of any kind are made.
     """
     emitter, _log_path = make_emitter()

@@ -1,6 +1,6 @@
-"""`falkordb_live` twin of the replace semantics (issue #214 S3, AC-BI-011).
+"""`falkordb_live` twin of the replace semantics.
 
-Not run in the implementation sandbox (no FalkorDB). The fast tests interpret the gateway's own
+The fast tests interpret the gateway's own
 Cypher templates by regex; only a real FalkorDB proves that the expansion's stamps and deletes
 leave a graph whose canonical digest equals a fresh restore of the same content, including over
 edges that carry no `identity` (a graph written before the gateway). The log store stays the

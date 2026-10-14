@@ -1,4 +1,4 @@
-"""Run the real unmerge executor over a `CleanupRig` (issue #212, slices S5 and S6).
+"""Run the real unmerge executor over a `CleanupRig`.
 
 An unmerge is planned from the audit trail (the merge's `applied` row) and the live graph, so a
 world here is two things: the aftermath of a merge in the rig's graph and the merge's row in the

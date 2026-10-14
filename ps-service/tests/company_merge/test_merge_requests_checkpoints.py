@@ -1,6 +1,6 @@
-"""`merge_baseline_graph` requests a digest checkpoint on its terminal groups (issue #215, S4c).
+"""`merge_baseline_graph` requests a digest checkpoint on its terminal groups.
 
-AC-BI-009 with CHANGES A-FL2: on `policy_system` the LAST group a merge writes asks for the
+On `policy_system` the LAST group a merge writes asks for the
 checkpoint (the canonical-embedding backfill when it has something to write, otherwise the
 rewired edges); on the regulation's `{short}_baseline` the incoming-embedding backfill does. A
 checkpoint that cannot be recorded never fails the merge.

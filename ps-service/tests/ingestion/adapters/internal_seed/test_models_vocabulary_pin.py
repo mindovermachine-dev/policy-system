@@ -1,4 +1,4 @@
-"""AC-BI-013 / AC-BI-022: `NodeLabel`/`EdgeType` are pinned to the code-defined domain schema.
+"""`NodeLabel`/`EdgeType` are pinned to the code-defined domain schema.
 
 The two `Literal` types are hand-written (pydantic needs them statically), so
 this module is the single place that proves they cannot drift from

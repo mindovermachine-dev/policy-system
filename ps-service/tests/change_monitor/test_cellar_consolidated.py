@@ -1,7 +1,7 @@
-"""Tests for `ps_service.change_monitor.cellar_consolidated` (AC-001).
+"""Tests for `ps_service.change_monitor.cellar_consolidated`.
 
 0a -- unit, fake transport: multi-row parsing, derivations, error shapes,
-      the flaw-15 base-CELEX guard.
+      the base-CELEX guard.
 0b -- `cellar_live`: the real CELLAR SPARQL endpoint.
 """
 
@@ -246,7 +246,7 @@ def test_consolidated_version_info_derivations(
 
 @pytest.mark.cellar_live
 def test_ac001_live_consolidated_detection() -> None:
-    """Real CELLAR SPARQL endpoint -- no local fixture, per AC-001.
+    """Real CELLAR SPARQL endpoint -- no local fixture.
 
     GDPR (`32016R0679`) has exactly one consolidated expression
     (`02016R0679-20160504`); CRR (`32013R0575`) has a growing series whose

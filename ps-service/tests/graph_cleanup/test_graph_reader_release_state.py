@@ -1,4 +1,4 @@
-"""Reader for `release-capability-governance` (issue #190, slice 14 b): pure reads."""
+"""Reader for `release-capability-governance` : pure reads."""
 
 from __future__ import annotations
 

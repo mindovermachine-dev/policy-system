@@ -1,4 +1,4 @@
-"""Replay rebuilds a graph from the log and verifies it against a checkpoint (#207 S7-S9).
+"""Replay rebuilds a graph from the log and verifies it against a checkpoint.
 
 The log is the in-memory store, the graph the in-memory graph; both are the approved boundary
 fakes (see `_fakes`). Every test enters at `GraphWriteGateway.replay_graph`.

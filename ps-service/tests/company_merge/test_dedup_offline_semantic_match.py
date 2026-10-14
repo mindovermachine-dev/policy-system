@@ -1,14 +1,14 @@
-"""Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`
-(PLAN.md Slice 5.4, D6): semantic match via artifact-supplied embeddings.
+"""Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`:
+semantic match via artifact-supplied embeddings.
 
-Per CHANGES.md MA1: this function never calls `route_embedding` -- every
+This function never calls `route_embedding` -- every
 embedding it scores with is either artifact-supplied (`incoming_embeddings`)
 or already cached on an existing canonical node
 (`ExistingCanonicalNode.embedding`). An existing canonical node with no
-cached embedding is excluded from scoring entirely ("skip, don't fetch",
-D6) -- never raises, never calls anything network-shaped -- and, when one or
+cached embedding is excluded from scoring entirely ("skip, don't fetch")
+-- never raises, never calls anything network-shaped -- and, when one or
 more entries were skipped this way, exactly one aggregate
-`outcome="warning"` log line is emitted (MA1's fix, also closing OQ4).
+`outcome="warning"` log line is emitted.
 """
 
 from __future__ import annotations

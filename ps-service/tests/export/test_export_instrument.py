@@ -1,5 +1,5 @@
 """Tests for `ps_service.export.export_instrument.export_instrument`
-(PLAN.md Slice 3.5, full orchestration; migrated to the gateway rig by issue #213).
+full orchestration, over the gateway rig.
 
 The graphs are the Graph Write Gateway rig's in-memory FalkorDB (a true boundary), read through
 `ExportReadGraph` (a `_GraphQueryHandle`); the embedding backfill is written through the rig's

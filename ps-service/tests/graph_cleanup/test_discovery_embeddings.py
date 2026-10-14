@@ -1,4 +1,4 @@
-"""Capability candidate discovery, embedding basis (issue #190, slice 7, AC-BI-003 partial).
+"""Capability candidate discovery, embedding basis.
 
 Cached-embedding cosine only; discovery never calls an LLM or embedding model.
 """

@@ -1,4 +1,4 @@
-"""`ps_service.ingestion.falkordb_client` delegates to the gateway factory (issue #215, S1)."""
+"""`ps_service.ingestion.falkordb_client` delegates to the gateway factory."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
-"""Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`
-(PLAN.md Slice 2, issue #30): offline candidate-pool eligibility (AC-BI-003).
+"""Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`:
+offline candidate-pool eligibility.
 
 Mirrors `test_dedup_combined_resolution.py`'s
 `test_dedupe_canonical_nodes_same_run_mints_do_not_converge_but_record_near_miss`
@@ -8,16 +8,11 @@ shapes exactly, adapted to the offline function's artifact-supplied-embedding
 signature: the offline semantic-match candidate pool is restricted to
 PRE-RUN existing nodes only (`original_existing_ids`), so a same-run mint --
 however high its score -- can never itself be an eligible merge target
-(AC-BI-003, the offline twin of the live path's AC-BI-001). A same-run mint
+(the offline twin of the live path's same restriction). A same-run mint
 that would otherwise have won is instead recorded as a `NearMissPair`
-(AC-BI-004, offline twin), whether the excluded mint is discovered on its
+(offline twin), whether the excluded mint is discovered on its
 own (mint branch) or alongside an eligible pre-run merge target scoring
 lower (merge branch).
-
-This file previously asserted the OPPOSITE for two same-run mints (in-batch
-convergence happens) -- per BASELINE.md's own note, that assertion became
-wrong under issue #30's restriction and its update below is not a
-regression.
 """
 
 from __future__ import annotations
@@ -61,11 +56,11 @@ def _capability(node_id: str, name: str) -> BaselineNode:
 
 
 def test_offline_convergence_same_run_mints_do_not_converge_but_record_near_miss() -> None:
-    """(AC-BI-002/AC-BI-004, offline twin of the live path's
+    """(Offline twin of the live path's
     `test_dedupe_canonical_nodes_same_run_mints_do_not_converge_but_record_near_miss`):
     two incoming nodes with no PRE-RUN existing match but semantically
-    equivalent to EACH OTHER (identical artifact-supplied embeddings) no
-    longer converge onto one another. Both resolve `match_kind="new"`, and
+    equivalent to EACH OTHER (identical artifact-supplied embeddings) do not
+    converge onto one another. Both resolve `match_kind="new"`, and
     the excluded same-run mint is recorded as a `NearMissPair` instead (the
     two vectors are identical, so cosine similarity is exactly 1.0, at/above
     `_THRESHOLD`).
@@ -101,14 +96,14 @@ def test_offline_convergence_same_run_mints_do_not_converge_but_record_near_miss
 
 
 def test_offline_convergence_records_near_miss_for_higher_scoring_mint_on_merge() -> None:
-    """CHANGES.md row 1 (HIGH), offline twin of the live path's
-    `test_dedupe_canonical_nodes_records_near_miss_for_higher_scoring_mint_on_merge`
-    (Appendix B): one pre-run existing Capability `P`; incoming `M` mints
+    """Offline twin of the live path's
+    `test_dedupe_canonical_nodes_records_near_miss_for_higher_scoring_mint_on_merge`:
+    one pre-run existing Capability `P`; incoming `M` mints
     first (scores below threshold against `P`); incoming `X` scores ABOVE
     threshold against BOTH `P` (eligible -- the merge target) and `M`
     (same-run mint, and a HIGHER score than `P`). `X` must still merge onto
     `P` (the eligible best), but the higher-scoring excluded mint `M` must
-    ALSO be recorded as a near-miss -- proving the merge branch's AC-BI-004
+    ALSO be recorded as a near-miss -- proving the merge branch's near-miss
     check fires independently of the mint branch's pre-existing one, on the
     offline path too.
     """

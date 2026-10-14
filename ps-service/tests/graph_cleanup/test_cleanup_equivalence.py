@@ -1,9 +1,9 @@
-"""The gateway-backed cleanup builds the graph the frozen legacy writer built (issue #212).
+"""The gateway-backed cleanup builds the graph the frozen legacy writer built.
 
 Each scenario seeds a fixture graph as a pre-gateway writer left it (identity-less edges), runs the
 FROZEN legacy statement (`_legacy_reference`, against its interpreter) on a copy, runs the real
-executor over the gateway rig on the other, and compares the two graphs by `canonical_digest`
-(AC-BI-002). "Modulo edge identity": the legacy graph's edges are stamped by the same
+executor over the gateway rig on the other, and compares the two graphs by `canonical_digest`.
+"Modulo edge identity": the legacy graph's edges are stamped by the same
 `{type}:{source}->{target}` formula before the comparison, as the gateway stamps its own.
 
 Shapes covered: release governance, capability merge (all four governance cases), obligation

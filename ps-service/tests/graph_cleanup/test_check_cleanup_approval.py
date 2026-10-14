@@ -1,4 +1,4 @@
-"""`check-cleanup-approval` and the lazy reconciler (issue #190, slice 10 sub-step d; A9).
+"""`check-cleanup-approval` and the lazy reconciler.
 
 Creator-only visibility, live status, and reconciliation of a signed row whose outcome was
 never recorded: effect present -> outcome reconciled; effect absent -> a `failed` audit row
@@ -305,7 +305,7 @@ def test_an_orphan_case_three_row_without_effect_keeps_the_policy_case_in_its_fa
     assert recorded.details["policy_case"] == 3
 
 
-# -- the reconciler waits for the graph to catch up (issue #212, AC-BI-007) -----------------------
+# -- the reconciler waits for the graph to catch up -----------------------
 
 
 def _orphan(store: FakeApprovalStore, **kwargs: object) -> PendingApprovalRow:

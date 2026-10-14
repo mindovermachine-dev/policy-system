@@ -1,4 +1,4 @@
-"""The system-audit helper gives ungated callers an audit event id to attach to a group (#208).
+"""The system-audit helper gives ungated callers an audit event id to attach to a group.
 
 Ingestion's internal path has no principal, but every `MutationGroup` needs the id of an
 `audit_events` row (a foreign key). The helper inserts one row with a fixed system actor on its

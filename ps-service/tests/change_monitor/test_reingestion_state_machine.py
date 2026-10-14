@@ -1,4 +1,4 @@
-"""Truth table for `classify_reingestion` (#201 S1b, PLAN 3.4 + CHANGES A4 `finalize`).
+"""Truth table for `classify_reingestion`.
 
 Each row seeds a `{short}_native` state on the gateway rig, runs the REAL `classify_reingestion` and
 `succession` reads over `SuccessionReadGraph`, and asserts the state, the stages still to run

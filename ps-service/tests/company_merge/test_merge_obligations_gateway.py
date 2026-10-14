@@ -1,12 +1,12 @@
-"""`merge_baseline_graph` writes the Obligation nodes through the Graph Write Gateway (issue #210).
+"""`merge_baseline_graph` writes the Obligation nodes through the Graph Write Gateway.
 
-Slice 4a: an Obligation is a create-only passthrough node (issue #42). Create-only is decided
+An Obligation is a create-only passthrough node. Create-only is decided
 BEFORE submission from one batched existing-node read, so an Obligation the graph already holds
 (however much its incoming `confidence` has drifted) is left out of the group: it keeps every
-property and nothing is logged for it (AC-BI-005). The net-new count is read through the same read
+property and nothing is logged for it. The net-new count is read through the same read
 wrapper as every other Company Merge read.
 
-Equivalence (AC-BI-002) against the frozen legacy reference is met modulo edge identity; live
+Equivalence against the frozen legacy reference is met modulo edge identity; live
 digest and live interpreter agreement are not verifiable here (no FalkorDB in this sandbox).
 """
 
@@ -256,7 +256,7 @@ def test_the_frozen_obligation_statement_matches_its_pinned_hash() -> None:
 def test_the_frozen_reference_and_the_gateway_path_build_the_same_graph_for_obligations(
     scenario: str, merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-002, family B (Obligation), modulo edge identity; live agreement not verifiable."""
+    """Family B (Obligation), modulo edge identity; live agreement not verifiable."""
     steps = _SCENARIOS[scenario]
     reference = LegacyRecordingGraph()
     for step in steps:

@@ -1,4 +1,4 @@
-"""Capability candidate governance, obligation count and merge case (issue #190, slice 8).
+"""Capability candidate governance, obligation count and merge case.
 
 The real reader + grouping run against a scripted single-tenant graph; only the
 rows it returns are canned. Row shape: id, name, embedding, policy id, policy

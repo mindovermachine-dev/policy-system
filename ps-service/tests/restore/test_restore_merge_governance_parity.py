@@ -1,4 +1,4 @@
-"""Restore and live merge import a policy tree through one function (issue #227, AC-BI-005).
+"""Restore and live merge import a policy tree through one function.
 
 The real engineering-practices seed is ingested into a gateway rig's baseline graph, then
 imported once by `merge_baseline_graph` (live internal ingest) and once by restore's
@@ -113,7 +113,7 @@ def _comparable(store: SingleTenantStore) -> tuple[object, object]:
 
 
 def _gateway_governance_edges(rig: MergeRig) -> set[tuple[str, str, str]]:
-    """The governance edges the gateway wrote, read from the rig's graph (issue #210).
+    """The governance edges the gateway wrote, read from the rig's graph.
 
     The merge side writes edges as gateway primitives, so they carry the gateway's `identity`
     property (`TYPE:source->target`). Nothing else may differ: the identity is checked against the

@@ -1,10 +1,10 @@
 """Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`
-with `kind="Policy"` (issue #54, S6/B6, AC-BI-021): the offline counterpart to
+with `kind="Policy"`: the offline counterpart to
 `test_dedup_policy_convergence.py`'s live-path Policy convergence proof (exact
 match and semantic match), exercised here for the OFFLINE function a restore's
 baseline merge uses instead.
 
-Per D6/CHANGES.md MA1: `resolve_capability_convergence_offline` never calls
+`resolve_capability_convergence_offline` never calls
 `route_embedding`/constructs an `EmbeddingCaller` -- every embedding it scores
 with is either artifact-supplied (`incoming_embeddings`) or already cached on
 an existing canonical node. Mirrors `test_dedup_offline_exact_match.py`/
@@ -115,9 +115,8 @@ def test_kind_policy_semantic_match_using_cached_embeddings_only() -> None:
 
 
 def test_kind_defaults_to_capability_when_omitted() -> None:
-    """Regression guard: `kind` defaults to `"Capability"` (its original,
-    pre-#54 scope) when the caller omits it -- every pre-existing offline
-    dedup test (`test_dedup_offline_exact_match.py` et al.) calls without
+    """Regression guard: `kind` defaults to `"Capability"` when the caller omits it --
+    every pre-existing offline dedup test (`test_dedup_offline_exact_match.py` et al.) calls without
     `kind=` at all and must keep resolving against the Capability index, not
     the Policy one.
     """
@@ -149,6 +148,6 @@ def test_kind_defaults_to_capability_when_omitted() -> None:
     )
 
     assert result.resolutions[0].match_kind == "exact"
-    assert len(capability_graph.calls) == 2  # index read + tombstone redirect read (issue #190)
+    assert len(capability_graph.calls) == 2  # index read + tombstone redirect read
     assert capability_graph.calls[0] == "MATCH (n:Capability) RETURN n.id, n.name, n.embedding"
     assert graph.calls == []  # the unused Policy-shaped fake was never touched

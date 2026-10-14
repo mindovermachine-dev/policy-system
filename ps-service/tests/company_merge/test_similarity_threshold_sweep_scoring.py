@@ -1,6 +1,4 @@
-"""Tests for `tools/company-merge/company_merge_similarity_sweep.py` (issue #29, PLAN.md
-§1 Increments 1-4, CHANGES.md row M3's path, row m2's AST import-scan test, and row M1's
-hermetic full-dataset sweep proof).
+"""Tests for `tools/company-merge/company_merge_similarity_sweep.py`.
 
 Loads the script by path via `importlib.util.spec_from_file_location`, exactly as
 `test_run_live_merge_cli.py` documents doing for `tools/company-merge/run_live_merge.py`
@@ -9,31 +7,30 @@ Loads the script by path via `importlib.util.spec_from_file_location`, exactly a
 Covers, hermetically (a hand-scripted fake `EmbeddingCaller`, zero network/FalkorDB):
 
 - `score_pair` returns a value in `[-1.0, 1.0]` actually computed by the real
-  `ps_service.company_merge.similarity.cosine_similarity` (AC-BI-004) -- proven both by
+  `ps_service.company_merge.similarity.cosine_similarity` -- proven both by
   an independent manual recomputation of the expected cosine similarity, and by an
   AST scan (mirrors `test_identity_reuse.py`'s convention) showing no dot-product/norm
   math is defined inside the sweep script itself, plus a direct object-identity check
   that the imported `cosine_similarity` is the real function, not a lookalike.
 - `route_embedding` is called with `model=` equal to the value passed to `score_pair`,
-  never a hardcoded literal (AC-BI-005).
+  never a hardcoded literal.
 - Every import in the sweep script is stdlib or `ps_service.*` -- no new third-party
-  dependency (AC-BI-006, CHANGES.md row m2).
-- `build_dataset()`'s AC-BI-003 exclusion mechanism, proven at corpus scale: a
+  dependency.
+- `build_dataset()`'s identical-name exclusion mechanism, proven at corpus scale: a
   mechanical guard raises on a violating pair, computed against all 778 real
   Capability nodes across curated-content -- not merely omitted by hand.
 - `sweep_dataset()` fetches each unique text's embedding at most once across every pair
-  AND every threshold (AC-BI-007, PLAN.md §1 Increment 2).
+  AND every threshold.
 - `sweep_dataset()` lets a `LlmProviderError` from any `route_embedding` call propagate
   unchanged, aborting before any `ThresholdResult` is produced for any threshold
-  (AC-BI-008, PLAN.md §1 Increment 3).
-- CHANGES.md row M1: `sweep_dataset()` scores the complete, real 21-pair dataset
-  cleanly across PLAN.md's default 0.70-0.95 step 0.01 threshold range, using a fully
-  scripted fake `call_embedding` keyed by CHANGES.md row M1's deterministic
-  SHA-256-based vector scheme (extended to the real embedding dimension, issue #100
-  Slice 4) -- before any CLI or live/network dependency exists. Every pair's `text_b`
+- `sweep_dataset()` scores the complete, real 21-pair dataset
+  cleanly across the default 0.70-0.95 step 0.01 threshold range, using a fully
+  scripted fake `call_embedding` keyed by a deterministic
+  SHA-256-based vector scheme (extended to the real embedding dimension) -- with no CLI
+  or live/network dependency. Every pair's `text_b`
   carries a real cached embedding, so only `text_a` is ever fetched -- proven, not
   assumed.
-- Issue #100 Slice 4 (CHANGES.md row F1): `_score_dataset` reuses a pair's
+- `_score_dataset` reuses a pair's
   `text_b_cached_embedding` when present, never fetching `text_b` in that case --
   proven with a fake `EmbeddingCaller` that raises on any such fetch.
 """
@@ -108,7 +105,7 @@ def sweep_source() -> str:
 def _configure_logging_for_route_embedding() -> None:  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     """`route_embedding` logs through the Logging component, which requires a configured
     default emitter before first use outside of `main.py`'s normal process startup
-    (CONTRIBUTING.md's own "Sanity-check via the public API" snippet; PLAN.md §0 F5).
+    (CONTRIBUTING.md's own "Sanity-check via the public API" snippet).
     The root conftest's `_isolate_logging` autouse fixture already points
     `PS_LOGGING_DIR` at a per-test `tmp_path` and resets the facade around each test, so
     calling this unconditionally here is safe and never touches the real log file.
@@ -191,7 +188,7 @@ def test_score_pair_calls_route_embedding_with_the_given_model_not_a_hardcoded_l
     ]
 
 
-# --- AC-BI-004: no reimplementation of cosine/dot-product/norm math -------------------
+# --- no reimplementation of cosine/dot-product/norm math -------------------
 
 
 def test_no_similarity_math_is_defined_inside_the_sweep_script(sweep_source: str) -> None:
@@ -231,7 +228,7 @@ def test_sweep_script_reexports_the_same_cosine_similarity_function_object(
     assert sweep_module.cosine_similarity is real_cosine_similarity
 
 
-# --- AC-BI-006 / CHANGES.md row m2: no new third-party dependency ----------------------
+# --- no new third-party dependency ----------------------
 
 
 def _imported_module_names(tree: ast.AST) -> list[str]:
@@ -268,7 +265,7 @@ def test_import_scan_flags_a_hypothetical_third_party_import() -> None:
     assert "numpy" not in sys.stdlib_module_names
 
 
-# --- AC-BI-002: no test-data/eu-regulations path is reintroduced -----------------------
+# --- no test-data/eu-regulations path is reintroduced -----------------------
 
 
 def _string_constants(tree: ast.AST) -> list[str]:
@@ -282,7 +279,7 @@ def _string_constants(tree: ast.AST) -> list[str]:
 def test_no_eu_regulations_path_literal_appears_anywhere_in_the_sweep_script(
     sweep_source: str,
 ) -> None:
-    """AC-BI-002: scans every string constant in the file's AST -- code *and*
+    """Scans every string constant in the file's AST -- code *and*
     docstrings alike, mirroring the existing import-scan's "scan the whole AST,
     don't special-case locations" convention -- for the stale data-source path.
     Deliberately stricter than "no code path reads the old file": a stale docstring
@@ -311,7 +308,7 @@ def test_eu_regulations_path_scan_flags_a_hypothetical_reintroduction() -> None:
     assert flagged == ["test-data/eu-regulations"]
 
 
-# --- AC-BI-004: no live-suite pytest marker on any scoped test file -------------------
+# --- no live-suite pytest marker on any scoped test file -------------------
 
 
 _MARKED_FILES = (
@@ -335,7 +332,7 @@ _LLM_LIVE_MARKER = "llm" + "_live"
 
 
 def test_scoped_test_files_carry_neither_live_pytest_marker() -> None:
-    """AC-BI-004: an unfiltered scoped run passing doesn't prove no marker was added
+    """An unfiltered scoped run passing doesn't prove no marker was added
     (an unfiltered `pytest` invocation runs marked tests too) -- this scans the raw
     source text of every scoped test file for the two live-suite pytest marker names
     (held in `_FALKORDB_LIVE_MARKER`/`_LLM_LIVE_MARKER`, deliberately not spelled out
@@ -351,13 +348,13 @@ def test_scoped_test_files_carry_neither_live_pytest_marker() -> None:
         assert _LLM_LIVE_MARKER not in source, f"{filename} references {_LLM_LIVE_MARKER!r}"
 
 
-# --- AC-BI-003: identical-Capability-name pair mechanically excluded ------------------
+# --- identical-Capability-name pair mechanically excluded ------------------
 
 
 def test_build_dataset_returns_no_pair_with_identical_text_a_and_text_b(
     sweep_module: ModuleType,
 ) -> None:
-    """Increment 4's full dataset (PLAN.md §3): every pair carries a non-empty
+    """The full dataset: every pair carries a non-empty
     rationale/cited_node_ids and never scores a Capability name against itself. Length
     and per-node-id coverage are proven at corpus scale by
     `test_similarity_threshold_dataset.py`, not re-asserted here.
@@ -372,7 +369,7 @@ def test_build_dataset_returns_no_pair_with_identical_text_a_and_text_b(
 def test_assert_dataset_excludes_real_identical_name_pairs_raises_on_a_violation(
     sweep_module: ModuleType,
 ) -> None:
-    """Proves the AC-BI-003 exclusion guard `build_dataset()` runs is a real mechanical
+    """Proves the identical-name exclusion guard `build_dataset()` runs is a real mechanical
     check that actively raises on a violation, not merely a check that happens to pass
     because the shipped dataset was curated correctly by hand.
     """
@@ -410,9 +407,8 @@ def test_assert_dataset_excludes_real_identical_name_pairs_passes_the_real_datas
 def test_repeated_capability_names_from_corpus_matches_the_known_10_groups(
     sweep_module: ModuleType,
 ) -> None:
-    """Issue #100 Slice 2: 10 Capability names are shared verbatim across two or more
-    of the 778 real Capability nodes across curated-content -- independently
-    re-confirmed for this dispatch by scanning all 778 nodes directly. Spot-checks a
+    """10 Capability names are shared verbatim across two or more
+    of the 778 real Capability nodes across curated-content. Spot-checks a
     few of the 10 by name.
     """
     repeated_names = sweep_module._repeated_capability_names_from_corpus()  # pyright: ignore[reportPrivateUsage] -- internal helper under test
@@ -448,7 +444,7 @@ def test_is_identical_name_pair_does_not_flag_a_genuine_non_match_pair(
     )
 
 
-# --- AC-BI-007: embedding cache -- each unique text fetched at most once --------------
+# --- embedding cache -- each unique text fetched at most once --------------
 
 
 class _OnceOnlyCallEmbedding:
@@ -486,8 +482,8 @@ class _OnceOnlyCallEmbedding:
 def test_sweep_dataset_fetches_each_unique_text_at_most_once_across_pairs_and_thresholds(
     sweep_module: ModuleType,
 ) -> None:
-    """Two pairs share one text (`"Access Control & Authentication"`, reused from
-    Increment 1's own true-match seed pair as this pair's `text_b`, then again as a
+    """Two pairs share one text (`"Access Control & Authentication"`, used as one
+    pair's `text_b` and again as a
     second pair's `text_a`) and the sweep is run over three thresholds -- a real
     duplication across both pairs AND thresholds, not a call-count mock.
     """
@@ -588,7 +584,7 @@ def test_sweep_dataset_result_metrics_are_computed_correctly_at_each_threshold(
     assert result.f1 == pytest.approx(1.0)
 
 
-# --- AC-BI-008: hard-fail -- no silent skip, no partial recommendation ----------------
+# --- hard-fail -- no silent skip, no partial recommendation ----------------
 
 
 class _ScriptedFailureCallEmbedding:
@@ -719,12 +715,12 @@ def test_sweep_dataset_never_calls_route_embedding_twice_even_when_a_later_pair_
     assert call_embedding.calls == [shared_text, failing_text]
 
 
-# --- CHANGES.md row M1: hermetic full-dataset sweep proof ------------------------------
+# --- hermetic full-dataset sweep proof ------------------------------
 
 
 def _sha256_deterministic_vector(text: str, *, dimensions: int) -> tuple[float, ...]:
-    """CHANGES.md row M1's deterministic vector scheme, extended to a caller-given
-    length (issue #100 Slice 4): repeatedly hashes `f"{text}:{counter}"` and
+    """A deterministic vector scheme with a caller-given
+    length: repeatedly hashes `f"{text}:{counter}"` and
     concatenates each digest's bytes until `dimensions` values are collected, then
     truncates to exactly `dimensions` -- identical every time for the same
     `(text, dimensions)`, effectively distinct across different strings (SHA-256
@@ -773,21 +769,20 @@ class _FullDatasetScriptedCallEmbedding:
 def test_sweep_dataset_scores_the_full_real_dataset_cleanly_across_the_default_range(
     sweep_module: ModuleType,
 ) -> None:
-    """CHANGES.md row M1: calls `sweep_dataset()` directly (no CLI) over the complete,
+    """Calls `sweep_dataset()` directly (no CLI) over the complete,
     real 21-pair dataset (10 match + 11 non-match, `build_dataset()`) with a fully
     scripted fake `call_embedding` covering every unique text via the deterministic
-    SHA-256-based vector scheme CHANGES.md row M1 specifies (extended, issue #100
-    Slice 4, to match the real curated-content embedding dimension), swept across
-    PLAN.md's default 0.70-0.95 step 0.01 threshold range (26 thresholds). Proves the
+    SHA-256-based vector scheme (extended to match the real curated-content embedding
+    dimension), swept across the default 0.70-0.95 step 0.01 threshold range
+    (26 thresholds). Proves the
     whole real dataset scores cleanly through the real `cosine_similarity`/cache path
     -- one `ThresholdResult` per threshold, zero exceptions, every metric within its
-    valid [0.0, 1.0] range -- before any CLI or live/network dependency exists.
+    valid [0.0, 1.0] range -- with no CLI or live/network dependency.
 
-    Every pair's `text_b` carries a real `text_b_cached_embedding` (issue #100 Slice
-    4, CHANGES.md row F1 -- every cited node in `build_dataset()`'s real 21-pair
-    dataset resolves to a real curated-content node with a real cached embedding), so
-    only `text_a` is ever fetched fresh via the fake `call_embedding` -- proven below,
-    not merely assumed.
+    Every pair's `text_b` carries a real `text_b_cached_embedding` (every cited node in
+    `build_dataset()`'s real 21-pair dataset resolves to a real curated-content node with a
+    real cached embedding), so only `text_a` is ever fetched fresh via the fake
+    `call_embedding` -- proven below, not merely assumed.
     """
     pairs = sweep_module.build_dataset()
     assert all(pair.text_b_cached_embedding is not None for pair in pairs), (
@@ -827,7 +822,7 @@ def test_sweep_dataset_scores_the_full_real_dataset_cleanly_across_the_default_r
     assert set(call_embedding.calls) == {pair.text_a for pair in pairs}
 
 
-# --- issue #100 Slice 4 (CHANGES.md row F1): text_b cached-embedding reuse -------------
+# --- text_b cached-embedding reuse -------------
 
 
 class _NoFetchForCachedTextBCallEmbedding:

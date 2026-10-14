@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false
-"""The Graph Write Gateway rig, seen from Graph Cleanup (issue #212).
+"""The Graph Write Gateway rig, seen from Graph Cleanup.
 
 Graph Cleanup reads the graph through a handle and writes it only as gateway groups. `CleanupRig`
 is the gateway rig (in-memory log and FalkorDB fakes, the true boundaries) plus the `policy_system`

@@ -1,4 +1,4 @@
-"""Shared builders and thread helpers of the swap tests (issue #214 S4 and S5).
+"""Shared builders and thread helpers of the swap tests.
 
 Import as `from graph_gateway._swap_support import ...`. The fakes themselves live in `_fakes.py`
 (`GatewayRig(swap=True)` wires the in-memory key port of `_swap_fakes.py`).

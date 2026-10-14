@@ -1,14 +1,10 @@
-"""Executor for `merge-obligations` (issue #190, slice 11 sub-step c).
+"""Executor for `merge-obligations`.
 
-Decision 4 ordering, fail-closed: re-check the actor's role; re-read and re-validate against
+Audit-first ordering, fail-closed: re-check the actor's role; re-read and re-validate against
 the previewed state digest; record the `applied` audit row; only then write; a guard miss or
 graph failure records a `failed` row with the same `approval_id` and returns a generic error.
-AC-BI-007 (executor path), AC-BI-015/016 (re-validation), AC-BI-017 (drift), AC-BI-018,
-AC-BI-021, AC-BI-022.
-
-Since #212 the merge is one gateway group (`CleanupRig`, the gateway over in-memory log and graph
-fakes); the assertions on outcomes, messages and audit rows are the ones from before that change,
-only the write-shape ones (Cypher call recorded) now name the group.
+The merge is one gateway group (`CleanupRig`, the gateway over in-memory log and graph fakes); the
+write-shape assertions name the group.
 """
 
 from __future__ import annotations

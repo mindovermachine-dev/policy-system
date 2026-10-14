@@ -1,4 +1,4 @@
-"""Reader for `merge-obligations` (issue #190, slice 11 sub-step b): pure reads."""
+"""Reader for `merge-obligations` : pure reads."""
 
 from __future__ import annotations
 

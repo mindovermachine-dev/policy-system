@@ -1,4 +1,4 @@
-"""`falkordb_live` + `postgres_live`: replay of a CRA x10 log on the real stores (#207 S19).
+"""`falkordb_live` + `postgres_live`: replay of a CRA x10 log on the real stores.
 
 The dataset is `curated-content/CRA-1.0/baseline.json` (3,482 nodes, 12,727 edges, 522 embeddings
 of 3,072 doubles) loaded ten times with the id prefixes `r0..r9`: 162,090 log entries, 127,270
@@ -6,7 +6,7 @@ edges, 5,220 embeddings. It is submitted through the real gateway in groups of 5
 the real `PsycopgGraphLogStore` and a real FalkorDB, then a checkpoint of the original graph is
 recorded at the head. Setup is excluded from every timer. The graph is then wiped and replayed.
 
-Measured numbers are printed (`pytest -s`) and recorded in `IMPL_SLICE_19.md`.
+Measured numbers are printed (`pytest -s`).
 
 Run with `uv run pytest -s -m "falkordb_live or postgres_live" <this file>`.
 """

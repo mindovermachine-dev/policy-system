@@ -1,4 +1,4 @@
-"""Export reads through the gateway's `ReadOnlyGraph` and imports no driver (#215, S3e)."""
+"""Export reads through the gateway's `ReadOnlyGraph` and imports no driver."""
 
 from __future__ import annotations
 

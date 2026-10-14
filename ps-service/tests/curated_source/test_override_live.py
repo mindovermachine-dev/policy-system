@@ -1,8 +1,8 @@
-"""`postgres_live` tests for the catalog-source override against a real Postgres (issue #130).
+"""`postgres_live` tests for the catalog-source override against a real Postgres.
 
-AC-BI-007 (persisted in `runtime_config`, survives a restart, no FalkorDB involved),
-AC-BI-008 (reset removes the row and resolution falls back to the default), AC-BI-010
-(an unreachable store fails closed with no host/port detail) and the full MCP path:
+Covers persistence in `runtime_config` (survives a restart, no FalkorDB involved),
+reset (removes the row and resolution falls back to the default), an unreachable store
+(fails closed with no host/port detail) and the full MCP path:
 `set-catalog-source` -> `runtime_config` + `audit_events` in one transaction ->
 `list-audit-events`.
 

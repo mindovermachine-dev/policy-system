@@ -1,8 +1,8 @@
-"""A requested checkpoint records the canonical digest at the group's last position (#207 S1).
+"""A requested checkpoint records the canonical digest at the group's last position.
 
-AC-RD-003: WHEN a group commits and a checkpoint is requested THEN the digest at that group's
+WHEN a group commits and a checkpoint is requested THEN the digest at that group's
 last position is recorded in the log; WHEN none is requested THEN none is recorded. The digest
-scan is chunked by internal-id cursor so a big graph is never held in memory at once (CHANGES A4).
+scan is chunked by internal-id cursor so a big graph is never held in memory at once.
 """
 
 from __future__ import annotations

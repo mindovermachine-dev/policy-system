@@ -1,4 +1,4 @@
-"""Slim renderer behaviour on small, locally built schemas (AC-BI-002, AC-BI-009)."""
+"""Slim renderer behaviour on small, locally built schemas."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ _ROLE = Node("Role", (Property("name", StringType(), Presence.REQUIRED),))
 
 
 def test_edge_shows_direction_cardinality_and_edge_property() -> None:
-    """AC-BI-002/009: an edge renders source, type, edge property, target and cardinality."""
+    """An edge renders source, type, edge property, target and cardinality."""
     defines = Edge(
         type="DEFINES",
         source="RegulatoryInstrument",
@@ -38,7 +38,7 @@ def test_edge_shows_direction_cardinality_and_edge_property() -> None:
 
 
 def test_edge_without_properties_has_no_braces() -> None:
-    """AC-BI-002: an edge with no edge properties renders a bare relationship type."""
+    """An edge with no edge properties renders a bare relationship type."""
     merged = Edge(
         type="MERGED_INTO",
         source="Role",
@@ -52,7 +52,7 @@ def test_edge_without_properties_has_no_braces() -> None:
 
 
 def test_property_types_and_presence_marks_render_compactly() -> None:
-    """AC-BI-009: type text, enum values and the required/conditional/optional marks."""
+    """Type text, enum values and the required/conditional/optional marks."""
     node = Node(
         "Thing",
         (

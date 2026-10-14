@@ -1,4 +1,4 @@
-"""The pure builders `graph_writer` exposes for Restore (issue #214, slice 7).
+"""The pure builders `graph_writer` exposes for Restore.
 
 Restore builds the `policy_system` leg of a restore as primitives in memory, so it needs the
 decisions `persist_obligation_passthrough`, `persist_practice_area_and_risk_path_passthrough` and

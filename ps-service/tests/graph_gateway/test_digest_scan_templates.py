@@ -1,4 +1,4 @@
-"""The digest scans read properties only for the rows they return (#207 S19).
+"""The digest scans read properties only for the rows they return.
 
 `WITH n, properties(n) AS p ORDER BY id(n) LIMIT k` makes FalkorDB build the property map of every
 node after the cursor before it sorts and cuts the chunk, so a scan of N nodes cost O(N^2) map

@@ -1,10 +1,9 @@
-"""Tests for `ps_service.domain_mapper.graph_writer` (PLAN_REVIEWED.md §11
-Increment 9).
+"""Tests for `ps_service.domain_mapper.graph_writer`.
 
 Fakes implement the `GraphHandle`/`GraphQueryResult` Protocols
 (`ps_service.domain_mapper.falkordb_client`) structurally — no mocking
 library, matching L2 Testing Patterns' "mock at component boundaries" and
-this issue's binding testing convention (§0.3/§0.5).
+the binding testing convention.
 """
 
 from __future__ import annotations
@@ -151,7 +150,7 @@ def test_persist_writes_regulation_role_and_requirement_with_edges(
 def test_persist_writes_requirement_status_from_real_extraction_output(
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-001 end-to-end (mint -> persist): a RequirementNode built by
+    """End-to-end (mint -> persist): a RequirementNode built by
     extraction.py's own _build_requirement_graph (not this file's
     _requirement_node() fixture) carries status="active" all the way into
     the logged Requirement entry's properties, proving the property bag passes
@@ -200,7 +199,7 @@ def test_persist_writes_requirement_status_from_real_extraction_output(
 def test_persist_writes_instrument_type_verbatim_when_present_in_properties(
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-010 (Domain Mapper, write side): `instrument_type` rides
+    """`instrument_type` rides
     through into the RegulatoryInstrument entry verbatim --
     `regulatory_instrument_properties` is `dict[str, object]` with no key allow-list,
     so the key propagates by construction with NO src change.
@@ -256,7 +255,7 @@ def test_persist_writes_zero_role_and_requirement_elements_when_collections_empt
     baseline_rig: BaselineRig,
 ) -> None:
     """Zero-unit extraction: the group holds only the RegulatoryInstrument, no
-    exception -- mirrors Increment 10's zero-unit-extraction case.
+    exception -- mirrors the extraction zero-unit case.
     """
     _persist(baseline_rig)
 
@@ -320,24 +319,23 @@ def test_persist_raises_when_role_nodes_collection_is_empty_but_requirement_refe
     assert baseline_rig.logged() == []
 
 
-# --- BASELINE.md row #2 regression: RegulatoryInstrument merge idempotency ---
+# --- RegulatoryInstrument merge idempotency regression -----------------------
 
 
 def test_persist_regulatory_instrument_merge_is_idempotent_across_repeated_calls(
     baseline_rig: BaselineRig,
 ) -> None:
-    """BASELINE.md row #2 regression. Live capstone reconnaissance: the
+    """Regression: the
     native graph's own RegulatoryInstrument node's full property bag
     (`extraction.py`'s `_read_regulatory_instrument_properties`, `dict(node.
     properties)`) carries its OWN `id` ("cra-1.0", ingestion's own casing) --
     different from the caller's `regulatory_instrument_id` ("CRA-1.0",
-    extraction's casing) -- and that whole bag, `id` key included, used to
-    flow unchanged into `regulatory_instrument_properties` here.
+    extraction's casing) -- and that whole bag, `id` key included, flows
+    unchanged into `regulatory_instrument_properties` here.
 
-    Writing that bag over the matched node blindly overwrote its `id` and broke
-    the match key for every SUBSEQUENT call: confirmed live, `cra_baseline`
-    ended up with THREE RegulatoryInstrument nodes all at `id: 'cra-1.0'` and
-    ZERO at `id: 'CRA-1.0'` after ~3 calls.
+    Writing that bag over the matched node blindly would overwrite its `id` and
+    break the match key for every SUBSEQUENT call, leaving several
+    RegulatoryInstrument nodes at `id: 'cra-1.0'` and none at `id: 'CRA-1.0'`.
 
     Persisting TWICE in a row with the same `regulatory_instrument_id`, given
     `regulatory_instrument_properties` whose OWN `id` differs from it, must
@@ -347,7 +345,7 @@ def test_persist_regulatory_instrument_merge_is_idempotent_across_repeated_calls
     """
     # The native graph's own RegulatoryInstrument node property bag -- its
     # own `id` ("cra-1.0") differs in casing from the caller's
-    # regulatory_instrument_id ("CRA-1.0") below, exactly like the live bug.
+    # regulatory_instrument_id ("CRA-1.0") below, exactly as in a live run.
     native_properties: dict[str, object] = {"id": "cra-1.0", "title": "Cyber Resilience Act"}
 
     _persist(baseline_rig, regulatory_instrument_properties=native_properties)
@@ -423,7 +421,7 @@ def test_validation_error_does_not_mark_falkordb_unhealthy(baseline_rig: Baselin
     assert is_healthy(FALKORDB) is True
 
 
-# --- persist_obligation_and_capability_graph (PLAN_REVIEWED.md §11 Increment 15) --
+# --- persist_obligation_and_capability_graph --------------------------------------
 
 _ROLE_ID = "role_manufacturer_abc123"
 _REQUIREMENT_ID = "CRA-1.0_req_art_13.1"
@@ -538,10 +536,10 @@ def test_persist_writes_obligation_capability_nodes_and_edges_exact_shape(
 def test_persist_writes_capability_status_from_real_derivation_output(
     baseline_rig: BaselineRig,
 ) -> None:
-    """AC-BI-002 end-to-end (mint -> persist): a CapabilityNode built by
+    """End-to-end (mint -> persist): a CapabilityNode built by
     derivation.py's own _to_capability_node (not this file's
     _capability_node() fixture) carries status="active" all the way into
-    the written node's properties — same pass-through proof as Slice 1's
+    the written node's properties — same pass-through proof as the
     requirement-side equivalent; graph_writer.py needs no change.
     """
     from ps_service.domain_mapper.derivation import (
@@ -785,7 +783,7 @@ def test_a_successful_endpoint_read_marks_falkordb_healthy(baseline_rig: Baselin
     assert is_healthy(FALKORDB) is True
 
 
-# --- Checkpoints (#215, S4c; AC-BI-009) --------------------------------------
+# --- Checkpoints -------------------------------------------------------------
 
 
 def _one_derivation(rig: BaselineRig) -> None:

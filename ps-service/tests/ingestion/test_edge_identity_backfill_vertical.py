@@ -1,13 +1,13 @@
 """Re-ingesting onto a legacy-shaped graph adds no parallel edge: the submit path backfills first.
 
-Issue #208, F1. A graph written before the gateway holds edges with no `identity`; the gateway
+A graph written before the gateway holds edges with no `identity`; the gateway
 merges on `identity`, so without the backfill a re-ingest doubles every edge. The ingestion
 submit path (`graph_submission.stamp_legacy_edges_before_first_write`) runs the idempotent
 backfill before its first group, so nothing here calls it by hand: the edge multiset keeps its
 legacy cardinality, a second ingest logs nothing more and the graph's canonical digest equals the
 identity-stamped expectation (the digest of the same graph written through the gateway).
 
-Internal seed: the legacy graphs are built by the frozen pre-#208 writer. External: the legacy
+Internal seed: the legacy graphs are built by the frozen legacy writer. External: the legacy
 shape is the gateway-written graph with its edge identities removed. FalkorDB and Postgres are
 the gateway rig's in-memory fakes.
 """
@@ -48,7 +48,7 @@ def _shape(graph: InMemoryGraph) -> Counter[tuple[str, str, str, str, str]]:
 def _legacy_internal_graphs(
     rig: GatewayRig, seed: InternalRegulationSeed
 ) -> dict[str, LegacyRecordingGraph]:
-    """Install the graphs the pre-#208 writer builds for `seed` (no edge identity) in `rig`."""
+    """Install the graphs the legacy writer builds for `seed` (no edge identity) in `rig`."""
     legacy_native, legacy_baseline = LegacyRecordingGraph(), LegacyRecordingGraph()
     write_legacy(seed, legacy_native, legacy_baseline)
     instrument = next(n for n in seed.nodes if n.label == "RegulatoryInstrument")

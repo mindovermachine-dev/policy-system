@@ -1,4 +1,4 @@
-"""Live proof for AC-BI-002/008: a failure while building the restore leaves everything untouched.
+"""Live proof that a failure while building the restore leaves everything untouched.
 
 The REAL `restore_instrument` runs against the real gateway (Postgres graph log, FalkorDB). A
 failure injected partway through the `policy_system` leg's build (after the native and baseline
@@ -115,7 +115,6 @@ def test_build_step_failure_leaves_the_log_and_every_graph_untouched(
         raise _ForcedMergeFailureError("forced failure partway through the build step")
 
     # Fault-injection seam proving the all-or-nothing guarantee against real, live state
-    # (issue #163 §2 case 1).
     # detroit-exception: fault seam proving the all-or-nothing guarantee
     monkeypatch.setattr(merge_primitives_module, "build_canonical_node_primitives", _raise)
 
@@ -133,7 +132,7 @@ def test_build_step_failure_leaves_the_log_and_every_graph_untouched(
                     emitter=emitter,
                 )
 
-            # AC-BI-002: no log entries exist under the restore's audit event.
+            # No log entries exist under the restore's audit event.
             assert live.gateway.read_log_position(single_tenant_graph_name) == 0
             assert live.gateway.read_log_position(native_target) == 0
             assert live.gateway.read_log_position(baseline_target) == 0

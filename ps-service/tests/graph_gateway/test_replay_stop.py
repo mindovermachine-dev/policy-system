@@ -1,4 +1,4 @@
-"""A replay can be asked to stop and stops between pages, resumable (#207 S12b, AC-RD-005/006)."""
+"""A replay can be asked to stop and stops between pages, resumable."""
 
 from __future__ import annotations
 

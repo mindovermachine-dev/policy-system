@@ -1,7 +1,7 @@
-"""The generated intake schema equals the committed file byte for byte (AC-BI-005).
+"""The generated intake schema equals the committed file byte for byte.
 
 The generator only produces text; nothing in this package writes the committed intake
-schema or its vendored copies (D13), so `print-intake` is the only way to see it.
+schema or its vendored copies, so `print-intake` is the only way to see it.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ _FORBIDDEN_SUBCOMMANDS = ("write-intake", "write-intake-schema")
 
 
 def test_generated_intake_schema_is_byte_identical_to_committed() -> None:
-    """AC-BI-005: generation from `DOMAIN_SCHEMA` reproduces the committed bytes."""
+    """Generation from `DOMAIN_SCHEMA` reproduces the committed bytes."""
     committed = _DOCS_COPY.read_bytes()
 
     assert generate_intake_schema(DOMAIN_SCHEMA).encode("utf-8") == committed
@@ -41,7 +41,7 @@ def test_generated_intake_schema_is_valid_json_with_the_committed_top_level_orde
 
 
 def test_three_committed_copies_are_identical() -> None:
-    """AC-BI-005: docs, ps-service and ps-cli copies hold the same bytes."""
+    """Docs, ps-service and ps-cli copies hold the same bytes."""
     docs = _DOCS_COPY.read_bytes()
 
     assert _SERVICE_COPY.read_bytes() == docs
@@ -49,7 +49,7 @@ def test_three_committed_copies_are_identical() -> None:
 
 
 def test_generator_does_not_write_files(capsys: pytest.CaptureFixture[str]) -> None:
-    """D13/F4: the CLI can print the intake schema but has no write-intake subcommand."""
+    """The CLI can print the intake schema but has no write-intake subcommand."""
     parser = build_parser()
 
     assert parser.parse_args(["print-intake"]).command == "print-intake"

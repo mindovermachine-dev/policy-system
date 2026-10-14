@@ -1,6 +1,6 @@
-"""`postgres_live` twin of the swap-set link (issue #214 S5, migration `0002`).
+"""`postgres_live` twin of the swap-set link (migration `0002`).
 
-Not run in the implementation sandbox (no Postgres). Against a scratch PS Postgres it proves
+Against a scratch PS Postgres it proves
 that `0002_group_swap_set.sql` applies from an empty database and on top of a database that only
 holds `0001`, that the application role can then log a swap set and read it back (every leg
 carries the one id the store minted, the pending group and the set are found), and that groups

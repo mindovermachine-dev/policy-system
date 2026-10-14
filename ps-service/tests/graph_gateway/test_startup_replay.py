@@ -1,4 +1,4 @@
-"""Startup replay finds the graphs whose projection is gone or half built (#207 S15, AC-RD-006).
+"""Startup replay finds the graphs whose projection is gone or half built.
 
 Every test enters at `GraphWriteGateway.startup_replay`. A wiped FalkorDB graph cannot be seen
 from the applied marker (which only moves forward and still says "applied"), so each graph is

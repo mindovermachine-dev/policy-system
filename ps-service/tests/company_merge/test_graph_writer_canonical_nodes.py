@@ -1,10 +1,9 @@
 """Tests for `ps_service.company_merge.graph_writer.persist_canonical_nodes`
-(PLAN_REVIEWED.md §10 Increment 11, mint half): the create-only canonical
-Capability node writer (Capability is the only canonically-deduped kind since
-#42) -- the load-bearing invariant that makes "existing canonical node's
+(mint half): the create-only canonical Capability node writer (Capability is the only
+canonically-deduped kind) -- the load-bearing invariant that makes "existing canonical node's
 properties are never overwritten" hold.
 
-Since issue #210 the mint is a Graph Write Gateway group: `created_at` is drawn from the injected
+The mint is a Graph Write Gateway group: `created_at` is drawn from the injected
 `ValueSource` while the group is built, and the embedding travels in the primitive's `embedding`
 field (the graph stores it as the node's `embedding`), not in its properties. A canonical id the
 graph already holds is decided BEFORE submission from one batched read and left out of the group.
@@ -169,7 +168,7 @@ def test_mixed_resolutions_only_write_for_new(merge_rig: MergeRig) -> None:
 
 
 def test_a_mint_stamps_created_at_as_iso_8601_text(merge_rig: MergeRig) -> None:
-    """Issue #35, Slice 1 (PLAN.md §2.2): a `match_kind="new"` mint always carries `created_at`,
+    """A `match_kind="new"` mint always carries `created_at`,
     an ISO-8601 UTC timestamp that round-trips through `datetime.fromisoformat` (needed by the
     older-wins winner rule of the near-miss merge).
     """
@@ -219,7 +218,7 @@ def test_one_created_at_is_drawn_per_new_node_in_resolution_order(merge_rig: Mer
 
 
 def test_the_builder_draws_created_at_before_anything_is_submitted() -> None:
-    """The group is a value: once built, the clock no longer matters."""
+    """The group is a value: once built, the clock does not matter."""
     node = _canonical_node()
     draws: list[int] = []
 

@@ -1,4 +1,4 @@
-"""Run the real merge executors over a `CleanupRig` (issue #212, slices S3 and S4).
+"""Run the real merge executors over a `CleanupRig`.
 
 The gateway, equivalence and continuity tests of the two merge flows all start the same way: a
 signed approval row bound to the state digest of the rig's graph, then the real executor over the

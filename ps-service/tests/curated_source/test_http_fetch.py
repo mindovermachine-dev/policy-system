@@ -83,7 +83,7 @@ def test_fetch_bytes_wraps_transport_failure_in_curated_source_fetch_error_prese
 
 
 def test_fetch_bytes_wraps_an_http_error_status_naming_the_url() -> None:
-    """AC-BI-006: an unreachable/failing source names the source URL and failure."""
+    """An unreachable/failing source names the source URL and failure."""
 
     class _HttpErrorTransport:
         def __call__(self, request: urllib.request.Request, /, *, timeout: float) -> NoReturn:

@@ -1,9 +1,9 @@
-"""Regression-documentation proof for a genuine FalkorDB server defect (see IMPL_SLICE_2.4.md).
+"""Regression-documentation proof for a genuine FalkorDB server defect.
 
 This is **not** a test of `ps_service` code -- it exercises the raw `redis`/
 `falkordb` primitives directly to pin down, precisely and reproducibly, an
-external defect discovered while implementing PLAN.md Slice 2.4 (the
-`dump_graph` + `RESTORE` round-trip proof): on this sandbox's FalkorDB
+external defect discovered while building the
+`dump_graph` + `RESTORE` round-trip proof: on this sandbox's FalkorDB
 instance, `RESTORE`-ing a `DUMP`-produced blob into a *different* key
 doubles the node count of BOTH the new key and the original source key the
 blob was dumped from. Kept, deliberately not `xfail`, as a permanent,
@@ -27,11 +27,10 @@ doubling is server-side, not a client retry. `GRAPH.COPY`/`RENAME` do not
 exhibit any equivalent corruption (`tests/restore/test_staging_snapshot_
 live.py`/`test_staging_finalize_live.py` pass cleanly).
 
-CHANGES2.md note: this defect is why `ps_service.export`/`ps_service.restore`
-no longer use `DUMP`/`RESTORE` at all (see `export/serialize.py`,
-`restore/populate.py`) -- this test no longer gates any `ps_service`
-behavior, but remains valuable, accurate, executable documentation of why
-that redesign exists. See `test_serialize_roundtrip_live.py` for the
+This defect is why `ps_service.export`/`ps_service.restore` do not use
+`DUMP`/`RESTORE` (see `export/serialize.py`, `restore/populate.py`) -- this test
+gates no `ps_service` behavior, but remains accurate, executable documentation
+of why that design exists. See `test_serialize_roundtrip_live.py` for the
 redesigned mechanism's own round-trip proof.
 """
 

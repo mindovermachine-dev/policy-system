@@ -1,6 +1,6 @@
-"""Test-side harness proving two write paths build the same graph (issue #207, AC-RD-009).
+"""Test-side harness proving two write paths build the same graph.
 
-Each writer migration (#208-#214) moves a writer from "write straight to FalkorDB" to "submit
+Each writer migration moves a writer from "write straight to FalkorDB" to "submit
 `MutationGroup`s through the gateway". The graph that results must be the same. This harness
 decides that by comparing the canonical digest of the two graphs (`digest.canonical_digest`),
 which ignores FalkorDB internal ids and insertion order.

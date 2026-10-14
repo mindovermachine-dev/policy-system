@@ -1,6 +1,6 @@
 """`postgres_live` tests: the provisioning CLI applies the ordinary ps_state migrations itself.
 
-Issue #205 follow-up. On an empty `ps_state` the CLI (admin credential) runs the ordinary
+On an empty `ps_state` the CLI (admin credential) runs the ordinary
 component migrations as the `ps_state` application role (`SET LOCAL ROLE`), so `ps_state` owns
 every public object exactly as service startup would have made it, and then creates the
 owner-protected `graph_log` tables. Every test drives the real `main` entry point against a real

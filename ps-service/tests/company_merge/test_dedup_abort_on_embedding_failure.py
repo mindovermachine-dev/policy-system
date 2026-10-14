@@ -1,5 +1,5 @@
-"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`
-(PLAN_REVIEWED.md §10 Increment 9, test (e)): a mocked embedding failure
+"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`:
+a mocked embedding failure
 partway through a 3-node collection propagates `LlmProviderError`
 unchanged, and `dedupe_canonical_nodes` has made ZERO write calls against
 `single_tenant_graph` by the time it aborts -- only the one read call from
@@ -119,7 +119,7 @@ def test_dedupe_canonical_nodes_aborts_with_zero_writes_on_embedding_failure(
             emitter=emitter,
         )
 
-    assert len(graph.calls) == 2  # index read + tombstone redirect read (issue #190)
+    assert len(graph.calls) == 2  # index read + tombstone redirect read
     assert "RETURN" in graph.calls[0]
     assert "MERGE" not in graph.calls[0]
     assert "SET" not in graph.calls[0]

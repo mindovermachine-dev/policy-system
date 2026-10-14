@@ -1,9 +1,8 @@
-"""Issue #28 verification of the first merge into the single-tenant graph, made hermetic (LL-11).
+"""Verification of the first merge into the single-tenant graph, made hermetic.
 
-`falkordb_live` + `postgres_live`, no LLM. These checks used to read a JSON report of a one-off
-live merge into the developer's own `policy_system` and could not pass on a clean instance. They
-now run the real `merge_baseline_graph` themselves (`_hermetic_policy_system.merged_graph_run`)
-into a uniquely named graph, and assert AC-BI-004/005/006/008 on that run's own before/after.
+`falkordb_live` + `postgres_live`, no LLM. The checks run the real `merge_baseline_graph`
+(`_hermetic_policy_system.merged_graph_run`) into a uniquely named graph and assert on that run's
+own before/after, so they pass on a clean instance.
 """
 
 from __future__ import annotations
@@ -113,7 +112,7 @@ def test_ac_bi_006_every_pre_existing_node_id_survives(merged_graph_run: MergedG
 @pytest.mark.postgres_live
 def test_ac_bi_006_pre_existing_node_properties_unchanged(merged_graph_run: MergedGraphRun) -> None:
     """The create-only writes (`ON CREATE SET`) must leave every pre-existing Role, Requirement
-    and Obligation exactly as it was (the #28 incident, fixed in `graph_writer.py`).
+    and Obligation exactly as it was (`graph_writer.py` must never overwrite them).
     """
     before = cast("dict[str, dict[str, dict[str, object]]]", merged_graph_run.before)
     after = cast("dict[str, dict[str, dict[str, object]]]", merged_graph_run.after_pass_1)

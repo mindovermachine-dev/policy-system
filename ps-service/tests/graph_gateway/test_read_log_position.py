@@ -1,4 +1,4 @@
-"""`GraphWriteGateway.read_log_position` reads a graph's last log position and nothing else (#211).
+"""`GraphWriteGateway.read_log_position` reads a graph's last log position and nothing else.
 
 The narrow accessor behind a guarded group's `ExpectedPosition`: the guard needs the position, not
 the full node and edge scan `read_persisted_elements` also does.

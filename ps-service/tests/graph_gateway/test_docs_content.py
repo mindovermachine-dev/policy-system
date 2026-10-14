@@ -1,4 +1,4 @@
-"""Content lint: the operator and architecture docs describe the graph log provisioning (#205).
+"""Content lint: the operator and architecture docs describe the graph log provisioning.
 
 The immutable `graph_log` tables are created by a privileged, admin-credential step (the
 `ps-state-provision` Job, or the same CLI by hand), never by ps-service itself. These tests pin
@@ -170,7 +170,7 @@ def test_ca_container_diagram_lists_startup_verification_edge() -> None:
 
 
 def test_ca_states_the_command_link_is_optional_at_the_store_and_the_gateway() -> None:
-    """Since #211 the gateway no longer requires the link either (it was required until then)."""
+    """The gateway does not require the link either."""
     gateway = _section(_read(_CA), "### Graph Write Gateway")
 
     assert "optional at both the store and the gateway" in gateway
@@ -285,7 +285,7 @@ def test_ca_fail_closed_invariant_names_the_two_fixed_sanitized_errors() -> None
         assert needle in invariant, needle
 
 
-# --- issue #206: the gateway proper (submit, apply, catch-up, recovery) --------------------------
+# --- the gateway proper (submit, apply, catch-up, recovery) --------------------------
 
 _GATEWAY_PACKAGE = _REPO / "ps-service" / "src" / "ps_service" / "graph_gateway"
 _MECHANISM_WORDS = re.compile(
@@ -463,7 +463,7 @@ def test_architecture_component_row_and_sequence_state_the_implemented_behaviour
         assert needle in sequence, needle
 
 
-# --- issue #207: replay, digest, checkpoints, the startup gate, the harness -----------------------
+# --- replay, digest, checkpoints, the startup gate, the harness -----------------------
 
 _DOMAIN_CONCEPTS = _REPO / "docs" / "artifacts" / "ps-domain-concepts.md"
 _PROCESS_HARNESS_HEADING = "### Process Harness"
@@ -572,7 +572,7 @@ def test_operations_guide_documents_startup_replay_and_the_gated_graph_remedy() 
     assert "(#graph-replay-at-startup-and-a-gated-graph)" in ops
 
 
-# --- issue #208: ingestion writes through the gateway --------------------------------------------
+# --- ingestion writes through the gateway --------------------------------------------
 
 
 def _ingestion_section() -> str:
@@ -656,7 +656,7 @@ def test_operations_guide_documents_the_503_when_the_gateway_is_not_running() ->
     assert "Ingestion never writes to FalkorDB directly" in troubleshooting
 
 
-# --- issue #210: Company Merge writes through the gateway ----------------------------------------
+# --- Company Merge writes through the gateway ----------------------------------------
 
 
 def _company_merge_guidance() -> str:
@@ -769,7 +769,7 @@ def test_domain_concepts_and_operations_guide_name_company_merge_as_a_gateway_wr
     assert "the approval stays pending" in ops
 
 
-# --- issue #211: Policy Lifecycle writes through the gateway -------------------------------------
+# --- Policy Lifecycle writes through the gateway -------------------------------------
 
 
 def _policy_lifecycle_section() -> str:
@@ -913,7 +913,7 @@ def test_operations_guide_says_policy_lifecycle_tools_answer_an_error_without_a_
     assert "record no audit row" in ops
 
 
-# --- issue #212: Graph Cleanup writes through the gateway ----------------------------------------
+# --- Graph Cleanup writes through the gateway ----------------------------------------
 
 _MCP_SERVER = _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "mcp_server.py"
 _EXECUTORS = _REPO / "ps-service" / "src" / "ps_service" / "graph_cleanup" / "executors.py"
@@ -1079,7 +1079,7 @@ def test_no_cleanup_source_or_doc_describes_a_direct_cleanup_write() -> None:
         assert "one guarded, all-or-nothing statement" not in text
 
 
-# --- issue #213: Change Monitor and Export write through the gateway -----------------------------
+# --- Change Monitor and Export write through the gateway -----------------------------
 
 _OPS_FAQ_HEADING = "## Troubleshooting / FAQ"
 _CURATED_README = _REPO / "curated-content" / "README.md"
@@ -1277,7 +1277,7 @@ def test_curated_content_readme_says_the_export_cli_needs_the_ps_state_database(
     assert "system audit row" in text
 
 
-# --- issue #214: Restore commits each restore as one gateway group (stage 1: design record) ------
+# --- Restore commits each restore as one gateway group (design record) -------------------
 
 _RESTORE_DECISIONS = "#### Design decisions (#214)"
 _RESTORE_C0 = "#### C-0 exceptions (#214)"
@@ -1575,7 +1575,7 @@ def test_architecture_describes_requested_checkpoints_and_the_drift_check() -> N
     assert any(line.startswith("| CheckDrift |") for line in gateway.splitlines())
 
 
-# --- issue #215 S8: gateway-only graph access and read-only reads ---------------------------------
+# --- gateway-only graph access and read-only reads ---------------------------------
 
 
 def test_architecture_states_gateway_only_graph_access_and_read_only_reads() -> None:
@@ -1734,7 +1734,7 @@ def _collapse(text: str) -> str:
 
 
 def test_no_old_backup_statements() -> None:
-    """AC-BI-006: no old backup procedure, marker or stale persistence claim remains."""
+    """No old backup procedure, marker or stale persistence claim remains."""
     ops = _read(_OPS)
     backup_restore = _collapse(" ".join(_section(ops, heading) for heading in _COLLAPSE_SECTIONS))
     for absent in ("redis-cli", "dump.rdb", "pg_dump", "pg_restore", "each is independent", "#216"):

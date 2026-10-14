@@ -1,9 +1,9 @@
-"""Executor for merge case 3, same policy (issue #190, slice 13 c; AC-BI-012, AC-BI-021, M3).
+"""Executor for merge case 3, same policy.
 
 No acknowledgment is needed; the audit row records policy case 3 with `acknowledged` false,
 the policy id/status and the before/after governed set; the snapshots show the absorbed
 `GOVERNED_BY` edge deleted and the survivor's kept; the guard pins both sides to the policy.
-Since #212 the merge is one gateway group (`CleanupRig`).
+The merge is one gateway group (`CleanupRig`).
 """
 
 from __future__ import annotations

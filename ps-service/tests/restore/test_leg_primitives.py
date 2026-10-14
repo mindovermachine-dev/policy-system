@@ -1,4 +1,4 @@
-"""`restore.leg_primitives`: an artifact's native or baseline leg as gateway primitives (#214)."""
+"""`restore.leg_primitives`: an artifact's native or baseline leg as gateway primitives."""
 
 from __future__ import annotations
 

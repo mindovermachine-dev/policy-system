@@ -1,7 +1,7 @@
 """Tests for ps_service.ingestion.adapters.cellar_eli.adapter.
 
 The main test here (`test_one_instance_produces_different_results...`) is the concrete
-proof-of-pluggability test for AC-001/AC-006 at the adapter level: one
+proof-of-pluggability test at the adapter level: one
 `CellarEliAdapter` instance, one injected `fetch` callable capable of
 serving multiple identifiers (exactly mirroring how the real `fetch_xhtml`
 serves any CELEX value), called twice with two different identifiers —
@@ -225,7 +225,7 @@ def test_fetch_regulatory_instrument_structure_propagates_cellar_parse_error_unc
 def test_fetch_regulatory_instrument_structure_calls_both_fetch_and_fetch_rdf_exactly_once() -> (
     None
 ):
-    """AC-BI-006 (mirrored at the adapter level): one call to `fetch`, one call
+    """One call to `fetch`, one call
     to `fetch_rdf` — no re-fetching of either, no fetch skipped.
     """
     fetch_calls: list[str] = []
@@ -247,7 +247,7 @@ def test_fetch_regulatory_instrument_structure_calls_both_fetch_and_fetch_rdf_ex
     assert fetch_rdf_calls == ["32020R1111"]
 
 
-# --- fetch_regulatory_instrument_metadata (issue #49): metadata only, no structure parse ---
+# --- fetch_regulatory_instrument_metadata: metadata only, no structure parse ---
 
 # Valid metadata inputs (title div + RDF) but no `eli-container`, so
 # `parse_structure` raises `CellarParseError` -- a document only the

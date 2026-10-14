@@ -1,6 +1,6 @@
-"""An interrupted swap set is completed as one unit; readers see none or all (issue #214 S5).
+"""An interrupted swap set is completed as one unit; readers see none or all.
 
-AC-BI-009 and part of AC-BI-002 (CHANGES F-1, F-7). Every test drives the gateway against the
+Every test drives the gateway against the
 Protocol fakes. A crash is a `Crash` (a `BaseException`) raised by a hook of the in-memory key port
 or log store, so nothing in the gateway catches it and no cleanup runs, as when a process dies;
 `GatewayRig.restart()` then builds a fresh gateway over the same log and key space. At every
@@ -130,7 +130,7 @@ def _clean_swap_digests() -> tuple[str, ...]:
     return digests(rig)
 
 
-# -- the interruption table (AC-BI-009) --------------------------------------------------------
+# -- the interruption table --------------------------------------------------------
 
 
 @pytest.mark.parametrize("point", _CRASH_POINTS)

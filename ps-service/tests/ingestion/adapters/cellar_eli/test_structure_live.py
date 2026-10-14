@@ -7,7 +7,7 @@ explicitly:
     uv run pytest ps-service/tests/ingestion/adapters/cellar_eli/test_structure_live.py \
         -m cellar_live -q
 
-Purpose (Follow-on A, folded into issue #19): prove that `parse_structure`
+Purpose: prove that `parse_structure`
 extracts the *same* structural skeleton from the Official Journal's
 consolidated rendering as from the original base act — same ARTICLE count,
 same ANNEX count, and (today) the same PARAGRAPH count — with the preamble
@@ -28,7 +28,7 @@ because no amendment has renumbered or inserted a paragraph in GDPR or CRA.
 A future consolidation that does so would legitimately diverge; if this
 assertion ever fails on that basis, loosen it to `>= base` for the
 affected CELEX (the ANNEX / ARTICLE skeleton is the load-bearing parity
-claim — see FLAWS_A finding 6 / PLAN_A §5 risk 4).
+claim).
 """
 
 from __future__ import annotations
@@ -138,18 +138,16 @@ def test_consolidated_metadata_carries_the_base_act_celex(
     base-act form, so a re-ingested consolidation stays pollable by
     `poll_for_amendments`.
 
-    Post-Slice-10 (Defect 2 fix): this used to raise `CellarParseError` --
-    the own subject's `resource_legal_id_celex` (asserted in unreduced
-    consolidated form, e.g. `"02024R2847-20241120"`) was compared raw against
-    the normalized `own_id` (`"32024R2847"`), so it was misclassified as a
-    foreign act and excluded from both tiers. Normalizing both sides
-    (`_base_celex_or_none`) now resolves this subject as "own", so resolution
-    succeeds -- but only into `effective_date == _CONSOLIDATION_AS_OF_DATE[...]`
-    (Cellar's consolidation bookkeeping date, NOT a real EV/MA/application
-    date -- see the module-level comment above). This is a known, accepted,
-    narrow limitation of fetching a consolidated-expression CELEX directly:
-    production ingestion never does this (see `_BASE_ACT_VERSION`'s
-    docstring in `metadata.py`), so it is not a violation of any AC.
+    Normalizing both the own subject's `resource_legal_id_celex` (asserted in
+    unreduced consolidated form, e.g. `"02024R2847-20241120"`) and the own id
+    (`"32024R2847"`) via `_base_celex_or_none` resolves this subject as "own",
+    so resolution succeeds -- but only into
+    `effective_date == _CONSOLIDATION_AS_OF_DATE[...]` (Cellar's consolidation
+    bookkeeping date, NOT a real EV/MA/application date -- see the
+    module-level comment above). This is a known, accepted, narrow limitation
+    of fetching a consolidated-expression CELEX directly: production
+    ingestion never does this (see `_BASE_ACT_VERSION`'s docstring in
+    `metadata.py`).
     """
     metadata = extract_metadata(
         fetch_xhtml(consolidated_celex), fetch_rdf(consolidated_celex), consolidated_celex

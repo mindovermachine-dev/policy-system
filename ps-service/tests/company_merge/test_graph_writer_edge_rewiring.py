@@ -1,15 +1,14 @@
-"""Tests for `ps_service.company_merge.graph_writer.persist_rewired_edges` (issue #210, slice 7a).
+"""Tests for `ps_service.company_merge.graph_writer.persist_rewired_edges`, the edge writer.
 
-PLAN_REVIEWED.md §10 Increment 12, §6.2: the edge writer. Since issue #42 only a `REQUIRES` edge's
-Capability target (and, since #54/#106, the Policy and Capability endpoints of the governance and
-classification edges) is rewritten through the caller-supplied canonical-id mapping; every other
-endpoint is a passthrough node written as its baseline-local id.
+Only a `REQUIRES` edge's Capability target (and the Policy and Capability endpoints of the
+governance and classification edges) is rewritten through the caller-supplied canonical-id mapping;
+every other endpoint is a passthrough node written as its baseline-local id.
 
-Since #210 each edge is an `UpsertEdge` primitive in ONE gateway group on `policy_system`
-(identity `{type}:{source}->{target}`, no properties). The old `MATCH ... MERGE` wrote nothing when
-an endpoint was missing; that is decided before submission from one batched existing-id read per
-label, and an edge with a missing endpoint is left out of the group (a group edge with a missing
-endpoint would fail the whole group). The gateway rig is the true boundary.
+Each edge is an `UpsertEdge` primitive in ONE gateway group on `policy_system`
+(identity `{type}:{source}->{target}`, no properties). A missing endpoint writes nothing; that is
+decided before submission from one batched existing-id read per label, and an edge with a missing
+endpoint is left out of the group (a group edge with a missing endpoint would fail the whole
+group). The gateway rig is the true boundary.
 """
 
 from __future__ import annotations
@@ -248,7 +247,7 @@ def test_rerunning_the_merge_adds_no_parallel_edge(merge_rig: MergeRig) -> None:
 def test_has_edge_obligation_target_absent_from_mapping_passes_through(
     merge_rig: MergeRig,
 ) -> None:
-    """Since #42 an Obligation is a passthrough node: no mapping entry is required, and an absent
+    """An Obligation is a passthrough node: no mapping entry is required, and an absent
     one is written verbatim, not a `CompanyMergePersistenceError`.
     """
     _seed_endpoints(merge_rig, "HAS", "role_manufacturer_abc123", "obl_x")
@@ -268,7 +267,7 @@ def test_has_edge_obligation_target_absent_from_mapping_passes_through(
 
 
 def test_covers_edge_target_is_rewritten_to_canonical_capability_id(merge_rig: MergeRig) -> None:
-    """AC-BI-005 (issue #106): `COVERS` (PracticeArea, Capability) rewrites its Capability."""
+    """`COVERS` (PracticeArea, Capability) rewrites its Capability."""
     _seed_endpoints(merge_rig, "COVERS", "pa_secure_sdlc_4a7c1d", "cap_canonical_existing")
     edge = BareEdge("COVERS", "pa_secure_sdlc_4a7c1d", "cap_baseline_local")
 
@@ -285,7 +284,7 @@ def test_covers_edge_target_is_rewritten_to_canonical_capability_id(merge_rig: M
 
 
 def test_owns_edge_target_is_rewritten_to_canonical_policy_id(merge_rig: MergeRig) -> None:
-    """AC-BI-005 (issue #106): `OWNS` (PracticeArea, Policy) rewrites its Policy target."""
+    """`OWNS` (PracticeArea, Policy) rewrites its Policy target."""
     _seed_endpoints(merge_rig, "OWNS", "pa_secure_sdlc_4a7c1d", "pol_canonical_existing")
     edge = BareEdge("OWNS", "pa_secure_sdlc_4a7c1d", "pol_baseline_local")
 
@@ -304,7 +303,7 @@ def test_owns_edge_target_is_rewritten_to_canonical_policy_id(merge_rig: MergeRi
 def test_mitigated_by_edge_target_is_rewritten_to_canonical_capability_id(
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-005 (issue #106): `MITIGATED_BY` (RiskPath, Capability) rewrites its Capability."""
+    """`MITIGATED_BY` (RiskPath, Capability) rewrites its Capability."""
     _seed_endpoints(
         merge_rig, "MITIGATED_BY", "rp_secure_build_release_d93f8a", "cap_canonical_existing"
     )
@@ -447,7 +446,7 @@ def test_a_failing_endpoint_read_is_query_failed_and_submits_nothing(merge_rig: 
 def test_covers_edge_target_missing_from_mapping_raises_before_any_write(
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-005's flip side: a `COVERS` Capability target with no mapping entry raises, with no
+    """The flip side: a `COVERS` Capability target with no mapping entry raises, with no
     read made and nothing submitted.
     """
     edge = BareEdge("COVERS", "pa_secure_sdlc_4a7c1d", "cap_unmapped")

@@ -1,9 +1,9 @@
-"""Tests for `ps_service.change_monitor.succession` (PLAN_REVIEWED.md §3 test 12).
+"""Tests for `ps_service.change_monitor.succession`.
 
 The deterministic prior lookup (0 / >1 rows -> `ChangeMonitorStateError`), the
 `new_node_exists` / `is_succession_complete` truth tables and the `RedisError` ->
 `SuccessionPersistenceError` + `mark_unhealthy` path of the reads. The succession's WRITES are
-gateway groups (issue #213), tested in `test_succession_gateway.py`.
+gateway groups, tested in `test_succession_gateway.py`.
 """
 
 from __future__ import annotations

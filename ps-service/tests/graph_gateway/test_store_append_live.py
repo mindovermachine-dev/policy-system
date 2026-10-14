@@ -1,9 +1,9 @@
-"""`postgres_live` tests for appending and reading log groups (issue #205, slice 3).
+"""`postgres_live` tests for appending and reading log groups.
 
 Runs the store as the real `ps_state` role against a scratch PS Postgres provisioned by the real
 Helm init script and the privileged provisioning path (see `persistence/provisioned_postgres.py`).
-Covers AC-BI-002 (atomic group, contiguous per-graph sequence, no partial group) and AC-BI-003
-(concurrent appends stay unique and gap-free), including rolled-back appenders.
+Covers atomic groups (contiguous per-graph sequence, no partial group) and concurrent appends
+(unique and gap-free), including rolled-back appenders.
 
 Deselected by default -- run with `uv run pytest -m postgres_live`; needs
 `PS_TEST_POSTGRES_SUPERUSER_DSN` and `psql` on `PATH`.

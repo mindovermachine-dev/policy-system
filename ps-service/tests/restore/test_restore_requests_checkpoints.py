@@ -1,6 +1,6 @@
-"""A restore requests a digest checkpoint on every leg of its one group (issue #215, S4a).
+"""A restore requests a digest checkpoint on every leg of its one group.
 
-AC-BI-009: the restore's terminal group asks the gateway to record the digest at the head of every
+The restore's terminal group asks the gateway to record the digest at the head of every
 graph it wrote; a checkpoint that cannot be recorded never fails the restore.
 """
 

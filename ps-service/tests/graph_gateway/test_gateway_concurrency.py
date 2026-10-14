@@ -1,4 +1,4 @@
-"""Per-graph serialization of submitted groups (issue #206 S7, AC-BI-006).
+"""Per-graph serialization of submitted groups.
 
 Two groups for one graph must not interleave: positions stay contiguous per group and the graph
 sees them in position order. Groups for different graphs do not wait for each other.

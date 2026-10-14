@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false
-"""`CleanupReadGraph` answers the reads exactly as the statements say (issue #212).
+"""`CleanupReadGraph` answers the reads exactly as the statements say.
 
 The double is only worth having if it is faithful: each read it was taught is pinned here against
 the rows the statement's `RETURN` clause names, and anything else (a write, or a read it was not

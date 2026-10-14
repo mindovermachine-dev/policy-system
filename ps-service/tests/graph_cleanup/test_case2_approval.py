@@ -1,4 +1,4 @@
-"""Case-2 acknowledgment gate on the approval (issue #190, slice 12 d; AC-BI-010, D5).
+"""Case-2 acknowledgment gate on the approval.
 
 With exactly one capability governed, a first call without `acknowledge_governance_change`
 returns the preview and creates NO approval; the acknowledged call creates the approval with

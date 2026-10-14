@@ -150,7 +150,7 @@ def test_reingestion_outcome_allows_null_run_id_and_no_stage_summaries() -> None
 
 
 def test_pipeline_stages_are_the_four_stages_in_run_order_and_linked_is_not_one_of_them() -> None:
-    """#201 S1a: the stage names reuse `_execute_catalog_stages`' strings; `LINKED` is the
+    """The stage names reuse `_execute_catalog_stages`' strings; `LINKED` is the
     marker value for "all stages done, succession written", not a pipeline stage.
     """
     assert PIPELINE_STAGES == ("ingestion", "extraction", "derivation", "merge")

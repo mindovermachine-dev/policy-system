@@ -1,12 +1,11 @@
-"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes` with `kind="Policy"`
-(issue #54, S4): Policy convergence via exact canonical-id match and via
+"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes` with `kind="Policy"`:
+Policy convergence via exact canonical-id match and via
 semantic match -- the same combined whole-collection resolution algorithm
 `test_dedup_combined_resolution.py` already proves for Capability, exercised
 here for Policy instead, since `dedupe_canonical_nodes`'s `kind` parameter
-now widens to `Literal["Capability", "Policy"]`.
+is `Literal["Capability", "Policy"]`.
 
-Per the binding testing convention (PLAN_REVIEWED.md §0.5): `call_embedding`
-is faked with a hand-written structural fake satisfying `EmbeddingCaller`
+`call_embedding` is faked with a hand-written structural fake satisfying `EmbeddingCaller`
 (mirrors `test_dedup_semantic_match.py`'s `_ScriptedCallEmbedding`); the
 fake `single_tenant_graph` is a hand-written structural fake satisfying
 `GraphHandle`, answering `read_existing_canonical_index`'s one read query

@@ -1,4 +1,4 @@
-"""Derivation writes its Obligation/Capability graph through the Graph Write Gateway (#209).
+"""Derivation writes its Obligation/Capability graph through the Graph Write Gateway.
 
 The stage reads the Requirements extraction left in the baseline graph, derives with a scripted
 LLM and submits ONE group on the baseline graph: Obligations, Capabilities, then the `HAS`,
@@ -119,7 +119,7 @@ def _two_role_script() -> CompletionCaller:
 def test_derivation_submits_obligations_capabilities_and_edges_with_the_role_and_requirement_endpoints_resolved_from_the_graph(  # noqa: E501 -- name fixed by the plan
     make_emitter: MakeEmitter, baseline_rig: BaselineRig
 ) -> None:
-    """AC-BI-001/003/007/008: one group under the audit event; endpoints found in the graph.
+    """One group under the audit event; endpoints found in the graph.
 
     Order is Obligations, Capabilities, `HAS`, `SATISFIED_BY`, `REQUIRES` (the write order of the
     direct path); edge identities are `{type}:{source}->{target}`; the three edge types carry no
@@ -182,7 +182,7 @@ def _scripted_with_hook(responses: list[str], on_call: Callable[[], None]) -> Co
 def test_derivation_drops_an_edge_whose_role_or_requirement_is_missing_everywhere_without_error_or_log_entry(  # noqa: E501 -- name fixed by the plan
     make_emitter: MakeEmitter, read_lines: ReadLines, baseline_rig: BaselineRig
 ) -> None:
-    """AC-BI-004: an edge whose Role or Requirement exists nowhere is skipped, as `MATCH` did.
+    """An edge whose Role or Requirement exists nowhere is skipped, as `MATCH` did.
 
     The Importer Role and its Requirement disappear (a concurrent writer) after the stage has
     read them and before it writes: the stage neither raises nor reports the dropped edges, and
@@ -359,7 +359,7 @@ def test_a_group_pending_from_an_earlier_run_raises_the_persistence_error_and_wr
     """F6: with an earlier group committed but not applied, the writer must not read or write.
 
     Reading first could find the Role missing only because the earlier group is not applied, and
-    drop its edge silently (AC-BI-004). It fails with the persistence error before the read.
+    drop its edge silently. It fails with the persistence error before the read.
     """
     baseline_rig.baseline.fail_on_write(redis.exceptions.ConnectionError("Error 111 connecting"))
     seed_extraction_output(
@@ -394,7 +394,7 @@ def test_an_unstorable_derived_property_raises_the_persistence_error_with_an_emp
 def test_persisting_derived_ids_calls_no_llm_and_keeps_every_derived_id(
     make_emitter: MakeEmitter, baseline_rig: BaselineRig
 ) -> None:
-    """AC-BI-003: the writer mints and matches nothing; the ids written are the derived ones.
+    """The writer mints and matches nothing; the ids written are the derived ones.
 
     The scripted LLM is exhausted by the four derivation calls and fails on a fifth, so a
     writer-side call would fail this test; the group's node ids equal the result's.

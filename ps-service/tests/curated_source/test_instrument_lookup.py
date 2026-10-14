@@ -1,6 +1,6 @@
 """Tests for ``ps_service.curated_source.instrument_lookup.resolve_canonical_instrument_id``.
 
-Issue #184: a requested ``instrument_id`` is resolved against the catalog
+A requested ``instrument_id`` is resolved against the catalog
 case-insensitively before any artifact fetch. Pure, fast, Detroit-style unit
 tests -- no I/O, no fakes, a plain `CuratedInstrumentEntry` tuple built
 directly per test (mirrors `ps_service.api.catalog`'s own
@@ -40,7 +40,7 @@ def test_exact_case_match_returns_the_canonical_id() -> None:
 
 
 def test_lowercase_request_against_uppercase_catalog_entry_returns_the_canonical_id() -> None:
-    """The real bug case (GH #184): `cra-1.0` resolves to the catalog's own `CRA-1.0`."""
+    """A mixed-case id: `cra-1.0` resolves to the catalog's own `CRA-1.0`."""
     catalog = (_entry("CRA-1.0"),)
 
     assert resolve_canonical_instrument_id(catalog, "cra-1.0") == "CRA-1.0"

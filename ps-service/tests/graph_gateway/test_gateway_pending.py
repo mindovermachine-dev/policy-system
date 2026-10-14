@@ -1,4 +1,4 @@
-"""Committed, apply pending and the permanent-error path (issue #206, S11; AC-BI-010, F2).
+"""Committed, apply pending and the permanent-error path.
 
 A transient FalkorDB failure after the commit is not an error: the group is in the log, the
 caller is told so, and the entries stay beyond the applied marker. A permanent failure (the

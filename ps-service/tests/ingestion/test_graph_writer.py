@@ -1,5 +1,4 @@
-"""Tests for `ps_service.ingestion.graph_writer` (PLAN_REVIEWED.md §7
-Increments 8-10).
+"""Tests for `ps_service.ingestion.graph_writer`.
 
 Fakes implement the `GraphHandle`/`GraphQueryResult` Protocols
 (`ps_service.ingestion.falkordb_client`) structurally — no mocking
@@ -111,7 +110,7 @@ def _node(element_type: str, node_id: str) -> StructuralNode:
     )
 
 
-# --- Increment 10: verify_structural_graph_reachable ---------------------
+# --- verify_structural_graph_reachable ---------------------
 
 _ALL_LABELS_NO_GAP: dict[str, tuple[int, int]] = {
     "RegulatoryInstrument": (1, 1),
@@ -146,7 +145,7 @@ def test_verify_structural_graph_reachable_raises_on_gap() -> None:
 
 
 def test_verify_passes_with_two_versions_coexisting() -> None:
-    """Follow-on A: after a Change-Monitor re-ingest, one `{short}_native`
+    """After a Change-Monitor re-ingest, one `{short}_native`
     graph holds two versions' subtrees. RECITAL's whole-graph total is v1's
     173, every one still reachable from v1 (0 orphans), while the id under
     verification is v2 — whose own document has no preamble. The orphan
@@ -253,8 +252,8 @@ def test_graph_writer_functions_work_against_real_falkordb(
     graph = select_graph(db, _LIVE_TEST_GRAPH_NAME)
 
     try:
-        # The graph is written through the Graph Write Gateway (issue #208): the real log store
-        # and the real FalkorDB opener, in place of the writer's former direct MERGE calls.
+        # The graph is written through the Graph Write Gateway using the real log store
+        # and the real FalkorDB opener.
         gateway = GraphWriteGateway(
             log_store=PsycopgGraphLogStore(provisioned_graph_log.state_config()),
             graph_opener=lambda name: select_graph(db, name),

@@ -1,12 +1,11 @@
-"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`
-(PLAN_REVIEWED.md §10 Increment 9, test (g), Q1's fix): the false-convergence
-negative test. Two incoming nodes with genuinely different duty text and a
+"""Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`:
+the false-convergence negative test. Two incoming nodes with genuinely different duty text and a
 mocked similarity score for their mutual comparison deliberately JUST BELOW
 threshold must resolve as two SEPARATE match_kind="new" entries with
 DISTINCT canonical_id values -- proving the in-run convergence mechanism
-(§5.4 step 6c) does not mis-fire when the two nodes are not actually
+does not mis-fire when the two nodes are not actually
 equivalent. This closes the gap a positive convergence test alone
-(test (d), `test_dedup_combined_resolution.py`) leaves open.
+(`test_dedup_combined_resolution.py`) leaves open.
 """
 
 from __future__ import annotations

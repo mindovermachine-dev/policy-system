@@ -1,8 +1,7 @@
-"""Gateway walking skeleton: submit an upsert-node group through log, apply and outcome (#206).
+"""Gateway: submit an upsert-node group through log, apply and outcome.
 
 Every test drives the public `GraphWriteGateway.submit_group` against the real validation models,
 entry codec and Cypher builders, with the log store and the graph replaced by Protocol fakes.
-Covers AC-BI-003, AC-BI-007 and AC-BI-013 (seed).
 """
 
 from __future__ import annotations
@@ -70,7 +69,7 @@ def test_submit_group_rejects_group_missing_caller_ids(fields: dict[str, object]
 
 
 def test_mutation_group_validates_a_given_causing_command_id() -> None:
-    """The id is optional since #211 (`test_gateway_optional_audit_link.py`), never malformed."""
+    """The id is optional (see `test_gateway_optional_audit_link.py`), never malformed."""
     primitive = _node("cap-1").model_dump()
     with pytest.raises(ValidationError):
         MutationGroup.model_validate(

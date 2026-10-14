@@ -1,4 +1,4 @@
-"""Frozen copy of Graph Cleanup's five guarded write statements as they were before issue #212.
+"""Frozen copy of Graph Cleanup's five guarded write statements from before the gateway.
 
 The statement texts are the Cypher of the pre-migration `graph_cleanup/graph_writer.py`, verbatim.
 Each is pinned by a sha256 taken from `git show HEAD:ps-service/src/ps_service/graph_cleanup/

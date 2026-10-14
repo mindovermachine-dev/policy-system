@@ -1,4 +1,4 @@
-"""Helpers of the `postgres_live` graph gateway tests (issue #207): audit rows for real appends."""
+"""Helpers of the `postgres_live` graph gateway tests: audit rows for real appends."""
 
 from __future__ import annotations
 

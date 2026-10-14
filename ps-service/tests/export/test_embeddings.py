@@ -1,5 +1,5 @@
 """Tests for `ps_service.export.embeddings.backfill_capability_embeddings`
-(PLAN.md Slices 3.1/3.2, D7; migrated to the Graph Write Gateway by issue #213).
+written through the Graph Write Gateway.
 
 The baseline graph is the gateway rig's in-memory FalkorDB read through `ExportReadGraph`; the
 backfill's one group is submitted to the rig's gateway, so a test asserts on what the rig's graph

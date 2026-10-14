@@ -1,4 +1,4 @@
-"""Fast tests for graph log payload encoding (issue #205, slice 5; AC-BI-007, AC-BI-008).
+"""Fast tests for graph log payload encoding.
 
 Embeddings are lossless 64-bit binary: every comparison here is on bit patterns, never on `==`,
 because `-0.0 == 0.0` and `nan != nan` would hide exactly the loss these tests must catch.
@@ -195,7 +195,7 @@ def test_content_containing_a_float_is_stored_as_a_json_payload(
     content: dict[str, object],
 ) -> None:
     # `jsonb` is a `numeric`: it has no negative zero, turns 1.0 into 1 and 1e22 into a long
-    # integer. Only the exact UTF-8 text keeps a float what it was (live proof: #207 S14L).
+    # integer. Only the exact UTF-8 text keeps a float what it was.
     payload = json_payload_if_large(content)
 
     assert payload is not None

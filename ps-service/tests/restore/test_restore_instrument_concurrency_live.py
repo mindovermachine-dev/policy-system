@@ -1,14 +1,13 @@
-"""Live proof of the restore's optimistic concurrency on `policy_system` (issue #214, AC-BI-004).
+"""Live proof of the restore's optimistic concurrency on `policy_system`.
 
 The REAL `restore_instrument` runs against the real gateway (Postgres graph log, FalkorDB). The
-pre-#214 version of this file raced a Redis `WATCH` with a second connection; the guard is now
-the log position the `policy_system` leg is built at (`ExpectedPosition`), so the race is a
+guard is the log position the `policy_system` leg is built at (`ExpectedPosition`), so the race is a
 second WRITER going through the gateway between the restore's position read and its submit. The
-two scenarios and their assertions are those of CHANGES.md B1 (D-6):
+two scenarios:
 
 (a) A rival group lands once, in that window -- the first set is refused (nothing logged on any
     graph), the restore reads again and completes carrying BOTH the rival's node and its own
-    merged Capability (AC-BI-006's additive, never-clobber invariant).
+    merged Capability (the additive, never-clobber invariant).
 (b) A rival group lands in that window on EVERY attempt -- after `MAX_POLICY_SYSTEM_ATTEMPTS` the
     restore raises `RestoreConcurrencyConflictError`, no `{short}_native`/`{short}_baseline` graph
     was created and `policy_system` holds ONLY the pre-existing seed and the rival's own writes.

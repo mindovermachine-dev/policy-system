@@ -1,9 +1,9 @@
-"""Executor for merge case 2 (issue #190, slice 12 c; AC-BI-010, AC-BI-021, M3).
+"""Executor for merge case 2.
 
 Defence in depth: a case-2 approval whose signed arguments lack the acknowledgment is refused
 at execution even if someone crafted the row. The audit row records policy case 2,
 acknowledgment, the policy id/status and the before/after governed set, and its snapshots
-carry the moved `GOVERNED_BY` edge. Since #212 the merge is one gateway group (`CleanupRig`).
+carry the moved `GOVERNED_BY` edge. The merge is one gateway group (`CleanupRig`).
 """
 
 from __future__ import annotations

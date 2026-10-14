@@ -1,10 +1,9 @@
-"""Live regression test for `tools/company-merge/check_baseline_preconditions.py`
-(issue #28, PLAN.md §2.2).
+"""Live regression test for `tools/company-merge/check_baseline_preconditions.py`.
 
 `@pytest.mark.falkordb_live`, strictly read-only, no approval needed -- runs
 the real CLI's `main()` (no `graph_provider` override, so it makes a real
 `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`-driven connection) against real
-FalkorDB, asserting exit `0` right now -- matches BASELINE.md's/
+FalkorDB, asserting exit `0` right now -- matches
 `test_preconditions_live.py`'s own finding of 0 `HAS`-edge-cardinality
 violations across all three currently-mapped baseline graphs (`cra_baseline`,
 `gdpr_baseline`, `nis2_baseline`).

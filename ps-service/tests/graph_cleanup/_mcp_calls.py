@@ -1,4 +1,4 @@
-"""Call the registered MCP tools of the real server as a given caller (issue #212 continuity tests).
+"""Call the registered MCP tools of the real server as a given caller (continuity tests).
 
 The continuity tests drive each cleanup flow through the MCP tool that previews it, the signing
 router, the executor and the tools that report on it. This is the small shared piece of that:

@@ -1,4 +1,4 @@
-"""Reader for `merge-capabilities` (issue #190, slice 10 sub-step b): pure reads."""
+"""Reader for `merge-capabilities` : pure reads."""
 
 from __future__ import annotations
 

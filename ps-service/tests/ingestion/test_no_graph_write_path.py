@@ -1,4 +1,4 @@
-"""Ingestion holds no write path to FalkorDB (issue #208, AC-BI-001, F10).
+"""Ingestion holds no write path to FalkorDB .
 
 Every graph mutation goes through the Graph Write Gateway, so no module under
 `ps_service.ingestion` (adapters included) may open a FalkorDB connection of its own, name the

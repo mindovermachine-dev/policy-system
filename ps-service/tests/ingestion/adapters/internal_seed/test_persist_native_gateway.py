@@ -1,6 +1,6 @@
-"""The internal-seed native graph is written as one gateway group (#208, slice S2).
+"""The internal-seed native graph is written as one gateway group.
 
-`{short}_native` receives the customer's raw submission verbatim (B5): every node in document
+`{short}_native` receives the customer's raw submission verbatim: every node in document
 order, then every edge, as one mutation group logged under the run's audit event id. Postgres and
 FalkorDB are the gateway rig's in-memory fakes.
 """
@@ -220,7 +220,7 @@ def test_a_reserved_key_on_an_edge_is_rejected_before_anything_is_submitted(
 
 
 def test_each_seeded_graph_gets_a_head_checkpoint(rig: GatewayRig) -> None:
-    """AC-BI-009: each graph's one group is its terminal group (#215, S4b)."""
+    """Each graph's one group is its terminal group."""
     run = Run(rig)
 
     run.ingest(_seed())

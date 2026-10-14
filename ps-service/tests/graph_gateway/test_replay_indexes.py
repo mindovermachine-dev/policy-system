@@ -1,4 +1,4 @@
-"""Replay sets up each label's `id` index once and writes in batches (#207 S13, AC-RD-008).
+"""Replay sets up each label's `id` index once and writes in batches.
 
 The spike behind the issue measured 9.6 s with the index in place against 67 s and 207 s without
 it or with one query per row. Wall clock is proved live; here the deterministic part is pinned:

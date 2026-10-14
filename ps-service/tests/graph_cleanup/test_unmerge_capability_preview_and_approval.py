@@ -1,7 +1,7 @@
-"""Preview and approval for capability `unmerge`, plus `check-cleanup-approval` (slice 15 d).
+"""Preview and approval for capability `unmerge`, plus `check-cleanup-approval`.
 
-AC-BI-019 (preview lists restored edges and the survivor-added edges that stay; approval bound to
-the merge and the state), AC-BI-020 (conflicts explained, no approval), A9 (reconciliation).
+The preview lists restored edges and the survivor-added edges that stay, and the approval is bound
+to the merge and the state; conflicts are explained and yield no approval; reconciliation.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""`postgres_live`: the checkpoint range read the replay uses (#207 S7L).
+"""`postgres_live`: the checkpoint range read the replay uses.
 
 Replay verifies against the highest checkpoint at or below the log's head, so the store must be
 able to answer "the highest checkpoint at or below this position" in one query.

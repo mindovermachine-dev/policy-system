@@ -1,8 +1,8 @@
-"""Tests for the catalog-source runtime-config key (issue #130, Slice 4).
+"""Tests for the catalog-source runtime-config key.
 
-AC-BI-006: the key's validator IS `validate_source_url` (rejects exactly what the shared
-validator rejects, with its message). D-REDACT: only the credential-free, query-free
-projection of a URL may reach an audit row's `details`. CHANGES F8: registration happens on
+The key's validator IS `validate_source_url` (rejects exactly what the shared
+validator rejects, with its message). Only the credential-free, query-free
+projection of a URL may reach an audit row's `details`. Registration happens on
 importing `ps_service.curated_source`, so no caller can reach the registry without the key.
 """
 

@@ -1,10 +1,9 @@
-"""Tests for `tools/domain-mapper/exclusion_audit.py`'s CLI surface (issue #27, Slice 5,
-PLAN.md §3 "Slice 5 — CLI polish + AC-BI-002 close-out").
+"""Tests for `tools/domain-mapper/exclusion_audit.py`'s CLI surface.
 
-No new capture/report logic under test here — Slice 4 already proved `main()`'s cached-mode
-report assembly (`test_exclusion_audit_report.py`'s
-`test_main_cached_mode_assembles_report_from_json_with_zero_extraction_calls`). This file
-covers only what Slice 5 adds: `--help` text, `--cache-dir`/`--report-path`/
+No capture/report logic is under test here — `main()`'s cached-mode report assembly is covered
+by `test_exclusion_audit_report.py`'s
+`test_main_cached_mode_assembles_report_from_json_with_zero_extraction_calls`. This file
+covers only: `--help` text, `--cache-dir`/`--report-path`/
 `--record-source` argument parsing, and the cached-by-default guarantee that running this
 script's CLI with no flags at all can never reach for a live Azure OpenAI or FalkorDB call.
 
@@ -79,7 +78,7 @@ def test_help_exits_zero_and_documents_every_flag(
 def test_help_mentions_the_cached_only_no_live_call_guarantee(
     cli_module: ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The whole point of Slice 5's CLI polish is that reading `--help` alone tells a
+    """The whole point of the CLI polish is that reading `--help` alone tells a
     maintainer this script cannot accidentally spend real Azure OpenAI/FalkorDB calls.
     """
     with pytest.raises(SystemExit):
@@ -109,7 +108,7 @@ def test_cache_dir_and_report_path_default_to_the_module_constants(
 
 
 def test_record_source_rejects_anything_other_than_cached(cli_module: ModuleType) -> None:
-    """No live mode is implemented (CHANGES.md row 1b) -- argparse's own `choices=` must
+    """No live mode is implemented -- argparse's own `choices=` must
     reject e.g. `--record-source live` at parse time, before `main()`'s body (and any
     chance of a live call) ever runs.
     """
@@ -164,11 +163,11 @@ def _write_minimal_regulation_fixture(
 def test_main_with_no_flags_at_all_stays_cached_and_never_calls_the_llm(
     cli_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The core Slice 5 guarantee: `main([])` -- i.e. every flag left at its default,
+    """The core guarantee: `main([])` -- i.e. every flag left at its default,
     the shape of running this script with no arguments -- must still never reach for
     `call_completion`. Points `--cache-dir`'s own default at a tmp fixture via
     monkeypatching the module constant (rather than writing into the real
-    `.orchestrator/tracker/issue-27-exclusion-audit/records/`), so this test never
+    default records directory), so this test never
     touches the real captured audit data.
     """
     records_dir = tmp_path / "records"
@@ -201,7 +200,7 @@ def test_main_explicit_cached_record_source_flag_matches_default_behavior(
     cli_module: ModuleType, tmp_path: Path
 ) -> None:
     """`--record-source cached` given explicitly must behave identically to leaving it
-    unset -- the flag exists for documentation/forward-compat (PLAN.md §3 Slice 5), not
+    unset -- the flag exists for documentation/forward-compat, not
     to change behavior.
     """
     records_dir = tmp_path / "records"

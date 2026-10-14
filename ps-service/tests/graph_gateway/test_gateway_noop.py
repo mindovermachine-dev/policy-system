@@ -1,6 +1,6 @@
-"""No-op suppression: a mutation that would not change the graph is never logged (#206 S6).
+"""No-op suppression: a mutation that would not change the graph is never logged.
 
-AC-BI-004. The gateway reads the current state of every node and edge the group names (batched,
+The gateway reads the current state of every node and edge the group names (batched,
 one query per label or type and chunk), then walks the group over that state with an overlay so a
 primitive sees the effect of the ones before it. Values compare by type and value (`1` differs from
 `1.0`, `True` from `1`, list order matters).

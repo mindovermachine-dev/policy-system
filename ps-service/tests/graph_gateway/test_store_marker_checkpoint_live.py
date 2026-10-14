@@ -1,9 +1,9 @@
-"""`postgres_live` tests for the applied marker and digest checkpoint (issue #205, slice 6).
+"""`postgres_live` tests for the applied marker and digest checkpoint.
 
 The applied marker is the only mutable table of the graph log: it may advance, never move back
 and never pass the last logged position. A digest checkpoint is insert-only: recording a second
 one at the same position is rejected, never an overwrite. Runs the store as the real `ps_state`
-role against a scratch PS Postgres (AC-BI-005, AC-BI-010).
+role against a scratch PS Postgres.
 
 Deselected by default -- run with `uv run pytest -m postgres_live`; needs
 `PS_TEST_POSTGRES_SUPERUSER_DSN` and `psql` on `PATH`.

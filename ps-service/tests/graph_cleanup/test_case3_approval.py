@@ -1,4 +1,4 @@
-"""Case 3 on the preview/approval path (issue #190, slice 13 d; AC-BI-011, AC-BI-012, D6).
+"""Case 3 on the preview/approval path.
 
 Different policies: rejected BEFORE any approval row exists, naming both policies and the
 release-governance step. Same policy: no acknowledgment, an approval is created at once.

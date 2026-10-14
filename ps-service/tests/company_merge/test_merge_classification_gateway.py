@@ -1,13 +1,13 @@
-"""`merge_baseline_graph` writes PracticeArea/RiskPath through the Graph Write Gateway (issue #210).
+"""`merge_baseline_graph` writes PracticeArea/RiskPath through the Graph Write Gateway.
 
-Slice 4b: PracticeArea and RiskPath are exact-identity create-only passthrough nodes (issue #106).
+PracticeArea and RiskPath are exact-identity create-only passthrough nodes.
 Both labels leave Company Merge as ONE gateway group; a node the graph already holds is left out
 of it (decided BEFORE submission from one batched read per label), so it keeps every property and
-nothing is logged for it (AC-BI-005). A baseline without classification-layer content reads and
-submits nothing (issue #106 AC-BI-009). The pre-write endpoint validation is a read through the
+nothing is logged for it. A baseline without classification-layer content reads and
+submits nothing. The pre-write endpoint validation is a read through the
 read wrapper.
 
-Equivalence (AC-BI-002, S-classification) against the frozen legacy reference is met modulo edge
+Equivalence against the frozen legacy reference is met modulo edge
 identity; live digest and live interpreter agreement are not verifiable here (no FalkorDB).
 """
 
@@ -159,7 +159,7 @@ def test_practice_areas_and_risk_paths_are_one_gateway_group_under_the_audit_eve
 def test_a_node_the_graph_holds_keeps_its_properties_and_nothing_is_logged_for_it(
     merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """Issue #106 AC-BI-007: the incoming node shares the id but carries other property values."""
+    """The incoming node shares the id but carries other property values."""
     _merge(merge_rig, _FRESH, emitter)
     entries_before = len(_classification_entries(merge_rig))
 
@@ -284,7 +284,7 @@ def test_the_frozen_classification_statements_match_their_pinned_hashes() -> Non
 def test_the_frozen_reference_and_the_gateway_path_build_the_same_graph_for_classification_nodes(
     scenario: str, merge_rig: MergeRig, emitter: LogEmitter
 ) -> None:
-    """AC-BI-002, S-classification, modulo edge identity; live agreement not verifiable here."""
+    """Modulo edge identity; live agreement not verifiable here."""
     steps = _SCENARIOS[scenario]
     reference = LegacyRecordingGraph()
     for step in steps:

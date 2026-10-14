@@ -1,4 +1,4 @@
-"""`StampEdgeIdentity` through the Graph Write Gateway (issue #208 S8, F1).
+"""`StampEdgeIdentity` through the Graph Write Gateway.
 
 A graph written before the gateway holds edges with no `identity`. The primitive gives such an
 edge its identity in place, so a later `UpsertEdge` merges into it instead of creating a parallel

@@ -1,9 +1,8 @@
-"""A restore guards `policy_system` with its log position, retrying up to three times (#214).
+"""A restore guards `policy_system` with its log position, retrying up to three times.
 
-The pre-#214 restore watched the live `policy_system` key and retried its merge when a writer
-touched it. Now the `policy_system` leg is built from reads taken at a log position P and
+The `policy_system` leg is built from reads taken at a log position P and
 submitted with `ExpectedPosition(P)`; if any group landed since, the gateway refuses the WHOLE set
-(nothing logged on any graph) and the restore reads again. AC-BI-004: three refused attempts raise
+(nothing logged on any graph) and the restore reads again. Three refused attempts raise
 the existing `RestoreConcurrencyConflictError` (same message); only the concurrent writes remain.
 """
 

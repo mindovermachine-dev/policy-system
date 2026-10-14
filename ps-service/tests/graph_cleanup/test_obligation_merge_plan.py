@@ -1,7 +1,7 @@
-"""Pure planner/validator for `merge-obligations` (issue #190, slice 11 sub-step a).
+"""Pure planner/validator for `merge-obligations`.
 
-AC-BI-005 (preview content), AC-BI-007 (union plan, survivor keeps its single HAS, absorbed
-deleted, full snapshot), AC-BI-015 (cross-role rejected), AC-BI-016 (self / nonexistent).
+Covers preview content, the union plan (survivor keeps its single HAS, absorbed deleted, full
+snapshot), cross-role rejection and self / nonexistent rejection.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Tests for ``ps_service.curated_source.artifact_client.fetch_artifact`` (AC-BI-004/006).
+"""Tests for ``ps_service.curated_source.artifact_client.fetch_artifact``.
 
 Mirrors ``test_catalog_client.py``'s own per-file fake-transport convention
 (per-file duplication over a shared cross-file fake, `tests/restore/
@@ -124,7 +124,7 @@ def test_fetch_artifact_returns_the_parsed_manifest_and_both_raw_blobs(
 def test_fetch_artifact_raises_curated_source_fetch_error_naming_source_on_transport_failure(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-006/004: an unreachable source names the source, no stale fallback."""
+    """An unreachable source names the source, no stale fallback."""
     emitter, _ = make_emitter()
 
     with pytest.raises(CuratedSourceFetchError) as excinfo:
@@ -136,7 +136,7 @@ def test_fetch_artifact_raises_curated_source_fetch_error_naming_source_on_trans
 def test_fetch_artifact_raises_curated_source_fetch_error_on_malformed_manifest(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-006: a malformed manifest.json is refused before baseline/native are ever fetched."""
+    """A malformed manifest.json is refused before baseline/native are ever fetched."""
     emitter, _ = make_emitter()
     transport = _RecordingTransport(
         {

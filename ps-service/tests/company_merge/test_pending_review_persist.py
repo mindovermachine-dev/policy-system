@@ -1,11 +1,11 @@
 """Tests for `ps_service.company_merge.pending_review.persist_pending_reviews`.
 
-Issue #35, Slice 1 (AC-BI-001/AC-BI-002): a `PendingReview` node is persisted for every
+A `PendingReview` node is persisted for every
 `NearMissPair` surfaced during a Company Merge dedup pass, carrying the pair's incoming id/text,
 nearest-existing id/text and similarity score verbatim, so a later review workflow never needs to
 re-query embeddings to render or act on it.
 
-Issue #210, slice 8a (AC-BI-007): each review is an `UpsertNode` in ONE gateway group on
+Each review is an `UpsertNode` in ONE gateway group on
 `policy_system`. Its uuid and `created_at` are drawn from the injected `ValueSource` while the group
 is BUILT, so the group carries them: submitting it twice leaves exactly one node per review, and a
 replay of the log reproduces the same ids and timestamps.
@@ -215,7 +215,7 @@ def test_the_frozen_pending_review_statement_matches_its_pinned_hash() -> None:
 def test_the_frozen_writer_and_the_gateway_path_build_the_same_review_nodes(
     merge_rig: MergeRig,
 ) -> None:
-    """AC-BI-002, family F (PendingReview), same generated values; modulo edge identity (none)."""
+    """Family F (PendingReview), same generated values; modulo edge identity (none)."""
     pairs = (_near_miss("capability_a", "capability_x"), _near_miss("capability_b", "capability_y"))
     reference = LegacyRecordingGraph()
     write_legacy_pending_reviews(reference, pairs, kind="Policy", values=stepped_values())
