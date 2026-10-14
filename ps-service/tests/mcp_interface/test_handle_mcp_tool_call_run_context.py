@@ -1,10 +1,9 @@
-"""Tests for run-correlation in `mcp_server.handle_mcp_tool_call`
-(PLAN_REVIEWED.md §6, Batch 3).
+"""Tests for run-correlation in `mcp_server.handle_mcp_tool_call`.
 
-Covers AC-006 (a fresh `run_id` is bound via `bind_run_context` before the
-delegate runs), AC-007 (the delegate's emitted log entry carries that
-`run_id`; no log entry contains the raw query text) and AC-008 (a second
-call gets its own distinct `run_id`).
+Covers a fresh `run_id` bound via `bind_run_context` before the
+delegate runs, the delegate's emitted log entry carrying that
+`run_id` (no log entry contains the raw query text) and a second
+call getting its own distinct `run_id`.
 
 Real `execute_cypher_query` + a hand-written `GraphHandle` fake that records
 `current_run_id()` at `query()` time; a real `LogEmitter` writing to a tmp
@@ -43,7 +42,7 @@ class _FakeQueryResult:
 class _RunIdRecordingGraphHandle:
     """Satisfies `GraphHandle` structurally. Records the `run_id` bound in
     the calling context every time `query()` is invoked -- now twice per
-    `handle_mcp_tool_call` call (D11's seed check, then the caller's own
+    `handle_mcp_tool_call` call (the seed check, then the caller's own
     query), both under the same bound context. Reports itself as seeded
     for `_SEED_CHECK_QUERY` so the caller's own query still runs.
     """

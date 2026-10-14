@@ -1,4 +1,4 @@
-"""The passkey-approved near-miss merge is audited as `near_miss.resolve` (issue #195, AC-BI-012).
+"""The passkey-approved near-miss merge is audited as `near_miss.resolve`.
 
 The APPROVER is the actor, the `approval_id` is in the details, the `applied` row precedes the graph
 merge and a failed merge adds a `failed` row. Creating the pending approval writes nothing.
@@ -210,9 +210,9 @@ def test_merge_audit_row_never_contains_the_approval_code_or_credential() -> Non
 def test_signing_a_merge_with_no_gateway_installed_returns_503_and_leaves_the_approval_pending() -> (  # noqa: E501
     None
 ):
-    """Issue #210 (F2): the gateway is checked BEFORE `mark_signed`, so the approval is not burned.
+    """The gateway is checked BEFORE `mark_signed`, so the approval is not burned.
 
-    Without the pre-check the single-use approval was consumed and the merge then failed; now the
+    Were the single-use approval consumed before the check, the merge would then fail; instead the
     caller gets a 503 and can retry the same approval link once the gateway is back.
     """
     audit = InMemoryAuditStore()

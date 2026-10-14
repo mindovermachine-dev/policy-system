@@ -1,4 +1,4 @@
-"""The Policy Lifecycle side of the Graph Write Gateway seam (issue #211, S2).
+"""The Policy Lifecycle side of the Graph Write Gateway seam.
 
 `graph_submission.submit_group` is the one place a lifecycle writer's primitives reach the gateway:
 an empty tuple submits nothing, the graph's legacy identity-less edges are stamped once per target

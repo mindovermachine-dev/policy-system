@@ -1,13 +1,13 @@
-"""Commit + tag + atomic push, and the D-03 push-race contract (AC-BI-015/016/017/019).
+"""Commit + tag + atomic push, and the push-race contract.
 
-`publish-release.sh` commits exactly the five version-file paths S7's `sync-version-files.sh`
+`publish-release.sh` commits exactly the five version-file paths `sync-version-files.sh`
 writes as `chore(release): <release_version>`, tags HEAD through
-`${PS_RELEASE_GH:-gh} tt semver bump --<bump_size>` (which runs the real `git tag -a`, PLAN A-03),
+`${PS_RELEASE_GH:-gh} tt semver bump --<bump_size>` (which runs the real `git tag -a`),
 asserts the tag resolves to that commit, then pushes both refs to `origin` in one atomic
 `git push --atomic origin main <release_version>`. A rejected atomic push (non-fast-forward
-because `main` moved upstream, PLAN A-30) leaves origin untouched, exits non-zero, and appends a
-summary line naming the race and stating that the next push to `main` recomputes and self-heals
-(D-03) -- proven end-to-end in `test_release_driver.py`.
+because `main` moved upstream) leaves origin untouched, exits non-zero, and appends a
+summary line naming the race and stating that the next push to `main`
+recomputes and self-heals -- proven end-to-end in `test_release_driver.py`.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""`near_miss.resolve` audit action registration and details model (issue #195, AC-BI-002/010)."""
+"""`near_miss.resolve` audit action registration and details model."""
 
 from __future__ import annotations
 

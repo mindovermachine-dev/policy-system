@@ -1,29 +1,26 @@
-"""Tests for `ps_service.mcp_interface.http_transport` (issue #39, Slice 3).
+"""Tests for `ps_service.mcp_interface.http_transport`.
 
 Proves `build_streamable_http_app` wraps the *same* `mcp_server.server`
 instance `mcp_server.py` defines in a real Streamable HTTP ASGI app: the
 `cypher` tool and the `psdomain://concepts` resource are reachable over real
 JSON-RPC-over-HTTP, not a reimplementation. Driven end-to-end through
-`TestClient` -- a real ASGI request/response cycle, headers included -- per
-PLAN.md §5 Slice 3, with the mount's own `lifespan` entered explicitly
-(PLAN.md §1 F2: mounting alone does not start the SDK's session manager).
+`TestClient` -- a real ASGI request/response cycle, headers included -- with the mount's own
+`lifespan` entered explicitly (mounting alone does not start the SDK's session manager).
 
-Per CHANGES.md F-3, this file intentionally has only 5 tests, not the 6
-PLAN.md's Slice 3 draft describes:
+This file intentionally has no
 `test_no_token_verifier_or_auth_configured_by_default` (asserting
-`RequireAuthMiddleware not in app.middleware`) was dropped -- verified
+`RequireAuthMiddleware not in app.middleware`) test: verified
 against the SDK's own route-construction code, that assertion can never
 fail (`RequireAuthMiddleware` wraps the route's `endpoint=` directly, never
 appended to `.middleware`), so it would be a no-op, not real coverage. The
 real "no auth silently wired" seam is
 `tests/mcp_interface/test_scope_guard.py::test_mcpserver_ctor_has_no_auth_kwargs`,
-already covering `mcp_server.py`'s sole `MCPServer(...)` constructor call --
-untouched by this issue.
+already covering `mcp_server.py`'s sole `MCPServer(...)` constructor call.
 
 Hand-written structural fakes (mirrors `test_cypher_tool.py`'s
 `_FakeGraphHandle`/`_FakeFalkorDB`) and monkeypatching only -- no
 `unittest.mock`. Every request against the mounted transport includes an
-explicit port in its base URL (PLAN.md §1 F3): the SDK's DNS-rebinding
+explicit port in its base URL: the SDK's DNS-rebinding
 protection auto-enables for loopback hosts and rejects a `Host` header with
 no port.
 """
@@ -66,7 +63,7 @@ class _FakeQueryResult:
 
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally, returning a scripted result.
-    Reports itself as seeded (D11) for `_SEED_CHECK_QUERY` so the mounted
+    Reports itself as seeded for `_SEED_CHECK_QUERY` so the mounted
     transport's success-path tests still reach the caller's own scripted
     result.
     """
@@ -109,7 +106,7 @@ def _wrapped_test_client(*, host: str = "127.0.0.1") -> TestClient:
     """A `TestClient` over `build_streamable_http_app`, its own lifespan entered.
 
     `app.mount(...)` alone never starts the mounted sub-app's session
-    manager (PLAN.md §1 F2) -- the outer wrapper's `lifespan` must enter
+    manager -- the outer wrapper's `lifespan` must enter
     `mcp_asgi_app.router.lifespan_context(mcp_asgi_app)` explicitly.
     """
     mcp_asgi_app = build_streamable_http_app(host=host, verifier=None, auth_context=None)
@@ -262,7 +259,7 @@ def test_domain_concepts_resource_reachable_through_the_built_app(
 
 
 def test_mismatched_host_header_is_rejected() -> None:
-    """PLAN.md §1 F3: the SDK's DNS-rebinding protection rejects a `Host`
+    """The SDK's DNS-rebinding protection rejects a `Host`
     header naming neither the configured host nor one of the recognized
     loopback spellings, with the port `_wrapped_test_client` always sends.
     """

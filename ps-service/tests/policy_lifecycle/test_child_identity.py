@@ -1,10 +1,10 @@
-"""Child ids derive from the parent and a re-add is idempotent (AC-BI-009, issue #211).
+"""Child ids derive from the parent and a re-add is idempotent.
 
 A Standard's id is a function of its Policy and title, a Control's of its Standard and title, so
 the same title under two parents never collides and adding the same child twice under one parent
-is one node and one edge (the second call changes nothing, so it logs nothing). The one intentional
-divergence from the direct writer: the gateway upserts by id, so an id FORCED under a second parent
-(unreachable through the computed ids) no longer mints a second node.
+is one node and one edge (the second call changes nothing, so it logs nothing). The gateway upserts
+by id, so an id FORCED under a second parent (unreachable through the computed ids) does not mint a
+second node.
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ def test_an_id_forced_under_a_second_parent_does_not_mint_a_second_node(
 def test_a_created_policys_children_are_derived_from_their_parents(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-009: the same Standard and Control titles in two created Policies get distinct ids."""
+    """The same Standard and Control titles in two created Policies get distinct ids."""
     for title in ("Policy One", "Policy Two"):
         create_policy_draft(
             actor=_OWNER,

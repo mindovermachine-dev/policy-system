@@ -1,7 +1,7 @@
 """Tests for ps_service.llm_interface.structured_completion.route_structured_completion.
 
-Slice 1 (happy-path-only) tests plus Slice 2 (fail-fast on an unsupported model,
-and the schema-mismatch error path).
+Happy-path tests plus the fail-fast path for an unsupported model
+and the schema-mismatch error path.
 """
 
 from __future__ import annotations
@@ -520,7 +520,7 @@ def test_route_structured_completion_raises_plain_provider_error_when_provider_r
     assert is_healthy(LLM_INTERFACE) is True
 
 
-def test_route_structured_completion_raises_plain_provider_error_when_provider_returns_empty_content(  # noqa: E501 - name mirrors PLAN.md Slice 3 verbatim
+def test_route_structured_completion_raises_plain_provider_error_when_provider_returns_empty_content(  # noqa: E501 - long descriptive test name
     emitter: LogEmitter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _set_schema_support(monkeypatch, supported=True)

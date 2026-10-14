@@ -1,13 +1,13 @@
-"""Tests for `execute_cypher_query`'s row-count cap enforcement (AC-BI-003, AC-BI-006, AC-BI-007).
+"""Tests for `execute_cypher_query`'s row-count cap enforcement.
 
-PLAN.md §4 S3 / D1: the row cap is applied strictly *after* `graph.query()`
+The row cap is applied strictly *after* `graph.query()`
 returns -- a pure Python-side `rows[:row_cap]` slice on `execute_cypher_query`'s
 own already-mapped `rows` list. Never sent to FalkorDB as a query modifier and
-never touching `GRAPH.CONFIG SET RESULTSET_SIZE` (AC-BI-007) -- the cap only
+never touching `GRAPH.CONFIG SET RESULTSET_SIZE` -- the cap only
 ever fires on the success path, after FalkorDB has already computed and
 returned every row.
 
-`row_count` (AC-BI-006) reflects the *post-slice* (returned) count, not the
+`row_count` reflects the *post-slice* (returned) count, not the
 pre-truncation count -- `QueryResult.truncated` is the only signal a caller
 gets that more rows existed.
 
@@ -45,10 +45,10 @@ class _ScriptedQueryResult:
 
 
 class _RowCapRecordingGraphHandle:
-    """Satisfies `GraphHandle` structurally -- reports itself as seeded (D11)
+    """Satisfies `GraphHandle` structurally -- reports itself as seeded
     for `_SEED_CHECK_QUERY`, records every query string it was called with
-    (AC-BI-007's direct proof site), and returns a scripted oversized/undersized
-    result for the caller's own query.
+    (the direct proof site for the cap never reaching FalkorDB), and returns a scripted
+    oversized/undersized result for the caller's own query.
     """
 
     def __init__(self, result_set: list[object]) -> None:

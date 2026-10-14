@@ -1,25 +1,25 @@
-"""Tests for `ps-author-policy`'s Control field-by-field authoring loop (issue #137, Slice 4).
+"""Tests for `ps-author-policy`'s Control field-by-field authoring loop.
 
-Five proofs, per PLAN.md Section 5 "Slice 4":
+Five proofs:
 
 1. `test_add_control_then_field_loop_persists_every_field_in_documented_order`
    -- a scripted `create-policy-draft` -> `add-standard-to-draft` ->
    `add-control-to-draft` -> `update-control-draft` x6 sequence against a
    module-local `_HybridGraph` (adapted from `test_ps_author_policy_
-   standard_loop.py`'s own shape, Slice 3, one level deeper), proving the
+   standard_loop.py`'s own shape, one level deeper), proving the
    tool-call SEQUENCE `ps-skills/ps-plugin/skills/ps-author-policy/
    SKILL.md`'s new "Control authoring loop" sub-flow documents:
    `add-control-to-draft(standard_id, title=<derived>,
    control_type=<answer>)` with no content `fields` at creation time
-   (D-3-style, mirrors Policy/Standard's own title-only creation), then one
+   (, mirrors Policy/Standard's own title-only creation), then one
    `update-control-draft` call per C-001..C-006 criterion in
    `control-rubric.md`'s listed order (C-004 Ownership Clarity's two
    properties, `executor_role`/`reviewer_role`, persisted together in one
-   call -- the same one-criterion/compound-field pattern Slices 2/3 used for
+   call -- the same one-criterion/compound-field pattern the earlier loop files used for
    `scope_in`/`scope_out` and `implementer_role`/`reviewer_role`) -- and
    that `title`/`status` never appear in any `fields` payload sent to either
-   tool (D-3's immutability guard, checked at the call-construction level,
-   same as Slices 2/3). The write-params assertion on `add-control-to-
+   tool (immutability guard, checked at the call-construction level,
+   same as the earlier loop files). The write-params assertion on `add-control-to-
    draft`'s own MERGE additionally pins the one deliberate divergence from
    Standard: `implementation_status` server-defaults to `"planned"`, never
    `"draft"` -- this file's own comments and assertions describe it as
@@ -27,7 +27,7 @@ Five proofs, per PLAN.md Section 5 "Slice 4":
    field, returned separately and always literally `"draft"` while the
    Control is in draft state, is a different property entirely).
 2. `test_control_type_patchable_via_update_but_rejected_as_creation_field`
-   -- proves the two ends of CHANGES.md finding #8 against the real tools:
+   -- proves the two ends of the `type` field's handling against the real tools:
    `add-control-to-draft`'s own `fields` rejects a `"type"` key outright
    (the top-level `control_type` param is the only creation-time path), but
    `update-control-draft`'s `fields` accepts `"type"` and persists it --
@@ -37,25 +37,25 @@ Five proofs, per PLAN.md Section 5 "Slice 4":
 3. `test_add_another_control_under_same_standard_succeeds` -- after one
    Control's field loop completes, a second `add-control-to-draft` call
    under the SAME `standard_id` is a valid, accepted sequence against the
-   real tool/fake (AC-BI-008's "add another Control" outcome).
-4. `test_decline_to_add_a_control_is_a_valid_zero_call_outcome` -- AC-BI-008's
-   own extra trigger clause, "or the user declines to add one": a Standard
+   real tool/fake (the "add another Control" outcome).
+4. `test_decline_to_add_a_control_is_a_valid_zero_call_outcome` -- the
+   extra trigger clause, "or the user declines to add one": a Standard
    with zero `add-control-to-draft` calls against it is asserted
    structurally to be a valid, complete terminal state, not a missing step
    -- the fake's own write log for that Standard shows no Control-creation
-   write at all, matching the schema's own cardinality (`scoring-model.md`
-   Section 1: `IMPLEMENTED_BY` requires exactly one inbound edge *per
+   write at all, matching the schema's own cardinality (`scoring-model.md`:
+   `IMPLEMENTED_BY` requires exactly one inbound edge *per
    Control*, never a minimum count *per Standard* -- verified directly
    against that file, not assumed by analogy to Policy/Standard).
 5. `test_overall_score_formula_matches_hand_arithmetic_for_passing_and_failing_vectors`
-   -- pure-function check of `scoring-model.md` Section 4's formula against
+   -- pure-function check of `scoring-model.md`'s formula against
    `control-rubric.md`'s real 6 criterion weights (verified directly
    against the file: 0.20+0.15+0.15+0.15+0.20+0.15 == 1.00,
-   `pass_threshold: 80`), same shape as Slices 2/3's own formula tests.
+   `pass_threshold: 80`), same shape as the earlier loop files' formula tests.
 
 Two real-code findings, verified directly against `service.py`/
-`graph_writer.py` (not trusted from PLAN.md's prose), both already flagged
-by PLAN.md Section 5 Slice 4 itself but confirmed here rather than assumed:
+`graph_writer.py` (not taken on trust from the plan's prose), confirmed here rather than
+assumed:
 
 - **`add_control_to_standard`'s own server-forced defaults**
   (`graph_writer.py:979-985`): `properties.setdefault("implementation_status",
@@ -75,7 +75,7 @@ by PLAN.md Section 5 Slice 4 itself but confirmed here rather than assumed:
   post-creation path to change it).
 
 Fake graph: adapted from `test_ps_author_policy_standard_loop.py`'s own
-`_HybridGraph` (Slice 3), extended one level deeper with
+`_HybridGraph`, extended one level deeper with
 `find_control_with_parent`'s own dispatch branch (needed because
 `update-control-draft`'s preamble, `_read_control_with_parent_backfilled`,
 reads it TWICE -- once before, once after the idempotent
@@ -84,16 +84,16 @@ genuinely TWO-hop case in this issue, `Policy -[:SUPPORTED_BY]-> Standard
 -[:IMPLEMENTED_BY]-> Control`, distinct from `find_standard_with_parent`'s
 own one-hop shape). `add-control-to-draft`'s OWN preamble,
 `_read_standard_with_parent_backfilled` (service.py:1715), still reads the
-one-hop Standard-with-parent shape Slice 3's fake already dispatches (the
+one-hop Standard-with-parent shape the Standard-loop file's fake already dispatches (the
 caller supplies a `standard_id`, exactly like `update-standard-draft`
-does -- PLAN.md Section 1.4's own correction, not a two-hop read). Every
+does -- not a two-hop read). Every
 write this slice's scenarios issue (`create-policy-draft`'s MERGE,
 `add-standard-to-draft`'s MERGE, `add-control-to-draft`'s MERGE,
 `update-control-draft`'s SET) is routed to one generic write bucket, with
 `params` captured alongside each query's text (`write_params`), same as
-Slice 3 -- needed because `update-control-draft`'s own MCP response never
+the Standard-loop file -- needed because `update-control-draft`'s own MCP response never
 echoes back `updated_fields` either (mirrors `update-standard-draft`'s own
-finding, Slice 3's module docstring; `mcp_server.py:2543-2544` returns
+finding, the Standard-loop file's module docstring; `mcp_server.py:2543-2544` returns
 exactly `{"control_id", "standard_id", "policy_id", "title", "status"}`).
 Module-local, no cross-file import -- matches this directory's established
 convention.
@@ -170,7 +170,7 @@ _IMPLEMENTATION_STATUS = "planned"
 # The Process order this file proves: `control-rubric.md`'s own C-001..C-006
 # listed order. C-004 Ownership Clarity's two properties persisted together in
 # one call (one criterion, one Socratic question, one `update-control-draft`
-# call -- the same compound-field pattern Slices 2/3 used for
+# call -- the same compound-field pattern the earlier loop files used for
 # `scope_in`/`scope_out` and `implementer_role`/`reviewer_role`).
 _LOOP_CALLS: tuple[dict[str, object], ...] = (
     {"pass_fail_criteria": _PASS_FAIL_CRITERIA},
@@ -184,7 +184,7 @@ _LOOP_CALLS: tuple[dict[str, object], ...] = (
 _DISALLOWED_FIELD_KEYS = frozenset({"title", "status"})
 
 
-# --- fakes (adapted from test_ps_author_policy_standard_loop.py, Slice 3) --
+# --- fakes (adapted from test_ps_author_policy_standard_loop.py) --
 
 
 @contextlib.contextmanager
@@ -218,7 +218,7 @@ class _PolicyTreeFixture:
 
     Needed because `add-standard-to-draft`'s own preamble,
     `_read_transition_target` (service.py:1498), still reads the Policy tree
-    this way -- carried over unchanged from Slice 3.
+    this way -- carried over unchanged from the earlier loop file.
     """
 
     id: str
@@ -235,9 +235,9 @@ class _StandardParentFixture:
 
     Needed because `add-control-to-draft`'s own preamble,
     `_read_standard_with_parent_backfilled`, reads the SAME one-hop shape
-    `update-standard-draft` uses (PLAN.md Section 1.4's own correction: the
+    `update-standard-draft` uses (not a two-hop read: the
     caller supplies a `standard_id`, so this is not the two-hop case) --
-    carried over unchanged from Slice 3.
+    carried over unchanged from the earlier loop file.
     """
 
     policy_id: str
@@ -272,7 +272,7 @@ class _ControlParentFixture:
 
 
 class _HybridGraph:
-    """Adapted from `test_ps_author_policy_standard_loop.py`'s own `_HybridGraph` (Slice 3).
+    """Adapted from `test_ps_author_policy_standard_loop.py`'s own `_HybridGraph`.
 
     Extended one level deeper with `find_control_with_parent`'s own dispatch
     branch (`RETURN s.id, p.id, p.owner_subject, p.owner_issuer, p.status,
@@ -288,7 +288,7 @@ class _HybridGraph:
     scenarios issue (`create-policy-draft`'s MERGE, `add-standard-to-draft`'s
     MERGE, `add-control-to-draft`'s MERGE, `update-control-draft`'s SET) is
     routed to one generic bucket, with `params` captured alongside each
-    query's text (`write_params`, parallel to Slice 3's own convention).
+    query's text (`write_params`, parallel to the Standard-loop file's convention).
     """
 
     def __init__(self, *, existing: tuple[str, str] | None = None) -> None:
@@ -311,7 +311,7 @@ class _HybridGraph:
             # already-backfilled-safe `SET` statements -- issued ahead of
             # `read_policy_tree`, `find_standard_with_parent`, AND
             # `find_control_with_parent`. Structural no-op, same as
-            # Slices 1-3.
+            # the earlier loop files.
             return _FakeQueryResult()
         if "RETURN s.id, p.id, p.owner_subject, p.owner_issuer, p.status, c.status, c.title" in q:
             # `graph_writer.find_control_with_parent` -- `update-control-
@@ -353,7 +353,7 @@ class _HybridGraph:
             # own `_read_transition_target` preamble. Checked BEFORE
             # `find_existing_policy`'s shorter substring below (its own
             # `RETURN` clause contains it) -- same ordering discipline
-            # Slices 1-3 already established.
+            # the earlier loop files already established.
             if self.policy_tree is None:
                 return _FakeQueryResult(result_set=[])
             pt = self.policy_tree
@@ -419,7 +419,7 @@ class _FakeAuditStore:
         self.calls.append(kwargs)
 
     def record_standalone_with_event_id(self, **kwargs: object) -> str:
-        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        """`record_standalone`, returning an id the process gateway's log accepts."""
         self.record_standalone(**kwargs)
         event_id = str(uuid.uuid4())
         installed_process_gateway().rig.store.audit_rows.add(event_id)
@@ -484,7 +484,7 @@ def _call_add_control_to_draft(
 
 
 def _call_update_control_draft(control_id: str, fields: dict[str, object]) -> CallToolResult:
-    # D-3-style immutability guard, checked at the call-construction level --
+    # immutability guard, checked at the call-construction level --
     # no test scenario below is even ALLOWED to build a `fields` payload
     # naming either immutable key, regardless of what assertions follow.
     assert _DISALLOWED_FIELD_KEYS.isdisjoint(fields), (
@@ -579,7 +579,7 @@ def test_add_control_then_field_loop_persists_every_field_in_documented_order(
             control_type=_CONTROL_TYPE,
         )
 
-    # Every write is a gateway group (issue #211): group 0 is create-policy-draft, group 1
+    # Every write is a gateway group: group 0 is create-policy-draft, group 1
     # add-standard-to-draft, group 2 add-control-to-draft, and the groups after them are the
     # update-control-draft calls, one per `_LOOP_CALLS` entry that changes something.
     assert handle.write_queries == []
@@ -593,8 +593,8 @@ def test_add_control_then_field_loop_persists_every_field_in_documented_order(
     # `graph_writer.add_control_to_standard`'s own server-forced defaults:
     # `implementation_status` defaults to `"planned"` -- NOT `"draft"` (Control's own workflow
     # starts one step later than Standard's, ps-domain-concepts.md's "earliest state"
-    # convention) -- since `add-control-to-draft`'s own call never includes content fields
-    # (D-3-style). `title`/`type`/`status` are always forced, never caller-controlled through
+    # convention) -- since `add-control-to-draft`'s own call never includes content fields.
+    # `title`/`type`/`status` are always forced, never caller-controlled through
     # `fields`.
     assert add_group.entries[0].content["properties"] == {
         "implementation_status": "planned",
@@ -662,7 +662,7 @@ def test_control_type_patchable_via_update_but_rejected_as_creation_field(
 
         # `update-control-draft`'s own `fields` allow-list is the FULL
         # `_CONTROL_PATCHABLE_FIELDS`, including `"type"` -- the only
-        # post-creation path to change it (CHANGES.md finding #8).
+        # post-creation path to change it (the `type` field's handling).
         update_result = _call_update_control_draft(control_id, {"type": "automated"})
         assert update_result.is_error is False
         body = json.loads(_text(update_result))
@@ -693,7 +693,7 @@ def test_add_another_control_under_same_standard_succeeds(
             control_type=_CONTROL_TYPE,
         )
 
-        # AC-BI-008's "add another Control" outcome: a second
+        # the "add another Control" outcome: a second
         # `add-control-to-draft` call under the SAME `standard_id`, after the
         # first Control's own rubric passes -- always attempted, never
         # blocked by the tool/fake for "already has a Control".
@@ -724,7 +724,7 @@ def test_decline_to_add_a_control_is_a_valid_zero_call_outcome(
 
     del policy_id, standard_id  # only needed to drive the sequence above
 
-    # AC-BI-008's own extra trigger clause: "or the user declines to add
+    # extra trigger clause: "or the user declines to add
     # one". Zero `add-control-to-draft` calls for this Standard is itself
     # the correct outcome, never a missing step -- this is asserted
     # structurally: exactly the write from `create-policy-draft` and the one gateway
@@ -739,7 +739,7 @@ def test_decline_to_add_a_control_is_a_valid_zero_call_outcome(
     ]
 
     # And it is a genuinely valid terminal state per the schema's own
-    # cardinality (`scoring-model.md` Section 1: `IMPLEMENTED_BY` requires
+    # cardinality (`scoring-model.md`: `IMPLEMENTED_BY` requires
     # exactly one inbound edge *per Control* that exists, never a minimum
     # count *per Standard* -- a Standard with zero Controls violates no
     # cardinality rule; only an existing Control that lacked the edge
@@ -751,7 +751,7 @@ def test_decline_to_add_a_control_is_a_valid_zero_call_outcome(
 
 # control-rubric.md's real 6 criteria, in listed order, with their real
 # weights (verified against the file directly: 0.20+0.15+0.15+0.15+0.20+
-# 0.15 == 1.00). `scoring-model.md` Section 5: pass_threshold: 80 (same
+# 0.15 == 1.00). `scoring-model.md`: pass_threshold: 80 (same
 # threshold constant every rubric file uses).
 _CONTROL_RUBRIC_WEIGHTS: tuple[tuple[str, float], ...] = (
     ("C-001", 0.20),  # Pass/Fail Objectivity
@@ -764,14 +764,14 @@ _CONTROL_RUBRIC_WEIGHTS: tuple[tuple[str, float], ...] = (
 _PASS_THRESHOLD = 80
 
 # No existing production function computes this formula anywhere in
-# ps_service (Slices 2/3's own grep already confirmed zero hits outside
+# ps_service (the earlier loop files' grep already confirmed zero hits outside
 # `company_merge/dedup.py`'s unrelated `best_overall_score`). Per the task's
 # own scope: a test-local pure-function helper verifying documented
-# arithmetic, not promoted to a shipped module -- same as Slices 2/3.
+# arithmetic, not promoted to a shipped module -- same as the earlier loop files.
 
 
 def _overall_score(scores: dict[str, int]) -> float:
-    """`scoring-model.md` Section 4: `100 * Σ(weight_i * score_i) / 2` (`max_score_i == 2`)."""
+    """`scoring-model.md`: `100 * Σ(weight_i * score_i) / 2` (`max_score_i == 2`)."""
     return (
         100
         * sum(weight * scores[criterion_id] for criterion_id, weight in _CONTROL_RUBRIC_WEIGHTS)

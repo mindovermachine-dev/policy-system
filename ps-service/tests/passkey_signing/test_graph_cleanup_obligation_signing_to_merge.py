@@ -1,9 +1,9 @@
-"""Signing ceremony to obligation-merge execution over HTTP (issue #190, slice 11).
+"""Signing ceremony to obligation-merge execution over HTTP.
 
-AC-BI-007/017/021: the real approval service, signing router, real WebAuthn verification,
+The real approval service, signing router, real WebAuthn verification,
 executor registry, executor, planner and gateway seam run; only the graph (the gateway rig's
 in-memory log and FalkorDB fakes), the stores and the role grants are fakes. A replayed, expired
-or re-targeted approval never reaches the graph. Since #212 the merge is one gateway group.
+or re-targeted approval never reaches the graph. The merge is one gateway group.
 """
 
 from __future__ import annotations

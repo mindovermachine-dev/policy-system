@@ -1,4 +1,4 @@
-"""AC-002/AC-003 live tests: RouteEmbedding against the real, configured LLM Provider."""
+"""Live tests: RouteEmbedding against the real, configured LLM Provider."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ _MIN_COSINE_FOR_IDENTICAL_INPUT = 0.9999
 # is to use the real value, so it must be captured before the fixture strips it.
 _LLM_INTERFACE_EMBED_MODEL = os.environ.get("PS_LLMINTERFACE_EMBED_MODEL")
 
-# Verified empirically during planning (PLAN.md §0) for the configured embedding model
+# Verified empirically for the configured embedding model
 # (`azure/text-embedding-3-large`, no `dimensions` param passed — its native/full output size).
 _EXPECTED_VECTOR_DIMENSIONALITY = 3072
 

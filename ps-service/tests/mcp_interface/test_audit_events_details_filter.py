@@ -1,4 +1,4 @@
-"""`list-audit-events` allow-listed `details` filter via the MCP tool (issue #195, AC-BI-018)."""
+"""`list-audit-events` allow-listed `details` filter via the MCP tool."""
 
 from __future__ import annotations
 

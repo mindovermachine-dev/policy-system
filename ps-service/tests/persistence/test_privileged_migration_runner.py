@@ -1,4 +1,4 @@
-"""Fast tests for `ps_service.persistence.privileged_migration_runner` (issue #205 slice 1).
+"""Fast tests for `ps_service.persistence.privileged_migration_runner`.
 
 The runner's database behavior (owner role creation, ownership, idempotency, the membership
 refusal) is proven against a real Postgres by `tests/graph_gateway/test_provision_live.py`.

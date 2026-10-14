@@ -1,4 +1,4 @@
-"""`record_standalone_with_event_id` hands back the inserted row's id (issue #210, A6, F3).
+"""`record_standalone_with_event_id` hands back the inserted row's id.
 
 The near-miss resolve anchors its graph group to the audit event it opened, so the opening row's
 `INSERT ... RETURNING id` must reach the caller. `record_standalone` is unchanged for its many

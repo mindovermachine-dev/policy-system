@@ -1,12 +1,11 @@
-"""Tests that the retired Query Engine dev CLI module is fully gone
-(PLAN_REVIEWED.md §6, Batch 6; AC-013).
+"""Tests that the retired Query Engine dev CLI module is fully gone.
 
-The load-bearing assertion is the FILESYSTEM check (F-09): the module file and
+The load-bearing assertion is the FILESYSTEM check: the module file and
 its compiled bytecode are gone. `find_spec(...) is None` is the secondary
 confirmation, and the MCP `instructions` string must carry no stale path.
 
 The retired module's name is assembled from fragments (`_RETIRED_STEM`) so a
-repo-wide grep for that name stays clean per AC-013 -- a retirement guard
+repo-wide grep for that name stays clean -- a retirement guard
 should assert an absence, not itself be a lingering textual reference.
 """
 

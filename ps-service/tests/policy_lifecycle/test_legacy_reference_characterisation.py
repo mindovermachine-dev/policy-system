@@ -1,7 +1,7 @@
 """The frozen legacy writer is the original one, and its interpreter applies Cypher like FalkorDB.
 
-`_legacy_reference` is the pre-#211 `graph_writer.py` write path, frozen, run against an
-interpreter (issue #211, S0). This file proves:
+`_legacy_reference` is the pre-gateway `graph_writer.py` write path, frozen, run against an
+interpreter. This file proves:
 
 * the frozen statements are the original ones (sha256 pins taken from `git show HEAD:`);
 * the interpreter applies each clause the way FalkorDB does, with the behaviours characterised on a

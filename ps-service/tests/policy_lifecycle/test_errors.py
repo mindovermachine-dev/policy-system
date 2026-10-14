@@ -1,8 +1,8 @@
-"""Tests for `ps_service.policy_lifecycle.errors` (issue #134, PLAN.md S9).
+"""Tests for `ps_service.policy_lifecycle.errors`.
 
 One test per error class: constructs it, asserts `str(exc)` contains the
 expected actionable phrase, and asserts it contains none of the forbidden
-substrings that would leak internal detail (AC-BI-015).
+substrings that would leak internal detail.
 """
 
 from __future__ import annotations

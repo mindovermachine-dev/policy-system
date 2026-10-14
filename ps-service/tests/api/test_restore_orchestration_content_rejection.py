@@ -1,4 +1,4 @@
-"""``run_restoration`` with the REAL ``restore_instrument`` delegate, DB-free (GH #104, AC-BI-007).
+"""``run_restoration`` with the REAL ``restore_instrument`` delegate, DB-free.
 
 Closes the gap between the synthetic-message tests (``test_restore_orchestration.py``,
 ``test_routes_restorations.py``) and the real validator: the rejected label is put into

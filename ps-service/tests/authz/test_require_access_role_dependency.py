@@ -1,11 +1,9 @@
-"""Direct unit tests for `require_access_role` (issue #133, PLAN.md §0.5/§2.3, Slice 5).
+"""Direct unit tests for `require_access_role`.
 
 `require_access_role` is a FastAPI dependency-factory with no REST route wired
-to it (PLAN.md §0.5 -- Deliverables names only MCP tools + a skill for every
-one of the six gated actions; a fabricated route would be scope creep beyond
-the 15 ACs). It is proven here exactly as PLAN.md's own Slice 5 text
-instructs: "construct a fake `Request`/`app.state.config`, call the returned
-callable, assert it raises/passes" -- a plain function call against a bare
+to it (only MCP tools and a skill expose the six gated actions; a route would
+be speculative). It is proven here by constructing a fake `Request`/`app.state.config`,
+calling the returned callable and asserting it raises/passes -- a plain function call against a bare
 Starlette `Request` built from a minimal ASGI scope, never a `TestClient`
 HTTP round trip (there is no route to hit).
 
@@ -14,7 +12,7 @@ the way `mcp_interface.mcp_server.PsycopgAccessRoleStore` already is in
 `tests/mcp_interface/test_access_role_tools.py`/`test_catalog_source_authz_gate.py`
 -- the same fakes (`tests/authz/_fakes.py`), proving `require_access_role`
 drives the identical shared `ps_service.authz.service.require_role` function
-those MCP tools call (AC-BI-012: one shared component, both surfaces).
+those MCP tools call (one shared component, both surfaces).
 
 Lives under `tests/authz/` (alongside `test_service.py`) rather than
 `tests/api/`: `--import-mode=importlib` (workspace root `pyproject.toml`)
@@ -23,9 +21,8 @@ pytest starts collecting *inside* that package's directory, and full-suite
 collection visits `tests/api/` before `tests/authz/` (alphabetical) --  a
 file under `tests/api/` importing `from authz._fakes import ...` hits a real
 `ModuleNotFoundError: No module named 'authz'` in a full-suite run (verified
-directly), the same class of pre-existing ordering quirk this issue's own
-task briefing already flags for `api`. Placing this file inside `tests/authz/`
-itself sidesteps it the same way `test_service.py` already does.
+directly), the same class of ordering quirk that affects `api`. Placing this file
+inside `tests/authz/` itself sidesteps it the same way `test_service.py` already does.
 """
 
 from __future__ import annotations
@@ -56,7 +53,7 @@ def _fake_store_factory(store: object) -> Callable[..., object]:
 
     Monkeypatched onto `dependencies.PsycopgAccessRoleStore` -- `require_access_role`'s
     returned dependency calls it as `PsycopgAccessRoleStore(config,
-    audit_store=PsycopgAuditStore(config))` (issue #147), so this must accept (and
+    audit_store=PsycopgAuditStore(config))`, so this must accept (and
     ignore) both the positional `config` and the `audit_store` keyword.
     Mirrors `test_access_role_tools.py`'s own `_fake_store_factory` exactly.
     """
@@ -75,7 +72,7 @@ def _fake_request(*, principal: Principal | None) -> Request:
     `PsycopgAccessRoleStore` factory below ignores it, exactly like
     `mcp_server.py`'s own `_fake_store_factory`), so a bare placeholder
     suffices. `get_principal` reads `request.scope["ps_principal"]`
-    directly (the contract `RestAuthMiddleware` establishes, issue #58).
+    directly (the contract `RestAuthMiddleware` establishes).
     """
     app = SimpleNamespace(state=SimpleNamespace(config=SimpleNamespace()))
     scope = {"type": "http", "app": app, "ps_principal": principal}
@@ -126,9 +123,9 @@ def test_principal_holding_the_required_role_passes(monkeypatch: pytest.MonkeyPa
 def test_sole_system_owner_also_satisfies_a_system_admin_minimum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PLAN.md §0.8's hierarchy fix reaches the REST dependency too: `SystemOwner` satisfies
+    """The role hierarchy applies to the REST dependency too: `SystemOwner` satisfies
     a `SystemAdmin` minimum -- proving `require_access_role` calls the identical
-    `require_role` function `mcp_server.py`'s own gated tools call (AC-BI-012), not a
+    `require_role` function `mcp_server.py`'s own gated tools call, not a
     parallel, potentially-divergent gating mechanism.
     """
     store = FakeAccessRoleStore(expected_owner=(_SUBJECT, _ISSUER))
@@ -141,7 +138,7 @@ def test_sole_system_owner_also_satisfies_a_system_admin_minimum(
 
 
 def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-011: a simulated authz-store outage raises the distinct
+    """A simulated authz-store outage raises the distinct
     `AuthorizationStoreUnavailableError`, never a silent pass/default.
     """
     monkeypatch.setattr(

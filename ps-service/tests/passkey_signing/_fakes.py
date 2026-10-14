@@ -20,7 +20,7 @@ from ps_service.passkey_signing.models import PendingApprovalRow, SigningCredent
 
 _CODE_TOKEN_BYTES = 32  # mirrors `store.py`'s own `_CODE_TOKEN_BYTES`
 _NONCE_BYTES = 32  # mirrors `store.py`'s own `_NONCE_BYTES`
-_EXPIRY_WINDOW = timedelta(minutes=15)  # PLAN.md §1.1 -- fixed, matches the migration's SQL default
+_EXPIRY_WINDOW = timedelta(minutes=15)  # fixed, matches the migration's SQL default
 
 
 @dataclass
@@ -30,13 +30,12 @@ class FakePendingApprovalStore:
     Mirrors `PsycopgPendingApprovalStore`'s own code/nonce/expiry generation
     exactly (`ps_service.passkey_signing.store`), so a test exercising this
     fake proves the same contract the real store must uphold, without a live
-    Postgres -- PLAN.md §0.6's "unit tests use an in-memory fake store"
-    convention.
+    Postgres.
     """
 
     _rows_by_id: dict[str, PendingApprovalRow] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
-    """Guards `mark_signed`'s check-then-write (issue #131 Slice 4): the real
+    """Guards `mark_signed`'s check-then-write: the real
     `PsycopgPendingApprovalStore.mark_signed` gets its atomicity from a single
     `UPDATE ... WHERE status = 'pending'` SQL statement; this fake has no such
     single-statement primitive, so it needs its own lock to genuinely honor
@@ -89,7 +88,7 @@ class FakePendingApprovalStore:
     def mark_signed(self, pending_approval_id: str) -> bool:
         """Atomically (single-threaded fake) flip `'pending'` -> `'signed'`.
 
-        Issue #131 Slice 3. Mirrors `PsycopgPendingApprovalStore.mark_signed`'s
+        Mirrors `PsycopgPendingApprovalStore.mark_signed`'s
         contract: returns `False` (no mutation) if the row is unknown or
         already not `'pending'`, `True` otherwise.
         """
@@ -110,7 +109,7 @@ class FakePendingApprovalStore:
 class FakeSigningCredentialStore:
     """In-memory `SigningCredentialStore` (structural `Protocol` match, no real Postgres).
 
-    Issue #131 Slice 2. Mirrors `FakePendingApprovalStore`'s own shape.
+    Mirrors `FakePendingApprovalStore`'s own shape.
     """
 
     _rows: list[SigningCredentialRow] = field(default_factory=list)
@@ -145,7 +144,7 @@ class FakeSigningCredentialStore:
         """Return this actor's credentials enrolled under `rp_id`.
 
         A `None` `rp_id` row never matches, mirroring the real store's
-        `rp_id = %(rp_id)s` three-valued-logic behaviour (AC-BI-015).
+        `rp_id = %(rp_id)s` three-valued-logic behaviour.
         """
         return tuple(
             row

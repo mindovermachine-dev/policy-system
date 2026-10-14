@@ -1,4 +1,4 @@
-"""A rejected pre-flight returns today's error and logs nothing to the graph (#208, AC-BI-006).
+"""A rejected pre-flight returns today's error and logs nothing to the graph.
 
 The three pre-flights of the catalog path (a CELEX already in the graph, a short name claimed by
 another CELEX, an instrument already fully merged) run before any group is built. Each is driven

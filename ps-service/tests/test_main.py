@@ -1,6 +1,6 @@
 """Unit tests for the `ps_service.main` process harness (FastAPI app, liveness, readiness).
 
-Uses `TestClient` in two distinct modes, per PLAN_REVIEWED.md §4:
+Uses `TestClient` in two distinct modes:
 - Bare `TestClient(app).get(...)`: never runs `lifespan` (no context manager
   entry), so it proves liveness/readiness behavior *before* startup completes.
 - `with TestClient(app) as client:`: runs the full async `lifespan` startup
@@ -103,7 +103,7 @@ _LEAK_SHAPED_KEYS = frozenset({"path", "config", "env", "traceback"})
 def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default every dependency probe `_check_dependencies_at_startup` (issue #22) calls
+    """Default every dependency probe `_check_dependencies_at_startup` calls
     to succeed, so every pre-existing test below (written before real dependencies
     existed) keeps working without a real FalkorDB/LLM Provider/Cellar-ELI to talk to.
 
@@ -116,11 +116,11 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     never-recorded dependency as healthy by default, and `conftest.py`'s
     autouse fixture resets it before every test.
 
-    `check_state_postgres_connectivity` (issue #133) is stubbed here too --
+    `check_state_postgres_connectivity` is stubbed here too --
     unlike `check_passkey_signing_postgres_connectivity` (a genuine no-op
     when unconfigured, so it never needed a stub), PS state Postgres's own
-    connectivity check deliberately raises even when unconfigured (PLAN.md
-    §0.11's fail-closed divergence from Passkey Signing's own precedent), so
+    connectivity check deliberately raises even when unconfigured (a
+    fail-closed divergence from Passkey Signing's own precedent), so
     without this stub every test in this file that runs `lifespan` startup
     would pick up a spurious `state_postgres` entry in `unhealthy_dependencies`
     and an extra startup warning log line, purely from `_complete_config()`
@@ -175,7 +175,7 @@ def _stub_auth_discovery(  # pyright: ignore[reportUnusedFunction]  # pytest aut
     """Autouse: exercise the real `resolve_auth_context`, faking only the one real network
     boundary beneath it (`fetch_discovery_document`, already an approved boundary target).
 
-    This file exercises the process harness (logging, readiness, the #67
+    This file exercises the process harness (logging, readiness, the
     local-test bypass, uvicorn wiring) -- none of its tests are about OIDC
     discovery itself, which is `tests/auth/test_startup_fail_closed.py`'s
     job. Without this stub, `_complete_config()`'s fake
@@ -201,7 +201,7 @@ def _complete_config(**overrides: object) -> ServiceConfig:
     startup gate to be reachable — the readiness-gated-on-config-completeness
     tests further down build their own incomplete configs directly instead of
     using this helper. `auth_issuer`/`auth_audience` default to a fake
-    placeholder pair (issue #58): `create_app` now fails closed
+    placeholder pair: `create_app` fails closed
     (`AuthConfigurationError`) unless the local-test bypass is active or both
     are set, and this helper's own callers have nothing to do with auth or
     the bypass -- defaulting the auth pair here (rather than forcing the
@@ -212,12 +212,12 @@ def _complete_config(**overrides: object) -> ServiceConfig:
     behavior overrides the auth pair directly via
     `_complete_config(auth_issuer=None, auth_audience=None)`.
 
-    Same rationale applies to `authz_bootstrap_owner_subject`/`_issuer`
-    (issue #144): `create_app` now also fails closed
+    Same rationale applies to `authz_bootstrap_owner_subject`/`_issuer`:
+    `create_app` also fails closed
     (`AccessRoleBootstrapConfigurationError`) unless the local-test bypass is
     active or both are set, so a fake placeholder pair is defaulted here too.
 
-    `authentik_api_token`/`authentik_base_url` (issue #140) are also
+    `authentik_api_token`/`authentik_base_url` are also
     defaulted here -- unlike the pairs above, `create_app`'s check for these
     (`require_authentik_credential_configured`) is unconditional, with no
     local-test-bypass exemption, so every test funnelling through this
@@ -244,15 +244,13 @@ def _complete_config(**overrides: object) -> ServiceConfig:
 
 @pytest.fixture
 def app() -> FastAPI:
-    """Build a fresh app instance via `create_app`, per PLAN_REVIEWED.md §6's migration table.
+    """Build a fresh app instance via `create_app`.
 
-    Uses the same host/port/timeout values #12 hardcoded, so migrated tests'
-    expected behavior is unchanged; `logging_dir=None` preserves
+    Uses the default host/port/timeout values; `logging_dir=None` preserves
     `conftest.py`'s existing `PS_LOGGING_DIR` isolation fixture behavior
     (falls back to `resolve_default_log_path()`, which reads the env var).
     Ingestion-required config fields are all set (see `_complete_config`) so
-    pre-existing tests, written before issue #16's follow-up gated `/ready`
-    on config completeness too, keep passing unchanged.
+    tests that do not exercise config completeness keep passing.
     """
     return create_app(_complete_config())
 
@@ -266,7 +264,7 @@ def test_health_returns_200_and_alive_status_before_lifespan_runs(app: FastAPI) 
 
 
 def test_health_returns_version_field_from_installed_metadata(app: FastAPI) -> None:
-    """AC-BI-001: `/health`'s `version` field comes from `installed_version("ps-service")`.
+    """`/health`'s `version` field comes from `installed_version("ps-service")`.
 
     Calls the real `importlib.metadata.version("ps-service")` directly and compares --
     safe to run for real (no mocking needed): the very next test,
@@ -283,7 +281,7 @@ def test_health_returns_version_field_from_installed_metadata(app: FastAPI) -> N
 
 
 def test_health_version_matches_ps_service_pyproject_toml_version(app: FastAPI) -> None:
-    """AC-BI-002 (dev-tree-real half): `/health`'s reported version matches
+    """Dev-tree-real half: `/health`'s reported version matches
     `ps-service/pyproject.toml`'s own declared `[project] version`.
 
     No monkeypatching -- reads `pyproject.toml` directly via `tomllib.load(...)`, proving the
@@ -324,7 +322,7 @@ def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> No
 
 
 def test_lifespan_calls_configure_before_emit_log_entry(tmp_path: Path, app: FastAPI) -> None:
-    """AC-BI-011: `configure()` runs before any `emit_log_entry()` call during lifespan startup.
+    """`configure()` runs before any `emit_log_entry()` call during lifespan startup.
 
     Exercises the real Logging facade (no monkeypatching): `emit_log_entry`'s own real
     contract raises `LoggingLifecycleError` if no default emitter has been installed yet, so
@@ -344,7 +342,7 @@ def test_lifespan_calls_configure_before_emit_log_entry(tmp_path: Path, app: Fas
 
 
 def test_lifespan_emits_exactly_one_startup_success_log_entry(tmp_path: Path, app: FastAPI) -> None:
-    """AC-BI-012: exactly one structured log entry with
+    """Exactly one structured log entry with
     action="startup"/outcome="success" is written.
 
     Uses the real Logging facade (no monkeypatching), writing to the
@@ -358,7 +356,7 @@ def test_lifespan_emits_exactly_one_startup_success_log_entry(tmp_path: Path, ap
     with TestClient(app):
         pass
 
-    reset_for_tests()  # D1 fix: drain the emitter's queue and join its writer thread before reading
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
 
     log_path = tmp_path / "ps-service.jsonl"
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
@@ -376,7 +374,7 @@ def test_lifespan_emits_exactly_one_startup_success_log_entry(tmp_path: Path, ap
 def test_non_get_request_to_health_or_ready_returns_405(
     path: str, method: str, app: FastAPI
 ) -> None:
-    """AC-BI-008: POST/PUT/DELETE to `/health` or `/ready` are rejected with 405.
+    """POST/PUT/DELETE to `/health` or `/ready` are rejected with 405.
 
     Likely passes with zero extra code (FastAPI/Starlette auto-405s a path
     registered only for GET) — written anyway as a locked-in regression guard.
@@ -391,11 +389,11 @@ def test_non_get_request_to_health_or_ready_returns_405(
 def test_405_response_body_does_not_leak_path_config_env_or_traceback(
     path: str, method: str, app: FastAPI
 ) -> None:
-    """D5: the 405 body's key set must not contain any leak-shaped key.
+    """The 405 body's key set must not contain any leak-shaped key.
 
     It need not equal `{"status"}` — Starlette's default 405 body
     `{"detail": "Method Not Allowed"}` is fine — it just must not leak
-    anything unexpected (AC-BI-009).
+    anything unexpected.
     """
     response = getattr(TestClient(app), method)(path)
 
@@ -404,18 +402,18 @@ def test_405_response_body_does_not_leak_path_config_env_or_traceback(
 
 def _get_bare_health(app: FastAPI) -> httpx.Response:
     """Helper: bare (never-entered) `TestClient` GET /health — lifespan never runs."""
-    return TestClient(app).get("/health")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree (issue #48 R6): httpx2._models.Response vs httpx._models.Response
+    return TestClient(app).get("/health")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
 
 
 def _get_bare_ready(app: FastAPI) -> httpx.Response:
     """Helper: bare (never-entered) `TestClient` GET /ready — lifespan never runs."""
-    return TestClient(app).get("/ready")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree (issue #48 R6): httpx2._models.Response vs httpx._models.Response
+    return TestClient(app).get("/ready")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
 
 
 def _get_ready_after_lifespan_startup(app: FastAPI) -> httpx.Response:
     """Helper: GET /ready with `lifespan` startup run to completion."""
     with TestClient(app) as client:
-        return client.get("/ready")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree (issue #48 R6): httpx2._models.Response vs httpx._models.Response
+        return client.get("/ready")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
 
 
 @pytest.mark.parametrize(
@@ -436,13 +434,13 @@ def test_response_body_contains_only_a_status_key(
     expected_keys: set[str],
     app: FastAPI,
 ) -> None:
-    """AC-BI-009 (final): every response body's key set is exactly the documented shape.
+    """Every response body's key set is exactly the documented shape.
 
-    Covers every state reached by increments 1-4's tests: bare `/health`
+    Covers every state the health/ready tests reach: bare `/health`
     (200, `{"status"}`), bare `/ready` before `lifespan` runs (503, not
     ready), and `/ready` after `lifespan` startup completes (200, ready) —
     both `/ready` states carry `{"status", "unhealthy_dependencies", "gated_graphs"}`
-    (issues #68 and #207) — no undocumented key ever leaks into either response.
+    — no undocumented key ever leaks into either response.
     """
     response = make_response(app)
 
@@ -452,12 +450,12 @@ def test_response_body_contains_only_a_status_key(
 
 @pytest.mark.parametrize("path", ["/health", "/ready"])
 def test_unauthenticated_get_never_returns_401_or_403(path: str, app: FastAPI) -> None:
-    """AC-BI-001 (final, consolidated): unauthenticated GET to /health or /ready
+    """Unauthenticated GET to /health or /ready
     never returns 401/403.
 
-    Explicit, dedicated test naming AC-BI-001 directly, per increment 12 —
+    Explicit, dedicated test that
     exercises both TestClient states (bare, and after lifespan startup
-    completes) even though earlier increments' `==200` assertions already
+    completes) even though other `==200` assertions already
     cover this incidentally.
     """
     bare_response = TestClient(app).get(path)
@@ -469,24 +467,24 @@ def test_unauthenticated_get_never_returns_401_or_403(path: str, app: FastAPI) -
 
 
 def test_main_module_does_not_statically_import_any_pipeline_or_query_surface_component() -> None:
-    """AC-BI-006 (narrowed by issues #22 and #51): `main.py` never imports a
+    """`main.py` never imports a
     pipeline/query-surface component it doesn't need for its own contract.
 
     `ps_service.ingestion`/`ps_service.llm_interface` were dropped from
-    `_FORBIDDEN_IMPORT_PREFIXES` by issue #22: `main.py` now imports each
+    `_FORBIDDEN_IMPORT_PREFIXES`: `main.py` imports each
     component's `check_connectivity` (`ingestion.falkordb_client.
     check_connectivity_from_config` for FalkorDB) as `/ready`'s startup
     dependency probes — a
-    deliberate, narrow exception to AC-BI-006's original decoupling, not a
-    reopening of it. Issue #51 drops `ps_service.api` for the same reason:
-    `create_app` now mounts the `ps_service.api` REST router (a single
+    deliberate, narrow exception to the original decoupling, not a
+    reopening of it. `ps_service.api` is dropped for the same reason:
+    `create_app` mounts the `ps_service.api` REST router (a single
     top-level `from ps_service.api.routes import build_api_router`), exactly
-    as #22 admitted `ingestion`/`llm_interface`. Issue #39 drops
-    `ps_service.mcp_interface` for the same reason: `create_app` mounts the
+    as `ingestion`/`llm_interface` were admitted. `ps_service.mcp_interface` is dropped
+    for the same reason: `create_app` mounts the
     MCP Interface's Streamable HTTP transport
-    (`http_transport.build_streamable_http_app`), exactly as #51 admitted
-    `ps_service.api`. Domain Mapper, Company Merge, Query Engine, and
-    Regulatory Change Monitor stay forbidden — the AST scan is non-transitive
+    (`http_transport.build_streamable_http_app`), exactly as `ps_service.api` was admitted.
+    Domain Mapper, Company Merge, Query Engine, and Regulatory Change Monitor
+    stay forbidden — the AST scan is non-transitive
     (it parses `main.py`'s source only), and the pipeline stage entry points
     those routes eventually drive are imported lazily, function-local, never
     at `main.py` module load.
@@ -515,7 +513,7 @@ def test_main_module_does_not_statically_import_any_pipeline_or_query_surface_co
 def test_lifespan_startup_failure_propagates_out_of_testclient_enter(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, app: FastAPI
 ) -> None:
-    """AC-BI-010 (unit half): a `configure()` failure is not swallowed by `lifespan`.
+    """Unit half: a `configure()` failure is not swallowed by `lifespan`.
 
     Forces the real `configure()` to fail for real, no monkeypatching of `configure` itself:
     redirects `PS_LOGGING_DIR` to a path that already exists as a regular file, so
@@ -536,10 +534,10 @@ def test_lifespan_startup_failure_propagates_out_of_testclient_enter(
 def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear every `PS_SERVICE_*` env var, giving `load_config()` a clean-env precondition.
 
-    Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair (issue #58), a
+    Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair, a
     fake `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`
-    pair (issue #144), and `REQUIRED_STARTUP_ENV` (currently
-    `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`, issue #140): these tests call `main()`
+    pair, and `REQUIRED_STARTUP_ENV` (currently
+    `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`): these tests call `main()`
     end to end (real `load_config()`, not `_complete_config()`), have nothing to do with auth,
     RBAC bootstrap, or Authentik, and don't set the local-test bypass --
     without fake values, `create_app` would now fail closed
@@ -563,22 +561,22 @@ def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-002/AC-BI-006/AC-BI-007: with no env overrides, `main()` wires
+    """With no env overrides, `main()` wires
     `uvicorn.run` with the default config.
 
     Monkeypatches `uvicorn.run` (as imported into `ps_service.main`) with a
     `Mock` so no real bind happens, then asserts `main()` invokes it with a
-    `FastAPI` app instance (identity equality against a fixture app is no
-    longer possible by design, per AC-BI-008 — `main()` builds its own app
+    `FastAPI` app instance (identity equality against a fixture app is not
+    possible by design — `main()` builds its own app
     internally via `create_app(load_config())`), `host="127.0.0.1"`,
     `port=8000`, and `timeout_graceful_shutdown=10` — the *configuration*
-    half of AC-BI-002/006/007. The *behavioral* half (a real process actually
+    half. The *behavioral* half (a real process actually
     binding to localhost and honoring the timeout on SIGTERM) is proven
     separately by the subprocess-based integration tests, not here.
     """
     _delenv_all_ps_service_vars(monkeypatch)
     mock_run = Mock()
-    # detroit-exception: binding a real socket is unsafe here; call args ARE the spec (§1.2)
+    # detroit-exception: binding a real socket is unsafe here; call args ARE the spec
     monkeypatch.setattr(main_module.uvicorn, "run", mock_run)
 
     main_module.main()
@@ -596,7 +594,7 @@ def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(
 
 
 def test_main_calls_load_config_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-002: `main()` resolves configuration via exactly one `load_config()` call.
+    """`main()` resolves configuration via exactly one `load_config()` call.
 
     Wraps the real `load_config` in a `Mock(wraps=...)` spy so the actual
     resolution behavior is unchanged, mocks `uvicorn.run` so no real bind
@@ -605,12 +603,12 @@ def test_main_calls_load_config_exactly_once(monkeypatch: pytest.MonkeyPatch) ->
     _delenv_all_ps_service_vars(monkeypatch)
     # A `Mock(wraps=...)` spy delegates to the real `load_config` (actual resolution behavior
     # unchanged) -- only the call *count* below is asserted, and that count is the literally
-    # specified behavior here (§1.2), not a stand-in for business logic.
-    # detroit-exception: spy-through wrapping the real collaborator; call count IS the spec (§1.2)
+    # specified behavior here, not a stand-in for business logic.
+    # detroit-exception: spy-through wrapping the real collaborator; call count IS the spec
     spy_load_config = Mock(wraps=main_module.load_config)
-    # detroit-exception: spy-through wrapping the real collaborator; call count IS the spec (§1.2)
+    # detroit-exception: spy-through wrapping the real collaborator; call count IS the spec
     monkeypatch.setattr(main_module, "load_config", spy_load_config)
-    # detroit-exception: starting a real ASGI server is unsafe/expensive in a unit test (§1.2)
+    # detroit-exception: starting a real ASGI server is unsafe/expensive in a unit test
     monkeypatch.setattr(main_module.uvicorn, "run", Mock())
 
     main_module.main()
@@ -629,7 +627,7 @@ def test_main_calls_load_config_exactly_once(monkeypatch: pytest.MonkeyPatch) ->
 def test_main_honors_ps_service_env_override_in_uvicorn_run_kwargs(
     env_var: str, env_value: str, kwarg: str, expected: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-003/004/005 (unit half): `main()` reflects a `PS_SERVICE_*` env
+    """Unit half: `main()` reflects a `PS_SERVICE_*` env
     override in `uvicorn.run`'s kwargs.
 
     Sets exactly one override env var at a time (the other two left cleared),
@@ -640,7 +638,7 @@ def test_main_honors_ps_service_env_override_in_uvicorn_run_kwargs(
     _delenv_all_ps_service_vars(monkeypatch)
     monkeypatch.setenv(env_var, env_value)
     mock_run = Mock()
-    # detroit-exception: binding a real socket is unsafe here; call args ARE the spec (§1.2)
+    # detroit-exception: binding a real socket is unsafe here; call args ARE the spec
     monkeypatch.setattr(main_module.uvicorn, "run", mock_run)
 
     main_module.main()
@@ -652,7 +650,7 @@ def test_main_honors_ps_service_env_override_in_uvicorn_run_kwargs(
 def test_main_does_not_call_uvicorn_run_when_bypass_refuses_bind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-002 (issue #67): `main()`'s refusal happens strictly before `uvicorn.run`.
+    """`main()`'s refusal happens strictly before `uvicorn.run`.
 
     Mirrors `test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout`,
     but with the bypass active and a non-loopback host: `main()` must raise
@@ -662,7 +660,7 @@ def test_main_does_not_call_uvicorn_run_when_bypass_refuses_bind(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     monkeypatch.setenv("PS_SERVICE_HOST", "0.0.0.0")
     mock_run = Mock()
-    # detroit-exception: binding a real socket is unsafe here; the non-call IS the spec (§1.2)
+    # detroit-exception: binding a real socket is unsafe here; the non-call IS the spec
     monkeypatch.setattr(main_module.uvicorn, "run", mock_run)
 
     with pytest.raises(main_module.LocalTestBypassBindRefusedError):
@@ -672,7 +670,7 @@ def test_main_does_not_call_uvicorn_run_when_bypass_refuses_bind(
 
 
 def test_main_module_has_zero_os_environ_references() -> None:
-    """AC-BI-012 (main.py half): `main.py` never references `os.environ`, not even via `.get(...)`.
+    """`main.py` never references `os.environ`, not even via `.get(...)`.
 
     Stronger than `config.py`'s equivalent check (which permits
     `os.environ.get(...)`): `main.py` must route every env read through
@@ -692,12 +690,12 @@ def test_main_module_has_zero_os_environ_references() -> None:
 
 
 def test_create_app_instances_have_independent_readiness_state() -> None:
-    """AC-BI-008 (partial, readiness isolation only): two `create_app()` apps
+    """Partial, readiness isolation only: two `create_app()` apps
     don't share `app.state.ready`.
 
     Constructs two independently-configured apps (configs are otherwise
     identical here — this test is scoped to readiness-flag isolation only,
-    not config-content independence, which is a later increment's job) and
+    not config-content independence, which a separate test covers) and
     enters only one's `TestClient` as a context manager (running its
     `lifespan` startup). The other app's `app.state.ready` must remain
     `False`, proving `app.state` is a genuine per-instance object rather
@@ -725,7 +723,7 @@ def test_create_app_instances_have_independent_readiness_state() -> None:
 def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_filename(
     tmp_path: Path,
 ) -> None:
-    """AC-BI-007: `lifespan` calls `configure(log_path=config.logging_dir / "ps-service.jsonl")`.
+    """`lifespan` calls `configure(log_path=config.logging_dir / "ps-service.jsonl")`.
 
     Exercises the real Logging facade (no monkeypatching): constructs a `ServiceConfig` with a
     non-`None` `logging_dir`, then asserts a real log entry lands at exactly
@@ -741,7 +739,7 @@ def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_fil
     before calling `configure()` -- passing the raw directory through would
     make the emitter's writer thread hit `IsADirectoryError` on every write,
     silently swallowed by the Logging facade's fallback-on-write-failure
-    contract (AC#6 from issue #20): no file would ever land at this exact
+    contract : no file would ever land at this exact
     path, and the real-state assertion below would fail for exactly that
     reason.
     """
@@ -770,7 +768,7 @@ def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_fil
 def test_lifespan_mirrors_failed_log_entries_to_stderr(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Issue #227: `lifespan` configures the emitter so `outcome=failed` lines reach stderr.
+    """`lifespan` configures the emitter so `outcome=failed` lines reach stderr.
 
     A pod's JSONL file is invisible to `kubectl logs`; the failure detail must also be on stderr.
     """
@@ -797,16 +795,14 @@ def test_lifespan_mirrors_failed_log_entries_to_stderr(
 
 
 def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path) -> None:
-    """AC-BI-008 (full): two `create_app()` calls with different `logging_dir`s
+    """Two `create_app()` calls with different `logging_dir`s
     stay independently configured.
 
     Distinct from `test_create_app_instances_have_independent_readiness_state`
     (which only proves `app.state.ready` isolation): this proves `config`
     *content* itself doesn't leak between `create_app()` instances, using
-    REAL file-write assertions rather than kwarg-capture — now that the
-    `logging_dir`/`log_path` join bug is fixed, this is safe (a prior version
-    of this test used kwarg-capture specifically because that bug would have
-    made real-file assertions fail against otherwise-correct code).
+    REAL file-write assertions rather than kwarg-capture (kwarg-capture
+    would not detect a wrong log path; a real file does).
 
     Only the first app's `TestClient` is entered as a context manager, so
     only its `lifespan` runs; the second app's `lifespan` never runs at all.
@@ -907,7 +903,7 @@ def test_lifespan_with_none_logging_dir_falls_back_to_resolve_default_log_path(
 
 
 def test_lifespan_emits_warning_log_entry_for_non_loopback_host(tmp_path: Path) -> None:
-    """AC-BI-011: a non-loopback `config.host` (e.g. "0.0.0.0") produces exactly
+    """A non-loopback `config.host` (e.g. "0.0.0.0") produces exactly
     one warning log entry.
 
     The existing `outcome="success"` entry must still also be present (order:
@@ -943,7 +939,7 @@ def test_lifespan_emits_warning_log_entry_for_non_loopback_host(tmp_path: Path) 
 
 
 def test_lifespan_emits_no_warning_log_entry_for_loopback_host(tmp_path: Path) -> None:
-    """AC-BI-011 (negative case): a loopback `config.host` produces zero warning entries.
+    """A loopback `config.host` produces zero warning entries.
 
     Complements the already-existing `test_lifespan_emits_exactly_one_startup_success_log_entry`
     (which uses the default loopback host and asserts exactly one entry
@@ -976,12 +972,12 @@ def test_lifespan_emits_no_warning_log_entry_for_loopback_host(tmp_path: Path) -
 
 
 def test_lifespan_refuses_when_bypass_active_and_host_not_loopback() -> None:
-    """AC-BI-002/AC-BI-003 (issue #67): bypass active + non-loopback host refuses to bind.
+    """Bypass active + non-loopback host refuses to bind.
 
     `lifespan()` startup must raise `LocalTestBypassBindRefusedError` before
     any port is bound, and the message must name both facts an operator needs
     to fix this immediately: the bypass being active, and the configured host
-    not being loopback (AC-BI-003).
+    not being loopback.
     """
     config = _complete_config(host="0.0.0.0", is_local_test_bypass_active=True)
     app = create_app(config)
@@ -999,10 +995,10 @@ def test_lifespan_refuses_when_bypass_active_and_host_not_loopback() -> None:
     assert "loopback" in message
 
 
-def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_and_host_not_loopback(  # noqa: E501 - name mirrors PLAN.md Slice 5 verbatim
+def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_and_host_not_loopback(  # noqa: E501 - descriptive test name
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-004, extended to the new transport (issue #39, PLAN.md Slice 5): the
+    """Through the MCP transport: the
     refusal at bypass-active + non-loopback host must fire *before* the MCP
     Streamable HTTP session manager's `lifespan_context` is ever entered, not just
     "probably does because it's earlier in the function" (already covered in
@@ -1010,14 +1006,14 @@ def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_a
     above).
 
     `mcp_asgi_app` is a local variable inside `create_app`, never returned or
-    exposed on `app.state`. Per PLAN.md Slice 5's test-authoring note, the seam
+    exposed on `app.state`. The seam
     is `main_module.build_streamable_http_app` itself (as imported into
     `ps_service.main`): this wraps it so the real sub-app it returns has its
     `router.lifespan_context` replaced with a recording stand-in *before*
     `create_app` uses it -- mirroring the existing
     `monkeypatch.setattr(main_module, "check_falkordb_connectivity", ...)`
     pattern already used throughout this file. No production code change expected: if
-    this fails, Slice 4's statement order in `main.py` is wrong, not this test.
+    this fails, the statement order in `main.py` is wrong, not this test.
     """
     entered = False
     real_build_streamable_http_app = main_module.build_streamable_http_app
@@ -1038,7 +1034,7 @@ def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_a
         mcp_asgi_app.router.lifespan_context = recording_lifespan_context
         return mcp_asgi_app
 
-    # detroit-exception: wraps/delegates to the real fn, only the lifespan hook swaps (§2 case 9)
+    # detroit-exception: wraps/delegates to the real fn, only the lifespan hook swaps (case 9)
     monkeypatch.setattr(main_module, "build_streamable_http_app", wrapped_build_streamable_http_app)
 
     config = _complete_config(host="0.0.0.0", is_local_test_bypass_active=True)
@@ -1051,7 +1047,7 @@ def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_a
 
 
 def test_lifespan_does_not_refuse_when_bypass_active_and_host_is_loopback() -> None:
-    """AC-BI-002 (negative case, issue #67): bypass active + loopback host starts normally."""
+    """Bypass active + loopback host starts normally."""
     config = _complete_config(is_local_test_bypass_active=True)
     app = create_app(config)
 
@@ -1062,13 +1058,12 @@ def test_lifespan_does_not_refuse_when_bypass_active_and_host_is_loopback() -> N
 def test_lifespan_still_only_warns_when_bypass_inactive_and_host_not_loopback(
     tmp_path: Path,
 ) -> None:
-    """AC-BI-004 (regression, issue #67): bypass inactive (default) + non-loopback host
+    """Regression: bypass inactive (default) + non-loopback host
     is still warning-only, never a refusal.
 
     Reuses `test_lifespan_emits_warning_log_entry_for_non_loopback_host`'s
-    read-log-lines technique to prove that test's assertions still hold after
-    this slice's refusal check was added — not merely that they held before
-    it.
+    read-log-lines technique to prove that test's assertions hold when the refusal check is present,
+    so the bypass-inactive case stays warning-only.
     """
     config = _complete_config(host="0.0.0.0")
     non_loopback_app = create_app(config)
@@ -1091,7 +1086,7 @@ def test_lifespan_still_only_warns_when_bypass_inactive_and_host_not_loopback(
 
 
 def test_lifespan_emits_bypass_warning_entry_when_active(tmp_path: Path) -> None:
-    """AC-BI-007 (issue #67): bypass active (+ loopback host) emits exactly one
+    """Bypass active (+ loopback host) emits exactly one
     startup warning entry stating both facts an operator needs — the bypass is
     active, and the guarantee is loopback-only — additive to (not replacing)
     the unconditional `outcome="success"` entry.
@@ -1123,7 +1118,7 @@ def test_lifespan_emits_bypass_warning_entry_when_active(tmp_path: Path) -> None
 
 
 def test_lifespan_emits_no_bypass_warning_entry_when_inactive(tmp_path: Path) -> None:
-    """AC-BI-007 (negative case, issue #67): bypass inactive (the default) emits
+    """Bypass inactive (the default) emits
     zero bypass-warning entries — the warning is conditional on the bypass
     actually being active, not unconditional startup noise.
     """
@@ -1143,7 +1138,7 @@ def test_lifespan_emits_no_bypass_warning_entry_when_inactive(tmp_path: Path) ->
 
 
 def test_lifespan_emits_bypass_warning_on_every_start_not_only_first(tmp_path: Path) -> None:
-    """AC-BI-007 (issue #67): every start, not only the first, gets its own warning.
+    """Every start, not only the first, gets its own warning.
 
     Two separate process starts (two independent `create_app` + `TestClient`
     entries, sharing this test's `tmp_path`-backed log sink) each emit their
@@ -1168,22 +1163,22 @@ def test_lifespan_emits_bypass_warning_on_every_start_not_only_first(tmp_path: P
 def test_lifespan_emits_bypass_warning_entry_every_start_with_mcp_transport_mounted(
     tmp_path: Path,
 ) -> None:
-    """AC-BI-005, extended to the new transport (issue #39, PLAN.md Slice 6): the
+    """Through the MCP transport: the
     every-start bypass-warning regression guard proven above by
-    `test_lifespan_emits_bypass_warning_on_every_start_not_only_first` (#67) still
-    holds now that `lifespan` wraps its tail in
-    `async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):` (Slice 4) --
+    `test_lifespan_emits_bypass_warning_on_every_start_not_only_first` still
+    holds with `lifespan` wrapping its tail in
+    `async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):` --
     proving that nesting did not accidentally move the warning emission to only
-    fire once, or suppress it, now that it sits one level deeper relative to
+    fire once, or suppress it, one level deeper relative to
     `yield`.
 
-    CHANGES.md's F-1 correction applies: this calls `create_app(config)` TWICE,
+    This calls `create_app(config)` TWICE,
     once per `with TestClient(...)` block, producing two independent apps (two
     distinct `mcp_asgi_app`/`StreamableHTTPSessionManager` instances) -- entering
     one `app`'s session manager twice via two separate `TestClient` blocks would
     raise `RuntimeError` (`StreamableHTTPSessionManager.run()` is one-shot per
     the installed SDK), unrelated to `main.py`'s statement order. This exactly
-    mirrors the #67 precedent test's own two-independent-`create_app()`-calls
+    mirrors the precedent test's own two-independent-`create_app()`-calls
     shape.
     """
     config = _complete_config(is_local_test_bypass_active=True)
@@ -1202,7 +1197,7 @@ def test_lifespan_emits_bypass_warning_entry_every_start_with_mcp_transport_moun
     assert len(bypass_warning_entries) == 2
 
 
-# --- Dependency-gated readiness (issue #22) --------------------------------
+# --- Dependency-gated readiness --------------------------------
 
 
 def test_ready_stays_not_ready_after_startup_when_a_dependency_check_fails(
@@ -1218,10 +1213,9 @@ def test_ready_stays_not_ready_after_startup_when_a_dependency_check_fails(
     with TestClient(app) as client:
         response = client.get("/ready")
 
-    # Regression for a real bug found via manual end-to-end testing (issue #68):
     # `check_connectivity_from_config` wraps both the connect step and the
     # `list_graphs()` probe in one `dependency_health`-recording try/except, so
-    # a failure anywhere in there now reliably lands FalkorDB in
+    # a failure anywhere in there lands FalkorDB in
     # `unhealthy_dependencies`, not just an empty list alongside a correct but
     # unhelpful "not_ready" status.
     assert response.json() == {
@@ -1287,12 +1281,12 @@ def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
     assert called == ["falkordb", "llm_interface", "cellar_eli"]
 
 
-# --- Passkey Signing Postgres readiness (issue #131, PLAN.md §0.8) ---------
+# --- Passkey Signing Postgres readiness ---------
 
 
 def test_passkey_signing_postgres_is_ready_but_not_gating_dependency() -> None:
     """An outage of this optional, pilot-scope Postgres instance must never
-    block `/ready` for the rest of the system (PLAN.md §0.8) -- it is
+    block `/ready` for the rest of the system -- it is
     tracked (`_READY_DEPENDENCIES`) but never gates (`_GATING_DEPENDENCIES`),
     unlike FalkorDB.
 
@@ -1319,7 +1313,7 @@ def test_ready_stays_ready_when_only_passkey_signing_postgres_check_fails(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
     """A failed connection is reflected as unhealthy without ever raising out
-    of `/ready`/crashing startup (PLAN.md §0.8): `_check_dependencies_at_startup`
+    of `/ready`/crashing startup: `_check_dependencies_at_startup`
     catches the probe's own exception, records it via `dependency_health`, and
     `status` stays `"ready"` since this dependency is deliberately excluded
     from `_GATING_DEPENDENCIES` -- unlike an equivalent FalkorDB failure,
@@ -1351,7 +1345,7 @@ def test_ready_stays_ready_when_only_passkey_signing_postgres_check_fails(
 def test_migration_runner_is_skipped_at_startup_when_postgres_is_not_configured(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """PLAN.md §0.6/§0.8: an environment that never configures Passkey Signing
+    """An environment that never configures Passkey Signing
     Postgres must not even attempt a connection at startup -- `app`'s
     `_complete_config()` leaves `passkey_signing_postgres_host` at its `None`
     default.
@@ -1361,7 +1355,7 @@ def test_migration_runner_is_skipped_at_startup_when_postgres_is_not_configured(
         message = "connect_from_config must not be called when Postgres is unconfigured"
         raise AssertionError(message)
 
-    # detroit-exception: raise-if-called trap proving a never-called ordering guarantee (§2 case 3)
+    # detroit-exception: raise-if-called trap proving a never-called ordering guarantee (case 3)
     monkeypatch.setattr(main_module, "connect_passkey_signing_postgres_from_config", fail_if_called)
 
     with TestClient(app):
@@ -1370,7 +1364,7 @@ def test_migration_runner_is_skipped_at_startup_when_postgres_is_not_configured(
 
 @pytest.mark.postgres_live
 def test_migration_runner_runs_at_startup_when_postgres_is_configured() -> None:
-    """PLAN.md §0.6: startup applies pending migrations once via the injected connection.
+    """Startup applies pending migrations once via the injected connection.
 
     `postgres_live`-marked (mirrors `tests/passkey_signing/test_migration_runner.py`'s own
     convention -- there is no meaningful fake for "did this SQL actually apply"): runs the real
@@ -1405,13 +1399,13 @@ def test_migration_runner_runs_at_startup_when_postgres_is_configured() -> None:
     assert recorded is True
 
 
-# --- PS state Postgres readiness and fatal migration failure (issue #130, CHANGES F1) ---
+# --- PS state Postgres readiness and fatal migration failure ---
 
 
 def test_state_postgres_is_ready_and_gating_dependency() -> None:
     """Unlike Passkey Signing Postgres, PS state Postgres backs privileged state (roles, audit,
     runtime config, the catalog override): without it the service cannot serve, so it gates
-    `/ready` (issue #130) -- a first `helm install` must not report ready with no usable store.
+    `/ready` -- a first `helm install` must not report ready with no usable store.
     """
     ready_dependencies = cast(
         "tuple[str, ...]",
@@ -1427,7 +1421,7 @@ def test_state_postgres_is_ready_and_gating_dependency() -> None:
 
 
 def test_graph_replay_is_a_gating_and_ready_dependency() -> None:
-    """The startup replay of the graph log holds `/ready` (issue #207, AC-RD-006): until it ends
+    """The startup replay of the graph log holds `/ready`: until it ends
     the pod must not enter Service rotation, so `graph_replay` is a gating dependency like
     FalkorDB and PS state Postgres, and is named in `unhealthy_dependencies` while it runs.
     """
@@ -1512,7 +1506,7 @@ def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not
         message = "connect_from_config must not be called when the state Postgres is unconfigured"
         raise AssertionError(message)
 
-    # detroit-exception: raise-if-called trap proving a never-called ordering guarantee (§2 case 3)
+    # detroit-exception: raise-if-called trap proving a never-called ordering guarantee (case 3)
     monkeypatch.setattr(main_module, "connect_state_postgres_from_config", fail_if_called)
     # The autouse stub reports every dependency healthy; restore the real probe for this test.
     monkeypatch.setattr(
@@ -1550,10 +1544,10 @@ def test_startup_after_the_provisioning_cli_on_an_empty_database_applies_nothing
 
     `postgres_live`-marked, like the Passkey Signing twin above: runs the real
     `create_app`/`lifespan` path against a scratch PS Postgres built by the real Helm init
-    script and brought up by the provisioning CLI alone (issue #205 follow-up: from an empty
+    script and brought up by the provisioning CLI alone (from an empty
     database it applies the ordinary component migrations as `ps_state` and then the privileged
     `graph_gateway` one), with `ps_state` credentials only. Startup then finds every migration
-    recorded (issue #130: audit, access roles, runtime config, ingestion runs; #205: the graph
+    recorded (audit, access roles, runtime config, ingestion runs, and the graph
     log, which startup only verifies) and applies nothing: the tracking rows, `applied_at`
     included, are unchanged by it.
     """
@@ -1587,7 +1581,7 @@ def test_startup_after_the_provisioning_cli_on_an_empty_database_applies_nothing
 def test_startup_fails_closed_naming_the_missing_graph_gateway_migration(
     fresh_provisioned: Provisioned,
 ) -> None:
-    """AC-BI-012: with `ps_state` credentials only and no provisioning, startup fails closed."""
+    """With `ps_state` credentials only and no provisioning, startup fails closed."""
     config = _config_for_cluster(fresh_provisioned)
 
     with pytest.raises(GraphLogMigrationMissingError) as raised, TestClient(create_app(config)):
@@ -1664,7 +1658,7 @@ def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -
 
 
 def test_ready_response_has_empty_unhealthy_dependencies_list_when_ready(app: FastAPI) -> None:
-    """AC-BI-002: a fully healthy `/ready` response names zero unhealthy dependencies."""
+    """A fully healthy `/ready` response names zero unhealthy dependencies."""
     with TestClient(app) as client:
         response = client.get("/ready")
 
@@ -1672,7 +1666,7 @@ def test_ready_response_has_empty_unhealthy_dependencies_list_when_ready(app: Fa
 
 
 def test_ready_response_lists_unhealthy_dependency_names_when_not_ready(app: FastAPI) -> None:
-    """AC-BI-001: an unhealthy dependency's name appears in `/ready`'s response."""
+    """An unhealthy dependency's name appears in `/ready`'s response."""
     with TestClient(app) as client:
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
 
@@ -1686,7 +1680,7 @@ def test_ready_response_lists_unhealthy_dependency_names_when_not_ready(app: Fas
 
 
 def test_ready_response_never_contains_the_raw_mark_unhealthy_error_string(app: FastAPI) -> None:
-    """AC-BI-003: `mark_unhealthy`'s raw error string never leaks into `/ready`'s
+    """`mark_unhealthy`'s raw error string never leaks into `/ready`'s
     response — only the dependency's name does.
     """
     with TestClient(app) as client:
@@ -1702,7 +1696,7 @@ def test_ready_response_never_contains_the_raw_mark_unhealthy_error_string(app: 
 
 
 def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: FastAPI) -> None:
-    """AC-BI-001/AC-BI-005 (live half): only FalkorDB health determines `/ready`'s
+    """Live half: only FalkorDB health determines `/ready`'s
     status — an LLM Interface outage recorded on the live registry still names
     it in `unhealthy_dependencies` but must not flip `status` to `not_ready`.
     """
@@ -1725,7 +1719,7 @@ def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: Fast
 
 
 def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI) -> None:
-    """AC-BI-001/AC-BI-006 (live half): a Cellar/ELI outage recorded on the live
+    """Live half: a Cellar/ELI outage recorded on the live
     registry still names it in `unhealthy_dependencies` but must not flip
     `status` to `not_ready`.
     """
@@ -1750,7 +1744,7 @@ def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI
 def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without_restart(
     app: FastAPI,
 ) -> None:
-    """AC-BI-004 (extended to LLM Interface): once LLM Interface recovers, its
+    """Through LLM Interface: once LLM Interface recovers, its
     name drops from `unhealthy_dependencies` on the next poll, without a
     restart. `status` stays `ready` throughout, since LLM Interface never
     gates it.
@@ -1777,7 +1771,7 @@ def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without
 def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_restart(
     app: FastAPI,
 ) -> None:
-    """AC-BI-004 (extended to Cellar/ELI): once Cellar/ELI recovers, its name
+    """Through Cellar/ELI: once Cellar/ELI recovers, its name
     drops from `unhealthy_dependencies` on the next poll, without a restart.
     `status` stays `ready` throughout, since Cellar/ELI never gates it.
     """
@@ -1803,7 +1797,7 @@ def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_re
 def test_ready_lists_both_llm_interface_and_cellar_eli_when_both_unhealthy_but_stays_ready(
     app: FastAPI,
 ) -> None:
-    """Strengthens AC-BI-001/AC-BI-003 against a "only one dependency at a time"
+    """Guards against a "only one dependency at a time"
     blind spot: both non-FalkorDB dependencies unhealthy at once are both
     named, in `_READY_DEPENDENCIES`'s declared order, while `status` stays
     `ready` since FalkorDB itself is untouched.
@@ -1828,7 +1822,7 @@ def test_ready_lists_both_llm_interface_and_cellar_eli_when_both_unhealthy_but_s
 def test_ready_is_ready_when_llm_interface_startup_probe_fails_but_falkordb_succeeds(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """AC-BI-002/AC-BI-005 (startup half): an LLM Interface probe failure at
+    """Startup half: an LLM Interface probe failure at
     startup must not wedge `app.state.ready` -- only a FalkorDB startup
     failure does. Once `lifespan` completes, `/ready` reports ready, still
     naming LLM Interface as unhealthy.
@@ -1854,7 +1848,7 @@ def test_ready_is_ready_when_llm_interface_startup_probe_fails_but_falkordb_succ
 def test_ready_is_ready_when_cellar_eli_startup_probe_fails_but_falkordb_succeeds(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """AC-BI-002/AC-BI-006 (startup half): a Cellar/ELI probe failure at
+    """Startup half: a Cellar/ELI probe failure at
     startup must not wedge `app.state.ready` -- only a FalkorDB startup
     failure does. Once `lifespan` completes, `/ready` reports ready, still
     naming Cellar/ELI as unhealthy.
@@ -1880,10 +1874,10 @@ def test_ready_is_ready_when_cellar_eli_startup_probe_fails_but_falkordb_succeed
 def test_startup_cellar_eli_failure_emits_a_warning_log_entry_naming_the_dependency(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI, tmp_path: Path
 ) -> None:
-    """AC-BI-014 (extended to Cellar/ELI): mirrors
+    """Through Cellar/ELI: mirrors
     `test_startup_dependency_failure_emits_a_warning_log_entry_naming_the_dependency`
     (LLM Interface) -- a Cellar/ELI startup probe failure must still emit a
-    warning log entry naming it, even though it no longer affects
+    warning log entry naming it, even though it does not affect
     `app.state.ready`.
     """
 
@@ -1908,16 +1902,16 @@ def test_startup_cellar_eli_failure_emits_a_warning_log_entry_naming_the_depende
     assert any(entry.get("dependency") == "cellar_eli" for entry in warning_entries)
 
 
-# --- /ready retries a still-latched gating dependency instead of restarting (issue #124) ---
+# --- /ready retries a still-latched gating dependency instead of restarting ---
 
 
 def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_probe(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """AC-BI-002: the exact race `spikes/deploy-ps-azure/README.md` documented --
-    FalkorDB unreachable at ps-service startup, then reachable seconds later.
-    Before issue #124, `app.state.ready` latched `False` forever once the
-    startup probe failed; now the next `/ready` poll after recovery reports
+    """The exact race of FalkorDB being
+    unreachable at ps-service startup, then reachable seconds later.
+    `app.state.ready` must not latch `False` forever once the
+    startup probe failed; the next `/ready` poll after recovery reports
     `ready`, with no process restart.
     """
     falkordb_reachable = False
@@ -1951,7 +1945,7 @@ def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_p
 def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_down(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """AC-BI-008: a retried gating-dependency probe failing again must not
+    """A retried gating-dependency probe failing again must not
     raise out of the request handler -- polling `/ready` repeatedly while
     FalkorDB is still down keeps answering `503 not_ready`, poll after poll.
     """
@@ -1977,7 +1971,7 @@ def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_
 def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succeeds(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """AC-BI-005: the retry loop is written against `_GATING_DEPENDENCIES`
+    """The retry loop is written against `_GATING_DEPENDENCIES`
     (today: FalkorDB alone), not hardcoded to FalkorDB by name -- proven here by widening the
     *real* `_GATING_DEPENDENCIES` set to also cover LLM Interface: an already-real dependency
     `_all_dependency_probes` already probes for, not a fabricated identity standing in for a
@@ -2033,7 +2027,7 @@ def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succ
 def test_concurrent_ready_polls_while_not_ready_leave_app_state_consistent(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """AC-BI-009: concurrent `/ready` requests while `app.state.ready` is
+    """Concurrent `/ready` requests while `app.state.ready` is
     `False` must not corrupt `dependency_health` registry state or leave
     `app.state.ready` inconsistent. `ready()`'s retry body has no `await`
     point, so within one process no two calls ever truly interleave --
@@ -2066,13 +2060,13 @@ def test_concurrent_ready_polls_while_not_ready_leave_app_state_consistent(
     assert dependency_health.is_healthy(dependency_health.FALKORDB) is False
 
 
-# --- Config-completeness-gated readiness (issue #16 follow-up) -------------
+# --- Config-completeness-gated readiness -------------
 
 
 def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete() -> None:
     """A missing `INGESTION_REQUIRED_CONFIG_FIELDS` value keeps `/ready` at
     `not_ready` even though every dependency probe succeeds — the same
-    outcome a caller previously only discovered by getting a 503 from
+    outcome a caller would otherwise only discover by getting a 503 from
     `POST /ingestions`.
     """
     incomplete_app = create_app(_complete_config(company_merge_similarity_threshold=None))
@@ -2089,7 +2083,7 @@ def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete
 
 def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
     """Regression guard: a fully-set config still reaches `ready` (proves the
-    new gate doesn't regress the already-passing case, independent of the
+    gate lets a complete config through, independent of the
     `app` fixture's own default).
     """
     complete_app = create_app(_complete_config())
@@ -2147,7 +2141,7 @@ def test_ready_never_self_heals_missing_config_without_a_restart(app: FastAPI) -
         }
 
 
-# --- MCP Streamable HTTP transport mounted at the composition root (issue #39) ---
+# --- MCP Streamable HTTP transport mounted at the composition root ---
 
 
 class _FakeQueryResult:
@@ -2234,24 +2228,23 @@ def _initialize_mcp_session(client: TestClient) -> str:
 
 
 def test_create_app_mounts_mcp_streamable_http_transport_at_fixed_path() -> None:
-    """AC-BI-001/002: `create_app` mounts MCP Interface's Streamable HTTP transport
+    """`create_app` mounts MCP Interface's Streamable HTTP transport
     at `MCP_HTTP_MOUNT_PATH`, reachable through the same `app`/`TestClient` that
     already serves `/health` in this file.
 
     A real JSON-RPC `initialize` request over the ASGI transport (real HTTP
     verbs/headers/JSON-RPC, not an in-process function call) succeeding proves
     the transport is wired through the real composition root, not just the
-    standalone factory already proven by `tests/mcp_interface/test_http_transport.py`
-    (Slice 3).
+    standalone factory already proven by `tests/mcp_interface/test_http_transport.py`.
 
-    Builds with the local-test bypass active (issue #58, Slice 5): this test
+    Builds with the local-test bypass active: this test
     is about transport wiring, not authentication -- `tests/mcp_interface/
     test_mcp_auth.py` covers the genuinely auth-armed mount. Without the
     bypass, `_complete_config()`'s default fake (but non-`None`)
     `auth_issuer`/`auth_audience` pair, combined with this file's own
     `_stub_resolve_auth_context` autouse fixture, would produce a real,
     armed `AuthContext`, and this unauthenticated request would now get 401
-    from the MCP SDK's own gate (AC-BI-006) instead of reaching `initialize`.
+    from the MCP SDK's own gate instead of reaching `initialize`.
     """
     app = create_app(_complete_config(is_local_test_bypass_active=True))
 
@@ -2280,12 +2273,12 @@ def test_create_app_mounts_mcp_streamable_http_transport_at_fixed_path() -> None
 def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """AC-BI-003 (through the real composition root): both the `cypher` tool and
+    """Through the real composition root: both the `cypher` tool and
     the `psdomain://concepts` resource are reachable over the mounted transport
     in the same session — composing the fact in one test, not two disconnected
-    ones (mirrors #67's own established convention).
+    ones (mirrors the established convention).
 
-    Builds with the local-test bypass active (issue #58, Slice 5) for the
+    Builds with the local-test bypass active for the
     same reason as `test_create_app_mounts_mcp_streamable_http_transport_at_fixed_path`
     above: this test is about tool/resource reachability, not
     authentication.
@@ -2341,10 +2334,9 @@ def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
 def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed_local_principal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
 ) -> None:
-    """AC-BI-006 (issue #39, PLAN.md Slice 7 -- the flagship test of the whole
-    issue): composes AC-BI-001/002/003/006 into one end-to-end scenario.
+    """End-to-end scenario: the flagship test of the MCP transport wiring.
 
-    Extends `test_main_integration.py`'s own (#67)
+    Extends `test_main_integration.py`'s own
     `test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_credential`
     -- which drives `mcp_server.cypher()` in-process, bypassing transport
     entirely -- to the mounted Streamable HTTP transport
@@ -2553,9 +2545,9 @@ def test_lifespan_replays_the_graph_log_in_the_background_and_stops_it_before_th
     def build_fake(_config: ServiceConfig) -> _FakeStartupGateway:
         return fake
 
-    # detroit-exception: the migration step needs a real Postgres; replay IS the spec (§1.2)
+    # detroit-exception: the migration step needs a real Postgres; replay IS the spec
     monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
-    # detroit-exception: composition-root builder seam handing the lifespan a fake gateway (§1.2)
+    # detroit-exception: composition-root builder seam handing the lifespan a fake gateway
     monkeypatch.setattr(main_module, "build_default_graph_write_gateway", build_fake)
     app = create_app(_state_config())
 
@@ -2608,10 +2600,10 @@ def _app_replaying(monkeypatch: pytest.MonkeyPatch, blocked: _BlockedReplay) -> 
     def skip_state_migrations(_config: ServiceConfig) -> None:
         """Stand-in for the migration step, which needs a real Postgres."""
 
-    # detroit-exception: the migration step needs a real Postgres; replay IS the spec (§1.2)
+    # detroit-exception: the migration step needs a real Postgres; replay IS the spec
     monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
     # detroit-exception: composition-root builder seam handing the lifespan the real gateway
-    # over the approved boundary fakes (§1.2)
+    # over the approved boundary fakes
     monkeypatch.setattr(main_module, "build_default_graph_write_gateway", blocked.build)
     return create_app(_state_config())
 
@@ -2750,10 +2742,10 @@ def _app_replaying_graphs(monkeypatch: pytest.MonkeyPatch, replay: _GatedGraphsR
     def skip_state_migrations(_config: ServiceConfig) -> None:
         """Stand-in for the migration step, which needs a real Postgres."""
 
-    # detroit-exception: the migration step needs a real Postgres; replay IS the spec (§1.2)
+    # detroit-exception: the migration step needs a real Postgres; replay IS the spec
     monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
     # detroit-exception: composition-root builder seam handing the lifespan the real gateway
-    # over the approved boundary fakes (§1.2)
+    # over the approved boundary fakes
     monkeypatch.setattr(main_module, "build_default_graph_write_gateway", replay.build)
     return create_app(_state_config())
 
@@ -2939,7 +2931,7 @@ def test_ready_gated_graphs_is_empty_without_a_graph_gateway() -> None:
     assert body["gated_graphs"] == []
 
 
-# The read gate (#207 S17c): while `graph_replay` is unhealthy no request that could read a
+# The read gate: while `graph_replay` is unhealthy no request that could read a
 # half-rebuilt graph is served. Only liveness, readiness and the OAuth metadata are exempt.
 
 _REPLAY_GATE_BODY = {"status": "not_ready", "unhealthy_dependencies": ["graph_replay"]}
@@ -3109,7 +3101,7 @@ def test_service_ready_flow_against_real_stores(
     assert rebuilt == checkpoint.canonical_digest
 
 
-# -- the drift monitor (issue #215, S5b/S5c) ---------------------------------------------------
+# -- the drift monitor ---------------------------------------------------
 
 
 class _FakeDriftGateway(_FakeStartupGateway):
@@ -3139,13 +3131,13 @@ def _app_with_gateway(
     def skip_state_migrations(_config: ServiceConfig) -> None:
         """Stand-in for the migration step, which needs a real Postgres."""
 
-    # detroit-exception: the migration step needs a real Postgres; replay IS the spec (§1.2)
+    # detroit-exception: the migration step needs a real Postgres; replay IS the spec
     monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
 
     def build(_config: ServiceConfig) -> object:
         return gateway
 
-    # detroit-exception: composition-root builder seam handing the lifespan a fake gateway (§1.2)
+    # detroit-exception: composition-root builder seam handing the lifespan a fake gateway
     monkeypatch.setattr(main_module, "build_default_graph_write_gateway", build)
     return create_app(_state_config(**config))
 

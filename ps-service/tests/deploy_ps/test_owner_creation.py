@@ -1,8 +1,8 @@
-"""First-owner creation in `scripts/deploy-ps-prod.sh` (issue #165; AC-BI-002, -004, -014, -016).
+"""First-owner creation in `scripts/deploy-ps-prod.sh`.
 
 The script reaches Authentik's admin API through a loopback `kubectl port-forward` (the admin API
-is deliberately NOT on the public Ingress, AC-BI-019) and rewrites the returned enrolment link
-onto the public `https://<host>/auth` authority (OD-2). The fake `curl` is the stateful Authentik
+is deliberately NOT on the public Ingress) and rewrites the returned enrolment link
+onto the public `https://<host>/auth` authority. The fake `curl` is the stateful Authentik
 API built from responses recorded against a real Authentik 2026.8.3; the fake `kubectl` prints
 kubectl's own `Forwarding from ...` line and blocks until killed.
 """
@@ -75,7 +75,7 @@ def test_authentik_is_awaited_before_the_owner_is_created(
 def test_the_printed_link_carries_the_public_authority_once(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """OD-2: Authentik builds the link from the request it received (the loopback port-forward);
+    """Authentik builds the link from the request it received (the loopback port-forward);
     the script rewrites scheme and authority onto the public host, without doubling `/auth`.
     """
     _seed(deploy_ps_fixture)
@@ -105,7 +105,7 @@ def test_rerun_with_an_unenrolled_owner_issues_a_fresh_link_without_a_second_use
 def test_rerun_with_an_enrolled_owner_is_a_true_no_op_for_the_owner(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """AC-BI-004: a passkey on file means no new link and no change to the user."""
+    """A passkey on file means no new link and no change to the user."""
     _seed(deploy_ps_fixture)
     deploy_ps_fixture.run_deploy("--yes", expect=0)
     pk = next(iter(deploy_ps_fixture.read_authentik_users()))
@@ -123,7 +123,7 @@ def test_rerun_with_an_enrolled_owner_is_a_true_no_op_for_the_owner(
 def test_unreachable_authentik_api_fails_naming_the_fix_and_a_rerun_completes(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """AC-BI-016: no half-created user; the next run finishes the job."""
+    """No half-created user; the next run finishes the job."""
     _seed(deploy_ps_fixture)
     deploy_ps_fixture.seed_curl(unreachable=True)
 
@@ -181,9 +181,7 @@ def test_the_shared_token_never_reaches_output_argv_or_call_logs(
 def test_owner_lives_in_authentik_only_never_in_an_az_call(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """No Azure identity or Key Vault call carries the owner (no tenant app registration either,
-    issue #129 AC-BI-001).
-    """
+    """No Azure identity or Key Vault call carries the owner (no tenant app registration either)."""
     _seed(deploy_ps_fixture)
     deploy_ps_fixture.run_deploy("--yes", "--owner-email", "other@example.test", expect=0)
 

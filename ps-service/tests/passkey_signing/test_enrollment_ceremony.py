@@ -1,5 +1,4 @@
-"""HTTP tests for the companion-browser enrollment ceremony (issue #131, PLAN.md §3,
-CHANGES.md F2/F3, PLAN.md §4 Slice 2).
+"""HTTP tests for the companion-browser enrollment ceremony .
 
 Mirrors `test_routes_near_misses.py`'s style: `TestClient` +
 `app.dependency_overrides` supplying fake `PendingApprovalStore`/
@@ -190,7 +189,7 @@ def _build_registration_credential(
 
 
 def test_enrollment_verify_persists_a_credential_for_the_approvals_actor() -> None:
-    """PLAN.md §4 Slice 2's own defining test: a full enrollment ceremony,
+    """A full enrollment ceremony,
     driven entirely through the REST surface, ends with a real
     `signing_credentials` row for the approval's actor.
     """
@@ -238,9 +237,9 @@ def test_enrollment_verify_persists_a_credential_for_the_approvals_actor() -> No
 
 def test_enroll_options_and_verify_reject_a_wrong_code_with_the_generic_error() -> None:
     """A wrong `code` is rejected identically at every step -- never distinguished
-    from any other invalid/expired condition (AC-BI-015).
+    from any other invalid/expired condition.
 
-    Issue #131 Slice 4: every rejection this router produces now also logs
+    Every rejection this router produces also logs
     its real reason server-side (`error_handlers.reject`) -- `configure()`
     installs the default emitter these tests don't otherwise need, mirroring
     `mcp_interface/test_near_miss_tools.py`'s own established precedent.
@@ -274,20 +273,20 @@ def test_enroll_options_and_verify_reject_a_wrong_code_with_the_generic_error() 
 def test_enroll_options_and_verify_reject_an_expired_approval_without_calling_webauthn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHANGES.md F3's own regression test: an expired approval is rejected by
+    """An expired approval is rejected by
     `_require_pending_and_unexpired` *before* either `enroll/options` or
     `enroll/verify` ever reaches the `webauthn` library -- proven here by
     making the real `webauthn` calls raise if they are ever reached at all.
 
-    Issue #131 Slice 4: `configure()` installs the default emitter this
-    rejection path now logs to (`error_handlers.reject`).
+    `configure()` installs the default emitter this
+    rejection path logs to (`error_handlers.reject`).
     """
     configure()
 
     def _fail_if_called(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("webauthn_rp function must not be called for an expired approval")
 
-    # Ordering proof via raise, not assert_called (AUDIT.md §2 case 6): the raise fires only if
+    # Ordering proof via raise, not assert_called: the raise fires only if
     # `_require_pending_and_unexpired`'s rejection failed to happen before reaching webauthn.
     # detroit-exception: proves enroll/options never reaches webauthn for an expired approval
     monkeypatch.setattr(
@@ -315,7 +314,7 @@ def test_enroll_options_and_verify_reject_an_expired_approval_without_calling_we
 
 
 def test_get_approval_shell_renders_identically_regardless_of_status() -> None:
-    """CHANGES.md F2: the shell is generic -- same 200 markup for a pending
+    """The shell is generic -- same 200 markup for a pending
     approval, an expired one, and an id that was never created at all.
     """
     pending_store = FakePendingApprovalStore()
@@ -335,13 +334,13 @@ def test_get_approval_shell_renders_identically_regardless_of_status() -> None:
         assert response.headers["content-type"].startswith("text/html")
 
     assert pending_response.text == expired_response.text == unknown_response.text
-    # AC-BI-015/F2: no `display_summary`/status is ever embedded server-side.
+    # No `display_summary`/status is ever embedded server-side.
     assert "Capability" not in pending_response.text
 
 
 def test_code_never_appears_in_any_registered_router_url_path() -> None:
-    """CHANGES.md F2's own structural fix: the capability code moved out of every
-    URL the server ever sees -- proven here by inspecting every route this
+    """The capability code never appears in any
+    URL the server sees -- proven here by inspecting every route this
     router actually registers, not just the ones this file happens to call.
     """
     router = build_passkey_signing_router()

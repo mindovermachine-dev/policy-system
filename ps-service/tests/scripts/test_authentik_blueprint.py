@@ -1,4 +1,4 @@
-"""Structural tests for the bundled Authentik blueprints (issue #165, Slice 2).
+"""Structural tests for the bundled Authentik blueprints.
 
 Regexes on the rendered ConfigMap (see the chart's `authentik-blueprint-configmap_test.yaml`)
 cannot express semantics such as "no password prompt is reachable from the enrollment flow" or
@@ -127,7 +127,7 @@ def main_entries() -> list[dict[str, Any]]:
     return _entries(MAIN_BLUEPRINT)
 
 
-# --- 2A: recovery flow + brand flow_recovery (AC-BI-021) ----------------------------------------
+# --- 2A: recovery flow + brand flow_recovery ----------------------------------------
 
 
 def test_recovery_flow_is_passkey_only_recovery_designation(
@@ -191,7 +191,7 @@ def test_brand_still_sets_flow_device_code(main_entries: list[dict[str, Any]]) -
     assert any("flow_device_code" in b["attrs"] for b in brands)
 
 
-# --- 2B: passkey-only enrollment (AC-BI-003) ----------------------------------------------------
+# --- 2B: passkey-only enrollment ----------------------------------------------------
 
 
 def test_enrollment_prompt_stage_offers_only_username_name_email(
@@ -248,7 +248,7 @@ def test_enrollment_invitation_stage_still_rejects_open_registration(
     assert stage["attrs"]["continue_flow_without_invitation"] is False
 
 
-# --- OD-6 negative tests: password stage stays in LOGIN only, never in enrollment/recovery ------
+# --- negative tests: password stage stays in LOGIN only, never in enrollment/recovery ------
 
 
 @pytest.mark.parametrize("flow_id", ["ps-enrollment-flow", "ps-recovery-flow"])
@@ -264,7 +264,7 @@ def test_enrollment_and_recovery_flows_have_no_password_stage(
 def test_blueprint_does_not_remove_the_shipped_login_password_stage(
     main_entries: list[dict[str, Any]],
 ) -> None:
-    """OD-6: the password stage stays in the shipped login flow (documented lockout precedent)."""
+    """The password stage stays in the shipped login flow (documented lockout precedent)."""
     login_flow_edits = [
         e
         for e in main_entries
@@ -282,7 +282,7 @@ def test_blueprint_does_not_remove_the_shipped_login_password_stage(
     )
 
 
-# --- 2C: sub_mode (AC-BI-022) -------------------------------------------------------------------
+# --- 2C: sub_mode -------------------------------------------------------------------
 
 
 def test_ps_cli_provider_uses_username_as_the_token_subject(
@@ -293,7 +293,7 @@ def test_ps_cli_provider_uses_username_as_the_token_subject(
     assert provider["attrs"]["sub_mode"] == "user_username"
 
 
-# --- #169: authorization_code grant + Claude redirect URIs ---------------------------------------
+# --- authorization_code grant + Claude redirect URIs ---------------------------------------
 
 
 def test_ps_cli_provider_accepts_authorization_code_with_claude_redirect_uris(
@@ -337,7 +337,7 @@ def test_blueprint_declares_version_1_and_a_name(path: Path) -> None:
     assert doc["metadata"]["name"]
 
 
-# --- 2D: local certificate blueprint (AC-BI-007, AC-BI-023) ---------------------------------------
+# --- 2D: local certificate blueprint ---------------------------------------
 
 
 def test_local_tls_blueprint_registers_the_mounted_certificate_from_files() -> None:
@@ -348,7 +348,7 @@ def test_local_tls_blueprint_registers_the_mounted_certificate_from_files() -> N
     assert keypair["identifiers"] == {"name": "ps-local-tls"}
     cert = keypair["attrs"]["certificate_data"]
     key = keypair["attrs"]["key_data"]
-    # Two-element form: a missing mount only warns and never aborts on an absent file (D-05).
+    # Two-element form: a missing mount only warns and never aborts on an absent file.
     assert cert == Tag(tag="File", value=["/ps-tls/tls.crt", ""])
     assert key == Tag(tag="File", value=["/ps-tls/tls.key", ""])
 
@@ -368,7 +368,7 @@ def test_local_tls_blueprint_never_embeds_key_material() -> None:
     assert "BEGIN" not in text
 
 
-# --- default-brand race (found live at LC2, issue #165) -----------------------------------------
+# --- default-brand race (found live) -----------------------------------------
 
 
 def _first_brand_index(entries: list[dict[str, Any]]) -> int:

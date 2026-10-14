@@ -1,9 +1,9 @@
 """Tests for `mcp_server.handle_mcp_tool_call` -- the injectable
-`HandleMcpToolCall` core (PLAN_REVIEWED.md §6, Batch 2).
+`HandleMcpToolCall` core.
 
-Covers AC-001, AC-002, AC-003, AC-004, AC-005 at the core (fakes only, no
+Covers the core behaviour (fakes only, no
 server, no subprocess, no FalkorDB). The write-clause guard is proven to
-live in Query Engine, never re-referenced here (AC-004, F-03: AST/symbol
+live in Query Engine, never re-referenced here (AST/symbol
 checks, not substring scans).
 
 Hand-written structural fakes throughout, per repo convention -- no
@@ -52,7 +52,7 @@ class _FakeQueryResult:
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally. `query()` records every call
     and either returns a scripted `_FakeQueryResult` or raises a scripted
-    exception. Reports itself as seeded (D11) for `_SEED_CHECK_QUERY` --
+    exception. Reports itself as seeded for `_SEED_CHECK_QUERY` --
     this module tests the pre-existing success/error/write-guard shapes,
     not the unseeded-graph guard (see `test_unseeded_error.py`), so a read
     query here must still reach the caller's own scripted result/error.
@@ -137,7 +137,7 @@ def test_delegates_to_execute_cypher_query(
 def test_principal_given_attaches_principal_to_query_engine_log_entry(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """Slice 4 (issue #67, AC-BI-008): `principal` passed into
+    """`principal` passed into
     `handle_mcp_tool_call` reaches the `query_engine`/`execute_cypher_query`
     log entry end to end (not an `mcp_interface` entry -- this layer emits
     none of its own).
@@ -166,9 +166,9 @@ def test_principal_given_attaches_principal_to_query_engine_log_entry(
 def test_no_principal_given_omits_principal_key_end_to_end(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """Slice 4 (issue #67, AC-BI-008): omitting `principal=` (as every
+    """Omitting `principal=` (as every
     pre-existing caller does) leaves the key absent end to end, matching
-    Slice 3's default behavior.
+    the default behavior.
     """
     emitter, log_path = make_emitter()
     fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
@@ -203,9 +203,9 @@ def test_error_string_returned_verbatim(emitter: LogEmitter) -> None:
 def test_success_dict_not_rewrapped_or_truncated(emitter: LogEmitter) -> None:
     """A result set under `row_cap` is passed through by `handle_mcp_tool_call`
     unchanged -- this layer never independently re-wraps or re-truncates what
-    `execute_cypher_query` already computed (D3). `row_cap` here is
-    deliberately larger than the scripted result set so issue #38's own
-    row-cap enforcement (now load-bearing, Slice 3) is a no-op for this test;
+    `execute_cypher_query` already computed. `row_cap` here is
+    deliberately larger than the scripted result set so the
+    row-cap enforcement is a no-op for this test;
     truncation itself is covered by `tests/query_engine/
     test_execute_cypher_query_row_cap.py`.
     """

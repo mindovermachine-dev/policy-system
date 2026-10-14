@@ -1,4 +1,4 @@
-"""Tests for ps_service.logging.facade.emit_log_entry (AC#1, AC#2, M15, M7/D9)."""
+"""Tests for ps_service.logging.facade.emit_log_entry."""
 
 from __future__ import annotations
 
@@ -36,16 +36,14 @@ def test_emit_log_entry_two_threads_same_emitter_no_cross_contamination(
     def worker(tag: str) -> None:
         with bind_run_context(tag):
             for i in range(entries_per_thread):
-                emit_log_entry(
-                    component="ac2", action=f"t{i}", emitter=emitter
-                )  # same instance (M8 fix)
+                emit_log_entry(component="ac2", action=f"t{i}", emitter=emitter)  # same instance
 
     threads = [threading.Thread(target=worker, args=(tag,)) for tag in ("thread-a", "thread-b")]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    emitter.flush()  # same instance the workers used (M8 fix)
+    emitter.flush()  # same instance the workers used
 
     lines = read_lines(log_path)
     assert lines, "no entries were written — wiring bug, not proof of isolation (M8)"

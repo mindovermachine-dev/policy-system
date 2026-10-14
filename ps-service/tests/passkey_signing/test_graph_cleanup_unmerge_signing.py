@@ -1,6 +1,6 @@
-"""Signing ceremony to capability-unmerge execution over HTTP (issue #190, slice 15).
+"""Signing ceremony to capability-unmerge execution over HTTP.
 
-AC-BI-017/021/022: the real approval service, signing router, real WebAuthn verification,
+The real approval service, signing router, real WebAuthn verification,
 executor registry, executor, locator, planner and writer run; only the graph rows, the stores and
 the role grants are in-memory fakes. A replayed, expired or re-targeted approval never reaches
 the graph.

@@ -1,4 +1,4 @@
-"""Smoke tests for the shared test fakes (issue #165 Slice 0).
+"""Smoke tests for the shared test fakes.
 
 Later script tests (owner lib, eval script) put these fakes on PATH. These tests exist so a
 failure there is attributable to the script under test, not to the fake's behaviour.
@@ -274,8 +274,8 @@ def test_blueprint_apply_is_recorded_for_a_known_instance(curl: FakeCurl) -> Non
 def test_blueprint_list_and_apply_serve_the_shape_recorded_from_a_live_authentik(
     curl: FakeCurl,
 ) -> None:
-    """LC2 (issue #165) recorded `GET /managed/blueprints/?name=` and `POST .../apply/` against a
-    real Authentik 2026.8.3; the shapes were assumed before that.
+    """The fake serves `GET /managed/blueprints/?name=` and `POST .../apply/` in the shape a
+    real Authentik 2026.8.3 returned.
     """
     _, status, listing = curl.call(f"{API}/managed/blueprints/?name=Policy%20System%20local%20TLS")
 

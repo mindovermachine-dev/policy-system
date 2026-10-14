@@ -1,10 +1,10 @@
-"""The governance backfill is a read-resolve-write through the gateway (AC-BI-006, issue #211).
+"""The governance backfill is a read-resolve-write through the gateway.
 
-`get_policy` (and every lifecycle read that gates on `status`) first fills what a pre-#134 graph
+`get_policy` (and every lifecycle read that gates on `status`) first fills what an older graph
 lacks: a Policy's `version` and a Standard's or Control's `status`. It reads what is NULL, then
 writes ONE group of `MergeProperty` for exactly the nodes that need it, with no audit link (a
 backfill has no audit row). A tree with nothing to fill logs nothing at all, not even the
-legacy-edge stamp. The gateway is only needed when there is something to write (D3/M4): a read of
+legacy-edge stamp. The gateway is only needed when there is something to write: a read of
 an already-backfilled tree works with no gateway installed.
 """
 
@@ -36,7 +36,7 @@ _POLICY = "pol_x"
 
 
 def _legacy_tree(rig: LifecycleRig, *, legacy_edges: bool = False, status: str = "draft") -> None:
-    """A pre-#134 tree: no Policy `version`, no Standard or Control `status`."""
+    """A legacy tree: no Policy `version`, no Standard or Control `status`."""
     rig.seed_policy(
         _POLICY,
         status=status,
@@ -82,7 +82,6 @@ def _no_gateway() -> LifecycleSubmitter:
 def test_a_legacy_tree_is_filled_in_one_group_with_no_audit_link(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-006, AC-BI-008."""
     _legacy_tree(lifecycle_rig)
 
     _read(lifecycle_rig)
@@ -131,7 +130,6 @@ def test_a_control_takes_the_root_policys_status_never_its_standards(
 
 
 def test_a_second_read_changes_and_logs_nothing(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-006."""
     _legacy_tree(lifecycle_rig)
     _read(lifecycle_rig)
     position = lifecycle_rig.store.last_position("policy_system")
@@ -145,7 +143,7 @@ def test_a_second_read_changes_and_logs_nothing(lifecycle_rig: LifecycleRig) -> 
 def test_a_backfilled_tree_with_legacy_edges_logs_nothing_not_even_the_stamp(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-006: nothing to fill means no group and no stamp group."""
+    """Nothing to fill means no group and no stamp group."""
     lifecycle_rig.seed_policy(
         _POLICY,
         owner=_OWNER,
@@ -206,7 +204,7 @@ def test_a_missing_policy_writes_nothing_and_is_not_found(lifecycle_rig: Lifecyc
 def test_a_backfilled_tree_is_read_without_asking_for_a_gateway(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """D3/M4: the submitter is only resolved when there is something to write."""
+    """The submitter is only resolved when there is something to write."""
     lifecycle_rig.seed_policy(
         _POLICY, owner=_OWNER, standards=(SeedStandard("std_1", "S1"),), legacy_edges=False
     )
@@ -219,7 +217,7 @@ def test_a_backfilled_tree_is_read_without_asking_for_a_gateway(
 def test_a_tree_that_needs_a_fill_fails_closed_without_a_gateway(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """D3/M4."""
+    """A fill needed with no gateway fails closed."""
     _legacy_tree(lifecycle_rig)
 
     with pytest.raises(GraphWriteUnavailableError):
@@ -232,7 +230,7 @@ def test_a_tree_that_needs_a_fill_fails_closed_without_a_gateway(
 def test_a_failed_fill_is_the_persistence_error_not_a_raw_driver_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011: the direct backfill leaked a raw `RedisError` from here."""
+    """A failed fill surfaces as the persistence error, not a raw `RedisError`."""
     _legacy_tree(lifecycle_rig)
     lifecycle_rig.store.fail_appends()
 

@@ -1,17 +1,16 @@
-"""Tests for `execute_cypher_query`'s timeout enforcement (AC-BI-004, AC-BI-005, AC-BI-009).
+"""Tests for `execute_cypher_query`'s timeout enforcement.
 
-PLAN.md §4 S2 / D1 / D2: `timeout_ms` is threaded straight into the single
+`timeout_ms` is threaded straight into the single
 `graph.query(query, timeout=timeout_ms)` call site (the caller's own query,
 never `_is_graph_seeded`'s own separate `graph.query` call). FalkorDB has no
-dedicated timeout exception type (PLAN.md §2.5), so a server-side abort is
-classified by a message-substring check (`_classify_execution_failure`,
-D2) -- `"timed out"` (case-insensitive) in the exception's own message means
+dedicated timeout exception type, so a server-side abort is
+classified by a message-substring check (`_classify_execution_failure`)
+-- `"timed out"` (case-insensitive) in the exception's own message means
 `outcome="timeout"`, anything else means `outcome="failed"` -- without ever
 logging the raw exception message or the raw query text.
 
-`row_cap` is accepted but not yet load-bearing in this slice (S3 adds
-truncation) -- every test here uses a `row_cap` value larger than any
-scripted result set so it is a no-op.
+`row_cap` is accepted but not exercised here -- every test here uses a `row_cap` value larger
+than any scripted result set so it is a no-op.
 
 Hand-written structural fakes throughout, per repo convention (no
 `unittest.mock`), mirroring `test_execute_cypher_query_logging.py`'s style.
@@ -52,7 +51,7 @@ class _ScriptedQueryResult:
 
 
 class _TimeoutRecordingGraphHandle:
-    """Satisfies `GraphHandle` structurally -- reports itself as seeded (D11)
+    """Satisfies `GraphHandle` structurally -- reports itself as seeded
     for `_SEED_CHECK_QUERY`, and records the `timeout=` kwarg it was called
     with for the caller's own query.
     """
@@ -70,7 +69,7 @@ class _TimeoutRecordingGraphHandle:
 
 
 class _RaisingGraphHandle:
-    """Satisfies `GraphHandle` structurally -- reports itself as seeded (D11)
+    """Satisfies `GraphHandle` structurally -- reports itself as seeded
     for `_SEED_CHECK_QUERY`, and raises a scripted exception for the caller's
     own query.
     """
@@ -92,7 +91,7 @@ def _assert_no_query_text_or_exception_message_logged(
     """Direct positive check: neither the query text nor the exception's own
     message ever appears anywhere in the serialized entry (mirrors
     `test_execute_cypher_query_logging.py::_assert_no_query_text_logged`,
-    extended to also cover the exception message D2's classification reads
+    extended to also cover the exception message the classification reads
     but must never persist).
     """
     serialized = json.dumps(entry)

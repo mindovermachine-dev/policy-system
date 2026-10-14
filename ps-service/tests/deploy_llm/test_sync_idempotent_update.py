@@ -1,9 +1,8 @@
-"""`scripts/sync-llm-secrets-to-kind.sh`: idempotent rerun (AC-BI-017, PLAN.md §5/S13;
-CHANGES.md Row 2 adds the raw-key-value test).
+"""`scripts/sync-llm-secrets-to-kind.sh`: idempotent rerun.
 
-Should need no script change if S12 already used the `create --dry-run=client -o yaml |
-apply -f -` idiom -- this slice proves that property end-to-end, exactly as S9 did for
-`deploy-llm.sh`'s own idempotency (AC-BI-011).
+Needs no script change when the secret write already uses the `create --dry-run=client -o yaml |
+apply -f -` idiom -- this module proves that property end-to-end, as the `deploy-llm.sh`
+tests do for that script's own idempotency.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ API_VERSION_VALUE = "preview"
 
 
 def _hash8(subscription_id: str) -> str:
-    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars (PLAN.md §0.4)."""
+    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars."""
     return hashlib.sha256(subscription_id.encode("utf-8")).hexdigest()[:8]
 
 

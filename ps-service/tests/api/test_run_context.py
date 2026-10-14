@@ -1,4 +1,4 @@
-"""End-to-end run-id propagation tests for the PS Service REST API (Increment 7, #51a).
+"""End-to-end run-id propagation tests for the PS Service REST API.
 
 Proves the async ``provide_run_id`` generator dependency's ``bind_run_context()``
 binding actually reaches:
@@ -12,8 +12,8 @@ A fully-stubbed Logging boundary would not prove the first point, so
 ``test_log_lines_emitted_during_a_request_carry_the_returned_run_id`` runs
 against a real ``configure()``d facade (the ``configured_logging`` fixture).
 
-AC coverage: AC-BI-010 (run context bound; every log line carries the run id;
-the run id is returned to the caller).
+Covers: run context bound; every log line carries the run id;
+the run id is returned to the caller.
 """
 
 from __future__ import annotations
@@ -86,9 +86,9 @@ def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
     app.dependency_overrides[get_principal] = lambda: Principal(sub="owner-1", iss="https://idp")
-    audit_store = InMemoryAuditStore()  # catalog ingestion writes `ingestion_run.*` rows (#195)
+    audit_store = InMemoryAuditStore()  # catalog ingestion writes `ingestion_run.*` rows
     app.dependency_overrides[provide_audit_store] = lambda: audit_store
-    rig = GatewayRig()  # the internal route fails closed without a gateway (issue #208)
+    rig = GatewayRig()  # the internal route fails closed without a gateway
     override_gateway(app, rig, RecordingSystemAudit(rig))
     return TestClient(app, raise_server_exceptions=False)
 
@@ -104,11 +104,11 @@ def _close_gateway_rigs() -> Iterator[None]:  # pyright: ignore[reportUnusedFunc
 def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+    """Every test below drives a caller holding `ComplianceOfficer` by default.
 
     The `source: "catalog"` path of `POST /ingestions` is now gated behind
     `require_access_role`, which has no local-test-bypass carve-out
-    (PLAN.md §3.2) -- so every pre-existing happy-path test in this file that
+    -- so every happy-path test in this file that
     posts a `source: "catalog"` body needs a principal holding the role.
     `source: "internal"` requests and `GET /catalog` are unaffected by the
     gate, but installing this grant unconditionally is harmless for them too.
@@ -119,7 +119,7 @@ def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytes
 def test_log_lines_emitted_during_a_request_carry_the_returned_run_id(
     configured_logging: Path, read_lines: ReadLines
 ) -> None:
-    """AC-BI-010: every line the orchestration emits carries the run id returned to the caller.
+    """Every line the orchestration emits carries the run id returned to the caller.
 
     The route binds one ``bind_run_context()`` in the async ``provide_run_id``
     dependency and hands the pipeline no explicit emitter, so the
@@ -151,7 +151,7 @@ def test_log_lines_emitted_during_a_request_carry_the_returned_run_id(
 def test_log_lines_emitted_during_an_internal_request_carry_the_returned_run_id(
     configured_logging: Path, read_lines: ReadLines
 ) -> None:
-    """AC-BI-016: the internal-ingestion path's ``ingestion_run`` log lines carry
+    """The internal-ingestion path's ``ingestion_run`` log lines carry
     the run id, source identifier, caller, and start/end timestamps.
 
     ``run_internal_ingestion_pipeline`` calls the same ``_emit_run`` helper as
@@ -188,7 +188,7 @@ def test_log_lines_emitted_during_an_internal_request_carry_the_returned_run_id(
 
 @pytest.mark.usefixtures("configured_logging")
 def test_error_body_carries_the_request_run_id() -> None:
-    """AC-BI-010: a structured error body carries the run id bound for the request.
+    """A structured error body carries the run id bound for the request.
 
     A failing stage yields a 502 ``PipelineStageError`` body; its ``run_id`` is
     read from ``request.state.run_id``, which ``provide_run_id`` set from the same
@@ -216,15 +216,14 @@ def test_get_catalog_succeeds_on_two_consecutive_requests(
 ) -> None:
     """`GET /catalog` is stateless and repeat-request-safe.
 
-    Replaces the deleted `GET /regulations` route's per-request run-id test
-    (issue #78): `list_curated_catalog` takes no `provide_run_id` dependency
+    `list_curated_catalog` takes no `provide_run_id` dependency
     and has no `run_id` field in its response, so there is nothing
     per-request to assert differs. Instead this proves the route survives
     two consecutive calls, returning the same non-empty catalog both times.
 
-    Since issue #125, `GET /catalog` fetches over HTTP -- `provide_curated_
+    `GET /catalog` fetches over HTTP -- `provide_curated_
     catalog_dependencies` is overridden with a fake transport (never real
-    network, BASELINE's hermetic-suite requirement), and `configured_logging`
+    network; the suite is hermetic), and `configured_logging`
     installs a real Logging facade since `fetch_catalog` now always logs.
     """
     _ = configured_logging
@@ -262,11 +261,10 @@ def test_get_catalog_succeeds_on_two_consecutive_requests(
 
 @pytest.mark.usefixtures("configured_logging")
 def test_two_consecutive_ingestion_requests_get_different_run_ids() -> None:
-    """AC-BI-010/AC-BI-007: each request gets its own ``bind_run_context()`` binding.
+    """Each request gets its own ``bind_run_context()`` binding.
 
-    `provide_run_id`'s fresh-id-per-request guarantee is now proven against
-    `POST /ingestions` (the deleted `GET /regulations` route's replacement
-    for this claim, per issue #78's PLAN.md -- `/ingestions` is chosen over
+    `provide_run_id`'s fresh-id-per-request guarantee is proven against
+    `POST /ingestions` (chosen over
     `/change-checks`, which also uses `provide_run_id`, because this file
     already has fake-dependency machinery wired for `/ingestions` and
     `/change-checks` would require pulling in separate fixture machinery).

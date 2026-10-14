@@ -2,7 +2,7 @@
 
 Mirrors `ps_service.company_merge.tests.test_falkordb_client`'s/
 `ps_service.domain_mapper.tests.test_falkordb_client`'s shape
-(PLAN_REVIEWED.md §5, Increment 2) -- this is a deliberate near-duplicate
+-- this is a deliberate near-duplicate
 component (own copy, not a shared import; see the module's own docstring),
 so its tests are a deliberate near-duplicate too, trimmed to only what this
 component actually exposes (no `check_connectivity`/graph-naming helper).

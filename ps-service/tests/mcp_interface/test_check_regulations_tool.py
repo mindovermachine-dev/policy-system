@@ -1,23 +1,23 @@
-"""Tests for the registered `check_regulations` MCP tool (issue #126, Slices 2.1-2.2).
+"""Tests for the registered `check_regulations` MCP tool.
 
-Slice 2.1 covers the happy-path sweep: `check_regulations` (zero parameters
--- there is no AC-BI-005 format-validation surface for this tool, stated
-explicitly here so its absence isn't mistaken for a gap) runs the D-PREFLIGHT
-LLM-Interface-health check, then delegates in-process to
-`run_change_check_sweep` (D-DELEGATE) via the shared `_run_mcp_action` audit
-wrapper (D-AUDIT-WRAPPER), returning
-`routes._to_change_check_response(result).model_dump()` (D-RESPONSE-SHAPE).
+The happy-path sweep: `check_regulations` (zero parameters
+-- there is no format-validation surface for this tool, stated
+explicitly here so its absence isn't mistaken for a gap) runs the
+LLM-Interface-health preflight check, then delegates in-process to
+`run_change_check_sweep` via the shared `_run_mcp_action` audit
+wrapper, returning
+`routes._to_change_check_response(result).model_dump()`.
 
-Slice 2.2 wires the remaining D-SANITIZE-UNEXPECTED rows for this tool: the
-D-PREFLIGHT LLM-Interface-unhealthy check (proving it fires for this specific
+The remaining sanitisation rows for this tool: the
+LLM-Interface-unhealthy preflight check (proving it fires for this specific
 tool, not just `ingest_regulation`), the graph-unavailable sanitiser around
 `dependencies.open_single_tenant` (new production code:
 `_sanitize_change_check_graph_opens`, mirroring `ingest_regulation`'s own
 `_sanitize_pipeline_graph_opens` shape and reusing the same generic
 `_sanitize_graph_open` per-opener wrapper -- not reinvented), and
-`_run_mcp_action`'s own residual unexpected-exception safety net (D-AUDIT-
-WRAPPER point 4), proven here specifically for `check_regulations` via a
-fake `dependencies.read_tracked_instruments` raising something unclassified.
+`_run_mcp_action`'s own residual unexpected-exception safety net, proven here specifically for
+`check_regulations` via a fake `dependencies.read_tracked_instruments` raising something
+unclassified.
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
 `test_ingest_regulation_tool.py`'s/`test_cypher_tool.py`'s own convention.
@@ -25,7 +25,7 @@ The fake `ChangeCheckDependencies` bundle
 (`tests/api/_fakes.py::build_fake_change_check_dependencies`) is the existing
 fixture already used by the REST-side `run_change_check_sweep` tests
 (`tests/api/test_change_check_orchestration.py`) -- reused here unchanged,
-not reinvented, per PLAN.md's own instruction. No single existing REST-side
+not reinvented. No single existing REST-side
 test scripts all six outcome buckets in one sweep, so this file's one test
 assembles that scenario itself, from the same fixture, to prove
 `check_regulations` reports every bucket verbatim.
@@ -72,7 +72,7 @@ pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 
 class NationalTranspositionNotSupportedError(Exception):
-    """Locally-defined test double proving D10's name-matching in
+    """Locally-defined test double proving the name-matching in
     `change_check_orchestration._reingest_one` (mirrors
     `test_routes_change_checks.py`'s own identically-named local double) --
     not an import of the real `ps_service.change_monitor.errors` type.
@@ -99,8 +99,7 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_with_principal_logged(
     `amendment_reingested`, `skipped`, `reingest_failed`. Asserts the
     returned dict's `instruments` list carries all six verbatim, plus the
     `mcp_interface` started/succeeded log pair carrying the resolved
-    principal (D-AUTH's stated gap-closing behavior for this tool, since
-    `run_change_check_sweep` itself takes no `caller` parameter at all).
+    principal (the sweep itself takes no `caller` parameter at all).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -179,7 +178,7 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_with_principal_logged(
     entry_skipped = CatalogEntry(
         celex="32024R0005", title="Skipped Regulation", short_name="skip-reg", version="1.0"
     )
-    # Deliberately no catalog entry for "32024R0006" -- the D5 "no curated
+    # Deliberately no catalog entry for "32024R0006" -- the "no curated
     # catalog entry" path, driving id_reingest_failed's `reingest_failed`
     # outcome without needing a scripted `trigger_reingestion` failure.
     catalog_entries = {"32024R0004": entry_amendment, "32024R0005": entry_skipped}
@@ -193,7 +192,7 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_with_principal_logged(
         "Re-ingestion of a national_transposition instrument is not supported..."
     )
     # trigger_reingestion is only ever called for id_amendment and id_skipped
-    # (id_reingest_failed short-circuits before it per D5), in tracked-list
+    # (id_reingest_failed short-circuits before it), in tracked-list
     # order -- id_amendment first, id_skipped second.
     fake = build_fake_change_check_dependencies(
         tracked=tracked,
@@ -247,18 +246,18 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_with_principal_logged(
         assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
 
 
-# --- Slice 2.2: remaining D-SANITIZE-UNEXPECTED rows for this tool ----------
+# --- remaining sanitisation rows for this tool ----------
 
 
 def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """D-PREFLIGHT: when `dependency_health.is_healthy(LLM_INTERFACE)` is
+    """Preflight: when `dependency_health.is_healthy(LLM_INTERFACE)` is
     `False`, `check_regulations` fails fast with the exact `handlers.py:72`
     message, before any graph is opened or the sweep is run -- and the
     failure is still logged with the resolved principal. Mirrors
     `test_ingest_regulation_tool.py`'s identically-named test for this same
-    D-PREFLIGHT branch, proven here specifically for `check_regulations`.
+    preflight branch, proven here specifically for `check_regulations`.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -288,7 +287,7 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
 def test_graph_unavailable_returns_named_error_when_single_tenant_graph_open_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D-SANITIZE-UNEXPECTED: `run_change_check_sweep` calls
+    """`run_change_check_sweep` calls
     `dependencies.open_single_tenant` directly, with no try/except of its
     own -- a generic exception from that opener must sanitise to the same
     fixed message `_resolve_graph`/`ingest_regulation` already use, never
@@ -324,7 +323,7 @@ def test_graph_unavailable_returns_named_error_when_single_tenant_graph_open_fai
 def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """D-AUDIT-WRAPPER point 4 / D-SANITIZE-UNEXPECTED's last row: an
+    """The audit wrapper's residual safety net: an
     exception `check_regulations`'s own body does not itself sanitise (here,
     `dependencies.read_tracked_instruments` raising something unclassified,
     with the single-tenant graph already successfully opened) is caught by
@@ -368,7 +367,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
 
 
 def test_sanitizer_wraps_the_pipeline_baseline_opener_so_a_driver_error_never_leaks() -> None:
-    """Issue #201: the sweep now opens the baseline graph (inside the re-ingest), so the
+    """The sweep opens the baseline graph (inside the re-ingest), so the
     MCP sanitiser must wrap that opener too -- a raw driver error carries host/port detail.
     """
     fake = build_fake_change_check_dependencies()

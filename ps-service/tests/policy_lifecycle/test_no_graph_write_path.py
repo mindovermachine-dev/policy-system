@@ -1,4 +1,4 @@
-"""Policy Lifecycle holds no write path to FalkorDB (issue #211, AC-BI-001).
+"""Policy Lifecycle holds no write path to FalkorDB.
 
 Every `policy_system` mutation goes through the Graph Write Gateway, so no module under
 `ps_service.policy_lifecycle` may open a FalkorDB connection of its own, name the gateway's apply
@@ -14,8 +14,8 @@ calls one of those writers.
 
 The guard is itself guarded: planted violations must be found, and prose must not be.
 
-Every writer is migrated (S10 of #211 deleted the last write statement), so the scan of every
-module and the sink check are plain tests: AC-BI-001 is enforced.
+Every writer is migrated (the last write statement is gone), so the scan of every
+module and the sink check are plain tests: the no-write-path rule is enforced.
 """
 
 from __future__ import annotations

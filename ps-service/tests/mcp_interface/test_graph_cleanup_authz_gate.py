@@ -1,11 +1,11 @@
-"""Authentication + `ComplianceOfficer` gate on every graph-cleanup MCP tool (issue #190).
+"""Authentication + `ComplianceOfficer` gate on every graph-cleanup MCP tool.
 
-AC-BI-001: no real authenticated session (the local-test bypass included) ->
+No real authenticated session (the local-test bypass included) ->
 rejected, the graph opener and every store are never touched.
-AC-BI-002: a caller without an explicit `ComplianceOfficer` grant (including
+A caller without an explicit `ComplianceOfficer` grant (including
 SystemAdmin / SystemOwner -- no hierarchy override) -> rejected, graph unchanged.
 
-`_TOOLS` is extended by each later slice that registers a cleanup tool.
+`_TOOLS` is extended by each cleanup tool that is registered.
 """
 
 from __future__ import annotations

@@ -1,8 +1,8 @@
-"""Tests for `ps_service.passkey_signing.store` (issue #131, PLAN.md Slice 1).
+"""Tests for `ps_service.passkey_signing.store` .
 
 Unit tests below exercise `FakePendingApprovalStore` (`_fakes.py`), a
 `Protocol`-typed in-memory double -- proving the `PendingApprovalStore`
-contract is sound without a real Postgres (PLAN.md §0.6's own established
+contract is sound without a real Postgres (the established
 `falkordb_live` split: unit tests against a fake store, one `postgres_live`
 test proves the real round-trip). The `postgres_live`-marked test at the
 bottom of this file is that proof: it applies migrations, inserts a real row
@@ -122,14 +122,14 @@ def test_two_created_rows_get_distinct_ids_codes_and_nonces() -> None:
     assert first.nonce != second.nonce
 
 
-# --- postgres_live (issue #131, PLAN.md Slice 1) ----------------------------
+# --- postgres_live ----------------------------
 
 _LIVE_TEST_TOOL_NAME = "near_misses_resolve_slice1_store_live_test"
 
 
 @pytest.mark.postgres_live
 def test_create_and_read_back_a_pending_approval_against_a_real_postgres_instance() -> None:
-    """AC-BI-006/AC-BI-008/AC-BI-014 against a REAL PostgreSQL instance.
+    """Round-trip against a REAL PostgreSQL instance.
 
     Applies migrations, inserts a real row via `PsycopgPendingApprovalStore`,
     reads it back both by `id` and by `code_hash`, and confirms

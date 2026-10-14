@@ -1,7 +1,7 @@
-"""The guides carry no stale `ps-*` plugin/connector names and their links resolve (issue #178).
+"""The guides carry no stale `ps-*` plugin/connector names and their links resolve.
 
 Reads the real markdown files off disk; no fakes. The old connector names are built by
-concatenation so the repo-wide AC-BI-008 grep stays empty. Deliberately structural: it does
+concatenation so the repo-wide grep for the old names stays empty. Deliberately structural: it does
 not assert that any particular wording or section exists, so the guides stay free to be
 rewritten. Renaming a heading is fine as long as the links to it are updated.
 """

@@ -1,4 +1,4 @@
-"""Tests for `scripts/verify-backup-restore.sh restore | wait-ready | verify-provision` (#216, V2).
+"""Tests for `scripts/verify-backup-restore.sh restore | wait-ready | verify-provision`.
 
 The script runs for real against fake `kubectl`, `helm` and `jq`-free helpers on PATH (the
 external CLIs are the process boundary). The fake `kubectl` records its argv, copies the stdin of

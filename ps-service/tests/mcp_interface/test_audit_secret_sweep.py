@@ -1,6 +1,6 @@
-"""No new audit row or log line carries a secret, free-text error, trace or path (issue #195).
+"""No new audit row or log line carries a secret, free-text error, trace or path.
 
-AC-BI-009 / AC-BI-010 capstone: every new emitter (sync ingest, restore, near-miss resolve,
+Capstone: every new emitter (sync ingest, restore, near-miss resolve,
 `check_regulations` re-ingest, invite, and the async run's completion builder) is driven once
 through a FAILING path whose exception message and inputs are full of sentinel secrets. None of
 the sentinels may appear in any recorded audit row or in any emitted log line.
@@ -73,7 +73,7 @@ def _assert_clean(store: InMemoryAuditStore, lines: list[dict[str, object]]) -> 
     """No sentinel in any audit row or in a log line emitted by this issue's code.
 
     Pre-existing operational logs (e.g. the restore stage failure entry, which logs the stage
-    exception for operators) are out of scope: AC-BI-009/010 concern the audit rows and what the
+    exception for operators) are out of scope: this sweep concerns the audit rows and what the
     new audit emission logs.
     """
     new_lines = [
@@ -189,7 +189,7 @@ def test_invite_failure_rows_and_logs_contain_no_secret(
 
 
 def test_async_completion_entry_cannot_carry_text_from_a_result_or_failure() -> None:
-    """The async run's builder has no field able to hold the stage error text (AC-BI-010)."""
+    """The async run's builder has no field able to hold the stage error text."""
     result: dict[str, object] = {
         "error": _LEAK,
         "stages": [{"stage": "extract", "summary": {"error": _LEAK}, "detail": _LEAK}],

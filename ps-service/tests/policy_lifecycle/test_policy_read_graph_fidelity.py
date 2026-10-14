@@ -1,4 +1,4 @@
-"""Issue #211, S0: the real `find_*`/`read_*` functions behave over `PolicyReadGraph` as expected.
+"""the real `find_*`/`read_*` functions behave over `PolicyReadGraph` as expected.
 
 The lifecycle tests that move onto the gateway rig read through `PolicyReadGraph`, an interpreter of
 the eight fixed read statements. These tests run the REAL `graph_writer` read functions over seeded

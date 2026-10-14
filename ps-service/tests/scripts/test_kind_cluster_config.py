@@ -1,4 +1,4 @@
-"""Structural regression test for `deploy/kind/cluster.yaml` (issue #160, Slice 1).
+"""Structural regression test for `deploy/kind/cluster.yaml`.
 
 Pure YAML load — no `kind`/`helm`/container runtime needed, hermetic, no marker required
 (same tier as `test_verify_chart_independence.py`'s home directory, but that one is marked
@@ -7,12 +7,12 @@ YAML file on disk).
 
 Guards two things together:
   - The two pre-existing loopback-only `extraPortMappings` entries (ps-service NodePort,
-    falkordb-browser NodePort) are untouched — a regression guard for AC-BI-007's "no
-    *other* port newly reachable" framing.
-  - The new third entry (Authentik's server Service HTTPS NodePort, issues #160/#165; the
+    falkordb-browser NodePort) are untouched — a regression guard that no
+    *other* port is newly reachable.
+  - The new third entry (Authentik's server Service HTTPS NodePort; the
     plain-HTTP 30080 is no longer host-mapped) has
-    `hostPort == containerPort` and `listenAddress: "0.0.0.0"` — the exact shape PLAN.md
-    §1.2 specifies, needed so the issuer URL is byte-identical for LAN clients (who
+    `hostPort == containerPort` and `listenAddress: "0.0.0.0"` — the exact shape
+    needed so the issuer URL is byte-identical for LAN clients (who
     traverse the host-port mapping) and in-cluster pods (who reach the node's own
     container IP directly on the NodePort, bypassing the mapping entirely).
 """
@@ -63,7 +63,7 @@ def test_first_two_port_mappings_are_unchanged_loopback_entries() -> None:
 
 
 def test_no_plain_http_authentik_host_mapping_remains() -> None:
-    # Issue #165 (OD-3): the plain-HTTP NodePort 30080 stays reachable inside the node only;
+    # The plain-HTTP NodePort 30080 stays reachable inside the node only;
     # only the HTTPS NodePort is mapped to the host.
     mappings = _load_extra_port_mappings()
     assert all(m["containerPort"] != PLAIN_HTTP_NODE_PORT for m in mappings)

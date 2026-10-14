@@ -1,10 +1,10 @@
-"""Stateful create -> propose -> approve -> detect chain for `ps-author-policy` (#185, S8).
+"""Stateful create -> propose -> approve -> detect chain for `ps-author-policy`.
 
-Closes the AC-007 bug at fake level: after a fork of an approved Policy is
+Closes a fork-detection gap at fake level: after a fork of an approved Policy is
 created, proposed and approved through the REAL MCP tools, the skill's own
 branch-detection query (`GOVERNED_BY` + `SUPERSEDED_BY`, SKILL.md step 3) must
 find the new Policy as the Capability's governor -- never "no governing
-Policy". Since issue #211 every write of the chain is a Graph Write Gateway group over the
+Policy". Every write of the chain is a Graph Write Gateway group over the
 process gateway rig's graph; the handle the tools read through answers the lifecycle reads and the
 skill's detection queries from that same graph. It cannot validate Cypher text -- that is the
 `falkordb_live` file's job (`policy_lifecycle/test_governed_by_live.py`).
@@ -63,7 +63,7 @@ class _Result:
 class _ChainGraph(PolicyReadGraph):
     """The process gateway rig's graph, as the lifecycle tools and the skill's queries read it.
 
-    Every write of the chain is a gateway group on that graph (issue #211). This handle answers
+    Every write of the chain is a gateway group on that graph. This handle answers
     the lifecycle reads through the shared read double and the skill's two detection queries from
     the same graph; it refuses every statement it was not taught.
     """
@@ -139,7 +139,7 @@ class _AuditStore:
         del kwargs
 
     def record_standalone_with_event_id(self, **kwargs: object) -> str:
-        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        """`record_standalone`, returning an id the process gateway's log accepts."""
         del kwargs
         event_id = str(uuid.uuid4())
         installed_process_gateway().rig.store.audit_rows.add(event_id)
@@ -216,7 +216,7 @@ def _seed_approved_prior() -> None:
 def test_fork_create_propose_approve_then_detection_finds_the_new_governed_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-007: the second run no longer re-reports "no governing Policy"."""
+    """The second run no longer re-reports "no governing Policy"."""
     configure()
     graph = _ChainGraph()
     _seed_approved_prior()
@@ -254,7 +254,7 @@ def test_fresh_create_with_capability_ids_is_found_by_detection_as_a_governing_d
     configure()
     graph = _ChainGraph()
     _install(monkeypatch, graph)
-    # The claim is a guarded gateway group (issue #211): the Capability exists in the graph the
+    # The claim is a guarded gateway group: the Capability exists in the graph the
     # gateway writes.
     PolicyGraphSeeder(installed_process_gateway().rig.graphs.open("policy_system")).seed_capability(
         _CAP_ID, name=_CAP_NAME

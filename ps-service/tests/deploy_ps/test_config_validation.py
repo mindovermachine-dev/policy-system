@@ -1,4 +1,4 @@
-"""Config validation for `scripts/deploy-ps-prod.sh` (contributes AC-BI-019; PLAN.md §5/S5).
+"""Config validation for `scripts/deploy-ps-prod.sh`.
 
 `validate_config` must reject a malformed `scripts/ps-defaults.conf` -- named field, named
 file, actionable message -- before any `az` call is made (enforced here simply by there being
@@ -6,8 +6,8 @@ no fake `az` on `PATH` yet: an invalid-config case that somehow reached an `az` 
 with "command not found", not the exit code these tests assert).
 
 Unlike `scripts/deploy-llm.sh`, `ps-defaults.conf` has no single `LLM_REGION` field (only
-`LLM_REGION_CANDIDATES` -- region *selection* is a later slice, S8) and adds a SKU field per
-model (`LLM_CHAT_MODEL_SKU`/`LLM_EMBED_MODEL_SKU`, PLAN.md §1) since these SKUs are
+`LLM_REGION_CANDIDATES` -- region *selection* happens later) and adds a SKU field per
+model (`LLM_CHAT_MODEL_SKU`/`LLM_EMBED_MODEL_SKU`) since these SKUs are
 evaluator-tunable here, unlike `deploy-llm.sh`'s hardcoded literals.
 """
 

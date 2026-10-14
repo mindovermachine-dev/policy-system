@@ -1,7 +1,7 @@
-"""Decline path: answering `N` at the confirmation prompt (AC-BI-003; PLAN.md §5/S3).
+"""Decline path: answering `N` at the confirmation prompt.
 
-On `N`, `deploy-llm.sh` prints the config file path and exits 0 -- nothing past step 3 of
-PLAN.md §0.1's resolved sequence runs (no RBAC preflight, no region selection, no writes).
+On `N`, `deploy-llm.sh` prints the config file path and exits 0 -- nothing past the confirmation
+step runs (no RBAC preflight, no region selection, no writes).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def test_answering_n_exits_zero_and_prints_config_file_path(
     run = deploy_llm_fixture.run_deploy(stdin="N\n", expect=0)
 
     assert CONFIG_DISPLAY_PATH in run.stdout
-    # Declining changes nothing in the subscription (AC-BI-003's "exits without changing
+    # Declining changes nothing in the subscription ("exits without changing
     # anything") -- the pre-seeded identity files are the only thing on disk, still.
     assert _azure_state_listing(deploy_llm_fixture) == before
 

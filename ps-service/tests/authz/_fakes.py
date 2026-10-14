@@ -31,9 +31,9 @@ _BOOTSTRAP_SENTINEL = "system:bootstrap"  # mirrors `store.py`'s own sentinel
 class RejectedAuditRecord:
     """One `record_grant_rejected`/`record_revoke_rejected` call `FakeAccessRoleStore` observed.
 
-    Lets `tests/authz/test_service.py` assert AC-BI-012's "attempting actor,
+    Lets `tests/authz/test_service.py` assert the "attempting actor,
     target, and reason code" directly, without a real Postgres/`audit_events`
-    row (issue #147, Slice 3).
+    row.
     """
 
     action: str
@@ -52,36 +52,35 @@ class FakeAccessRoleStore:
     Mirrors `PsycopgAccessRoleStore`'s own bootstrap/read behavior exactly
     (`ps_service.authz.store`), so a test exercising this fake proves the
     same contract the real store must uphold, without a live Postgres.
-    `grant`/`revoke` are not implemented here either -- they land in Slice 2,
-    matching `PsycopgAccessRoleStore`'s own current scope.
+    `grant`/`revoke` are not implemented here either -- they are covered by
+    separate fakes below.
     """
 
     _rows: list[AccessRoleAssignmentRow] = field(default_factory=list)
     _events: list[AccessRoleGrantEvent] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
     rejected_records: list[RejectedAuditRecord] = field(default_factory=list)
-    """Every `record_grant_rejected`/`record_revoke_rejected` call observed so far (issue #147)."""
+    """Every `record_grant_rejected`/`record_revoke_rejected` call observed so far."""
     expected_owner: tuple[str, str] | None = None
-    """The operator-configured expected first-owner identity (issue #144, D-6).
+    """The operator-configured expected first-owner identity.
 
     Mirrors `PsycopgAccessRoleStore`'s own `(config.authz_bootstrap_owner_subject,
-    config.authz_bootstrap_owner_issuer)` comparison (D-3). Defaults to `None`,
+    config.authz_bootstrap_owner_issuer)` comparison. Defaults to `None`,
     which matches no principal -- fail-closed by default, consistent with the
     real store's own default-deny posture.
     """
 
     def bootstrap_first_owner(self, principal: tuple[str, str]) -> frozenset[AccessRole]:
-        """Advisory-locked (via `self._lock`) check-empty-then-insert (PLAN.md §0.10)."""
+        """Advisory-locked (via `self._lock`) check-empty-then-insert."""
         with self._lock:
             if self._rows:
                 return frozenset({AccessRole.AUTHENTICATED_USER})
             if principal != self.expected_owner:
-                # AC-BI-004/AC-BI-005: the store is empty, but this principal
+                # The store is empty, but this principal
                 # is not the configured expected owner -- grant nothing,
                 # leave the table empty, and record a distinct rejection
-                # audit event naming the rejected principal (mirrors D-5's
-                # real-store `access_role_grant_events` row shape, since
-                # Slice 4's real-SQL insert doesn't exist yet).
+                # audit event naming the rejected principal (mirrors the
+                # real-store `access_role_grant_events` row shape).
                 subject, issuer = principal
                 self._events.append(
                     AccessRoleGrantEvent(
@@ -135,7 +134,7 @@ class FakeAccessRoleStore:
     def grant(
         self, *, actor: tuple[str, str], target: tuple[str, str], access_role: AccessRole
     ) -> None:
-        """Idempotent insert + one `'grant'` audit event (PLAN.md §4 Slice 2).
+        """Idempotent insert + one `'grant'` audit event.
 
         Mirrors `PsycopgAccessRoleStore.grant`'s own plain, unlocked path --
         used for every grantable role, `SYSTEM_OWNER` included.
@@ -179,9 +178,8 @@ class FakeAccessRoleStore:
         """`DELETE` the matching row (no-op if absent) + one `'revoke'` audit event.
 
         This fake's own scope mirrors `PsycopgAccessRoleStore.revoke`'s
-        current scope (PLAN.md §4 Slice 2): the plain, unlocked path, used
-        for `SYSTEM_ADMIN`/`POLICY_MANAGER` this slice; `SYSTEM_OWNER`'s
-        advisory-locked floor-check branch lands in Slice 3.
+        plain, unlocked path, used for `SYSTEM_ADMIN`/`POLICY_MANAGER`;
+        `SYSTEM_OWNER` takes the advisory-locked floor-check branch.
         """
         with self._lock:
             target_subject, target_issuer = target
@@ -279,14 +277,14 @@ class RaisingAfterGateAccessRoleStore(FakeAccessRoleStore):
 
 @dataclass
 class RaisingAuditOnRejectAccessRoleStore(FakeAccessRoleStore):
-    """A `FakeAccessRoleStore` whose denial-audit recording always raises (issue #147, Slice 3).
+    """A `FakeAccessRoleStore` whose denial-audit recording always raises.
 
     Isolates the "the denial-audit write itself fails" branch of
     `ps_service.authz.service._record_rejected_or_raise_unavailable`
     hermetically: `grant_role`/`revoke_role` must convert
     `AuditPostgresUnavailableError` into `AuthorizationStoreUnavailableError`
     and never let the original `AccessDeniedError`/etc. through unaudited
-    (AC-BI-011's fail-closed contract applied to the denial-recording path).
+    (the fail-closed contract applied to the denial-recording path).
     """
 
     def record_grant_rejected(
@@ -318,8 +316,8 @@ class RaisingAuditOnRejectAccessRoleStore(FakeAccessRoleStore):
 class RaisingAccessRoleStore:
     """An `AccessRoleStore`-shaped fake whose every method raises a connection error.
 
-    Simulates an unreachable PS state Postgres instance (AC-BI-011) -- narrower
-    than the full `Protocol` (only the methods Slice 1's own call sites
+    Simulates an unreachable PS state Postgres instance -- narrower
+    than the full `Protocol` (only the methods this fake's own call sites
     reach need to raise), mirroring `test_near_miss_tools.py`'s own
     deliberately-narrower-than-the-Protocol `_RaisingStore` fake.
     """
@@ -383,19 +381,18 @@ class RaisingAccessRoleStore:
 
 @dataclass
 class FakeAuditStore:
-    """In-memory `AuditStore` stub for `ps_service.authz.service.list_audit_events` tests
-    (issue #147, Slice 4).
+    """In-memory `AuditStore` stub for `ps_service.authz.service.list_audit_events` tests.
 
     `record`/`record_standalone` are present only for `Protocol` conformance
     (mirrors `RaisingAccessRoleStore`'s own "narrower than the full
     `Protocol`, only what this fake's own call sites reach" convention) --
     `list_audit_events`'s own tests never call either. `query` is a spy:
     every call is appended to `query_calls` (the exact `filters`/`cursor`/
-    `page_size` it was called with), so AC-BI-002/AC-BI-008's "query was
+    `page_size` it was called with), so the "query was
     never called" assertions can check `query_calls == []`. Returns
     `query_result` (an empty page by default) unless `raise_on_query` is
     set, in which case it raises that instead -- simulates a Postgres outage
-    discovered only once `query` itself runs (AC-BI-011).
+    discovered only once `query` itself runs.
     """
 
     query_result: AuditQueryPage = field(

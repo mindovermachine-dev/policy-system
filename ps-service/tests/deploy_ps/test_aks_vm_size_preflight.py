@@ -1,25 +1,19 @@
-"""AKS node VM-size allowlist + vCPU quota preflight for `scripts/deploy-ps-prod.sh` (AC-BI-011;
-PLAN.md §0.6/§5/S12).
+"""AKS node VM-size allowlist + vCPU quota preflight for `scripts/deploy-ps-prod.sh`.
 
-Unlike every other slice in this plan, this AC has no spike-proven mechanism to port --
-`spikes/deploy-ps-azure/`'s own README documents it as an undischarged manual step ("Manual steps
-a real installer needs" #3). `check_aks_vm_size`, `vm_size_allowed`, and
-`vm_family_quota_sufficient` are this run's own new design against documented Azure CLI surfaces
+This check has no empirically proven mechanism to port. `check_aks_vm_size`, `vm_size_allowed`, and
+`vm_family_quota_sufficient` are a new design against documented Azure CLI surfaces
 only (`az vm list-skus`, `az vm list-usage`), not yet empirically re-verified against a live
 Azure subscription. Treat this module's coverage as weaker evidence than the ported-bugfix
 modules (e.g. test_quota_check.py) until that re-verification happens.
 
-Interim scope note (mirrors IMPL_SLICE_7.md's own precedent): S13 (`az aks create`) doesn't exist
-yet at this slice, so the "no AKS-related call on failure" test below cannot assert against a
-real `aks create` call the way a full end-to-end proof eventually will. It instead asserts the
-narrower thing provable today: the fake `az` log contains no AKS *creation*-related invocation
-after a failing preflight run. As of issue #120's follow-on to #111's `check_aks_vm_size`
-idempotent-rerun guard, `check_aks_vm_size` now runs `aks_cluster_exists` (`az aks show`) as its
+Scope note: the "no AKS-related call on failure" test below asserts the narrower thing provable
+at this stage: the fake `az` log contains no AKS *creation*-related invocation after a failing
+preflight run. `check_aks_vm_size` runs `aks_cluster_exists` (`az aks show`) as its
 own read-only existence check, unconditionally, as its very first action -- this fires on every
 run, including a preflight failure, and is expected/correct, so `_aks_related_calls` below
-excludes it explicitly rather than asserting zero `aks`-prefixed calls outright. Once S13 lands
-and adds a real `az aks create` call downstream of this preflight, strengthen this to a call-log
-ordering check the way test_provider_registration.py's own note describes for its analogous case.
+excludes it explicitly rather than asserting zero `aks`-prefixed calls outright. This could be
+strengthened to a call-log ordering check against the real `az aks create` call, the way
+test_provider_registration.py's own note describes for its analogous case.
 
 `seed_subscription`'s baseline already seeds AKS_NODE_VM_SIZE as unrestricted with ample vCPU
 quota across every configured candidate region (conftest.py), so every test below only needs to
@@ -134,7 +128,7 @@ def test_neither_check_makes_an_aks_related_az_call_on_failure(
     `az` call is ever made -- S13 (`az aks create`) doesn't exist yet, so this is scoped to what's
     actually callable at this slice (see this module's own docstring): the fake `az` log has zero
     AKS creation-related entries after either failure mode. The read-only `aks show`
-    existence-check guard (`check_aks_vm_size`'s idempotent-rerun guard, see #120) is expected to
+    existence-check guard (`check_aks_vm_size`'s idempotent-rerun guard) is expected to
     fire regardless -- excluded from `_aks_related_calls` and asserted separately below.
     """
     deploy_ps_fixture.fill_tls_contact_email()

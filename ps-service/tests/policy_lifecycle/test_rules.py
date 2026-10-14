@@ -1,10 +1,9 @@
-"""Tests for `ps_service.policy_lifecycle.rules` (issue #134, PLAN.md D-3 / S3).
+"""Tests for `ps_service.policy_lifecycle.rules`.
 
-`PolicyLifecycleRuleContext.action` is the CHANGES.md-widened Literal
-(finding 6, Appendix A) -- `"read"` is included alongside
+`PolicyLifecycleRuleContext.action` is a Literal that
+includes `"read"` alongside
 `"propose"/"approve"/"reject"/"revert"` even though none of these tests
-exercise `"read"` themselves (S13, out of this slice's scope, is its only
-consumer).
+exercise `"read"` themselves (only the read path consumes it).
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ def test_require_status_rejects_every_action_on_deprecated() -> None:
 
 
 def test_require_status_allows_edit_on_draft() -> None:
-    """Issue #136, Slice 1 (PLAN.md §1.2): `edit` requires `draft`."""
+    """`edit` requires `draft`."""
     ctx = PolicyLifecycleRuleContext(
         actor=_ACTOR, owner=_ACTOR, action="edit", current_status="draft"
     )
@@ -101,7 +100,7 @@ def test_block_self_approval_rejects_when_actor_equals_owner() -> None:
 
 
 def test_block_self_approval_allows_same_subject_differing_issuer() -> None:
-    """AC-BI-017 regression case: same subject, different issuer are different people."""
+    """Regression case: same subject, different issuer are different people."""
     ctx = PolicyLifecycleRuleContext(
         actor=_ACTOR,
         owner=_SAME_SUBJECT_OTHER_ISSUER,

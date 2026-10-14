@@ -1,30 +1,29 @@
-"""Tests for the registered `restore_instrument` MCP tool (issue #127, Group 2).
+"""Tests for the registered `restore_instrument` MCP tool.
 
-Slice 2.1 covers the happy path: `restore_instrument(instrument_id=...)`
-(D-INSTRUMENT-ID-STRICTNESS: `instrument_id` validated at the MCP schema
+The happy path: `restore_instrument(instrument_id=...)`
+(`instrument_id` validated at the MCP schema
 layer against `_RESTORE_INSTRUMENT_ID_PATTERN`, at least as strict as
 ps-cli's own `_instrument_id_type` callback) delegates in-process to
-`run_restoration_from_catalog_source` (D-RESTORE-DELEGATE -- the exact same
+`run_restoration_from_catalog_source` (the exact same
 function `POST /restorations/from-catalog`'s own route calls), via the
-shared `_run_mcp_action` audit wrapper (D-AUDIT-WRAPPER), returning the
-returned `RestorationAcceptedResponse.model_dump()` verbatim -- the same
-`instrument_id`/`stages` shape ps-cli's own `restore instrument` used to
-print.
+shared `_run_mcp_action` audit wrapper, returning the
+returned `RestorationAcceptedResponse.model_dump()` as is -- the same
+`instrument_id`/`stages` shape.
 
-Slice 2.2 (added below in a follow-up edit) wires the remaining
-D-SANITIZE-RESTORE error-taxonomy rows and the residual unexpected-exception
+Further tests wire the remaining
+Error-taxonomy rows and the residual unexpected-exception
 safety net.
 
-Slice 2.3 (added below in a follow-up edit) proves principal resolution
+Principal resolution is also proven
 (both the `mcp_interface` audit log and the delegate's own `actor` kwarg)
 under a real verified bearer token.
 
-issue #163 Slice E: `build_default_restore_from_catalog_dependencies`'s DI
+`build_default_restore_from_catalog_dependencies`'s DI
 seam is narrowed so only its `fetch_artifact`/`resolve_effective_source`/
 `open_db` boundary bundle (`CatalogRestoreInfra`) is substitutable
 (`restore_orchestration.py`'s own module docstring) -- `restore` is always
-the real, shipped `ps_service.restore.restore_instrument.restore_instrument`
-now. This file therefore no longer fakes `restore` at all: every scenario
+the real, shipped `ps_service.restore.restore_instrument.restore_instrument`.
+This file therefore does not fake `restore`: every scenario
 that can be reached without a real GRAPH.COPY/WATCH-guarded FalkorDB round
 trip (checksum/schema_version/content-validation rejection, every
 pre-restore failure mode, and the never-reached-the-delegate cases) drives
@@ -34,21 +33,20 @@ need the whole staged-write sequence to *succeed* (GRAPH.COPY/WATCH-guarded
 RENAME finalize) get there by substituting only the `open_db` boundary
 (`_use_fake_restore_infra`'s own default, `_default_open_db_stub`) with a
 real, stateful, in-memory FalkorDB-shaped test-data builder
-(`_FakeStagingFalkorDB`, below) -- duplicated verbatim from `tests/restore/
-test_restore_instrument_audit_log.py`'s own identically-named fixture
-(Slice I, IMPL_SLICE_8.md), not imported (see that fixture's own leading
+(`_FakeStagingFalkorDB`, below) -- duplicated from `tests/restore/
+test_restore_instrument_audit_log.py`'s own identically-named fixture,
+not imported (see that fixture's own leading
 comment for why), so `stage_graph`/`stage_and_finalize_policy_system_leg`/
 `raw_connection` all run FOR REAL against it, exactly as that file's own
 tests already prove. No `# detroit-exception:` escape hatch is needed here
-any more (issue #163 Slice 19: the prior raw no-op stubs for those two
-functions, and the docstring justifying them, are gone).
+any more: those two functions run for real, with no raw no-op stubs.
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
 `test_get_catalog_listing_tool.py`'s/`test_restorations_from_catalog.py`'s
 own convention. `FakeCuratedArtifactTransport`/`FakeFailingCuratedSourceTransport`
 (`tests/api/_fakes.py`) are the existing fixtures the REST-side
 `POST /restorations/from-catalog` test suite already uses -- reused here
-unchanged, not reinvented, per PLAN.md's own instruction. `_fetch_artifact_through`
+unchanged, not reinvented. `_fetch_artifact_through`
 mirrors `test_restorations_from_catalog.py`'s own identically-shaped helper
 (that file's fixture is local to it, not exported, so it is mirrored here
 rather than imported).
@@ -70,7 +68,7 @@ import pytest
 from api._fakes import FakeCuratedArtifactTransport, FakeFailingCuratedSourceTransport
 from api._gateway_fakes import installed_process_gateway
 from audit._fakes import InMemoryAuditStore, audit_store_factory
-from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- issue #145: same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own real-token success test can grant the caller `ComplianceOfficer` on the new gate
+from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own real-token success test can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
 from fastapi.testclient import TestClient
@@ -136,7 +134,7 @@ def _manifest(**overrides: object) -> dict[str, object]:
 
     Every field is real/self-consistent by default (`baseline_sha256`/
     `native_sha256` computed from `_EMPTY_GRAPH_BYTES`, `schema_version` the
-    real `DOMAIN_SCHEMA_VERSION`) so the real `restore_instrument`'s D9/D10
+    real `DOMAIN_SCHEMA_VERSION`) so the real `restore_instrument`'s checksum and schema_version
     verification passes unless a caller deliberately overrides a field to
     break it.
     """
@@ -188,8 +186,8 @@ def _valid_transport() -> FakeCuratedArtifactTransport:
 def _content_violating_transport() -> FakeCuratedArtifactTransport:
     """A transport whose native leg carries a label outside `NATIVE_ALLOWED_LABELS`.
 
-    Its checksum is computed from the actual (violating) bytes, so D9 passes
-    and the real `_validate_content` is the thing that rejects it (GH #104)
+    Its checksum is computed from the actual (violating) bytes, so the checksum check passes
+    and the real `_validate_content` is the thing that rejects it
     -- zero FalkorDB calls either way, exactly like a checksum/schema_version
     rejection.
     """
@@ -222,11 +220,11 @@ def _resolve_effective_source_stub(config: ServiceConfig) -> EffectiveCatalogSou
 
 
 # --------------------------------------------------------------------------
-# A real, stateful in-memory FalkorDB-shaped test-data builder (issue #163 Slice 19).
+# A real, stateful in-memory FalkorDB-shaped test-data builder.
 #
 # Duplicated from `tests/restore/test_restore_instrument_audit_log.py`'s own
 # `_FakeStagingFalkorDB`/`_FakeStagedGraph`/`_FakeSingleTenantGraph`/
-# `_FakeWatchablePipeline`/`_FakeRawConnection` (Slice I, IMPL_SLICE_8.md),
+# `_FakeWatchablePipeline`/`_FakeRawConnection`,
 # verbatim -- NOT imported, per this test suite's own established
 # per-file-duplication convention (that file's own `_FakeSingleTenantGraph`
 # docstring: "duplicated per this test suite's existing per-component
@@ -241,13 +239,8 @@ def _resolve_effective_source_stub(config: ServiceConfig) -> EffectiveCatalogSou
 # own CI/exit-criteria command uses, not just a narrow-subset artifact) --
 # duplication sidesteps that hazard entirely.
 #
-# Previously (before issue #163 Slice 19), this file's own
-# `_use_real_restore_with_staging_faked` monkeypatched `stage_graph`/
-# `stage_and_finalize_policy_system_leg` into raw no-op stubs (behind two
-# now-removed `# detroit-exception:` comments citing this same file's
-# staging convention as precedent) -- an AC-BI-004 violation confirmed by
-# VERIFY_B.md, since the cited precedent had already been upgraded to this
-# real fixture and the fix never propagated back here. This fixture lets
+# Stubbing `stage_graph`/`stage_and_finalize_policy_system_leg` into raw
+# no-op functions would hide the staging path from these tests. This fixture lets
 # `stage_graph`/`stage_and_finalize_policy_system_leg`/`raw_connection` all
 # run FOR REAL: a real `GRAPH.COPY` snapshot and a real WATCH-guarded
 # `RENAME` finalize against this in-memory graph-key registry, not a
@@ -295,7 +288,7 @@ _NODE_READ_RE = re.compile(
     r"^MATCH \(n:(?P<label>\w+)\)(?P<filter> WHERE n\.status = 'approved')? "
     r"RETURN (?P<cols>n\.\w+(?:, n\.\w+)*)$"
 )
-# issue #183 -- restore's unfiltered, whole-node governance read (`MATCH (n:Policy) RETURN n`).
+# Restore's unfiltered, whole-node governance read (`MATCH (n:Policy) RETURN n`).
 _ALL_NODES_READ_RE = re.compile(r"^MATCH \(n:(?P<label>\w+)\) RETURN n$")
 _VIVIFY_QUERY = "MATCH (n) WHERE false RETURN n"
 
@@ -446,7 +439,7 @@ class _FakeSingleTenantGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append((q, params))
-        if "MERGED_INTO" in q or "MergedObligation" in q:  # issue #190: no tombstones/markers
+        if "MERGED_INTO" in q or "MergedObligation" in q:  # no tombstones/markers
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
@@ -628,13 +621,11 @@ class _FakeStagingFalkorDB:
 def _default_open_db_stub(config: ServiceConfig) -> FalkorDB:
     """The `open_db` boundary's own default: a real, in-memory FalkorDB stand-in.
 
-    Issue #163 Slice 19: previously `lambda config: cast("FalkorDB", object())`, a value
-    only viable because the staging/merge/finalize collaborators underneath it
-    (`stage_graph`/`stage_and_finalize_policy_system_leg`/`raw_connection`) were themselves
-    monkeypatched into raw no-op stubs -- an AC-BI-004 violation (VERIFY_B.md), since
-    `tests/restore/test_restore_instrument_audit_log.py` had already replaced that exact
-    pattern with a real, stateful in-memory FalkorDB-shaped test-data builder
-    (`_FakeStagingFalkorDB` above), just never propagated back here. This default means every
+    A bare placeholder object would only be viable if the staging/merge/finalize
+    collaborators underneath it (`stage_graph`/`stage_and_finalize_policy_system_leg`/
+    `raw_connection`) were monkeypatched into raw no-op stubs; instead this is a real,
+    stateful in-memory FalkorDB-shaped test-data builder (`_FakeStagingFalkorDB` above),
+    as in `tests/restore/test_restore_instrument_audit_log.py`. This default means every
     scenario that reaches this far now drives the REAL `stage_graph`/`stage_and_finalize_
     policy_system_leg`/`raw_connection` -- a real `GRAPH.COPY` snapshot and a real
     WATCH-guarded `RENAME` finalize against this in-memory graph-key registry, not a scripted
@@ -662,13 +653,13 @@ def _use_fake_restore_infra(
     real `restore_instrument` business logic.
 
     Targets `ps_service.api.restore_orchestration.build_default_restore_from_catalog_infra`
-    -- the approved-boundary entry issue #163 Slice E added to
+    -- the approved-boundary entry in
     `docs/coding-standards/approved-mock-boundaries.yaml` -- so
     `build_default_restore_from_catalog_dependencies()`'s own, unpatched call (`mcp_server.py`'s
     one call site makes it with zero arguments) still wires the real, shipped
     `restore_instrument`; only the curated-content fetch/effective-source-resolution/FalkorDB
     boundary beneath it is substituted. `open_db` defaults to `_default_open_db_stub` -- a real,
-    stateful FalkorDB stand-in (issue #163 Slice 19), not an inert placeholder -- so every
+    stateful FalkorDB stand-in, not an inert placeholder -- so every
     caller of this function gets a working staging/merge/finalize path for free unless it
     supplies its own `open_db` (e.g. to prove the boundary is never opened, or to force a
     connection failure).
@@ -705,7 +696,7 @@ def _set_similarity_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
-    """Every restore writes `instrument.restore` rows (issue #195): keep them off Postgres."""
+    """Every restore writes `instrument.restore` rows: keep them off Postgres."""
     store = InMemoryAuditStore()
     monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
     return store
@@ -740,17 +731,16 @@ def _mcp_log_lines(all_lines: list[dict[str, object]]) -> list[dict[str, object]
     ]
 
 
-# --- Slice 2.1: happy path ----------------------------------------------------
+# --- happy path ----------------------------------------------------
 
 
 def test_happy_path_returns_accepted_response_shape_and_logs_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """AC-BI-002/004: the returned `instrument_id`/`stages` match
-    `RestorationAcceptedResponse`'s own field-for-field shape -- the same
-    summary ps-cli's `restore instrument` used to print. Also asserts the
+    """The returned `instrument_id`/`stages` match
+    `RestorationAcceptedResponse`'s own field-for-field shape. Also asserts the
     `mcp_interface` started/succeeded log pair carries the resolved
-    principal (AC-BI-007, restore half -- partial; Slice 2.3 proves the
+    principal (restore half only; other tests prove the
     failed-call case and the real-bearer-token case).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -782,7 +772,7 @@ def test_happy_path_returns_accepted_response_shape_and_logs_principal(
 def test_happy_path_fetches_the_artifact_from_the_curated_source_not_a_local_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-002/004: the fake `fetch_artifact` HTTP transport was hit for exactly
+    """The fake `fetch_artifact` HTTP transport was hit for exactly
     `manifest.json`/`baseline.json`/`native.json` under the instrument's own
     path -- proving the fetch, not a local `catalog_repo` read, supplied the
     artifact (no local-machine dependency).
@@ -804,13 +794,13 @@ def test_happy_path_fetches_the_artifact_from_the_curated_source_not_a_local_fil
         assert f"/{_INSTRUMENT_ID}/" in req.full_url
 
 
-# --- issue #184: case-insensitive instrument_id resolution against the catalog -------
+# --- case-insensitive instrument_id resolution against the catalog -------
 
 
 def test_lowercase_instrument_id_resolves_and_fetches_the_canonical_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-001: `cra-1.0` resolves against the catalog's `CRA-1.0` and fetches under it."""
+    """`cra-1.0` resolves against the catalog's `CRA-1.0` and fetches under it."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -830,7 +820,7 @@ def test_lowercase_instrument_id_resolves_and_fetches_the_canonical_id(
 def test_catalog_fetch_failure_surfaces_as_the_existing_curated_source_unavailable_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: a `catalog.json` fetch failure is the same error, not a masked case error."""
+    """A `catalog.json` fetch failure is the same error, not a masked case error."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -846,7 +836,7 @@ def test_catalog_fetch_failure_surfaces_as_the_existing_curated_source_unavailab
 def test_audit_delegate_receives_the_canonical_id_not_the_callers_spelling(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """AC-BI-006: the real restore delegate's own audit log entries carry the canonical id."""
+    """The real restore delegate's own audit log entries carry the canonical id."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     emitter = configure()
@@ -880,7 +870,7 @@ def _ambiguous_transport() -> FakeCuratedArtifactTransport:
 def test_ambiguous_case_collision_is_rejected_naming_both_colliding_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-003: two catalog entries differing only by case -> an `error: ` string naming both."""
+    """Two catalog entries differing only by case -> an `error: ` string naming both."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -924,7 +914,7 @@ def _no_match_transport() -> FakeCuratedArtifactTransport:
 def test_no_catalog_match_in_any_case_is_rejected_naming_the_closest_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-004: no catalog entry matches any case -> an `error: ` string naming the closest id."""
+    """No catalog entry matches any case -> an `error: ` string naming the closest id."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -944,8 +934,8 @@ def test_no_catalog_match_in_any_case_is_rejected_naming_the_closest_id(
 def test_happy_path_calls_the_restore_delegate_with_the_resolved_principal_as_actor(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """The REAL `restore_instrument`'s own D14 audit log entries carry `caller` equal to the
-    resolved principal (D-RESTORE-DELEGATE's `actor=principal or "unknown"` convention) --
+    """The REAL `restore_instrument`'s own audit log entries carry `caller` equal to the
+    resolved principal (the delegate's `actor=principal or "unknown"` convention) --
     a stronger proof than a fake delegate's own recorded kwarg, since it proves the actor
     genuinely reached the real function's own logging, not just a spy.
     """
@@ -963,13 +953,13 @@ def test_happy_path_calls_the_restore_delegate_with_the_resolved_principal_as_ac
     assert all(line.get("caller") == LOCAL_TEST_PRINCIPAL_ID for line in restore_lines)
 
 
-# --- Slice 2.1: validation (D-INSTRUMENT-ID-STRICTNESS) ------------------------
+# --- validation  ------------------------
 
 
 def test_malformed_instrument_id_is_rejected_at_the_schema_layer_before_the_body_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D-INSTRUMENT-ID-STRICTNESS: the combined `Field(pattern=...)` +
+    """The combined `Field(pattern=...)` +
     `AfterValidator(_reject_path_traversal_segment)` schema (see
     `mcp_server.py`'s own comment on why this is two validators, not one
     regex: pydantic-core's regex backend has no look-around support) rejects
@@ -1000,7 +990,7 @@ def test_malformed_instrument_id_is_rejected_at_the_schema_layer_before_the_body
             _call_restore_instrument(bad_instrument_id)
 
 
-# --- Slice 2.2 auth infra: mirrors test_get_catalog_listing_tool.py's/
+# --- Auth infra: mirrors test_get_catalog_listing_tool.py's/
 # test_ingest_regulation_tool.py's own pattern exactly ------------------------
 
 
@@ -1019,8 +1009,8 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
     """A `TestClient` over the real, auth-armed `build_streamable_http_app`.
 
     Mirrors `test_get_catalog_listing_tool.py`'s/`test_ingest_regulation_tool
-    .py`'s own `_authenticated_test_client` exactly -- this module's Slice
-    2.3 tests drive `restore_instrument` (not `cypher`) through the same
+    .py`'s own `_authenticated_test_client` exactly -- this module's
+    real-token tests drive `restore_instrument` (not `cypher`) through the same
     genuinely auth-enforcing mounted app, never the bypass-shaped one every
     other test in this module builds via a bare `server.call_tool`.
     """
@@ -1114,12 +1104,11 @@ def _call_restore_instrument_over_http(client: TestClient, *, token: str) -> str
 def _grant_compliance_officer(
     monkeypatch: pytest.MonkeyPatch, *, subject: str, issuer: str
 ) -> None:
-    """Issue #145: seed a `ComplianceOfficer` grant for `(subject, issuer)` on a fake store,
+    """Seed a `ComplianceOfficer` grant for `(subject, issuer)` on a fake store,
     monkeypatched onto `mcp_server.PsycopgAccessRoleStore`.
 
-    The real-verified-token test below predates issue #145's authz gate (it
-    was written to prove principal/actor threading, not authorization) --
-    without this, the newly-added gate now denies it, since the token's own
+    The real-verified-token test below proves principal/actor threading, not
+    authorization -- without this, the authz gate denies it, since the token's own
     subject holds no grant on the real store, which itself is unreachable in
     this test environment (`PS_STATE_POSTGRES_HOST` unset) and would
     otherwise fail closed. Mirrors `test_catalog_source_authz_gate.py`'s own
@@ -1139,14 +1128,14 @@ def _grant_compliance_officer(
 def test_real_verified_token_principal_threads_through_to_audit_log_and_delegate_actor(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
-    """AC-BI-001/007: under a real, verified bearer token -- driven through
+    """Under a real, verified bearer token -- driven through
     the actual mounted Streamable HTTP transport, mirroring
     `test_get_catalog_listing_tool.py`'s own pattern, never a bare in-process
     `server.call_tool` -- the token's `sub` claim (never
     `LOCAL_TEST_PRINCIPAL_ID`) reaches both the `mcp_interface` log entries'
-    `principal` AND the real `restore_instrument`'s own D14 `caller` field.
+    `principal` AND the real `restore_instrument`'s own `caller` field.
 
-    Issue #145: the caller must also hold `ComplianceOfficer` now that this
+    The caller must also hold `ComplianceOfficer` because this
     tool is gated, so `_grant_compliance_officer` seeds that grant for this
     token's own `(sub, iss)` -- orthogonal to what this test itself proves.
     """
@@ -1225,7 +1214,7 @@ def _restored_policy_owner() -> tuple[object, object]:
 def test_verified_token_caller_becomes_the_owner_of_restored_drafts(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
 ) -> None:
-    """Issue #183, AC-BI-001: the token's `(sub, iss)` ends up as the Policy's owner."""
+    """The token's `(sub, iss)` ends up as the Policy's owner."""
     _set_similarity_threshold(monkeypatch)
     configure()
     auth_context = _auth_context(mock_oidc_provider)
@@ -1243,7 +1232,7 @@ def test_verified_token_caller_becomes_the_owner_of_restored_drafts(
 def test_local_test_bypass_caller_owns_restored_drafts_as_the_bypass_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #183: with the bypass active and no token, the bypass identity owns the drafts."""
+    """With the bypass active and no token, the bypass identity owns the drafts."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -1258,11 +1247,11 @@ def test_local_test_bypass_caller_owns_restored_drafts_as_the_bypass_identity(
 def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """AC-BI-001: `_resolve_principal`'s existing, unchanged fallback
+    """`_resolve_principal`'s existing, unchanged fallback
     contract -- with no bearer token presented at all (a bare in-process
     `server.call_tool`) and the local-test bypass active,
     `LOCAL_TEST_PRINCIPAL_ID` still reaches the `mcp_interface` log entries'
-    `principal` (already proven by Slice 2.1's own test; re-proven here as
+    `principal` (already proven by the happy-path test; re-proven here as
     this slice's own dedicated auth/audit completeness check, mirroring
     `test_get_catalog_listing_tool.py`'s identically-purposed test).
     """
@@ -1282,7 +1271,7 @@ def test_local_test_bypass_principal_still_threads_through_when_no_token_is_pres
 def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principal(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
-    """AC-BI-007: a FAILED call -- a real checksum-mismatched artifact -- still carries the
+    """A FAILED call -- a real checksum-mismatched artifact -- still carries the
     resolved real-token principal on its `outcome="failed"` `mcp_interface` log entry, not
     only the succeeded-call case proven above.
     """
@@ -1306,13 +1295,13 @@ def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principa
     assert all(line.get("principal") == token_sub for line in mcp_lines)
 
 
-# --- Slice 2.2: failure-state completeness -------------------------------------
+# --- failure-state completeness -------------------------------------
 
 
 def test_curated_source_unreachable_returns_named_error_and_never_calls_the_delegate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D-SANITIZE-RESTORE: an unreachable curated-content source
+    """An unreachable curated-content source
     (`CuratedSourceUnavailableError`, raised by `run_restoration_from_catalog_source`
     when `fetch_artifact` raises `CuratedSourceFetchError`) is caught and
     returned as `error: <str(exc)>` verbatim -- the FalkorDB boundary is
@@ -1343,7 +1332,7 @@ def test_curated_source_unreachable_returns_named_error_and_never_calls_the_dele
 def test_override_read_failure_returns_named_error_and_never_fetches_or_opens_the_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-010: `CatalogSourceOverrideUnavailableError` (the fail-closed override read) is
+    """`CatalogSourceOverrideUnavailableError` (the fail-closed override read) is
     returned as its fixed `error:` string -- neither the default source nor FalkorDB is used.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1378,9 +1367,9 @@ def test_override_read_failure_returns_named_error_and_never_fetches_or_opens_th
 
 
 def test_checksum_mismatch_returns_named_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D-SANITIZE-RESTORE: the fetched artifact's checksum doesn't match its
+    """The fetched artifact's checksum doesn't match its
     own manifest (real `ArtifactIntegrityError` from the real `restore_instrument`,
-    zero FalkorDB calls -- D9 runs before any) -> `RestoreArtifactRejectedError`,
+    zero FalkorDB calls -- the checksum check runs before any) -> `RestoreArtifactRejectedError`,
     returned as `error: <str(exc)>`.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1397,8 +1386,8 @@ def test_checksum_mismatch_returns_named_error(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_schema_version_mismatch_returns_named_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D-SANITIZE-RESTORE: real `ArtifactSchemaVersionMismatchError` from the real
-    `restore_instrument` (D10, zero FalkorDB calls) -> `RestoreArtifactRejectedError`,
+    """Real `ArtifactSchemaVersionMismatchError` from the real
+    `restore_instrument` (zero FalkorDB calls) -> `RestoreArtifactRejectedError`,
     returned verbatim.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1416,9 +1405,9 @@ def test_schema_version_mismatch_returns_named_error(monkeypatch: pytest.MonkeyP
 
 
 def test_restore_stage_failure_returns_named_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D-SANITIZE-RESTORE: any other restore-stage failure -- here, a real
+    """Any other restore-stage failure -- here, a real
     `ArtifactContentRejectedError` from the real `restore_instrument`'s own
-    content-validation step (GH #104, a native leg carrying a label outside
+    content-validation step (a native leg carrying a label outside
     the allow-list) -> `RestoreStageFailedError`, returned as `error:
     <str(exc)>` naming the failing stage.
     """
@@ -1438,7 +1427,7 @@ def test_restore_stage_failure_returns_named_error(monkeypatch: pytest.MonkeyPat
 def test_missing_similarity_threshold_returns_named_configuration_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D-SANITIZE-RESTORE: `_require_similarity_threshold` raises
+    """`_require_similarity_threshold` raises
     `RestoreStageFailedError(stage="configuration", ...)` directly, outside
     any try/except inside `run_restoration_from_catalog_source`, when
     `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` is unset -- reaches the tool the
@@ -1467,7 +1456,7 @@ def test_missing_similarity_threshold_returns_named_configuration_error(
 
 
 def test_graph_unavailable_returns_generic_graph_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D-SANITIZE-RESTORE: `dependencies.open_db` raising any exception is
+    """`dependencies.open_db` raising any exception is
     wrapped by `_sanitize_restore_graph_opens` into `McpGraphUnavailableError`,
     surfaced as the shared, fixed `_GRAPH_UNAVAILABLE_MESSAGE` -- never the
     raw driver exception.
@@ -1492,7 +1481,7 @@ def test_graph_unavailable_returns_generic_graph_message(monkeypatch: pytest.Mon
 def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """D-AUDIT-WRAPPER point 4: an exception the tool body does not itself
+    """An exception the tool body does not itself
     sanitise (here, `dependencies.fetch_artifact` raising something
     unclassified, not `CuratedSourceFetchError`) is caught by
     `_run_mcp_action`'s residual safety net -- returned as the fixed,
@@ -1525,13 +1514,13 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     assert failed_line.get("exception_type") == "ValueError"
 
 
-# --- issue #195: instrument.restore audit rows ---------------------------------------
+# --- instrument.restore audit rows ---------------------------------------
 
 
 def test_restore_instrument_audits_verified_actor(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-001/002: the rows carry the verified caller and the canonical instrument id."""
+    """The rows carry the verified caller and the canonical instrument id."""
     _set_similarity_threshold(monkeypatch)
     configure()
     _grant_compliance_officer(monkeypatch, subject="user-42", issuer="https://issuer.example.com/")
@@ -1556,7 +1545,7 @@ def test_restore_instrument_audits_verified_actor(
 def test_restore_instrument_audits_sentinel_under_bypass(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-001: under the local-test bypass the actor is `system:local-test-bypass`."""
+    """Under the local-test bypass the actor is `system:local-test-bypass`."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -1572,7 +1561,7 @@ def test_restore_instrument_audits_sentinel_under_bypass(
 def test_restore_instrument_returns_error_prefix_when_audit_unavailable_and_restores_nothing(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-011: the opening row cannot be written -> `error: ...`, the graph is never opened."""
+    """The opening row cannot be written -> `error: ...`, the graph is never opened."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -1598,7 +1587,7 @@ def test_restore_instrument_returns_error_prefix_when_audit_unavailable_and_rest
 def test_restore_instrument_failure_writes_a_failed_row_with_a_reason_code(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-003/010: a rejected artifact leaves started + failed(artifact_rejected), no detail."""
+    """A rejected artifact leaves started + failed(artifact_rejected), no detail."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -1618,7 +1607,7 @@ def test_restore_instrument_failure_writes_a_failed_row_with_a_reason_code(
 def test_restore_instrument_rows_are_returned_by_list_audit_events_by_instrument_id(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-018: the rows are retrievable by `details={"instrument_id": ...}` (Slice 11 filter)."""
+    """The rows are retrievable by `details={"instrument_id": ...}`."""
     from ps_service.audit import AuditQueryFilters
 
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1638,13 +1627,13 @@ def test_restore_instrument_rows_are_returned_by_list_audit_events_by_instrument
     assert [e.details["status"] for e in page.events] == ["succeeded", "started"]  # newest first
 
 
-# --- issue #214: a restore is one multi-graph group, anchored to its opening audit row ---------
+# --- a restore is one multi-graph group, anchored to its opening audit row ---------
 
 
 def test_restore_instrument_logs_one_group_per_graph_under_the_opening_rows_event_id(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-001/012 down to the log: the groups carry the id of the `started` audit row."""
+    """The groups carry the id of the `started` audit row."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
@@ -1686,7 +1675,7 @@ def test_restore_instrument_without_a_gateway_fails_closed_and_audits_graph_unav
 def test_a_corrupt_artifact_is_still_rejected_when_no_gateway_is_installed(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-005 ordering: verification comes before the gateway is looked for."""
+    """Verification comes before the gateway is looked for."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()

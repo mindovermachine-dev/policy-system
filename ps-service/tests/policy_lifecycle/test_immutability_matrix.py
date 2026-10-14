@@ -1,22 +1,22 @@
-"""Immutability matrix test (issue #134, PLAN.md S23, AC-BI-011).
+"""Immutability matrix test.
 
-AC-BI-011 requires "no tool mutates the content of an approved or deprecated
-tree." Within #134's own scope, no dedicated content-mutation tool exists in
-this codebase yet -- content editing (renaming a Policy, adding/removing a
-Standard/Control, changing a Control's `control_type`, etc.) is entirely
-#136's scope. What #134 DOES own is the 4 status-transition entry points
+No tool may mutate the content of an approved or deprecated tree. Within this
+module's scope, no dedicated content-mutation tool exists -- content editing
+(renaming a Policy, adding/removing a Standard/Control, changing a Control's
+`control_type`, etc.) is outside it. What this module DOES own is the 4 status-transition
+entry points
 (`propose_policy`/`approve_policy`/`reject_policy`/`revert_policy_to_draft`),
-and this test is the concrete, within-#134-scope verification that every one
+and this test is the concrete verification that every one
 of them refuses to run its own cascading write from the two statuses it does
 not apply from beyond the one it does (`"approved"`/`"deprecated"` -- see
 `ps_service.policy_lifecycle.rules.require_status`'s own
-`_REQUIRED_STATUS_BY_ACTION` table, D-3): the call is rejected by
+`_REQUIRED_STATUS_BY_ACTION` table): the call is rejected by
 `PolicyInvalidStatusTransitionError` before `graph_writer.cascade_status`'s
 own cascading group is ever submitted -- a parametrized, no-mutation regression
 guard, not new production code.
 
-Forward pointer for #136: when that issue adds its own content-editing
-tool(s) (a Policy rename, a Standard/Control add/remove/edit), each one must
+Forward pointer: when a content-editing
+tool is added (a Policy rename, a Standard/Control add/remove/edit), each one must
 independently apply the same `require_status`-shaped precondition (reject
 whenever the target tree's root Policy is `"approved"`/`"deprecated"`) --
 this test file's own matrix does not, and cannot, cover a tool that does not
@@ -146,10 +146,10 @@ _ACTIONS = {
 def test_transition_from_immutable_status_is_rejected_with_no_graph_mutation(
     lifecycle_rig: LifecycleRig, action: str, status: str
 ) -> None:
-    """AC-BI-011: none of the 4 transitions ever cascades from `approved`/`deprecated`.
+    """None of the 4 transitions ever cascades from `approved`/`deprecated`.
 
     Neither status is any action's own `require_status`-required starting
-    point (D-3's `_REQUIRED_STATUS_BY_ACTION` names only `"draft"`/
+    point (`_REQUIRED_STATUS_BY_ACTION` names only `"draft"`/
     `"proposed"`), so every one of these 8 cases is rejected by
     `PolicyInvalidStatusTransitionError` before `graph_writer.cascade_status`
     is ever reached -- proven here by asserting zero cascading writes, not

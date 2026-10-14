@@ -1,4 +1,4 @@
-"""Tests that exercise the *built* `ps-service` runtime image (issue #60).
+"""Tests that exercise the *built* `ps-service` runtime image.
 
 Unlike `test_dockerfile.py`, which asserts the static contract of the build inputs, every
 test here needs a real container runtime and a real image: it builds (or is handed) the image
@@ -65,7 +65,7 @@ _INSPECT_TIMEOUT_SECONDS = 60.0
 
 # The dev group (`pyproject.toml:4-11`) minus the two that are not importable modules
 # (`pre-commit` installs a `pre_commit` module but is a hook runner, `httpx` is a genuine
-# transitive runtime concern). These three are the ones AC-BI-003 names by name.
+# transitive runtime concern). These three are the dev-only modules absent from the runtime image.
 _DEV_ONLY_MODULES = ("pytest", "ruff", "basedpyright")
 
 # Probes the installed package's own tree plus the two build-context paths that would betray a
@@ -125,7 +125,7 @@ def image_ref(container_cli: str) -> str:
 
     `PS_CONTAINER_IMAGE_REF` is set by `on_semver.yml`'s build job to the exact tag its
     `build-push-action` step produced and its publish job later pushes, so CI tests the
-    published bytes rather than a second, locally rebuilt image (FLAWS F-02). Unset (the
+    published bytes rather than a second, locally rebuilt image. Unset (the
     laptop path) means build `ps-service:local-test` from the repo root.
     """
     supplied = os.environ.get(_IMAGE_REF_ENV)
@@ -194,10 +194,10 @@ def _image_environment(cli: str, ref: str) -> list[str]:
 def test_container_env_sets_ps_service_host_to_all_interfaces(
     container_cli: str, image_ref: str
 ) -> None:
-    """AC-BI-008: the image's own environment widens the bind, so the published port works.
+    """The image's own environment widens the bind, so the published port works.
 
     The wider bind exists *only* here. `ps_service.config` still defaults to loopback and
-    still refuses to widen on a bad value (D-6, guarded by
+    still refuses to widen on a bad value (guarded by
     `test_dockerfile.py::test_source_default_host_is_still_loopback`).
     """
     env = _image_environment(container_cli, image_ref)
@@ -225,7 +225,7 @@ def test_container_env_sets_exactly_one_absolute_logging_dir(
 
 
 def test_runtime_image_has_no_dev_dependencies(container_cli: str, image_ref: str) -> None:
-    """AC-BI-003, empirically: pytest, ruff and basedpyright are absent from the image."""
+    """Empirically: pytest, ruff and basedpyright are absent from the image."""
     importable = [
         module
         for module in _DEV_ONLY_MODULES
@@ -239,7 +239,7 @@ def test_runtime_image_has_no_dev_dependencies(container_cli: str, image_ref: st
 def test_runtime_image_contains_no_test_modules_or_fixtures(
     container_cli: str, image_ref: str
 ) -> None:
-    """AC-BI-003, empirically: no test module, source tree or fixture directory shipped."""
+    """Empirically: no test module, source tree or fixture directory shipped."""
     result = _python_in_image(container_cli, image_ref, _NO_TEST_SOURCE_PROBE, check=False)
     assert result.returncode == 0, (
         f"probing {image_ref} for test sources failed (exit {result.returncode}):\n"
@@ -260,28 +260,29 @@ def test_runtime_image_contains_no_test_modules_or_fixtures(
     )
 
 
-# --- S6: the smoke test that gates the push (AC-BI-007, AC-BI-008) --------------------------
+# --- the smoke test that gates the push ----------------------------------------------------
 #
 # `on_semver.yml`'s build job runs this module against the image it just built, and only a
 # green run lets the publish job push. The four tests below are that gate: A proves the service
 # answers, B' pins `/ready`'s exact answer and the exact reason for it, C' proves FalkorDB
 # specifically was healthy, and D is C's negative control.
 #
-# Issue #58 made `create_app` fail closed without OIDC config (AC-BI-002), so every container
-# this module starts now runs with the local-test bypass (issue #67) -- and the bypass is itself
+# `create_app` fails closed without OIDC config, so every container
+# this module starts runs with the local-test bypass -- and the bypass is itself
 # refused on a non-loopback bind (`main._refuse_non_loopback_bypass_bind`), which the image's own
-# baked-in default (`PS_SERVICE_HOST=0.0.0.0`, AC-BI-008) is. So these containers now bind
+# baked-in default (`PS_SERVICE_HOST=0.0.0.0`) is. So these containers bind
 # loopback and every test reaches them via `docker exec` (`_get_from_container`), inside their
-# own network namespace, instead of through a published port. AC-BI-008's env-baking half is
-# still proven live by `test_container_env_sets_ps_service_host_to_all_interfaces`; its
+# own network namespace, instead of through a published port. The env-baking half
+# of the host default is still proven live by
+# `test_container_env_sets_ps_service_host_to_all_interfaces`; its
 # published-port-reachability half has no live coverage left in this module.
 #
-# Why `/ready` is asserted `not_ready` and not `ready` (the F-03 residual, stated once here):
+# Why `/ready` is asserted `not_ready` and not `ready` (stated once here):
 # `app.state.ready` also requires the Cellar/ELI probe, whose endpoint is a hardcoded module
 # constant (`ingestion/adapters/cellar_eli/fetch.py`) with no configuration seam. A literal
 # `"ready"` would therefore make the release gate depend on a live third-party service. The
 # gate instead asserts `/ready` answers 503 `not_ready` for the exactly-known reason, and
-# proves FalkorDB specifically healthy -- which is the half of AC-BI-007 this image controls.
+# proves FalkorDB specifically healthy -- which is the half of readiness this image controls.
 
 _FALKORDB_IMAGE = "falkordb/falkordb:latest"
 _SERVICE_CONTAINER_PORT = 8000
@@ -293,12 +294,12 @@ _LOG_FILE_IN_IMAGE = "/var/log/ps-service/ps-service.jsonl"
 _FALKORDB_DEPENDENCY = "falkordb"
 _BARRIER_DEPENDENCY = "llm_interface"
 
-# Issue #133: PS state Postgres is unconditionally probed and never no-ops when unconfigured
+# PS state Postgres is unconditionally probed and never no-ops when unconfigured
 # (unlike Passkey Signing Postgres), so it always shows unhealthy in the smoke-test container,
-# which never sets `PS_STATE_POSTGRES_HOST`. Since issue #130 it also gates `/ready`.
+# which never sets `PS_STATE_POSTGRES_HOST`. It also gates `/ready`.
 _STATE_POSTGRES_DEPENDENCY = "state_postgres"
 
-# Issue #130: `GET /catalog` reads the catalog-source override from the PS state Postgres and
+# `GET /catalog` reads the catalog-source override from the PS state Postgres and
 # fails closed without one, so the catalog smoke test runs against a real Postgres sidecar.
 _POSTGRES_IMAGE = "postgres:16-alpine"
 # The sidecar is provisioned like production: the bootstrap superuser is `postgres_admin` (the
@@ -390,7 +391,7 @@ def _startup_log_entries(
     single writer thread that flushes every line, so once the `llm_interface` warning is in the
     JSONL, a `falkordb` warning -- had one been emitted -- is necessarily already in it. Polling
     for that later entry is what turns "no falkordb warning" from absence-of-evidence into a
-    real completion barrier (FLAWS F-05: the `outcome="success"` entry at `main.py:181` is
+    real completion barrier (the `outcome="success"` entry at `main.py:181` is
     emitted *before* the probes and is therefore not a barrier).
 
     Fails the test on timeout, echoing the container's logs.
@@ -491,7 +492,7 @@ def _get_from_container(
 ) -> httpx.Response:
     """GET `path` from inside `container`'s own network namespace via `docker exec`.
 
-    These containers bind loopback only (local-test bypass, AC-BI-002), so the host cannot
+    These containers bind loopback only (local-test bypass), so the host cannot
     reach them through a published port -- this execs `python` inside the container and issues
     the request from its own network namespace instead, via the image's own `httpx` install
     (a genuine runtime dependency, not a dev-only one -- see `_DEV_ONLY_MODULES`). A non-zero
@@ -531,9 +532,9 @@ def _start_service(
     """Start the image under test on `network`, bound to loopback with the local-test bypass.
 
     `PS_SERVICE_LOCAL_TEST_BYPASS=true` is needed because these tests carry no OIDC credentials
-    (issue #67) and `create_app` now fails closed without one (issue #58, AC-BI-002). The bypass
+    and `create_app` fails closed without one. The bypass
     is itself refused on a non-loopback bind (`main._refuse_non_loopback_bypass_bind`) -- and the
-    image's own baked-in default is `PS_SERVICE_HOST=0.0.0.0` (AC-BI-008) -- so `PS_SERVICE_HOST`
+    image's own baked-in default is `PS_SERVICE_HOST=0.0.0.0` -- so `PS_SERVICE_HOST`
     is pinned to loopback here explicitly. That means no `--publish`ed port can reach this
     container from the host; every test against it goes through `_get_from_container` instead.
 
@@ -542,9 +543,9 @@ def _start_service(
     -- neither a CI runner's nor the devcontainer's, which sets `PS_FALKORDB_HOST=falkordb`
     for exactly this reason.
 
-    `REQUIRED_STARTUP_ENV` (issue #148) supplies every env var `create_app` needs unconditionally,
-    regardless of the local-test bypass (currently `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`,
-    issue #140, AC-BI-003) -- without them the container never reaches a listening `/health` at
+    `REQUIRED_STARTUP_ENV` supplies every env var `create_app` needs unconditionally,
+    regardless of the local-test bypass (currently `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`)
+    -- without them the container never reaches a listening `/health` at
     all. It is the same dict `test_startup_env_parity.py` proves is sufficient, hermetically and
     without Docker, so a future addition to it can never again go unnoticed here.
     """
@@ -662,11 +663,11 @@ def smoke_service(
 
 
 def test_health_returns_200_alive(container_cli: str, smoke_service: _RunningService) -> None:
-    """A (AC-BI-007): `/health` answers 200 `alive`.
+    """`/health` answers 200 `alive`.
 
-    AC-BI-002 (built-image half): `version` must match `ps-service/pyproject.toml`'s own
+    Built-image half: `version` must match `ps-service/pyproject.toml`'s own
     declared `[project] version` -- the real, non-editable wheel install baked into the image
-    (see CHANGES.md C-02) carries hatchling-stamped metadata equal to that source-tree value.
+    carries hatchling-stamped metadata equal to that source-tree value.
     """
     response = _get_from_container(container_cli, smoke_service.name, "/health")
 
@@ -682,13 +683,13 @@ def test_health_returns_200_alive(container_cli: str, smoke_service: _RunningSer
 def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     container_cli: str, smoke_service: _RunningService
 ) -> None:
-    """B' (AC-BI-007): `/ready` answers 503 `not_ready`.
+    """`/ready` answers 503 `not_ready`.
 
     Deterministic, not merely observed: `connectivity.check_connectivity` raises without a
     network call because neither model variable is set, and `missing_ingestion_config_fields`
     is non-empty for the same reason, so `app.state.ready` cannot be `True`.
 
-    What stops this being a tautology (FLAWS F-04) is the pair of log-derived tests either
+    What stops this being a tautology is the pair of log-derived tests either
     side of it -- `test_startup_probe_reports_the_llm_interface_dependency_unhealthy` fixes
     *why* the answer is `not_ready`, and
     `test_no_falkordb_startup_warning_is_emitted_when_falkordb_is_reachable` proves the
@@ -709,7 +710,7 @@ def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
 def test_startup_probe_reports_the_llm_interface_dependency_unhealthy(
     container_cli: str, smoke_service: _RunningService
 ) -> None:
-    """B' (AC-BI-007): the exactly-known reason `/ready` is `not_ready` is the LLM provider.
+    """The exactly-known reason `/ready` is `not_ready` is the LLM provider.
 
     Fails if the wrong image is under test or if the JSONL sink is missing. `cellar_eli` is
     asserted neither present nor absent: its outcome depends on the runner's egress, and
@@ -726,7 +727,7 @@ def test_startup_probe_reports_the_llm_interface_dependency_unhealthy(
 def test_no_falkordb_startup_warning_is_emitted_when_falkordb_is_reachable(
     container_cli: str, smoke_service: _RunningService
 ) -> None:
-    """C' (AC-BI-007): FalkorDB specifically was healthy, proven behind a completion barrier.
+    """FalkorDB specifically was healthy, proven behind a completion barrier.
 
     `_startup_log_entries` returns only once the `llm_interface` warning -- emitted strictly
     *after* the FalkorDB probe -- is in the JSONL, so "no falkordb entry" means the probe ran
@@ -744,8 +745,8 @@ def test_no_falkordb_startup_warning_is_emitted_when_falkordb_is_reachable(
 def _wait_for_catalog(cli: str, service: _RunningService) -> httpx.Response:
     """Poll `/catalog` until it answers 200, then return it.
 
-    New Slice 6.8 (CHANGES.md MA3): `GET /catalog` needs no FalkorDB/LLM
-    dependency (AC-BI-011), so this polls the same way `_wait_for_liveness`
+    `GET /catalog` needs no FalkorDB/LLM
+    dependency, so this polls the same way `_wait_for_liveness`
     polls `/health`, just against `/catalog` instead.
     """
     deadline = time.monotonic() + _LIVENESS_DEADLINE_SECONDS
@@ -856,8 +857,8 @@ def _start_state_postgres_service(
 ) -> None:
     """Start the image under test with no FalkorDB, holding only the `ps_state` credential.
 
-    Bound to loopback with the local-test bypass, same reasoning as `_start_service` (issue #58,
-    AC-BI-002); also needs `REQUIRED_STARTUP_ENV` for the same reason (issue #148).
+    Bound to loopback with the local-test bypass, same reasoning as `_start_service`;
+    also needs `REQUIRED_STARTUP_ENV` for the same reason.
     """
     env = {
         "PS_SERVICE_HOST": "127.0.0.1",
@@ -911,8 +912,8 @@ def provisioned_state_postgres(
 ) -> str:
     """Provision the sidecar with the CLI from the image under test, then return its hostname.
 
-    This is the operator flow the Helm Job performs: the service refuses to start until it ran
-    (issue #205), and the CLI needs only the admin credential, never the service's.
+    This is the operator flow the Helm Job performs: the service refuses to start until it ran,
+    and the CLI needs only the admin credential, never the service's.
     """
     result = _run_provision_cli(container_cli, image_ref, smoke_network, state_postgres_hostname)
     assert result.returncode == 0, (
@@ -928,12 +929,12 @@ def catalog_only_service(
 ) -> Iterator[_RunningService]:
     """Start the image under test with no FalkorDB at all, against a provisioned state Postgres.
 
-    New Slice 6.8: `GET /catalog` (AC-BI-011) is provably FalkorDB/LLM-free,
+    `GET /catalog` is provably FalkorDB/LLM-free,
     so this deliberately does *not* reuse `smoke_service` (which wires a
     FalkorDB container) -- the route answers with real content with no graph
-    database running at all. Since issue #130 the catalog-source override lives in the PS state
+    database running at all. The catalog-source override lives in the PS state
     Postgres and a failed read fails closed, so this container is given a real Postgres sidecar.
-    Since issue #205 the service holds `ps_state` credentials only and fails closed until the
+    The service holds `ps_state` credentials only and fails closed until the
     provisioning CLI ran, which `provisioned_state_postgres` does first.
     """
     name = _unique("ps-smoke-catalog")
@@ -951,15 +952,14 @@ def catalog_only_service(
 def test_get_catalog_serves_real_packaged_content_from_inside_the_built_image(
     container_cli: str, catalog_only_service: _RunningService
 ) -> None:
-    """New Slice 6.8 (CHANGES.md MA3): `GET /catalog` serves real, non-empty content
-    from *inside a built container image* -- not a `tmp_path` fixture.
+    """`GET /catalog` serves real, non-empty content from *inside a built container image*.
 
-    This is the exact proof FLAWS.md's MA3 verdict required: `catalog.json`'s
+    Not a `tmp_path` fixture: `catalog.json`'s
     packaged copy lives at `ps_service/api/curated_content/catalog.json`,
     already inside the Dockerfile's allow-listed build context
     (`ps-service/src`) -- unlike the repo-root `curated-content/` tree, which
     `.dockerignore`'s deny-all-then-allow-list excludes entirely. Without
-    MA3's fix, this route would 500/serve an empty listing inside a real
+    packaging the file there, this route would 500/serve an empty listing inside a real
     deployed image even though every fast, in-process test (`tests/api/
     test_routes_catalog.py`) would still pass, since those never touch a
     built image at all.
@@ -972,7 +972,7 @@ def test_get_catalog_serves_real_packaged_content_from_inside_the_built_image(
     # The expectation is the packaged copy itself, not a hardcoded id list: every curation
     # run rewrites `catalog.json` (see `curated_content/__init__.py`), so a literal here would
     # go stale on the next export while the image stayed correct. Comparing against the file
-    # the Dockerfile packages is the actual MA3 proof -- the image serves *these* bytes.
+    # the Dockerfile packages is the actual proof -- the image serves *these* bytes.
     packaged_ids = {
         item["instrument_id"]
         for item in json.loads(_PACKAGED_CATALOG_JSON.read_text(encoding="utf-8"))
@@ -1038,7 +1038,7 @@ _LIST_GRAPH_GATEWAY_MIGRATIONS = (
 def test_runtime_image_ships_graph_gateway_migrations_and_provision_cli_entry(
     container_cli: str, image_ref: str
 ) -> None:
-    """Issue #205 AC-BI-011/012: the image the chart's provisioning Job runs carries both parts.
+    """The image the chart's provisioning Job runs carries both parts.
 
     The Job runs `python -m ps_service.graph_gateway.provision` from this image, so the module
     must be runnable (`--help` prints usage and never connects) and the migration file it applies
@@ -1090,7 +1090,7 @@ def test_state_postgres_sidecar_matches_production_roles(
 ) -> None:
     """The sidecar is built by the real init script, so the smoke test cannot pass on a lax one.
 
-    A superuser `ps_state` (the old fixture) would make the startup verifier's ownership check
+    A superuser `ps_state` would make the startup verifier's ownership check
     meaningless, so the application role must be an unprivileged login that owns only its own
     database, and the graph owner role must be NOLOGIN.
     """
@@ -1110,7 +1110,7 @@ def test_state_postgres_sidecar_matches_production_roles(
 def test_provision_cli_in_built_image_provisions_empty_state_postgres_and_is_idempotent(
     container_cli: str, image_ref: str, smoke_network: str
 ) -> None:
-    """AC-FR-001/002/006: the CLI shipped in the image takes an empty ps_state to ready, twice.
+    """The CLI shipped in the image takes an empty ps_state to ready, twice.
 
     Uses its own sidecar: the shared one is already provisioned by `provisioned_state_postgres`,
     so the first run would be a no-op there.
@@ -1136,7 +1136,7 @@ def test_provision_cli_in_built_image_provisions_empty_state_postgres_and_is_ide
 def test_service_fails_closed_in_image_on_unprovisioned_state_postgres(
     container_cli: str, image_ref: str, smoke_network: str
 ) -> None:
-    """Negative control for AC-FR-006: the service never comes up without the CLI step.
+    """Negative control: the service never comes up without the CLI step.
 
     Same sidecar and service wiring as `catalog_only_service`, minus the provisioning run. The
     process exits at startup with the verifier's fixed reason, so a green catalog test cannot be

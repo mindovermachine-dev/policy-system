@@ -1,5 +1,4 @@
-"""HTTP tests for `POST /exports` (issue #71, PLAN.md S3 / CHANGES.md
-Appendix A2's "new S2").
+"""HTTP tests for `POST /exports`.
 
 Mirrors `test_routes_restorations.py`'s style exactly: `TestClient` +
 `app.dependency_overrides` supplying a fake `ExportDependencies` bundle, so
@@ -54,7 +53,7 @@ _NATIVE_BYTES = b'{"nodes": [], "edges": []}'
 
 @pytest.fixture(autouse=True)
 def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture
-    """The gateway and system audit recorder the app lifespan installs (issue #213)."""
+    """The gateway and system audit recorder the app lifespan installs."""
     with process_gateway_installed():
         yield
 
@@ -146,7 +145,7 @@ class _FakeExportStage:
 
 
 class _PartialWriteExportStage:
-    """Writes `baseline.json` successfully, then raises before `native.json` (S11 item 1)."""
+    """Writes `baseline.json` successfully, then raises before `native.json`."""
 
     def __init__(self) -> None:
         self.call_count = 0
@@ -224,14 +223,14 @@ def _stub_export_log(  # pyright: ignore[reportUnusedFunction] -- requested via 
 
     Mirrors `test_routes_change_checks.py`'s own `_stub_run_log` fixture
     exactly, for the identical reason: `create_export` passes no explicit
-    emitter, so `run_export`'s `_emit_export_log` (D4) emits through the
+    emitter, so `run_export`'s `_emit_export_log` emits through the
     process-wide default emitter, which these fast HTTP tests deliberately do
     not `configure()`. Not autouse because
     `test_actor_is_threaded_from_caller_host` needs the real facade instead;
     every other test requests this explicitly via
     `@pytest.mark.usefixtures("_stub_export_log")`.
     """
-    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
+    # detroit-exception: process-wide atexit logging facade, not a business fake
     monkeypatch.setattr("ps_service.api.export_orchestration.emit_log_entry", _noop_emit)
 
 
@@ -252,10 +251,10 @@ def _client_with_fake(
 def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+    """Every test below drives a caller holding `ComplianceOfficer` by default.
 
     `POST /exports` is now gated behind `require_access_role`, which has no
-    local-test-bypass carve-out (PLAN.md §3.2). The dedicated denial-proof
+    local-test-bypass carve-out. The dedicated denial-proof
     tests below re-monkeypatch this away for their own scenario (the same
     `monkeypatch` fixture instance, so the later call simply wins).
     """
@@ -307,7 +306,7 @@ def test_config_incomplete_returns_503() -> None:
 
 @pytest.mark.usefixtures("_stub_export_log")
 def test_no_gateway_returns_503_and_never_calls_the_delegate() -> None:
-    """AC-BI-008 (issue #213): without a gateway Export fails closed before any graph is opened."""
+    """Without a gateway Export fails closed before any graph is opened."""
     install_graph_write_gateway(None)
     stage = _FakeExportStage()
     client = _client_with_fake(stage)
@@ -321,7 +320,7 @@ def test_no_gateway_returns_503_and_never_calls_the_delegate() -> None:
 
 @pytest.mark.usefixtures("_stub_export_log")
 def test_unwritable_system_audit_row_returns_503_and_never_calls_the_delegate() -> None:
-    """AC-BI-010 (issue #213): the Export audit row is fail-closed; nothing is computed."""
+    """The Export audit row is fail-closed; nothing is computed."""
     rig = installed_process_gateway().rig
     install_process_gateway(
         rig,
@@ -339,7 +338,7 @@ def test_unwritable_system_audit_row_returns_503_and_never_calls_the_delegate() 
 
 @pytest.mark.usefixtures("_stub_export_log")
 def test_export_graph_write_failure_returns_502_naming_the_embedding_stage() -> None:
-    """A gateway failure of the embedding backfill is an `embedding` stage failure (issue #213)."""
+    """A gateway failure of the embedding backfill is an `embedding` stage failure."""
     stage = _FakeExportStage(error=ExportGraphWriteError("FalkorDB write failed: down"))
     client = _client_with_fake(stage)
 
@@ -378,11 +377,10 @@ def _recording_mkdtemp(monkeypatch: pytest.MonkeyPatch, recorded_paths: list[str
 def test_partial_write_failure_returns_502_and_leaves_no_residual_scratch_dir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-011 route-level proof (PLAN.md S11 item 1): a delegate that writes
+    """Route-level proof: a delegate that writes
     `baseline.json` then raises before `native.json` never leaves a residual
     scratch directory reachable after the request completes -- no partial
-    artifact survives anywhere, matching AC-BI-011's "no partial/corrupt
-    artifact is returned" phrasing.
+    artifact survives anywhere and no partial/corrupt artifact is returned.
     """
     recorded_paths: list[str] = []
     _recording_mkdtemp(monkeypatch, recorded_paths)
@@ -404,7 +402,7 @@ def test_partial_write_failure_returns_502_and_leaves_no_residual_scratch_dir(
 def test_immediate_stage_failure_returns_502_and_leaves_no_residual_scratch_dir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-011 route-level proof (PLAN.md S11 item 2): a delegate raising
+    """Route-level proof: a delegate raising
     immediately (before any write) still leaves no residual scratch
     directory, and the named failing stage is the delegate's own -- not a
     guard-clause default (`"configuration"`/`"validation"`).
@@ -429,7 +427,7 @@ def test_immediate_stage_failure_returns_502_and_leaves_no_residual_scratch_dir(
 
 @pytest.mark.usefixtures("_stub_export_log")
 def test_stage_failure_message_never_leaks_the_scratch_path() -> None:
-    """AC-BI-012 security proof (PLAN.md S12): a delegate exception whose own
+    """Security proof: a delegate exception whose own
     message embeds a realistic absolute scratch path must never surface that
     path in the response body -- a generic, scrubbed message is present
     instead.
@@ -464,8 +462,7 @@ def test_malformed_body_returns_422_and_never_calls_the_delegate() -> None:
 
 @pytest.mark.parametrize("path", ["/exports"])
 def test_exports_route_with_compliance_officer_grant_is_never_401_or_403(path: str) -> None:
-    """Issue #145: renamed from the pre-#145 `..._is_unauthenticated_never_401_or_403` --
-    the route now requires `ComplianceOfficer`; this proves a caller who holds it (the
+    """The route requires `ComplianceOfficer`; this proves a caller who holds it (the
     file's own autouse `_grant_compliance_officer` fixture) is never turned away.
     """
     stage = _FakeExportStage()
@@ -477,7 +474,7 @@ def test_exports_route_with_compliance_officer_grant_is_never_401_or_403(path: s
 
 
 def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Issue #145, AC-BI-003/006: no verified principal -- 403, export delegate never called."""
+    """No verified principal -- 403, export delegate never called."""
     install_no_principal(monkeypatch)
     stage = _FakeExportStage()
     client = _client_with_fake(stage)
@@ -509,7 +506,7 @@ def test_authenticated_user_without_compliance_officer_is_denied_with_403(
 def test_system_admin_without_explicit_grant_is_denied_with_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    """`SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
     install_compliance_officer_grant(
         monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
     )
@@ -526,7 +523,7 @@ def test_system_admin_without_explicit_grant_is_denied_with_403(
 def test_system_owner_without_explicit_grant_is_denied_with_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
+    """`SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
     install_compliance_officer_grant(
         monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_OWNER})
     )
@@ -549,7 +546,7 @@ def test_actor_is_threaded_from_caller_host(
     `test_routes_change_checks.py`'s
     `test_post_change_checks_response_run_id_matches_the_provide_run_id_binding`
     and `test_run_context.py`'s own established pattern for this exact
-    situation) -- proof AC-BI-013's `caller` field is the requesting
+    situation) -- proof the `caller` field is the requesting
     client's host, not a placeholder.
     """
     stage = _FakeExportStage()

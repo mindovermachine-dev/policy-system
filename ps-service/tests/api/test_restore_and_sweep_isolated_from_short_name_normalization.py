@@ -1,10 +1,10 @@
-"""Static guard: restore and the sweep never use ingest-side short_name normalization (#193).
+"""Static guard: restore and the sweep never use ingest-side short_name normalization.
 
-AC-BI-009/AC-BI-010. ``normalize_short_name`` upper-cases the ``short_name`` a caller
+``normalize_short_name`` upper-cases the ``short_name`` a caller
 supplies on the ingest path (``RegulatoryInstrument.id`` becomes ``CRA-1.0``). FalkorDB
 graph names are case-sensitive and stay lowercase (``cra_native``), so restore and the
 sweep must keep deriving them from the lowercase canonical value. This is a
-CHARACTERIZATION guard: it passes before and after the change and fails the moment a
+CHARACTERIZATION guard: it passes today and fails the moment a
 restore or sweep module starts referencing the normalizer.
 
 Docstrings and comments are not code, so the AST walk ignores them.
@@ -54,7 +54,7 @@ def _names_referenced_in(path: Path) -> set[str]:
 
 @pytest.mark.parametrize("module_name", [*_RESTORE_AND_SWEEP_PACKAGES, *_RESTORE_AND_SWEEP_MODULES])
 def test_restore_and_sweep_modules_do_not_import_normalize_short_name(module_name: str) -> None:
-    """AC-BI-009/010 (characterization): no restore or sweep file references the normalizer."""
+    """No restore or sweep file references the normalizer."""
     files = _python_files(module_name)
     assert files, f"no source files found for {module_name}"
 

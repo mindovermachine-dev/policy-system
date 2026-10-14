@@ -1,4 +1,4 @@
-"""Real-`openssl` run of `scripts/deploy-ps-eval.sh` (issue #165, AC-BI-007).
+"""Real-`openssl` run of `scripts/deploy-ps-eval.sh`.
 
 Marked `integration` (spawns the real `openssl`, L2 Testing Patterns): the whole script runs with
 only the network `s_client` faked, so the certificate the script generates and hands to the
@@ -45,6 +45,6 @@ def test_script_generated_leaf_chains_to_the_local_ca_and_names_the_host(
     assert "DNS:authentik.test" in text
     assert "Authority Key Identifier" in text
     assert "Subject Key Identifier" in text
-    # The closing summary names the local CA so the evaluator can trust it (the script no longer
-    # prints an `export SSL_CERT_FILE=` line since #176).
+    # The closing summary names the local CA so the evaluator can trust it (the script does not
+    # print an `export SSL_CERT_FILE=` line).
     assert f"{state.resolve()}/ca.pem" in run.stdout

@@ -1,4 +1,4 @@
-"""A failed pipeline stage's detail reaches the operator log, scrubbed (issue #227, AC-BI-009/010).
+"""A failed pipeline stage's detail reaches the operator log, scrubbed.
 
 Drives ``POST /ingestions`` (internal) through the real ``configure()``d Logging facade with a
 merge stage that raises an unlisted exception. The HTTP body stays ``"merge failed"``; the

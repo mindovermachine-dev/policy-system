@@ -1,4 +1,4 @@
-"""Content lint for `ps-policy-lifecycle/SKILL.md` (issue #185, S9).
+"""Content lint for `ps-policy-lifecycle/SKILL.md`.
 
 Pins that the skill documents `capability_ids` on `create-policy-draft`, the
 `GOVERNED_BY` move on `approve-policy`, and the exact text of the three new
@@ -23,7 +23,7 @@ _SKILL_DIR = (
     / "ps-policy-lifecycle"
 )
 _SKILL_PATH = _SKILL_DIR / "SKILL.md"
-# Issue #200: rarely-needed detail is read on demand from these files.
+# Rarely-needed detail is read on demand from these files.
 _REFERENCES: tuple[str, ...] = (
     "references/transition-rules.md",
     "references/local-test-bypass.md",

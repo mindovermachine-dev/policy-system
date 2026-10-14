@@ -1,21 +1,21 @@
-"""Issue #71 PLAN.md S16 -- the ``falkordb_live``/``llm_live`` export capstone.
+"""The ``falkordb_live``/``llm_live`` export capstone.
 
 Exercises the real ``POST /exports`` route end to end against two real,
 already-ingested instruments -- one external, one internal -- proving
-Deliverable #5 (issue #71) across the whole HTTP stack rather than only at
+the export across the whole HTTP stack rather than only at
 the bare ``export_instrument()`` orchestration level.
 
-Per PLAN.md §0 D10, this capstone reuses two already-real, already-permanent
+This capstone reuses two already-real, already-permanent
 fixture graph pairs instead of seeding new ones:
 
 - **External half:** ``cra_baseline``/``cra_native`` (``RegulatoryInstrument.id
   = "CRA-1.0"``). Rather than assuming these already exist from a prior,
-  out-of-order test run (an ordering assumption this plan rejects as
+  out-of-order test run (an ordering assumption that would be
   fragile), this module runs its own bounded, self-contained ``POST
   /ingestions`` catalog call for CRA (CELEX ``32024R2847``) first -- copying
   ``test_live_capstone_external.py``'s own
   ``_LimitedDomainMappingAdapter``/``_EXTRACTION_UNIT_LIMIT`` pattern
-  verbatim (bounds LLM cost/time) -- guaranteeing ``CRA-1.0`` is freshly,
+  as it stands (bounds LLM cost/time) -- guaranteeing ``CRA-1.0`` is freshly,
   provably ingested before ``POST /exports`` is ever called against it. Only
   the *disposable single-tenant* merge graph this ingestion targets
   (``_DISPOSABLE_GRAPH``) is cleaned up in a ``finally`` -- ``cra_baseline``/
@@ -24,7 +24,7 @@ fixture graph pairs instead of seeding new ones:
   side effect.
 - **Internal half:** the real, permanent ``engprac_baseline``/
   ``engprac_native`` (``RegulatoryInstrument.id = "ENGPRAC-1.0"``), seeded
-  by issue #95's real internal-seed adapter submissions (the incremental
+  by the real internal-seed adapter submissions (the incremental
   per-slice submissions of ``internal-sources/engineering-practices/
   engineering-practices-seed.json`` through ``POST /ingestions``) -- no
   setup of its own is needed, exactly like
@@ -40,7 +40,7 @@ copied from that module) -- so the capstone needs ``llm_live`` only for the
 external half's ingestion pre-step (a real Domain Mapper extraction call),
 not for either export.
 
-**Written but not run here:** per BASELINE.md, this sandbox has no live
+**Written but not run here:** this sandbox has no live
 FalkorDB and the default local gate already excludes
 ``falkordb_live``/``llm_live`` (``pyproject.toml``). This file is committed,
 correctly marked, and collected-then-deselected here -- mirroring
@@ -185,7 +185,7 @@ def _limited_pipeline_dependencies() -> PipelineDependencies:
     return replace(default, adapters=replace(default.adapters, mapping=_limited_mapping_adapter))
 
 
-# --- export embedding seam (D10; copied from test_engineering_practices_migration_live.py) ---
+# --- export embedding seam (copied from test_engineering_practices_migration_live.py) ---
 
 
 class _FakeEmbeddingCaller:
@@ -306,14 +306,14 @@ def capstone(
 
     install_compliance_officer_grant(monkeypatch, granted=True)  # the routes are role-gated
     app = create_app(config)
-    # The ingestion pre-step and both exports write through the Graph Write Gateway (#208-#213).
+    # The ingestion pre-step and both exports write through the Graph Write Gateway.
     # `TestClient` is not entered, so the app lifespan never installs it: install the real one
     # (PS state Postgres and FalkorDB) the way a deployed service does. Not run in the sandbox.
     gateway = build_default_graph_write_gateway(config)
     install_graph_write_gateway(gateway)
     app.state.graph_write_gateway = gateway  # the internal route is handed it from app state
     app.dependency_overrides[provide_pipeline_dependencies] = _limited_pipeline_dependencies
-    # Issue #227: the Policy-bearing seed needs a verified caller, who then owns the draft tree.
+    # The Policy-bearing seed needs a verified caller, who then owns the draft tree.
     app.dependency_overrides[get_principal] = lambda: Principal(
         sub="capstone-owner", iss="https://idp.example"
     )
@@ -387,7 +387,7 @@ def _parsed_blob_counts(body: dict[str, object], *, field: str) -> tuple[int, in
 
 
 def test_cra_export_returns_200_with_external_manifest(capstone: _CapstoneData) -> None:
-    """AC-BI-003/Deliverable #5: the external half's manifest is real and server-derived."""
+    """The external half's manifest is real and server-derived."""
     assert capstone.ingestion_status == 200
     assert capstone.cra_export_status == 200
     manifest = cast("dict[str, object]", capstone.cra_export_body["manifest"])
@@ -397,7 +397,7 @@ def test_cra_export_returns_200_with_external_manifest(capstone: _CapstoneData) 
 
 
 def test_cra_export_blobs_are_lossless_against_the_live_graphs(capstone: _CapstoneData) -> None:
-    """The scratch-directory round trip (D1) drops/duplicates nothing for the external half."""
+    """The scratch-directory round trip drops/duplicates nothing for the external half."""
     baseline_counts = _parsed_blob_counts(capstone.cra_export_body, field="baseline_blob_base64")
     native_counts = _parsed_blob_counts(capstone.cra_export_body, field="native_blob_base64")
     assert baseline_counts == capstone.cra_live_baseline_counts
@@ -405,7 +405,7 @@ def test_cra_export_blobs_are_lossless_against_the_live_graphs(capstone: _Capsto
 
 
 def test_engprac_export_returns_200_with_internal_manifest(capstone: _CapstoneData) -> None:
-    """AC-BI-003/Deliverable #5: the internal half's manifest is real and server-derived."""
+    """The internal half's manifest is real and server-derived."""
     assert capstone.engprac_export_status == 200
     manifest = cast("dict[str, object]", capstone.engprac_export_body["manifest"])
     assert manifest["source_type"] == "internal"
@@ -416,7 +416,7 @@ def test_engprac_export_returns_200_with_internal_manifest(capstone: _CapstoneDa
 def test_engprac_export_blobs_are_lossless_against_the_live_graphs(
     capstone: _CapstoneData,
 ) -> None:
-    """The scratch-directory round trip (D1) drops/duplicates nothing for the internal half."""
+    """The scratch-directory round trip drops/duplicates nothing for the internal half."""
     baseline_counts = _parsed_blob_counts(
         capstone.engprac_export_body, field="baseline_blob_base64"
     )
@@ -428,7 +428,7 @@ def test_engprac_export_blobs_are_lossless_against_the_live_graphs(
 def test_engprac_baseline_document_includes_policy_standard_control_labels(
     capstone: _CapstoneData,
 ) -> None:
-    """D15 depth check, now proven reachable through the HTTP route, not just the bare delegate."""
+    """The depth check is reachable through the HTTP route, not just the bare delegate."""
     blob = base64.b64decode(cast("str", capstone.engprac_export_body["baseline_blob_base64"]))
     document = cast("dict[str, object]", json.loads(blob))
     labels_present = {
@@ -440,7 +440,7 @@ def test_engprac_baseline_document_includes_policy_standard_control_labels(
 def test_audit_log_records_started_and_succeeded_for_both_exports(
     capstone: _CapstoneData,
 ) -> None:
-    """AC-BI-013: both exports produce started/succeeded entries with correct id/schema_version."""
+    """Both exports produce started/succeeded entries with correct id/schema_version."""
     entries = [
         row
         for row in capstone.log_lines

@@ -1,13 +1,12 @@
 """HTTP tests for `GET /near-misses`, `POST /near-misses/{review_id}/resolve`, and
-`GET /near-misses/approvals/{pending_approval_id}` (issue #35, Slices 2-4,
-AC-BI-003/004/005/006/007/008/009; issue #131, CHANGES.md F1/F2).
+`GET /near-misses/approvals/{pending_approval_id}`.
 
 Mirrors `test_routes_restorations.py`'s style: `TestClient` +
 `app.dependency_overrides` supplying a fake `NearMissReviewDependencies`
 bundle, so request handling is exercised without a real graph.
 
-Issue #131 (signed passkey approval before near-miss merges), CHANGES.md F1:
-`decision="merge"` no longer executes the merge synchronously -- it requires
+Signed passkey approval before near-miss merges:
+`decision="merge"` does not execute the merge synchronously -- it requires
 a real, verified `Principal` (fails closed with 401 otherwise, before any
 Postgres/FalkorDB write) and returns a pending approval instead of
 `winner_id`/`loser_id`. `_principal()`/`app.dependency_overrides[get_principal]`
@@ -16,13 +15,9 @@ dependency override, unlike the MCP side's `auth_context_var` contextvar
 trick (`test_near_miss_tools.py`), since `get_principal` is already designed
 to be overridden this way for every other authenticated-route test in this
 suite. `test_post_resolve_merge_returns_pending_approval_and_does_not_execute`
-replaces the old `test_post_resolve_merge_returns_winner_and_loser` (merge no
-longer returns winner/loser synchronously); the old
-`test_post_resolve_merge_stale_reference_returns_404_with_stale_message`
-(and its `StalePendingReviewError` import) is removed outright -- that
-scenario is a later slice's execution-time concern now, since this route's
-merge branch never calls `resolve_review` at all any more (mirrors
-`test_near_miss_tools.py`'s own identical removal/rationale).
+covers the merge branch (it returns a pending approval, not winner/loser); a
+stale-reference scenario is an execution-time concern, since this route's
+merge branch never calls `resolve_review` (mirrors `test_near_miss_tools.py`).
 
 `_FakePendingApprovalStore` is a local, private copy of
 `tests/passkey_signing/_fakes.py`'s own `FakePendingApprovalStore` --
@@ -133,7 +128,7 @@ class _FakePendingApprovalStore:
 
     def mark_signed(self, pending_approval_id: str) -> bool:
         """Mirrors `tests/passkey_signing/_fakes.py`'s own `FakePendingApprovalStore.mark_signed`
-        (issue #131 Slice 3) -- kept structurally complete so this duplicate still
+        -- kept structurally complete so this duplicate still
         satisfies the `PendingApprovalStore` `Protocol`, even though no test in
         this file drives the signing ceremony itself (that's `passkey_signing/
         test_signing_ceremony.py`'s job).
@@ -245,7 +240,7 @@ def test_get_near_misses_empty_graph_returns_empty_reviews_list() -> None:
 
 
 def test_get_near_misses_returns_id_incoming_text_existing_text_similarity() -> None:
-    """AC-BI-003: every unresolved PendingReview is shown with id, texts, similarity."""
+    """Every unresolved PendingReview is shown with id, texts, similarity."""
     record = _record()
     client = _client_with_records((record,))
 
@@ -260,7 +255,7 @@ def test_get_near_misses_returns_id_incoming_text_existing_text_similarity() -> 
     assert entry["incoming_text"] == record.incoming_text
     assert entry["nearest_existing_text"] == record.nearest_existing_text
     assert entry["similarity"] == record.similarity
-    # AC-BI-003 requires only id/incoming text/existing text/similarity -- the
+    # The response requires only id/incoming text/existing text/similarity -- the
     # underlying node ids are deliberately not part of the wire response.
     assert "incoming_id" not in entry
     assert "nearest_existing_id" not in entry
@@ -322,9 +317,9 @@ def _client_for_resolve(
 
 
 def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
-    """AC-BI-004: `decision="keep-separate"` succeeds and echoes the resolved review id.
+    """`decision="keep-separate"` succeeds and echoes the resolved review id.
 
-    Regression guard (issue #131): unaffected by the merge-branch change --
+    Regression guard: unaffected by the merge-branch change --
     still one synchronous round trip, no principal required.
     """
     recorded_calls: list[tuple[str, str]] = []
@@ -356,7 +351,7 @@ def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
 
 
 def test_post_resolve_keep_separate_without_a_gateway_is_503_and_writes_no_audit_row() -> None:
-    """Issue #210 (F2): keep-separate writes through the gateway; none installed fails closed."""
+    """Keep-separate writes through the gateway; none installed fails closed."""
     install_graph_write_gateway(None)
     audit = InMemoryAuditStore()
 
@@ -377,7 +372,7 @@ def test_post_resolve_keep_separate_without_a_gateway_is_503_and_writes_no_audit
 
 
 def test_post_resolve_persistence_failure_is_a_generic_500_with_a_failed_audit_row() -> None:
-    """Issue #210 (AC-BI-008): a refused or unapplied graph write is classified as before.
+    """A refused or unapplied graph write is classified as a generic 500.
 
     The route answers the generic 500 (no gateway text, host or port in the body) and the
     resolution's follow-up audit row records `graph_write_failed`.
@@ -409,7 +404,7 @@ def test_post_resolve_persistence_failure_is_a_generic_500_with_a_failed_audit_r
 
 
 def test_post_resolve_unknown_id_returns_404_pending_review_not_found() -> None:
-    """AC-BI-008 (not-found half): a bad id surfaces as a clear 404, not a 500/200."""
+    """A bad id surfaces as a clear 404, not a 500/200."""
 
     def _resolve(
         graph: GraphHandle,
@@ -451,11 +446,9 @@ def test_post_resolve_rejects_unknown_decision_with_422() -> None:
 
 
 def test_post_resolve_merge_returns_pending_approval_and_does_not_execute() -> None:
-    """CHANGES.md F1: `decision="merge"` no longer executes synchronously -- it
+    """`decision="merge"` does not execute synchronously -- it
     returns a pending-approval link, and the graph is left unchanged
-    (`resolve_review` is never called -- the same proof the old, now-removed
-    `test_post_resolve_merge_returns_winner_and_loser` gave via
-    `recorded_calls`, but for the new behavior).
+    (`resolve_review` is never called, proven via `recorded_calls`).
     """
     recorded_calls: list[tuple[str, str]] = []
 
@@ -491,7 +484,7 @@ def test_post_resolve_merge_returns_pending_approval_and_does_not_execute() -> N
 
 
 def test_post_resolve_merge_unauthenticated_is_refused_with_401() -> None:
-    """CHANGES.md F1's fail-closed rule: no real, verified `Principal` (the
+    """Fail-closed rule: no real, verified `Principal` (the
     local-test bypass alone establishes none) means no Postgres/FalkorDB
     write at all -- 401, not a pending approval.
     """
@@ -505,9 +498,8 @@ def test_post_resolve_merge_unauthenticated_is_refused_with_401() -> None:
 
 
 def test_post_resolve_merge_unknown_id_returns_404_pending_review_not_found() -> None:
-    """AC-BI-008 (not-found half): a bad id surfaces as a clear 404 for merge too --
-    PLAN.md §2.2 step 2's early existence check, before any pending-approval
-    row is created.
+    """A bad id surfaces as a clear 404 for merge too --
+    an early existence check, before any pending-approval row is created.
     """
     client = _client_for_resolve(_unexpected_resolve_review, principal=_principal())
 
@@ -520,7 +512,7 @@ def test_post_resolve_merge_unknown_id_returns_404_pending_review_not_found() ->
 
 
 def test_post_resolve_merge_approval_url_carries_the_code_only_after_the_fragment() -> None:
-    """CHANGES.md F2's own fix, tested explicitly: `approval_url` is
+    """`approval_url` is
     `{base_url}/approvals/{id}#{code}` -- the `id` portion (before `#`) is
     exactly `pending_approval_id`, and the code sits only after `#`, never
     itself equal to or containing the id.
@@ -542,7 +534,7 @@ def test_post_resolve_merge_approval_url_carries_the_code_only_after_the_fragmen
 
 
 def test_post_resolve_merge_approval_url_rewrites_a_loopback_ip_host_to_localhost() -> None:
-    """Issue #196: a browser refuses `navigator.credentials.create()` on a
+    """A browser refuses `navigator.credentials.create()` on a
     `127.0.0.1` host (WebAuthn's `rp_id` must be a domain), so the link a
     local bind hands out names `localhost` instead -- the same machine, in a
     spelling that can actually be signed. The port is preserved.
@@ -562,7 +554,7 @@ def test_post_resolve_merge_approval_url_rewrites_a_loopback_ip_host_to_localhos
 
 
 def test_post_resolve_merge_approval_url_rewrites_the_ipv6_loopback_literal_to_localhost() -> None:
-    """Issue #196, bracketed-IPv6 half: `[::1]` is no more a domain than
+    """Bracketed-IPv6 half: `[::1]` is no more a domain than
     `127.0.0.1` is, and its port survives the rewrite too.
     """
     client = _client_for_resolve(
@@ -580,7 +572,7 @@ def test_post_resolve_merge_approval_url_rewrites_the_ipv6_loopback_literal_to_l
 
 
 def test_post_resolve_merge_approval_url_leaves_a_non_loopback_host_untouched() -> None:
-    """Issue #196's bright line: only loopback literals are rewritten. A
+    """Only loopback literals are rewritten. A
     `kind` NodePort or LAN address names a machine `localhost` would not
     reach, so rewriting it would break a link that is merely unsignable --
     the shell page explains that case instead.
@@ -624,9 +616,9 @@ def test_get_approval_status_reports_pending_for_a_freshly_created_approval() ->
 
 
 def test_get_approval_status_reports_the_recorded_error_for_a_failed_merge() -> None:
-    """AC-BI-013: a signed approval whose merge could not run stores
-    `{"error": ...}` as its outcome, but the status read used to report only
-    `winner_id`/`loser_id`. Both were null for three different situations --
+    """A signed approval whose merge could not run stores
+    `{"error": ...}` as its outcome, and the status read reports it rather than only
+    `winner_id`/`loser_id`, which are null for three different situations --
     merge crashed before recording anything, merge failed with a reason
     recorded, merge genuinely produced nulls -- so neither a compliance
     officer nor an operator could tell a failure from a success.
@@ -654,7 +646,7 @@ def test_get_approval_status_reports_the_recorded_error_for_a_failed_merge() -> 
 
 
 def test_get_approval_status_reports_no_error_for_a_successful_merge() -> None:
-    """AC-BI-013's other half: `error` stays absent/null on the happy path, so
+    """`error` stays absent/null on the happy path, so
     its presence is itself the failure signal.
     """
     store = _FakePendingApprovalStore()
@@ -678,7 +670,7 @@ def test_get_approval_status_reports_no_error_for_a_successful_merge() -> None:
 
 
 def test_get_approval_status_unauthenticated_gets_404() -> None:
-    """PLAN.md §2.3's fail-closed rule applied to the read side: a caller
+    """Fail-closed on the read side: a caller
     with no real `Principal` can never see any pending approval -- the same
     404 an unknown id gets.
     """
@@ -709,7 +701,7 @@ def test_get_approval_status_unknown_id_returns_404() -> None:
     assert body["error"]["code"] == "pending_approval_not_found"
 
 
-# --- issue #195: keep-separate audits `near_miss.resolve` (AC-BI-001/011/012) ---
+# --- keep-separate audits `near_miss.resolve` ---
 
 
 def _outcome_resolve(

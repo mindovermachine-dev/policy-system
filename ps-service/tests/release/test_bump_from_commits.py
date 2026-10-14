@@ -1,15 +1,14 @@
 """`scripts/release/bump-from-commits.sh` -- the conventional-commit classifier.
 
-Contract (PLAN B.1): stdin is the NUL-separated `sha<LF>header<LF>body` stream that
-`git log -z --format='%H%n%s%n%b' <baseline>..HEAD` yields (PLAN A-33); stdout is exactly one
+Contract: stdin is the NUL-separated `sha<LF>header<LF>body` stream that
+`git log -z --format='%H%n%s%n%b' <baseline>..HEAD` yields; stdout is exactly one
 line `bump=<major|minor|patch|none>`; structured logs go to stderr and a table with a warning
 row per unparsed SHA goes to `$GITHUB_STEP_SUMMARY`.
 
 Rules under test: type is read from the header only; `!` after type/scope or a body line
-`BREAKING CHANGE: ` yields major (AC-BI-008); `feat` minor (AC-BI-007); `fix`/`perf` patch
-(AC-BI-006) as does `refactor`; the other six types none (AC-BI-005); the highest wins
-(AC-BI-009); a header that does not parse counts as none and the summary names its SHA
-(AC-BI-010). Fixtures a-d of AC-BI-011 use the real `main` SHAs and headers recorded in PLAN A-32.
+`BREAKING CHANGE: ` yields major; `feat` minor; `fix`/`perf` patch
+as does `refactor`; the other six types none; the highest wins; a header that does not parse
+counts as none and the summary names its SHA. Fixtures a-d use real `main` SHAs and headers.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ BUMP_SCRIPT = "bump-from-commits.sh"
 SEED_TAG = "0.11.0"
 NUL = "\0"
 
-# Real `main` SHAs and headers (PLAN A-32): (b) slash-separated pseudo-type, (c) untyped prose.
+# Real `main` SHAs and headers: (b) slash-separated pseudo-type, (c) untyped prose.
 FIXTURE_B_SHA = "3b3c19da5f52f17bcd31321c13a0e38fb3208722"
 FIXTURE_B_HEADER = "ps-service/ps-cli: FalkorDB-only readiness gate + LLM fail-fast - resolves #75"
 FIXTURE_C_SHA = "72764ca1b3231372d090ae3b0499e86178e5fd86"
@@ -66,7 +65,7 @@ def _sha(index: int) -> str:
 
 
 def _stream(*records: tuple[str, str, str]) -> str:
-    """Synthesise the `git log -z --format='%H%n%s%n%b'` stream (PLAN A-33).
+    """Synthesise the `git log -z --format='%H%n%s%n%b'` stream.
 
     Each record is `sha<LF>header<LF>body` followed by NUL; git emits the body with its own
     trailing newline and nothing at all when the body is empty.
@@ -95,7 +94,7 @@ def _summary_rows_naming(release_fixture: ReleaseFixture, sha: str) -> list[str]
 
 
 # ---------------------------------------------------------------------------------------------
-# S3 -- classifier core (AC-BI-005, 006, 007, 009)
+# S3 -- classifier core
 # ---------------------------------------------------------------------------------------------
 
 
@@ -146,7 +145,7 @@ def test_reads_real_git_log_z_stream_from_fixture_repo(release_fixture: ReleaseF
 
 
 # ---------------------------------------------------------------------------------------------
-# S4 -- breaking changes, warnings, summary (AC-BI-008, 010, 011)
+# S4 -- breaking changes, warnings, summary
 # ---------------------------------------------------------------------------------------------
 
 

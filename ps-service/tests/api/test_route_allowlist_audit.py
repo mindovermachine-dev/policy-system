@@ -1,10 +1,10 @@
-"""Route allow-list default-deny audit (issue #58, Slice 9, AC-BI-011).
+"""Route allow-list default-deny audit.
 
-AC-BI-011: "WHEN any route not in the explicit open-route allow-list
-(``/health``, ``/ready``, ``/.well-known/*``) is registered THEN it requires
-a token -- a test enumerates the app's routes and asserts this."
+Any route not in the explicit open-route allow-list
+(``/health``, ``/ready``, ``/.well-known/*``) requires a token; this test
+enumerates the app's routes and asserts it.
 
-Issue #131 (PLAN.md §0.5) adds one more deliberate exemption, ``/approvals/*``
+One more deliberate exemption exists, ``/approvals/*``
 -- the companion-browser signing-ceremony router. It is a bare capability
 URL by design (a plain browser tab carries no ``Authorization`` header), so
 it is excluded from the enumeration below the same way ``/health``/``/ready``/
@@ -16,27 +16,27 @@ file's `/mcp` test already establishes.
 
 This is the one test that proves default-deny holds for **every** registered
 route, present and future, rather than the single representative route
-(``GET /catalog``) `test_rest_auth_middleware.py` (Slice 3) exercises.
+(``GET /catalog``) `test_rest_auth_middleware.py` exercises.
 `create_app`'s own composition root is what's audited -- if a future route is
 added to `build_api_router()`/`create_app()` without going through
 `RestAuthMiddleware`, this test fails loudly by construction (it enumerates
 what the app reports, not a hardcoded list).
 
-Enumeration source (issue #117) is the **union** of two views, because neither
+Enumeration source is the **union** of two views, because neither
 alone is complete on this FastAPI version:
 
 - ``app.openapi()["paths"]`` carries every API route, but never routes with no
   OpenAPI operation -- FastAPI's own ``/docs``, ``/redoc``, ``/openapi.json``
   and ``/docs/oauth2-redirect`` are plain Starlette ``Route`` objects.
 - ``app.routes`` carries those Starlette-level routes, but sub-routers are
-  included lazily (an opaque ``_IncludedRouter``), so it no longer carries a
+  included lazily (an opaque ``_IncludedRouter``), so it does not carry a
   flattened ``APIRoute`` per path (see `test_app_wiring.py`'s own comment).
 
 ``/mcp`` is a `Starlette` `Mount`, not an `APIRoute` -- it never appears in
 `app.openapi()["paths"]`. `RestAuthMiddleware` deliberately exempts
 ``/mcp*`` from its own check (`ps_service/auth/middleware.py`'s
 `_MCP_MOUNT_PREFIX`) because the MCP SDK's own `token_verifier=` gate
-(Slice 5, `RequireAuthMiddleware`/`BearerAuthBackend`) already enforces auth
+(`RequireAuthMiddleware`/`BearerAuthBackend`) already enforces auth
 *inside* the mounted sub-app with the same shared `PsTokenVerifier`. The
 explicit probe below proves that exemption is a deliberate hand-off to a
 second, still-active gate -- not a silent bypass -- by hitting the real
@@ -44,13 +44,12 @@ second, still-active gate -- not a silent bypass -- by hitting the real
 `Authorization` header and confirming the *inner* gate still rejects it,
 with the MCP-side rejection shape (a `WWW-Authenticate: Bearer ...` header;
 the MCP SDK's own body shape, not REST's `_error_body` JSON -- see
-`tests/mcp_interface/test_mcp_auth.py`, Slice 5, for the same observed
+`tests/mcp_interface/test_mcp_auth.py`, for the same observed
 shape).
 
 Drives the real composition root (`create_app`) against
 `tests.auth.mock_oidc_provider`'s real local HTTP server -- no monkeypatched
-transport anywhere in this file (AC-BI-017), matching every other Slice's
-convention.
+transport anywhere in this file, matching the convention of the other tests.
 """
 
 from __future__ import annotations
@@ -87,7 +86,7 @@ _AUDIENCE = "ps-service"
 def _configure_logging_for_auth_tests(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     configured_logging: Path,
 ) -> None:
-    """Slice 10: `PsTokenVerifier.verify_token` now always logs (AC-BI-014/015)
+    """`PsTokenVerifier.verify_token` always logs
     on every request this audit fires -- install a real process-wide Logging
     facade (`tests/api/conftest.py`'s own `configured_logging` fixture) so
     `emit_log_entry`'s no-default-configured guard never trips here.
@@ -97,11 +96,11 @@ def _configure_logging_for_auth_tests(  # pyright: ignore[reportUnusedFunction] 
 _HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 _JSON_RPC_ACCEPT = "application/json, text/event-stream"
 
-# AC-BI-011's own verbatim allow-list -- deliberately re-declared here rather than
+# The open-route allow-list, deliberately re-declared here rather than
 # imported from `ps_service.auth.middleware`, so this test fails (rather than
 # silently passing) if a future edit to that module's private constants ever drifts
-# from the issue's own wording. `_APPROVALS_PREFIX` is issue #131's own deliberate
-# addition (PLAN.md §0.5) -- see this file's module docstring.
+# from the documented allow-list. `_APPROVALS_PREFIX` is a separate deliberate
+# addition -- see this file's module docstring.
 _EXEMPT_PATHS = frozenset({"/health", "/ready"})
 _EXEMPT_PREFIX = "/.well-known/"
 _APPROVALS_PREFIX = "/approvals/"
@@ -109,7 +108,7 @@ _APPROVALS_PREFIX = "/approvals/"
 # it appears in `app.routes`, so the union enumeration must skip it explicitly.
 _MCP_PREFIX = MCP_HTTP_MOUNT_PATH
 
-# FastAPI's auto-generated Starlette-level routes (issue #117): no OpenAPI
+# FastAPI's auto-generated Starlette-level routes: no OpenAPI
 # operation, so invisible to `app.openapi()["paths"]`.
 _FASTAPI_BUILTIN_PATHS = ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect")
 
@@ -169,7 +168,7 @@ def _config(provider: MockOidcProvider, **overrides: object) -> ServiceConfig:
 
 
 def _is_exempt(path: str) -> bool:
-    """Mirror `RestAuthMiddleware`'s own exemption check, verbatim against AC-BI-011's wording."""
+    """Mirror `RestAuthMiddleware`'s own exemption check against the documented allow-list."""
     return path in _EXEMPT_PATHS or path.startswith(
         (_EXEMPT_PREFIX, _APPROVALS_PREFIX, _MCP_PREFIX)
     )
@@ -227,7 +226,7 @@ class _NoSuchApprovalStore:
 
 
 def test_every_non_exempt_route_requires_a_token(mock_oidc_provider: MockOidcProvider) -> None:
-    """AC-BI-011: every registered route outside the allow-list rejects an unauthenticated
+    """Every registered route outside the allow-list rejects an unauthenticated
     request with 401 -- never 404 (route missing), 422 (masked by bad input), or 200.
     """
     app = create_app(_config(mock_oidc_provider))
@@ -250,7 +249,7 @@ def test_every_non_exempt_route_requires_a_token(mock_oidc_provider: MockOidcPro
     # A schema that suddenly reported zero non-exempt routes would make the loop
     # above vacuously pass -- guard against that silently swallowing a real gap.
     assert checked, "expected at least one non-exempt route to audit"
-    # Issue #117: the union must reach the routes `openapi()` alone never sees.
+    # The union must reach the routes `openapi()` alone never sees.
     for builtin in _FASTAPI_BUILTIN_PATHS:
         assert f"GET {builtin}" in checked, f"{builtin} missing from the audit enumeration"
 
@@ -259,8 +258,8 @@ def test_every_non_exempt_route_requires_a_token(mock_oidc_provider: MockOidcPro
 def test_fastapi_builtin_routes_reject_unauthenticated_request_without_leaking(
     mock_oidc_provider: MockOidcProvider, path: str
 ) -> None:
-    """Issue #117 AC-BI-002/003: FastAPI's own docs routes are 401 with no token, and
-    the 401 body carries no token, key ids, or library internals (#58's no-leak contract).
+    """FastAPI's own docs routes are 401 with no token, and
+    the 401 body carries no token, key ids, or library internals (the no-leak contract).
     """
     client = TestClient(create_app(_config(mock_oidc_provider)))
 
@@ -279,7 +278,7 @@ def test_open_allowlist_routes_remain_reachable_without_a_token(
 
     Proves `RestAuthMiddleware`'s exemption is not accidentally over-broad in
     the *other* direction either -- these three stay reachable with no
-    `Authorization` header at all, exactly as AC-BI-011's allow-list promises.
+    `Authorization` header at all, exactly as the allow-list promises.
     """
     app = create_app(_config(mock_oidc_provider))
     client = TestClient(app)
@@ -292,7 +291,7 @@ def test_open_allowlist_routes_remain_reachable_without_a_token(
 def test_approvals_routes_remain_reachable_without_a_token_but_still_reject_a_bad_code(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """Issue #131, PLAN.md §0.5: `/approvals/*` is deliberately exempt from
+    """`/approvals/*` is deliberately exempt from
     `RestAuthMiddleware` (a plain browser tab carries no `Authorization`
     header) -- but, mirroring this file's own `/mcp` proof, the exemption is
     a hand-off to a second, still-enforcing gate (`passkey_signing.router`'s
@@ -324,8 +323,8 @@ def test_mcp_mount_rejects_unauthenticated_request_via_its_own_sdk_gate(
 
     Hits the real `create_app()` composition root's mounted transport directly (not
     the bespoke standalone-`Starlette`-wrapper helper `test_mcp_auth.py` uses), so
-    this is the same object AC-BI-011's "any route ... is registered" language
-    describes for the whole app, `/mcp` included.
+    this is the same object that serves every registered route of the whole app,
+    `/mcp` included.
     """
     app = create_app(_config(mock_oidc_provider))
 
@@ -337,8 +336,8 @@ def test_mcp_mount_rejects_unauthenticated_request_via_its_own_sdk_gate(
         )
 
     # The MCP SDK's own `RequireAuthMiddleware` rejects this before the `initialize`
-    # handshake ever completes -- observed shape per `test_mcp_auth.py` (Slice 5):
+    # handshake ever completes -- observed shape per `test_mcp_auth.py`:
     # 401 with a `WWW-Authenticate: Bearer ...` header, not REST's `_error_body` JSON
-    # shape (the two gates are deliberately allowed to differ, PLAN.md §1.3).
+    # shape (the two gates are deliberately allowed to differ).
     assert response.status_code == 401
     assert response.headers["www-authenticate"].startswith("Bearer ")

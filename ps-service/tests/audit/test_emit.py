@@ -1,4 +1,4 @@
-"""Audit lifecycle primitives: fail-closed opening row, best-effort follow-up row (issue #195)."""
+"""Audit lifecycle primitives: fail-closed opening row, best-effort follow-up row."""
 
 from __future__ import annotations
 
@@ -205,7 +205,7 @@ def test_failure_log_omits_the_resource_id_when_the_target_marks_it_personal_dat
     assert "a@example.com" not in str(line)
 
 
-# --- issue #210 (A6): the opening row hands back its audit event id ---
+# --- the opening row hands back its audit event id ---
 
 
 def test_record_opening_row_with_event_id_writes_the_opening_row_and_returns_its_id() -> None:

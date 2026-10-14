@@ -1,4 +1,4 @@
-"""Frozen copy of Policy Lifecycle's graph writer as it was before issue #211: the reference.
+"""Frozen copy of Policy Lifecycle's graph writer before the gateway migration.
 
 It issues the Cypher the pre-migration `policy_lifecycle/graph_writer.py` issued, in the same
 order, against a `LegacyRecordingGraph`: a small interpreter that keeps the node and edge sets those
@@ -22,7 +22,7 @@ Deviations from the original, each deliberate:
   the whole pattern; characterised live on 2026-10-08, unreachable through the computed ids). This
   interpreter keys nodes by `(label, id)` and cannot hold two, so it RAISES on that input instead
   of reproducing it; the gateway's upsert-by-id deliberately does not reproduce it either (the one
-  intentional divergence of #211);
+  intentional divergence from this reference);
 * a `SET x += $map` whose map carries a `None` value, or an `id` different from the merge key, is
   refused (the original never passed one on a reachable path and FalkorDB's treatment of either is
   not characterised).

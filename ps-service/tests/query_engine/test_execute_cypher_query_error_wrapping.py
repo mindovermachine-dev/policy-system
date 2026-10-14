@@ -1,12 +1,12 @@
 """Tests for `execute_cypher_query`'s FalkorDB-failure wrapping.
 
-PLAN_REVIEWED.md §5, Increment 5: a fake `GraphHandle.query` that raises
+A fake `GraphHandle.query` that raises
 proves `execute_cypher_query` re-raises as `QueryEngineExecutionError` with
-the original exception's message preserved verbatim, chained via
+the original exception's message preserved unchanged, chained via
 `raise ... from exc` so `__cause__` is the original exception.
 
-Batch 4/Increment 6 wired `_log` into `execute_cypher_query`'s failure path,
-so every call here now needs a live emitter (or a configured process
+`execute_cypher_query` logs on its failure path,
+so every call here needs a live emitter (or a configured process
 default) or it raises `LoggingLifecycleError` -- mirrors
 `tests/llm_interface/test_route_completion_mocked.py`'s established
 throwaway-emitter fixture pattern; these tests don't assert on log content,

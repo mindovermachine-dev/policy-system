@@ -1,7 +1,6 @@
-"""Core LLM resource provisioning: create-if-absent chain + three-secret write (supports
-AC-BI-015; PLAN.md §5/S9). Own copy of scripts/deploy-llm.sh's provisioning chain, RG-scoped
-under S1's renamed `rg-policy-system` (PLAN.md §0.1/§0.2) -- mirrors
-ps-service/tests/deploy_llm/test_provisioning.py's own S8-equivalent test shape.
+"""Core LLM resource provisioning: create-if-absent chain + three-secret write . Own copy of
+scripts/deploy-llm.sh's provisioning chain, RG-scoped under `rg-policy-system` -- mirrors
+ps-service/tests/deploy_llm/test_provisioning.py's test shape.
 """
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
-"""Tests for `scripts/lib/authentik-owner.sh` (issue #165, Slice 3B).
+"""Tests for `scripts/lib/authentik-owner.sh`.
 
 The real library is sourced by a real bash; `curl` is the stateful Authentik fake serving
 response shapes recorded from a live Authentik 2026.8.3, `kubectl` records its argv.
-Acceptance: AC-BI-002 (owner user + link), AC-BI-004 (re-run semantics), AC-BI-016 (fail
-cleanly, no half-created user), D-21 (token never in argv/output).
+Covered: owner user + link, re-run semantics, failing cleanly with no half-created user, and
+the token never appearing in argv or output.
 """
 
 from __future__ import annotations
@@ -338,7 +338,7 @@ def test_prompt_is_disabled_for_non_interactive_runs(lib_harness: LibHarness) ->
     assert "--owner-email" in proc.stderr
 
 
-# --- waiting for the bundled blueprint (found live at LC3, issue #165) ------------------------
+# --- waiting for the bundled blueprint ---------------------------------------------------------
 
 MAIN_BLUEPRINT = "PS Service — bundled Authentik setup (issue #129)"
 WAIT_ENV = {"PS_BLUEPRINT_WAIT_ATTEMPTS": "4", "PS_BLUEPRINT_WAIT_INTERVAL_SECONDS": "0"}

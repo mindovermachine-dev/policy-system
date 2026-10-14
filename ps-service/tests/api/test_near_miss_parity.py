@@ -1,4 +1,4 @@
-"""MCP and REST keep-separate record the same `near_miss.resolve` row (issue #195, AC-BI-017)."""
+"""MCP and REST keep-separate record the same `near_miss.resolve` row."""
 
 from __future__ import annotations
 

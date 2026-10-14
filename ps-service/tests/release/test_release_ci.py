@@ -1,10 +1,10 @@
-"""`.insitu.yml` runs the default pytest suite in the `trunk-worthy` wave (CHANGES X-03).
+"""`.insitu.yml` runs the default pytest suite in the `trunk-worthy` wave.
 
-AC-BI-011 requires the classifier's unit tests to "pass in CI"; until slice S4b nothing in CI
-ran pytest at all (PLAN A-24). The default suite is hermetic (DECISIONS F-03), so the whole of
+The classifier's unit tests must "pass in CI". The default suite is
+hermetic, so the whole of
 `uv run pytest -q` -- not only `ps-service/tests/release` -- becomes a trunk-worthy check.
 
-Issue #197: the xdist flags (`-n`, `--dist`) moved out of that command into `addopts` in the root
+The xdist flags (`-n`, `--dist`) moved out of that command into `addopts` in the root
 `pyproject.toml`, the single source of truth shared with a bare local `pytest`. The command no
 longer pins them, so this file instead pins that `addopts` still enables xdist: dropping `-n`
 there would silently serialize both the gate and every local run. (`test_release_workflow.py`
@@ -73,7 +73,7 @@ def test_root_pytest_addopts_enables_xdist_so_the_gate_and_a_bare_run_stay_paral
 
 
 def test_post_create_and_prep_runner_waves_install_helm(repo_root: Path) -> None:
-    """CHANGES.md X-01: `install-helm` mirrors `install-actionlint`'s real placement -
+    """`install-helm` mirrors `install-actionlint`'s real placement -
     installed in `post-create` and `prep-runner`, never inside `trunk-worthy` itself.
     """
     document = _insitu_document(repo_root)
@@ -97,8 +97,8 @@ def test_post_create_and_prep_runner_waves_install_helm(repo_root: Path) -> None
 
 
 def test_trunk_worthy_wave_runs_helm_lint_and_unittest(repo_root: Path) -> None:
-    """AC-BI-004: `helm lint`/`helm unittest` are continuously enforced in CI, not just
-    claimed once (also makes AC-BI-003's unittest cases durable).
+    """`helm lint`/`helm unittest` are continuously enforced in CI, not just
+    claimed once.
     """
     document = _insitu_document(repo_root)
     checks = _entries(document, "inventory")

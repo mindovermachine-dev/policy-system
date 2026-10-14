@@ -1,4 +1,4 @@
-"""Static structure checks for `scripts/deploy-ps-eval.sh` (issue #165, AC-BI-013, AC-BI-008)."""
+"""Static structure checks for `scripts/deploy-ps-eval.sh`."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ _SKIPPED_PARTS = frozenset({"__pycache__", ".venv", "node_modules", ".git"})
 
 
 def test_the_old_default_hostname_literal_appears_in_no_tracked_file() -> None:
-    """AC-BI-008: the needle is built by concatenation, so no file (this one included) holds it."""
+    """The needle is built by concatenation, so no file (this one included) holds it."""
     offenders = [
         str(path.relative_to(REPO_ROOT))
         for root in _SCANNED_ROOTS

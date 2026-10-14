@@ -1,106 +1,59 @@
-"""Tests for the registered `near_misses_list`/`near_misses_resolve` MCP tools
-(issue #126, Group 3 -- `ps-near-miss-review` skill). This file also hosts
-Slices 3.3/3.4's tests as those branches land; Slice 3.1 (`near_misses_list`'s
-happy path) and Slice 3.2 (`near_misses_resolve`'s `keep-separate` happy
-path) are implemented here.
+"""Tests for the registered `near_misses_list`/`near_misses_resolve` MCP tools.
 
-Slice 3.1: `near_misses_list` (zero parameters -- no D-PREFLIGHT check, since
+`near_misses_list` takes no parameters and so has no pre-flight check, since
 neither `handle_near_misses_list` nor `handle_near_misses_resolve` call
-`_assert_llm_interface_available` either, confirmed by reading
-`ps-cli/src/ps_cli/modules/handlers.py:77-92`) delegates in-process to
-`run_list_near_misses` (D-DELEGATE) via the shared `_run_mcp_action` audit
-wrapper (D-AUDIT-WRAPPER), returning `run_list_near_misses(...).model_dump()`
--- `run_list_near_misses` itself already builds the
-`PendingReviewListResponse` via `near_miss_review_orchestration`'s own
-already-public `_to_pending_review_entry` (D-RESPONSE-SHAPE), so no separate
-reconstruction is needed in `mcp_server.py`.
+`_assert_llm_interface_available`. It delegates in-process to
+`run_list_near_misses` via the shared `_run_mcp_action` audit wrapper and
+returns `run_list_near_misses(...).model_dump()`; that function already builds
+the `PendingReviewListResponse` via `near_miss_review_orchestration`'s public
+`_to_pending_review_entry`, so no reconstruction is needed in `mcp_server.py`.
 
-Slice 3.2: `near_misses_resolve(review_id, decision)` -- `decision`'s
+`near_misses_resolve(review_id, decision)`: `decision`'s
 `Literal["keep-separate", "merge"]` type is itself the MCP-schema-level enum
-enforcement (AC-BI-005); only `decision="keep-separate"` is exercised here.
-Delegates in-process to `run_resolve_near_miss` (D-DELEGATE) via the same
-`_run_mcp_action` wrapper, returning
-`run_resolve_near_miss(...).model_dump()` -- like `run_list_near_misses`,
-`run_resolve_near_miss` already builds the `ResolveReviewResponse` via
-`near_miss_review_orchestration`'s own already-public `_to_resolve_response`
-(D-RESPONSE-SHAPE), so no separate reconstruction is needed here either.
-`winner_id`/`loser_id` are asserted `None` for this decision (AC-BI-004's
-documented shape). The `merge` decision and its own failure states are
-Slices 3.3/3.4's scope, not this one.
+enforcement. It delegates in-process to `run_resolve_near_miss` via the same
+`_run_mcp_action` wrapper and returns `run_resolve_near_miss(...).model_dump()`;
+that function already builds the `ResolveReviewResponse` via
+`near_miss_review_orchestration`'s public `_to_resolve_response`. For
+`keep-separate`, `winner_id`/`loser_id` are `None`.
 
-Slice 3.3 (issue #35): `near_misses_resolve`'s `merge` path originally gated
-`decision="merge"` behind a typed-confirm MCP elicitation round trip
-(`MergeConfirmation`/`_confirm_merge`, CHANGES.md H2). Issue #131 removes
-that mechanism entirely (AC-BI-009) and replaces it with a signed-passkey
-pending-approval flow: `decision="merge"` now returns a pending approval
-(`pending_approval_id`/`approval_url`/`expires_at`) immediately, with no
-graph write and no elicitation round trip at all -- see the "issue #131"
-section below for that flow's own tests.
-`test_docstring_states_merge_is_irreversible` is kept, updated for the new
-flow's own docstring text (the underlying merge write is still IRREVERSIBLE
-once it eventually executes, which is exactly why it is now gated behind a
-signed approval rather than a typed-confirm round trip).
+`decision="merge"` is gated behind a signed-passkey pending approval: it
+returns a pending approval (`pending_approval_id`/`approval_url`/`expires_at`)
+immediately, with no graph write and no elicitation round trip.
+`test_docstring_states_merge_is_irreversible` checks the tool's own docstring
+text, because the underlying merge write is IRREVERSIBLE once it eventually
+executes, which is why it is gated behind a signed approval.
 `test_domain_concepts_tool.py::test_tool_listed_alongside_cypher` is this
 suite's only other precedent for asserting on a tool's own listed metadata
 (there `input_schema`, here `description`).
 
-Issue #131 (signed passkey approval before near-miss merges): PLAN.md's
-`_resolve_signing_actor()`/`create_merge_pending_approval`/
-`check_pending_approval` design. `_verified_actor()` (this file, new) binds
-a real `AccessToken` directly onto the MCP SDK's own
-`mcp.server.auth.middleware.auth_context.auth_context_var` contextvar --
-the same one `get_access_token()` (`_resolve_principal`/
-`_resolve_signing_actor`) reads, normally populated by `AuthContextMiddleware`
-from a real HTTP request (`test_mcp_auth.py`'s own end-to-end proof of that
-wiring). Binding it directly here, rather than driving a full
+`_verified_actor()` (this file) binds a real `AccessToken` directly onto the
+MCP SDK's `mcp.server.auth.middleware.auth_context.auth_context_var`
+contextvar -- the same one `get_access_token()`
+(`_resolve_principal`/`_resolve_signing_actor`) reads, normally populated by
+`AuthContextMiddleware` from a real HTTP request (`test_mcp_auth.py` proves
+that wiring end to end). Binding it directly, rather than driving a full
 `initialize`/`notifications/initialized`/`tools/call` JSON-RPC handshake
 through a `TestClient`, is sufficient because `near_misses_resolve`'s merge
-branch and `near_misses_check_approval` never touch `ctx.session` at all
-(no elicitation, no server-initiated request) -- only `get_access_token()`
-and, for the merge branch, `ctx.request_context.request` for the approval
-link's `{base_url}` (falls back to a fixed placeholder when no context is
-bound at all, exercised by this file's own bare `server.call_tool(name,
-args)` calls with no context argument, which is every call in this file
-including the new ones below).
+branch and `near_misses_check_approval` never touch `ctx.session` (no
+elicitation, no server-initiated request) -- only `get_access_token()` and,
+for the merge branch, `ctx.request_context.request` for the approval link's
+`{base_url}` (falls back to a fixed placeholder when no context is bound at
+all, as in every bare `server.call_tool(name, args)` call in this file).
+`test_ctx_parameter_is_not_part_of_the_client_visible_schema` proves the
+auto-injected `ctx: Context` parameter (needed for the approval link's
+`{base_url}`) is excluded from the client-visible schema.
 
-`test_merge_pauses_for_elicitation_then_executes_once_confirmed` (the old
-elicitation-round-trip test) and `test_keep_separate_never_elicits_single_round_trip`
-(its third-proof companion) are both removed outright, along with the
-`_elicitation_context()`/`_FakeSession` helpers and the `mcp.types`
-elicitation imports they used -- the mechanism they exercised
-(`MergeConfirmation`/`_confirm_merge`/`Elicit`/`Resolve`) no longer exists in
-`mcp_server.py` at all, so keeping either test around (even passing, by
-accident of dead code) would assert on a mechanism that is gone; deleting
-them, not weakening them, is this file's explicit proof that the old gate
-is really gone (AC-BI-009), alongside the new
-`test_merge_returns_pending_approval_without_executing_the_merge` below,
-which is this issue's own defining test (PLAN.md §4 Slice 1).
-`test_confirmed_gate_is_not_part_of_the_client_visible_schema` is renamed
-`test_ctx_parameter_is_not_part_of_the_client_visible_schema` and now
-proves the *new* auto-injected `ctx: Context` parameter (needed for the
-approval link's `{base_url}`) is excluded from the client-visible schema,
-the same way the old resolver-filled `confirmed` parameter was.
-
-Slice 3.4 (Group 3, issue #35/#126): failure-state completeness for both
-tools' `keep-separate` paths, per PLAN.md's D-SANITIZE-UNEXPECTED table and
-`near_miss_review_orchestration.py`'s own module docstring. Historical note:
-this slice originally also covered a merge-only "stale reference" case
-(`dependencies.resolve_review` raising `StalePendingReviewError`, re-raised
-as `PendingReviewNotFoundError` with a dedicated "stale" message) -- that
-test (`test_resolve_merge_stale_reference_returns_named_error`) is removed
-by issue #131, since `near_misses_resolve`'s merge branch no longer calls
-`resolve_review` at all (see the "issue #131" section above); the analogous
-early-existence check for merge now lives in
-`test_resolve_merge_unresolved_review_not_found_returns_named_error`
-above, and the exact stale-reference scenario becomes a later slice's
-execution-time concern. Graph-unavailable reuses the existing generic
-`_sanitize_graph_open` helper via `_sanitize_near_miss_review_graph_opens`
-(mirrors `_sanitize_pipeline_graph_opens`/`_sanitize_change_check_graph_opens`
+Failure-state completeness for both tools' `keep-separate` paths follows
+`near_miss_review_orchestration.py`'s own module docstring. A merge never
+calls `resolve_review`; the early-existence check for merge is
+`test_resolve_merge_unresolved_review_not_found_returns_named_error`.
+Graph-unavailable reuses the generic `_sanitize_graph_open` helper via
+`_sanitize_near_miss_review_graph_opens` (mirrors
+`_sanitize_pipeline_graph_opens`/`_sanitize_change_check_graph_opens`
 exactly). The residual unexpected-exception safety net is `_run_mcp_action`'s
-own existing catch-all (D-AUDIT-WRAPPER point 4) -- no new production code,
-proven per tool via a fake delegate raising something unclassified, mirroring
-`test_check_regulations_tool.py`'s identically-shaped tests for this same
-branch.
+own catch-all, proven per tool via a fake delegate raising something
+unclassified, mirroring `test_check_regulations_tool.py`'s identically-shaped
+tests for this same branch.
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
 `test_ingest_regulation_tool.py`'s/`test_check_regulations_tool.py`'s own
@@ -114,24 +67,21 @@ docstring), so this cross-package import works the same way
 `test_check_regulations_tool.py`'s `from api._fakes import
 build_fake_change_check_dependencies` already does.
 
-issue #163 Slice D: `build_default_near_miss_review_dependencies`'s DI seam
-is narrowed so only its FalkorDB `open_single_tenant_graph` opener is
-substitutable (`near_miss_review_orchestration.py`'s own module docstring) --
+`build_default_near_miss_review_dependencies`'s DI seam is narrowed so only its
+FalkorDB `open_single_tenant_graph` opener is substitutable
+(`near_miss_review_orchestration.py`'s own module docstring);
 `list_pending_reviews`/`resolve_review` are always the real, shipped
-`ps_service.company_merge.pending_review` functions now. This file therefore
-no longer fakes those two collaborators at all: `_ScriptedGraphHandle`
+`ps_service.company_merge.pending_review` functions. `_ScriptedGraphHandle`
 (below) is a structural `GraphHandle` stand-in that scripts per-call
 `graph.query(...)` results/exceptions -- mirroring
 `tests/company_merge/test_pending_review_{list,resolve}.py`'s own
-`_FakeGraph`/`_FakeQueryResult` (a fresh, local, private copy here, not a
-cross-package import, matching this codebase's established "own copy per
-module" convention) -- and the *real* `list_pending_reviews`/`resolve_review`
-run against it, issuing their own real Cypher query strings and mapping the
-scripted rows back exactly as they would against real FalkorDB. Where an
-earlier version of this file asserted a fake collaborator was/was not
-called, the rewritten test instead asserts on `graph.calls` (which real
-queries the real functions actually issued) or on the tool's own output --
-proof about real behaviour, not about whether a fake was invoked.
+`_FakeGraph`/`_FakeQueryResult` (a local, private copy here, not a
+cross-package import, matching this codebase's "own copy per module"
+convention) -- and the real `list_pending_reviews`/`resolve_review` run
+against it, issuing their own real Cypher query strings and mapping the
+scripted rows back exactly as they would against real FalkorDB. Tests assert
+on `graph.calls` (which real queries the real functions issued) or on the
+tool's own output, not on whether a fake was invoked.
 
 `pytest-asyncio` is not installed; this file drives the tool with a bare
 `asyncio.run(server.call_tool(...))`, exactly like `test_cypher_tool.py`/
@@ -153,7 +103,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from api._gateway_fakes import installed_process_gateway
 from api.test_routes_near_misses import (
-    _record,  # pyright: ignore[reportPrivateUsage]  -- reuse the existing REST-side fixture verbatim, not reinvented (PLAN.md Slice 3.1 instruction)
+    _record,  # pyright: ignore[reportPrivateUsage]  -- reuse the existing REST-side fixture, not reinvented
 )
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from mcp.server.auth.middleware.auth_context import auth_context_var
@@ -299,7 +249,7 @@ class _FakePendingApprovalStore:
             self._rows_by_id[pending_approval_id] = dataclasses.replace(row, outcome=outcome)
 
 
-# --- issue #163 Slice D: script the real `pending_review.list_pending_reviews`/
+# --- Script the real `pending_review.list_pending_reviews`/
 # `resolve_review` functions against a structural `GraphHandle` fake, rather than
 # faking those functions themselves (see module docstring). --------------------
 
@@ -375,7 +325,7 @@ def _use_fake_graph_opener_only(
 
     Targets `ps_service.api.near_miss_review_orchestration.
     build_default_near_miss_review_graph_opener` -- the approved-boundary
-    entry issue #163 Slice D added to
+    entry in
     `docs/coding-standards/approved-mock-boundaries.yaml` -- so
     `build_default_near_miss_review_dependencies()`'s own, unpatched call
     (every tool body in `mcp_server.py` makes it with zero arguments) still
@@ -414,11 +364,10 @@ def _text(result: CallToolResult) -> str:
 def test_happy_path_lists_every_unresolved_review_with_full_field_set(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """AC-BI-004 (list half): several scripted `PendingReviewRecord`s come
-    back verbatim, field for field (`id`/`kind`/`incoming_text`/
-    `nearest_existing_text`/`similarity` -- AC-BI-004's explicit requirement
-    list), plus the `mcp_interface` started/succeeded log pair carrying the
-    resolved principal.
+    """Several scripted `PendingReviewRecord`s come
+    back field for field (`id`/`kind`/`incoming_text`/
+    `nearest_existing_text`/`similarity`), plus the `mcp_interface`
+    started/succeeded log pair carrying the resolved principal.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -439,7 +388,7 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
         assert entry["incoming_text"] == record.incoming_text
         assert entry["nearest_existing_text"] == record.nearest_existing_text
         assert entry["similarity"] == record.similarity
-    # AC-BI-003/004 precedent (`test_routes_near_misses.py`): the underlying
+    # Matches `test_routes_near_misses.py`: the underlying
     # node ids are deliberately not part of this wire response.
     assert "incoming_id" not in body["reviews"][0]
     assert "nearest_existing_id" not in body["reviews"][0]
@@ -460,9 +409,9 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
 
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
-    """`near_misses_resolve` writes `near_miss.resolve` rows (issue #195): keep off Postgres."""
+    """`near_misses_resolve` writes `near_miss.resolve` rows: keep off Postgres."""
 
-    # Issue #210: the resolution's graph group is anchored to the opening row's id, which the
+    # The resolution's graph group is anchored to the opening row's id, which the
     # graph log accepts only for a committed audit row -- register each id with the process rig.
     def _register(event_id: str) -> None:
         installed_process_gateway().rig.store.audit_rows.add(event_id)
@@ -485,7 +434,7 @@ def _call_near_misses_resolve(review_id: str, decision: str) -> CallToolResult:
 def test_keep_separate_resolves_with_winner_and_loser_left_none(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-004 (resolve half, keep-separate): the resolved review's
+    """For keep-separate, the resolved review's
     `winner_id`/`loser_id` stay `None` in the response for this decision,
     plus the `mcp_interface` started/succeeded log pair carrying the
     resolved principal.
@@ -493,9 +442,9 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
 
-    # Step 0 (`get_pending_review`, issue #195): the audit lookup of the review's entity ids.
+    # Step 0 (`get_pending_review`): the audit lookup of the review's entity ids.
     # Step 1 (`_FIND_REVIEW_QUERY`): the review exists, kind "Capability".
-    # Step 2 (issue #210): the review is deleted by a gateway group, not by a graph query, so
+    # Step 2: the review is deleted by a gateway group, not by a graph query, so
     # the scripted handle sees no third call.
     graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]]])
     _use_scripted_graph(monkeypatch, graph)
@@ -546,13 +495,13 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
         assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
 
 
-# --- Slice 3.3: `merge` path + CHANGES.md H2's elicitation gate ---
+# --- `merge` path and its pending-approval gate ---
 
 
 def test_docstring_states_merge_is_irreversible() -> None:
-    """The underlying merge write is still IRREVERSIBLE once it eventually
-    executes -- this is exactly why issue #131 gates it behind a signed
-    passkey approval rather than the old typed-confirm elicitation round
+    """The underlying merge write is IRREVERSIBLE once it eventually
+    executes -- this is exactly why it is gated behind a signed
+    passkey approval rather than a typed-confirm elicitation round
     trip. Mirrors `test_domain_concepts_tool.py::test_tool_listed_alongside_cypher`'s
     own `list_tools()` precedent for asserting on a tool's listed metadata.
     """
@@ -564,11 +513,9 @@ def test_docstring_states_merge_is_irreversible() -> None:
 
 def test_ctx_parameter_is_not_part_of_the_client_visible_schema() -> None:
     """The SDK's auto-injected `ctx: Context` parameter (needed for the
-    approval link's `{base_url}`, PLAN.md §2.2 step 4) must never leak into
-    the tool's client-visible JSON argument schema -- mirrors the old,
-    now-removed `confirmed` resolver-parameter's own exclusion proof (the
-    mechanism differs -- Context injection, not `Resolve(...)` -- but the
-    client-visible contract this protects is the same).
+    approval link's `{base_url}`) must never leak into
+    the tool's client-visible JSON argument schema, so a client never
+    has to supply it.
     """
     tools = asyncio.run(mcp_server.server.list_tools())
     [tool] = [t for t in tools if t.name == "near_misses_resolve"]
@@ -576,13 +523,13 @@ def test_ctx_parameter_is_not_part_of_the_client_visible_schema() -> None:
     assert set(tool.input_schema.get("required", [])) == {"review_id", "decision"}
 
 
-# --- issue #131: signed passkey approval before near-miss merges -------------
+# --- Signed passkey approval before near-miss merges -------------
 
 
 def test_merge_returns_pending_approval_without_executing_the_merge(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """PLAN.md §4 Slice 1's own defining test: calling `near_misses_resolve`
+    """Calling `near_misses_resolve`
     with `decision="merge"` for a real, authenticated caller returns a
     pending approval immediately -- no elicitation, no `confirmed` argument
     -- and never calls the real `resolve_review` at all, proving the graph
@@ -632,7 +579,7 @@ def test_merge_returns_pending_approval_without_executing_the_merge(
 def test_merge_without_a_real_authenticated_caller_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-002: a caller with no real, verified actor identity -- here, the
+    """A caller with no real, verified actor identity -- here, the
     local-test bypass alone, with no `AccessToken` ever bound -- gets a
     clear error, never a pending approval. No dependencies/store faking is
     needed: this check runs before either is ever touched.
@@ -651,14 +598,12 @@ def test_merge_without_a_real_authenticated_caller_is_refused(
 def test_resolve_merge_unresolved_review_not_found_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PLAN.md §2.2 step 2's early existence check: a `review_id` absent from
+    """Early existence check: a `review_id` absent from
     the unresolved-reviews listing is rejected with the same
     `PendingReviewNotFoundError` message `keep-separate` already uses,
-    before any Postgres row is created. Supersedes the old, now-removed
-    `test_resolve_merge_stale_reference_returns_named_error`: that test's
-    scenario -- a review whose referenced node a PRIOR merge already deleted
-    -- is a later slice's authoritative execution-time check now (this
-    Slice 1 create step never calls `resolve_review` at all).
+    before any Postgres row is created. The create step never calls
+    `resolve_review` at all; a review whose referenced node a PRIOR merge
+    already deleted is an execution-time check.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
@@ -770,7 +715,7 @@ def test_check_approval_reports_pending_for_a_freshly_created_approval(
 def test_check_approval_reports_the_recorded_error_for_a_failed_merge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-013 on the MCP surface: the compliance officer polls this tool, so
+    """The compliance officer polls this tool, so
     a signed approval whose merge stored `{"error": ...}` must report that
     reason here too. Reporting only null `winner_id`/`loser_id` left "the
     merge failed" indistinguishable from "the merge is done".
@@ -830,7 +775,7 @@ def test_check_approval_unknown_id_gets_generic_not_found(
 def test_check_approval_unauthenticated_caller_gets_generic_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PLAN.md §2.3's fail-closed rule applied to the read side: a caller
+    """Fail-closed on the read side: a caller
     with no real actor identity can never poll any pending approval, not
     even to learn that a real one exists -- the same generic message an
     unknown id gets, never a distinct "unauthenticated" message here (that
@@ -862,7 +807,7 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
 def test_check_approval_wrong_actor_gets_generic_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PLAN.md §2.3's ownership check: a different, but still real,
+    """Ownership check: a different, but still real,
     authenticated caller gets the identical generic not-found error -- never
     a distinct "not yours" message that would leak the row's existence.
     """
@@ -892,7 +837,7 @@ def test_check_approval_wrong_actor_gets_generic_not_found(
     assert "no pending approval" in text
 
 
-# --- Slice 3.4: failure-state completeness for both tools --------------------
+# --- Failure-state completeness for both tools --------------------
 
 
 def test_list_graph_unavailable_returns_named_error(
@@ -1021,7 +966,7 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
 
-    # Step 1 (`_FIND_REVIEW_QUERY`) succeeds; the delete is a gateway group (issue #210) whose log
+    # Step 1 (`_FIND_REVIEW_QUERY`) succeeds; the delete is a gateway group whose log
     # append raises something the gateway and `submit_group` do not classify.
     graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]]])
     _use_scripted_graph(monkeypatch, graph)
@@ -1046,7 +991,7 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
 
 
-# --- issue #195: keep-separate audits `near_miss.resolve` (AC-BI-001/011/012) ---
+# --- keep-separate audits `near_miss.resolve` ---
 
 
 def _script_keep_separate(monkeypatch: pytest.MonkeyPatch) -> _ScriptedGraphHandle:
@@ -1106,7 +1051,7 @@ def test_near_misses_resolve_returns_error_prefix_when_audit_is_unavailable(
 def test_creating_a_merge_pending_approval_via_mcp_writes_no_audit_row(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """The merge is audited when the approval is signed, not when it is requested (issue #195)."""
+    """The merge is audited when the approval is signed, not when it is requested."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     _use_scripted_graph(

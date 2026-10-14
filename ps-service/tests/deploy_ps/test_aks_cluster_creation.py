@@ -1,23 +1,19 @@
-"""AKS cluster creation with AAD+RBAC+hardening flags for `scripts/deploy-ps-prod.sh` (AC-BI-006,
-AC-BI-012; PLAN.md §5/S13).
+"""AKS cluster creation with AAD+RBAC+hardening flags for `scripts/deploy-ps-prod.sh`.
 
 `ensure_aks_cluster`'s exact `az aks create` flag set -- AAD-integrated auth, Azure RBAC
-authorization, disabled local accounts, and Azure CNI network policy -- is ported verbatim from
-`spikes/deploy-ps-azure/deploy-ps-prod.sh`'s own `ensure_aks_cluster` (spike lines 939-950), the
-trusted empirical reference this whole plan cites. The headline regression this module guards:
-`spikes/deploy-ps-azure/README.md`'s own "Bugs found and fixed" section, confirmed against a
-real subscription during the spike run, states verbatim: "Missing `--network-plugin` (new,
-mine) -- `--network-policy azure` requires an explicit `--network-plugin azure`; omitting it
-fails `az aks create` outright. Fixed." `test_creates_cluster_with_network_plugin_azure_and_
+authorization, disabled local accounts, and Azure CNI network policy -- matches what the production
+`ensure_aks_cluster` runs against a real subscription. The headline regression this module
+guards: `--network-policy azure` requires an explicit `--network-plugin azure`; omitting it
+fails `az aks create` outright. `test_creates_cluster_with_network_plugin_azure_and_
 network_policy_azure_together` below asserts both flags land in the SAME `aks create` call, not
 merely that each flag appears somewhere in the log.
 
 `grant_aks_rbac_access` grants the deploying identity -- reusing `fetch_signed_in_user_object_
-id`'s result, the same resolver S9's Key Vault access grant already uses (PLAN.md §0.5, no
+id`'s result, the same resolver the Key Vault access grant already uses (no
 service-principal branch) -- the "Azure Kubernetes Service RBAC Cluster Admin" role at the
 cluster's own resource-ID scope, never the subscription root: without --enable-azure-rbac
-authorizing the deploying identity there, every kubectl/helm call in S14+ is rejected regardless
-of the operator's subscription-level Owner/Contributor role S6's rbac_preflight already checked
+authorizing the deploying identity there, every later kubectl/helm call is rejected regardless
+of the operator's subscription-level Owner/Contributor role `rbac_preflight` already checked
 -- a different scope for a different concern.
 """
 
@@ -83,9 +79,9 @@ def _role_assignment_create_calls(fixture: DeployPsFixture) -> list[str]:
 def test_creates_cluster_with_network_plugin_azure_and_network_policy_azure_together(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """The exact AC-BI-012 regression: `--network-plugin azure` MUST be present alongside
+    """The `--network-plugin azure` MUST be present alongside
     `--network-policy azure` in the SAME `az aks create` call -- omitting the former fails the
-    real `az aks create` outright (spike README, quoted in `scripts/deploy-ps-prod.sh`'s own
+    real `az aks create` outright (documented in `scripts/deploy-ps-prod.sh`'s own
     `ensure_aks_cluster` comment). A test that only checked each flag appeared *somewhere* in the
     log would not catch a regression that moved one of them to a different, unrelated call.
     """
@@ -102,7 +98,7 @@ def test_creates_cluster_with_network_plugin_azure_and_network_policy_azure_toge
 def test_creates_cluster_with_aad_rbac_and_disable_local_accounts_flags(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """AC-BI-006: AAD-integrated auth, Azure RBAC authorization, and local (cert-based) accounts
+    """AAD-integrated auth, Azure RBAC authorization, and local (cert-based) accounts
     disabled -- all three hardening flags in the same `aks create` call.
     """
     _seed(deploy_ps_fixture)
@@ -133,7 +129,7 @@ def test_grants_aks_rbac_cluster_admin_role_scoped_to_the_cluster_only(
     """The AKS RBAC grant's `--scope` is the cluster's own resource ID -- never the subscription
     root S6's `rbac_preflight` already checked (a different scope for a different concern) --
     and the role is the built-in "Azure Kubernetes Service RBAC Cluster Admin", granted to the
-    signed-in user's object id (reusing `fetch_signed_in_user_object_id`'s result, PLAN.md §0.5).
+    signed-in user's object id (reusing `fetch_signed_in_user_object_id`'s result).
     """
     _seed(deploy_ps_fixture)
     cluster_id = _cluster_resource_id(_cluster_name())

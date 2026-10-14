@@ -1,6 +1,6 @@
-"""Cross-action audit-vocabulary consistency check (issue #134, PLAN.md S27).
+"""Cross-action audit-vocabulary consistency check.
 
-AC-BI-016 requires more than "each action records an audit event on
+The audit trail needs more than "each action records an audit event on
 rejection" -- the `reason_code` vocabulary must mean the same thing
 everywhere it appears, so a consumer reading the audit trail across actions
 never has to special-case one action's own dialect. This file exercises each
@@ -11,15 +11,13 @@ can raise it: `"access_denied"` (propose/revert, both owner-only actions),
 `"invalid_status"` (all four), and `"self_approval_blocked"`
 (approve/reject, both `PolicyManager`-gated actions). It then cross-checks
 those same strings against `PolicyTransitionDetails`'s own registered
-`reason_code` vocabulary (S10's single source of truth,
+`reason_code` vocabulary (the single source of truth,
 `ps_service.policy_lifecycle.audit_actions`) -- a reason code drifting out of
 that model, or the model accepting a code no action actually emits, would
 also be caught here.
 
-This slice runs only after S26's shared `_apply_transition` helper lands
-(PLAN.md S27's own note: "this should be a straightforward pass now if S26's
-refactor is done correctly") -- these tests exist to prove that holds, not
-to newly discover the vocabulary. No drift was found: `_apply_transition`
+These tests prove the shared `_apply_transition` helper keeps the vocabulary
+consistent, rather than discover it: `_apply_transition`
 (`service.py`) and `PolicyTransitionDetails` (`audit_actions.py`) already
 share one `reason_code` `Literal` end to end.
 """

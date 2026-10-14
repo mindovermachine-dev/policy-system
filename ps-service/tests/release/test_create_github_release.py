@@ -1,11 +1,11 @@
-"""`previous-release-tag.sh` and `create-github-release.sh` (S10, PLAN B.1, CHANGES X-02).
+"""`previous-release-tag.sh` and `create-github-release.sh` .
 
 `previous-release-tag.sh <release_version>` finds the highest bare-semver git tag strictly
 below `<release_version>` (by `sort -V`), for use as the note baseline; it exits 1 when none
 exists. `create-github-release.sh <release_version>` calls it for the baseline, writes release
 notes to a file via `${PS_RELEASE_GH:-gh} tt semver note --from <baseline> --to <release_version>
 --filename <file>`, then either `gh release edit` (release already exists) or `gh release create
---verify-tag --title <release_version> --notes-file <file>` (AC-BI-021).
+--verify-tag --title <release_version> --notes-file <file>`.
 
 The fake `gh` (`conftest.py`'s `FAKE_GH_SCRIPT`) answers `tt semver note` by writing a real note
 from `git log` and answers `release view` by exit 1 unless the test creates the marker file

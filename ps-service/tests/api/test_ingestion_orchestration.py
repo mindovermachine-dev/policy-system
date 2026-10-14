@@ -1,14 +1,13 @@
 """Tests for ``ps_service.api.ingestion_orchestration`` (the catalog pipeline sequencer).
 
-Increment 5 (#51a). Drives ``run_catalog_ingestion_pipeline`` with a fake
+Drives ``run_catalog_ingestion_pipeline`` with a fake
 ``PipelineDependencies`` (see ``tests/api/_fakes.py``) so the sequencing, the
 config guard, the stage-failure handling, and the ``ingestion_run`` log entries
 are all exercised without a real graph, adapter, or LLM.
 
-AC coverage: AC-BI-002 (chained stages), AC-BI-003 (each stage consumes the
-prior id), AC-BI-008 (failure aborts + names the stage), AC-BI-009 (unsafe stage
-message is sanitised), AC-BI-011 (run log records id / source / caller / start /
-end), plus the 503 config guard.
+Covers: chained stages (each stage consumes the prior id), a failure aborting and
+naming the stage, an unsafe stage message being sanitised, the run log recording
+id / source / caller / start / end, and the 503 config guard.
 """
 
 from __future__ import annotations
@@ -204,7 +203,7 @@ def _incomplete_config() -> ServiceConfig:
 
 
 def test_derive_short_name_slugifies_title_words_and_appends_lowercase_celex() -> None:
-    """AC-BI-004: the slug is the title's words, lowercased and `_`-joined, with the
+    """The slug is the title's words, lowercased and `_`-joined, with the
     lowercase CELEX appended for uniqueness.
     """
     result = _derive_short_name("Regulation (EU) 2019/881 of 17 April 2019 on ENISA", "32019R0881")
@@ -230,7 +229,7 @@ def test_derive_short_name_is_deterministic() -> None:
 def test_catalog_pipeline_runs_ingest_extract_derive_merge_in_order(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-002: the four stages run once each, in pipeline order."""
+    """The four stages run once each, in pipeline order."""
     emitter, _ = make_emitter()
     fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
 
@@ -258,7 +257,7 @@ def test_catalog_pipeline_runs_ingest_extract_derive_merge_in_order(
 def test_extract_and_derive_stages_receive_the_gateway_baseline_graph_name_and_run_audit_event(
     make_emitter: MakeEmitter, process_gateway: ProcessGateway
 ) -> None:
-    """AC-BI-007 plumbing (#209): the baseline-writing stages get the same gateway and run audit
+    """The baseline-writing stages get the same gateway and run audit
     event the ingest stage got, and the `{short}_baseline` graph name; one audit row per run.
     """
     emitter, _ = make_emitter()
@@ -285,7 +284,7 @@ def test_extract_and_derive_stages_receive_the_gateway_baseline_graph_name_and_r
 def test_derivation_stage_summary_reports_unmatched_obligations_count(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #64 slice 9: the derivation stage's ``StageReport.summary`` dict
+    """The derivation stage's ``StageReport.summary`` dict
     carries an ``unmatched_obligations`` count, symmetric with the existing
     ``unmatched_requirements`` key, sourced from
     ``DerivationResult.unmatched_obligation_ids``.
@@ -313,7 +312,7 @@ def test_derivation_stage_summary_reports_unmatched_obligations_count(
 def test_each_stage_consumes_prior_stage_regulatory_instrument_id(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-003: extraction / derivation / merge all use the id the ingest stage returned."""
+    """Extraction / derivation / merge all use the id the ingest stage returned."""
     emitter, _ = make_emitter()
     fake = build_fake_pipeline_dependencies(rid="GDPR-1.0")
 
@@ -335,7 +334,7 @@ def test_each_stage_consumes_prior_stage_regulatory_instrument_id(
 
 
 def test_stage_failure_aborts_and_names_failing_stage(make_emitter: MakeEmitter) -> None:
-    """AC-BI-008: a stage error surfaces as PipelineStageError naming that stage."""
+    """A stage error surfaces as PipelineStageError naming that stage."""
     emitter, _ = make_emitter()
     fake = build_fake_pipeline_dependencies(
         extract_error=DomainMapperExtractionError("unit 7 produced no candidates")
@@ -358,10 +357,10 @@ def test_stage_failure_aborts_and_names_failing_stage(make_emitter: MakeEmitter)
 def test_a_persistence_error_from_the_extract_stage_keeps_its_classification(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #209 (AC-BI-005): the baseline write now fails as a gateway refusal, but the stage
-    error is classified exactly as before: a `PipelineStageError` naming `extraction`, whose
+    """The baseline write fails as a gateway refusal, but the stage
+    error is still classified as a `PipelineStageError` naming `extraction`, whose
     caller-visible reason is the generic `extraction failed` (the persistence error is not on
-    the verbatim whitelist, as the old FalkorDB write error was not), and no later stage runs.
+    the pass-through whitelist, like a FalkorDB write error), and no later stage runs.
     """
     emitter, _ = make_emitter()
     persistence_error = DomainMapperPersistenceError(
@@ -386,7 +385,7 @@ def test_a_persistence_error_from_the_extract_stage_keeps_its_classification(
 
 
 def test_stage_failure_prevents_later_stages_from_running(make_emitter: MakeEmitter) -> None:
-    """AC-BI-008: derivation and merge never run once extraction has failed."""
+    """Derivation and merge never run once extraction has failed."""
     emitter, _ = make_emitter()
     fake = build_fake_pipeline_dependencies(extract_error=DomainMapperExtractionError("boom"))
 
@@ -422,7 +421,7 @@ def test_incomplete_llm_config_raises_503_before_any_stage_runs() -> None:
 def test_unsafe_stage_exception_is_sanitized_to_generic_reason(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-009: a non-whitelisted stage error collapses to a generic, host-free reason."""
+    """A non-whitelisted stage error collapses to a generic, host-free reason."""
     emitter, _ = make_emitter()
     fake = build_fake_pipeline_dependencies(
         merge_error=FalkorDBConnectionError("FalkorDB connection failed at 10.0.0.5:6379")
@@ -448,7 +447,7 @@ def test_emits_started_and_succeeded_entries_with_run_id_source_and_caller_and_d
     make_emitter: MakeEmitter,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-011: the run log records the run id, source id, caller, and start/end."""
+    """The run log records the run id, source id, caller, and start/end."""
     emitter, log_path = make_emitter()
     fake = build_fake_pipeline_dependencies()
 
@@ -475,7 +474,7 @@ def test_succeeded_ingestion_run_log_carries_trigger_and_counts(
     make_emitter: MakeEmitter,
     read_lines: ReadLines,
 ) -> None:
-    """Issue #195: the succeeded log line agrees with the audit row (trigger + the three counts)."""
+    """The succeeded log line agrees with the audit row (trigger + the three counts)."""
     emitter, log_path = make_emitter()
     fake = build_fake_pipeline_dependencies()
 
@@ -575,13 +574,13 @@ def test_classify_stage_failure_returns_generic_reason_for_unwhitelisted_excepti
     assert "10.0.0.5" not in result.reason
 
 
-# --- injected ingestion_adapter (AC-BI-006 wiring) ---------------------------
+# --- injected ingestion_adapter ----------------------------------------------
 
 
 def test_run_catalog_ingestion_pipeline_uses_injected_ingestion_adapter_when_provided(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-006: a caller-supplied ``ingestion_adapter`` is passed to the ingest stage
+    """A caller-supplied ``ingestion_adapter`` is passed to the ingest stage
     verbatim, not the dependency-bundle's default factory.
     """
     emitter, _ = make_emitter()
@@ -606,10 +605,6 @@ def test_run_catalog_ingestion_pipeline_falls_back_to_default_adapter_when_omitt
 ) -> None:
     """Regression: omitting ``ingestion_adapter`` still uses the dependency bundle's
     default factory, exactly as today's curated path does.
-
-    Shortened from PLAN.md's literal
-    `..._falls_back_to_default_adapter_factory_when_ingestion_adapter_omitted` -- 9
-    chars over the 100-col limit; same assertion, same intent.
     """
     emitter, _ = make_emitter()
     fake = build_fake_pipeline_dependencies()
@@ -627,17 +622,17 @@ def test_run_catalog_ingestion_pipeline_falls_back_to_default_adapter_when_omitt
 
 
 # A real curated CELEX, used as an ordinary CELEX by the `resolve_ingestion_entry` tests
-# below (issue #193: the catalog is never consulted by the ingest path).
+# below (the catalog is never consulted by the ingest path).
 _CURATED_CELEX = "32024R2847"
 
 
-# --- resolve_ingestion_entry (issue #193, S1) --------------------------------
+# --- resolve_ingestion_entry -------------------------------------------------
 
 
 def test_resolve_ingestion_entry_resolves_a_curated_celex_via_cellar_under_the_callers_short_name(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #193 AC-BI-001: a curated CELEX is resolved through Cellar -- both documents
+    """A curated CELEX is resolved through Cellar -- both documents
     fetched once -- under the caller's own ``short_name``, after exactly one graph query
     (the short_name collision check). The returned resolution carries the entry and the
     fetch-once adapter.
@@ -665,7 +660,7 @@ def test_resolve_ingestion_entry_resolves_a_curated_celex_via_cellar_under_the_c
 def test_resolve_ingestion_entry_rejects_a_claimed_short_name_before_any_cellar_fetch(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #193 D1 ordering: the graph collision check runs before Cellar, so a doomed
+    """Ordering: the graph collision check runs before Cellar, so a doomed
     request never reaches the network.
     """
     graph = FakeGraphHandle([FakeQueryResult([]), FakeQueryResult([["mycra-1.0", "32024R0001"]])])
@@ -690,7 +685,7 @@ def test_resolve_ingestion_entry_rejects_a_claimed_short_name_before_any_cellar_
 def test_resolve_ingestion_entry_collision_check_failure_fails_closed_before_cellar(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #193 AC-BI-007 (collision half): a graph failure in the collision check is a
+    """A graph failure in the collision check is a
     ``PipelineStageError`` naming ``collision_check``, never "no collision", and Cellar
     is never reached.
     """
@@ -714,8 +709,8 @@ def test_resolve_ingestion_entry_collision_check_failure_fails_closed_before_cel
 def test_resolve_ingestion_entry_not_found_message_names_the_celex_without_the_catalog(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #193 AC-BI-008/013: a CELEX Cellar does not know raises the not-found error
-    naming the CELEX; the message no longer claims a curated catalog was consulted.
+    """A CELEX Cellar does not know raises the not-found error
+    naming the CELEX; the message does not claim a curated catalog was consulted.
     """
 
     def _not_found(celex: str) -> bytes:
@@ -739,7 +734,7 @@ def test_resolve_ingestion_entry_not_found_message_names_the_celex_without_the_c
 def test_resolve_ingestion_entry_checks_celex_then_collision_then_cellar(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #193 D1 ordering: CELEX-existence query first, then the short_name collision
+    """Ordering: CELEX-existence query first, then the short_name collision
     query, then Cellar -- a request doomed by the graph never reaches the network.
     """
     graph = FakeGraphHandle()
@@ -765,7 +760,7 @@ def test_resolve_ingestion_entry_checks_celex_then_collision_then_cellar(
 def test_resolve_ingestion_entry_rejects_an_ingested_celex_before_collision_check_and_cellar(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #193 AC-BI-003: an already-ingested CELEX raises ``CelexAlreadyIngestedError``
+    """An already-ingested CELEX raises ``CelexAlreadyIngestedError``
     naming the existing short_name, with no collision query and no Cellar fetch.
     """
     graph = FakeGraphHandle([FakeQueryResult([["cra-1.0"]])])
@@ -789,7 +784,7 @@ def test_resolve_ingestion_entry_rejects_an_ingested_celex_before_collision_chec
 def test_resolve_ingestion_entry_celex_check_failure_fails_closed_naming_celex_check(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #193 AC-BI-007: a graph failure in the CELEX check is a ``PipelineStageError``
+    """A graph failure in the CELEX check is a ``PipelineStageError``
     with stage ``celex_check`` (the collision check keeps ``collision_check``).
     """
     graph = FakeGraphHandle(error=RuntimeError("boom"))
@@ -804,7 +799,7 @@ def test_resolve_ingestion_entry_celex_check_failure_fails_closed_naming_celex_c
 def test_resolve_ingestion_entry_logs_celex_rejection_with_only_safe_fields(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """Issue #193 D7 / AC-BI-008: the rejection is logged as ``ingestion_identity_check``
+    """The rejection is logged as ``ingestion_identity_check``
     with outcome ``rejected_celex_exists`` carrying only the CELEX, short_name and the
     existing short_name -- no Cypher, no exception text.
     """
@@ -825,11 +820,11 @@ def test_resolve_ingestion_entry_logs_celex_rejection_with_only_safe_fields(
     assert "MATCH" not in str(entries[0])
 
 
-# --- short_name normalization + case-insensitivity (issue #193, S3) ----------
+# --- short_name normalization + case-insensitivity ---------------------------
 
 
 def test_check_short_name_collision_compares_case_insensitively() -> None:
-    """Issue #193 AC-BI-004: ``cra`` matches a recorded ``CRA-1.0`` (and the reverse); the
+    """``cra`` matches a recorded ``CRA-1.0`` (and the reverse); the
     Python compare is on the upper-cased short name segment.
     """
     graph = FakeGraphHandle(
@@ -848,7 +843,7 @@ def test_check_short_name_collision_compares_case_insensitively() -> None:
 
 
 def test_collision_check_param_prefix_is_uppercase_and_query_is_case_insensitive() -> None:
-    """Issue #193 AC-BI-004 / M2 / M6: the collision query upper-cases the stored id
+    """The collision query upper-cases the stored id
     (``toUpper(n.id)``) and is parameterized with an upper-case prefix, whatever case the
     caller passed.
     """
@@ -861,7 +856,7 @@ def test_collision_check_param_prefix_is_uppercase_and_query_is_case_insensitive
 
 
 def test_preflight_query_is_case_insensitive_so_a_legacy_lowercase_node_is_caught() -> None:
-    """Issue #193 M2: the legacy celex-less preflight matches ``toUpper(n.id)`` against an
+    """The legacy celex-less preflight matches ``toUpper(n.id)`` against an
     upper-cased id, so a legacy ``cra-1.0`` node is found when ``CRA-1.0`` is ingested.
     """
     graph = FakeGraphHandle([FakeQueryResult([["cra-1.0"]])])
@@ -874,7 +869,7 @@ def test_preflight_query_is_case_insensitive_so_a_legacy_lowercase_node_is_caugh
 
 
 def test_normalize_short_name_uppercases() -> None:
-    """Issue #193 D3: the public normalizer upper-cases (and is idempotent)."""
+    """The public normalizer upper-cases (and is idempotent)."""
     assert normalize_short_name("cra") == "CRA"
     assert normalize_short_name("Cra") == "CRA"
     assert normalize_short_name("CRA") == "CRA"
@@ -883,7 +878,7 @@ def test_normalize_short_name_uppercases() -> None:
 def test_resolve_ingestion_entry_normalizes_the_short_name_for_checks_and_entry(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #193 AC-BI-005: ``resolve_ingestion_entry`` normalizes once at the top; the
+    """``resolve_ingestion_entry`` normalizes once at the top; the
     collision query, the returned entry and (by construction) every downstream consumer
     see the upper-case short_name.
     """
@@ -903,13 +898,13 @@ def test_resolve_ingestion_entry_normalizes_the_short_name_for_checks_and_entry(
     assert graph.calls[-1].params == {"prefix": "CRA-", "celex": _CURATED_CELEX}
 
 
-# --- resolve_via_cellar (AC-BI-003/004/005/006/007) --------------------------
+# --- resolve_via_cellar ------------------------------------------------------
 
 
 def test_resolve_via_cellar_returns_catalog_entry_with_derived_short_name_and_base_version() -> (
     None
 ):
-    """AC-BI-004: a happy-path Cellar resolution derives short_name/version/title."""
+    """A happy-path Cellar resolution derives short_name/version/title."""
     fetch = _CountingFetch(_FIXTURE_REGULATION_A)
     fetch_rdf = _CountingFetch(_RDF_FIXTURE_REGULATION_A)
 
@@ -926,8 +921,8 @@ def test_resolve_via_cellar_returns_catalog_entry_with_derived_short_name_and_ba
 
 
 def test_resolve_via_cellar_uses_caller_supplied_short_name_verbatim_when_given() -> None:
-    """Issue #126 CHANGES.md C1/Appendix C1: when a caller supplies `short_name`
-    explicitly (the MCP `ingest_regulation` path), it is used verbatim and
+    """When a caller supplies `short_name`
+    explicitly (the MCP `ingest_regulation` path), it is used as given and
     `_derive_short_name` is never reached -- proven by passing a value that
     does not match what `_derive_short_name` would have derived from this
     fixture's own title.
@@ -948,7 +943,7 @@ def test_resolve_via_cellar_uses_caller_supplied_short_name_verbatim_when_given(
 
 
 def test_resolve_via_cellar_omitting_short_name_still_derives_exactly_as_before() -> None:
-    """Issue #126 CHANGES.md C1/Appendix C1: REST's call site
+    """REST's call site
     (`routes.py:145`, `resolve_via_cellar(request_body.celex)`) never passes
     `short_name`, so this is REST's exact existing call shape -- confirming
     the new optional keyword-only parameter is fully backward compatible and
@@ -967,9 +962,9 @@ def test_resolve_via_cellar_omitting_short_name_still_derives_exactly_as_before(
 
 
 def test_resolve_via_cellar_fetches_document_at_most_once_when_stage_one_reuses_adapter() -> None:
-    """AC-BI-006/D2: one HTTP fetch total per document (XHTML, RDF) across resolution +
+    """One HTTP fetch total per document (XHTML, RDF) across resolution +
     a simulated Stage 1 call -- the direct regression guard for the "fetch-once,
-    replay both cached payloads" mechanism (PLAN_REVISED.md §6 item 2). Without the
+    replay both cached payloads" mechanism. Without the
     RDF-side replay, Stage 1 would issue a third real Cellar/ELI request for the RDF
     document, silently doubling the per-resolution request cost.
     """
@@ -986,7 +981,7 @@ def test_resolve_via_cellar_fetches_document_at_most_once_when_stage_one_reuses_
 
 
 def test_resolve_via_cellar_not_found_on_cellar_404_does_not_mark_unhealthy() -> None:
-    """AC-BI-005/007: a genuine Cellar 404 is a not-found, not an outage."""
+    """A genuine Cellar 404 is a not-found, not an outage."""
 
     def _not_found_fetch(celex: str) -> bytes:
         raise CellarNotFoundError(f"CELEX {celex!r} was not found on Cellar/ELI")
@@ -1003,7 +998,7 @@ def test_resolve_via_cellar_raises_pipeline_stage_error_stage_ingestion_on_cella
     """A genuine Cellar outage during resolution surfaces as a 502-shaped stage error.
 
     `resolve_via_cellar` passes no explicit `emitter` to `_classify_stage_failure`
-    (mirroring the route's own no-explicit-emitter call, Increment 8), so a
+    (mirroring the route's own no-explicit-emitter call), so a
     non-whitelisted exception's server-side log line goes through the
     process-default facade -- `configured_logging` installs one for this test.
     """
@@ -1042,7 +1037,7 @@ def test_resolve_via_cellar_raises_pipeline_stage_error_on_empty_extracted_title
     `extract_metadata` itself raises `pydantic.ValidationError` for an empty
     title (`RegulatoryInstrumentMetadata.title` is `Field(min_length=1)`) --
     not a silent `title == ""` return. `resolve_via_cellar`'s `except Exception`
-    around `extract_metadata` (added for exactly this reason -- CellarParseError
+    around `extract_metadata` (CellarParseError
     alone would miss it) still classifies it as stage `"ingestion"`, satisfying
     the same behavioral guarantee the flaw-review's empty-title fix intended:
     no degenerate `_<celex>`-shaped short_name is ever produced.
@@ -1056,7 +1051,7 @@ def test_resolve_via_cellar_raises_pipeline_stage_error_on_empty_extracted_title
     assert exc_info.value.stage == "ingestion"
 
 
-# --- run_status wiring (AC-BI-008, Increment 11) -----------------------------
+# --- run_status wiring -------------------------------------------------------
 
 
 class _StageOrderIngest:
@@ -1216,7 +1211,7 @@ class _StageOrderMerge:
 def test_execute_catalog_stages_records_each_stage_as_current_before_running_it(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-008: `set_stage(run_id, name)` happens before each `_run_stage(name, ...)`
+    """`set_stage(run_id, name)` happens before each `_run_stage(name, ...)`
     call, not after -- each fake stage asserts `get_stage(run_id)` already names itself
     from inside its own `__call__`, so a poller would see "currently executing", not
     "just completed".
@@ -1248,11 +1243,10 @@ def test_execute_catalog_stages_records_each_stage_as_current_before_running_it(
 def test_execute_catalog_stages_default_runs_all_four_in_order(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Characterization (#201 S0): the shared sequence with no stage subset runs
+    """The shared sequence with no stage subset runs
     ingestion -> extraction -> derivation -> merge in order, feeds each later stage
     the id the ingest stage returned, and returns that id plus one report per stage
-    in pipeline order. Pins the catalog path before `_execute_catalog_stages` gains
-    `stages_to_run` / `on_stage_complete`.
+    in pipeline order.
     """
     emitter, _ = make_emitter()
     fake = build_fake_pipeline_dependencies(rid="CRA-9.9")
@@ -1307,7 +1301,7 @@ def _run_selected(
 def test_execute_catalog_stages_subset_skips_unrequested_stages_and_derives_rid(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#201 S1a: with `ingestion` not requested the ingest stage never runs and the
+    """With `ingestion` not requested the ingest stage never runs and the
     instrument id is `<short_name>-<version>` (the formula the ingest stage uses), so
     the later stages still receive an id; only the requested stages are reported.
     """
@@ -1323,7 +1317,7 @@ def test_execute_catalog_stages_subset_skips_unrequested_stages_and_derives_rid(
 
 
 def test_stage_order_mirrors_the_change_monitor_pipeline_stages() -> None:
-    """#201 S1a: `api` cannot import `change_monitor` at module level (M6), so the two
+    """`api` cannot import `change_monitor` at module level, so the two
     stage-name tuples are duplicated and must never drift.
     """
     assert _STAGE_ORDER == PIPELINE_STAGES
@@ -1332,7 +1326,7 @@ def test_stage_order_mirrors_the_change_monitor_pipeline_stages() -> None:
 def test_execute_catalog_stages_reports_each_completed_stage_to_the_callback_in_order(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#201 S1a: `on_stage_complete(name)` fires once per stage, after that stage returned."""
+    """`on_stage_complete(name)` fires once per stage, after that stage returned."""
     emitter, _ = make_emitter()
     completed: list[str] = []
 
@@ -1346,7 +1340,7 @@ def test_execute_catalog_stages_reports_each_completed_stage_to_the_callback_in_
 def test_execute_catalog_stages_does_not_report_a_stage_that_failed(
     make_emitter: MakeEmitter,
 ) -> None:
-    """#201 S1a: a failing stage is never reported complete, and later stages never run."""
+    """A failing stage is never reported complete, and later stages never run."""
     emitter, _ = make_emitter()
     completed: list[str] = []
     fake = build_fake_pipeline_dependencies(derive_error=DomainMapperExtractionError("boom"))
@@ -1361,7 +1355,7 @@ def test_execute_catalog_stages_does_not_report_a_stage_that_failed(
 def test_run_catalog_ingestion_pipeline_clears_stage_tracking_on_success(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-008: once a run succeeds, its `run_status` entry is cleared."""
+    """Once a run succeeds, its `run_status` entry is cleared."""
     emitter, _ = make_emitter()
     run_id = "run-status-success"
     fake = build_fake_pipeline_dependencies()
@@ -1381,7 +1375,7 @@ def test_run_catalog_ingestion_pipeline_clears_stage_tracking_on_success(
 def test_run_catalog_ingestion_pipeline_clears_stage_tracking_on_stage_failure(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-008: a run that aborts on a stage failure still clears its `run_status` entry."""
+    """A run that aborts on a stage failure still clears its `run_status` entry."""
     emitter, _ = make_emitter()
     run_id = "run-status-failure"
     fake = build_fake_pipeline_dependencies(
@@ -1402,10 +1396,9 @@ def test_run_catalog_ingestion_pipeline_clears_stage_tracking_on_stage_failure(
 
 
 def test_merge_summary_includes_pending_reviews_key() -> None:
-    """Issue #35, Slice 5 (AC-BI-010): `_merge_summary`'s dict gains a new
-    `pending_reviews` key sourced from `MergeResult.pending_review_count`,
-    alongside the pre-existing `near_misses` key (unchanged, backward-compat
-    -- CHANGES.md/PLAN.md §5's decision: additive, not a rename/replace --
+    """`_merge_summary`'s dict carries a `pending_reviews` key sourced from
+    `MergeResult.pending_review_count`, alongside the `near_misses` key
+    (additive, not a rename/replace;
     `ps-cli`'s own `_parse_stage_outcome` already iterates `summary.items()`
     generically, so an extra key never breaks it).
     """
@@ -1452,9 +1445,9 @@ def test_merge_summary_pending_reviews_zero_when_no_near_misses() -> None:
 
 
 def test_merge_stage_summary_exposes_new_and_matched_counts() -> None:
-    """Issue #195, Slice 6: the merge stage summary gains `new_obligations`, `new_capabilities`
-    and `matched_capabilities` (additive; `StageOutcome.summary` is `dict[str, int]`), sourced
-    from the `MergeResult` fields, alongside the pre-existing keys (unchanged).
+    """The merge stage summary carries `new_obligations`, `new_capabilities`
+    and `matched_capabilities` (`StageOutcome.summary` is `dict[str, int]`), sourced
+    from the `MergeResult` fields, alongside the other keys.
     """
     result = MergeResult(
         regulatory_instrument_id="ri-summary-3",
@@ -1489,13 +1482,13 @@ def test_merge_stage_summary_counts_default_to_zero() -> None:
     assert summary["matched_capabilities"] == 0
 
 
-# --- issue #135: reject redundant re-ingestion of an already-merged instrument ---
+# --- reject redundant re-ingestion of an already-merged instrument -----------------
 
 
 def test_preflight_check_queries_single_tenant_graph_before_any_stage(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-001: the pre-flight check runs, querying the single-tenant graph
+    """The pre-flight check runs, querying the single-tenant graph
     for the resolved ``{short_name}-{version}`` id, before any stage.
     """
     emitter, _ = make_emitter()
@@ -1515,7 +1508,7 @@ def test_preflight_check_queries_single_tenant_graph_before_any_stage(
 
 
 def test_preflight_miss_runs_pipeline_exactly_as_before(make_emitter: MakeEmitter) -> None:
-    """AC-BI-004: when no fully-merged instrument exists, every stage still runs
+    """When no fully-merged instrument exists, every stage still runs
     and the outcome is reported as ``"fresh"``.
     """
     emitter, _ = make_emitter()
@@ -1542,7 +1535,7 @@ def test_preflight_miss_runs_pipeline_exactly_as_before(make_emitter: MakeEmitte
 
 
 def test_preflight_hit_skips_domain_mapper_and_company_merge(make_emitter: MakeEmitter) -> None:
-    """AC-BI-002/003: an existing fully-merged instrument skips every stage and
+    """An existing fully-merged instrument skips every stage and
     the response reports the distinct ``"already_ingested"`` outcome with no
     stage reports at all.
     """
@@ -1567,7 +1560,7 @@ def test_preflight_hit_skips_domain_mapper_and_company_merge(make_emitter: MakeE
 def test_preflight_check_failure_fails_closed_as_pipeline_stage_error(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-006: a pre-flight query failure (e.g. graph unreachable) surfaces as
+    """A pre-flight query failure (e.g. graph unreachable) surfaces as
     a ``PipelineStageError`` naming the ``"preflight"`` stage -- never silently
     treated as already ingested, and no stage ever runs.
     """
@@ -1591,10 +1584,10 @@ def test_preflight_check_failure_fails_closed_as_pipeline_stage_error(
     assert fake.recorder.order == []
 
 
-# --- check_short_name_collision (issue #146, D4/DQ2 -- Appendix C) -----------
+# --- check_short_name_collision ----------------------------------------------
 
 
-def test_check_short_name_collision_returns_the_conflicting_celex_when_a_different_celex_holds_the_prefix() -> (  # noqa: E501 - name mirrors CHANGES.md Appendix B verbatim
+def test_check_short_name_collision_returns_the_conflicting_celex_when_a_different_celex_holds_the_prefix() -> (  # noqa: E501 - long descriptive test name
     None
 ):
     """A different CELEX already ingested under this exact ``short_name`` is a real collision."""
@@ -1637,10 +1630,10 @@ def test_check_short_name_collision_returns_none_when_the_only_matching_row_is_t
     assert conflict is None
 
 
-def test_check_short_name_collision_returns_none_when_a_candidate_row_only_shares_a_hyphenated_prefix() -> (  # noqa: E501 - name mirrors CHANGES.md Appendix B verbatim
+def test_check_short_name_collision_returns_none_when_a_candidate_row_only_shares_a_hyphenated_prefix() -> (  # noqa: E501 - long descriptive test name
     None
 ):
-    """DQ2's false-positive fix: a ``STARTS WITH`` hit isn't a real collision unless the
+    """A ``STARTS WITH`` hit isn't a real collision unless the
     candidate's own ``rpartition("-")``-derived short name is an exact match.
 
     ``"cra-legacy-1.0"``'s recorded short name is ``"cra-legacy"`` (rpartition splits off

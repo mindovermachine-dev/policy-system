@@ -1,4 +1,4 @@
-"""Content lint for `ps-graph-cleanup/SKILL.md` and its registrations (issue #190).
+"""Content lint for `ps-graph-cleanup/SKILL.md` and its registrations.
 
 The skill is created in slice 6 (candidate discovery) and grows one step per
 slice; this file grows with it. Pins what the skill promises about the tools
@@ -31,7 +31,7 @@ def _text() -> str:
 
 
 def _ref(name: str) -> str:
-    """A reference file's whitespace-normalised text (issue #200: moved out of SKILL.md)."""
+    """A reference file's whitespace-normalised text (moved out of SKILL.md)."""
     return " ".join((_REFS / name).read_text(encoding="utf-8").split())
 
 
@@ -344,7 +344,7 @@ def test_skill_names_the_obligation_unmerge_conflicts() -> None:
     assert "tombstone" in section
 
 
-# --- Slice 18: skill finalisation (case table, error table, E1 limitation, reconciliation) ----
+# --- skill finalisation (case table, error table, E1 limitation, reconciliation) ----
 
 
 def _section(heading: str, reference: str) -> str:

@@ -1,6 +1,6 @@
-"""Tests for `execute_cypher_query`'s unseeded-graph guard (D11, AC-BI-013/AC-BI-014).
+"""Tests for `execute_cypher_query`'s unseeded-graph guard.
 
-Slice 8.1 (PLAN.md Batch 8): a new pre-flight check, `_is_graph_seeded`,
+A pre-flight check, `_is_graph_seeded`,
 issues one cheap `count(n)` read before the caller's own query is ever sent.
 A fake `GraphHandle` scripted with an ordered response queue proves the
 guard ordering end to end via call-count/call-content assertions on the
@@ -10,12 +10,12 @@ graph (`count(n) = 0`) raises `GraphUnseededError` after exactly one
 seeded graph (`count(n) > 0`) runs the caller's query normally as a second
 call. A write-clause query against an unseeded graph still raises
 `WriteClauseRejectedError` first, with zero `.query()` calls at all --
-proving the pre-existing write-clause guard (cheap, no I/O) is not
-reordered behind the new (one-I/O) seed check.
+proving the write-clause guard (cheap, no I/O) runs before the
+seed check (one I/O).
 
 Mirrors `test_execute_cypher_query_write_guard.py`'s fake/emitter-fixture
 conventions -- every call needs a live emitter or it raises
-`LoggingLifecycleError` (Batch 4/Increment 6).
+`LoggingLifecycleError`.
 """
 
 from __future__ import annotations
@@ -101,8 +101,8 @@ def test_seeded_graph_runs_callers_query_normally(emitter: LogEmitter) -> None:
 def test_write_clause_on_unseeded_graph_still_rejected_first_with_zero_io(
     emitter: LogEmitter,
 ) -> None:
-    """Guard ordering: the pre-existing write-clause guard (cheap, no I/O)
-    must not be reordered behind the new (one-I/O) seed check. No responses
+    """Guard ordering: the write-clause guard (cheap, no I/O)
+    runs before the seed check (one I/O). No responses
     are scripted at all -- if the seed check ran first, `.query()` would be
     called and `.pop(0)` on the empty list would raise `IndexError` instead
     of the expected `WriteClauseRejectedError`.
@@ -118,7 +118,7 @@ def test_write_clause_on_unseeded_graph_still_rejected_first_with_zero_io(
 
 
 def test_an_empty_seed_check_result_reads_as_unseeded(emitter: LogEmitter) -> None:
-    """The read-only path answers a never-created graph key with an empty result (issue #215).
+    """The read-only path answers a never-created graph key with an empty result.
 
     Characterisation (green before and after): an empty `result_set` from the seed check is the
     unseeded case, so the caller still gets `GraphUnseededError` and their query never runs.

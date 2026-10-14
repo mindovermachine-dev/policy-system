@@ -1,8 +1,8 @@
-"""Tests for `ps_service.invitations.client.create_invitation` (issue #140).
+"""Tests for `ps_service.invitations.client.create_invitation`.
 
 Mirrors `tests/curated_source/test_http_fetch.py`'s own fake-transport
 pattern exactly -- mocking at the transport boundary (L2 Testing Patterns),
-never reaching real network. Per CHANGES.md Appendix C, the happy-path test
+never reaching real network. The happy-path test
 asserts the *exact* outgoing JSON body, not just "a request was sent" --
 a future correction against real Authentik should be a one-line diff.
 """
@@ -88,7 +88,7 @@ class _FailingTransport:
 
 
 def test_create_invitation_sends_exact_request_body_and_headers() -> None:
-    """CHANGES.md Appendix C: assert exact JSON body equality (bar the random
+    """Assert exact JSON body equality (bar the random
     `name` suffix and the time-derived `expires`), the `Authorization` header, and the HTTP method.
     """
     transport = _RecordingTransport(json.dumps({"pk": "abc123"}).encode())
@@ -181,7 +181,7 @@ def test_create_invitation_returns_itoken_and_invite_url_from_response_pk() -> N
 
 
 def test_create_invitation_builds_link_from_public_url_when_set() -> None:
-    """Issue #165 OD-1=B: link uses the public URL, the API call still goes to the base URL."""
+    """The link uses the public URL, the API call still goes to the base URL."""
     public_url = "https://ps.example.com/auth"
     transport = _RecordingTransport(json.dumps({"pk": "abc123"}).encode())
 

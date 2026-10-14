@@ -1,14 +1,14 @@
-"""Pre-flight parity characterization for the catalog-ingestion MCP tools (issue #194).
+"""Pre-flight parity characterization for the catalog-ingestion MCP tools.
 
 Pins, as exact returned text, the pre-flight error behaviour and its precedence
 that `ingest_regulation` exhibits today: which named `error:` string wins when
 two pre-flight failures coincide, and that no pipeline stage ever runs
 (`fake.recorder.calls == []`). Written and run green against the unmodified
-`mcp_server._resolve_and_ingest` before S1 extracted its validation/resolution
-half into `_prepare_catalog_ingestion`, so this file is the proof that the
-extraction changed nothing observable (AC-BI-018). It is parametrized over
-`tool` so a later slice can add `"start_ingestion"` and prove the same
-precedence holds for it (AC-BI-010) without re-declaring a single scenario.
+`mcp_server._resolve_and_ingest` before its validation/resolution
+half was extracted into `_prepare_catalog_ingestion`, so this file is the proof that the
+extraction changed nothing observable. It is parametrized over
+`tool` so another tool can be added (such as `"start_ingestion"`) and prove the same
+precedence holds for it without re-declaring a single scenario.
 
 Fixtures are imported from `test_ingest_regulation_tool.py` rather than
 re-declared, mirroring `test_ingest_regulation_authz_gate.py`'s own
@@ -50,13 +50,13 @@ if TYPE_CHECKING:
     from api._fakes import ReadLines
     from ingestion_runs._fakes import InMemoryIngestionRunStore
 
-# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+# The sync tool writes `ingestion_run.*` rows: keep them off Postgres.
 pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 _TOOLS = ("ingest_regulation", "start_ingestion")
 
 _WRONG_SHORT_NAME = "not-the-real-short-name"
-# Issue #193: identity is decided by the live graph and Cellar, never the curated catalog,
+# Identity is decided by the live graph and Cellar, never the curated catalog,
 # so a CELEX already in the graph is rejected under any short_name.
 _ALREADY_INGESTED_MESSAGE = f"error: CELEX {_CELEX} is already ingested as short_name 'CRA'"
 _NOT_FOUND_MESSAGE = f"error: CELEX {_NONCURATED_CELEX!r} does not exist on Cellar/ELI."
@@ -109,7 +109,7 @@ def _ingestion_run_store(  # pyright: ignore[reportUnusedFunction]  # pytest aut
 def _no_row_or_slot_after_a_preflight_failure(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture
     _ingestion_run_store: InMemoryIngestionRunStore,
 ) -> Iterator[None]:
-    """AC-BI-010: whichever tool ran, a pre-flight failure leaves no row and no in-flight run."""
+    """Whichever tool ran, a pre-flight failure leaves no row and no in-flight run."""
     yield
     assert _ingestion_run_store.rows == {}
     assert dispatch.in_flight_run_count() == 0
@@ -217,7 +217,7 @@ def test_single_tenant_graph_open_failure_returns_graph_unreachable_error(
     assert fake.recorder.calls == []
 
 
-# --- Schema-layer parity (issue #194 S2, AC-BI-011) -------------------------
+# --- Schema-layer parity -------------------------
 
 
 def _input_schemas() -> dict[str, dict[str, object]]:
@@ -263,7 +263,7 @@ def test_malformed_arguments_are_rejected_by_the_schema_before_the_body_runs(
     monkeypatch: pytest.MonkeyPatch,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-011: identical `ToolError`; for `start_ingestion` no row, slot or log line."""
+    """Identical `ToolError`; for `start_ingestion` no row, slot or log line."""
     isolate_ingestion_runs()
     runs = install_ingestion_run_store(monkeypatch)
     _configure_complete_llm_env(monkeypatch)

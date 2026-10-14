@@ -1,4 +1,4 @@
-"""Unit tests for `scripts/check_mock_boundaries.py` (issue #163 Slice B, AC-BI-009 groundwork).
+"""Unit tests for `scripts/check_mock_boundaries.py`.
 
 Pure AST analysis over in-memory/tmp-path fixture source text -- no subprocess, no FalkorDB/
 Postgres/Docker dependency -- so this runs in the default hermetic suite (mirrors the
@@ -6,8 +6,8 @@ Postgres/Docker dependency -- so this runs in the default hermetic suite (mirror
 `scripts/*` file from inside `ps-service/tests/`, per `pyproject.toml`'s `testpaths`).
 
 Boundary-list fixtures are self-contained (written to `tmp_path`, never read from the real
-`docs/coding-standards/approved-mock-boundaries.yaml`) so these tests do not depend on Slice A's
-file having landed. `FULL_BOUNDARY_YAML` below is copied verbatim from PLAN.md §3's schema.
+`docs/coding-standards/approved-mock-boundaries.yaml`) so these tests do not depend on that
+file existing. `FULL_BOUNDARY_YAML` below mirrors the boundary-list schema.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "check_mock_boundaries.py"
 
-# Verbatim from `.orchestrator/tracker/issue-163/PLAN.md` §3 (Slice A's committed file content).
+# A full boundary-list document in the schema the checker reads.
 FULL_BOUNDARY_YAML = """\
 falkordb:
   - ps_service.ingestion.falkordb_client.connect
@@ -191,9 +191,8 @@ def test_detroit_exception_comment_suppresses_violation(tmp_path: Path) -> None:
 
 
 # --- (d0) f-string (unresolvable) setattr target: flagged unless exception-commented ------------
-# Gap 1, issue #163 interstitial fix (`.orchestrator/tracker/issue-163/IMPL_SLICE_11.md`): the
-# f-string form `monkeypatch.setattr(f"...{name}", ...)` used to resolve to `None` and be
-# silently skipped by `_target_violations`. It must now require the same
+# The f-string form `monkeypatch.setattr(f"...{name}", ...)` must not resolve to `None` and be
+# silently skipped by `_target_violations`. It must require the same
 # `# detroit-exception:` suppression as a resolvable-but-disallowed target.
 
 

@@ -2,13 +2,12 @@
 
 ``make_emitter``/``read_lines`` continue to resolve from the root
 ``tests/conftest.py`` (pytest picks the nearer conftest first, then falls back);
-this module adds the API-specific ``app_config`` and ``client`` fixtures per
-PLAN_REVIEWED.md §1.1 m8. The root autouse ``_isolate_logging`` fixture still
-applies.
+this module adds the API-specific ``app_config`` and ``client`` fixtures.
+The root autouse ``_isolate_logging`` fixture still applies.
 
 ``client`` is a *bare* ``TestClient`` — its ``lifespan`` is deliberately not
-entered. Increment 1's only endpoint (``GET /regulations``) emits no log lines
-and needs no readiness state, so running ``lifespan`` would only add real
+entered. The bare client's endpoints emit no log lines at startup
+and need no readiness state, so running ``lifespan`` would only add real
 dependency probes and leave the process-wide Logging facade configured (which
 ``reset_for_tests`` does not fully undo — the ``atexit`` guard persists). A
 later increment that needs ``configure()`` to have run will layer a
@@ -37,7 +36,7 @@ if TYPE_CHECKING:
 def configured_logging(tmp_path: Path) -> Iterator[Path]:
     """Install a real process-wide Logging facade for one test, fully restored afterwards.
 
-    Increment 7's run-context test proves the async ``provide_run_id`` binding
+    The run-context test proves the async ``provide_run_id`` binding
     reaches the log lines the ingestion orchestration emits during a request
     through the *process-default* emitter (the ``POST /ingestions`` route passes
     no explicit ``emitter``), so it needs a real ``configure()``d facade rather
@@ -89,9 +88,9 @@ def mirrored_logging(tmp_path: Path) -> Iterator[Path]:
 def app_config() -> ServiceConfig:
     """A loopback ``ServiceConfig`` for building a test app (``logging_dir=None``).
 
-    ``is_local_test_bypass_active=True`` by default (issue #58): most tests
+    ``is_local_test_bypass_active=True`` by default: most tests
     funnelling through this fixture have nothing to do with auth, and
-    ``create_app`` now fails closed (``AuthConfigurationError``) unless the
+    ``create_app`` fails closed (``AuthConfigurationError``) unless the
     bypass is active or ``PS_AUTH_ISSUER``/``PS_AUTH_AUDIENCE`` are both set.
     A test exercising the new fail-closed behavior overrides this directly.
     """
@@ -116,9 +115,9 @@ def client(app_config: ServiceConfig) -> TestClient:
 def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stub the Cellar fetch boundary for every non-live test (issue #193, CHANGES.md H1).
+    """Stub the Cellar fetch boundary for every non-live test.
 
-    Every ingestion request now resolves via Cellar, so a test that reaches the
+    Every ingestion request resolves via Cellar, so a test that reaches the
     ingest handler with a fake pipeline must never hit the real service.
     Skipped for tests carrying a live marker; a per-test patch overrides it.
     """
@@ -127,7 +126,7 @@ def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest aut
 
 @pytest.fixture(autouse=True)
 def process_gateway() -> Iterator[ProcessGateway]:
-    """Install a rig gateway as the process's for one test (issue #208).
+    """Install a rig gateway as the process's for one test.
 
     The catalog pipeline obtains its Graph Write Gateway and system audit recorder from the
     process, as the MCP tools and the amendment sweep do. A test of the fail-closed case

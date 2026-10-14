@@ -1,18 +1,18 @@
-"""AC-BI-014/015/016: the auth audit-logging contract (issue #58, Slice 10).
+"""The auth audit-logging contract.
 
 `PsTokenVerifier.verify_token` is THE single logging choke point for every
-authentication outcome (PLAN.md §1.2): on success it emits
+authentication outcome: on success it emits
 ``component="auth", action="authenticate_request", outcome="success"``
-with ``extra={"sub", "iss"}`` (AC-BI-014); on any rejection it emits
+with ``extra={"sub", "iss"}``; on any rejection it emits
 ``outcome="unauthenticated"`` with ``extra={"reason": <category>}`` drawn
-from the closed six-category set (AC-BI-015). Across every one of those
+from the closed six-category set. Across every one of those
 entries, the raw token string (and the literal ``"Bearer "`` prefix) must
-never appear anywhere in the serialized log line (AC-BI-016) -- proven once,
+never appear anywhere in the serialized log line -- proven once,
 generically, across all seven verification outcomes (six failure categories
 plus success), not hoped for per call site.
 
 Exercises `PsTokenVerifier` directly against the real
-`tests.auth.mock_oidc_provider.MockOidcProvider` (AC-BI-017), using the
+`tests.auth.mock_oidc_provider.MockOidcProvider`, using the
 repo's real `make_emitter`/`read_lines` fixtures (`tests/conftest.py`) --
 a real `LogEmitter` writing JSON lines to a temp file, read back and parsed
 -- exactly like `tests/query_engine/test_execute_cypher_query_logging.py`'s
@@ -68,7 +68,7 @@ def _verifier(
 
 
 def _assert_token_never_logged(lines: list[dict[str, object]], token: str) -> None:
-    """AC-BI-016: the raw token string, and the literal `"Bearer "` prefix,
+    """The raw token string, and the literal `"Bearer "` prefix,
     must never appear anywhere in any captured log entry's serialized form.
     """
     for entry in lines:
@@ -139,9 +139,8 @@ def test_expired_token_logs_reason_expired(
 def test_immature_token_also_logs_reason_expired(
     mock_oidc_provider: MockOidcProvider, make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """AC-BI-015 enumerates no separate `nbf` bucket -- both temporal-validity
-    failures (expired, not-yet-valid) share the `expired` category
-    (PLAN.md §1.2's mapping table).
+    """There is no separate `nbf` bucket -- both temporal-validity
+    failures (expired, not-yet-valid) share the `expired` category.
     """
     emitter, log_path = make_emitter()
     verifier = _verifier(mock_oidc_provider, emitter=emitter)
@@ -291,7 +290,7 @@ class _RaisingJwkClient:
     (e.g. the JWKS endpoint becoming unreachable after process startup, distinct from the
     "kid never published" case `test_jwks_refresh.py` already covers) -- proves
     `PsTokenVerifier` maps *any* such failure to the generic closed-set `invalid_signature`
-    reason (AC-BI-015), never the raw exception's own text (AC-BI-013/AC-BI-016).
+    reason, never the raw exception's own text.
     """
 
     def get_signing_key_from_jwt(self, token: str) -> object:
@@ -307,7 +306,7 @@ _JWK_CLIENT_FAILURE_MARKER = "INTERNAL_ERROR_CODE_9911"
 def test_jwk_client_failure_mid_request_logs_generic_reason_not_raw_exception_text(
     mock_oidc_provider: MockOidcProvider, make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """AC-BI-013/015/016: a `jwt.PyJWKClientError` raised while resolving a signing key must
+    """A `jwt.PyJWKClientError` raised while resolving a signing key must
     map to the generic `invalid_signature` reason category -- never surfacing the raw
     exception's own text anywhere in the logged entry.
     """
@@ -342,7 +341,7 @@ def test_jwk_client_failure_mid_request_logs_generic_reason_not_raw_exception_te
 def test_token_never_appears_across_every_captured_outcome(
     mock_oidc_provider: MockOidcProvider, make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """AC-BI-016, proven once generically across success and all six failure
+    """Proven once generically across success and all six failure
     categories in a single shared log file, rather than hoped-for per test.
     """
     emitter, log_path = make_emitter()

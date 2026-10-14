@@ -52,7 +52,7 @@ def test_signed_merge_that_finds_no_review_is_logged_server_side(
     def _capture(**kwargs: object) -> None:
         logged.append(kwargs)
 
-    # detroit-exception: capturing the log call's args IS the spec here (§1.2)
+    # detroit-exception: capturing the log call's args IS the spec here
     monkeypatch.setattr("ps_service.passkey_signing.router.emit_log_entry", _capture)
 
     pending_store = FakePendingApprovalStore()
@@ -106,22 +106,22 @@ def test_signed_merge_that_finds_no_review_is_logged_server_side(
 def test_signed_merge_whose_execution_raises_is_logged_and_still_answers_200(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-012: only `PendingReviewNotFoundError` used to be caught, so a
+    """Only `PendingReviewNotFoundError` was caught, so a
     `CompanyMergePersistenceError`, a raw `redis.RedisError` from one of the
     unwrapped reads, a `CompanyMergeConfigurationError` from the graph opener
     or an `IndexError` on an empty merge result escaped instead -- all of them
     *after* `mark_signed` had committed. That left the row `signed` with no
     outcome recorded, emitted no `sign_verify_merge` entry at all, and 500'd
     the caller, which the shell renders as "This approval link is no longer
-    valid." -- the exact symptom this issue exists to remove, reached through
-    a second door.
+    valid." -- the same symptom as an expired link, reached through
+    a second path.
     """
     logged: list[dict[str, object]] = []
 
     def _capture(**kwargs: object) -> None:
         logged.append(kwargs)
 
-    # detroit-exception: capturing the log call's args IS the spec here (§1.2)
+    # detroit-exception: capturing the log call's args IS the spec here
     monkeypatch.setattr("ps_service.passkey_signing.router.emit_log_entry", _capture)
 
     pending_store = FakePendingApprovalStore()
@@ -178,7 +178,7 @@ def test_signed_merge_whose_execution_raises_is_logged_and_still_answers_200(
 
 
 def test_shell_does_not_claim_approval_when_the_signed_response_carries_an_error() -> None:
-    """AC-BI-011: `/sign/verify` answers 200 `{"status": "signed", "error": ...}`
+    """`/sign/verify` answers 200 `{"status": "signed", "error": ...}`
     when the signature was valid but the action it authorised could not run.
     Rendering "Approved." for that body reports a merge that never happened,
     so the success message must be guarded by the body's own `error` key.

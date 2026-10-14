@@ -2,7 +2,7 @@
 and the new export error types (`ps_service.api.errors`).
 
 Mirrors ``test_models_restoration.py``'s pure-Pydantic-level style: no FastAPI
-``TestClient``, no FalkorDB (issue #71 PLAN.md S1, CHANGES.md Appendix A2).
+``TestClient``, no FalkorDB.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""AC-BI-017/018 (issue #130): `runtime_config` and `authz` write audit rows only via `AuditStore`.
+"""`runtime_config` and `authz` write audit rows only via `AuditStore`.
 
 Structural checks on the real source tree via `ast` and a plain text scan, so a later edit
 cannot quietly add a config-specific hook to `audit`, a raw `INSERT INTO audit_events`, or an

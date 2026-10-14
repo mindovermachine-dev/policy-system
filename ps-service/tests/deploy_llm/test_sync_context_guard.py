@@ -1,9 +1,8 @@
-"""`scripts/sync-llm-secrets-to-kind.sh`: kind-context guard (AC-BI-015, PLAN.md §5/S11).
+"""`scripts/sync-llm-secrets-to-kind.sh`: kind-context guard.
 
 Running against a non-`kind-*` kubectl context must abort before writing anything -- and before
 reading anything out of Key Vault -- protecting against writing Azure credentials into the wrong
-cluster. This is the new script's first behavior and the first consumer of the fake `kubectl`
-(CHANGES.md Row 3/Appendix A, not PLAN.md §2.3's original racy version).
+cluster. This is the new script's first behavior and the first consumer of the fake `kubectl`.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ SUBSCRIPTION_ID = "11111111-2222-3333-4444-555555555555"
 
 
 def _hash8(subscription_id: str) -> str:
-    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars (PLAN.md §0.4)."""
+    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars."""
     return hashlib.sha256(subscription_id.encode("utf-8")).hexdigest()[:8]
 
 

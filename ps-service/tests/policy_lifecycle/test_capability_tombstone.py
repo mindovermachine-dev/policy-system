@@ -1,8 +1,8 @@
-"""Policy Lifecycle ignores `merged` Capability tombstones (issue #190, slice 5).
+"""Policy Lifecycle ignores `merged` Capability tombstones.
 
 A tombstone must behave exactly like a nonexistent Capability to the draft
 claim: the read that feeds `PolicyCapabilityNotFoundError` omits it. The claim
-itself is a gateway group since issue #211, whose write-time guard re-uses that
+itself is a gateway group, whose write-time guard re-uses that
 same read, so a race cannot claim a tombstone either (`test_claim_create_gateway.py`).
 Without a live engine, the observable of the read is the statement text (L1
 carve-out, `level1-coding-principles.md:71-76`); the live twin is in

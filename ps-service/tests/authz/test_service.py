@@ -1,16 +1,16 @@
-"""Tests for `ps_service.authz.service` (issue #133, PLAN.md §2.3, Slices 1-3).
+"""Tests for `ps_service.authz.service`.
 
 Direct unit-level coverage of `resolve_active_roles`/`require_role`/
 `list_assignments`/`grant_role`/`revoke_role` against
 `FakeAccessRoleStore`/`RaisingAccessRoleStore` (`tests/authz/_fakes.py`) --
 complements `tests/mcp_interface/test_access_role_tools.py`'s own
 end-to-end MCP-level proof with focused, single-reason-to-fail assertions
-on the service layer itself, in particular PLAN.md §0.8's hierarchy fix (a
-`SystemOwner` also satisfies a `SystemAdmin` minimum check), Slice 2's own
-grant/revoke RBAC + `block_self_target` + closed-set validation, and Slice
-3's `SystemOwner` revoke + `enforce_system_owner_floor` (AC-BI-006) --
-per CHANGES.md, the real MCP-reachable proof of AC-BI-006/AC-BI-007 is
-`test_access_role_tools.py`'s own Appendix A 5-step scenario, not the
+on the service layer itself, in particular the role hierarchy (a
+`SystemOwner` also satisfies a `SystemAdmin` minimum check), the
+grant/revoke RBAC + `block_self_target` + closed-set validation, and the
+`SystemOwner` revoke + `enforce_system_owner_floor` -- the real MCP-reachable
+proof of the owner-floor behaviour is
+`test_access_role_tools.py`'s own five-step multi-owner scenario, not the
 fake-store-seeded tests here, which remain as a supplementary,
 narrower-scoped defensive-logic check on the service layer itself.
 
@@ -66,7 +66,7 @@ _ISSUER = "https://issuer.example.com/"
 
 
 def test_resolve_active_roles_bootstraps_the_first_ever_principal() -> None:
-    """AC-BI-001: an empty store bootstraps the calling principal to both roles."""
+    """An empty store bootstraps the calling principal to both roles."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
 
     roles = resolve_active_roles(_FIRST_CALLER, store=store)
@@ -75,7 +75,7 @@ def test_resolve_active_roles_bootstraps_the_first_ever_principal() -> None:
 
 
 def test_resolve_active_roles_defaults_a_later_principal_to_authenticated_user() -> None:
-    """AC-BI-002: once non-empty, a different principal defaults to AuthenticatedUser only."""
+    """Once non-empty, a different principal defaults to AuthenticatedUser only."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -85,7 +85,7 @@ def test_resolve_active_roles_defaults_a_later_principal_to_authenticated_user()
 
 
 def test_resolve_active_roles_bootstraps_only_the_configured_owner_identity() -> None:
-    """AC-BI-003: the configured expected owner still bootstraps to both roles."""
+    """The configured expected owner still bootstraps to both roles."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
 
     roles = resolve_active_roles(_FIRST_CALLER, store=store)
@@ -94,7 +94,7 @@ def test_resolve_active_roles_bootstraps_only_the_configured_owner_identity() ->
 
 
 def test_resolve_active_roles_rejects_a_non_matching_principal_in_an_empty_store() -> None:
-    """AC-BI-004: a non-matching caller in an empty store gets no grant; the table stays empty."""
+    """A non-matching caller in an empty store gets no grant; the table stays empty."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
 
     roles = resolve_active_roles(_SECOND_CALLER, store=store)
@@ -103,7 +103,7 @@ def test_resolve_active_roles_rejects_a_non_matching_principal_in_an_empty_store
     assert store.list_all_assignments() == ()
 
 
-def test_resolve_active_roles_still_lets_the_configured_owner_bootstrap_after_a_rejected_attempt() -> (  # noqa: E501 - name mirrors PLAN.md Slice 2 verbatim
+def test_resolve_active_roles_still_lets_the_configured_owner_bootstrap_after_a_rejected_attempt() -> (  # noqa: E501 - long descriptive test name
     None
 ):
     """A prior rejection doesn't poison the bootstrap window for the configured owner."""
@@ -116,9 +116,9 @@ def test_resolve_active_roles_still_lets_the_configured_owner_bootstrap_after_a_
 
 
 def test_require_role_system_owner_satisfies_a_system_admin_minimum() -> None:
-    """PLAN.md §0.8's hierarchy fix: the sole bootstrapped SystemOwner passes a SystemAdmin gate.
+    """The role hierarchy: the sole bootstrapped SystemOwner passes a SystemAdmin gate.
 
-    Without this fix, AC-BI-001/AC-BI-005/AC-BI-008 jointly describe a
+    Without the hierarchy, the bootstrap and self-grant rules jointly describe a
     permanent lockout (the sole SystemOwner could never self-grant
     SystemAdmin, so could never pass a literal SystemAdmin-only check).
     """
@@ -142,12 +142,12 @@ def test_require_role_denies_a_principal_with_only_authenticated_user() -> None:
 def test_require_role_never_lets_system_owner_satisfy_a_policy_manager_minimum_by_accident() -> (
     None
 ):
-    """PLAN.md §0.8: the hierarchy fix is scoped to SystemAdmin only, never PolicyManager.
+    """The hierarchy fix is scoped to SystemAdmin only, never PolicyManager.
 
     Confirms the fix is not accidentally a generic "SystemOwner satisfies
     everything" rule -- a bare AuthenticatedUser-only principal (never
     granted PolicyManager) is still denied a PolicyManager gate even though
-    nothing in this slice ever calls `require_role` with that minimum yet.
+    nothing else calls `require_role` with that minimum.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- SystemOwner, not PolicyManager
@@ -159,13 +159,13 @@ def test_require_role_never_lets_system_owner_satisfy_a_policy_manager_minimum_b
 def test_require_role_never_lets_system_owner_satisfy_compliance_officer_minimum_by_accident() -> (
     None
 ):
-    """Issue #145 Slice 1, mirroring the PolicyManager non-hierarchy proof above.
+    """Mirrors the PolicyManager non-hierarchy proof above.
 
     Confirms the SystemAdmin-only hierarchy fix does not accidentally extend
     to ComplianceOfficer either -- a bare AuthenticatedUser-only principal
     (never granted ComplianceOfficer) is still denied a ComplianceOfficer
-    gate even though nothing in this slice ever calls `require_role` with
-    that minimum yet.
+    gate even though nothing else calls `require_role` with
+    that minimum.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps SystemOwner only
@@ -175,7 +175,7 @@ def test_require_role_never_lets_system_owner_satisfy_compliance_officer_minimum
 
 
 def test_list_assignments_returns_every_row_and_the_floor_warning() -> None:
-    """AC-BI-007's floor condition: with exactly one active SystemOwner, the warning is true."""
+    """Floor condition: with exactly one active SystemOwner, the warning is true."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -189,7 +189,7 @@ def test_list_assignments_returns_every_row_and_the_floor_warning() -> None:
 
 
 def test_list_assignments_denies_a_caller_without_system_admin_or_above() -> None:
-    """§0.9's plan-original list-gate: a bare AuthenticatedUser caller is denied the roster."""
+    """The list gate: a bare AuthenticatedUser caller is denied the roster."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # first caller bootstraps, store now non-empty
 
@@ -198,7 +198,7 @@ def test_list_assignments_denies_a_caller_without_system_admin_or_above() -> Non
 
 
 def test_resolve_active_roles_never_falls_open_on_a_store_connection_error() -> None:
-    """AC-BI-011: a simulated store outage raises, never silently bootstraps/defaults."""
+    """A simulated store outage raises, never silently bootstraps/defaults."""
     store = RaisingAccessRoleStore()
 
     with pytest.raises(AuthorizationStoreUnavailableError) as exc_info:
@@ -208,7 +208,7 @@ def test_resolve_active_roles_never_falls_open_on_a_store_connection_error() -> 
 
 
 def test_list_assignments_never_falls_open_on_a_store_connection_error() -> None:
-    """AC-BI-011: a store outage surfacing at the RBAC gate itself still fails closed."""
+    """A store outage surfacing at the RBAC gate itself still fails closed."""
     store = RaisingAccessRoleStore()
 
     with pytest.raises(AuthorizationStoreUnavailableError):
@@ -218,7 +218,7 @@ def test_list_assignments_never_falls_open_on_a_store_connection_error() -> None
 def test_list_assignments_never_falls_open_on_a_store_outage_discovered_after_the_gate_passes() -> (
     None
 ):
-    """AC-BI-011: a store outage discovered only in the roster read (after the RBAC gate already
+    """A store outage discovered only in the roster read (after the RBAC gate already
     passed) still fails closed, exercising `list_assignments`'s second, independent try/except.
     """
     store = RaisingAfterGateAccessRoleStore(expected_owner=_FIRST_CALLER)
@@ -228,11 +228,11 @@ def test_list_assignments_never_falls_open_on_a_store_outage_discovered_after_th
         list_assignments(_FIRST_CALLER, store=store)
 
 
-# --- grant_role / revoke_role (Slice 2, PLAN.md §4) --------------------------
+# --- grant_role / revoke_role --------------------------
 
 
 def test_grant_role_lets_the_bootstrapped_system_owner_grant_system_admin() -> None:
-    """AC-BI-003/AC-BI-015: SystemOwner grants SystemAdmin; one audit event is recorded."""
+    """SystemOwner grants SystemAdmin; one audit event is recorded."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps FIRST_CALLER as SystemOwner
 
@@ -256,7 +256,7 @@ def test_grant_role_lets_the_bootstrapped_system_owner_grant_system_admin() -> N
 
 
 def test_grant_role_lets_a_system_admin_grant_policy_manager() -> None:
-    """AC-BI-004: a SystemAdmin (not just a SystemOwner) may grant PolicyManager."""
+    """A SystemAdmin (not just a SystemOwner) may grant PolicyManager."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps FIRST_CALLER as SystemOwner
     grant_role(
@@ -280,7 +280,7 @@ def test_grant_role_lets_a_system_admin_grant_policy_manager() -> None:
 
 
 def test_grant_role_lets_the_system_owner_grant_policy_manager_directly() -> None:
-    """AC-BI-004: a SystemOwner may also grant PolicyManager directly."""
+    """A SystemOwner may also grant PolicyManager directly."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -296,7 +296,7 @@ def test_grant_role_lets_the_system_owner_grant_policy_manager_directly() -> Non
 
 
 def test_grant_role_lets_a_system_admin_grant_compliance_officer() -> None:
-    """Issue #145 Slice 1: ComplianceOfficer's grant RBAC mirrors PolicyManager's own row --
+    """ComplianceOfficer's grant RBAC mirrors PolicyManager's own row --
     a SystemAdmin (not just a SystemOwner) may grant it.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
@@ -322,7 +322,7 @@ def test_grant_role_lets_a_system_admin_grant_compliance_officer() -> None:
 
 
 def test_grant_role_lets_the_system_owner_grant_compliance_officer_directly() -> None:
-    """Issue #145 Slice 1: a SystemOwner may also grant ComplianceOfficer directly."""
+    """A SystemOwner may also grant ComplianceOfficer directly."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -338,10 +338,10 @@ def test_grant_role_lets_the_system_owner_grant_compliance_officer_directly() ->
 
 
 def test_grant_role_lets_the_system_owner_grant_a_peer_system_owner() -> None:
-    """CHANGES.md MAJOR resolution: SystemOwner may grant SystemOwner to a peer.
+    """SystemOwner may grant SystemOwner to a peer.
 
     Both principals show as SystemOwner afterwards -- this is the new flow
-    that makes AC-BI-006/AC-BI-007 genuinely MCP-reachable (Appendix A).
+    that makes the owner-floor behaviour genuinely MCP-reachable.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
@@ -361,7 +361,7 @@ def test_grant_role_lets_the_system_owner_grant_a_peer_system_owner() -> None:
 
 
 def test_grant_role_rejects_a_non_owner_granting_system_owner() -> None:
-    """CHANGES.md Appendix A: only a SystemOwner may grant SystemOwner -- a SystemAdmin cannot."""
+    """Only a SystemOwner may grant SystemOwner -- a SystemAdmin cannot."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # FIRST_CALLER: SystemOwner
     grant_role(
@@ -384,9 +384,9 @@ def test_grant_role_rejects_a_non_owner_granting_system_owner() -> None:
 
 
 def test_grant_role_rejects_a_non_owner_granting_system_admin() -> None:
-    """PLAN.md §0.7: granting SystemAdmin requires the actor hold SystemOwner, not merely exist.
+    """Granting SystemAdmin requires the actor hold SystemOwner, not merely exist.
 
-    AC-BI-012: this denial also records one `outcome='rejected'`
+    This denial also records one `outcome='rejected'`
     `access_role.grant` audit event naming the attempting actor, the
     target, and `reason_code="access_denied"`.
     """
@@ -415,7 +415,7 @@ def test_grant_role_rejects_a_non_owner_granting_system_admin() -> None:
 
 
 def test_grant_role_lets_a_system_owner_grant_themselves_another_role() -> None:
-    """AC-BI-005 exemption: a SystemOwner may grant any role to their own subject."""
+    """Self-grant exemption: a SystemOwner may grant any role to their own subject."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -432,9 +432,9 @@ def test_grant_role_lets_a_system_owner_grant_themselves_another_role() -> None:
 
 
 def test_grant_role_still_blocks_a_non_owner_granting_themselves_a_role() -> None:
-    """AC-BI-005 still binds everyone but SystemOwner: a SystemAdmin may not self-grant.
+    """The self-grant block still binds everyone but SystemOwner: a SystemAdmin may not self-grant.
 
-    AC-BI-012: this denial also records one `outcome='rejected'`
+    This denial also records one `outcome='rejected'`
     `access_role.grant` audit event with `reason_code="self_grant_blocked"`.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
@@ -471,7 +471,7 @@ def test_grant_role_still_blocks_a_non_owner_granting_themselves_a_role() -> Non
 def test_grant_role_converts_a_failed_denial_audit_write_into_authorization_store_unavailable() -> (
     None
 ):
-    """AC-BI-011 applied to the denial-recording path (CHANGES.md item 3, PLAN.md §4 Slice 3).
+    """The fail-closed contract applies to the denial-recording path.
 
     When the audit write for a denial itself fails (Postgres unreachable),
     the caller must not see the original `AccessDeniedError` -- a denial
@@ -499,9 +499,9 @@ def test_grant_role_converts_a_failed_denial_audit_write_into_authorization_stor
 
 
 def test_grant_role_rejects_an_access_role_outside_the_closed_set() -> None:
-    """AC-BI-013 (inner layer): a raw string naming no real AccessRole is rejected, no row written.
+    """A raw string naming no real AccessRole is rejected, no row written.
 
-    `AccessRole("SuperAdmin")` itself raises `ValueError` (PLAN.md §0.6) --
+    `AccessRole("SuperAdmin")` itself raises `ValueError` --
     `grant_role` is the one place that catches it and re-raises the
     domain-specific `InvalidAccessRoleError`, exercised here via a direct
     call that bypasses the MCP tool's own `Literal[...]` schema entirely.
@@ -525,7 +525,7 @@ def test_grant_role_rejects_an_access_role_outside_the_closed_set() -> None:
 
 
 def test_grant_role_rejects_authenticated_user_as_a_grant_target() -> None:
-    """AC-BI-013: `AuthenticatedUser` is a valid AccessRole but never grantable via this flow."""
+    """`AuthenticatedUser` is a valid AccessRole but never grantable via this flow."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -540,7 +540,7 @@ def test_grant_role_rejects_authenticated_user_as_a_grant_target() -> None:
 
 
 def test_grant_role_never_falls_open_on_a_store_connection_error() -> None:
-    """AC-BI-011: a simulated store outage during the mutation itself fails closed."""
+    """A simulated store outage during the mutation itself fails closed."""
     store = RaisingAfterGateAccessRoleStore(expected_owner=_FIRST_CALLER)
     store.bootstrap_first_owner(_FIRST_CALLER)
 
@@ -555,7 +555,7 @@ def test_grant_role_never_falls_open_on_a_store_connection_error() -> None:
 
 
 def test_revoke_role_round_trips_system_admin_with_its_own_audit_event() -> None:
-    """AC-BI-015: revoking SystemAdmin deletes the row and records one 'revoke' audit event."""
+    """Revoking SystemAdmin deletes the row and records one 'revoke' audit event."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     grant_role(
@@ -585,7 +585,7 @@ def test_revoke_role_round_trips_system_admin_with_its_own_audit_event() -> None
 
 
 def test_revoke_role_round_trips_policy_manager() -> None:
-    """AC-BI-004/015 symmetry: PolicyManager also revokes cleanly, with its own audit event."""
+    """Symmetry: PolicyManager also revokes cleanly, with its own audit event."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     grant_role(
@@ -608,7 +608,7 @@ def test_revoke_role_round_trips_policy_manager() -> None:
 
 
 def test_revoke_role_round_trips_compliance_officer() -> None:
-    """Issue #145 Slice 1: ComplianceOfficer revokes cleanly, mirroring PolicyManager's own test."""
+    """ComplianceOfficer revokes cleanly, mirroring PolicyManager's own test."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     grant_role(
@@ -631,7 +631,7 @@ def test_revoke_role_round_trips_compliance_officer() -> None:
 
 
 def test_revoke_role_lets_a_system_owner_revoke_a_non_owner_role_from_themselves() -> None:
-    """AC-BI-005 exemption extended to revoke: a SystemOwner may drop their own non-owner roles."""
+    """Self-grant exemption extended to revoke: a SystemOwner may drop their own non-owner roles."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- FIRST_CALLER: SystemOwner
     grant_role(
@@ -660,10 +660,10 @@ def test_revoke_role_denies_a_bare_system_admin_who_is_not_rbac_eligible_at_all(
 
     This is `AccessDeniedError`, not `SelfGrantOrRevokeBlockedError`: RBAC
     is checked before the self-target rule (mirroring `grant_role`'s own
-    order, PLAN.md §2.3), so an actor who could never revoke this role from
+    order), so an actor who could never revoke this role from
     *anyone* is turned away by RBAC first, self-target or not.
 
-    AC-BI-012: this denial also records one `outcome='rejected'`
+    This denial also records one `outcome='rejected'`
     `access_role.revoke` audit event with `reason_code="access_denied"`.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
@@ -720,7 +720,7 @@ def test_revoke_role_rejects_a_non_owner_non_admin_actor() -> None:
 
 
 def test_revoke_role_rejects_an_access_role_outside_the_closed_set() -> None:
-    """AC-BI-013 (inner layer), revoke side: an unrecognized role name is rejected."""
+    """Revoke side: an unrecognized role name is rejected."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -736,10 +736,10 @@ def test_revoke_role_rejects_an_access_role_outside_the_closed_set() -> None:
 
 
 def test_revoke_role_lets_a_system_admin_revoke_system_owner_from_a_peer_owner() -> None:
-    """CHANGES.md Appendix A: the widened revoke-SystemOwner RBAC -- a SystemAdmin (not just a
+    """The widened revoke-SystemOwner RBAC -- a SystemAdmin (not just a
     SystemOwner) may revoke SystemOwner from someone else, once a second owner exists.
 
-    This is the flow that makes AC-BI-006/AC-BI-007 genuinely MCP-reachable
+    This is the flow that makes the owner-floor behaviour genuinely MCP-reachable
     -- see `tests/mcp_interface/test_access_role_tools.py`'s own
     `test_appendix_a_five_step_multi_owner_scenario_proves_ac_bi_006_and_007`
     for the full, real MCP-level round trip this unit test's own service-layer
@@ -778,7 +778,7 @@ def test_revoke_role_lets_a_system_admin_revoke_system_owner_from_a_peer_owner()
 
 
 def test_revoke_role_rejects_a_bare_policy_manager_revoking_system_owner() -> None:
-    """CHANGES.md Appendix A: the widened RBAC is still a closed set -- a PolicyManager
+    """The widened RBAC is still a closed set -- a PolicyManager
     (neither SystemOwner nor SystemAdmin) may never revoke SystemOwner from anyone.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
@@ -810,7 +810,7 @@ def test_revoke_role_rejects_a_bare_policy_manager_revoking_system_owner() -> No
 
 
 def test_revoke_role_blocks_the_sole_owner_self_revoking_before_the_floor_check_ever_runs() -> None:
-    """AC-BI-005 extended to SystemOwner + PLAN.md §4 Slice 3's explicit ordering requirement.
+    """The self-target block extends to SystemOwner, with an explicit ordering requirement.
 
     The sole SystemOwner is RBAC-eligible to revoke SystemOwner (their own
     role satisfies the widened `_REVOKE_RBAC[SYSTEM_OWNER]`) *and* is the
@@ -837,17 +837,16 @@ def test_revoke_role_blocks_the_sole_owner_self_revoking_before_the_floor_check_
 
 
 def test_revoke_role_rejects_revoking_the_last_remaining_system_owner() -> None:
-    """AC-BI-006: revoking the sole remaining active SystemOwner is rejected.
+    """Revoking the sole remaining active SystemOwner is rejected.
 
     A `SystemAdmin` distinct from the target (never self-targeting, so
     `block_self_target` never fires here) is the actor -- isolating
-    `enforce_system_owner_floor`'s own rejection as PLAN.md §0.9 originally
-    specified, now reachable for real via CHANGES.md's widened RBAC (see
-    the MCP-level Appendix A test for the full real round trip that first
+    `enforce_system_owner_floor`'s own rejection, reachable for real via the
+    widened RBAC (see the MCP-level multi-owner test for the full real round trip that first
     brings the count down to exactly one via a genuine revoke, rather than
     seeding it directly).
 
-    AC-BI-012: this denial also records one `outcome='rejected'`
+    This denial also records one `outcome='rejected'`
     `access_role.revoke` audit event with
     `reason_code="system_owner_floor_violation"`.
     """
@@ -884,7 +883,7 @@ def test_revoke_role_rejects_revoking_the_last_remaining_system_owner() -> None:
 
 
 def test_revoke_role_converts_a_failed_denial_audit_write_into_unavailable_error() -> None:
-    """AC-BI-011 applied to the denial-recording path (CHANGES.md item 3, PLAN.md §4 Slice 3).
+    """The fail-closed contract applies to the denial-recording path.
 
     Mirrors the grant-side test of the same name: when the audit write for
     a revoke denial itself fails, `AuthorizationStoreUnavailableError`
@@ -918,7 +917,7 @@ def test_revoke_role_converts_a_failed_denial_audit_write_into_unavailable_error
 
 
 def test_revoke_role_rejects_super_owner_outside_the_closed_set() -> None:
-    """AC-BI-013 (inner layer): `"SuperOwner"` is rejected the same two-layer way as Slice 2."""
+    """`"SuperOwner"` is rejected the same two-layer way as in `grant_role`."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -934,7 +933,7 @@ def test_revoke_role_rejects_super_owner_outside_the_closed_set() -> None:
 
 
 def test_revoke_role_never_falls_open_on_a_store_connection_error() -> None:
-    """AC-BI-011: a simulated store outage during the revoke mutation itself fails closed."""
+    """A simulated store outage during the revoke mutation itself fails closed."""
     store = RaisingAfterGateAccessRoleStore(expected_owner=_FIRST_CALLER)
     store.bootstrap_first_owner(_FIRST_CALLER)
 
@@ -948,11 +947,11 @@ def test_revoke_role_never_falls_open_on_a_store_connection_error() -> None:
         )
 
 
-# --- list_audit_events (issue #147, Slice 4) --------------------------------
+# --- list_audit_events --------------------------------
 
 
 def test_list_audit_events_denies_a_caller_without_system_admin_or_above_before_any_query() -> None:
-    """AC-BI-002: a bare AuthenticatedUser caller is denied, and `audit_store.query` never ran."""
+    """A bare AuthenticatedUser caller is denied, and `audit_store.query` never ran."""
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=access_role_store)  # bootstraps FIRST_CALLER only
     audit_store = FakeAuditStore()
@@ -972,7 +971,7 @@ def test_list_audit_events_denies_a_caller_without_system_admin_or_above_before_
 
 
 def test_list_audit_events_never_falls_open_on_an_access_role_store_connection_error() -> None:
-    """AC-BI-011 (gate half): an authz-store outage at the RBAC gate itself fails closed."""
+    """An authz-store outage at the RBAC gate itself fails closed."""
     audit_store = FakeAuditStore()
 
     with pytest.raises(AuthorizationStoreUnavailableError):
@@ -989,7 +988,7 @@ def test_list_audit_events_never_falls_open_on_an_access_role_store_connection_e
 
 
 def test_list_audit_events_rejects_an_unregistered_action_filter_before_any_query() -> None:
-    """AC-BI-008: an unknown `action` filter is rejected, naming 'action', query never ran."""
+    """An unknown `action` filter is rejected, naming 'action', query never ran."""
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=access_role_store)
     audit_store = FakeAuditStore()
@@ -1009,7 +1008,7 @@ def test_list_audit_events_rejects_an_unregistered_action_filter_before_any_quer
 
 
 def test_list_audit_events_rejects_an_unregistered_resource_type_filter_before_any_query() -> None:
-    """AC-BI-008: an unknown `resource_type` filter is rejected, naming 'resource_type'."""
+    """An unknown `resource_type` filter is rejected, naming 'resource_type'."""
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=access_role_store)
     audit_store = FakeAuditStore()
@@ -1029,7 +1028,7 @@ def test_list_audit_events_rejects_an_unregistered_resource_type_filter_before_a
 
 
 def test_list_audit_events_rejects_a_from_later_than_to_time_range_before_any_query() -> None:
-    """AC-BI-008: `occurred_from` later than `occurred_to` is rejected."""
+    """`occurred_from` later than `occurred_to` is rejected."""
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=access_role_store)
     audit_store = FakeAuditStore()
@@ -1053,7 +1052,7 @@ def test_list_audit_events_rejects_a_from_later_than_to_time_range_before_any_qu
 
 
 def test_list_audit_events_rejects_a_page_size_above_the_maximum_before_any_query() -> None:
-    """AC-BI-008: `page_size` above the configured maximum is rejected."""
+    """`page_size` above the configured maximum is rejected."""
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=access_role_store)
     audit_store = FakeAuditStore()
@@ -1106,8 +1105,8 @@ def test_list_audit_events_returns_the_audit_store_result_after_a_successful_gat
 
 
 def test_list_audit_events_never_falls_open_when_the_audit_store_is_unreachable() -> None:
-    """AC-BI-011 (query half): the audit store failing to connect surfaces as the same
-    `AuthorizationStoreUnavailableError` every other role-gated action uses (issue #147).
+    """The audit store failing to connect surfaces as the same
+    `AuthorizationStoreUnavailableError` every other role-gated action uses.
     """
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=access_role_store)
@@ -1149,7 +1148,7 @@ def test_list_audit_events_translates_a_malformed_cursor_into_invalid_query_filt
     assert "cursor" in str(exc_info.value)
 
 
-# --- issue #195, Slice 11: the allow-listed `details` filter -----------------
+# --- the allow-listed `details` filter -----------------
 # Pattern for validation-before-query tests: modelled on the other `list_audit_events` filter
 # tests above (the :954/:974 ones are access-denied tests, not a pattern).
 
@@ -1170,7 +1169,7 @@ def _call_list_with_details(details: dict[str, str]) -> FakeAuditStore:
 
 
 def test_list_audit_events_rejects_a_details_key_outside_the_allow_list_before_any_query() -> None:
-    """AC-BI-018: a key outside the allow-list is rejected, naming 'details', query never ran."""
+    """A key outside the allow-list is rejected, naming 'details', query never ran."""
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=access_role_store)
     audit_store = FakeAuditStore()

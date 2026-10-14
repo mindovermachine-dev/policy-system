@@ -1,4 +1,4 @@
-"""Shared test doubles for the `ps_service.runtime_config` tests (issue #130)."""
+"""Shared test doubles for the `ps_service.runtime_config` tests."""
 
 from __future__ import annotations
 

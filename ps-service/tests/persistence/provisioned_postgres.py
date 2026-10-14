@@ -3,7 +3,7 @@
 Runs `charts/policy-system/files/ps-postgres-init.sh` (the script the chart mounts into the
 Postgres image) against the scratch server named by `PS_TEST_POSTGRES_SUPERUSER_DSN`, with unique
 database and role names per call so live tests never collide. Used by
-`test_database_isolation_live.py` and the `graph_gateway` live tests (issue #205).
+`test_database_isolation_live.py` and the `graph_gateway` live tests.
 
 Needs `PS_TEST_POSTGRES_SUPERUSER_DSN` (a superuser DSN of a scratch server, e.g.
 `postgresql://postgres@127.0.0.1:54329/postgres`) and `psql` on `PATH`.

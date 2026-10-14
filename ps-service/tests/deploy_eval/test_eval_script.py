@@ -1,9 +1,8 @@
-"""Tests for `scripts/deploy-ps-eval.sh` (issue #165, Slice 3D).
+"""Tests for `scripts/deploy-ps-eval.sh`.
 
 The real script and libs run in a temp tree; only the process boundary is faked (kubectl, helm,
 podman/docker, openssl network calls and, here, certificate generation, and the stateful
-Authentik-API `curl`). Acceptance: AC-BI-007/008/009 (script half), AC-BI-012, AC-BI-013,
-AC-BI-016, AC-BI-004/002 (script side), AC-BI-023.
+Authentik-API `curl`).
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ def _mutations(fixture: EvalFixture) -> list[str]:
     return [*fixture.helm_upgrades(), *kubectl, *fixture.curl_urls()]
 
 
-# --- happy path: one deploy sets everything (AC-BI-012) ----------------------------------------
+# --- happy path: one deploy sets everything -----------------------------------------------------
 
 
 def test_fresh_run_deploys_once_with_owner_subject_issuer_and_base_url(
@@ -129,7 +128,7 @@ def test_deployments_are_awaited_after_helm(eval_fixture: EvalFixture) -> None:
         assert any(f"deployment/policy-system-{name}" in r for r in rollouts), name
 
 
-# --- owner: prompt, flags, link (AC-BI-002/004, AC-BI-016) ------------------------------------
+# --- owner: prompt, flags, link ----------------------------------------------------------------
 
 
 def test_email_is_prompted_for_when_no_flag_is_given(eval_fixture: EvalFixture) -> None:
@@ -258,7 +257,7 @@ def test_the_shared_token_never_reaches_output_argv_or_logs(eval_fixture: EvalFi
     assert TOKEN not in "\n".join(eval_fixture.helm_calls())
 
 
-# --- local TLS (AC-BI-007/008/023) -------------------------------------------------------------
+# --- local TLS ---------------------------------------------------------------------------------
 
 
 def test_the_tls_secret_carries_leaf_key_and_ca_and_is_applied_before_helm(
@@ -325,7 +324,7 @@ def test_a_certificate_that_never_arrives_fails_with_a_fix(eval_fixture: EvalFix
     assert eval_fixture.curl_users() == {}
 
 
-# --- prerequisites and guard rails (AC-BI-007 missing-tool path, AC-BI-016) --------------------
+# --- prerequisites and guard rails (including the missing-tool path) ---------------------------
 
 
 def test_missing_tools_are_reported_together_with_hints_before_any_change(
@@ -342,7 +341,7 @@ def test_missing_tools_are_reported_together_with_hints_before_any_change(
     assert _mutations(eval_fixture) == []
 
 
-# --- `.local` hostnames are rejected (#239): Claude Code cannot resolve them ---------------------
+# --- `.local` hostnames are rejected: Claude Code cannot resolve them ----------------------------
 
 # Built by concatenation so the contiguous old default appears in no tracked file (the AC gate).
 REJECTED_LOCAL_HOST = "authentik" + ".local"
@@ -461,7 +460,7 @@ def test_a_failed_rollout_stops_the_run_with_a_fix_and_creates_no_user(
     assert eval_fixture.curl_users() == {}
 
 
-# --- closing output (AC-BI-009 script half) ----------------------------------------------------
+# --- closing output ----------------------------------------------------------------------------
 
 
 def _hosts_file(fixture: EvalFixture, content: str = "") -> str:
@@ -602,7 +601,7 @@ def test_apply_host_setup_does_nothing_when_the_machine_is_already_set_up(
 
 
 def test_a_hostname_mapped_only_for_ipv4_gets_just_the_ipv6_line(eval_fixture: EvalFixture) -> None:
-    """An earlier version wrote only the IPv4 line; macOS then waits 5s per lookup (#224)."""
+    """Without the IPv6 line, macOS waits 5s per lookup, so the missing line is added."""
     hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n")
     sudo_log = _fake_sudo(eval_fixture)
 
@@ -648,7 +647,7 @@ def test_a_changed_owner_email_triggers_a_new_helm_upgrade(eval_fixture: EvalFix
     assert subject == "other@example.com"
 
 
-# --- hostname switch on an existing install: pre-flight listing (#239) -------------------------
+# --- hostname switch on an existing install: pre-flight listing -------------------------------
 
 OLD_HOST = "old-host.test"
 
@@ -715,7 +714,7 @@ def test_upgrade_listing_mentions_passkey_reenrolment_and_lan_colleagues(
 
 
 def test_upgrade_listing_prints_the_role_assignment_reset_step(eval_fixture: EvalFixture) -> None:
-    # The script now refuses .local, so a pre-#239 release is seeded straight into the fake helm.
+    # The script refuses .local, so a release with a `.local` hostname is seeded into the fake helm.
     eval_fixture.helm_state.mkdir(parents=True)
     old_values = {"psService": {"authentikHostname": "old" + ".local"}}
     (eval_fixture.helm_state / "values.json").write_text(json.dumps(old_values))

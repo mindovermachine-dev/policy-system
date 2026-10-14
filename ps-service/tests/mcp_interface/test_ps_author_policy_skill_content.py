@@ -1,8 +1,7 @@
-"""Structural/content lint for `ps-author-policy/SKILL.md` (issue #137, Slice 6, PLAN.md §1(a)).
+"""Structural/content lint for `ps-author-policy/SKILL.md` .
 
 Reads the real, finished `SKILL.md` off disk (no fakes needed -- this is a
-pure content assertion, the "(a) Structural/content lint" mechanism PLAN.md
-§1 describes) and asserts:
+pure content assertion, a structural/content lint) and asserts:
 
 - Frontmatter has exactly `name: ps-author-policy` and a non-empty
   `description`, no other keys.
@@ -13,13 +12,13 @@ pure content assertion, the "(a) Structural/content lint" mechanism PLAN.md
   text names none of the old connector names.
 - Guardrails text contains all four forbidden tool names verbatim:
   `propose-policy`, `approve-policy`, `reject-policy`,
-  `revert-policy-to-draft` (AC-BI-010's "never calling it itself").
-- Every one of the 9 tool names this skill actually calls (PLAN.md §0.3's
-  table minus the four forbidden ones: `cypher`, `create-policy-draft`,
+  `revert-policy-to-draft` (the "never calling it itself").
+- Every one of the 9 tool names this skill actually calls (the
+  skill's tool table minus the four forbidden ones: `cypher`, `create-policy-draft`,
   `update-policy-draft`, `get-policy`, `add-standard-to-draft`,
   `update-standard-draft`, `add-control-to-draft`, `update-control-draft`,
   `domain_concepts`) appears at least once in the document body.
-- Every named-exception error-message substring from PLAN.md §6.6's
+- Every named-exception error-message substring from the
   assembled Guardrails table appears somewhere in the Guardrails/Process
   text -- catching silent drift if a future `errors.py`/`mcp_server.py`
   message changes without this skill's table being updated. Each substring
@@ -27,8 +26,7 @@ pure content assertion, the "(a) Structural/content lint" mechanism PLAN.md
   (`ps_service.policy_lifecycle.errors`, `mcp_server.py`'s
   `_parse_patch_fields`/`add-control-to-draft`'s own `control_type` check,
   the `cypher` tool's own docstring) while writing this file, not copied
-  from PLAN.md's paraphrase uncritically -- see IMPL_SLICE_6.md for the
-  citations.
+  from a paraphrase uncritically.
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ _SKILL_DIR = (
     Path(__file__).resolve().parents[3] / "ps-skills" / "ps-plugin" / "skills" / "ps-author-policy"
 )
 _SKILL_PATH = _SKILL_DIR / "SKILL.md"
-# Issue #200: the Standard/Control loops and the web-research note are read on demand.
+# The Standard/Control loops and the web-research note are read on demand.
 _REFERENCES: tuple[str, ...] = (
     "references/standard-loop.md",
     "references/control-loop.md",
@@ -70,7 +68,7 @@ _FORBIDDEN_TOOL_NAMES: tuple[str, ...] = (
     "revert-policy-to-draft",
 )
 
-# PLAN.md §0.3's table, minus the four forbidden tools above.
+# The skill's tool table, minus the four forbidden tools above.
 _CALLED_TOOL_NAMES: tuple[str, ...] = (
     "cypher",
     "create-policy-draft",
@@ -82,9 +80,9 @@ _CALLED_TOOL_NAMES: tuple[str, ...] = (
     "update-control-draft",
 )
 
-# PLAN.md §6.6, each substring re-verified directly against
+# Each substring was re-verified directly against
 # `ps_service.policy_lifecycle.errors`/`mcp_server.py` while writing this
-# file (IMPL_SLICE_6.md has the file:line citations).
+# file.
 _ERROR_MESSAGE_SUBSTRINGS: tuple[str, ...] = (
     "this action requires a real authenticated caller (the local-test bypass counts as one)",
     "the policy graph database is not reachable",
@@ -104,7 +102,7 @@ _ERROR_MESSAGE_SUBSTRINGS: tuple[str, ...] = (
     "already governed by a Policy",
 )
 
-# Issue #185: named stop states and the fork-detection query the skill must carry.
+# Named stop states and the fork-detection query the skill must carry.
 _NAMED_STATES: tuple[str, ...] = (
     "superseded_by_unowned_draft",
     "fork_awaiting_approval",
@@ -211,10 +209,10 @@ def test_every_named_error_message_substring_appears_in_guardrails_or_process() 
 
 
 def test_never_describes_a_freshly_scaffolded_control_as_draft_implementation_status() -> None:
-    """Process's own Control-loop instruction (PLAN.md §0.3/Slice 4): a freshly scaffolded
+    """Process's own Control-loop instruction: a freshly scaffolded
     Control's `implementation_status` server-defaults to `"planned"`, never `"draft"` --
     the governance `status` (always `"draft"` while in draft state) is a different property
-    entirely. Guards against the two being conflated in prose (real drift Slice 4 found and
+    entirely. Guards against the two being conflated in prose (real drift that was
     fixed once already).
     """
     text = _SKILL_PATH.read_text(encoding="utf-8")

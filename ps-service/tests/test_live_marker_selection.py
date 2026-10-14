@@ -1,4 +1,4 @@
-"""A `postgres_live` run must stay green without FalkorDB or an LLM provider (issue #205).
+"""A `postgres_live` run must stay green without FalkorDB or an LLM provider.
 
 `-m postgres_live` is the documented way to run the live Postgres tests against a scratch server
 (see `tests/persistence/provisioned_postgres.py`). A test that also needs

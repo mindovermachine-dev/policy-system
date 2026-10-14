@@ -1,10 +1,8 @@
-"""Core provisioning against a fresh subscription: create-if-absent chain + three-secret write
-(AC-BI-009, AC-BI-010 completion, AC-BI-012, AC-BI-013 first enforcement; PLAN.md §5/S8).
+"""Core provisioning against a fresh subscription: create-if-absent chain + three-secret write.
 
-`test_deploy_llm_sh_never_calls_printf_or_echo_directly_on_the_key_variable` is explicitly
-dropped per PLAN.md §5/S8 and §10 point 5 -- static "how might it leak" source-grepping is the
-wrong test shape; `test_successful_run_output_never_contains_the_raw_api_key_value` below is the
-real, dynamic AC-BI-013 proof in its place.
+The API key is checked dynamically rather than by static "how might it leak" source-grepping:
+`test_successful_run_output_never_contains_the_raw_api_key_value` below proves it never appears
+in the output.
 """
 
 from __future__ import annotations
@@ -23,7 +21,7 @@ DEFAULT_KEY1 = "FAKE-KEY-1-INITIAL"
 
 
 def _hash8(subscription_id: str) -> str:
-    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars (PLAN.md §0.4)."""
+    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars."""
     return hashlib.sha256(subscription_id.encode("utf-8")).hexdigest()[:8]
 
 
@@ -87,7 +85,7 @@ def test_account_and_vault_names_match_the_confirmation_table(
     run = deploy_llm_fixture.run_deploy("--yes", expect=0)
 
     # The table (printed before provisioning) and the actual create calls must use the exact
-    # same computed names -- both come from the same main() variables (S2/S10 stay consistent).
+    # same computed names -- both come from the same main() variables.
     assert account in run.stdout
     assert vault in run.stdout
     assert any(account in line for line in deploy_llm_fixture.read_az_log())
@@ -140,7 +138,7 @@ def test_successful_run_output_never_contains_the_raw_api_key_value(
 def test_resource_group_is_rg_policy_system_not_the_old_llm_suffixed_name(
     deploy_llm_fixture: DeployLlmFixture,
 ) -> None:
-    """Issue #111 Slice S1: the resource group is the shared `rg-policy-system`, not the old
+    """The resource group is the shared `rg-policy-system`, not the old
     `-llm`-suffixed name -- proves the create call and the on-disk state both use the new name,
     and explicitly rules out the retired name reappearing anywhere in the created state or log.
     """

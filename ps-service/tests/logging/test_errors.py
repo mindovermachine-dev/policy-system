@@ -1,4 +1,4 @@
-"""Tests for ps_service.logging.errors — M15 sanity."""
+"""Tests for ps_service.logging.errors sanity."""
 
 from __future__ import annotations
 

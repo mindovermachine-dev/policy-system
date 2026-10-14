@@ -1,14 +1,13 @@
-"""Tests for the registered `check_instrument_ingestion_status` MCP tool
-(issue #139, S4/S5/S6).
+"""Tests for the registered `check_instrument_ingestion_status` MCP tool.
 
-S4 covers the happy path only (PLAN.md §3, S4): a fixed, parameterized
+The happy path: a fixed, parameterized
 `UNWIND $celex_ids AS c MATCH (n:RegulatoryInstrument {celex: c}) RETURN
 DISTINCT n.celex AS celex` query, run through `execute_cypher_query` via
 `_resolve_graph` -- exactly like the `cypher` tool's own reliance on those
 two helpers -- and the `_resolve_principal` + `_run_mcp_action` audit triad,
 exactly like `check_regulations`.
 
-S5 (PLAN.md D5) adds the degraded path: `_resolve_graph`/`execute_cypher_query`
+The degraded path: `_resolve_graph`/`execute_cypher_query`
 failures (`McpGraphUnavailableError`, `GraphUnseededError`,
 `QueryEngineExecutionError`, `WriteClauseRejectedError`) are now caught
 inside the tool body and folded to `{"statuses": {c: "unknown" for c in
@@ -19,7 +18,7 @@ diverging from `check_regulations`'s own
 (`test_check_regulations_tool.py:286-320`), whose `error:`-prefixed return
 trips `_run_mcp_action`'s `outcome="failed"` branch instead.
 
-S6 (PLAN.md D6, AC-BI-010) adds no new production authz code -- this tool
+Authorization: this tool
 intentionally carries no `require_role` gate, matching `cypher`/
 `near_misses_list` (both plain graph reads). The tests below prove that
 placement structurally (AST, mirroring `test_scope_guard.py`'s own
@@ -27,11 +26,10 @@ convention) and prove the resolved principal under the local-test bypass
 matches `check_regulations`'s own audit-log parity
 (`test_check_regulations_tool.py:91-101, 244-245`).
 
-Issue #145 later gave `check_regulations` itself a `ComplianceOfficer`
-`require_role` gate (it stopped being a plain, ungated graph read -- a
-sweep now automatically re-ingests detected amendments, D-DELEGATE), so it
-is no longer used below as an *ungated*-peer comparison for AST test (a) --
-it moved into that same test's "gated" contrast alongside
+`check_regulations` carries a `ComplianceOfficer`
+`require_role` gate (a sweep automatically re-ingests detected amendments), so it
+is not used below as an *ungated*-peer comparison for AST test (a) --
+it sits in that same test's "gated" contrast alongside
 `set_catalog_source`. Tests (b)/(c) are unaffected: both are about
 registration mechanics and bypass-principal parity, neither of which this
 gate changed (the gate is itself skipped entirely under the local-test
@@ -136,7 +134,7 @@ def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _FakeGraphHandle) ->
 
 
 def _install_unreachable_graph(monkeypatch: pytest.MonkeyPatch) -> None:
-    """S5 (a): `connect_from_config` raises a generic, detail-bearing
+    """`connect_from_config` raises a generic, detail-bearing
     exception -- `_resolve_graph` catches it broadly and sanitises it to
     `McpGraphUnavailableError` (mcp_server.py's own `_resolve_graph`
     docstring), exactly like `test_check_regulations_tool.py`'s
@@ -232,7 +230,7 @@ def test_audit_log_records_started_then_succeeded_with_resolved_principal(
 
 
 # --- (c): pydantic-schema rejection smoke tests -------------------------------
-# First list-typed MCP tool parameter in this codebase (PLAN.md §1) -- these
+# First list-typed MCP tool parameter in this codebase -- these
 # prove the `Annotated[list[Annotated[str, Field(pattern=...)]], Field(min_length=...,
 # max_length=...)]` composition actually registers and validates correctly.
 
@@ -276,7 +274,7 @@ def test_malformed_celex_item_is_rejected_at_the_schema_layer(
     assert handle.calls == []
 
 
-# --- S5: degraded path (PLAN.md D5, AC-BI-009) -------------------------------
+# --- degraded path -------------------------------
 
 
 def test_graph_unavailable_folds_every_requested_celex_to_unknown(
@@ -286,9 +284,8 @@ def test_graph_unavailable_folds_every_requested_celex_to_unknown(
     raises, sanitised by `_resolve_graph` to `McpGraphUnavailableError` --
     never fails the whole call. Every requested `celex_ids` entry maps to
     `"unknown"`, and the result is `is_error is False` (a dict body, never
-    a top-level `error:` string), per AC-BI-009's literal wording ("the
-    artifact still returns the candidate list ... rather than the whole
-    assessment failing").
+    a top-level `error:` string), so the artifact still returns the candidate list
+    rather than the whole assessment failing.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
@@ -311,11 +308,10 @@ def test_unseeded_graph_folds_every_requested_celex_to_unknown(
     every requested `celex_ids` entry maps to `"unknown"`, `is_error is
     False`, never a top-level `error:` string.
 
-    Deliberate choice (PLAN.md D5, traceable to this plan, independently
-    confirmed CORRECT by the Critique stage): a fresh/unseeded graph is
+    Deliberate choice: a fresh/unseeded graph is
     reported as `"unknown"`, NOT confidently `"not_yet_ingested"`, even
     though one could argue a totally empty graph knows for certain that
-    nothing has been ingested. D5's reasoning: reusing `execute_cypher_query`
+    nothing has been ingested. Reasoning: reusing `execute_cypher_query`
     whole (rather than bypassing its seeded-check) avoids duplicating the
     write-guard, and an unseeded graph is at least as likely to signal a
     real provisioning/connectivity problem as a genuinely fresh company
@@ -372,7 +368,7 @@ def test_degraded_path_audit_log_shows_succeeded_not_failed(
         assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
 
 
-# --- S6: authorization parity proof (PLAN.md D6, AC-BI-010) ------------------
+# --- authorization parity proof ------------------
 
 
 def _calls_in(func: object) -> list[ast.Call]:
@@ -396,15 +392,14 @@ def test_tool_body_has_no_require_role_gate_matching_plain_graph_read_peers() ->
     function body contains no call to `require_role`, exactly like its
     plain-graph-read peers `cypher`/`near_misses_list`, and unlike an
     administrative/gated tool such as `set_catalog_source`, which does call
-    `require_role`. Per PLAN.md D6, this cohort placement -- not new gating
-    code -- is what satisfies AC-BI-010's "same authorization checks as
-    other graph-read operations exposed via the MCP interface": no elevated
+    `require_role`. This cohort placement -- not new gating
+    code -- is what gives it the same authorization checks as
+    other graph-read operations exposed via the MCP interface: no elevated
     `AccessRole` is ever checked for this tool, matching its peers exactly.
 
-    `check_regulations` moved out of `ungated_peers` and into the gated
-    contrast below under issue #145 (PLAN.md/CHANGES.md), which gave it its
-    own `ComplianceOfficer` `require_role` gate -- it is no longer a plain,
-    ungated graph read, unlike this tool.
+    `check_regulations` sits in the gated contrast below rather than in
+    `ungated_peers`: it has its own `ComplianceOfficer` `require_role` gate,
+    so it is not a plain, ungated graph read, unlike this tool.
     """
     ungated_peers = (
         mcp_server.check_instrument_ingestion_status,
@@ -416,7 +411,7 @@ def test_tool_body_has_no_require_role_gate_matching_plain_graph_read_peers() ->
         assert "require_role" not in names, peer
 
     # Contrast: administrative/gated tools in the same module DO gate via
-    # `require_role` (`check_regulations`, since issue #145), proving this
+    # `require_role` (`check_regulations`), proving this
     # AST technique actually discriminates rather than trivially passing
     # for everything.
     for gated_peer in (mcp_server.set_catalog_source, mcp_server.check_regulations):
@@ -427,16 +422,16 @@ def test_tool_body_has_no_require_role_gate_matching_plain_graph_read_peers() ->
 def test_tool_registered_on_server_the_same_ungated_way_as_check_regulations() -> None:
     """(b): `check_instrument_ingestion_status` is registered on the single
     `server` singleton the same way as `check_regulations` -- a bare
-    `@server.tool()` with no `name=` kebab-case override (PLAN.md §1: the
+    `@server.tool()` with no `name=` kebab-case override (the
     explicit `name=` override is reserved for admin/write tools like
     `set-catalog-source`/`invite-user`/`grant-access-role`) and no
     additional wrapping: both remain plain functions after decoration
     (`server.tool()` returns the original callable), and both are present
     in the same `server` tool registry. This is purely about registration
-    mechanics -- unaffected by issue #145 giving `check_regulations`'s own
-    function *body* a `require_role` gate (see test (a) above); the
-    docstring's original "ungated" framing described both tools' shared
-    registration shape, not their current authorization status.
+    mechanics -- unaffected by `check_regulations`'s own
+    function *body* having a `require_role` gate (see test (a) above); the
+    "ungated" framing describes both tools' shared
+    registration shape, not their authorization status.
     """
     assert callable(mcp_server.check_instrument_ingestion_status)
     assert callable(mcp_server.check_regulations)

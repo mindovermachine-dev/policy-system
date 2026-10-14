@@ -1,6 +1,5 @@
-"""Region targeting: LLM_REGION used as configured, never auto-switched (AC-BI-005/AC-BI-008
-superseded by issue #110 -- see `verify_target_region`/`fail_region_not_viable` in
-scripts/deploy-llm.sh).
+"""Region targeting: LLM_REGION used as configured, never auto-switched (see
+`verify_target_region`/`fail_region_not_viable` in scripts/deploy-llm.sh).
 
 The script checks only the configured `LLM_REGION` for both models being `GenerallyAvailable` at
 the required SKU; it is never replaced by a different region. When that check fails, every other

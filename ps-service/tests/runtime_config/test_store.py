@@ -1,7 +1,7 @@
-"""Fast tests for `PsycopgRuntimeConfigStore` (issue #130, Slice 3).
+"""Fast tests for `PsycopgRuntimeConfigStore`.
 
-Everything here is decided before, or instead of, a successful connection: input rejection
-(AC-BI-005), the fixed no-detail unavailable error (AC-BI-010 groundwork) and semantic
+Everything here is decided before, or instead of, a successful connection: input rejection,
+the fixed no-detail unavailable error and semantic
 logging. The transactional behaviour against a real Postgres lives in `test_store_live.py`.
 """
 

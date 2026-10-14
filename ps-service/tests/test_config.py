@@ -30,7 +30,7 @@ _DEFAULT_CURATED_SOURCE_BASE_URL = (
 
 
 def test_service_config_field_mutation_raises_frozen_instance_error() -> None:
-    """`ServiceConfig` is frozen (AC-BI-001): mutating any field raises."""
+    """`ServiceConfig` is frozen: mutating any field raises."""
     config = ServiceConfig(
         host="127.0.0.1",
         port=8000,
@@ -45,8 +45,8 @@ def test_service_config_field_mutation_raises_frozen_instance_error() -> None:
 def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_SERVICE_*`/`PS_LOGGING_DIR` set → defaults matching #12's shipped
-    values (AC-BI-006).
+    """No `PS_SERVICE_*`/`PS_LOGGING_DIR` set → defaults matching the shipped
+    values.
     """
     monkeypatch.delenv("PS_LOGGING_DIR", raising=False)
     monkeypatch.delenv("PS_SERVICE_HOST", raising=False)
@@ -83,7 +83,7 @@ def test_load_config_no_relevant_env_vars_returns_default_service_config(
 def test_load_config_honors_ps_service_port_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`PS_SERVICE_PORT` override takes effect (AC-BI-003)."""
+    """`PS_SERVICE_PORT` override takes effect."""
     monkeypatch.setenv("PS_SERVICE_PORT", "9000")
 
     assert load_config().port == 9000
@@ -92,7 +92,7 @@ def test_load_config_honors_ps_service_port_override(
 def test_load_config_honors_ps_service_host_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`PS_SERVICE_HOST` override takes effect (AC-BI-004)."""
+    """`PS_SERVICE_HOST` override takes effect."""
     monkeypatch.setenv("PS_SERVICE_HOST", "0.0.0.0")
 
     assert load_config().host == "0.0.0.0"
@@ -101,7 +101,7 @@ def test_load_config_honors_ps_service_host_override(
 def test_load_config_honors_ps_service_graceful_shutdown_seconds_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS` override takes effect (AC-BI-005)."""
+    """`PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS` override takes effect."""
     monkeypatch.setenv("PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS", "30")
 
     assert load_config().graceful_shutdown_seconds == 30
@@ -115,7 +115,7 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_service_p
     invalid_port: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-integer, zero, negative, or out-of-range `PS_SERVICE_PORT` fails closed (AC-BI-009)."""
+    """Non-integer, zero, negative, or out-of-range `PS_SERVICE_PORT` fails closed."""
     monkeypatch.setenv("PS_SERVICE_PORT", invalid_port)
 
     with pytest.raises(ServiceConfigurationError):
@@ -162,7 +162,7 @@ def _find_bare_os_environ_references(tree: ast.AST) -> list[ast.Attribute]:
 
 def test_config_module_never_references_bare_os_environ() -> None:
     """`config.py` only reads env vars via `os.environ.get(...)`, never the full
-    mapping (AC-BI-012).
+    mapping.
     """
     source = inspect.getsource(config_module)
     tree = ast.parse(source)
@@ -191,7 +191,7 @@ def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_
     invalid_host: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Empty/whitespace-only `PS_SERVICE_HOST` fails closed, never falls back (AC-BI-010)."""
+    """Empty/whitespace-only `PS_SERVICE_HOST` fails closed, never falls back."""
     monkeypatch.setenv("PS_SERVICE_HOST", invalid_host)
 
     with pytest.raises(ServiceConfigurationError):
@@ -318,7 +318,7 @@ def test_load_config_with_no_ps_companymerge_similarity_threshold_set_returns_no
 ) -> None:
     """No `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` set -> `None`, no exception raised at this layer.
 
-    Issue #16's B1 fix: "required" enforcement lives at
+    "Required" enforcement lives at
     `merge_baseline_graph`'s own call site, not in `load_config()` — every
     other unrelated caller of `load_config()` must keep working with this
     env var unset.
@@ -367,7 +367,7 @@ def test_load_config_raises_for_non_numeric_ps_companymerge_similarity_threshold
 
 
 def test_service_config_four_field_construction_still_succeeds_with_none_threshold() -> None:
-    """Regression proof (issue #16's B1): the exact pre-existing 4-positional-field
+    """Regression proof: the exact pre-existing 4-positional-field
     `ServiceConfig(...)` construction other tests in this file already use, with no
     `company_merge_similarity_threshold` argument, still succeeds and the new field
     defaults to `None` — proving this field's addition does not break any
@@ -432,7 +432,7 @@ def test_load_config_local_test_bypass_unset_is_inactive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No `PS_SERVICE_LOCAL_TEST_BYPASS` set -> inactive, never defaults to
-    enabled (AC-BI-001, issue #67).
+    enabled.
     """
     monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
 
@@ -442,7 +442,7 @@ def test_load_config_local_test_bypass_unset_is_inactive(
 def test_load_config_local_test_bypass_empty_string_is_inactive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`PS_SERVICE_LOCAL_TEST_BYPASS=""` -> inactive (AC-BI-001, issue #67)."""
+    """`PS_SERVICE_LOCAL_TEST_BYPASS=""` -> inactive."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "")
 
     assert load_config().is_local_test_bypass_active is False
@@ -451,7 +451,7 @@ def test_load_config_local_test_bypass_empty_string_is_inactive(
 def test_load_config_local_test_bypass_whitespace_only_is_inactive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Whitespace-only `PS_SERVICE_LOCAL_TEST_BYPASS` -> inactive (AC-BI-001, issue #67)."""
+    """Whitespace-only `PS_SERVICE_LOCAL_TEST_BYPASS` -> inactive."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "   ")
 
     assert load_config().is_local_test_bypass_active is False
@@ -462,7 +462,7 @@ def test_load_config_honors_local_test_bypass_true(
     true_value: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Case-insensitive `"true"` activates the bypass (issue #67)."""
+    """Case-insensitive `"true"` activates the bypass."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", true_value)
 
     assert load_config().is_local_test_bypass_active is True
@@ -473,7 +473,7 @@ def test_load_config_honors_local_test_bypass_false(
     false_value: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Case-insensitive `"false"` keeps the bypass inactive (issue #67)."""
+    """Case-insensitive `"false"` keeps the bypass inactive."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", false_value)
 
     assert load_config().is_local_test_bypass_active is False
@@ -485,7 +485,7 @@ def test_load_config_raises_for_unrecognized_local_test_bypass_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A value that is neither a recognized on/off token nor empty fails config
-    loading closed rather than silently defaulting (AC-BI-006, issue #67).
+    loading closed rather than silently defaulting.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", invalid_value)
 
@@ -499,7 +499,7 @@ def test_load_config_raises_for_unrecognized_local_test_bypass_value(
 def test_load_config_with_no_ps_query_timeout_ms_set_defaults_to_5000(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_QUERY_TIMEOUT_MS` set -> defaults to 5000 (AC-BI-001)."""
+    """No `PS_QUERY_TIMEOUT_MS` set -> defaults to 5000."""
     monkeypatch.delenv("PS_QUERY_TIMEOUT_MS", raising=False)
 
     assert load_config().query_timeout_ms == 5000
@@ -508,7 +508,7 @@ def test_load_config_with_no_ps_query_timeout_ms_set_defaults_to_5000(
 def test_load_config_honors_ps_query_timeout_ms_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`PS_QUERY_TIMEOUT_MS` override takes effect (AC-BI-001)."""
+    """`PS_QUERY_TIMEOUT_MS` override takes effect."""
     monkeypatch.setenv("PS_QUERY_TIMEOUT_MS", "2500")
 
     assert load_config().query_timeout_ms == 2500
@@ -522,7 +522,7 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_query_tim
     invalid_query_timeout_ms: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-integer, zero, or negative `PS_QUERY_TIMEOUT_MS` fails closed (AC-BI-001)."""
+    """Non-integer, zero, or negative `PS_QUERY_TIMEOUT_MS` fails closed."""
     monkeypatch.setenv("PS_QUERY_TIMEOUT_MS", invalid_query_timeout_ms)
 
     with pytest.raises(ServiceConfigurationError):
@@ -532,7 +532,7 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_query_tim
 def test_load_config_with_no_ps_query_row_cap_set_defaults_to_1000(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_QUERY_ROW_CAP` set -> defaults to 1000 (AC-BI-002)."""
+    """No `PS_QUERY_ROW_CAP` set -> defaults to 1000."""
     monkeypatch.delenv("PS_QUERY_ROW_CAP", raising=False)
 
     assert load_config().query_row_cap == 1000
@@ -541,7 +541,7 @@ def test_load_config_with_no_ps_query_row_cap_set_defaults_to_1000(
 def test_load_config_honors_ps_query_row_cap_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`PS_QUERY_ROW_CAP` override takes effect (AC-BI-002)."""
+    """`PS_QUERY_ROW_CAP` override takes effect."""
     monkeypatch.setenv("PS_QUERY_ROW_CAP", "50")
 
     assert load_config().query_row_cap == 50
@@ -555,7 +555,7 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_query_row
     invalid_query_row_cap: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-integer, zero, or negative `PS_QUERY_ROW_CAP` fails closed (AC-BI-002)."""
+    """Non-integer, zero, or negative `PS_QUERY_ROW_CAP` fails closed."""
     monkeypatch.setenv("PS_QUERY_ROW_CAP", invalid_query_row_cap)
 
     with pytest.raises(ServiceConfigurationError):
@@ -565,7 +565,7 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_query_row
 def test_load_config_with_no_ps_ingestionruns_max_in_flight_set_defaults_to_1(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_INGESTIONRUNS_MAX_IN_FLIGHT` set -> defaults to 1 (AC-BI-012)."""
+    """No `PS_INGESTIONRUNS_MAX_IN_FLIGHT` set -> defaults to 1."""
     monkeypatch.delenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", raising=False)
 
     assert load_config().ingestion_runs_max_in_flight == 1
@@ -574,7 +574,7 @@ def test_load_config_with_no_ps_ingestionruns_max_in_flight_set_defaults_to_1(
 def test_load_config_honors_ps_ingestionruns_max_in_flight_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`PS_INGESTIONRUNS_MAX_IN_FLIGHT` override takes effect (AC-BI-012)."""
+    """`PS_INGESTIONRUNS_MAX_IN_FLIGHT` override takes effect."""
     monkeypatch.setenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", "3")
 
     assert load_config().ingestion_runs_max_in_flight == 3
@@ -585,7 +585,7 @@ def test_load_config_raises_for_invalid_ps_ingestionruns_max_in_flight(
     invalid_cap: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-integer, zero or negative `PS_INGESTIONRUNS_MAX_IN_FLIGHT` fails closed (AC-BI-012)."""
+    """Non-integer, zero or negative `PS_INGESTIONRUNS_MAX_IN_FLIGHT` fails closed."""
     monkeypatch.setenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", invalid_cap)
 
     with pytest.raises(ServiceConfigurationError, match="PS_INGESTIONRUNS_MAX_IN_FLIGHT"):
@@ -595,7 +595,7 @@ def test_load_config_raises_for_invalid_ps_ingestionruns_max_in_flight(
 def test_load_config_with_no_ps_curatedsource_env_vars_set_defaults_to_the_public_repo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-001: no `PS_CURATEDSOURCE_URL` set -> defaults to the public GitHub repo."""
+    """No `PS_CURATEDSOURCE_URL` set -> defaults to the public GitHub repo."""
     monkeypatch.delenv("PS_CURATEDSOURCE_URL", raising=False)
     monkeypatch.delenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", raising=False)
 
@@ -608,7 +608,7 @@ def test_load_config_with_no_ps_curatedsource_env_vars_set_defaults_to_the_publi
 def test_load_config_honors_ps_curatedsource_url_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-002: an operator-configured `PS_CURATEDSOURCE_URL` takes effect, no code change."""
+    """An operator-configured `PS_CURATEDSOURCE_URL` takes effect, no code change."""
     monkeypatch.setenv("PS_CURATEDSOURCE_URL", "https://example.com/my-curated-content")
 
     assert load_config().curated_source_base_url == "https://example.com/my-curated-content"
@@ -617,7 +617,7 @@ def test_load_config_honors_ps_curatedsource_url_override(
 def test_load_config_raises_for_plain_http_curatedsource_url_without_the_allow_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008/AC-BI-010 (startup half): plain `http://` is refused unless explicitly allowed."""
+    """Startup half: plain `http://` is refused unless explicitly allowed."""
     monkeypatch.setenv("PS_CURATEDSOURCE_URL", "http://example.com/curated-content")
     monkeypatch.delenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", raising=False)
 
@@ -630,7 +630,7 @@ def test_load_config_raises_for_plain_http_curatedsource_url_without_the_allow_f
 def test_load_config_raises_for_file_scheme_curatedsource_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008: a non-http(s) scheme (e.g. `file://`) is always rejected."""
+    """A non-http(s) scheme (e.g. `file://`) is always rejected."""
     monkeypatch.setenv("PS_CURATEDSOURCE_URL", "file:///etc/passwd")
 
     with pytest.raises(ServiceConfigurationError) as excinfo:
@@ -642,7 +642,7 @@ def test_load_config_raises_for_file_scheme_curatedsource_url(
 def test_load_config_honors_ps_curatedsource_allow_insecure_http_true(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-010: `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP=true` opts in to a plain `http://`."""
+    """`PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP=true` opts in to a plain `http://`."""
     monkeypatch.setenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", "true")
     monkeypatch.setenv("PS_CURATEDSOURCE_URL", "http://example.com/curated-content")
 
@@ -666,7 +666,7 @@ def test_load_config_raises_for_unrecognized_curatedsource_allow_insecure_http_v
     assert "PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP" in str(excinfo.value)
 
 
-# --- PS_AUTHENTIK_API_TOKEN / PS_AUTHENTIK_BASE_URL (issue #140) -----------------
+# --- PS_AUTHENTIK_API_TOKEN / PS_AUTHENTIK_BASE_URL -----------------
 
 
 @pytest.mark.parametrize("invalid_token", ["", "   ", "\t"])
@@ -736,7 +736,7 @@ def test_load_config_raises_for_empty_or_whitespace_ps_authentik_public_url(
     invalid_public_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Empty/whitespace-only `PS_AUTHENTIK_PUBLIC_URL` fails closed (issue #165, OD-1=B)."""
+    """Empty/whitespace-only `PS_AUTHENTIK_PUBLIC_URL` fails closed."""
     monkeypatch.setenv("PS_AUTHENTIK_PUBLIC_URL", invalid_public_url)
 
     with pytest.raises(ServiceConfigurationError):
@@ -762,7 +762,7 @@ def test_load_config_honors_ps_authentik_public_url_override(
 
 
 def test_service_config_repr_never_includes_authentik_api_token() -> None:
-    """AC-BI-004: `repr(config)` never includes the configured Authentik API token."""
+    """`repr(config)` never includes the configured Authentik API token."""
     config = ServiceConfig(
         host="127.0.0.1",
         port=8000,
@@ -784,7 +784,7 @@ _STATE_POSTGRES_ENV_VARS = (
 
 
 def test_load_config_reads_ps_state_postgres_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Issue #130 AC-BI-004: the PS state Postgres connection is read from `PS_STATE_POSTGRES_*`."""
+    """The PS state Postgres connection is read from `PS_STATE_POSTGRES_*`."""
     monkeypatch.setenv("PS_STATE_POSTGRES_HOST", "state-db.example.com")
     monkeypatch.setenv("PS_STATE_POSTGRES_PORT", "5433")
     monkeypatch.setenv("PS_STATE_POSTGRES_DATABASE", "ps_state")
@@ -827,10 +827,10 @@ def test_load_config_rejects_out_of_range_ps_state_postgres_port(
 def test_load_config_ignores_retired_env_var_names_for_the_state_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #130 AC-BI-004: no shim -- the retired env var names leave the store unset."""
+    """No shim -- the retired env var names leave the store unset."""
     for name in _STATE_POSTGRES_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
-    # Split literal: the retired prefix must not appear contiguously in the tree (AC-BI-004 search).
+    # Split literal: the retired prefix must not appear contiguously in the tree.
     retired_store = "AUTHZ"
     retired_prefix = f"PS_{retired_store}_POSTGRES"
     monkeypatch.setenv(f"{retired_prefix}_HOST", "legacy-db.example.com")
@@ -844,7 +844,7 @@ def test_load_config_ignores_retired_env_var_names_for_the_state_store(
 def test_load_config_with_no_drift_check_interval_set_defaults_to_one_hour(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS` -> 3600 (issue #215, AC-BI-007)."""
+    """No `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS` -> 3600."""
     monkeypatch.delenv("PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS", raising=False)
 
     assert load_config().graph_drift_check_interval_seconds == 3600

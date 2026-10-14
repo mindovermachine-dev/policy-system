@@ -1,9 +1,10 @@
-"""Every #195 action round-trips through a real Postgres and `list_audit_events` (`postgres_live`).
+"""Every new audit action round-trips through real Postgres and `list_audit_events`
+(`postgres_live`).
 
 The migrations 0001 + 0002 are applied to an isolated schema. Rows of each new action (written
 with the real builders and typed details models) are read back through the authorised read path
-by action, by `details` filter (CELEX and instrument id) and are checked for leaked markers
-(AC-BI-003 / AC-BI-009 / AC-BI-010 / AC-BI-018). Could not be run in the authoring environment
+by action, by `details` filter (CELEX and instrument id) and are checked for leaked markers.
+Could not be run in the authoring environment
 (no Postgres); it needs a CI / dev-environment run.
 """
 
@@ -114,7 +115,7 @@ def _seed(store: PsycopgAuditStore) -> None:
         outcome="applied",
         details={"instrument_id": "CRA-1.0", "status": "started", "source": "catalog"},
     )
-    # issue #214: the two outcomes a restore group can end in besides success and failure
+    # The two outcomes a restore group can end in besides success and failure
     store.record_standalone(
         actor_subject=_ACTOR[0],
         actor_issuer=_ACTOR[1],

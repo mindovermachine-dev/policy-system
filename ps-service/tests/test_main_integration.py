@@ -2,8 +2,7 @@
 
 Marked `@pytest.mark.integration` (registered in root `pyproject.toml`). These
 spawn *real* subprocesses and interact with them over real HTTP/OS
-primitives, unlike `test_main.py`'s `TestClient`-based unit tests. See
-PLAN_REVIEWED.md §4/§6 (increment 11) for the technique rationale.
+primitives, unlike `test_main.py`'s `TestClient`-based unit tests.
 
 The port is configurable via `PS_SERVICE_PORT` (see
 `test_ps_service_port_env_override_serves_health_on_overridden_port` below,
@@ -27,7 +26,7 @@ Two spawn helpers, empirically justified:
 
 - `_spawn_via_documented_command` runs the *literal* `uv run python -m
   ps_service` from `CONTRIBUTING.md`, used only by `running_server` (tests
-  (a)/(b)) since AC-BI-004 requires proving that exact documented command
+  (a)/(b)) since the tests must prove that exact documented command
   works. Empirically confirmed (manual `ps`/`lsof` inspection during test
   development): `uv run` does NOT `exec`-replace itself — it forks a real
   child process (`uv`'s pid != the actual `python -m ps_service` pid that
@@ -137,7 +136,7 @@ def _spawn_via_documented_command(
     """Spawn the exact documented local-run command from `CONTRIBUTING.md`:
     `uv run python -m ps_service`.
 
-    Used for AC-BI-003/AC-BI-004, where the point is proving that literal
+    Used where the point is proving that literal
     command works. See the module docstring for why this wrapper's own
     `returncode`/pid are not suitable for the SIGTERM/port-bind-failure
     tests, which use `_spawn_direct` instead.
@@ -262,7 +261,7 @@ class TestSharedServer:
     def test_documented_run_command_starts_process_and_it_stays_running(
         self, running_server: subprocess.Popen[bytes]
     ) -> None:
-        """AC-BI-003 + AC-BI-004: the documented `uv run python -m ps_service`
+        """The documented `uv run python -m ps_service`
         command starts a live, staying-up process.
 
         Polls `/health` over real HTTP until it responds, then asserts the
@@ -278,11 +277,11 @@ class TestSharedServer:
     def test_process_binds_health_and_ready_to_localhost_only(
         self, running_server: subprocess.Popen[bytes]
     ) -> None:
-        """AC-BI-002 (behavioral half): the running process's listening socket is
+        """The running process's listening socket is
         bound to 127.0.0.1, not 0.0.0.0/*.
 
         Uses `lsof -n -P -iTCP:<port> -sTCP:LISTEN` (confirmed available on
-        this darwin dev machine per PLAN_REVIEWED.md §4). `-n -P` disable
+        this darwin dev machine). `-n -P` disable
         hostname/port-name resolution — without them `lsof` prints
         `localhost:irdmi` (its resolved name for `127.0.0.1:8000`, `irdmi`
         being port 8000's registered `/etc/services` name) instead of a
@@ -298,7 +297,7 @@ class TestSharedServer:
         run` forks a real child rather than `exec`-replacing itself —
         confirmed empirically). Since `_PORT = 8000` is this class's shared
         server's default (no-env-override) port and no other service in this
-        repo's dev setup uses it (per PLAN_REVIEWED.md §3), a port-scoped
+        repo's dev setup uses it, a port-scoped
         `lsof` query unambiguously identifies the server's socket.
         """
         lsof_path = shutil.which("lsof")
@@ -327,12 +326,11 @@ class TestSharedServer:
 
 @pytest.mark.integration
 def test_sigterm_triggers_clean_bounded_exit(tmp_path: Path) -> None:
-    """AC-BI-007 (behavioral half): SIGTERM causes a clean, bounded exit (no hang, no forced kill).
+    """SIGTERM causes a clean, bounded exit (no hang, no forced kill).
 
     Spawns its own dedicated subprocess (separate from `running_server`)
-    since this test kills it. Accepted limitation (PLAN_REVIEWED.md §7 item
-    4): this proves clean bounded exit on SIGTERM, not full in-flight-request
-    -drain semantics — `/health`/`/ready` return instantly, so there is
+    since this test kills it. Accepted limitation: this proves clean bounded exit on SIGTERM,
+    not full in-flight-request-drain semantics — `/health`/`/ready` return instantly, so there is
     nothing to keep in-flight during the shutdown window to actually exercise
     `timeout_graceful_shutdown`'s drain behavior.
 
@@ -367,14 +365,14 @@ def test_sigterm_triggers_clean_bounded_exit(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 def test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content(tmp_path: Path) -> None:
-    """AC-BI-010 (subprocess half): a port-bind failure exits nonzero and reports
+    """A port-bind failure exits nonzero and reports
     it without leaking secrets.
 
     Occupies the default port (`_PORT`) with a raw socket first, then spawns the
     subprocess pointed at the same port; uvicorn's own bind attempt should
-    fail quickly. Per D4 in DECISIONS.md, a resolved file-path appearing in
-    the failure traceback is an ACCEPTABLE, non-secret detail (out of
-    AC-BI-010's literal "no secrets/credentials" scope) — this test only
+    fail quickly. A resolved file-path appearing in
+    the failure traceback is an ACCEPTABLE, non-secret detail (outside
+    the "no secrets/credentials" scope) — this test only
     checks for the absence of an actual secret-looking marker, using a
     distinguishing sentinel value injected via env, not for the absence of
     paths generally.
@@ -404,15 +402,14 @@ def test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content(tmp_pa
 
 @pytest.mark.integration
 def test_ps_service_port_env_override_serves_health_on_overridden_port(tmp_path: Path) -> None:
-    """AC-BI-003 (subprocess/behavioral proof): PS_SERVICE_PORT actually rebinds
+    """PS_SERVICE_PORT actually rebinds
     the real listening port.
 
     Spawns its own dedicated subprocess with `PS_SERVICE_PORT=_OVERRIDE_PORT`
     (distinct from `_PORT`, the default-path constant used by
     `TestSharedServer`'s shared server and the SIGTERM/bind-failure tests),
     so it can run independently of that fixture's class-scoped lifecycle.
-    This is the test that actually proves the issue's motivating pain
-    point — the previously-hardcoded port — is fixed: the unit-level tests
+    This is the test that actually proves that the port is configurable: the unit-level tests
     in `test_main.py` only prove `uvicorn.run` was *called* with the right
     `port` kwarg; this proves a real process actually bound there.
     """
@@ -428,7 +425,7 @@ def test_ps_service_port_env_override_serves_health_on_overridden_port(tmp_path:
 
 @pytest.mark.integration
 def test_invalid_ps_service_port_env_exits_nonzero_without_binding(tmp_path: Path) -> None:
-    """AC-BI-009 (subprocess/behavioral proof): an invalid PS_SERVICE_PORT fails
+    """An invalid PS_SERVICE_PORT fails
     before uvicorn ever binds.
 
     `main()` calls `load_config()` first; an unparseable `PS_SERVICE_PORT`
@@ -474,7 +471,7 @@ class _FakeQueryResult:
 
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally: `query()` reports itself as
-    seeded (D11) for `_SEED_CHECK_QUERY`, and otherwise always returns the
+    seeded for `_SEED_CHECK_QUERY`, and otherwise always returns the
     scripted `_FakeQueryResult`.
     """
 
@@ -508,7 +505,7 @@ _JSON_RPC_ACCEPT = "application/json, text/event-stream"
 def test_mcp_streamable_http_transport_reachable_over_a_real_socket(
     tmp_path: Path, provisioned_graph_log: Provisioned
 ) -> None:
-    """AC-BI-001/002 (issue #39, PLAN.md Slice 8): the mounted Streamable HTTP
+    """The mounted Streamable HTTP
     transport is reachable over a real TCP socket, not just `TestClient`'s
     virtual transport.
 
@@ -516,8 +513,8 @@ def test_mcp_streamable_http_transport_reachable_over_a_real_socket(
     `test_ps_service_port_env_override_serves_health_on_overridden_port`
     above does (`_spawn_direct`, a real `[sys.executable, "-m", "ps_service"]`
     subprocess bound to `127.0.0.1:<port>`), polls `/ready` (not `/health`
-    -- readiness is what proves the app's `lifespan`, including the new
-    `async with mcp_asgi_app.router.lifespan_context(...)` this issue added,
+    -- readiness is what proves the app's `lifespan`, including the
+    `async with mcp_asgi_app.router.lifespan_context(...)` block,
     has actually completed and the MCP session manager has started) until
     healthy, then issues a real `httpx.post` -- a genuine OS-level HTTP
     request over a real socket, unlike every other MCP-transport test in
@@ -527,16 +524,16 @@ def test_mcp_streamable_http_transport_reachable_over_a_real_socket(
     `test_main.py`/`test_http_transport.py` already use for MCP `initialize`
     requests. This is the strongest available proof, inside a
     single-machine CI sandbox, that the transport is reachable over a real
-    TCP/HTTP stack -- the closest verifiable proxy for AC-BI-001's "a client
-    on a different machine" claim, matching the exact proxy this file's own
-    AC-BI-004/005 subprocess tests above already rely on.
+    TCP/HTTP stack -- the closest verifiable proxy for "a client
+    on a different machine", matching the proxy this file's own
+    subprocess tests above already rely on.
     """
     # Markers: `/ready` 200 needs FalkorDB and the LLM Interface as well as Postgres, so the test
     # carries `falkordb_live` and `llm_live` and is NOT `postgres_live` (a `-m postgres_live` run
     # must not go red for services it does not provide). Its Postgres comes from the
     # `provisioned_graph_log` fixture, which needs `PS_TEST_POSTGRES_SUPERUSER_DSN` and `psql`.
-    # `/ready` gates on state Postgres (issue #130 F1) and startup fails closed unless the
-    # privileged graph log tables exist (issue #205), so the spawned process gets the `ps_state`
+    # `/ready` gates on state Postgres and startup fails closed unless the
+    # privileged graph log tables exist, so the spawned process gets the `ps_state`
     # and `ps_signing` roles of a scratch cluster built by the real init script and provisioned
     # by the real provisioning path (`provisioned_graph_log`), not whatever the environment holds.
     prov = provisioned_graph_log
@@ -584,11 +581,10 @@ def test_mcp_streamable_http_transport_reachable_over_a_real_socket(
 def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_credential(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
 ) -> None:
-    """AC-BI-005 / AC-BI-008 (issue #67): with the bypass active on a
+    """With the bypass active on a
     loopback-bound instance, the process starts successfully AND answers a
     query with no credential of any kind supplied -- composed in one test,
-    not two disconnected unit-level facts (FLAWS.md finding 3 / CHANGES.md
-    row 3).
+    not two disconnected unit-level facts.
 
     "Starts successfully" is proven by the `with TestClient(app):` block
     completing without raising: a `LocalTestBypassBindRefusedError` (the
@@ -598,12 +594,12 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
     in-process, straight after startup, passing nothing but the query text
     itself -- no header, token, or credential of any kind exists on this
     call path to omit. Reading the `query_engine` log entry's `principal`
-    back out ties this same execution to AC-BI-008: the composition is real,
+    back out ties this same execution to the principal: the composition is real,
     not two disconnected facts.
 
     Dependency connectivity checks (FalkorDB/LLM Interface/Cellar-ELI) are
-    stubbed to succeed instantly -- real reachability is out of scope for
-    AC-BI-005/AC-BI-008 (covered elsewhere) and `_check_dependencies_at_startup`
+    stubbed to succeed instantly -- real reachability is out of scope here
+    (covered elsewhere) and `_check_dependencies_at_startup`
     never raises regardless, so stubbing only removes real-network flakiness/
     latency from this test, it does not change what is being proven.
     """

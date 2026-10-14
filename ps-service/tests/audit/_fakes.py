@@ -1,4 +1,4 @@
-"""Shared in-memory `AuditStore` double for emission tests (issue #195).
+"""Shared in-memory `AuditStore` double for emission tests.
 
 `InMemoryAuditStore.record_standalone` validates `details` against the real action registry
 (so a test fails if an emitter writes an undeclared field), appends to `rows` and to the
@@ -93,7 +93,7 @@ class InMemoryAuditStore:
         outcome: str,
         details: Mapping[str, object],
     ) -> str:
-        """Record the row as `record_standalone` does and return its fresh event id (issue #210).
+        """Record the row as `record_standalone` does and return its fresh event id.
 
         The id is appended to `event_ids` and handed to `event_id_sink`, which a test points at the
         graph log's committed audit rows so a group anchored to this row is accepted.

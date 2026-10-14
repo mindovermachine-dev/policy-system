@@ -1,14 +1,13 @@
-"""Adversarial hardening tests for the companion-browser signing ceremony
-(issue #131, PLAN.md §4 Slice 4, CHANGES.md F2/F3).
+"""Adversarial hardening tests for the companion-browser signing ceremony.
 
-Reuses Slice 3's own fixtures/helpers verbatim (`test_signing_ceremony.py`,
+Reuses the signing-ceremony tests' own fixtures/helpers unchanged (`test_signing_ceremony.py`,
 same test package -- a plain same-package import, no
 `--import-mode=importlib` ordering concern, mirroring
 `test_enrollment_ceremony.py`'s own documented "same-package import has no
 such problem" precedent) rather than rebuilding the real EC P-256 key pair /
 CBOR/COSE / WebAuthn-assertion construction machinery a third time.
 
-Every test here proves one of two things PLAN.md §4 Slice 4 asks for:
+Every test here proves one of two things:
 
 1. Every adversarial path (unknown id, wrong code, expired, already-signed,
    wrong-actor credential, a lost `mark_signed` CAS race, a tampered
@@ -18,11 +17,10 @@ Every test here proves one of two things PLAN.md §4 Slice 4 asks for:
    the real, distinguishing reason is available server-side only, via
    `passkey_signing.error_handlers.reject`'s `emit_log_entry` call
    (`component="passkey_signing"`).
-2. The expiry/status guard (`_require_pending_and_unexpired`, Slice 2) runs
+2. The expiry/status guard (`_require_pending_and_unexpired`) runs
    *before* any `webauthn.*` library call, for all four guarded routes
    (`enroll/options`, `enroll/verify`, `sign/options`, `sign/verify`) -- one
-   consistent test pattern, not the two separate ones Slices 2/3 each built
-   for their own half.
+   consistent test pattern, not two separate ones, one per ceremony.
 """
 
 from __future__ import annotations
@@ -37,7 +35,7 @@ from typing import TYPE_CHECKING, cast
 
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
-# Same-package reuse of Slice 3's own fixtures/helpers (see module docstring).
+# Same-package reuse of the signing-ceremony fixtures/helpers (see module docstring).
 from passkey_signing._fakes import FakePendingApprovalStore, FakeSigningCredentialStore
 from passkey_signing.test_signing_ceremony import (
     _ACTOR_ISSUER,  # pyright: ignore[reportPrivateUsage]  -- reused verbatim, mirrors test_signing_ceremony.py's own cross-package-import precedent
@@ -124,7 +122,7 @@ def _failed_log_entries(read_lines: ReadLines, *, action: str) -> list[dict[str,
 def test_replayed_signature_is_rejected_and_merge_does_not_re_run(
     read_lines: ReadLines,
 ) -> None:
-    """Sign once (Slice 3's happy path), then replay the *exact same*
+    """Sign once (the happy path), then replay the *exact same*
     `AuthenticationCredential` payload a second time.
 
     Asserts: a generic, non-leaky rejection (not a 500, no driver/exception
@@ -158,7 +156,7 @@ def test_replayed_signature_is_rejected_and_merge_does_not_re_run(
     body = replay_response.json()
     assert body["error"]["code"] == _INVALID_ERROR_CODE
     assert body["error"]["message"] == "This approval link is no longer valid."
-    # AC-BI-015: nothing beyond the fixed generic shape -- no exception text,
+    # Nothing beyond the fixed generic shape -- no exception text,
     # no traceback, no driver detail.
     assert set(body["error"]) == {"code", "message", "failing_stage"}
     assert recorded_calls == [_MergeCall(_REVIEW_ID, "merge")]
@@ -228,11 +226,11 @@ def test_two_concurrent_sign_verify_calls_race_on_the_same_row_and_only_one_wins
 
 
 def test_summary_called_twice_before_signing_leaves_status_pending_both_times() -> None:
-    """AC-BI-012, adversarial-intent confirmation: an attacker (or an
+    """Adversarial-intent confirmation: an attacker (or an
     impatient legitimate user) hitting `/summary` -- the first call that
-    actually consumes the opaque `code` (CHANGES.md F2) -- repeatedly before
-    ever signing must never itself flip `status`. Slice 2/3 built the
-    mechanism (`status` only changes inside `mark_signed`); this is the
+    actually consumes the opaque `code` -- repeatedly before
+    ever signing must never itself flip `status`. The
+    mechanism is that `status` only changes inside `mark_signed`; this is the
     dedicated test proving repeated *viewing* alone can never trigger it.
     """
     pending_store = FakePendingApprovalStore()
@@ -257,9 +255,8 @@ def test_summary_called_twice_before_signing_leaves_status_pending_both_times() 
 def test_expired_already_consumed_wrong_code_and_unknown_id_are_byte_identical_responses(
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-015 applied precisely: expiry, already-consumed, a wrong code,
-    and an unknown id are four conceptually distinct reasons (PLAN.md §4's
-    own prose draws exactly this distinction) -- this test confirms the
+    """Expiry, already-consumed, a wrong code,
+    and an unknown id are four conceptually distinct reasons -- this test confirms the
     *response* never lets a caller tell them apart, while the server-side
     log (`passkey_signing`/`sign_verify`, `outcome="failed"`) *does* record a
     different `reason` for each, proving the information isn't simply lost,
@@ -371,8 +368,8 @@ def test_a_hand_tampered_challenge_byte_is_rejected_generically_not_as_a_500() -
     installed `webauthn==3.0.1`) -- this test proves the shared
     `error_handlers.reject_on_webauthn_failure` layer maps that into the
     same sanitized 404 body every other rejection in this router already
-    returns, not the app-wide generic 500 handler Slice 3 left this path
-    falling through to.
+    returns, not the app-wide generic 500 handler this path would
+    otherwise fall through to.
     """
     configure()
     pending_store = FakePendingApprovalStore()
@@ -414,11 +411,11 @@ def test_malformed_enroll_verify_payload_is_rejected_generically_not_as_a_500(
 ) -> None:
     """A syntactically-valid JSON object that is nowhere close to a real
     `RegistrationCredential` (`{"bogus": True}`), posted with the *correct*
-    code against a genuinely still-pending row, previously reached the real,
+    code against a genuinely still-pending row, reaches the real,
     unmocked `webauthn.verify_registration_response` and raised
     `InvalidJSONStructure` uncaught -- the app-wide generic 500 handler
     caught it, but with a different status/shape than every other rejection
-    in this router. Confirms it is now mapped to the identical 404 body, and
+    in this router. Confirms it is mapped to the identical 404 body, and
     that the real exception is still visible server-side.
     """
     emitter = configure()
@@ -449,7 +446,7 @@ def test_malformed_enroll_verify_payload_is_rejected_generically_not_as_a_500(
 
 def test_malformed_sign_verify_response_substructure_is_rejected_generically_not_as_a_500() -> None:
     """A `sign/verify` payload with a *valid, enrolled* `rawId` (so it passes
-    `_resolve_credential_for_signing`'s own AC-BI-005 check) but a
+    `_resolve_credential_for_signing`'s own actor-binding check) but a
     `response` object missing required WebAuthn fields -- this reaches the
     real, unmocked `webauthn.verify_authentication_response`, which raises
     `InvalidJSONStructure` (confirmed empirically). Proves the same mapping
@@ -517,7 +514,7 @@ def test_expiry_is_checked_before_any_webauthn_call_on_all_four_guarded_routes(
         # guarantee (expiry is checked before any webauthn_rp.* call, across all 4
         # guarded routes), not an assert_called interaction check -- final assertions
         # below are on HTTP response state/output, not on this trap's call count.
-        # AUDIT.md §2 case 6 / PLAN.md §5 Slice L. Covers all 4 patched names in this
+        # Covers all 4 patched names in this
         # loop (single physical monkeypatch.setattr call site).
         monkeypatch.setattr(f"ps_service.passkey_signing.router.{name}", _fail_if_called)
 

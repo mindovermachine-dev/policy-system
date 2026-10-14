@@ -1,27 +1,26 @@
-"""Tests for `ps-author-policy`'s Policy field-by-field authoring loop (issue #137, Slice 2).
+"""Tests for `ps-author-policy`'s Policy field-by-field authoring loop.
 
-Two independent proofs, per PLAN.md Section 5 "Slice 2":
+Two independent proofs:
 
 1. `test_scaffold_then_field_loop_persists_every_field_in_documented_order`
    -- a scripted `create-policy-draft` -> `update-policy-draft` x6 sequence
    against a module-local `_HybridGraph` fake, proving the tool-call
    SEQUENCE `ps-skills/ps-plugin/skills/ps-author-policy/SKILL.md`'s
    new "Policy authoring loop" sub-flow documents: the scaffold (Title,
-   derived and never asked for, D-3; then `scope_in`/`scope_out` persisted
-   together as the "1-2 fields" of AC-BI-002) followed by one
+   derived and never asked for; then `scope_in`/`scope_out` persisted
+   together as the "1-2 fields") followed by one
    `update-policy-draft` call per remaining P-002..P-006 criterion, in
    `policy-rubric.md`'s listed order, each field landing immediately
-   (AC-BI-005) -- and that `title`/`status` never appear in any `fields`
-   payload sent to `update-policy-draft` (D-3's immutability guard,
+   -- and that `title`/`status` never appear in any `fields`
+   payload sent to `update-policy-draft` (immutability guard,
    checked at the call-construction level, not just documentation).
 2. `test_overall_score_formula_matches_hand_arithmetic_for_passing_and_failing_vectors`
-   -- a pure-function check of `scoring-model.md` Section 4's aggregation
+   -- a pure-function check of `scoring-model.md`'s aggregation
    formula against `policy-rubric.md`'s real 7 criterion weights and
    `pass_threshold: 80`, decoupled from any tool call: feeds a fixed
    (criterion, weight, score) vector through the formula and asserts the
    computed `overall_score` and the `>= pass_threshold` comparison match
-   hand arithmetic, for both a passing and a failing vector
-   (AC-BI-006/AC-BI-012).
+   hand arithmetic, for both a passing and a failing vector.
 
 P-007 Lifecycle Honesty is scored against the Policy's own `status`
 property (`policy-template.md`'s "Ownership and Status" section), which
@@ -30,29 +29,28 @@ property (`policy-template.md`'s "Ownership and Status" section), which
 `service.py:112-122` directly) and which this skill never changes (it only
 ever authors content, never calls a status-transition tool). A freshly
 scaffolded Policy stays honestly `"draft"` for the whole of this loop, and
-`scoring-model.md` Section 2 is explicit that "being honestly in
+`scoring-model.md` is explicit that "being honestly in
 draft/planned is not [a Fail]" -- so P-007 is never itself the target of a
 Socratic question or an `update-policy-draft` call in this loop; only
 P-001 (`scope_in`/`scope_out`, scaffolded then refined) through P-006
 (`capability_grouping_rationale`) are persisted via `fields`. This is why
 test 1 below exercises exactly 6 `update-policy-draft` calls (the scaffold
 plus 5 loop fields) covering the 7 real patchable content properties, not
-7 tool calls for "P-001..P-007" read literally -- PLAN.md Section 5 Slice
-2 step 3's own instruction text ("for each of P-002..P-007") cannot be
-followed literally given `status`'s immutability; this file follows
-Section 0.5 D-5's own 7-*property* content-read query instead (which
-likewise excludes `status`), the more specific and mechanically-checkable
-source. Flagged as a deviation in IMPL_SLICE_2.md, not silently resolved.
+7 tool calls for "P-001..P-007" read literally -- an instruction to loop
+"for each of P-002..P-007" cannot be
+followed literally given `status`'s immutability; this file follows the
+7-*property* content-read query instead (which likewise excludes
+`status`), the more specific and mechanically-checkable source.
 
-Fake graph: CHANGES.md Appendix A's `_HybridGraph` (F-1's resolution),
-as corrected by `test_ps_author_policy_branch_detection.py` (Slice 1) --
+Fake graph: a `_HybridGraph`, as corrected by
+`test_ps_author_policy_branch_detection.py` --
 trimmed here to only the dispatch branches this slice's tests actually
 exercise (seed-check, `backfill_governance_status`'s no-op, `read_policy_
 tree`'s `"s.id, s.title, s.status, c.id"` branch -- needed because
 `update-policy-draft` runs the same `_read_transition_target` preamble as
-the four #134 transition functions, per `service.py:1377`'s own
+the four policy transition functions, per `service.py:1377`'s own
 docstring -- `find_existing_policy`'s `"RETURN p.id, p.title"` branch, and
-the plain write fallback). Slice 1's `read_policy_tree_for_fork` branch and
+the plain write fallback). The branch-detection file's `read_policy_tree_for_fork` branch and
 freehand-`cypher`-queue branch are intentionally omitted: this slice's
 scenarios are all fresh-branch, content-CRUD-only, and never call the
 `cypher` tool. Module-local, no cross-file import -- matches this
@@ -134,7 +132,7 @@ _LOOP_FIELDS: tuple[tuple[str, str], ...] = (
 _DISALLOWED_FIELD_KEYS = frozenset({"title", "status"})
 
 
-# --- fakes (CHANGES.md Appendix A, trimmed per this file's own docstring) --
+# --- fakes (trimmed per this file's own docstring) --
 
 
 @contextlib.contextmanager
@@ -181,7 +179,7 @@ class _PolicyTreeFixture:
 
 
 class _HybridGraph:
-    """CHANGES.md Appendix A's fake, trimmed to this slice's own dispatch needs.
+    """A fake graph, trimmed to this slice's own dispatch needs.
 
     `policy_tree` is deliberately settable after construction: `create-
     policy-draft` computes its own new `policy_id` (title-slug + hash) that
@@ -206,14 +204,14 @@ class _HybridGraph:
             # already-backfilled-safe `SET` statements -- issued ahead of
             # `read_policy_tree` by `_read_transition_target`. Structural
             # no-op, exactly as `test_ps_author_policy_branch_detection.py`
-            # (Slice 1) and `test_policy_lifecycle_tools.py` already treat it.
+            # and `test_policy_lifecycle_tools.py` already treat it.
             return _FakeQueryResult()
         if "s.id, s.title, s.status, c.id" in q:
             # `graph_writer.read_policy_tree` -- `update-policy-draft`'s own
             # `_read_transition_target` preamble (service.py:1377-1382).
             # Checked BEFORE the shorter `find_existing_policy` substring
             # below (its own `RETURN` clause contains that substring) --
-            # same "more specific match wins" ordering Slice 1 discovered.
+            # same "more specific match wins" ordering the branch-detection file discovered.
             if self.policy_tree is None:
                 return _FakeQueryResult(result_set=[])
             p = self.policy_tree
@@ -279,7 +277,7 @@ class _FakeAuditStore:
         self.calls.append(kwargs)
 
     def record_standalone_with_event_id(self, **kwargs: object) -> str:
-        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        """`record_standalone`, returning an id the process gateway's log accepts."""
         self.record_standalone(**kwargs)
         event_id = str(uuid.uuid4())
         installed_process_gateway().rig.store.audit_rows.add(event_id)
@@ -319,7 +317,7 @@ def _call_create_policy_draft(*, title: str) -> CallToolResult:
 
 
 def _call_update_policy_draft(policy_id: str, fields: dict[str, object]) -> CallToolResult:
-    # D-3 immutability guard, checked at the call-construction level -- no
+    # immutability guard, checked at the call-construction level -- no
     # test scenario below is even ALLOWED to build a `fields` payload naming
     # either immutable key, regardless of what assertions follow.
     assert _DISALLOWED_FIELD_KEYS.isdisjoint(fields), (
@@ -349,7 +347,7 @@ def test_scaffold_then_field_loop_persists_every_field_in_documented_order(
     persisted_order: list[str] = []
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        # Step 1 (D-3): title derived from the Capability name, never asked
+        # Step 1: title derived from the Capability name, never asked
         # for -- `create-policy-draft` has no content-field parameter at all.
         create_result = _call_create_policy_draft(title=_TITLE)
         assert create_result.is_error is False
@@ -367,7 +365,7 @@ def test_scaffold_then_field_loop_persists_every_field_in_documented_order(
         )
         rig = installed_process_gateway().rig
 
-        # Step 2 (AC-BI-002): the scaffold's "1-2 fields" -- P-001's two
+        # Step 2: the scaffold's "1-2 fields" -- P-001's two
         # properties persisted together, displayed before any question.
         scaffold_result = _call_update_policy_draft(
             policy_id, {"scope_in": _SCOPE_IN, "scope_out": _SCOPE_OUT}
@@ -378,7 +376,7 @@ def test_scaffold_then_field_loop_persists_every_field_in_documented_order(
         assert sorted(scaffold_body["updated_fields"]) == ["scope_in", "scope_out"]
         persisted_order.extend(sorted(scaffold_body["updated_fields"]))
 
-        # Step 3 (AC-BI-005): P-002..P-006, one Socratic field per call, in
+        # Step 3: P-002..P-006, one Socratic field per call, in
         # policy-rubric.md's listed order, each landing immediately.
         for key, value in _LOOP_FIELDS:
             result = _call_update_policy_draft(policy_id, {key: value})
@@ -398,7 +396,7 @@ def test_scaffold_then_field_loop_persists_every_field_in_documented_order(
         "capability_grouping_rationale",
     ]
 
-    # Exactly 7 writes, every one a gateway group (issue #211): the create-policy-draft group
+    # Exactly 7 writes, every one a gateway group: the create-policy-draft group
     # (linked to its `applied` row), then 6 update-policy-draft groups (the combined scaffold call
     # + 5 individual loop fields), each one `MergeProperty` with no audit link. Every read-only
     # find_existing_policy/backfill/read_policy_tree call is routed to its own
@@ -417,7 +415,7 @@ def test_scaffold_then_field_loop_persists_every_field_in_documented_order(
 
 # policy-rubric.md's real 7 criteria, in listed order, with their real
 # weights (verified against the file directly: 0.15+0.15+0.10+0.10+0.15+
-# 0.20+0.15 == 1.00). `scoring-model.md` §5: pass_threshold: 80.
+# 0.20+0.15 == 1.00). `scoring-model.md`: pass_threshold: 80.
 _POLICY_RUBRIC_WEIGHTS: tuple[tuple[str, float], ...] = (
     ("P-001", 0.15),  # Scope Clarity
     ("P-002", 0.15),  # Normative Language
@@ -437,7 +435,7 @@ _PASS_THRESHOLD = 80
 
 
 def _overall_score(scores: dict[str, int]) -> float:
-    """`scoring-model.md` §4: `100 * Σ(weight_i * score_i) / 2` (every `max_score_i == 2`)."""
+    """`scoring-model.md`: `100 * Σ(weight_i * score_i) / 2` (every `max_score_i == 2`)."""
     return (
         100
         * sum(weight * scores[criterion_id] for criterion_id, weight in _POLICY_RUBRIC_WEIGHTS)

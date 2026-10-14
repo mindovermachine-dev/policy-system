@@ -1,9 +1,9 @@
-"""The evaluator hostname documentation after issue #239 (`authentik.test`, `.local` rejected).
+"""The evaluator hostname documentation (`authentik.test`, `.local` rejected).
 
 Reads the real markdown files off disk; no fakes. The old hostname needle is built by
-concatenation so the repo-wide AC-BI-008 grep stays empty. Deliberately limited to absence
-rules, the option row, the surface-table rule and section existence; the wording of the
-upgrade and evidence sections is reviewed by hand, not pinned here.
+concatenation so the repo-wide grep for the old hostname stays empty.
+Deliberately limited to absence rules, the option row, the surface-table rule and section
+existence; the wording of the upgrade and evidence sections is reviewed by hand, not pinned here.
 """
 
 from __future__ import annotations

@@ -1,11 +1,11 @@
-"""Tests for `execute_cypher_query`'s structured logging (AC-004).
+"""Tests for `execute_cypher_query`'s structured logging.
 
-PLAN_REVIEWED.md §5, Increment 6: with a `run_id` bound via
+With a `run_id` bound via
 `bind_run_context`, `execute_cypher_query` emits one structured log entry
 per call on every branch (succeeded/rejected/failed), carrying the bound
 `run_id`; without a bound run context, `run_id` is absent/`None` and the
 call does not crash. Every emitted entry's `extra` must never contain the
-raw query text (S1/§0.5's PII-safety deviation from `route_completion`'s own
+raw query text (a PII-safety deviation from `route_completion`'s own
 `extra={"model": ...}` precedent) -- checked as a direct positive assertion,
 not just absence-by-omission.
 
@@ -54,7 +54,7 @@ class _ScriptedQueryResult:
 
 class _FakeSuccessGraphHandle:
     """Satisfies `GraphHandle` structurally -- reports itself as seeded
-    (D11) for `_SEED_CHECK_QUERY`, and otherwise always succeeds with a
+    for `_SEED_CHECK_QUERY`, and otherwise always succeeds with a
     scripted two-row result.
     """
 
@@ -181,7 +181,7 @@ def test_no_bound_run_context_run_id_absent_and_no_crash(
 def test_success_with_principal_includes_principal_on_entry(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """Slice 3 (issue #67, supports AC-BI-008): an opaque `principal` string,
+    """An opaque `principal` string,
     when given, is attached to the succeeded-branch log entry.
     """
     emitter, log_path = make_emitter()
@@ -207,7 +207,7 @@ def test_success_with_principal_includes_principal_on_entry(
 def test_rejected_with_principal_includes_principal_on_entry(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """Slice 3 (issue #67, supports AC-BI-008): `principal` is attached on
+    """`principal` is attached on
     the rejected branch too, not only on success.
     """
     emitter, log_path = make_emitter()
@@ -234,7 +234,7 @@ def test_rejected_with_principal_includes_principal_on_entry(
 def test_failed_with_principal_includes_principal_on_entry(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """Slice 3 (issue #67, supports AC-BI-008): `principal` is attached on
+    """`principal` is attached on
     the failed branch too, not only on success.
     """
     emitter, log_path = make_emitter()
@@ -261,7 +261,7 @@ def test_failed_with_principal_includes_principal_on_entry(
 def test_no_principal_given_omits_principal_key(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """Slice 3 (issue #67, supports AC-BI-008): the default `principal=None`
+    """The default `principal=None`
     stays silent -- no `"principal"` key at all -- so no pre-existing test's
     implicit "extra has no unexpected keys" expectation breaks.
     """

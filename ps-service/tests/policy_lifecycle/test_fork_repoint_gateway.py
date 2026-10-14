@@ -1,8 +1,8 @@
-"""Approving a fork moves its prior's governed Capabilities as one guarded group (AC-BI-004).
+"""Approving a fork moves its prior's governed Capabilities as one guarded group.
 
 The group deletes each `GOVERNED_BY` edge from the prior, upserts it to the fork and cascades the
-fork's tree, guarded by the log position plus a Python re-read of the prior's governed set (CHANGES
-M1 order: position, re-read, refuse with nothing logged, stamp, submit with `P0 + stamped`). A set
+fork's tree, guarded by the log position plus a Python re-read of the prior's governed set (order:
+position, re-read, refuse with nothing logged, stamp, submit with `P0 + stamped`). A set
 that changed, or any write that landed between the position read and the submit, is a governance
 conflict: a `failed` row (`governance_conflict`, no Capabilities) and
 `PolicyGovernanceConflictError`.
@@ -116,7 +116,7 @@ def test_approving_a_non_fork_is_one_cascade_group_linked_to_the_applied_row(
 def test_approving_a_fork_moves_the_governed_capabilities_in_one_group(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-004: delete from the prior, upsert to the fork, cascade, one group."""
+    """Delete from the prior, upsert to the fork, cascade, one group."""
     _seed_fork(lifecycle_rig)
 
     result = _approve(lifecycle_rig)
@@ -171,7 +171,6 @@ def _assert_conflict_without_a_trace(rig: LifecycleRig, position: int) -> None:
 def test_a_capability_added_to_the_prior_after_the_read_is_a_conflict_and_logs_nothing(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-004."""
     _seed_fork(lifecycle_rig)
     lifecycle_rig.seed_capability("c3")
     position = lifecycle_rig.store.last_position("policy_system")
@@ -211,7 +210,7 @@ def test_a_capability_removed_from_the_prior_after_the_read_is_a_conflict_and_lo
 def test_an_unrelated_write_between_the_position_read_and_the_submit_is_a_conflict(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-004, Decision 2: the position guard is coarser than the in-statement guard."""
+    """The position guard is coarser than the in-statement guard."""
     _seed_fork(lifecycle_rig)
     lifecycle_rig.hooked.before_submit(lifecycle_rig.append_unrelated_group)
 
@@ -230,7 +229,7 @@ def test_an_unrelated_write_between_the_position_read_and_the_submit_is_a_confli
 def test_a_fork_whose_prior_governs_nothing_approves_without_moving_edges(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """D-5: legacy forks without `GOVERNED_BY` edges stay approvable."""
+    """Legacy forks without `GOVERNED_BY` edges stay approvable."""
     _seed_fork(lifecycle_rig, governed=(), legacy_edges=False)
 
     result = _approve(lifecycle_rig)
@@ -282,7 +281,6 @@ def test_a_failure_of_the_second_group_leaves_the_first_applied(
 def test_a_gateway_failure_of_the_repoint_records_failed_without_a_reason_code(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011."""
     _seed_fork(lifecycle_rig, legacy_edges=False)
     lifecycle_rig.store.fail_appends()
 

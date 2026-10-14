@@ -1,4 +1,4 @@
-"""AC#4/D8: emit() must never block on the sink, even while the sink is stalled."""
+"""emit() must never block on the sink, even while the sink is stalled."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
 class _GatedSink:
     """A `TextSink` whose `write` blocks until the test opens the gate.
 
-    Lives in the sink, not a faked `Thread` (D8 design note) — this exercises
+    Lives in the sink, not a faked `Thread` — this exercises
     the real writer thread stalled on a real write, avoiding any typing
-    trickery around faking `threading.Thread` itself (M9).
+    trickery around faking `threading.Thread` itself.
     """
 
     def __init__(self, gate: threading.Event) -> None:

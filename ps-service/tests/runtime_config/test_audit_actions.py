@@ -1,4 +1,4 @@
-"""Tests for the runtime-config audit actions' registration and typed details (issue #130)."""
+"""Tests for the runtime-config audit actions' registration and typed details."""
 
 from __future__ import annotations
 

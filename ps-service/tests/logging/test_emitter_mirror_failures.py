@@ -1,4 +1,4 @@
-"""Tests for ``EmitterConfig.mirror_failures_to_stderr`` (issue #227, AC-BI-009).
+"""Tests for ``EmitterConfig.mirror_failures_to_stderr``.
 
 A failed entry is the one an operator reads via ``kubectl logs``; with the option on, the writer
 thread also writes its JSON line to stderr, in addition to the JSONL file.

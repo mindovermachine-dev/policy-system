@@ -1,4 +1,4 @@
-"""Regression tests for `scripts/ps-upgrade.sh` (issue #165 baseline fix).
+"""Regression tests for `scripts/ps-upgrade.sh`.
 
 The script upgraded the release without carrying over the values the release already has, so an
 upgrade reset every non-LLM value on the evaluator (and the bootstrap-owner and Authentik URL

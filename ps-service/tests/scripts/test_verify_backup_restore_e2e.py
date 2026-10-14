@@ -1,4 +1,4 @@
-"""Tests for `scripts/verify-backup-restore.sh seed | e2e` (issue #216, slice V3).
+"""Tests for `scripts/verify-backup-restore.sh seed | e2e`.
 
 The script runs for real against fake `kubectl` and `helm` on PATH (the external CLIs are the
 process boundary). The fake `kubectl` records its argv and answers: the helper-pod exec (a volume

@@ -1,5 +1,4 @@
-"""Quota hard stop at LLM_REGION (AC-BI-007; superseded by issue #110 -- see
-`fail_region_not_viable` in scripts/deploy-llm.sh).
+"""Quota hard stop at LLM_REGION (see `fail_region_not_viable` in scripts/deploy-llm.sh).
 
 Runs once, at the configured `LLM_REGION`: `az cognitiveservices usage list --location <region>`.
 Insufficient quota for either model is a hard stop with a quota-increase message. LLM_REGION is

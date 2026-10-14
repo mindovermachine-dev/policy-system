@@ -1,4 +1,4 @@
-"""The docs state the direct-connector rule consistently (issue #170).
+"""The docs state the direct-connector rule consistently.
 
 Structural: wording and issue numbers are free. The tests read the real markdown files off
 disk (no fakes) and check shape only: no doc ties the direct connector to a Dynamic Client
@@ -195,7 +195,7 @@ def test_guides_link_to_other_documents_with_dot_slash_form(guide: Path) -> None
     assert _BARE_MD_FRAGMENT_LINK.findall(_text(guide)) == []
 
 
-# --- Plugin remote-connector docs (issue #173) -------------------------------------------
+# --- Plugin remote-connector docs -------------------------------------------
 
 _BRIDGE = "ps-cli-" + "mcp-bridge"
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")

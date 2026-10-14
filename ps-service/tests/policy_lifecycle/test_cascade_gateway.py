@@ -1,7 +1,7 @@
-"""Propose, reject and revert cascade a Policy's tree as ONE gateway group (AC-BI-003, #211).
+"""Propose, reject and revert cascade a Policy's tree as ONE gateway group.
 
-The group is a `MergeProperty status` per node of the tree AS READ JUST BEFORE THE SUBMIT (no lock,
-as before: a Standard added between the gate read and the cascade read is cascaded too), linked to
+The group is a `MergeProperty status` per node of the tree AS READ JUST BEFORE THE SUBMIT (no lock:
+a Standard added between the gate read and the cascade read is cascaded too), linked to
 the transition's `applied` audit row, written after that row, with no precondition (an unrelated
 write between the read and the submit does not refuse a cascade). A gate rejection writes nothing;
 a gateway failure records a `failed` row with the same details and the prefixed persistence error.
@@ -100,7 +100,6 @@ def _merges(group: GraphLogGroup) -> dict[tuple[str, str], object]:
 def test_a_proposal_is_one_group_setting_the_status_of_every_node_of_the_tree(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-003."""
     _seed(lifecycle_rig, "draft")
 
     _propose(lifecycle_rig)
@@ -129,7 +128,6 @@ def test_a_policy_with_no_children_cascades_its_own_status_alone(
 
 
 def test_the_applied_row_precedes_the_append(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-008."""
     _seed(lifecycle_rig, "draft")
 
     _propose(lifecycle_rig)
@@ -143,7 +141,7 @@ def test_the_applied_row_precedes_the_append(lifecycle_rig: LifecycleRig) -> Non
 def test_a_standard_added_between_the_gate_read_and_the_cascade_read_is_cascaded_too(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-003: the tree is the one read just before the submit; no lock, as before."""
+    """The tree is the one read just before the submit; no lock is taken."""
     _seed(lifecycle_rig, "draft")
 
     def _grow() -> None:
@@ -154,7 +152,7 @@ def test_a_standard_added_between_the_gate_read_and_the_cascade_read_is_cascaded
     (group,) = lifecycle_rig.store.groups
     assert ("Standard", "std_late") in _merges(group)
     assert lifecycle_rig.graph.nodes[("Standard", "std_late")]["status"] == "proposed"
-    # The audit row names the nodes of the gate read; the cascade covers more (as before).
+    # The audit row names the nodes of the gate read; the cascade covers more.
     assert "std_late" not in lifecycle_rig.audit.rows[0].details["affected_node_ids"]  # type: ignore[operator]
 
 
@@ -179,7 +177,6 @@ def test_a_gate_rejection_writes_a_rejected_row_and_nothing_to_the_graph(
 def test_a_gateway_failure_records_a_failed_row_with_the_same_details_and_the_prefixed_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011."""
     _seed(lifecycle_rig, "draft")
     lifecycle_rig.store.fail_appends()
 

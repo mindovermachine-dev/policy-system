@@ -1,7 +1,7 @@
-"""`merge-capabilities` (preview + approval) and `check-cleanup-approval` (issue #190, slice 10).
+"""`merge-capabilities` (preview + approval) and `check-cleanup-approval`.
 
-AC-BI-005 (preview, no writes, approval bound to the pair), AC-BI-016 (rejected before any
-approval), AC-BI-018 (sanitised errors). Gate behaviour is in `test_graph_cleanup_authz_gate.py`.
+Covers preview (no writes, approval bound to the pair), rejection before any
+approval, and sanitised errors. Gate behaviour is in `test_graph_cleanup_authz_gate.py`.
 """
 
 from __future__ import annotations

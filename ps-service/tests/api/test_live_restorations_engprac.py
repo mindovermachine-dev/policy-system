@@ -1,4 +1,4 @@
-"""GH #104 AC-BI-004 -- restore the shipped ENGPRAC-1.0 artifact over ``POST /restorations``.
+"""Restore the shipped ENGPRAC-1.0 artifact over ``POST /restorations``.
 
 ``falkordb_live`` + ``postgres_live`` against the dev-container FalkorDB and PS Postgres (the
 graph log): the restore writes through the Graph Write Gateway.
@@ -12,11 +12,11 @@ only the target graph names (derived from ``short_name.lower()``) change. Cleanu
 three graphs this test names plus any FalkorDB-owned ``telemetry{...}`` key created for them,
 and the module's last assertion proves no key carrying the run token remains.
 
-GH #106 closes the classification-layer follow-up flagged above: Company Merge's
+Company Merge's
 ``graph_reader``/``graph_writer`` now carry ``PracticeArea``/``RiskPath`` nodes and the
 ``COVERS``/``OWNS``/``MITIGATED_BY``/``VERIFIED_BY`` edges through to the single-tenant graph,
-so this test asserts their counts directly against the shipped ``baseline.json`` artifact
-(AC-BI-004), not just the merged leg's ``Policy`` presence.
+so this test asserts their counts directly against the shipped ``baseline.json`` artifact,
+not just the merged leg's ``Policy`` presence.
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ def _delete_everything_created_for(db: FalkorDB, token: str, graph_names: tuple[
 def _assert_governance_tree_is_draft_and_owned(
     db: FalkorDB, single_tenant_graph_name: str, *, native_blob: bytes
 ) -> None:
-    """Issue #183, AC-BI-001/003/006: counts match the artifact; every node is `draft`; owned."""
+    """Counts match the artifact; every node is `draft`; owned."""
     native = parse_serialized_graph_json(native_blob)
     for label in ("Policy", "Standard", "Control"):
         expected = sum(1 for node in native.nodes if node.label == label)
@@ -175,7 +175,7 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
     )
     client = TestClient(app, raise_server_exceptions=False)
     body, native_blob = _restoration_body(short_name)
-    # The restore writes through the Graph Write Gateway (#214). `TestClient` is not entered, so
+    # The restore writes through the Graph Write Gateway. `TestClient` is not entered, so
     # the app lifespan never installs it: install the real one the way a deployed service does.
     install_graph_write_gateway(build_default_graph_write_gateway(config))
 
@@ -195,13 +195,13 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
         assert _count(db, native_target, "MATCH (n) RETURN count(n)") == expected_native_nodes
         # The widened list let the classification layer through (not a shortcut).
         assert _count(db, baseline_target, "MATCH (n:PracticeArea) RETURN count(n)") > 0
-        # The internal draft-governance pass ran (issue #183): the whole Policy/Standard/
+        # The internal draft-governance pass ran: the whole Policy/Standard/
         # Control tree lands as `draft`, Policy owned by the restoring caller.
         _assert_governance_tree_is_draft_and_owned(
             db, single_tenant_graph_name, native_blob=native_blob
         )
 
-        # AC-BI-004: the single-tenant graph carries the same PracticeArea/RiskPath node
+        # The single-tenant graph carries the same PracticeArea/RiskPath node
         # counts and the same count of each classification edge type as the shipped
         # baseline.json artifact -- compared against the real parsed content, not a
         # hand-maintained expected-count constant that could drift from the fixture.

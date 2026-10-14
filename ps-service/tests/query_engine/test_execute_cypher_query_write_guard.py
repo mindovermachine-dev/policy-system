@@ -1,16 +1,16 @@
-"""Tests for `execute_cypher_query`'s write-clause guard (AC-002).
+"""Tests for `execute_cypher_query`'s write-clause guard.
 
-PLAN_REVIEWED.md §5, Increment 3: a hand-written fake `GraphHandle` with a
+A hand-written fake `GraphHandle` with a
 `calls: list[str]` call log proves `.query()` is never invoked for any of
 the seven write clauses, upper/lower/mixed case; a word-boundary negative
 case proves the regex doesn't false-positive on an identifier substring; an
-exact-message-text assertion (Q3 fix) pins the rejection wording so drift is
+exact-message-text assertion pins the rejection wording so drift is
 caught mechanically, not just by manual review; and `is_write_clause` is
 also tested directly, since an independent caller (`mcp_interface`) also
 goes through it.
 
-Batch 4/Increment 6 wired `_log` into `execute_cypher_query`'s rejected
-path, so every call here now needs a live emitter (or a configured process
+`execute_cypher_query` logs on its rejected
+path, so every call here needs a live emitter (or a configured process
 default) or it raises `LoggingLifecycleError` -- mirrors
 `tests/llm_interface/test_route_completion_mocked.py`'s established
 throwaway-emitter fixture pattern; these tests don't assert on log content,
@@ -60,7 +60,7 @@ class _FakeQueryResult:
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally. Records every `.query()`
     invocation in `calls` so tests can assert the guard short-circuited
-    before FalkorDB was ever touched. Reports itself as seeded (D11) for
+    before FalkorDB was ever touched. Reports itself as seeded for
     `_SEED_CHECK_QUERY` -- this module tests the write-clause guard, not the
     unseeded-graph guard (see `test_execute_cypher_query_unseeded.py`), so a
     read query here must still reach the real success path.
@@ -106,8 +106,8 @@ def test_write_clause_rejected_before_graph_query_called(
 
 
 def test_write_clause_rejected_error_exact_message_text(emitter: LogEmitter) -> None:
-    """Q3 fix: pins the exact rejection wording, not just the exception
-    type, so wording drift (like the original S1 flaw) is caught
+    """Pins the exact rejection wording, not just the exception
+    type, so wording drift is caught
     mechanically by this suite.
     """
     fake_graph = _FakeGraphHandle()

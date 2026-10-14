@@ -1,4 +1,4 @@
-"""AC-BI-009 live test: RouteStructuredCompletion against the real, configured LLM Provider."""
+"""Live test: RouteStructuredCompletion against the real, configured LLM Provider."""
 
 from __future__ import annotations
 

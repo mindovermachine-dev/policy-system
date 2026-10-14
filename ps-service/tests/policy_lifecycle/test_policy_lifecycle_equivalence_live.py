@@ -1,9 +1,9 @@
-"""`falkordb_live`: the gateway-backed lifecycle writers against the frozen legacy Cypher (#211).
+"""`falkordb_live`: the gateway-backed lifecycle writers against the frozen legacy Cypher.
 
-The live twin of `test_policy_lifecycle_equivalence.py`. The frozen pre-#211 statements
+The live twin of `test_policy_lifecycle_equivalence.py`. The frozen pre-gateway statements
 (`_legacy_reference`) run VERBATIM on one real FalkorDB graph; the real `graph_writer` builders run
 through a real gateway (in-memory log) on another; `canonical_digest` of the two must be equal
-once the legacy edges are given the gateway's deterministic `identity` (AC-BI-002, AC-BI-010: met
+once the legacy edges are given the gateway's deterministic `identity` (met
 modulo edge identity). It is the only proof that the in-memory interpreter agrees with real
 FalkorDB semantics (`SET +=`, `OPTIONAL MATCH` cross products, `FOREACH` ordering).
 

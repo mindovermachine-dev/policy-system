@@ -1,4 +1,4 @@
-"""Shared harness for the `scripts/lib/*.sh` tests (issue #165).
+"""Shared harness for the `scripts/lib/*.sh` tests.
 
 Detroit style: the real library is sourced by a real `bash`; only the process boundary is faked
 (`curl` -> the stateful Authentik fake, `kubectl`/`podman` -> tiny recording fakes on PATH).

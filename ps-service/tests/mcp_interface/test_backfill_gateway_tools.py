@@ -1,8 +1,8 @@
-"""Backfills write through the Graph Write Gateway, only when there is something to fill (#211, S5).
+"""Backfills write through the Graph Write Gateway, only when there is something to fill.
 
-`get-policy` resolves the gateway lazily (D3): a read of an already-backfilled tree works with no
+`get-policy` resolves the gateway lazily: a read of an already-backfilled tree works with no
 gateway installed, a read that needs a fill answers `error:` without one and writes nothing. Every
-write tool (the transitions here) acquires the gateway before the service call (M4), so without
+write tool (the transitions here) acquires the gateway before the service call, so without
 one they answer `error:`, write no audit row and log nothing, whether or not a backfill is needed.
 """
 
@@ -132,7 +132,7 @@ def _text(result: CallToolResult) -> str:
 def test_get_policy_of_a_backfilled_tree_works_with_no_gateway_installed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D3: a read that has nothing to fill needs no gateway."""
+    """A read that has nothing to fill needs no gateway."""
     rig, _ = _setup(monkeypatch, legacy=False)
     install_graph_write_gateway(None)
 
@@ -146,7 +146,7 @@ def test_get_policy_of_a_backfilled_tree_works_with_no_gateway_installed(
 def test_get_policy_that_needs_a_fill_with_no_gateway_answers_an_error_and_writes_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D3, M4."""
+    """`get-policy` of a tree needing a fill answers the no-gateway error and writes nothing."""
     rig, graph_audit = _setup(monkeypatch, legacy=True)
     install_graph_write_gateway(None)
 
@@ -161,7 +161,7 @@ def test_get_policy_that_needs_a_fill_with_no_gateway_answers_an_error_and_write
 def test_get_policy_of_a_legacy_tree_fills_it_in_one_group_and_answers_the_filled_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-006, AC-BI-008."""
+    """A legacy tree is filled once in a single group; the second read fills nothing."""
     rig, audit = _setup(monkeypatch, legacy=True)
 
     with _verified_actor(sub=_ACTOR):
@@ -181,7 +181,7 @@ def test_get_policy_of_a_legacy_tree_fills_it_in_one_group_and_answers_the_fille
 def test_get_policy_backfill_failure_is_the_prefixed_persistence_error_in_the_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-011: the direct backfill leaked a raw driver error from here."""
+    """A failing backfill append answers the prefixed persistence error, not a raw driver error."""
     rig, _ = _setup(monkeypatch, legacy=True)
     rig.store.fail_appends()
 
@@ -199,7 +199,7 @@ def test_get_policy_backfill_failure_is_the_prefixed_persistence_error_in_the_an
 def test_a_transition_with_no_gateway_answers_an_error_writes_no_audit_row_and_logs_nothing(
     monkeypatch: pytest.MonkeyPatch, tool: str, *, legacy: bool
 ) -> None:
-    """M4: the gateway is acquired before the service call, so not even a `rejected` row exists."""
+    """The gateway is acquired before the service call, so not even a `rejected` row exists."""
     rig, audit = _setup(monkeypatch, legacy=legacy)
     install_graph_write_gateway(None)
 
@@ -214,7 +214,7 @@ def test_a_transition_with_no_gateway_answers_an_error_writes_no_audit_row_and_l
 def test_a_standard_edit_on_a_tree_that_needs_a_fill_with_no_gateway_writes_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """M4."""
+    """A standard edit needing a fill, with no gateway, answers the no-gateway error."""
     rig, audit = _setup(monkeypatch, legacy=True)
     install_graph_write_gateway(None)
 

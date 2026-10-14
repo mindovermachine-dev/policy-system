@@ -1,1 +1,1 @@
-"""Tests for `ps_service.authz` (issue #133)."""
+"""Tests for `ps_service.authz`."""

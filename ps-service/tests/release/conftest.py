@@ -1,30 +1,30 @@
-"""Shared fixtures for the release-automation tests (`scripts/release/**`, GH issue #79).
+"""Shared fixtures for the release-automation tests (`scripts/release/**`).
 
 Why this package lives under `ps-service/tests/release/` rather than a root-level `tests/`
-(PLAN F-08, precedent `ps-service/tests/test_release_workflow.py`): the root `pyproject.toml`'s
+(precedent `ps-service/tests/test_release_workflow.py`): the root `pyproject.toml`'s
 `testpaths` covers only the two workspace members' test dirs and `ps-service/tests` is already
 inside basedpyright's strict `include` list. A root-level `tests/` would need `testpaths` and
 `include` edits and would be a strict-type-checking blind spot until then. The release scripts
 are not `ps-service` source, so this is a documented deviation from L2's "tests mirror `src/`".
 
-Marker policy (DECISIONS X-07): nothing in this package is marked `integration` except
+Marker policy: nothing in this package is marked `integration` except
 `test_release_rehearsal.py`. The tests are hermetic -- they build temporary git repositories
-(`git init -b main` plus a bare `origin.git`), an `--offline` uv mini-workspace (PLAN A-16), and
+(`git init -b main` plus a bare `origin.git`), an `--offline` uv mini-workspace, and
 a fake `gh` selected through `PS_RELEASE_GH`; no network, no services, no GitHub. They follow
 `test_release_workflow.py`'s precedent of executing `bash` unmarked, and they deliberately
 deviate from L2's "mark `git`-spawning tests `integration`" so that the default suite (and the
-CI check added in slice S4b) exercises them on every run.
+CI check) exercises them on every run.
 
 Prerequisites: `git` and `bash` must be on this machine -- both are devcontainer and CI
 prerequisites, so their absence is a failure, not a skip. `uv` is required by the version-sync
-tests (slice S7) and is located the same way.
+tests and is located the same way.
 
-Fixture layout under `tmp_path` (CHANGES X-06 recipe):
+Fixture layout under `tmp_path`:
 
     origin.git/         bare, default branch `main`
     work/               `git init -b main`, seeded, `origin` added, `main` pushed, tag `0.11.0`
-    bin/gh              fake `gh` (PLAN B.3, CHANGES X-08) -- logs every argv to `PS_RELEASE_GH_LOG`
-    shim/git            git shim (CHANGES X-01) -- logs script-issued git argv to `PS_TEST_GIT_LOG`
+    bin/gh              fake `gh` -- logs every argv to `PS_RELEASE_GH_LOG`
+    shim/git            git shim -- logs script-issued git argv to `PS_TEST_GIT_LOG`
     summary.md          the file `GITHUB_STEP_SUMMARY` points at
     home/               throwaway `HOME` so the developer's own git config never leaks in
 
@@ -34,8 +34,8 @@ copies of `charts/policy-system/Chart.yaml` and `ps-skills/ps-plugin/.claude-plu
 plugin.json`, so `sed`/`awk` patterns are exercised on the true file shapes -- with their
 version fields immediately reseeded to `SEED_TAG` (see `_copy_real_version_files`), so the
 seeded baseline never depends on whatever version happens to be checked out on `main`
-(issue #87). `charts/policy-system/values.yaml` is no longer a synced file (issue #80 AC-BI-012
-amendment) and is not seeded here.
+(see `_copy_real_version_files`). `charts/policy-system/values.yaml` is no longer a synced file
+and is not seeded here.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ NEWLINE_TOKEN = "\n"
 
 # uv needs an interpreter to resolve `requires-python`; the minimal PATH below may expose a
 # stripped-down `/usr/bin/python3`, so pin uv to the interpreter running this test session.
-# `UV_OFFLINE` keeps every uv call the scripts make hermetic (PLAN A-16).
+# `UV_OFFLINE` keeps every uv call the scripts make hermetic.
 UV_ENVIRONMENT: dict[str, str] = {"UV_PYTHON": sys.executable, "UV_OFFLINE": "1"}
 
 # A `git commit`/`gc` may fork a detached background auto-maintenance child. In a container
@@ -114,16 +114,17 @@ def _require_tool(name: str) -> Path:
 
 
 # --------------------------------------------------------------------------------------
-# Fake `gh` (PLAN B.3, CHANGES X-08) and git shim (CHANGES X-01)
+# Fake `gh` and git shim
 # --------------------------------------------------------------------------------------
 
-# Dispatches on `$1 $2`. Every invocation is logged first (X-08). `tt semver` mirrors gh-tt's
-# real behaviour (highest bare-semver tag over ALL tags, PLAN A-01/A-02); `tt semver bump` runs
-# the exact `git tag -a` gh-tt runs (A-03) through `$REAL_GIT` so the git shim never sees it;
-# `tt semver note --filename` writes A-07's shape; `release view` exits 1 unless the test has
-# created the marker file `$PS_RELEASE_GH_RELEASE_EXISTS`; `release create|edit` only log.
+# Dispatches on `$1 $2`. Every invocation is logged first. `tt semver` mirrors gh-tt's
+# real behaviour (highest bare-semver tag over ALL tags); `tt semver bump` runs
+# the exact `git tag -a` gh-tt runs through `$REAL_GIT` so the git shim never sees it;
+# `tt semver note --filename` writes the release-note shape; `release view` exits 1 unless
+# the test has created the marker file `$PS_RELEASE_GH_RELEASE_EXISTS`; `release create|edit`
+# only log.
 # `PS_RELEASE_GH_SEMVER_OUTPUT`, when set, replaces the `tt semver` answer (failure injection
-# for AC-BI-013: a test sets it to `not-a-version`).
+# for the invalid-baseline case: a test sets it to `not-a-version`).
 FAKE_GH_SCRIPT = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$PS_RELEASE_GH_LOG"
@@ -198,7 +199,7 @@ exec "$REAL_GIT" "$@"
 
 
 def git_shim(tmp_path: Path, real_git: Path) -> Path:
-    """Write the git shim (CHANGES X-01) and return the directory to prepend to `PATH`.
+    """Write the git shim and return the directory to prepend to `PATH`.
 
     The shim logs every git argv a *script* issues to `PS_TEST_GIT_LOG` and then execs the real
     git. The fake `gh` calls `$REAL_GIT` directly, so its own git calls bypass the shim.
@@ -278,7 +279,7 @@ class GitRepository:
 
 @dataclass
 class ReleaseFixture:
-    """The fixture repo pair plus the helpers PLAN B.4 names.
+    """The fixture repo pair plus the helpers the release tests drive.
 
     `work` is the clone the scripts under test run in; `origin` is the bare remote whose
     refs prove what actually landed.
@@ -421,7 +422,7 @@ class ReleaseFixture:
 
 
 def _write_mini_workspace(work_dir: Path) -> None:
-    """Seed the dependency-free uv workspace PLAN A-16 describes (members at `SEED_TAG`)."""
+    """Seed the dependency-free offline uv workspace (members at `SEED_TAG`)."""
     members = ", ".join(f'"{member}"' for member in MINI_WORKSPACE_MEMBERS)
     (work_dir / "pyproject.toml").write_text(
         f"[tool.uv.workspace]\nmembers = [{members}]\n", encoding="utf-8"
@@ -525,7 +526,7 @@ def _normalize_real_version_files(work_dir: Path) -> None:
 
 
 def _lock_mini_workspace(work_dir: Path, uv: Path, environment: Mapping[str, str]) -> None:
-    """Create `uv.lock` offline (PLAN A-16) so the seed commit carries a consistent lock."""
+    """Create `uv.lock` offline so the seed commit carries a consistent lock."""
     subprocess.run(  # noqa: S603 - `uv` is a shutil.which-resolved absolute path; args are literals
         [str(uv), "lock", "--offline", "--quiet"],
         cwd=work_dir,
@@ -539,7 +540,7 @@ def _lock_mini_workspace(work_dir: Path, uv: Path, environment: Mapping[str, str
 
 @pytest.fixture
 def release_fixture(tmp_path: Path) -> ReleaseFixture:
-    """Build the bare origin + seeded `main` clone tagged `0.11.0` (CHANGES X-06 recipe)."""
+    """Build the bare origin + seeded `main` clone tagged `0.11.0`."""
     git = _require_tool("git")
     bash = _require_tool("bash")
     uv_located = shutil.which("uv")

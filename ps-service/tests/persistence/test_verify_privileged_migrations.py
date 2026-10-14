@@ -1,4 +1,4 @@
-"""Fast tests for the fail-closed startup verifier's error and log shape (issue #205 slice 8).
+"""Fast tests for the fail-closed startup verifier's error and log shape.
 
 The verifier's database behavior (tracking rows, table existence, owner membership) is proven
 against a real Postgres by `tests/graph_gateway/test_startup_check_live.py`.

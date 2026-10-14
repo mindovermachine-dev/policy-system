@@ -1,4 +1,4 @@
-"""`postgres_live` tests for `apply_pending_migrations(run_as_role=...)` (issue #205 follow-up).
+"""`postgres_live` tests for `apply_pending_migrations(run_as_role=...)`.
 
 The provisioning command connects with the ADMIN credential but must leave every public object
 owned by the `ps_state` application role, exactly as service startup does. The runner therefore

@@ -1,7 +1,7 @@
-"""`unmerge` (preview + approval) through the MCP tool, capability merges (issue #190, slice 15).
+"""`unmerge` (preview + approval) through the MCP tool, capability merges.
 
-AC-BI-019 (preview lists restored and survivor-added edges, approval bound to the merge and the
-state, no graph write), AC-BI-020 (conflicts explained, no approval), AC-BI-018 (sanitised errors).
+Covers the preview (lists restored and survivor-added edges, approval bound to the merge and the
+state, no graph write), conflicts explained (no approval), and sanitised errors.
 Gate behaviour is in `test_graph_cleanup_authz_gate.py`.
 """
 

@@ -1,4 +1,4 @@
-"""#199 golden: schema-derived patchable sets equal fixed expected-value lists."""
+"""Golden: schema-derived patchable sets equal fixed expected-value lists."""
 
 from __future__ import annotations
 
@@ -51,21 +51,21 @@ _CONTROL_STATUSES = ("planned", "implemented", "reviewed", "deprecated")
 
 
 def test_derived_policy_patchable_fields_equal_the_fixed_list() -> None:
-    """#199 AC-BI-002: a new schema property cannot silently become patchable."""
+    """A new schema property cannot silently become patchable."""
     assert patchable_fields("Policy") == _POLICY_PATCHABLE
 
 
 def test_derived_standard_patchable_fields_equal_the_fixed_list() -> None:
-    """#199 AC-BI-002: Standard excludes title, status and version, keeps implementation_status."""
+    """Standard excludes title, status and version, keeps implementation_status."""
     assert patchable_fields("Standard") == _STANDARD_PATCHABLE
 
 
 def test_derived_control_patchable_fields_equal_the_fixed_list() -> None:
-    """#199 AC-BI-002: Control excludes title and status, and keeps type patchable."""
+    """Control excludes title and status, and keeps type patchable."""
     assert patchable_fields("Control") == _CONTROL_PATCHABLE
 
 
 def test_derived_implementation_status_values_keep_the_schema_order() -> None:
-    """#199 AC-BI-003: the status tuples are the schema enums, in order."""
+    """The status tuples are the schema enums, in order."""
     assert enum_values("Standard", "implementation_status") == _STANDARD_STATUSES
     assert enum_values("Control", "implementation_status") == _CONTROL_STATUSES

@@ -1,4 +1,4 @@
-"""Tests for LogEmitter.flush/stop barrier semantics (D7/G3, and M6)."""
+"""Tests for LogEmitter.flush/stop barrier semantics."""
 
 from __future__ import annotations
 

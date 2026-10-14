@@ -1,11 +1,11 @@
-"""RBAC preflight for `scripts/deploy-ps-prod.sh` (PLAN.md §0.5/§5/S6 -- user-only, no
+"""RBAC preflight for `scripts/deploy-ps-prod.sh` (user-only, no
 service-principal branch).
 
 An operator whose signed-in identity has neither `Owner` nor `Contributor` at subscription
-scope is stopped before any other Azure resource is touched -- including S7's resource-provider
+scope is stopped before any other Azure resource is touched -- including resource-provider
 registration, which runs immediately after this check in `main()` -- with the same actionable
-fix-command message shape as `scripts/deploy-llm.sh`'s own preflight (PLAN.md §0.5: reused
-almost verbatim).
+fix-command message shape as `scripts/deploy-llm.sh`'s own preflight (reused
+nearly unchanged).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _seed(fixture: DeployPsFixture) -> None:
 
 def _role_assignment_calls(fixture: DeployPsFixture) -> list[str]:
     """Only the subscription-ROOT-scoped `role assignment list` calls this module's own
-    preflight (`rbac_preflight`) makes -- so this stays accurate once S13 adds a second,
+    preflight (`rbac_preflight`) makes -- so this stays accurate alongside a second,
     cluster-scoped `role assignment list` call of its own (`grant_aks_rbac_access`, a distinct
     scope for a distinct concern) later in the same `main()` run. Checks the `--scope` token's
     exact value, not merely a `/subscriptions/` substring -- the cluster's own resource ID is

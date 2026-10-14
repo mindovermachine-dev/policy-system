@@ -1,14 +1,13 @@
-"""Shared fixtures for the Azure LLM bootstrap scripts (`scripts/deploy-llm.sh`, GH issue #105).
+"""Shared fixtures for the Azure LLM bootstrap scripts (`scripts/deploy-llm.sh`).
 
 Why this package lives under `ps-service/tests/deploy_llm/` rather than a root-level `tests/`
 (mirrors `ps-service/tests/release/conftest.py`'s own documented deviation): the root
 `pyproject.toml`'s `testpaths` covers only `ps-service/tests` and `ps-cli/tests`. Neither script
 under test is `ps-service` source, but this is the only test-collected location available.
 
-`scripts/deploy-llm.sh` takes no `--config` flag (CHANGES.md Row 4 drops it as unscoped design
-work with no basis in the architecture doc or TASK.md), so a test wanting a malformed
+`scripts/deploy-llm.sh` takes no `--config` flag, so a test wanting a malformed
 `scripts/llm-defaults.conf` cannot point the script at an alternate path. Instead, this fixture
-copies the real `scripts/deploy-llm.sh` (and, once later slices add them, `scripts/llm-
+copies the real `scripts/deploy-llm.sh` (and `scripts/llm-
 defaults.conf` / `scripts/lib/deploy-llm-common.sh`) into an isolated `tmp_path` copy of the
 `scripts/` tree and runs *that* copy -- the script's own `$SCRIPT_DIR`-relative config lookup
 then resolves inside the fixture, so a test edits `DeployLlmFixture.config_path` in place without
@@ -16,10 +15,8 @@ ever touching the real, checked-in defaults file or requiring a test-only flag o
 itself. This mirrors `ps-service/tests/release/conftest.py`'s `_copy_real_version_files` pattern
 of copying real repo files into a fixture working tree.
 
-S1 (PLAN.md §5) needed no `az`/`kubectl` fakes; S2 adds the fake `az` (PLAN.md §2.2, copied
-verbatim) and the naming-related `DeployLlmFixture` members. This grows further across S4-S13
-as later slices need more of PLAN.md §2.4's full API (azure-state seeding helpers, the `kubectl`
-fake, and so on).
+The fixture provides the fake `az`, the fake `kubectl`, and the `DeployLlmFixture` members for
+naming, azure-state seeding and reading back what the script did.
 """
 
 from __future__ import annotations
@@ -35,7 +32,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Mirrors scripts/llm-defaults.conf's shipped defaults (PLAN.md §1) -- hardcoded here rather than
+# Mirrors scripts/llm-defaults.conf's shipped defaults -- hardcoded here rather than
 # parsed from the config file, matching test_confirmation_table.py's own existing precedent of
 # hardcoding these same literal values for its assertions.
 DEFAULT_REGION_CANDIDATES = ("swedencentral", "francecentral", "westeurope", "germanywestcentral")
@@ -46,7 +43,7 @@ DEFAULT_EMBED_MODEL_SKU = "DataZoneStandard"
 # Ample enough that the default seeded quota never binds against the default capacities
 # (1000/350) -- tests that want quota to bind call seed_usage() themselves with tighter values.
 AMPLE_QUOTA_LIMIT = 10_000
-# Mirrors scripts/lib/deploy-llm-common.sh's LLM_RESOURCE_GROUP_NAME (PLAN.md §0.4) -- default
+# Mirrors scripts/lib/deploy-llm-common.sh's LLM_RESOURCE_GROUP_NAME -- default
 # for seed_existing_resource_group() below.
 DEFAULT_RESOURCE_GROUP_NAME = "rg-policy-system"
 
@@ -54,8 +51,8 @@ DEFAULT_RESOURCE_GROUP_NAME = "rg-policy-system"
 def _model_availability_entry(
     name: str, sku: str, *, is_generally_available: bool, capacity_range: tuple[int, int]
 ) -> dict[str, object]:
-    """One `az cognitiveservices model list` response entry for a single model (PLAN.md §2.4's
-    `seed_model_availability` "shape `deploy-llm.sh` is expected to parse").
+    """One `az cognitiveservices model list` response entry for a single model, in the
+    shape `deploy-llm.sh` is expected to parse (see `seed_model_availability`).
     """
     minimum, maximum = capacity_range
     return {
@@ -68,8 +65,7 @@ def _model_availability_entry(
 
 
 # Copied into each test's tmp_path so the script under test always finds its config/lib next to
-# itself, exactly as it would in the real repo. Files land only once their owning slice has
-# created them (S1: the script + config; S2 adds the shared naming lib).
+# itself, exactly as it would in the real repo.
 DEPLOY_LLM_RELATIVE_FILES = (
     Path("scripts/deploy-llm.sh"),
     Path("scripts/llm-defaults.conf"),
@@ -79,7 +75,7 @@ DEPLOY_LLM_RELATIVE_FILES = (
 
 SUBPROCESS_TIMEOUT_SECONDS = 30.0
 
-# Fake `az` (PLAN.md §2.2), copied verbatim -- load-bearing spec, not an implementer's paraphrase.
+# Fake `az` -- a load-bearing spec of the CLI surface the script uses.
 # Dispatches on "$1 $2" (three/four-token sub-dispatch inside `cognitiveservices account`).
 # Every invocation is logged to $PS_TEST_AZ_LOG first, unconditionally, before any dispatch runs.
 FAKE_AZ_SCRIPT = r"""#!/usr/bin/env bash
@@ -229,12 +225,12 @@ case "${1:-} ${2:-}" in
 esac
 """
 
-# Fake `kubectl` (S11, CHANGES.md Row 3 + Appendix A -- NOT PLAN.md §2.3's original), copied
-# verbatim -- load-bearing spec, not an implementer's paraphrase. `"create secret"` is a pure,
-# stateless `--dry-run=client` transform (no `$state` read/write) so it is deliberately NOT
+# Fake `kubectl` -- a load-bearing spec of the CLI surface the script uses.
+# `"create secret"` is a pure, stateless `--dry-run=client` transform (no `$state`
+# read/write) so it is deliberately NOT
 # logged to $PS_TEST_KUBECTL_LOG: logging it would race against the concurrently-running
 # "apply -f -" stage of the same pipe (both processes start at once; cross-process log order is
-# not deterministic -- PLAN.md §2.3's original version reproduced this race 5/8 runs). Every
+# not deterministic, and logging it made the log flaky). Every
 # other case still logs unconditionally before dispatching. Assert `create secret`'s output via
 # `read_applied_manifest()` (the captured manifest `kubectl apply` received), not the call log.
 FAKE_KUBECTL_SCRIPT = r"""#!/usr/bin/env bash
@@ -299,10 +295,10 @@ class ScriptRun:
 
 @dataclass
 class DeployLlmFixture:
-    """`scripts/deploy-llm.sh` copied into an isolated tree, plus the helpers PLAN.md §2.4 names.
+    """`scripts/deploy-llm.sh` copied into an isolated tree, plus the seeding and read-back helpers.
 
-    Grows across S1-S13 as later slices need more of it. S2 adds the fake `az` (`bin_dir`,
-    `az_log`) and the `azure-state` seeding needed for naming/confirmation-table tests.
+    Carries the fake `az` (`bin_dir`, `az_log`), the fake `kubectl` and the `azure-state` seeding
+    used by the naming, confirmation-table and later tests.
     """
 
     root: Path
@@ -429,8 +425,8 @@ class DeployLlmFixture:
         """Every argv line the fake `kubectl` recorded, in order.
 
         Records only state-mutating invocations (`config current-context`, `config view`,
-        `apply -f`) -- `create secret --dry-run=client` is deliberately unlogged (CHANGES.md
-        Row 3/Appendix A); assert its output via `read_applied_manifest()` instead.
+        `apply -f`) -- `create secret --dry-run=client` is deliberately unlogged;
+        assert its output via `read_applied_manifest()` instead.
         """
         return (
             self.kubectl_log.read_text(encoding="utf-8").splitlines()
@@ -447,17 +443,15 @@ class DeployLlmFixture:
         """Write the three identity files the fake `az` reads for `account show`/`ad
         signed-in-user show`, plus a fully-authorized, fully-available default baseline (Owner
         role; both models Generally Available with ample capacity headroom; ample quota) across
-        every configured candidate region (S4-S7, PLAN.md §5).
+        every configured candidate region.
 
         Why bundle the baseline here rather than leaving every test to call
-        `seed_role_assignments`/`seed_model_availability`/`seed_usage` individually: S2/S3's
-        tests (`test_confirmation_table.py`, `test_decline_path.py`) already call only
-        `seed_subscription()` and run the *entire* linear `main()` body -- S4-S7 each add an
-        unconditional next step to that same body, so without a default happy baseline here,
-        every earlier slice's test would need its own edit for every later slice added (S2's own
-        precedent for this problem, IMPL_SLICE_2.md, was a one-off patch to a single test; doing
-        that per-slice for every S2/S3 test here would multiply the same fix). A test exercising
-        a negative/edge case overrides just the one piece it cares about by calling the specific
+        `seed_role_assignments`/`seed_model_availability`/`seed_usage` individually: tests such
+        as `test_confirmation_table.py` and `test_decline_path.py` call only
+        `seed_subscription()` and run the *entire* linear `main()` body, whose every step needs
+        a happy baseline; without one here each such test would have to seed all of it.
+        A test exercising a negative/edge case overrides just the one piece it cares about by
+        calling the specific
         `seed_role_assignments`/`seed_model_availability`/`seed_usage` method afterward (each
         fully replaces the file `seed_subscription` wrote).
         """
@@ -476,8 +470,8 @@ class DeployLlmFixture:
 
     def seed_role_assignments(self, *roles: str) -> None:
         """Write `azure-state/role-assignments` -- newline-separated role names the fake `az
-        role assignment list` call returns verbatim. Empty call (`seed_role_assignments()`) means
-        no roles at all (AC-BI-004's negative case) -- an empty file, per §2.1's "empty = none",
+        role assignment list` call returns as-is. Empty call (`seed_role_assignments()`) means
+        no roles at all (the negative case) -- an empty file meaning "none",
         not a missing one (the fake's `cat` would error on a genuinely absent file).
         """
         self.azure_state.mkdir(parents=True, exist_ok=True)
@@ -494,8 +488,8 @@ class DeployLlmFixture:
         embed_capacity_range: tuple[int, int] = (1, 700),
     ) -> None:
         """Write `azure-state/model-availability/<region>.json` -- the fake `az cognitiveservices
-        model list --location <region>` response `deploy-llm.sh`'s region-selection probe (S5)
-        and capacity-range check (S6) parse. One entry per configured model; `lifecycleStatus` is
+        model list --location <region>` response `deploy-llm.sh`'s region-selection probe
+        and capacity-range check parse. One entry per configured model; `lifecycleStatus` is
         `GenerallyAvailable` when its `*_ga` flag is true, `Preview` otherwise.
         """
         payload = [
@@ -518,7 +512,7 @@ class DeployLlmFixture:
 
     def seed_usage(self, region: str, *, chat: tuple[int, int], embed: tuple[int, int]) -> None:
         """Write `azure-state/usage/<region>.json` -- the fake `az cognitiveservices usage list
-        --location <region>` response `deploy-llm.sh`'s quota check (S7) parses. `chat`/`embed`
+        --location <region>` response `deploy-llm.sh`'s quota check parses. `chat`/`embed`
         are each `(current_value, limit)`. Entry names mirror Azure's real
         "OpenAI.<sku>.<model_name>" key shape (confirmed against a live subscription), not a bare
         "chat"/"embed" placeholder -- the script looks entries up by that exact key. currentValue/
@@ -551,10 +545,9 @@ class DeployLlmFixture:
     ) -> None:
         """Pre-populate an already-existing resource group.
 
-        Not one of PLAN.md §2.4's named `seed_existing_*` members verbatim, but a minimal,
-        same-shaped extension of that table (§2.1 already specifies this exact state shape:
-        `resource-groups/<name>`, content = location): proving "zero create calls" on a full
-        rerun (S9's `test_rerun_makes_no_create_calls`) requires every create-if-absent target --
+        A minimal extension of the `seed_existing_*` members, using the state shape
+        `resource-groups/<name>`, content = location: proving "zero create calls" on a full
+        rerun (`test_rerun_makes_no_create_calls`) requires every create-if-absent target --
         the resource group included -- to already exist, not just the account/deployments/vault
         the table names.
         """
@@ -573,9 +566,9 @@ class DeployLlmFixture:
         ready_after_polls: int = 0,
     ) -> None:
         """Pre-populate an already-existing AIServices account and its key pair (the fake `az
-        cognitiveservices account keys list` source) -- for idempotency (S9) and rotation (S10)
+        cognitiveservices account keys list` source) -- for idempotency and rotation
         tests that need an account without going through a prior `deploy-llm.sh` run. Defaults
-        match the fake `az`'s own `cognitiveservices account create` defaults (PLAN.md §2.2), so
+        match the fake `az`'s own `cognitiveservices account create` defaults, so
         a seeded account looks like one this script itself would have just created.
 
         `provisioning_state` simulates a prior run interrupted mid-provisioning (`deploy-llm.sh`
@@ -616,19 +609,19 @@ class DeployLlmFixture:
         )
 
     def seed_existing_deployment(self, account: str, name: str) -> None:
-        """Pre-populate an already-existing model deployment marker (S9)."""
+        """Pre-populate an already-existing model deployment marker."""
         directory = self.azure_state / "deployments" / account
         directory.mkdir(parents=True, exist_ok=True)
         (directory / name).touch()
 
     def seed_existing_keyvault(self, name: str) -> None:
-        """Pre-populate an already-existing Key Vault marker (S9)."""
+        """Pre-populate an already-existing Key Vault marker."""
         directory = self.azure_state / "keyvaults"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / f"{name}.json").touch()
 
     def seed_existing_secret(self, vault: str, name: str, value: str) -> None:
-        """Pre-populate an already-existing Key Vault secret value (S9/S10)."""
+        """Pre-populate an already-existing Key Vault secret value."""
         directory = self.azure_state / "keyvaults" / f"{vault}-secrets"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / name).write_text(value, encoding="utf-8")
@@ -645,14 +638,14 @@ class DeployLlmFixture:
 
     def seed_kubectl_context(self, name: str) -> None:
         """Writes `kubectl-state/current-context` -- the fake `kubectl config current-context`
-        response `sync-llm-secrets-to-kind.sh`'s context guard (S11) reads.
+        response `sync-llm-secrets-to-kind.sh`'s context guard reads.
         """
         self.kubectl_state.mkdir(parents=True, exist_ok=True)
         (self.kubectl_state / "current-context").write_text(name, encoding="utf-8")
 
     def seed_kubectl_namespace(self, name: str) -> None:
-        """Writes `kubectl-state/namespace` -- the fake `kubectl`'s resolved "active namespace"
-        (S12/S13). Unseeded, the fake's `"apply -f"` case falls back to `"default"`.
+        """Writes `kubectl-state/namespace` -- the fake `kubectl`'s resolved "active namespace".
+        Unseeded, the fake's `"apply -f"` case falls back to `"default"`.
         """
         self.kubectl_state.mkdir(parents=True, exist_ok=True)
         (self.kubectl_state / "namespace").write_text(name, encoding="utf-8")
@@ -661,7 +654,7 @@ class DeployLlmFixture:
         """Reads back `kubectl-applied/<namespace>-<secret_name>.yaml` -- the manifest the fake
         `kubectl apply -f -` last captured, or None if `apply` was never called for that
         namespace/secret pair. Overwritten (not appended) on rerun -- this overwrite *is* the
-        AC-BI-017 idempotent-update proof (S13).
+        proof that the update is idempotent.
         """
         path = self.kubectl_applied / f"{namespace}-{secret_name}.yaml"
         return path.read_text(encoding="utf-8") if path.exists() else None
@@ -685,8 +678,8 @@ def _copy_deploy_llm_files(root: Path) -> None:
 @pytest.fixture
 def deploy_llm_fixture(tmp_path: Path) -> DeployLlmFixture:
     """Build an isolated copy of the `scripts/deploy-llm.sh` / `scripts/sync-llm-secrets-to-
-    kind.sh` tree under `tmp_path`, plus the fake `az` (PLAN.md §2.2) and fake `kubectl`
-    (CHANGES.md Row 3/Appendix A) on the same shared `bin/` directory.
+    kind.sh` tree under `tmp_path`, plus the fake `az` and fake `kubectl`
+    on the same shared `bin/` directory.
     """
     _copy_deploy_llm_files(tmp_path)
     home = tmp_path / "home"

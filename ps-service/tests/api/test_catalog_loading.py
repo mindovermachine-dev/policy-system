@@ -1,7 +1,7 @@
-"""Tests for `ps_service.api.catalog.load_regulation_catalog` (D12, CHANGES.md MA3).
+"""Tests for `ps_service.api.catalog.load_regulation_catalog` .
 
 Uses a `tmp_path`-based `catalog.json` fixture (two external entries, one
-internal) rather than the packaged production copy, per PLAN.md Slice 6.5 --
+internal) rather than the packaged production copy:
 this repo has no real, live-ingested `curated-content/catalog.json` with
 genuine CRA/GDPR/NIS2 content yet.
 """
@@ -54,7 +54,7 @@ def _write_fixture(tmp_path: Path) -> Path:
 
 
 def test_load_regulation_catalog_returns_every_entry_unfiltered(tmp_path: Path) -> None:
-    """Slice 6.5: every entry -- external and internal -- comes back, all fields populated."""
+    """Every entry -- external and internal -- comes back, all fields populated."""
     catalog_path = _write_fixture(tmp_path)
 
     entries = load_regulation_catalog(catalog_path)
@@ -72,7 +72,7 @@ def test_load_regulation_catalog_returns_every_entry_unfiltered(tmp_path: Path) 
 
 
 def test_load_regulation_catalog_preserves_file_order(tmp_path: Path) -> None:
-    """No implicit re-sorting -- the reader trusts the writer's own ordering (D1)."""
+    """No implicit re-sorting -- the reader trusts the writer's own ordering."""
     catalog_path = _write_fixture(tmp_path)
 
     entries = load_regulation_catalog(catalog_path)

@@ -1,17 +1,17 @@
-"""End-to-end MCP auth tests (issue #58, Slice 5: AC-BI-006, AC-BI-007).
+"""End-to-end MCP auth tests .
 
 Drives the *real* mounted Streamable HTTP ASGI app -- the same
 `build_streamable_http_app` production code path `ps_service.main.create_app`
 uses -- through a real `TestClient`, against the shared `MockOidcProvider`
-test infra (`tests/auth/mock_oidc_provider.py`, AC-BI-017: generic, no
+test infra (`tests/auth/mock_oidc_provider.py`: generic, no
 provider-specific shape). No second, MCP-specific mock IdP.
 
-AC-BI-006: an MCP request to `/mcp` with no/invalid token is rejected by the
+An MCP request to `/mcp` with no/invalid token is rejected by the
 same `PsTokenVerifier`, via the MCP SDK's own `MCPServer(token_verifier=...)`
 gate (`RequireAuthMiddleware`/`BearerAuthBackend`) -- not a reimplementation
 in this codebase.
 
-AC-BI-007: under a valid token, the `cypher` tool's `principal` is the
+Under a valid token, the `cypher` tool's `principal` is the
 token's `sub` -- never `LOCAL_TEST_PRINCIPAL_ID`, never `None`. Proven by
 reading the real `query_engine`/`execute_cypher_query` log entry the real,
 unmonkeypatched delegate emits end to end (mirrors `test_cypher_tool.py`'s
@@ -104,7 +104,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
 
     Mirrors `test_http_transport.py::_wrapped_test_client` exactly, except
     it threads a real `PsTokenVerifier`/`AuthContext` pair through, so the
-    mounted app is the genuinely auth-enforcing one (AC-BI-006), not the
+    mounted app is the genuinely auth-enforcing one, not the
     bypass-shaped one every other MCP Interface test builds.
     """
     verifier = PsTokenVerifier(auth_context)
@@ -125,7 +125,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
 def test_mcp_request_with_no_authorization_header_is_rejected_with_401(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """AC-BI-006, proven for real: no `Authorization` header at all against
+    """Proven for real: no `Authorization` header at all against
     the genuinely auth-armed app -- the MCP SDK's own `RequireAuthMiddleware`
     rejects it before the `initialize` handshake ever completes, via the
     same shared `PsTokenVerifier` REST uses (never a parallel gate).
@@ -144,15 +144,15 @@ def test_mcp_request_with_no_authorization_header_is_rejected_with_401(
 def test_mcp_request_with_an_invalid_token_is_rejected_with_401(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """AC-BI-006: a syntactically-`Bearer`-shaped but unverifiable token
+    """A syntactically-`Bearer`-shaped but unverifiable token
     (wrong audience) is rejected the same way as no token at all -- proving
     the SDK's gate genuinely calls into `PsTokenVerifier.verify_token`,
     not merely checking header shape.
     """
-    # Slice 10: unlike the no-header case above (rejected by the SDK's own gate
+    # Unlike the no-header case above (rejected by the SDK's own gate
     # before `verify_token` is ever called), a present-but-invalid token does
-    # reach `PsTokenVerifier.verify_token`, which now always logs
-    # (AC-BI-014/015) -- a configured facade is required (`tests/conftest.py`'s
+    # reach `PsTokenVerifier.verify_token`, which always logs
+    # -- a configured facade is required (`tests/conftest.py`'s
     # autouse `_isolate_logging` redirects `PS_LOGGING_DIR` and resets after).
     configure()
     auth_context = _auth_context(mock_oidc_provider)
@@ -173,7 +173,7 @@ def test_cypher_tool_principal_is_the_valid_tokens_sub(
     mock_oidc_provider: MockOidcProvider,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-007: under a valid token, the `cypher` tool's `principal` is
+    """Under a valid token, the `cypher` tool's `principal` is
     exactly the token's `sub` -- never `LOCAL_TEST_PRINCIPAL_ID`, never
     `None`. Drives the real mounted transport end to end (`initialize` ->
     `notifications/initialized` -> `tools/call`), the same JSON-RPC sequence

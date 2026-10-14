@@ -1,4 +1,4 @@
-"""AC-004 test: a RouteCompletion call emits a structured log entry with the bound run_id."""
+"""A RouteCompletion call emits a structured log entry with the bound run_id."""
 
 from __future__ import annotations
 

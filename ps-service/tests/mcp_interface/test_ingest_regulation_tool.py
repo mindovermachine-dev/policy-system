@@ -1,27 +1,26 @@
-"""Tests for the registered `ingest_regulation` MCP tool (issue #126, Slices 1.1-1.3).
+"""Tests for the registered `ingest_regulation` MCP tool .
 
-Slice 1.1 covers the curated-CELEX happy path: `find_by_celex` resolves a real
+The curated-CELEX happy path: `find_by_celex` resolves a real
 catalog entry, the caller-supplied `short_name` matches the catalog's own
 value, and the tool delegates in-process to `run_catalog_ingestion_pipeline`
-(D-DELEGATE) via the new `_run_mcp_action` audit wrapper (D-AUDIT-WRAPPER),
-returning `routes._to_accepted_response(...).model_dump()` (D-RESPONSE-SHAPE).
+via the `_run_mcp_action` audit wrapper,
+returning `routes._to_accepted_response(...).model_dump()`.
 
-Slice 1.2 covers the non-curated (Cellar-fallback) path -- the actual #96 fix
-(CHANGES.md C1/Appendix C1): when `find_by_celex` returns `None`, the tool
+The non-curated (Cellar-fallback) path: when `find_by_celex` returns `None`, the tool
 calls `resolve_via_cellar(celex, short_name=short_name)` with the
 caller-supplied, already-pattern-validated `short_name`, which is used
-verbatim -- `_derive_short_name` is never reached on this path, so two
+as given -- `_derive_short_name` is never reached on this path, so two
 resolutions of the same CELEX with differently-worded Cellar titles no
 longer diverge into two different `short_name`s/graph names.
 
-Slice 1.3 wires the remaining D-SANITIZE-UNEXPECTED error-taxonomy rows for
+The remaining error-taxonomy rows for
 this tool: `IngestionConfigIncompleteError`, `PipelineStageError`, the
-D-PREFLIGHT LLM-Interface-unhealthy check, the graph-unavailable sanitiser
+LLM-Interface-unhealthy preflight check, the graph-unavailable sanitiser
 around each of `run_catalog_ingestion_pipeline`'s three graph-open call
-sites, and `_run_mcp_action`'s own residual unexpected-exception safety net
-(D-AUDIT-WRAPPER point 4), proven here specifically for `ingest_regulation`.
+sites, and `_run_mcp_action`'s own residual unexpected-exception safety net,
+proven here specifically for `ingest_regulation`.
 
-Slice 1.4 proves D-AUTH's auth/audit-completeness claim end to end under a
+Auth/audit completeness is proven end to end under a
 *real, verified* bearer token -- not just the local-test-bypass principal
 every test above exercises via a bare in-process `server.call_tool`. It
 drives the actual mounted Streamable HTTP transport against the shared
@@ -41,11 +40,11 @@ bundle (`GraphOpeners`/`PipelineStages`/`PipelineAdapters`) is the existing
 `tests/api/_fakes.py::build_fake_pipeline_dependencies` fixture already used
 by the REST-side `run_catalog_ingestion_pipeline` tests
 (`tests/api/test_ingestion_orchestration.py`) -- reused here unchanged, not
-reinvented, per PLAN.md's own instruction.
+reinvented.
 
 `pytest-asyncio` is not installed; most of this file's tests drive the tool
 with bare `asyncio.run(server.call_tool(...))`, exactly like
-`test_cypher_tool.py`. Slice 1.4's real-token tests instead drive the real
+`test_cypher_tool.py`. The real-token tests instead drive the real
 mounted ASGI transport through `TestClient`, since a bare `server.call_tool`
 never populates the `get_access_token()` contextvar a real token requires.
 """
@@ -68,7 +67,7 @@ from api._fakes import (
     install_compliance_officer_grant,
 )
 from api._gateway_fakes import installed_process_gateway
-from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- issue #145: same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own two real-token tests can grant the caller `ComplianceOfficer` on the new gate
+from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own two real-token tests can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
 from fastapi.testclient import TestClient
@@ -81,7 +80,7 @@ from ps_service.api.catalog import CatalogEntry, find_by_celex
 from ps_service.api.dependencies import provide_audit_store, provide_pipeline_dependencies
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import (
-    _CELEX_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key (issue #193), mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
+    _CELEX_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key, mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
     _MERGED_INSTRUMENT_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key, mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
     _SHORT_NAME_COLLISION_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key
     GraphOpeners,
@@ -138,7 +137,7 @@ if TYPE_CHECKING:
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
-# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+# The sync tool writes `ingestion_run.*` rows: keep them off Postgres.
 pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 _BASE_URL = "http://127.0.0.1:8000"
@@ -159,10 +158,10 @@ _CURATED_ENTRY = _curated_cra_entry()
 _CELEX = _CURATED_ENTRY.celex
 _SHORT_NAME = _CURATED_ENTRY.short_name
 _VERSION = _CURATED_ENTRY.version
-# Issue #193: ingestion normalizes the short_name to upper case, so the id is `CRA-1.0`.
+# Ingestion normalizes the short_name to upper case, so the id is `CRA-1.0`.
 _RID = f"{_SHORT_NAME.upper()}-{_VERSION}"
 
-# --- Slice 1.2 fixtures: a CELEX absent from the curated catalog, resolved via
+# --- non-curated fixtures: a CELEX absent from the curated catalog, resolved via
 # Cellar/ELI -- mirrors tests/api/test_ingestion_orchestration.py's own
 # `_NONCURATED_CELEX`/Fixture-A/RDF-fixture shapes, not reinvented.
 _NONCURATED_CELEX = "32020R1111"
@@ -220,8 +219,8 @@ def _text(result: CallToolResult) -> str:
     return block.text
 
 
-# --- issue #163 Slice C: the two ways this module supplies pipeline
-# dependencies to the `ingest_regulation` tool, now that
+# --- the two ways this module supplies pipeline
+# dependencies to the `ingest_regulation` tool, given that
 # `build_default_pipeline_dependencies`'s own DI seam is narrowed to
 # `graphs` only -- `PipelineStages`/`PipelineAdapters` are always the real,
 # shipped functions when that factory itself runs unpatched. -----------------
@@ -231,7 +230,7 @@ def _use_fake_graph_openers_only(monkeypatch: pytest.MonkeyPatch, graphs: GraphO
     """Patch only the narrowed FalkorDB boundary; the real factory wires real stages.
 
     Targets `ps_service.api.ingestion_orchestration.build_default_graph_openers`
-    -- the approved-boundary entry issue #163 Slice C added to
+    -- the approved-boundary entry in
     `docs/coding-standards/approved-mock-boundaries.yaml` -- so
     `_resolve_and_ingest`'s own, unpatched `build_default_pipeline_dependencies()`
     call still wires the real `PipelineStages`/`PipelineAdapters`. Every
@@ -247,15 +246,14 @@ def _use_fake_graph_openers_only(monkeypatch: pytest.MonkeyPatch, graphs: GraphO
     )
 
 
-# --- issue #163 Slice 20: run the REAL four pipeline stage functions end to
-# end, replacing the wholesale `Fake*Stage` substitution VERIFY_B.md flagged
-# as an unfixed AC-BI-003 violation (no interaction was ever asserted at that
-# seam; it substituted real Domain Mapper/Company Merge/Ingestion engine
-# logic wholesale, not just an infra boundary). `_MiniGraph` below is a
+# --- run the REAL four pipeline stage functions end to
+# end, rather than substituting `Fake*Stage` wholesale (that would replace real
+# Domain Mapper/Company Merge/Ingestion engine
+# logic, not just an infra boundary). `_MiniGraph` below is a
 # generic, stateful in-memory FalkorDB-shaped graph double -- the same
 # "structural fake, not a mock" precedent `test_restore_instrument_audit_
-# log.py`'s `_FakeStagedGraph` (IMPL_SLICE_8.md) and `test_export_instrument_
-# cli.py`'s `_StatefulFakeGraph` (IMPL_SLICE_13.md) already established,
+# log.py`'s `_FakeStagedGraph` and `test_export_instrument_
+# cli.py`'s `_StatefulFakeGraph` already established,
 # generalized here across the generic Cypher shapes `ps_service.ingestion.
 # graph_writer`, `ps_service.domain_mapper.{extraction,graph_writer,
 # derivation}`, and `ps_service.company_merge.{graph_reader,graph_writer,
@@ -265,8 +263,6 @@ def _use_fake_graph_openers_only(monkeypatch: pytest.MonkeyPatch, graphs: GraphO
 # reads `read_baseline_graph`/`read_existing_canonical_index` issue) rather
 # than one component's own fixed literal query list -- not a general Cypher
 # engine, only what these components' own writers/readers actually emit.
-# See `.orchestrator/tracker/issue-163/IMPL_SLICE_20.md` for the full
-# rationale and for the one remaining exception this slice could not close.
 
 
 class _FakeQueryResult:
@@ -334,7 +330,7 @@ class _MiniGraph:
     "id": id}}}` (a real `MERGE (n:{label} {id: $id}) SET n += $properties`
     genuinely leaves `id` itself as a readable property, since it was bound
     by the `MERGE` pattern -- `domain_mapper.graph_writer`'s own module
-    docstring documents exactly this, see its "BASELINE.md row #2 fix" note)
+    docstring documents exactly this, see its note on the id property)
     so a later whole-node `RETURN n`/column-projection read can recover it
     generically, without per-label special-casing. Edges are stored keyed by
     `(relationship_type, source_label, target_label)` -> `{(source_id,
@@ -363,21 +359,21 @@ class _MiniGraph:
         if q == _DERIVATION_READ_QUERY:
             return self._read_requirements_by_role()
         if "MERGED_INTO" in q or "MergedObligation" in q:
-            # issue #190: the tombstone and obligation-marker reads -- no tombstones here.
+            # the tombstone and obligation-marker reads -- no tombstones here.
             return _FakeQueryResult([])
         existing = _EXISTING_NODE_READ.match(q)
         if existing is not None:
-            # issue #209: the derivation writer's batched read of the Role/Requirement endpoints.
+            # the derivation writer's batched read of the Role/Requirement endpoints.
             known_nodes = self._nodes.get(existing.group("label"), {})
             return _FakeQueryResult(
                 [[i] for i in cast("list[str]", params["ids"]) if i in known_nodes]
             )
         if q == _OBLIGATIONS_EXIST_QUERY:
-            # issue #195, Slice 6: the net-new Obligation probe (`count_new_obligations`).
+            # the net-new Obligation probe (`count_new_obligations`).
             known = self._nodes.get("Obligation", {})
             return _FakeQueryResult([[i] for i in cast("list[str]", params["ids"]) if i in known])
         if q == _CELEX_EXISTS_QUERY:
-            # `{celex: $celex}` match (issue #193): the id of the node carrying that CELEX.
+            # `{celex: $celex}` match: the id of the node carrying that CELEX.
             matches = [
                 node_id
                 for node_id, node in self._nodes.get("RegulatoryInstrument", {}).items()
@@ -385,7 +381,7 @@ class _MiniGraph:
             ]
             return _FakeQueryResult([[matches[0]]] if matches else [])
         if q == _MERGED_INSTRUMENT_EXISTS_QUERY:
-            # `toUpper(n.id) = $id` (issue #193, M2): emulate the case-insensitive match.
+            # `toUpper(n.id) = $id`: emulate the case-insensitive match.
             wanted = cast("str", params["id"])
             matches = [
                 node_id
@@ -400,7 +396,7 @@ class _MiniGraph:
                 [
                     [node_id, node.get("celex")]
                     for node_id, node in self._nodes.get("RegulatoryInstrument", {}).items()
-                    if node_id.upper().startswith(prefix)  # `toUpper(n.id) STARTS WITH` (#193)
+                    if node_id.upper().startswith(prefix)  # `toUpper(n.id) STARTS WITH`
                     and node.get("celex") is not None
                     and node.get("celex") != celex
                 ]
@@ -412,7 +408,7 @@ class _MiniGraph:
             self._write_edge(match, params)
             return _FakeQueryResult([])
         if match := _EMBEDDING_STATE_READ.match(q):
-            # issue #210: the backfills' read of which ids exist and have no embedding yet (the
+            # the backfills' read of which ids exist and have no embedding yet (the
             # write is a gateway group, projected back by `_project_gateway_graph`)
             known_nodes = self._nodes.get(match["label"], {})
             return _FakeQueryResult(
@@ -432,7 +428,7 @@ class _MiniGraph:
                 return _FakeQueryResult([])
             return _FakeQueryResult([[_FakeGraphNode(dict(node))]])
         if match := _ALL_NODES_READ_RE.match(q):
-            # issue #227: the governance read takes every node, whatever its status.
+            # the governance read takes every node, whatever its status.
             return _FakeQueryResult(
                 [
                     [_FakeGraphNode(dict(node))]
@@ -568,7 +564,7 @@ _FIXTURE_UNIT = ExtractionUnit(
 def _project_gateway_graph(graph_name: str, *, into: _MiniGraph) -> None:
     """Copy what the gateway wrote to ``graph_name`` into a generic graph fake.
 
-    The ingest and extract stages write through the Graph Write Gateway (issues #208, #209) while
+    The ingest and extract stages write through the Graph Write Gateway while
     the later stages read the graphs through ``_MiniGraph``; this is the test-side bridge between
     the two boundary fakes, expressed in the Cypher shapes ``_MiniGraph`` already interprets. An
     edge property (``source_ref``) is carried over with the ``SET e.<name>`` form it understands.
@@ -940,7 +936,7 @@ def _use_real_pipeline_stages(
             emitter=emitter,  # pyright: ignore[reportArgumentType]
             governance=governance,
         )
-        # the merge's gateway groups (issue #210) land in the rig's `policy_system`; the legacy
+        # the merge's gateway groups land in the rig's `policy_system`; the legacy
         # writes it has not migrated yet are applied to `_MiniGraph` directly
         _project_gateway_graph(
             single_tenant_graph_name, into=cast("_MiniGraph", single_tenant_graph)
@@ -973,13 +969,12 @@ def _use_real_pipeline_stages(
     # openers` already covers as an approved boundary) and a fake HTTP-fetch/
     # native-graph-read adapter (the same category every `Fake*Adapter` in this
     # suite already substitutes) -- plus the LLM completion/embedding callers'
-    # own first-class `call_completion`/`call_embedding` DI parameters. Slice C's
-    # narrowed factory (issue #163) has no `adapters`/`call_completion` parameter
+    # own first-class `call_completion`/`call_embedding` DI parameters. The
+    # narrowed factory has no `adapters`/`call_completion` parameter
     # of its own to substitute those two pieces individually -- only `graphs` --
-    # so patching the factory's return value itself is, unlike Slice C's original
-    # violation this replaces, the only seam available to keep those two genuine
-    # boundaries fake while every stage's own business logic runs for real. See
-    # `.orchestrator/tracker/issue-163/IMPL_SLICE_20.md`.
+    # so patching the factory's return value itself is
+    # the only seam available to keep those two genuine
+    # boundaries fake while every stage's own business logic runs for real.
     monkeypatch.setattr(mcp_server, "build_default_pipeline_dependencies", lambda: dependencies)
     return RealPipelineFixture(
         stage_order=stage_order,
@@ -990,7 +985,7 @@ def _use_real_pipeline_stages(
     )
 
 
-# --- Slice 1.4 auth infra: mirrors test_mcp_auth.py's own pattern exactly --
+# --- auth infra: mirrors test_mcp_auth.py's own pattern exactly --
 
 
 def _auth_context(provider: MockOidcProvider) -> AuthContext:
@@ -1008,7 +1003,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
     """A `TestClient` over the real, auth-armed `build_streamable_http_app`.
 
     Mirrors `test_mcp_auth.py::_authenticated_test_client` exactly -- this
-    module's Slice 1.4 tests drive `ingest_regulation` (not `cypher`) through
+    module's real-token tests drive `ingest_regulation` (not `cypher`) through
     the same genuinely auth-enforcing mounted app, never the bypass-shaped
     one every other test in this module builds via a bare
     `server.call_tool`.
@@ -1140,7 +1135,7 @@ def test_curated_celex_happy_path_returns_ingestion_accepted_response_shape(
 def test_the_ingest_stage_commits_its_native_graph_as_one_group_under_a_system_audit_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #208: the sync tool's real ingest stage writes through the Graph Write Gateway."""
+    """The sync tool's real ingest stage writes through the Graph Write Gateway."""
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
@@ -1150,7 +1145,7 @@ def test_the_ingest_stage_commits_its_native_graph_as_one_group_under_a_system_a
     result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
 
     assert result.is_error is False
-    # the extract and derive stages' groups follow (#209), then the merge's three (#210)
+    # the extract and derive stages' groups follow, then the merge's three
     [group, baseline_group, derivation_group, merge_group, obligation_group, capability_group] = (
         gateway.rig.store.groups
     )
@@ -1177,7 +1172,7 @@ _WRITE_KEYWORD_RE = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE)\b")
 def test_ingest_regulation_writes_baseline_through_the_gateway_not_the_baseline_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #209 (AC-BI-001): extract and derive write `cra_baseline` only as gateway groups.
+    """Extract and derive write `cra_baseline` only as gateway groups.
 
     The baseline graph handle the stages are given is read-only: across the whole real pipeline
     it receives reads (so the assertion is not vacuous) and not one write query, while the
@@ -1229,13 +1224,12 @@ def test_without_a_gateway_the_tool_fails_closed_before_any_stage_runs(
 def test_curated_celex_happy_path_reports_each_completed_stage_with_a_nonempty_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #163 Slice C rewrite (and Slice 20's real-stage follow-up): the
+    """The
     tool's own response -- the caller-observable *resulting state*, not an
-    assertion on an internal stage-call recorder's order/kwargs (the
-    interaction-assertion violation `mcp_interface_part1.md` line 18 flagged)
+    assertion on an internal stage-call recorder's order/kwargs
     -- shows all four REAL stages completed successfully, each reporting a
     real, non-placeholder `summary` derived from its own real computation
-    (D-DELEGATE: real orchestration sequencing, proven by its output, not a
+    (real orchestration sequencing, proven by its output, not a
     reimplementation). `fail_capability_derivation=True` makes the real
     capability-derivation LLM call return unparseable JSON for this
     fixture's one Obligation, so `derive_obligations_and_capabilities`'s own
@@ -1263,7 +1257,7 @@ def test_curated_celex_happy_path_reports_each_completed_stage_with_a_nonempty_s
 def test_curated_celex_merge_summary_counts_equal_the_graph_delta(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #195, Slice 6 (AC-BI-016): the real merge stage's `summary` reports the net-new
+    """The real merge stage's `summary` reports the net-new
     Obligation / Capability counts, which equal what the run actually added to the (initially
     empty) single-tenant graph, counted independently from the graph's own node tables.
     """
@@ -1323,8 +1317,8 @@ def test_curated_celex_happy_path_emits_one_started_succeeded_log_pair_with_prin
 def test_mcp_curated_celex_with_non_catalog_short_name_is_accepted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #193 AC-BI-001 (MCP side): a curated CELEX asked for under a short_name
-    that is not the catalog's own is no longer rejected -- the catalog is not
+    """A curated CELEX asked for under a short_name
+    that is not the catalog's own is not rejected -- the catalog is not
     consulted, the CELEX resolves via Cellar and runs under the caller's name
     (normalized to upper case).
     """
@@ -1345,10 +1339,10 @@ def test_mcp_curated_celex_with_non_catalog_short_name_is_accepted(
 def test_mcp_lowercase_short_name_is_stored_as_uppercase_id_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #193 AC-BI-005 (MCP side, CHANGES.md M4): the real ``ingest_regulatory_instrument``
+    """The real ``ingest_regulatory_instrument``
     run through the MCP tool with lowercase ``cra`` writes node ``CRA-1.0`` (not
     ``cra-1.0``), and both graph openers receive the normalized ``"CRA"`` -- the
-    graph *names* they build stay lowercase (user decision, DECISIONS.md T1/D5).
+    graph *names* they build stay lowercase (by design).
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1368,7 +1362,7 @@ def test_mcp_lowercase_short_name_is_stored_as_uppercase_id_end_to_end(
 def test_mcp_existing_celex_returns_error_string_naming_existing_short_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #193 AC-BI-003 (MCP side): a CELEX already in the graph is rejected under
+    """A CELEX already in the graph is rejected under
     any short_name with the existing short_name named, before any stage runs.
     """
     _configure_complete_llm_env(monkeypatch)
@@ -1387,7 +1381,7 @@ def test_mcp_existing_celex_returns_error_string_naming_existing_short_name(
 def test_mcp_celex_check_graph_failure_returns_stage_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #193 AC-BI-007 (MCP side): a failing CELEX-existence query fails closed as the
+    """A failing CELEX-existence query fails closed as the
     ``celex_check`` stage error -- never read as "not ingested" -- with no raw detail
     leaked, and no pipeline stage runs.
     """
@@ -1409,7 +1403,7 @@ def test_mcp_celex_check_graph_failure_returns_stage_error(
 def test_short_name_collision_with_an_already_ingested_different_celex_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #146 AC-BI-006 / issue #193 AC-BI-004: a CELEX whose ``short_name`` is already
+    """A CELEX whose ``short_name`` is already
     recorded in the single-tenant graph under a *different* CELEX is rejected with
     the named error string, before any pipeline stage runs -- MCP parity with
     ``POST /ingestions``'s own graph-side collision check. The message echoes the
@@ -1434,28 +1428,24 @@ def test_short_name_collision_with_an_already_ingested_different_celex_is_reject
 def test_non_curated_celex_repeated_ingestion_with_drifting_titles_resolves_identical_short_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression test for issue #96 (CHANGES.md C1/Appendix C1).
+    """The caller-supplied `short_name` is used as given, never re-derived from the Cellar title.
 
     Two sequential `ingest_regulation` calls for the same non-curated CELEX,
     against a fake Cellar/ELI adapter that returns a *differently-worded*
     title on each call (simulating a re-crawl rendering drift), must both
     resolve to the identical, caller-supplied `short_name` -- the same value
     used to construct the `{short_name}_native`/`{short_name}_baseline` graph
-    keys (`ingestion/falkordb_client.py`). Before this fix, `resolve_via_cellar`
-    derived `short_name` by slugging the fetched title internally, so these
-    two calls would have diverged into two different graph names for the
-    same CELEX -- the exact "forks a duplicate RegulatoryInstrument subtree"
-    defect #96 describes. Now, `_derive_short_name` is never reached on this
-    path at all.
+    keys (`ingestion/falkordb_client.py`). Had `resolve_via_cellar`
+    derived `short_name` by slugging the fetched title internally, these
+    two calls would diverge into two different graph names for the
+    same CELEX -- forking a duplicate RegulatoryInstrument subtree.
+    `_derive_short_name` is never reached on this path at all.
 
-    Issue #163 Slice 20: both calls now run the REAL ingest stage --
+    Both calls run the REAL ingest stage --
     `resolve_via_cellar`'s own real `CellarEliAdapter`, bound to each call's
-    own cached xhtml/rdf bytes, is never itself faked (it wasn't before
-    either: the pre-Slice-20 `FakeIngestStage` never called its own
-    `adapter` argument at all, so this real adapter's parse was already
-    exercised-but-unasserted).
+    own cached xhtml/rdf bytes, is never itself faked.
 
-    Issue #193: the FIRST call ingests under the caller's short_name (upper-cased)
+    The FIRST call ingests under the caller's short_name (upper-cased)
     and writes the CELEX into the shared single-tenant graph; the SECOND call is
     rejected by the CELEX-existence check with an error naming that same
     short_name -- re-ingest is refused rather than silently forked or no-op'd
@@ -1500,7 +1490,7 @@ def test_non_curated_celex_repeated_ingestion_with_drifting_titles_resolves_iden
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class _ParityScenario:
-    """One request/outcome pair both entry points must answer identically (AC-BI-014)."""
+    """One request/outcome pair both entry points must answer identically."""
 
     celex: str
     short_name: str
@@ -1552,7 +1542,7 @@ def _parity_fake(scenario: _ParityScenario) -> FakePipeline:
 def test_rest_and_mcp_return_identical_outcomes_for_the_same_request(
     monkeypatch: pytest.MonkeyPatch, scenario_id: str
 ) -> None:
-    """Issue #193 AC-BI-014: ``POST /ingestions`` and the ``ingest_regulation`` MCP tool both
+    """``POST /ingestions`` and the ``ingest_regulation`` MCP tool both
     call ``resolve_ingestion_entry``, so for the same CELEX/short_name and the same graph and
     Cellar state they accept or reject identically -- the MCP ``error: <message>`` string
     equals the REST error body's own message, and an accepted request yields the same
@@ -1579,7 +1569,7 @@ def test_rest_and_mcp_return_identical_outcomes_for_the_same_request(
     install_compliance_officer_grant(monkeypatch, granted=True)
     app = create_app(_rest_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: rest_fake.dependencies
-    rest_audit_store = InMemoryAuditStore()  # the REST side audits too (issue #195)
+    rest_audit_store = InMemoryAuditStore()  # the REST side audits too
     app.dependency_overrides[provide_audit_store] = lambda: rest_audit_store
 
     rest_response = TestClient(app, raise_server_exceptions=False).post(
@@ -1614,8 +1604,8 @@ def test_non_curated_celex_not_found_on_cellar_returns_catalog_identifier_not_fo
     """D-SANITIZE-UNEXPECTED: a CELEX Cellar/ELI does not know returns
     `error: <str(exc)>` verbatim, and no stage ever runs.
 
-    Issue #193: the message names only the CELEX and Cellar/ELI -- it no longer
-    claims a curated catalog was consulted.
+    The message names only the CELEX and Cellar/ELI -- it does not
+    claim a curated catalog was consulted.
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1636,7 +1626,7 @@ def test_non_curated_celex_not_found_on_cellar_returns_catalog_identifier_not_fo
     assert fake.recorder.calls == []
 
 
-# --- Slice 1.3: remaining D-SANITIZE-UNEXPECTED rows for this tool ----------
+# --- remaining sanitised-error rows for this tool ----------
 
 
 def test_ingestion_config_incomplete_returns_named_error_before_any_stage_runs(
@@ -1674,7 +1664,7 @@ def test_pipeline_stage_error_surfaces_verbatim_with_sanitised_reason(
     leaks its own message, only the generic `"<stage> failed"` reason.
     Later stages never run.
 
-    Issue #163 Slice 20: the failure is now injected at the real extraction
+    The failure is injected at the real extraction
     stage's own real, external-content boundary -- the Domain Mapping
     Adapter's `read_native_units` call, the first thing
     `extract_roles_and_requirements` does -- rather than a wholesale fake
@@ -1765,7 +1755,7 @@ def test_graph_unavailable_returns_named_error_when_native_graph_open_fails(
 def test_collision_check_graph_unreachable_returns_graph_unavailable_error_without_opening_any_pipeline_graph(  # noqa: E501 - name mirrors the sibling graph-unavailable test's verbatim-scenario naming
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #146 AC-BI-007: `_resolve_and_ingest` opens the single-tenant
+    """`_resolve_and_ingest` opens the single-tenant
     graph itself (to run the collision check) before
     `run_catalog_ingestion_pipeline` ever runs -- that open is wrapped by the
     same `_sanitize_pipeline_graph_opens`/`_sanitize_graph_open` machinery
@@ -1800,7 +1790,7 @@ def test_collision_check_graph_unreachable_returns_graph_unavailable_error_witho
 def test_collision_check_query_failure_surfaces_as_pipeline_stage_error_not_graph_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #146 AC-BI-007: when the single-tenant graph *opens* successfully
+    """When the single-tenant graph *opens* successfully
     but the collision-check *query itself* fails, that failure never touches
     `_sanitize_graph_open` (which only wraps the open) -- it is caught by
     `check_short_name_collision`'s own `_run_stage` wrapping inside
@@ -1845,10 +1835,10 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
         _ = (run_id, outcome)
         raise RuntimeError("boom -- must never reach the caller")
 
-    # AUDIT.md §2 case 13: `_to_accepted_response` is a pure, always-succeeding
+    # `_to_accepted_response` is a pure, always-succeeding
     # response-shaping function for any well-formed `IngestionOutcome`; there is
     # no real input that makes it fail, so proving this residual safety net
-    # (D-AUDIT-WRAPPER point 4) genuinely requires forcing this otherwise-
+    # genuinely requires forcing this otherwise-
     # unreachable defensive branch.
     # detroit-exception: legitimate fault-injection carve-out, see comment above.
     monkeypatch.setattr(mcp_server, "_to_accepted_response", _boom)
@@ -1872,18 +1862,17 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     assert "RuntimeError(" not in str(failed_line.get("detail"))
 
 
-# --- Slice 1.4: auth/audit completeness under a real verified bearer token --
+# --- auth/audit completeness under a real verified bearer token --
 
 
 def _grant_compliance_officer(
     monkeypatch: pytest.MonkeyPatch, *, subject: str, issuer: str
 ) -> None:
-    """Issue #145: seed a `ComplianceOfficer` grant for `(subject, issuer)` on a fake store,
+    """Seed a `ComplianceOfficer` grant for `(subject, issuer)` on a fake store,
     monkeypatched onto `mcp_server.PsycopgAccessRoleStore`.
 
-    The two real-verified-token tests below predate issue #145's authz gate
-    (they were written to prove principal/caller threading, not
-    authorization) -- without this, the newly-added gate now denies them
+    The two real-verified-token tests below prove principal/caller threading, not
+    authorization -- without this, the authz gate denies them
     (or, in the LLM-unhealthy case, denies with the wrong error string)
     since the token's own subject holds no grant on the real store, which
     itself is unreachable in this test environment (`PS_STATE_POSTGRES_HOST`
@@ -1904,19 +1893,19 @@ def _grant_compliance_officer(
 def test_real_verified_token_principal_threads_through_to_both_audit_log_and_pipeline_caller(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
-    """D-AUTH (a): under a real, verified bearer token -- driven through the
+    """Under a real, verified bearer token -- driven through the
     actual mounted Streamable HTTP transport, mirroring `test_mcp_auth.py`'s
     own pattern, never a bare in-process `server.call_tool` -- the token's
     `sub` claim (never `LOCAL_TEST_PRINCIPAL_ID`) reaches both
     `_run_mcp_action`'s `mcp_interface` log entries (`principal`) and
     `run_catalog_ingestion_pipeline`'s own `ingestion_run` log entries
-    (`caller`). Both were already wired from Slice 1.1's `principal =
+    (`caller`). Both are wired from the `principal =
     _resolve_principal(config)` / `caller=principal or "unknown"` plumbing --
-    this is the first test to prove it under a real verified token rather
+    this test proves it under a real verified token rather
     than the local-test-bypass principal every other test in this module
     exercises.
 
-    Issue #145: the caller must also hold `ComplianceOfficer` now that this
+    The caller must also hold `ComplianceOfficer` because this
     tool is gated, so `_grant_compliance_officer` seeds that grant for this
     token's own `(sub, iss)` -- orthogonal to what this test itself proves.
     """
@@ -1960,12 +1949,12 @@ def test_real_verified_token_principal_threads_through_to_both_audit_log_and_pip
 def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """D-AUTH (b): `_resolve_principal`'s existing, unchanged fallback
+    """`_resolve_principal`'s existing, unchanged fallback
     contract -- with no bearer token presented at all (a bare in-process
     `server.call_tool`, like every other test above) and the local-test
     bypass active, `LOCAL_TEST_PRINCIPAL_ID` still reaches both the
-    `mcp_interface` log entries' `principal` (already proven by Slice 1.1's
-    own test) and, newly proven here, `run_catalog_ingestion_pipeline`'s own
+    `mcp_interface` log entries' `principal` (already proven by the
+    happy-path test) and, proven here, `run_catalog_ingestion_pipeline`'s own
     `ingestion_run` log entries' `caller`.
     """
     _configure_complete_llm_env(monkeypatch)
@@ -1998,14 +1987,14 @@ def test_local_test_bypass_principal_still_threads_through_when_no_token_is_pres
 def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principal(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
-    """D-AUTH (c): a FAILED call -- reusing Slice 1.3's LLM-unhealthy
-    D-PREFLIGHT branch -- still carries the resolved real-token principal on
+    """A FAILED call -- reusing the LLM-unhealthy
+    preflight branch -- still carries the resolved real-token principal on
     its `outcome="failed"` `mcp_interface` log entry, not only the
     succeeded-call case proven above. No `ingestion_run` entry is emitted at
-    all here, since D-PREFLIGHT fails before the pipeline is ever called.
+    all here, since the preflight fails before the pipeline is ever called.
 
-    Issue #145: the caller must hold `ComplianceOfficer` for this call to
-    reach the D-PREFLIGHT branch at all -- see `_grant_compliance_officer`.
+    The caller must hold `ComplianceOfficer` for this call to
+    reach the preflight branch at all -- see `_grant_compliance_officer`.
     """
     _configure_complete_llm_env(monkeypatch)
     emitter = configure()

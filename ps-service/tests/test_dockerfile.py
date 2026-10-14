@@ -1,4 +1,4 @@
-"""Static contract tests for the repository-root `Dockerfile` and `.dockerignore` (issue #60).
+"""Static contract tests for the repository-root `Dockerfile` and `.dockerignore`.
 
 No repo linter covers either file — `prettier`, `cspell` and `markdownlint-cli2` all have
 no handler for them, and `ruff`/`basedpyright` only see Python. These tests are therefore
@@ -117,7 +117,7 @@ def _minor_version(text: str) -> tuple[int, int]:
 def test_dockerfile_declares_at_least_two_build_stages() -> None:
     """A multi-stage build is what keeps uv and the build scratch out of the runtime layer.
 
-    AC-BI-003: a single-stage image would ship the builder's toolchain.
+    A single-stage image would ship the builder's toolchain.
     """
     stages = _base_images(_read(_DOCKERFILE, "a Dockerfile"))
 
@@ -129,7 +129,7 @@ def test_uv_sync_invocations_pass_package_frozen_and_no_dev() -> None:
 
     `--package ps-service` scopes the sync to the member being imaged, `--frozen` makes a
     stale `uv.lock` fail the build instead of silently re-resolving, and `--no-dev` is the
-    mechanism behind AC-BI-003 (no pytest/ruff/basedpyright in the runtime image).
+    mechanism that keeps dev tools out of the image (no pytest/ruff/basedpyright).
     """
     syncs = [
         shlex.split(argument)
@@ -185,8 +185,7 @@ def test_dockerfile_base_image_python_version_matches_ps_service_requires_python
 def test_source_default_host_is_still_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     """The container's wider bind must come from the Dockerfile only, never from the source.
 
-    D-6: `ps-service` binds loopback-only and unauthenticated until issue #39 ships a
-    network-reachable, authenticated transport. `ENV PS_SERVICE_HOST=0.0.0.0` belongs in the
+    `ps-service` binds loopback-only by default. `ENV PS_SERVICE_HOST=0.0.0.0` belongs in the
     image, where the wider bind is deliberate; widening the source default would expose an
     unauthenticated service on every developer's machine and would silently invert the
     non-loopback startup warning. Host resolution correspondingly fails closed — an invalid

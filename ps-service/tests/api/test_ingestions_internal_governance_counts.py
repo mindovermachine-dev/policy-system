@@ -1,4 +1,4 @@
-"""The imported policy tree's counts reach the response and the run log (issue #227, AC-BI-011).
+"""The imported policy tree's counts reach the response and the run log.
 
 ``ingestion_run.complete`` has no internal-path row to carry them (it needs a CELEX and a
 catalog/amendment trigger), so -- as restore does -- the four counts ride on the merge-stage

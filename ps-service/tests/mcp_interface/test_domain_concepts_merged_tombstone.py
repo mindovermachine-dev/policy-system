@@ -1,4 +1,4 @@
-"""The domain-concepts document describes the Capability `merged` tombstone (issue #190).
+"""The domain-concepts document describes the Capability `merged` tombstone.
 
 These are properties of the hand-written document, served verbatim by the
 `psdomain://concepts` resource (the `domain_concepts` tool now renders the slim
@@ -63,7 +63,7 @@ def _tool_text() -> str:
 
 
 def test_capability_status_enum_includes_merged_in_schema_and_tool_output() -> None:
-    """AC-BI-020: the tombstone status is a schema fact and visible through the tool."""
+    """The tombstone status is a schema fact and visible through the tool."""
     capability = next(node for node in DOMAIN_SCHEMA.nodes if node.label == "Capability")
     status = next(prop for prop in capability.properties if prop.name == "status")
 
@@ -73,7 +73,7 @@ def test_capability_status_enum_includes_merged_in_schema_and_tool_output() -> N
 
 
 def test_merged_into_edge_in_schema_and_slim_output() -> None:
-    """AC-BI-020: Capability -[MERGED_INTO]-> Capability, 0..1 : 0..*, in schema and tool output."""
+    """Capability -[MERGED_INTO]-> Capability, 0..1 : 0..*, in schema and tool output."""
     edges = {edge.key: edge for edge in DOMAIN_SCHEMA.edges}
 
     assert str(edges[("MERGED_INTO", "Capability", "Capability")].cardinality) == "0..1 : 0..*"

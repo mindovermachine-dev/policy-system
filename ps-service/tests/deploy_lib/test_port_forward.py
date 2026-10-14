@@ -1,5 +1,5 @@
-"""Tests for the loopback `kubectl port-forward` helper in `scripts/lib/authentik-owner.sh`
-(issue #165, Slices 3D/3E): both deploy scripts reach Authentik's admin API through it when the
+"""Tests for the loopback `kubectl port-forward` helper in `scripts/lib/authentik-owner.sh`:
+both deploy scripts reach Authentik's admin API through it when the
 external address is not usable (the evaluator before its certificate is served, production
 where the admin API is deliberately not on the public Ingress).
 

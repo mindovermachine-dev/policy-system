@@ -1,8 +1,8 @@
-"""`postgres_live` tests for the catalog-source MCP tools against a real Postgres (issue #130).
+"""`postgres_live` tests for the catalog-source MCP tools against a real Postgres.
 
-The full path AC-BI-007/011/012 describe: `set-catalog-source` -> `runtime_config` row and
+The full path: `set-catalog-source` -> `runtime_config` row and
 `audit_events` row committed in one transaction -> readable through `list-audit-events`, plus
-CHANGES F4 (the local-test bypass records a sentinel actor). The store-level live tests are in
+the local-test bypass recording a sentinel actor. The store-level live tests are in
 `tests/curated_source/test_override_live.py`.
 
 Deselected by default -- run with `uv run pytest -m postgres_live` against a reachable
@@ -129,7 +129,7 @@ def _sentinel_audit_row_count(config: ServiceConfig, action: str) -> int:
 def test_set_and_reset_under_local_test_bypass_each_write_one_audit_row_for_the_sentinel_actor(
     config: ServiceConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CHANGES F4: the bypass has no real actor, and `audit_events` actors are NOT NULL."""
+    """The bypass has no real actor, and `audit_events` actors are NOT NULL."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     sets_before = _sentinel_audit_row_count(config, "runtime_config.set")

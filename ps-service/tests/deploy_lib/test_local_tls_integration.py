@@ -1,8 +1,8 @@
-"""Real-`openssl`, real-TLS-handshake tests for `scripts/lib/local-tls.sh` (issue #165, 3C).
+"""Real-`openssl`, real-TLS-handshake tests for `scripts/lib/local-tls.sh`.
 
 Marked `integration`: they spawn real `openssl` and bind a local TLS server socket (L2 Testing
 Patterns). They prove what the fake-`openssl` logic tests cannot: the CA/leaf extensions that
-strict verifiers require (Python 3.13+/browsers need SKI and AKI: AC-BI-007), a strict-verify
+strict verifiers require (Python 3.13+/browsers need SKI and AKI), a strict-verify
 handshake on the running interpreter, idempotence, host change, near-expiry renewal and file
 modes.
 """

@@ -1,4 +1,4 @@
-"""The Query Engine reads through the gateway's `ReadOnlyGraph` and imports no driver (#215, S2)."""
+"""The Query Engine reads through the gateway's `ReadOnlyGraph` and imports no driver."""
 
 from __future__ import annotations
 

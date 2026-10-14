@@ -1,8 +1,8 @@
-"""`postgres_live` tests for the PS Postgres init script's database isolation (issue #130 S5).
+"""`postgres_live` tests for the PS Postgres init script's database isolation.
 
 Runs the SAME `charts/policy-system/files/ps-postgres-init.sh` the Helm chart mounts into
 the Postgres image (via `templates/ps-postgres-init-configmap.yaml`) against a scratch
-server, with unique database/role names per session, then proves AC-BI-016 with real
+server, with unique database/role names per session, then proves the isolation with real
 connections: neither role can connect to the other's database, a mistakenly re-granted
 `CONNECT` still leaves the other database's tables unreadable and `public` unwritable, and
 `PUBLIC` holds neither `CONNECT` nor `CREATE` on `public` in either database. It also proves

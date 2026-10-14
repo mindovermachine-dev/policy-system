@@ -1,18 +1,18 @@
-"""The gateway-backed lifecycle writes build the graph the frozen legacy writer built (issue #211).
+"""The gateway-backed lifecycle writes build the graph the frozen legacy writer built.
 
 Each scenario seeds a fixture Policy tree as a pre-gateway writer left it (identity-less edges),
 runs the FROZEN legacy statements (`_legacy_reference`, against its interpreter) on a copy, runs
 the real service functions over the gateway rig on the other, and compares the two graphs by
-`canonical_digest` (AC-BI-002, AC-BI-010). "Modulo edge identity": the legacy graph's edges are
+`canonical_digest`. "Modulo edge identity": the legacy graph's edges are
 stamped by the same `{type}:{source}->{target}` formula before the comparison, as the gateway
 stamps its own.
 
 Met modulo edge identity; the live digest and live interpreter agreement are not verifiable here
 (no FalkorDB in this sandbox): the `falkordb_live` anchor stays the live proof.
 
-Families covered: draft Policy edit (S3), draft Standard/Control edit and add (S4),
-governance backfill (S5), create without a claim (S6), claim create (S7), propose/reject/revert
-cascades (S8), approve with fork repoint and auto-deprecate (S9). The full matrix (S11) adds the
+Families covered: draft Policy edit, draft Standard/Control edit and add,
+governance backfill, create without a claim, claim create, propose/reject/revert
+cascades, approve with fork repoint and auto-deprecate. The full matrix adds the
 chained transitions (create -> propose -> approve, with and without a fork and governed
 Capabilities), a composite scenario that reaches every family in one run, identity-less legacy
 edges ahead of the first group, and idempotency (a second pass changes and logs nothing).
@@ -325,7 +325,7 @@ def _seed_for_backfill(rig: LifecycleRig, case: str) -> None:
             _POLICY,
             owner=_OWNER,
             standards=(SeedStandard("std_1", "S1", controls=(SeedControl("ctl_1", "c1"),)),),
-            # Nothing to fill logs nothing, not even a stamp (AC-BI-006), so the edges stay as
+            # Nothing to fill logs nothing, not even a stamp, so the edges stay as
             # seeded: identified ones keep this case comparable with the legacy digest.
             legacy_edges=False,
         )
@@ -693,7 +693,7 @@ def _propose(rig: LifecycleRig, policy_id: str) -> None:
 def test_create_propose_approve_leaves_the_graph_the_frozen_legacy_chain_left(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-002: a non-fork Policy through create, propose and approve."""
+    """A non-fork Policy through create, propose and approve."""
     new_id = compute_policy_id(_CREATE_TITLE)
     expected = _legacy_digest(
         lifecycle_rig,
@@ -743,7 +743,7 @@ def _seed_governed_prior(rig: LifecycleRig) -> None:
 def test_a_fork_lifecycle_with_governed_capabilities_leaves_the_graph_the_legacy_chain_left(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-002: fork create, propose, approve (repoint) and auto-deprecate of the prior."""
+    """Fork create, propose, approve (repoint) and auto-deprecate of the prior."""
     _seed_governed_prior(lifecycle_rig)
     new_id = compute_policy_id(_CREATE_TITLE, prior_policy_id="pol_prior")
     new_std = standard_id(new_id, "Encryption")
@@ -873,7 +873,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
 def test_the_composite_scenario_reaches_every_family_and_leaves_the_legacy_graph(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-002, AC-BI-010: create, edit, add, cascade, reject, revert, approve in one run."""
+    """Create, edit, add, cascade, reject, revert, approve in one run."""
     new_id = compute_policy_id(_CREATE_TITLE)
     logging_std = standard_id(new_id, "Logging")
     logging_ctl = control_id(logging_std, "Review logs")

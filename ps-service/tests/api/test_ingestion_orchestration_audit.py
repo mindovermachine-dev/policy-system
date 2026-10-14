@@ -1,4 +1,4 @@
-"""Audit emission of the synchronous ingestion orchestration (issue #195, Slices 8 and 9).
+"""Audit emission of the synchronous ingestion orchestration.
 
 `run_audited_catalog_ingestion` wraps identity resolution and the pipeline between an
 `ingestion_run.submit` opening row (`trigger='sync_ingest'`, fail-closed) and one
@@ -173,7 +173,7 @@ def test_audited_ingestion_returns_the_pipeline_outcome_unchanged() -> None:
     assert getattr(outcome, "outcome", None) == "fresh"
 
 
-# --- Slice 9: edge cases ------------------------------------------------------------------------
+# --- edge cases ------------------------------------------------------------------------
 
 _ZERO_COUNTS = {"new_obligations": 0, "new_capabilities": 0, "matched_capabilities": 0}
 
@@ -184,7 +184,7 @@ def _terminal(store: InMemoryAuditStore) -> dict[str, object]:
 
 
 def test_celex_already_ingested_writes_already_ingested_zero_counts_row_and_still_raises() -> None:
-    """D-A / AC-BI-006: the submit row precedes the identity check; the error is unchanged."""
+    """The submit row precedes the identity check; the error is unchanged."""
     store = InMemoryAuditStore()
     deps = build_fake_pipeline_dependencies(celex_row="cra-1.0").dependencies
 
@@ -312,7 +312,7 @@ def test_unexpected_exception_writes_failed_row_unexpected_error_with_no_traceba
 
 
 def test_pipeline_does_not_run_when_the_submit_row_cannot_be_written() -> None:
-    """AC-BI-011: fail-closed; zero stage calls and no graph opened."""
+    """Fail-closed: zero stage calls and no graph opened."""
     store = InMemoryAuditStore(
         fail_on_outcome={"applied": AuditPostgresUnavailableError("db down")}
     )
@@ -338,7 +338,7 @@ def test_pipeline_does_not_run_when_the_submit_row_cannot_be_written() -> None:
 def test_terminal_row_failure_is_logged_with_run_id_and_the_outcome_is_returned_unchanged(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """AC-BI-015: the lost terminal write is logged with the run id; the outcome stands."""
+    """The lost terminal write is logged with the run id; the outcome stands."""
     emitter, log_path = make_emitter()
     store = InMemoryAuditStore()
     original_write = store.record_standalone

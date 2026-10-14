@@ -1,4 +1,4 @@
-"""`user.invite` typed audit details (issue #195, AC-BI-002/009/010/013)."""
+"""`user.invite` typed audit details."""
 
 from __future__ import annotations
 

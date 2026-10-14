@@ -1,4 +1,4 @@
-"""Content lint for `ps-assess-instrument-applicability/SKILL.md` (issue #200).
+"""Content lint for `ps-assess-instrument-applicability/SKILL.md`.
 
 Reads the real `SKILL.md` off disk and asserts that the progressive-disclosure
 split kept the skill intact:

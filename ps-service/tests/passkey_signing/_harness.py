@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false
-"""Public re-exports of the real-WebAuthn signing harness for cross-package tests (issue #190).
+"""Public re-exports of the real-WebAuthn signing harness for cross-package tests.
 
 `test_signing_ceremony.py` owns the hand-built, genuinely verifiable WebAuthn assertion
 construction; tests in other packages (graph-cleanup executor dispatch) reuse it through this

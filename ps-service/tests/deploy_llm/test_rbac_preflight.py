@@ -1,8 +1,8 @@
-"""RBAC preflight for `scripts/deploy-llm.sh` (AC-BI-004; PLAN.md §5/S4).
+"""RBAC preflight for `scripts/deploy-llm.sh`.
 
 An evaluator whose signed-in identity has neither `Owner` nor `Contributor` at subscription
 scope is stopped before region selection ever runs, with an actionable message: which role is
-missing, and an example `az role assignment create` fix command (PLAN.md §0.1 step 5).
+missing, and an example `az role assignment create` fix command.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""HTTP tests for `POST /restorations/from-catalog` (issue #125, PLAN.md Slice 2).
+"""HTTP tests for `POST /restorations/from-catalog`.
 
 Mirrors `test_routes_restorations.py`'s style (`TestClient` +
 `app.dependency_overrides` supplying a fake `CatalogRestoreDependencies`
@@ -87,7 +87,7 @@ _NATIVE_BYTES = b'{"nodes": [], "edges": []}'
 def _configure_logging_for_catalog_restore_tests(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     configured_logging: Path,
 ) -> None:
-    """`fetch_artifact` always logs (issue #125) -- install a real Logging facade.
+    """`fetch_artifact` always logs -- install a real Logging facade.
 
     Mirrors `test_routes_catalog.py`'s own
     `_configure_logging_for_catalog_tests` fixture: `create_app` + a bare
@@ -231,11 +231,11 @@ def _client_with_fake(
 def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+    """Every test below drives a caller holding `ComplianceOfficer` by default.
 
     `POST /restorations/from-catalog` (and, in one cross-route smoke test
     below, `POST /restorations` too) is now gated behind `require_access_role`,
-    which has no local-test-bypass carve-out (PLAN.md §3.2). The dedicated
+    which has no local-test-bypass carve-out. The dedicated
     denial-proof tests below re-monkeypatch this away for their own scenario
     (the same `monkeypatch` fixture instance, so the later call simply wins).
     """
@@ -261,7 +261,7 @@ def test_valid_instrument_id_returns_200_with_expected_shape() -> None:
 
 
 def test_restore_delegate_receives_the_effective_source_url_for_the_audit_log() -> None:
-    """(2) `source` is threaded through to the restore delegate (D-AUDIT, AC-BI-011)."""
+    """(2) `source` is threaded through to the restore delegate."""
     stage = _FakeCatalogRestoreStage()
     client = _client_with_fake(_valid_transport(), stage)
 
@@ -271,7 +271,7 @@ def test_restore_delegate_receives_the_effective_source_url_for_the_audit_log() 
 
 
 def test_checksum_mismatch_returns_422_and_never_calls_the_delegate_with_a_bad_artifact() -> None:
-    """(3) A checksum-rejected fetched artifact -> 422 (AC-BI-009, D9 reused unmodified)."""
+    """(3) A checksum-rejected fetched artifact -> 422."""
     stage = _FakeCatalogRestoreStage(error=ArtifactIntegrityError("checksum mismatch"))
     client = _client_with_fake(_valid_transport(), stage)
 
@@ -282,7 +282,7 @@ def test_checksum_mismatch_returns_422_and_never_calls_the_delegate_with_a_bad_a
 
 
 def test_schema_version_mismatch_returns_422() -> None:
-    """(4) A schema_version-rejected fetched artifact -> 422 (D10 reused, mirrors #66)."""
+    """(4) A schema_version-rejected fetched artifact -> 422."""
     stage = _FakeCatalogRestoreStage(error=ArtifactSchemaVersionMismatchError("schema mismatch"))
     client = _client_with_fake(_valid_transport(), stage)
 
@@ -293,7 +293,7 @@ def test_schema_version_mismatch_returns_422() -> None:
 
 
 def test_unreachable_source_returns_502_naming_the_failure_and_never_calls_the_delegate() -> None:
-    """(5) An unreachable source -> 502 naming the failure (AC-BI-006/004), delegate never called.
+    """(5) An unreachable source -> 502 naming the failure, delegate never called.
 
     The response body's `message` is the *already-scrubbed* failure reason
     (`error_handlers._scrub_text` redacts embedded URLs -- the same
@@ -344,8 +344,7 @@ def test_extra_field_in_request_body_returns_422() -> None:
 
 
 def test_route_with_compliance_officer_grant_is_never_401_or_403() -> None:
-    """Issue #145: renamed from the pre-#145 `..._is_unauthenticated_never_401_or_403` --
-    the route now requires `ComplianceOfficer`; this proves a caller who holds it (the
+    """The route requires `ComplianceOfficer`; this proves a caller who holds it (the
     file's own autouse `_grant_compliance_officer` fixture) is never turned away.
     """
     stage = _FakeCatalogRestoreStage()
@@ -357,7 +356,7 @@ def test_route_with_compliance_officer_grant_is_never_401_or_403() -> None:
 
 
 def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Issue #145, AC-BI-003/006: no verified principal -- 403, delegate never called."""
+    """No verified principal -- 403, delegate never called."""
     install_no_principal(monkeypatch)
     stage = _FakeCatalogRestoreStage()
     client = _client_with_fake(_valid_transport(), stage)
@@ -389,7 +388,7 @@ def test_authenticated_user_without_compliance_officer_is_denied_with_403(
 def test_system_admin_without_explicit_grant_is_denied_with_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    """`SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
     install_compliance_officer_grant(
         monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
     )
@@ -406,7 +405,7 @@ def test_system_admin_without_explicit_grant_is_denied_with_403(
 def test_system_owner_without_explicit_grant_is_denied_with_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
+    """`SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
     install_compliance_officer_grant(
         monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_OWNER})
     )
@@ -445,7 +444,7 @@ def test_restorations_upload_path_is_unaffected_by_this_route(configured_logging
 
 
 def test_restore_from_catalog_fails_closed_when_override_read_fails() -> None:
-    """AC-BI-010: an override-read failure is a named 503 and nothing is fetched or restored."""
+    """An override-read failure is a named 503 and nothing is fetched or restored."""
     transport = _valid_transport()
     stage = _FakeCatalogRestoreStage()
 
@@ -473,7 +472,7 @@ def test_restore_from_catalog_fails_closed_when_override_read_fails() -> None:
 
 
 def test_verified_caller_is_passed_to_the_delegate_as_the_owner_of_restored_drafts() -> None:
-    """Issue #183, AC-BI-001: the route hands the verified `(sub, iss)` to the restore as owner."""
+    """The route hands the verified `(sub, iss)` to the restore as owner."""
     stage = _FakeCatalogRestoreStage()
     client = _client_with_fake(_valid_transport(), stage)
     cast("FastAPI", client.app).dependency_overrides[get_principal] = lambda: Principal(
@@ -497,11 +496,11 @@ def test_no_verified_principal_means_no_owner_is_passed_to_the_delegate() -> Non
     assert stage.calls[0]["owner"] is None
 
 
-# --- issue #184: case-insensitive instrument_id resolution against the catalog -------
+# --- case-insensitive instrument_id resolution against the catalog -------
 
 
 def test_lowercase_instrument_id_resolves_and_fetches_the_canonical_id() -> None:
-    """AC-BI-001: `cra-1.0` resolves against the catalog's `CRA-1.0` and fetches under it."""
+    """`cra-1.0` resolves against the catalog's `CRA-1.0` and fetches under it."""
     stage = _FakeCatalogRestoreStage()
     transport = _valid_transport()
     client = _client_with_fake(transport, stage)
@@ -516,7 +515,7 @@ def test_lowercase_instrument_id_resolves_and_fetches_the_canonical_id() -> None
 
 
 def test_catalog_fetch_failure_surfaces_as_the_existing_curated_source_unavailable_error() -> None:
-    """AC-BI-005: a `catalog.json` fetch failure is the same 502, not a masked case error."""
+    """A `catalog.json` fetch failure is the same 502, not a masked case error."""
     stage = _FakeCatalogRestoreStage()
     client = _client_with_fake(FakeFailingCuratedSourceTransport(), stage)
 
@@ -528,7 +527,7 @@ def test_catalog_fetch_failure_surfaces_as_the_existing_curated_source_unavailab
 
 
 def test_audit_delegate_receives_the_canonical_id_not_the_callers_spelling() -> None:
-    """AC-BI-006: the restore delegate's manifest carries the canonical id, not `cra-1.0`."""
+    """The restore delegate's manifest carries the canonical id, not `cra-1.0`."""
     stage = _FakeCatalogRestoreStage()
     client = _client_with_fake(_valid_transport(), stage)
 
@@ -556,7 +555,7 @@ def _ambiguous_transport() -> FakeCuratedArtifactTransport:
 
 
 def test_ambiguous_case_collision_is_rejected_with_409_and_never_fetches_the_artifact() -> None:
-    """AC-BI-003: two catalog entries differing only by case -> 409, nothing fetched.
+    """Two catalog entries differing only by case -> 409, nothing fetched.
 
     Proven against both spellings a caller might use (`CRA-1.0` and `cra-1.0`): the
     collision is present in the catalog either way, so neither spelling should ever
@@ -600,7 +599,7 @@ def _no_match_transport() -> FakeCuratedArtifactTransport:
 
 
 def test_no_catalog_match_in_any_case_returns_404_naming_closest_ids_and_never_fetches() -> None:
-    """AC-BI-004: no catalog entry matches any case -> 404, naming the closest id, no fetch."""
+    """No catalog entry matches any case -> 404, naming the closest id, no fetch."""
     stage = _FakeCatalogRestoreStage()
     transport = _no_match_transport()
     client = _client_with_fake(transport, stage)
@@ -616,11 +615,11 @@ def test_no_catalog_match_in_any_case_returns_404_naming_closest_ids_and_never_f
     assert requested_filenames == {"catalog.json"}
 
 
-# --- issue #195: instrument.restore audit rows ---------------------------------------
+# --- instrument.restore audit rows ---------------------------------------
 
 
 def test_post_from_catalog_audits_the_principal() -> None:
-    """AC-BI-001/002: the opening and terminal rows carry the verified caller as actor.
+    """The opening and terminal rows carry the verified caller as actor.
 
     The ComplianceOfficer gate (autouse) presents `compliance_officer_principal()`; the audit
     context is built from the same `get_principal`, so that principal is the row actor. (Under the
@@ -644,7 +643,7 @@ def test_post_from_catalog_audits_the_principal() -> None:
 
 
 def test_post_from_catalog_returns_503_when_audit_unavailable() -> None:
-    """AC-BI-011: the opening row cannot be written -> 503, nothing restored."""
+    """The opening row cannot be written -> 503, nothing restored."""
     stage = _FakeCatalogRestoreStage()
     store = InMemoryAuditStore(fail_on_outcome={"applied": AuditPostgresUnavailableError("db")})
     client = _client_with_fake(_valid_transport(), stage, audit_store=store)

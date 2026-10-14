@@ -1,4 +1,4 @@
-"""Plugin and marketplace manifests carry the `ps-*` ids (issue #178, AC-BI-001..003, AC-BI-010).
+"""Plugin and marketplace manifests carry the `ps-*` ids.
 
 Reads the real manifest files off disk; no fakes. The marketplace manifest has no display-name
 field, so "Policy System Marketplace" lives only in its `description` and in the docs.

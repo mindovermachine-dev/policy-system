@@ -1,17 +1,14 @@
-"""Structural proof that `AuditStore` exposes no mutation/deletion method (issue #147, AC-BI-013).
+"""Structural proof that `AuditStore` exposes no mutation/deletion method.
 
-Fast, hermetic -- no Postgres, no instantiation. AC-BI-013 requires "the
-codebase is inspected" to show no `UPDATE`/`DELETE` capability exists on
-`AuditStore` at all -- this test checks that structurally (the `Protocol`'s
+Fast, hermetic -- no Postgres, no instantiation. No `UPDATE`/`DELETE` capability
+may exist on `AuditStore` at all -- this test checks that structurally (the `Protocol`'s
 and the real implementation's own public method names), independent of
 whatever behavioral tests also happen to run against a real database.
 
-Slice 3 added `record_standalone` (still an insert-only write, just one that
-opens its own connection instead of reusing the caller's cursor). Slice 4
-adds `query` -- a pure read, not a mutation -- so it belongs in the expected
-set too, still with no `update`/`delete`/`mutate` method anywhere; re-verify
-again at the end of every later slice that no new method ever contains one
-of those substrings.
+`record_standalone` is still an insert-only write, just one that opens its own
+connection instead of reusing the caller's cursor. `query` is a pure read, not a
+mutation, so it belongs in the expected set too; no `update`/`delete`/`mutate`
+method may appear anywhere, and no new method may contain one of those substrings.
 """
 
 from __future__ import annotations
@@ -20,7 +17,7 @@ from ps_service.audit.store import AuditStore, PsycopgAuditStore
 
 _FORBIDDEN_METHOD_NAME_SUBSTRINGS = ("update", "delete", "mutate")
 _EXPECTED_METHOD_NAMES = {"record", "record_standalone", "query"}
-# Issue #210: `record_standalone_with_event_id` is `record_standalone` returning the inserted id
+# `record_standalone_with_event_id` is `record_standalone` returning the inserted id
 # (still insert-only). It is on the implementation and on the narrow `EventIdAuditStore` Protocol,
 # not on `AuditStore`, whose many fakes stay untouched.
 _EXPECTED_IMPLEMENTATION_METHOD_NAMES = _EXPECTED_METHOD_NAMES | {"record_standalone_with_event_id"}

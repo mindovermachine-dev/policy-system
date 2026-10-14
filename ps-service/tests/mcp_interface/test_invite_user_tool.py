@@ -1,11 +1,11 @@
-"""Tests for the registered `invite-user` MCP tool (issue #140).
+"""Tests for the registered `invite-user` MCP tool.
 
-AC-BI-005 (a `SystemAdmin`-or-above caller succeeds, returns
-`itoken`/`invite_url`), AC-BI-007 (a malformed/missing email is rejected at
-the schema layer before any Authentik call), AC-BI-008 (an
-Authentik-unreachable error is returned sanitized -- no token, no stack
-trace substring), AC-BI-009 (a successful invite is recorded to the logging
-output with actor, target email, timestamp, outcome).
+A `SystemAdmin`-or-above caller succeeds and gets
+`itoken`/`invite_url`; a malformed/missing email is rejected at
+the schema layer before any Authentik call; an
+Authentik-unreachable error is returned sanitized (no token, no stack
+trace substring); a successful invite is recorded to the logging
+output with actor, target email, timestamp, outcome.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ _BASE_URL = "https://authentik.example.com"
 
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
-    """Every invite writes `user.invite` rows (issue #195): keep them off a real Postgres."""
+    """Every invite writes `user.invite` rows: keep them off a real Postgres."""
     store = InMemoryAuditStore()
     monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
     return store
@@ -76,10 +76,10 @@ def _text(result: CallToolResult) -> str:
 def test_system_admin_caller_succeeds_and_returns_itoken_and_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005.
+    """A `SystemAdmin`-or-above caller gets `itoken` and `invite_url`.
 
     Exercises the REAL `ps_service.invitations.client.create_invitation`
-    (issue #163 Slice F fix: `create_invitation` already has its own unused
+    (`create_invitation` already has its own unused
     `transport=` DI seam -- rewiring `mcp_server.create_invitation` to a
     `functools.partial` over the real function with a fake transport lets
     the tool's delegate run for real instead of being replaced wholesale).
@@ -122,7 +122,7 @@ def test_system_admin_caller_succeeds_and_returns_itoken_and_url(
 def test_malformed_email_rejected_before_any_authentik_call(
     bad_email: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-007: rejected at the MCP schema layer -- confirmed via
+    """Rejected at the MCP schema layer -- confirmed via
     `test_restore_instrument_tool.py`'s own documented behavior, a bare
     in-process `server.call_tool` propagates a schema rejection as a raised
     `ToolError`, never reaching the tool's own body.
@@ -148,7 +148,7 @@ def test_malformed_email_rejected_before_any_authentik_call(
 def test_authentik_unreachable_returns_sanitized_error_no_stack_trace_no_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008: the returned string never contains the configured
+    """The returned string never contains the configured
     `authentik_api_token` value or a traceback substring.
 
     A real HTTP 503 from the transport boundary, translated by the real
@@ -179,7 +179,7 @@ def test_authentik_unreachable_returns_sanitized_error_no_stack_trace_no_token(
 def test_successful_invite_emits_audit_log_entry_with_actor_email_outcome(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """AC-BI-009: a successful invite records actor, target email, timestamp,
+    """A successful invite records actor, target email, timestamp,
     and outcome as its own `component="invitations"` audit entry -- distinct
     from (additional to) the generic `mcp_interface` started/succeeded pair
     `_run_mcp_action` already emits for every tool call.
@@ -283,7 +283,7 @@ def _use_transport(monkeypatch: pytest.MonkeyPatch, transport: AuthentikTranspor
 def test_invite_user_audits_the_verified_actor_subject_and_issuer(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-001/013: one `applied` `user.invite` row by the verified caller, email only."""
+    """One `applied` `user.invite` row by the verified caller, email only."""
     configure()
     _as_admin(monkeypatch)
     _use_transport(monkeypatch, _RecordingTransport(json.dumps({"pk": "tok-1"}).encode()))
@@ -325,7 +325,7 @@ def test_invite_user_under_local_test_bypass_audits_as_system_local_test_bypass(
 def test_invite_user_returns_error_and_calls_nothing_when_audit_unavailable(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-011: fail closed with an `error: ` response; Authentik is never contacted."""
+    """Fail closed with an `error: ` response; Authentik is never contacted."""
     configure()
     _as_admin(monkeypatch)
     transport = _RecordingTransport(json.dumps({"pk": "unused"}).encode())
@@ -345,7 +345,7 @@ def test_invite_user_returns_error_and_calls_nothing_when_audit_unavailable(
 def test_invite_user_failure_records_a_failed_row_with_a_reason_code(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-010/013: an Authentik failure adds a `failed` row; no free text in it."""
+    """An Authentik failure adds a `failed` row; no free text in it."""
     configure()
     _as_admin(monkeypatch)
     _use_transport(monkeypatch, _HttpErrorTransport(503, "unavailable"))
@@ -366,7 +366,7 @@ def test_invite_user_rows_never_contain_the_itoken_or_invite_url_or_bearer_token
     audit_store: InMemoryAuditStore,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-009: the secret pk, the redemption URL and the API token appear in no row or log."""
+    """The secret pk, the redemption URL and the API token appear in no row or log."""
     emitter = configure()
     _as_admin(monkeypatch)
     _use_transport(monkeypatch, _RecordingTransport(json.dumps({"pk": "SECRET-PK-123"}).encode()))

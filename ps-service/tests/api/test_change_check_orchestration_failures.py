@@ -1,4 +1,4 @@
-"""Failure injection and retry for the `check_regulations` sweep's full pipeline (issue #201).
+"""Failure injection and retry for the `check_regulations` sweep's full pipeline.
 
 Entry is the real `run_change_check_sweep`; the REAL `trigger_reingestion` / `will_reingest` /
 `classify_reingestion` / `succession` run over stateful ledger doubles for each instrument's
@@ -272,7 +272,7 @@ def test_a_second_sweep_after_a_completed_retry_runs_nothing(make_emitter: MakeE
     assert third.instruments[0].detail == f"{_new_id(_CRA)} (already_processed)"
 
 
-# --- AC-BI-006: incomplete pipeline config fails before any graph write ---
+# --- incomplete pipeline config fails before any graph write ---
 
 
 def _writes(world: _World, short: str) -> list[object]:
@@ -321,7 +321,7 @@ def test_missing_pipeline_config_reports_reingest_failed_before_any_graph_write(
     assert already.detail == f"{_new_id(_GDPR)} (already_processed)"
 
 
-# --- AC-BI-005: national_transposition is skipped and nothing is written by any stage ---
+# --- national_transposition is skipped and nothing is written by any stage ---
 
 
 @pytest.mark.parametrize("limb", ["prior_type", "fetched_metadata"])

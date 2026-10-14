@@ -1,4 +1,4 @@
-"""The sweep's injected `PipelineRunner` (#201 S1c): shared stage sequence, config first, no leaks.
+"""The sweep's injected `PipelineRunner`: shared stage sequence, config first, no leaks.
 
 `_build_pipeline_runner` adapts `ingestion_orchestration._execute_catalog_stages` to the
 `change_monitor.models.PipelineRunner` shape `trigger_reingestion` is handed. The stages and
@@ -256,11 +256,7 @@ def test_resume_with_no_gateway_installed_fails_closed_before_the_baseline_graph
 def test_resume_at_merge_resolves_the_gateway_and_records_one_audit_event(
     process_gateway: ProcessGateway,
 ) -> None:
-    """Issue #210: the merge stage writes through the gateway, so a merge-only resume needs one.
-
-    Reverses #209's `test_resume_at_merge_only_resolves_no_gateway_and_records_no_audit_row`
-    deliberately (CHANGES.md F4, DECISIONS D2): the baseline write is no longer direct.
-    """
+    """The merge stage writes through the gateway, so a merge-only resume needs one."""
     pipeline = build_fake_pipeline_dependencies()
 
     _runner(pipeline, _config())(

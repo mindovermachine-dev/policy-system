@@ -1,4 +1,4 @@
-"""MCP-action and background-ingestion failure logs are scrubbed (issue #229).
+"""MCP-action and background-ingestion failure logs are scrubbed.
 
 ``_run_mcp_action``'s residual net and ``_execute_background_ingestion``'s last-resort net each
 write one ``failed`` entry through the real ``configure()``d Logging facade, mirrored to stderr.
@@ -87,7 +87,7 @@ def _no_repr(entry: dict[str, object], exc: Exception) -> None:
 def test_run_mcp_action_logs_scrubbed_detail_type_and_run_id(
     mirrored: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-001/003/004: one failed entry, scrubbed and capped, mirrored; client result generic."""
+    """One failed entry, scrubbed and capped, mirrored; client result generic."""
     exc = _chained(_NOISY)
     run_id = str(uuid.uuid4())
 
@@ -110,7 +110,7 @@ def test_run_mcp_action_logs_scrubbed_detail_type_and_run_id(
 
 
 def test_run_mcp_action_detail_is_capped(mirrored: Path) -> None:
-    """AC-BI-003: a 5000-character message is cut to at most 300 characters."""
+    """A 5000-character message is cut to at most 300 characters."""
     mcp_server._run_mcp_action(  # pyright: ignore[reportPrivateUsage]
         _ACTION, "alice", _raiser(_BoomError("x" * 5000))
     )
@@ -152,7 +152,7 @@ def _run_background(store: InMemoryIngestionRunStore, run_id: str) -> None:
 def test_background_body_failure_is_scrubbed_and_run_recorded_failed(
     mirrored: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-002: a pipeline exception logs under the submitted run_id; the row is failed."""
+    """A pipeline exception logs under the submitted run_id; the row is failed."""
     exc = _chained(_NOISY)
 
     def _boom(*_args: object, **_kwargs: object) -> object:
@@ -182,7 +182,7 @@ def test_background_body_failure_is_scrubbed_and_run_recorded_failed(
 def test_background_last_resort_net_is_scrubbed_and_run_recorded_failed(
     mirrored: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-002/003/004: an exception escaping ``_run_mcp_action`` is scrubbed; row failed."""
+    """An exception escaping ``_run_mcp_action`` is scrubbed; row failed."""
     exc = _chained(_NOISY)
 
     def _escapes(*_args: object, **_kwargs: object) -> object:

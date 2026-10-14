@@ -1,7 +1,7 @@
-"""ComplianceOfficer gate on `start_ingestion` and `get_ingestion_status` (issue #194, S2).
+"""ComplianceOfficer gate on `start_ingestion` and `get_ingestion_status` .
 
-AC-BI-001: a caller below `ComplianceOfficer` is denied by `start_ingestion` before any
-`ingestion_runs` row, run slot or pipeline stage exists. AC-BI-002: the same denial from
+A caller below `ComplianceOfficer` is denied by `start_ingestion` before any
+`ingestion_runs` row, run slot or pipeline stage exists. The same denial applies to
 `get_ingestion_status`, whether or not the run id exists, before any store read. Each denial
 text is compared against what `ingest_regulation` returns for the same caller.
 
@@ -137,7 +137,7 @@ def test_callers_below_compliance_officer_get_the_same_denial_as_ingest_regulati
     runs: InMemoryIngestionRunStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-001 / AC-BI-002: AuthenticatedUser-only and SystemAdmin-without-grant are denied."""
+    """AuthenticatedUser-only and SystemAdmin-without-grant are denied."""
     access = _seeded_store()
     subject = _NON_ADMIN_SUBJECT
     if role is not None:
@@ -184,7 +184,7 @@ def test_no_token_with_the_bypass_off_requires_a_real_authenticated_caller(
 def test_status_denial_is_identical_for_an_unseen_and_an_existing_run_id(
     runs: InMemoryIngestionRunStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-002: the denial never reveals whether a run id exists, and no read happens first."""
+    """The denial never reveals whether a run id exists, and no read happens first."""
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
     unseen = str(uuid.uuid4())
 
@@ -232,5 +232,5 @@ def test_a_granted_compliance_officer_reaches_the_tool_body(
     else:
         assert payload["run_id"] == _SEEDED_RUN_ID
         # The seeded `running` row has no worker in this process, so the poll reconciles it
-        # (issue #194 S5) -- proof the granted caller reached the body and read the row.
+        # -- proof the granted caller reached the body and read the row.
         assert payload["status"] == "failed"

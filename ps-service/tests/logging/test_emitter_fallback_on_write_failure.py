@@ -1,4 +1,4 @@
-"""Tests for the writer thread's failure-safe fallback path (AC#6, M3, M12, N1)."""
+"""Tests for the writer thread's failure-safe fallback path."""
 
 from __future__ import annotations
 
@@ -25,13 +25,11 @@ def test_emit_when_target_unwritable_then_falls_back_to_stderr_via_capsys(
     )  # fallback=None -> resolves sys.stderr dynamically
 
     emitter.emit(LogEntry(component="ac6", action="unwritable"))
-    emitter.flush()  # N1: fallback write completes on the writer thread BEFORE this barrier returns
+    emitter.flush()  # fallback write completes on the writer thread BEFORE this barrier returns
 
-    captured = (
-        capsys.readouterr()
-    )  # N1: read only AFTER flush() — ordering is enforced, not assumed
+    captured = capsys.readouterr()  # read only AFTER flush() — ordering is enforced, not assumed
     assert "ac6" in captured.err
-    assert not log_path.exists()  # M12 tie-in: mkdir failed before any file was created
+    assert not log_path.exists()  # mkdir failed before any file was created
 
 
 def test_emit_when_target_unwritable_then_falls_back_to_injected_stringio(tmp_path: Path) -> None:
@@ -46,7 +44,7 @@ def test_emit_when_target_unwritable_then_falls_back_to_injected_stringio(tmp_pa
     emitter.emit(LogEntry(component="ac6", action="unwritable"))
     emitter.flush()
 
-    assert "ac6" in fallback.getvalue()  # AC#6's non-flaky fail-safe assertion
+    assert "ac6" in fallback.getvalue()  # non-flaky fail-safe assertion
 
 
 def test_emit_when_extra_not_json_serializable_then_falls_back_and_writer_survives(
@@ -62,7 +60,7 @@ def test_emit_when_extra_not_json_serializable_then_falls_back_and_writer_surviv
 
     emitter.emit(bad_entry)
     emitter.emit(good_entry)
-    # both handled — if the writer had died, this would hang (proves M6+M3 together)
+    # both handled — if the writer had died, this would hang (proves both together)
     emitter.flush()
 
     lines = read_lines(log_path)
@@ -85,4 +83,4 @@ def test_write_failure_when_target_missing_parent_then_log_file_never_created(
     emitter.emit(LogEntry(component="ac6", action="unwritable"))
     emitter.flush()
 
-    assert not log_path.exists()  # M12 tie-in: the writer never got far enough to create the file
+    assert not log_path.exists()  # the writer never got far enough to create the file

@@ -1,7 +1,7 @@
-"""Content lint for `ps-list-audit-events/SKILL.md` (issue #195).
+"""Content lint for `ps-list-audit-events/SKILL.md`.
 
-Pins that the skill documents the allow-listed `details` filter, the audited actions added by
-#195 and the unknown-key `error:` state, and that the audit-adjacent skills tell the user what is
+Pins that the skill documents the allow-listed `details` filter, the audited actions and the
+unknown-key `error:` state, and that the audit-adjacent skills tell the user what is
 recorded.
 """
 

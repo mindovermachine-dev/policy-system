@@ -1,4 +1,4 @@
-"""A compact in-memory `AuditStore` for `tests/api` (issue #195).
+"""A compact in-memory `AuditStore` for `tests/api`.
 
 Own copy of `tests/audit/_fakes.py::InMemoryAuditStore`'s write side, not a cross-package import:
 `tests/api/` sorts before `tests/audit/`, and under `--import-mode=importlib` a package only becomes
@@ -89,7 +89,7 @@ class InMemoryAuditStore:
         outcome: str,
         details: Mapping[str, object],
     ) -> str:
-        """Record the row as `record_standalone` does and return its fresh event id (issue #210).
+        """Record the row as `record_standalone` does and return its fresh event id.
 
         The id is appended to `event_ids` and handed to `event_id_sink`, which a test points at the
         graph log's committed audit rows so a group anchored to this row is accepted.

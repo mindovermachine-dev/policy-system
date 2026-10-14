@@ -1,5 +1,5 @@
-"""Increment 10 -- the live capstone proving AC-001 against real
-infrastructure (PLAN_REVIEWED.md §5 Batch 8).
+"""The live capstone proving the read path against real
+infrastructure.
 
 `@pytest.mark.falkordb_live`. Connects to the real, reachable FalkorDB
 instance and reads a uniquely named throwaway graph the test seeds and
@@ -17,7 +17,7 @@ Two tests:
    asserting `columns` is non-empty and matches the `RETURN` clause's own
    alias(es) (a real driver-response-shape check), and that no exception is
    raised. Deliberately does NOT assert `row_count == len(rows)`
-   (PLAN_REVIEWED.md §5's Q2 fix) -- see that test's own docstring for why.
+   -- see that test's own docstring for why.
 
 2. `test_live_write_clause_rejected_and_graph_provably_unmutated` -- a
    write-clause query against the same real graph raises
@@ -96,7 +96,7 @@ def _count_nodes(graph: GraphHandle) -> int:
 
     The handle is read-only (`GRAPH.RO_QUERY`): on a graph key that does not exist it answers with
     no rows instead of `[[0]]` (and creates nothing), so no rows means a count of zero. The test
-    therefore no longer depends on the key having been created by an earlier run (#215).
+    therefore does not depend on the key having been created by an earlier run.
     """
     result = graph.query("MATCH (n) RETURN count(n)")
     rows = cast("list[list[object]]", result.result_set)
@@ -107,12 +107,12 @@ def _count_nodes(graph: GraphHandle) -> int:
 def test_live_read_only_query_matches_real_driver_response_shape(
     real_graph: GraphHandle, emitter: LogEmitter
 ) -> None:
-    """AC-001 live proof: a real `MATCH (n) RETURN n LIMIT 5` query against
+    """Live proof: a real `MATCH (n) RETURN n LIMIT 5` query against
     the throwaway graph, executed through the actual
     `execute_cypher_query` against the real FalkorDB driver, not
-    Increment 4's scripted fake.
+    a scripted fake.
 
-    Only two assertions, per PLAN_REVIEWED.md §5's Q2 fix:
+    Only two assertions:
     - `columns` is non-empty and matches the `RETURN` clause's own
       alias(es) exactly -- a real driver-response-shape check (`header`
       really does come back as `[[type, name], ...]` pairs from the live
@@ -126,13 +126,13 @@ def test_live_read_only_query_matches_real_driver_response_shape(
     `execute_cypher_query` itself, so checking it against the very same
     `rows` object it was derived from can never fail regardless of whether
     the FalkorDB integration is actually correct -- it adds no coverage
-    beyond Increment 4's unit test, which already proves the same
+    beyond the unit tests, which already proves the same
     arithmetic against a scripted fake. Not replaced with an
     independent-source-of-truth check (e.g. a separate `count(n)` query)
     either, because `row_count`'s definition is *by construction*
     `len(rows)` -- there is no independent ground truth to check it against
     that wouldn't just re-derive the same tautology through a second query
-    (PLAN_REVIEWED.md §5, Q2). This is intentional, not an oversight.
+    This is intentional, not an oversight.
     """
     result = execute_cypher_query(
         "MATCH (n) RETURN n LIMIT 5",
@@ -152,7 +152,7 @@ def test_live_read_only_query_matches_real_driver_response_shape(
 def test_live_write_clause_rejected_and_graph_provably_unmutated(
     real_graph: GraphHandle, emitter: LogEmitter
 ) -> None:
-    """Defense-in-depth proof for AC-002 against the real graph: not just
+    """Defense-in-depth proof against the real graph: not just
     that `execute_cypher_query` raises `WriteClauseRejectedError` for a
     write-clause query, but that the throwaway graph's node
     count is provably unchanged before vs. after the rejected attempt --

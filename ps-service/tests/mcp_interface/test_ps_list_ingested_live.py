@@ -1,4 +1,4 @@
-"""Live FalkorDB proof of the `ps-list-ingested` fixed query (issue #77).
+"""Live FalkorDB proof of the `ps-list-ingested` fixed query.
 
 The Cypher is extracted from SKILL.md so the skill text and the tested query cannot
 drift, and is run through the real `handle_mcp_tool_call`. UNVERIFIED where no FalkorDB

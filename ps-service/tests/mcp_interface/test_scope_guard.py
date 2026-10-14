@@ -1,9 +1,9 @@
-"""AC-015 scope guards for `mcp_server.py` (PLAN_REVIEWED.md §6, Batch 6; §9).
+"""Scope guards for `mcp_server.py`.
 
 These prove -- structurally, by parsing the module's AST -- that
 `mcp_server.py` stays a pure surface definition: it binds no transport and
 constructs its module-level `MCPServer(...)` singleton with zero auth
-kwargs, forever. Transport (and, since issue #58, real per-user auth) both
+kwargs, forever. Transport (and real per-user auth) both
 belong to the sibling `http_transport.py` module, so neither may leak back
 into this module. They inspect `ast.Call` / `ast.keyword` / `ast.Constant`
 nodes and MUST NOT substring-scan the source: a bare scan false-fails on
@@ -11,16 +11,16 @@ the `cypher` docstring's `CREATE/MERGE/...` clause list (F-03, Residual
 risk 6).
 
 These guards describe `mcp_server.py`'s own source only (`inspect.getsource`
-against that one module). Issue #39's Streamable HTTP transport -- now the
-only transport, since MCP's stdio entrypoint was removed -- and issue #58's
+against that one module). The Streamable HTTP transport -- the
+only transport, since MCP's stdio entrypoint was removed -- and the
 real auth wiring both live in the sibling
 `ps_service.mcp_interface.http_transport` module, out of this file's AST
 entirely, so neither triggers nor is covered by these assertions.
 
 `test_mcpserver_ctor_has_no_auth_kwargs` stays exactly as written (not
-deleted, not weakened) even after issue #58 wires real auth: PLAN.md's own
-design keeps the module-level `MCPServer(...)` call itself permanently
-free of `auth`/`auth_server_provider`/`token_verifier` kwargs -- auth is
+deleted, not weakened) even though real auth is wired: the design keeps the module-level
+`MCPServer(...)` call itself permanently free of
+`auth`/`auth_server_provider`/`token_verifier` kwargs -- auth is
 armed on the already-constructed `server` object, after the fact, inside
 `http_transport.build_streamable_http_app` (see that module and
 `test_mcp_wires_token_verifier_after_construction_when_auth_configured`
@@ -121,8 +121,7 @@ _FAKE_AUTH_CONTEXT = AuthContext(
 
 
 def test_mcp_wires_token_verifier_after_construction_when_auth_configured() -> None:
-    """Issue #58, Slice 5 (AC-BI-006): the behavioral replacement for the
-    AST-based guard this issue's design deliberately keeps unchanged (see
+    """Behavioral complement to the AST-based guard that stays unchanged (see
     module docstring). Proves `build_streamable_http_app` actually arms the
     module-level `server` singleton's auth -- a direct runtime check, not a
     source-shape scan, since what matters now is that the mutation really

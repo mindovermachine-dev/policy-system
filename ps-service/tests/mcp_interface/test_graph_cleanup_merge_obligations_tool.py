@@ -1,7 +1,7 @@
-"""`merge-obligations` (preview + approval) through the MCP tool (issue #190, slice 11).
+"""`merge-obligations` (preview + approval) through the MCP tool.
 
-AC-BI-005 (preview, no writes, approval bound to the pair), AC-BI-015 (cross-role rejected, no
-approval), AC-BI-016 (self / nonexistent rejected, no approval), AC-BI-018 (sanitised errors).
+Covers preview (no writes, approval bound to the pair), cross-role rejection (no
+approval), self / nonexistent rejection (no approval), and sanitised errors.
 Gate behaviour is in `test_graph_cleanup_authz_gate.py`.
 """
 

@@ -1,4 +1,4 @@
-"""``POST /ingestions`` (internal) writes the seed's instrument through the gateway (#208).
+"""``POST /ingestions`` (internal) writes the seed's instrument through the gateway.
 
 The thin vertical path, end to end over the HTTP route: request ->
 ``run_internal_ingestion_pipeline`` -> system audit row -> the real ``internal_seed`` ingest stage
@@ -62,7 +62,7 @@ def _stub_run_log(  # pyright: ignore[reportUnusedFunction]  # autouse
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Stub the process-wide logging facade, as every route test of this package does."""
-    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
+    # detroit-exception: process-wide atexit logging facade, not a business fake
     monkeypatch.setattr("ps_service.api.ingestion_orchestration.emit_log_entry", _noop_emit)
 
 
@@ -147,7 +147,7 @@ def test_instrument_is_logged_under_a_system_audit_row_and_read_back(rig: Gatewa
     native = rig.graphs.open(_NATIVE_GRAPH)
     assert ("RegulatoryInstrument", "TESTREG-1.0") in native.nodes
     assert canonical_digest(native) == _NATIVE_DIGEST
-    assert fake.native.calls == []  # the native graph no longer goes through a legacy handle
+    assert fake.native.calls == []  # the native graph does not go through a legacy handle
 
 
 def test_post_onto_a_legacy_shaped_graph_adds_no_parallel_edge_and_a_second_post_logs_nothing(
@@ -264,7 +264,7 @@ def _document_with_capability(capability_id: str, name: str) -> dict[str, object
 
 
 def test_renaming_a_capability_removes_the_old_node_from_both_graphs(rig: GatewayRig) -> None:
-    """GH #99 over HTTP: a resubmission that renames a Capability retires the old node."""
+    """Over HTTP, a resubmission that renames a Capability retires the old node."""
     client = _client(
         _real_ingest_stage(build_fake_pipeline_dependencies()), rig, RecordingSystemAudit(rig)
     )

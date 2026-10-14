@@ -1,10 +1,10 @@
-"""Gateway failures reach Policy Lifecycle callers as its persistence error (issue #211, AC-BI-011).
+"""Gateway failures reach Policy Lifecycle callers as its persistence error.
 
-Seam part (S2): every failure `graph_submission` can see from the gateway becomes
+Seam part: every failure `graph_submission` can see from the gateway becomes
 `PolicyLifecycleGraphUnavailableError("FalkorDB write failed: ...")` with the gateway error chained,
 whether the gateway refused the group, could not reach its stores, committed it without applying it,
 or the graph is behind its log. The mapped text carries no host, port or traceback. The per-family
-matrix (every writer family x failure) is the second half of this module (S11).
+matrix (every writer family x failure) is the second half of this module.
 """
 
 from __future__ import annotations
@@ -413,7 +413,7 @@ _ARMS: dict[str, Callable[[LifecycleRig], None]] = {
 def test_a_gateway_failure_is_the_prefixed_persistence_error_in_every_writer_family(
     lifecycle_rig: LifecycleRig, family: str, arm: str
 ) -> None:
-    """AC-BI-011: no raw driver error; the `failed` audit row where one exists today."""
+    """No raw driver error; the `failed` audit row where one exists today."""
     spec = _FAMILIES[family]
     spec.seed(lifecycle_rig)
     _ARMS[arm](lifecycle_rig)
@@ -449,7 +449,7 @@ def test_a_graph_behind_its_log_fails_every_writer_family_with_the_prefixed_erro
 def test_the_applied_row_precedes_the_first_graph_log_append_in_every_audited_family(
     lifecycle_rig: LifecycleRig, family: str
 ) -> None:
-    """AC-BI-008: the `applied` audit row is written before the group is logged."""
+    """The `applied` audit row is written before the group is logged."""
     spec = _FAMILIES[family]
     spec.seed(lifecycle_rig)
 
@@ -467,7 +467,7 @@ def test_the_applied_row_precedes_the_first_graph_log_append_in_every_audited_fa
 def test_draft_edits_and_backfills_leave_no_audit_row_and_no_audit_link(
     lifecycle_rig: LifecycleRig, family: str
 ) -> None:
-    """AC-BI-008: groups of a draft edit or a backfill carry no audit link."""
+    """Groups of a draft edit or a backfill carry no audit link."""
     spec = _FAMILIES[family]
     spec.seed(lifecycle_rig)
 

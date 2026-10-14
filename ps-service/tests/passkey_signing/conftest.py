@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse
-    """Install a rig gateway as the process's for one test (issue #210).
+    """Install a rig gateway as the process's for one test.
 
     A signed near-miss merge checks the Graph Write Gateway before it consumes the approval, as
     the app lifespan installs it in production. The import is lazy for the importlib

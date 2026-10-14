@@ -1,4 +1,4 @@
-"""Shared helpers for the `start_ingestion` / `get_ingestion_status` tool tests (issue #194).
+"""Shared helpers for the `start_ingestion` / `get_ingestion_status` tool tests.
 
 Follows the `tests/passkey_signing/_harness.py` precedent: one module the tool-level test files
 import from, so the in-memory store wiring, the in-process tool calls and the per-test isolation
@@ -125,7 +125,7 @@ class GatedPipeline:
 
     def release(self, short_name: str) -> None:
         """Let the run for `short_name` proceed (per-short_name mode only)."""
-        # Ingestion normalizes `short_name` to upper case (issue #193) before opening graphs.
+        # Ingestion normalizes `short_name` to upper case before opening graphs.
         self.short_name_gates[short_name.upper()].set()
 
     def release_all(self) -> None:

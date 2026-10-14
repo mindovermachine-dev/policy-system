@@ -1,12 +1,11 @@
-"""AC-BI-002/AC-BI-001: PS Service refuses to start on absent config or failed discovery.
+"""PS Service refuses to start on absent config or failed discovery.
 
-Issue #58. Slice 1 covers the fail-closed *presence* check (AC-BI-002).
-Slice 2 (this file's `Test*Discovery*`-style tests below) covers the "both
-set" branch: OIDC discovery fetch + asymmetric-algorithm allow-list math
-(AC-BI-001, and AC-BI-009's discovery-time half) -- exercised via
+The first tests cover the fail-closed *presence* check. The discovery tests
+below cover the "both set" branch: OIDC discovery fetch + asymmetric-algorithm
+allow-list math -- exercised via
 `resolve_auth_context` directly with an injected fake `transport`, per
 `ps_service.auth.discovery.DiscoveryTransport`'s DI seam. No real HTTP
-server here (that is Slice 3's mock-OIDC-provider infrastructure).
+server here (the mock-OIDC-provider tests cover that).
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ def _config(**overrides: object) -> ServiceConfig:
         "graceful_shutdown_seconds": 10,
         "logging_dir": None,
         "is_local_test_bypass_active": False,
-        # Unconditional (issue #140): `require_authentik_credential_configured`
+        # Unconditional: `require_authentik_credential_configured`
         # carries no bypass exemption, so every test in this file needs both
         # set, including the ones below that raise before ever reaching it
         # (harmless to those) and the one bypass=True "does not raise" test.
@@ -194,7 +193,7 @@ def test_resolve_auth_context_raises_naming_issuer_when_no_recognized_algorithm_
 class _AuthentikShapedFailingDiscoveryTransport:
     """Simulates a discovery-fetch failure whose underlying transport exception carries an
     internal-looking detail (a synthetic marker standing in for e.g. an internal hostname or
-    error code) -- AC-BI-013's "leaks no internal config" half of the requirement, exercised
+    error code) -- the "leaks no internal config" half of the requirement, exercised
     against an issuer URL shaped like a real bundled-Authentik issuer.
     """
 
@@ -212,11 +211,11 @@ _AUTHENTIK_SHAPED_ISSUER = "https://auth-a1b2c3d4.eastus.cloudapp.azure.com/appl
 
 
 def test_resolve_auth_context_discovery_failure_names_issuer_but_not_raw_exception_text() -> None:
-    """AC-BI-013: an unreachable/misconfigured Authentik issuer's `AuthDiscoveryError` must
+    """An unreachable/misconfigured Authentik issuer's `AuthDiscoveryError` must
     name the issuer (actionable) and must NOT embed the underlying transport exception's own
     text (non-leaking). `from exc` is still preserved -- the full chain remains available via
     `__cause__`/a log-viewer's stderr traceback, a separate mechanism from this message's own
-    `str()`, which is what this assertion (and AC-BI-013) actually governs.
+    `str()`, which is what this assertion actually governs.
     """
     with pytest.raises(AuthDiscoveryError) as excinfo:
         resolve_auth_context(

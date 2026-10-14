@@ -1,11 +1,9 @@
-"""Regression test for `scripts/verify-chart-independence.sh` (issue #111 baseline fix).
+"""Regression test for `scripts/verify-chart-independence.sh`.
 
 The script's own `helm template` invocations must always pass
-`psService.localTestBypass.enabled=true` (or otherwise satisfy the chart's #58 fail-closed OIDC
+`psService.localTestBypass.enabled=true` (or otherwise satisfy the chart's fail-closed OIDC
 guard on `templates/ps-service-deployment.yaml`), or every `helm template` call in the script
-fails before its independence/credential-leak checks ever run. This was found as a pre-existing
-bug on unmodified `main` (reproduced independently by two implement agents against clean
-checkouts) and fixed by adding the bypass flag to each `helm template` call in the script.
+fails before its independence/credential-leak checks ever run.
 
 Marked `integration` (spawns a real `helm` subprocess against the real chart, per the
 `integration` marker's own definition) so the default hermetic `pytest -q` suite -- which does

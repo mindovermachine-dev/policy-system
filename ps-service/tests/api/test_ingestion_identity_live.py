@@ -1,4 +1,4 @@
-"""Live FalkorDB proof of the case-insensitive identity queries (issue #193, S3, CHANGES M2/M6).
+"""Live FalkorDB proof of the case-insensitive identity queries.
 
 The fast tests prove the queries' text and parameters through fakes that emulate
 case-insensitivity; only a real FalkorDB settles that ``toUpper(n.id)`` actually evaluates as
@@ -70,7 +70,7 @@ def seed() -> Iterator[Seed]:
 def test_preflight_matches_a_legacy_lowercase_celexless_node_for_the_uppercase_id(
     seed: Seed,
 ) -> None:
-    """M2: a celex-less legacy ``cra-1.0`` is caught when ``CRA-1.0`` is ingested."""
+    """A celex-less legacy ``cra-1.0`` is caught when ``CRA-1.0`` is ingested."""
     graph = seed(("cra-1.0", None))
 
     assert _is_already_merged(graph, "CRA-1.0") is True
@@ -79,7 +79,7 @@ def test_preflight_matches_a_legacy_lowercase_celexless_node_for_the_uppercase_i
 
 
 def test_preflight_matches_a_mixed_case_id(seed: Seed) -> None:
-    """M6: a mixed-case ``Cra-1.0`` -- neither all-lower nor all-upper -- still matches."""
+    """A mixed-case ``Cra-1.0`` -- neither all-lower nor all-upper -- still matches."""
     graph = seed(("Cra-1.0", None))
 
     assert _is_already_merged(graph, "CRA-1.0") is True
@@ -88,7 +88,7 @@ def test_preflight_matches_a_mixed_case_id(seed: Seed) -> None:
 def test_collision_check_finds_an_uppercase_claim_for_a_lowercase_short_name(
     seed: Seed,
 ) -> None:
-    """AC-BI-004: ``cra`` collides with ``CRA-1.0`` held by another CELEX; the same CELEX
+    """``cra`` collides with ``CRA-1.0`` held by another CELEX; the same CELEX
     does not collide with itself; a hyphenated extension (``CRA-LEGACY-1.0``) is not a collision.
     """
     graph = seed(("CRA-1.0", _OTHER), ("CRA-LEGACY-1.0", "32024R0002"))
@@ -99,7 +99,7 @@ def test_collision_check_finds_an_uppercase_claim_for_a_lowercase_short_name(
 
 
 def test_collision_check_finds_a_mixed_case_claim(seed: Seed) -> None:
-    """M6: a mixed-case stored id ``Cra-1.0`` held by another CELEX is a collision for ``cra``."""
+    """A mixed-case stored id ``Cra-1.0`` held by another CELEX is a collision for ``cra``."""
     graph = seed(("Cra-1.0", _OTHER))
 
     assert check_short_name_collision(graph, celex=_MINE, short_name="CRA") == _OTHER
@@ -108,7 +108,7 @@ def test_collision_check_finds_a_mixed_case_claim(seed: Seed) -> None:
 def test_celex_lookup_returns_the_id_for_an_ingested_celex_and_none_otherwise(
     seed: Seed,
 ) -> None:
-    """AC-BI-003: the CELEX-existence query finds the node by its ``celex`` property."""
+    """The CELEX-existence query finds the node by its ``celex`` property."""
     graph = seed(("CRA-1.0", _MINE))
 
     assert _find_instrument_id_by_celex(graph, _MINE) == "CRA-1.0"

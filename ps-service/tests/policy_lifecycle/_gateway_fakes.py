@@ -1,4 +1,4 @@
-"""The Graph Write Gateway rig, seen from Policy Lifecycle (issue #211).
+"""The Graph Write Gateway rig, seen from Policy Lifecycle.
 
 Policy Lifecycle submits its graph writes as gateway groups and only reads the graph through a
 handle. `LifecycleRig` is the gateway rig (in-memory log and FalkorDB fakes, the true boundaries)
@@ -313,7 +313,7 @@ class FlippingRead(PolicyReadGraph):
 
     The test names the statement by a distinctive `marker` substring: the first matching read is
     the service's own, and the change lands just before a later one -- "the graph moved between
-    the read and the write-time re-read" (AC-BI-004/005), with no write path of its own.
+    the read and the write-time re-read", with no write path of its own.
     """
 
     def __init__(

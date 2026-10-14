@@ -1,12 +1,12 @@
-"""Draft Policy edits are one gateway group, with no audit link and no precondition (issue #211).
+"""Draft Policy edits are one gateway group, with no audit link and no precondition.
 
 `update_policy_draft` reads the Policy, authorizes the edit, then submits the patch as ONE group:
 a `MergeProperty` for the fields set and a `RemoveProperty` for the fields cleared. A draft edit
-writes no `audit_events` row today, so its group carries a null link (AC-BI-008); a cleared
-property is absent afterwards (AC-BI-007); re-applying the same patch logs nothing; a gateway
-failure is the module's persistence error with the `FalkorDB write failed: ` prefix (AC-BI-011).
-The Standard and Control edits and adds (S4) follow the same rules: one group, no audit link; an
-add is an `UpsertNode` plus the parent's `UpsertEdge` (AC-BI-007, AC-BI-008).
+writes no `audit_events` row today, so its group carries a null link; a cleared
+property is absent afterwards; re-applying the same patch logs nothing; a gateway
+failure is the module's persistence error with the `FalkorDB write failed: ` prefix.
+The Standard and Control edits and adds follow the same rules: one group, no audit link; an
+add is an `UpsertNode` plus the parent's `UpsertEdge`.
 """
 
 from __future__ import annotations
@@ -69,7 +69,6 @@ def _ops(group: GraphLogGroup) -> list[str]:
 def test_a_cleared_property_is_absent_afterwards_and_the_others_are_kept(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007."""
     _seed(lifecycle_rig, description="old", scope_out="out", scope_in="in")
 
     _edit(lifecycle_rig, {"description": "new", "scope_out": None})
@@ -91,7 +90,7 @@ def test_a_patch_that_sets_and_clears_is_one_group_of_a_merge_then_a_remove(
 
 
 def test_a_draft_edit_group_carries_no_audit_link(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-008: draft edits write no audit row and their groups carry no audit link."""
+    """Draft edits write no audit row and their groups carry no audit link."""
     _seed(lifecycle_rig, description="old")
 
     _edit(lifecycle_rig, {"description": "new"})
@@ -153,7 +152,7 @@ def test_the_first_edit_of_a_graph_with_legacy_edges_logs_the_stamp_group_first_
 def test_a_value_the_gateway_cannot_store_is_refused_with_the_persistence_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """Section 9 item 6: an empty list was accepted by the direct writer."""
+    """An empty list is refused with the persistence error and nothing is written."""
     _seed(lifecycle_rig, description="old")
 
     with pytest.raises(PolicyLifecycleGraphUnavailableError) as raised:
@@ -169,7 +168,7 @@ def test_a_value_the_gateway_cannot_store_is_refused_with_the_persistence_error(
 def test_a_gateway_failure_is_the_persistence_error_with_the_gateway_error_chained(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011: the direct writer leaked a raw driver error from here; now it is mapped."""
+    """A gateway failure is mapped, never a raw driver error."""
     _seed(lifecycle_rig, description="old")
     lifecycle_rig.store.fail_appends()
 
@@ -194,7 +193,7 @@ def test_a_committed_group_the_graph_could_not_apply_is_a_failure_of_the_call(
     assert lifecycle_rig.logged_groups == 1  # committed to the log; the gateway applies it later
 
 
-# --- Standard and Control edits and adds (S4) -----------------------------------------------
+# --- Standard and Control edits and adds -----------------------------------------------
 
 _STANDARD = "std_1"
 _CONTROL = "ctl_1"
@@ -275,7 +274,6 @@ def _add_control(
 def test_a_cleared_standard_property_is_absent_afterwards_and_the_others_are_kept(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007."""
     _seed_tree(lifecycle_rig)
 
     _edit_standard(lifecycle_rig, {"description": "new", "procedure": None})
@@ -289,7 +287,6 @@ def test_a_cleared_standard_property_is_absent_afterwards_and_the_others_are_kep
 def test_a_cleared_control_property_is_absent_afterwards_and_the_others_are_kept(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007."""
     _seed_tree(lifecycle_rig)
 
     _edit_control(lifecycle_rig, {"description": "new", "evidence_ref": None})
@@ -303,7 +300,6 @@ def test_a_cleared_control_property_is_absent_afterwards_and_the_others_are_kept
 def test_a_standard_or_control_patch_is_one_group_of_a_merge_then_a_remove_with_no_audit_link(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-008."""
     _seed_tree(lifecycle_rig)
 
     _edit_standard(lifecycle_rig, {"description": "new", "procedure": None})
@@ -344,7 +340,7 @@ def test_the_first_standard_edit_of_a_graph_with_legacy_edges_stamps_them_first(
 def test_a_standard_or_control_value_the_gateway_cannot_store_is_refused_with_the_persistence_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """Section 9 item 6."""
+    """A Standard/Control value the gateway cannot store is refused with the persistence error."""
     _seed_tree(lifecycle_rig)
 
     with pytest.raises(PolicyLifecycleGraphUnavailableError) as standard_raised:
@@ -360,7 +356,6 @@ def test_a_standard_or_control_value_the_gateway_cannot_store_is_refused_with_th
 def test_a_standard_edit_gateway_failure_is_the_persistence_error_with_the_cause_chained(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011."""
     _seed_tree(lifecycle_rig)
     lifecycle_rig.store.fail_appends()
 
@@ -387,7 +382,6 @@ def test_a_control_edit_committed_but_not_applied_is_a_failure_of_the_call(
 def test_adding_a_standard_is_one_group_of_a_node_then_its_parent_edge_with_no_audit_link(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007, AC-BI-008."""
     _seed_tree(lifecycle_rig)
 
     new_id = _add_standard(lifecycle_rig, "Encryption Standard")
@@ -410,7 +404,6 @@ def test_adding_a_standard_is_one_group_of_a_node_then_its_parent_edge_with_no_a
 def test_an_added_standard_gets_the_defaults_a_forced_status_and_drops_none_valued_keys(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007."""
     _seed_tree(lifecycle_rig)
 
     plain = _add_standard(lifecycle_rig, "Plain")
@@ -441,7 +434,6 @@ def test_an_added_standard_gets_the_defaults_a_forced_status_and_drops_none_valu
 def test_adding_a_control_is_one_group_with_planned_default_forced_type_and_status(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007, AC-BI-008."""
     _seed_tree(lifecycle_rig)
 
     new_id = _add_control(
@@ -474,7 +466,6 @@ def test_adding_a_control_is_one_group_with_planned_default_forced_type_and_stat
 def test_an_add_gateway_failure_is_the_persistence_error_and_writes_nothing(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011."""
     _seed_tree(lifecycle_rig)
     lifecycle_rig.store.fail_appends()
 

@@ -1,4 +1,4 @@
-"""`ingest_regulation` writes `ingestion_run.*` audit rows (issue #195, Slices 8 and 9).
+"""`ingest_regulation` writes `ingestion_run.*` audit rows.
 
 The sync MCP tool delegates to `run_audited_catalog_ingestion`; these tests prove the transport
 side: the actor (verified caller or the local-test-bypass sentinel), the bound run id as
@@ -60,7 +60,7 @@ def _grant_compliance_officer(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_ingest_regulation_audits_verified_actor_and_bound_run_id(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-001/004/005: both rows carry the verified caller and the response's run id."""
+    """Both rows carry the verified caller and the response's run id."""
     _configure_complete_llm_env(monkeypatch)
     configure()
     _grant_compliance_officer(monkeypatch)
@@ -85,7 +85,7 @@ def test_ingest_regulation_audits_verified_actor_and_bound_run_id(
 def test_ingest_regulation_under_bypass_audits_sentinel(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-001: under the local-test bypass the actor is `system:local-test-bypass`."""
+    """Under the local-test bypass the actor is `system:local-test-bypass`."""
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
@@ -100,7 +100,7 @@ def test_ingest_regulation_under_bypass_audits_sentinel(
 def test_ingest_regulation_counts_equal_the_graph_delta(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-005/016: the complete row's counts equal what the real merge wrote to the graph."""
+    """The complete row's counts equal what the real merge wrote to the graph."""
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
@@ -125,7 +125,7 @@ def test_ingest_regulation_counts_equal_the_graph_delta(
 def test_ingest_regulation_rows_are_retrievable_by_celex_and_instrument_id(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-018: the CELEX finds both rows; the instrument id finds the complete row only."""
+    """The CELEX finds both rows; the instrument id finds the complete row only."""
     from ps_service.audit import AuditQueryFilters
 
     _configure_complete_llm_env(monkeypatch)
@@ -153,7 +153,7 @@ def test_ingest_regulation_rows_are_retrievable_by_celex_and_instrument_id(
 def test_ingest_regulation_returns_error_prefix_when_audit_unavailable_and_runs_nothing(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-011: an unwritable opening row is the fixed `error: ` text and nothing ran."""
+    """An unwritable opening row is the fixed `error: ` text and nothing ran."""
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
@@ -174,7 +174,7 @@ def test_ingest_regulation_returns_error_prefix_when_audit_unavailable_and_runs_
 def test_re_ingesting_an_ingested_celex_audits_already_ingested_and_returns_the_same_error(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-006 / D-A: the `error:` is unchanged; a started/already_ingested pair is added."""
+    """The `error:` is unchanged; a started/already_ingested pair is added."""
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()

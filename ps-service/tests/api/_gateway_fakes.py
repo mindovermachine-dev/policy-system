@@ -1,4 +1,4 @@
-"""Gateway-side doubles for the ``POST /ingestions`` (internal) route tests (issue #208).
+"""Gateway-side doubles for the ``POST /ingestions`` (internal) route tests.
 
 The route needs a Graph Write Gateway and a system-audit recorder (it fails closed without a
 gateway). Postgres and FalkorDB are the true boundaries: the gateway is the gateway rig over
@@ -103,7 +103,7 @@ def process_gateway_installed() -> Generator[ProcessGateway]:
     The state the app lifespan creates in production, for the catalog pipeline, the MCP tools
     and the amendment sweep, which run outside a request and cannot be injected.
     """
-    rig = GatewayRig(swap=True)  # a restore is applied by swap (issue #214)
+    rig = GatewayRig(swap=True)  # a restore is applied by swap
     system_audit = RecordingSystemAudit(rig)
     install_process_gateway(rig, system_audit)
     installed = ProcessGateway(rig, system_audit)

@@ -1,7 +1,7 @@
-"""Tests for the registered `create-policy-draft` MCP tool (issue #134, S12).
+"""Tests for the registered `create-policy-draft` MCP tool.
 
 `_verified_actor` is a local copy of `test_access_role_tools.py`'s own
-helper (issue #131's originating pattern) -- binds a real `AccessToken`
+helper -- binds a real `AccessToken`
 onto the MCP SDK's own auth contextvar that `get_access_token()`
 (`_resolve_principal`/`_resolve_policy_lifecycle_actor`) reads.
 `_install_graph` mirrors `test_cypher_tool.py`'s own
@@ -89,9 +89,9 @@ class _QueryResult(Protocol):
 
 class _GraphHandleDouble(Protocol):
     """Structural shape both `_FakeGraph` (write-flow tests) and `_TreeFakeGraph`
-    (`get-policy`'s read-flow tests, added S14) satisfy -- lets `_install_graph`/
+    (`get-policy`'s read-flow tests) satisfy -- lets `_install_graph`/
     `_FakeFalkorDB` accept either without a shared base class. The lifecycle rig's read double
-    (issue #211) satisfies it too.
+    satisfies it too.
     """
 
     def query(
@@ -103,7 +103,7 @@ class _FakeGraph:
     """Fake FalkorDB graph handle for the reads of a create that never reaches the gateway.
 
     It answers the title-collision and Capability-governor reads and refuses anything else: every
-    write is a Graph Write Gateway group (issue #211), never a statement through this handle.
+    write is a Graph Write Gateway group, never a statement through this handle.
     """
 
     def __init__(
@@ -113,7 +113,7 @@ class _FakeGraph:
         governors: dict[str, str | None] | None = None,
     ) -> None:
         self._existing = existing
-        # Issue #185: `{capability_id: governing_policy_id | None}`; absent ids do not exist.
+        # `{capability_id: governing_policy_id | None}`; absent ids do not exist.
         self._governors = governors if governors is not None else {}
         self.total_queries = 0
 
@@ -204,7 +204,7 @@ class _FakeAuditStore:
         outcome: str,
         details: Mapping[str, object],
     ) -> str:
-        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        """`record_standalone`, returning an id the process gateway's log accepts."""
         self.record_standalone(
             actor_subject=actor_subject,
             actor_issuer=actor_issuer,
@@ -301,7 +301,7 @@ def test_duplicate_title_surfaces_as_its_own_distinct_error(
 def test_graph_unavailable_surfaces_as_its_own_distinct_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed."""
     configure()
     rig = installed_process_gateway().rig
     rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
@@ -336,11 +336,9 @@ def test_without_a_real_authenticated_caller_and_no_bypass_is_refused() -> None:
 def test_bypass_active_creates_a_policy_owned_by_the_bypass_principal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-018 / D-11: under `PS_SERVICE_LOCAL_TEST_BYPASS=true`, with no
+    """Under `PS_SERVICE_LOCAL_TEST_BYPASS=true`, with no
     verified bearer token bound at all, the created Policy's owner is
-    `(LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)` -- CHANGES.md
-    finding 2's real bypass-toggling pattern (`test_main.py:626`/`:2004`),
-    not the stale `test_main.py:358-387` range PLAN.md itself cites.
+    `(LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)`.
     """
     configure()
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -358,7 +356,7 @@ def test_bypass_active_creates_a_policy_owned_by_the_bypass_principal(
     assert audit_store.calls[0].actor_issuer == LOCAL_TEST_PRINCIPAL_ID
 
 
-# --- `create-policy-draft` `capability_ids` argument (issue #185) -----------
+# --- `create-policy-draft` `capability_ids` argument -----------
 
 
 def test_capability_ids_claims_capabilities_and_echoes_them(
@@ -451,12 +449,12 @@ def test_blank_capability_id_entry_is_rejected_before_any_work(
 def test_capability_ids_without_authenticated_caller_is_refused_before_graph_is_opened(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pins the PRE-EXISTING authentication gate (AC-BI-001, D-1/D-6), not new behaviour.
+    """Pins the pre-existing authentication gate, not new behaviour.
 
     `create-policy-draft` is not role-gated; a caller with no verified
     identity who passes `capability_ids` is refused with the same fixed
     message as without them, the graph is never touched and nothing is
-    audited. No role gate is added by issue #185.
+    audited. `capability_ids` adds no role gate.
     """
     configure()
     graph = _FakeGraph(governors={"cap_a": None})
@@ -474,7 +472,7 @@ def test_capability_ids_without_authenticated_caller_is_refused_before_graph_is_
     assert audit_store.calls == []
 
 
-# --- `create-policy-draft` `standards` argument (issue #134, S12B gap fix) --
+# --- `create-policy-draft` `standards` argument --
 
 
 def test_create_policy_draft_without_standards_argument_still_works_unchanged(
@@ -529,7 +527,7 @@ def test_create_policy_draft_with_malformed_standards_returns_named_error(
 
 
 def _install_stateful_rig(monkeypatch: pytest.MonkeyPatch) -> GatewayRig:
-    """Read through the lifecycle read double over the process rig's graph (issue #211).
+    """Read through the lifecycle read double over the process rig's graph.
 
     Every write -- creates, draft edits and the transition cascades -- is a gateway group on that
     graph, so a create -> get -> propose -> approve round trip runs over one graph.
@@ -602,12 +600,11 @@ def test_create_policy_draft_with_standards_creates_full_tree_all_draft(
 def test_create_policy_draft_with_standards_then_propose_policy_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End-to-end proof the gap is closed: a Policy created via
-    `create-policy-draft` WITH a Standard attached at creation now satisfies
-    `propose-policy`'s >=1-Standard completeness gate (AC-BI-013), so
-    AC-BI-003 (the owner proposes their own complete Draft) is exercisable
-    through the tool surface alone -- previously impossible, since
-    `create-policy-draft` could only ever produce a zero-Standard Policy.
+    """A Policy created via
+    `create-policy-draft` WITH a Standard attached at creation satisfies
+    `propose-policy`'s >=1-Standard completeness gate, so
+    the owner can propose their own complete Draft
+    through the tool surface alone.
     """
     configure()
     _install_stateful_rig(monkeypatch)
@@ -631,7 +628,7 @@ def test_create_policy_draft_with_standards_then_propose_policy_succeeds(
     assert propose_body["status"] == "proposed"
 
 
-# --- `create-policy-draft`'s `supersedes_policy_id` fork (issue #136, Slice 6) --
+# --- `create-policy-draft`'s `supersedes_policy_id` fork --
 #
 # `_MANAGER_SUBJECT`/`_install_manager_role` (used below) are defined once,
 # near the `approve-policy` tests further down this module -- reused here
@@ -642,10 +639,10 @@ def test_create_policy_draft_with_standards_then_propose_policy_succeeds(
 def test_create_policy_draft_with_supersedes_policy_id_success_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005/010: a genuine round trip against the shared stateful fake
+    """A genuine round trip against the shared stateful fake
     graph -- create a Policy, propose/approve it, then fork a successor from
     it, proving the response carries the new Policy id and every forked
-    child id, and (CHANGES.md Appendix D) that a returned child id is
+    child id, and that a returned child id is
     IMMEDIATELY usable in a following real `update-standard-draft` call.
     """
     configure()
@@ -689,7 +686,7 @@ def test_create_policy_draft_with_supersedes_policy_id_success_shape(
         new_standard_id = body["standard_ids"][0]
         assert new_standard_id != "std_encryption_standard_" + prior_id[len("pol_") :]
 
-        # AC-BI-010's own "usable immediately" proof: a real second call.
+        # "Usable immediately" proof: a real second call.
         update_result = _call_update_standard_draft(
             standard_id=new_standard_id, fields={"description": "revised"}
         )
@@ -745,7 +742,7 @@ def test_create_policy_draft_supersedes_non_approved_prior_returns_named_error(
 def test_create_policy_draft_supersede_log_triad_carries_entity_id(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """CHANGES.md finding #9 (Appendix G): the fork path logs
+    """The fork path logs
     `entity_id=supersedes_policy_id` (the prior, known before `body()`
     returns, unlike the not-yet-minted successor id) -- proven for both a
     successful fork and a deliberate `PolicySupersedePriorNotApprovedError`
@@ -803,7 +800,7 @@ def test_create_policy_draft_supersede_log_triad_carries_entity_id(
         assert isinstance(line["timestamp"], float)
 
 
-# --- `get-policy` (issue #134, S14) -----------------------------------------
+# --- `get-policy` -----------------------------------------
 
 _OTHER_SUBJECT = "someone-else"
 _GRANTER = ("system-admin-tool", "iss")
@@ -1099,7 +1096,7 @@ def test_get_policy_with_standards_and_controls_returns_full_nested_tree(
     ]
 
 
-# --- `update-policy-draft` (issue #136, Slice 1) ----------------------------
+# --- `update-policy-draft` ----------------------------
 
 
 def _install_rig_graph(
@@ -1107,7 +1104,7 @@ def _install_rig_graph(
 ) -> GatewayRig:
     """Seed `policy` (no children) into the process gateway rig's `policy_system` graph.
 
-    Issue #211: `update-policy-draft` writes through the Graph Write Gateway (the process gateway
+    `update-policy-draft` writes through the Graph Write Gateway (the process gateway
     the package's autouse fixture installs), so the graph it reads is the rig graph the gateway
     writes. The read handle is the lifecycle read double over it (it refuses a write statement).
     """
@@ -1137,7 +1134,7 @@ def _install_tree_rig(
 ) -> GatewayRig:
     """Seed the existing Policy with its Standard (and optionally a Control) into the rig.
 
-    Issue #211: the Standard and Control tools write through the Graph Write Gateway, so the
+    The Standard and Control tools write through the Graph Write Gateway, so the
     graph they read is the rig graph the gateway writes. `standard_status=None` /
     `control_status=None` seed a legacy node with no `status` (the backfill fixtures).
     """
@@ -1193,11 +1190,10 @@ def test_update_policy_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> N
 def test_update_policy_draft_applies_only_supplied_fields_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008, proven as a genuine round trip: update -> get, against the same rig graph,
+    """A genuine round trip: update -> get, against the same rig graph,
     showing the patched field actually persists and only the supplied field changed.
 
-    The Policy is seeded rather than created: `create-policy-draft` still writes through the
-    direct writer until it migrates (a later slice of #211).
+    The Policy is seeded rather than created.
     """
     configure()
     rig = _install_rig_graph(monkeypatch, _draft_fixture())
@@ -1216,7 +1212,7 @@ def test_update_policy_draft_applies_only_supplied_fields_end_to_end(
         "updated_fields": ["description"],
     }
     assert get_result.is_error is False
-    # `get-policy`'s own response shape (S13) never echoes back arbitrary
+    # `get-policy`'s own response shape never echoes back arbitrary
     # content fields like `description` -- the round trip proves the write
     # landed by confirming the node holds it, the Policy is still readable,
     # still owned by the same actor, and still `draft` (i.e. the PATCH didn't
@@ -1305,8 +1301,8 @@ def test_update_policy_draft_graph_unavailable_returns_named_error(
 ) -> None:
     """The gateway failure is the module's persistence error, `FalkorDB write failed: ` prefixed.
 
-    Since #211 the direct writer's generic "not reachable" text is replaced by the gateway-mapped
-    message (Decision 4, AC-BI-011); the tool still answers `error: ...` and never leaks detail.
+    The gateway-mapped message is used rather than a generic "not reachable" text; the tool still
+    answers `error: ...` and never leaks detail.
     """
     configure()
     rig = _install_rig_graph(monkeypatch, _draft_fixture())
@@ -1326,7 +1322,7 @@ def test_update_policy_draft_graph_unavailable_returns_named_error(
 def test_update_policy_draft_log_triad_carries_actor_action_node_id_and_timestamp(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """CHANGES.md finding #9: `_run_mcp_action`'s log triad now threads
+    """`_run_mcp_action`'s log triad threads
     `entity_id` -- proven here for both a success call and a deliberate
     `PolicyNotFoundError` failure, plus the `started` entry every call emits.
     """
@@ -1365,7 +1361,7 @@ def test_update_policy_draft_log_triad_carries_actor_action_node_id_and_timestam
         assert isinstance(line["timestamp"], float)
 
 
-# --- `add-standard-to-draft` (issue #136, Slice 2) --------------------------
+# --- `add-standard-to-draft` --------------------------
 
 
 def _call_add_standard_to_draft(
@@ -1404,12 +1400,11 @@ def test_add_standard_to_draft_success_shape(monkeypatch: pytest.MonkeyPatch) ->
 def test_add_standard_to_draft_response_id_usable_in_get_policy_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009, proven as a genuine round trip: add Standard -> get-policy, against the same
+    """A genuine round trip: add Standard -> get-policy, against the same
     rig graph the gateway writes, showing the new Standard's id genuinely round-trips into a
     second, real call.
 
-    The Policy is seeded rather than created: `create-policy-draft` still writes through the
-    direct writer until it migrates (a later slice of #211).
+    The Policy is seeded rather than created.
     """
     configure()
     _install_rig_graph(monkeypatch, _draft_fixture())
@@ -1519,7 +1514,7 @@ def test_add_standard_to_draft_missing_policy_returns_named_error(
 def test_add_standard_to_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed."""
     configure()
     rig = _install_rig_graph(monkeypatch, _draft_fixture())
     rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
@@ -1538,9 +1533,9 @@ def test_add_standard_to_draft_graph_unavailable_returns_named_error(
 def test_add_standard_to_draft_log_triad_carries_actor_action_node_id_and_timestamp(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """CHANGES.md finding #9: the log triad carries `entity_id=policy_id` --
+    """The log triad carries `entity_id=policy_id` --
     the parent, since it's known before the call, matching `add-standard-to-
-    draft`'s own §1(Appendix G) rule (the new Standard's id isn't known until
+    draft`'s own rule (the new Standard's id isn't known until
     `body()` returns, and `_run_mcp_action`'s `entity_id` is fixed first).
     """
     emitter = configure()
@@ -1574,7 +1569,7 @@ def test_add_standard_to_draft_log_triad_carries_actor_action_node_id_and_timest
         assert isinstance(line["timestamp"], float)
 
 
-# --- `update-standard-draft` (issue #136, Slice 3) --------------------------
+# --- `update-standard-draft` --------------------------
 
 _EXISTING_STANDARD_ID = "std_encryption_standard_aaaaaa"
 
@@ -1611,12 +1606,11 @@ def test_update_standard_draft_success_shape(monkeypatch: pytest.MonkeyPatch) ->
 def test_update_standard_draft_response_id_usable_in_update_standard_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009, real round trip (CHANGES.md Appendix D): add Standard -> update-standard-draft,
+    """Real round trip: add Standard -> update-standard-draft,
     against the same rig graph the gateway writes, proving the new Standard's id genuinely
     round-trips into a second, real call -- not just a determinism check.
 
-    The Policy is seeded rather than created: `create-policy-draft` still writes through the
-    direct writer until it migrates (a later slice of #211).
+    The Policy is seeded rather than created.
     """
     configure()
     _install_rig_graph(monkeypatch, _draft_fixture())
@@ -1705,7 +1699,7 @@ def test_update_standard_draft_missing_standard_returns_named_error(
 def test_update_standard_draft_missing_standard_returns_distinct_error_from_missing_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-012's 'distinct' requirement: a missing Standard's own error text
+    """A missing Standard's own error text
     differs from a missing Policy's (`update-policy-draft`'s own error).
     """
     configure()
@@ -1730,7 +1724,7 @@ def test_update_standard_draft_missing_standard_returns_distinct_error_from_miss
 def test_update_standard_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed."""
     configure()
     rig = _install_tree_rig(monkeypatch)
     rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
@@ -1787,7 +1781,7 @@ def test_update_standard_draft_log_triad_carries_actor_action_node_id_and_timest
 def test_update_standard_draft_backfills_legacy_null_status_before_gating(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHANGES.md finding #2 (High): a legacy Standard with a `NULL` own
+    """A legacy Standard with a `NULL` own
     `status` (e.g. minted before any backfilling call, such as via the
     internal-seed adapter) is still draft-eligible once backfilled by
     `_read_standard_with_parent_backfilled`, not spuriously rejected.
@@ -1804,7 +1798,7 @@ def test_update_standard_draft_backfills_legacy_null_status_before_gating(
     assert standard["status"] == "draft"
 
 
-# --- `add-control-to-draft` (issue #136, Slice 4) ----------------------------
+# --- `add-control-to-draft` ----------------------------
 
 
 def _call_add_control_to_draft(
@@ -1847,7 +1841,7 @@ def test_add_control_to_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> 
 def test_add_control_to_draft_defaults_implementation_status_planned_not_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-007: the one deliberate divergence from `add-standard-to-draft`'s
+    """The one deliberate divergence from `add-standard-to-draft`'s
     own `"draft"` default -- easy to copy-paste wrong.
     """
     configure()
@@ -1867,12 +1861,11 @@ def test_add_control_to_draft_defaults_implementation_status_planned_not_draft(
 def test_add_control_to_draft_response_id_usable_in_get_policy_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009-shaped, proven as a genuine round trip: add Standard -> add Control ->
+    """A genuine round trip: add Standard -> add Control ->
     get-policy, against the same rig graph the gateway writes, showing the new Control's id
     genuinely round-trips into a real call.
 
-    The Policy is seeded rather than created: `create-policy-draft` still writes through the
-    direct writer until it migrates (a later slice of #211).
+    The Policy is seeded rather than created.
     """
     configure()
     _install_rig_graph(monkeypatch, _draft_fixture())
@@ -1917,7 +1910,7 @@ def test_add_control_to_draft_unknown_field_returns_named_error(
 def test_add_control_to_draft_fields_type_key_rejected_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHANGES.md finding #8: `fields.type` is rejected -- `control_type` is
+    """`fields.type` is rejected -- `control_type` is
     the single path to set a Control's type at creation.
     """
     configure()
@@ -2014,7 +2007,7 @@ def test_add_control_to_draft_missing_standard_returns_named_error(
 def test_add_control_to_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed."""
     configure()
     rig = _install_tree_rig(monkeypatch)
     rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
@@ -2033,7 +2026,7 @@ def test_add_control_to_draft_graph_unavailable_returns_named_error(
 def test_add_control_to_draft_log_triad_carries_actor_action_node_id_and_timestamp(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """CHANGES.md finding #9: the log triad carries `entity_id=standard_id` --
+    """The log triad carries `entity_id=standard_id` --
     the parent, since it's known before the call (the new Control's id isn't
     known until `body()` returns).
     """
@@ -2072,7 +2065,7 @@ def test_add_control_to_draft_log_triad_carries_actor_action_node_id_and_timesta
 def test_add_control_to_draft_backfills_legacy_null_status_before_gating(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHANGES.md finding #2 (High): a legacy Standard with a `NULL` own
+    """A legacy Standard with a `NULL` own
     `status` is still draft-eligible once backfilled by
     `_read_standard_with_parent_backfilled`, not spuriously rejected.
     """
@@ -2088,7 +2081,7 @@ def test_add_control_to_draft_backfills_legacy_null_status_before_gating(
     assert standard["status"] == "draft"
 
 
-# --- `update-control-draft` (issue #136, Slice 5) ----------------------------
+# --- `update-control-draft` ----------------------------
 
 _EXISTING_CONTROL_ID = "ctrl_key_rotation_check_aaaaaa"
 
@@ -2134,8 +2127,7 @@ def test_update_control_draft_ownership_traverses_two_hops_end_to_end(
     only thing that can resolve `update-control-draft`'s ownership here, since only the Policy
     node carries an owner.
 
-    The Policy is seeded rather than created: `create-policy-draft` still writes through the
-    direct writer until it migrates (a later slice of #211).
+    The Policy is seeded rather than created.
     """
     configure()
     _install_rig_graph(monkeypatch, _draft_fixture())
@@ -2210,7 +2202,7 @@ def test_update_control_draft_unknown_field_returns_named_error(
 
 
 def test_update_control_draft_type_field_is_patchable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unlike `add-control-to-draft` (CHANGES.md finding #8), `type` IS
+    """Unlike `add-control-to-draft` (which rejects `fields.type`), `type` IS
     patchable through `update-control-draft` -- the only post-creation path
     to change a Control's type.
     """
@@ -2273,7 +2265,7 @@ def test_update_control_draft_missing_control_returns_named_error(
 def test_update_control_draft_missing_control_error_distinct_from_standard_and_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-012's 'distinct' requirement, extended to the third node type:
+    """Extended to the third node type:
     a missing Control's own error text differs from both `update-standard-
     draft`'s and `update-policy-draft`'s own missing-node errors.
     """
@@ -2304,7 +2296,7 @@ def test_update_control_draft_missing_control_error_distinct_from_standard_and_p
 def test_update_control_draft_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed (#211)."""
+    """The gateway failure is the persistence error, `FalkorDB write failed: ` prefixed."""
     configure()
     rig = _install_tree_rig(monkeypatch, with_control=True)
     rig.graphs.open("policy_system").fail_on_write(redis.exceptions.ConnectionError("boom"))
@@ -2358,7 +2350,7 @@ def test_update_control_draft_log_triad_carries_actor_action_node_id_and_timesta
 def test_update_control_draft_backfills_legacy_null_status_before_gating(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHANGES.md finding #2 (High), two-hop case: a legacy Control with a
+    """Two-hop case: a legacy Control with a
     `NULL` own `status` (e.g. minted before any backfilling call, such as via
     the internal-seed adapter) is still draft-eligible once backfilled by
     `_read_control_with_parent_backfilled`, not spuriously rejected.
@@ -2375,7 +2367,7 @@ def test_update_control_draft_backfills_legacy_null_status_before_gating(
     assert control["status"] == "draft"
 
 
-# --- `propose-policy` (issue #134, S16) -------------------------------------
+# --- `propose-policy` -------------------------------------
 
 
 def _proposable_fixture(
@@ -2405,7 +2397,7 @@ def _install_fixture_rig(
 ) -> GatewayRig:
     """Seed `policy` (with its tree) into the process gateway rig and read through its double.
 
-    Issue #211: the transition tools write through the Graph Write Gateway, so the graph they
+    The transition tools write through the Graph Write Gateway, so the graph they
     read is the rig graph the gateway writes. `fork_of=(prior_id, capability_ids)` makes the
     Policy a fork of a `deprecated` prior (not auto-deprecated) that governs `capability_ids`.
     """
@@ -2582,7 +2574,7 @@ def test_propose_policy_without_a_real_authenticated_caller_and_no_bypass_is_ref
     )
 
 
-# --- `approve-policy` (issue #134, S18) -------------------------------------
+# --- `approve-policy` -------------------------------------
 
 _MANAGER_SUBJECT = "policy-manager"
 
@@ -2804,9 +2796,9 @@ def test_approve_policy_without_a_real_authenticated_caller_and_no_bypass_is_ref
     )
 
 
-# --- `reject-policy` (issue #134, S20) ---------------------------------------
+# --- `reject-policy` ---------------------------------------
 #
-# Mirrors `approve-policy`'s own S18 test list exactly (same
+# Mirrors `approve-policy`'s own test list exactly (same
 # `_ApproveFakeGraph`/`_approvable_fixture`/`_install_manager_role`
 # fixtures, reused unchanged), proving the tool-layer wrapper is genuinely
 # the same pattern, not reimplemented differently.
@@ -2949,9 +2941,9 @@ def test_reject_policy_without_a_real_authenticated_caller_and_no_bypass_is_refu
     )
 
 
-# --- `revert-policy-to-draft` (issue #134, S22) ------------------------------
+# --- `revert-policy-to-draft` ------------------------------
 #
-# Mirrors `propose-policy`'s own S16 test list (owner-only, no
+# Mirrors `propose-policy`'s own test list (owner-only, no
 # `access_role_store` involved at all) rather than `approve-policy`'s
 # `PolicyManager`-gated shape. The non-owner test below deliberately grants
 # the non-owner caller `PolicyManager` to prove this tool's own action is
@@ -3099,26 +3091,25 @@ def test_revert_policy_to_draft_no_auth_caller_and_no_bypass_is_refused() -> Non
     )
 
 
-# --- Dedicated local-test-bypass verification (issue #134, PLAN.md S28, AC-BI-018) -----
+# --- Dedicated local-test-bypass verification ---
 #
 # `test_bypass_active_creates_a_policy_owned_by_the_bypass_principal` above
-# (S12) already covers `create-policy-draft`'s `actor_subject`/
-# `owner_subject` half of AC-BI-018 through the tool's own success response
+# already covers `create-policy-draft`'s `actor_subject`/
+# `owner_subject` half through the tool's own success response
 # and its recorded audit row. The two tests below close the remaining gaps:
 # (1) the `owner_issuer` graph property -- not part of the tool's own
 # success response shape (`{"policy_id", "title", "status", "version",
 # "owner_subject"}` has no `owner_issuer` key) -- is also the bypass
 # principal, confirmed by inspecting the graph write's own params directly;
 # (2) the regression guard that `approve-policy`/`reject-policy` are ALWAYS
-# rejected by `block_self_approval` under the bypass, proving the issue's
-# own documented limitation ("approve/reject are not exercisable locally
-# under the bypass") is real and intended, not a defect.
+# rejected by `block_self_approval` under the bypass, because the bypass
+# makes approve/reject not exercisable locally by design, not a defect.
 
 
 def test_bypass_sets_owner_subject_and_owner_issuer_to_the_bypass_principal_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-018 / D-11: the new Policy's `owner_issuer` graph property -- not just
+    """The new Policy's `owner_issuer` graph property -- not just
     `owner_subject` (already covered by
     `test_bypass_active_creates_a_policy_owned_by_the_bypass_principal` above)
     -- is also `LOCAL_TEST_PRINCIPAL_ID` under the bypass, proving the
@@ -3143,7 +3134,7 @@ def test_bypass_sets_owner_subject_and_owner_issuer_to_the_bypass_principal_pair
 
 
 def _bypass_owned_proposed_fixture() -> _PolicyFixture:
-    """A `"proposed"` Policy owned by the bypass principal pair (S28)."""
+    """A `"proposed"` Policy owned by the bypass principal pair."""
     return _PolicyFixture(
         id=_EXISTING_POLICY_ID,
         title=_TITLE,
@@ -3155,10 +3146,10 @@ def _bypass_owned_proposed_fixture() -> _PolicyFixture:
 
 
 def _install_bypass_manager_role(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Grants `PolicyManager` to the bypass principal pair itself (S28).
+    """Grants `PolicyManager` to the bypass principal pair itself.
 
     Needed so `approve-policy`/`reject-policy`'s own RBAC gate
-    (`require_role`, AC-BI-008) passes -- the point of these regression
+    (`require_role`) passes -- the point of these regression
     tests is to prove `block_self_approval` is what rejects the call, not
     the RBAC gate.
     """
@@ -3174,8 +3165,8 @@ def _install_bypass_manager_role(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bypass_approve_policy_is_always_rejected_by_self_approval_block(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression guard (AC-BI-018's own documented limitation): under the bypass,
-    `_resolve_policy_lifecycle_actor` (D-11) returns the SAME fixed
+    """Regression guard: under the bypass,
+    `_resolve_policy_lifecycle_actor` returns the SAME fixed
     `(LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)` pair for `actor` on
     every call, with no verified bearer token to vary it -- so a Policy
     created under the bypass always has `owner == actor` for any later call
@@ -3203,8 +3194,8 @@ def test_bypass_reject_policy_is_always_rejected_by_self_approval_block(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Mirrors `test_bypass_approve_policy_is_always_rejected_by_self_approval_block`
-    above for `reject-policy` -- same bypass-forced `owner == actor` reasoning
-    (AC-BI-018's documented limitation), not a defect.
+    above for `reject-policy` -- same bypass-forced `owner == actor` reasoning,
+    not a defect.
     """
     configure()
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -3218,17 +3209,16 @@ def test_bypass_reject_policy_is_always_rejected_by_self_approval_block(
     assert _text(result) == "error: you cannot approve or reject a Policy you own"
 
 
-# --- AC-BI-001 bypass proofs (Slice 7 gap closure) ---------------------------
+# --- Bypass proofs ---
 #
-# An independent Verify pass found that no test anywhere in this issue's diff
-# actually exercises the local-test bypass against any of #136's six new
-# tools -- every existing test for these six uses `_verified_actor`. Each
-# test below proves BOTH halves of AC-BI-001 for its own tool:
+# Every other test for these six tools uses `_verified_actor`, so none exercises
+# the local-test bypass. Each test below proves BOTH halves of the bypass
+# behaviour for its own tool:
 # `_resolve_policy_lifecycle_actor` resolves the fixed `LOCAL_TEST_PRINCIPAL_ID`
 # pair as `actor` under the bypass (no `_verified_actor` context is entered
 # anywhere in these tests), AND `require_owner`'s `(sub, iss)` tuple-equality
 # check passes against a node whose recorded owner is that exact same pair --
-# i.e. a draft "created under the bypass" (which #134's own
+# i.e. a draft "created under the bypass" (which
 # `test_bypass_active_creates_a_policy_owned_by_the_bypass_principal` already
 # proves gets owner `(LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)`) is
 # genuinely editable under the bypass, not merely callable.
@@ -3343,7 +3333,7 @@ def test_bypass_update_control_draft_treats_bypass_principal_as_owner(
 def test_bypass_create_policy_draft_supersedes_fork_owned_and_editable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The sixth AC-BI-001 tool: `create-policy-draft` with `supersedes_policy_id`.
+    """The sixth bypass-proof tool: `create-policy-draft` with `supersedes_policy_id`.
 
     The superseded prior is created and approved by a real verified actor
     (irrelevant to what this test proves); only the fork call itself, and the
@@ -3398,15 +3388,15 @@ def test_bypass_create_policy_draft_supersedes_fork_owned_and_editable(
     assert update_result.is_error is False
 
 
-# --- AC-BI-013 unexpected-error hardening (Slice 7 gap closure) -------------
+# --- Unexpected-error hardening ---
 #
 # Sibling tool suites (`test_near_miss_tools.py`, `test_restore_instrument_
 # tool.py`, `test_ingest_regulation_tool.py`, `test_check_regulations_tool.py`,
 # `test_get_catalog_listing_tool.py`) each have a dedicated test proving an
 # unclassified exception from the underlying call never crosses the MCP
 # boundary raw -- `_run_mcp_action`'s residual safety net sanitises it to the
-# fixed `_UNEXPECTED_ERROR_MESSAGE` string. None of #136's six new tools had
-# an analogous test; each one below raises a raw exception carrying a fake
+# fixed `_UNEXPECTED_ERROR_MESSAGE` string. Each test below does the same for
+# one of these tools: it raises a raw exception carrying a fake
 # host:port string from the underlying service call and asserts neither the
 # host nor the port text leaks into the returned error string.
 

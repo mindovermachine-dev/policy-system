@@ -1,4 +1,4 @@
-"""`check_regulations` writes `ingestion_run.*` audit rows per re-ingest (issue #195, Slice 10).
+"""`check_regulations` writes `ingestion_run.*` audit rows per re-ingest.
 
 Transport side only: the actor (verified caller or the local-test-bypass sentinel), the
 re-ingest's own run id as `resource_id`, and the `error: ` mapping of an unavailable audit
@@ -101,7 +101,7 @@ def _text(result: CallToolResult) -> str:
 def test_check_regulations_audits_the_caller_as_actor(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-001/007: both rows carry the verified caller and a re-ingest run id."""
+    """Both rows carry the verified caller and a re-ingest run id."""
     configure()
     access = _seeded_store()
     access.grant(
@@ -130,7 +130,7 @@ def test_check_regulations_audits_the_caller_as_actor(
 def test_check_regulations_under_bypass_audits_sentinel(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-001: under the local-test bypass the actor is `system:local-test-bypass`."""
+    """Under the local-test bypass the actor is `system:local-test-bypass`."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
 
@@ -143,7 +143,7 @@ def test_check_regulations_under_bypass_audits_sentinel(
 def test_check_regulations_returns_error_prefix_when_audit_unavailable(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """AC-BI-011: an unwritable opening row yields an `error: ` string and no re-ingest."""
+    """An unwritable opening row yields an `error: ` string and no re-ingest."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     audit_store.fail_on_outcome["applied"] = AuditPostgresUnavailableError("db down")

@@ -1,4 +1,4 @@
-"""HTTP tests for `POST /restorations` (D5, PLAN.md Slice 6.4).
+"""HTTP tests for `POST /restorations` .
 
 Mirrors `test_ingestions_catalog.py`'s style: `TestClient` +
 `app.dependency_overrides` supplying a fake `RestoreDependencies` bundle, so
@@ -142,15 +142,14 @@ def _client_with_fake(
 def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+    """Every test below drives a caller holding `ComplianceOfficer` by default.
 
     `POST /restorations` is now gated behind `require_access_role`, which has
     no local-test-bypass carve-out (`AccessDeniedError` whenever
     `get_principal` returns `None` -- true for every test's own
-    `is_local_test_bypass_active=True` config absent this fixture, PLAN.md
-    §3.2). The dedicated denial-proof tests below re-monkeypatch this away
-    for their own scenario (the same `monkeypatch` fixture instance, so the
-    later call simply wins).
+    `is_local_test_bypass_active=True` config absent this fixture). The dedicated
+    denial-proof tests below re-monkeypatch this away for their own scenario
+    (the same `monkeypatch` fixture instance, so the later call simply wins).
     """
     install_compliance_officer_grant(monkeypatch, granted=True)
 
@@ -197,9 +196,9 @@ def test_stage_failure_returns_502_naming_the_stage(configured_logging: Path) ->
 
 
 def test_content_rejection_returns_502_whose_message_names_the_rejected_label() -> None:
-    """GH #104 / AC-BI-007 end-to-end: FastAPI app -> route -> orchestration -> 502 handler.
+    """End to end: FastAPI app -> route -> orchestration -> 502 handler.
 
-    The body's `error.message` (the AC's "reason") carries the validator's own text
+    The body's `error.message` carries the validator's own text
     naming the rejected label, never the generic `content_validation failed`.
     """
     stage = _FakeRestoreStage(
@@ -233,11 +232,9 @@ def test_malformed_body_returns_422_and_never_calls_the_delegate() -> None:
 
 @pytest.mark.parametrize("path", ["/restorations"])
 def test_restorations_route_with_compliance_officer_grant_is_never_401_or_403(path: str) -> None:
-    """Issue #145: a caller holding `ComplianceOfficer` is never turned away by the gate.
+    """A caller holding `ComplianceOfficer` is never turned away by the gate.
 
-    Renamed from the pre-#145 `..._is_unauthenticated_never_401_or_403` -- the
-    route is no longer unauthenticated-by-design (it now requires
-    `ComplianceOfficer`); this proves the gate itself introduces no *spurious*
+    The route requires `ComplianceOfficer`; this proves the gate itself introduces no *spurious*
     401/403 for a caller who does hold the role, relying on the file's own
     autouse `_grant_compliance_officer` fixture exactly like every other
     happy-path test here.
@@ -251,7 +248,7 @@ def test_restorations_route_with_compliance_officer_grant_is_never_401_or_403(pa
 
 
 def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Issue #145, AC-BI-003/006: no verified principal (the file's own bypass default,
+    """No verified principal (the file's own bypass default,
     undoing the autouse grant) -- 403, matching the existing `AccessDeniedError` contract,
     and the restore delegate is never called.
     """
@@ -286,7 +283,7 @@ def test_authenticated_user_without_compliance_officer_is_denied_with_403(
 def test_system_admin_without_explicit_grant_is_denied_with_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    """`SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
     install_compliance_officer_grant(
         monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
     )
@@ -303,7 +300,7 @@ def test_system_admin_without_explicit_grant_is_denied_with_403(
 def test_system_owner_without_explicit_grant_is_denied_with_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either --
+    """`SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either --
     no hierarchy override, mirroring `PolicyManager`'s own existing non-hierarchical contract.
     """
     install_compliance_officer_grant(
@@ -320,7 +317,7 @@ def test_system_owner_without_explicit_grant_is_denied_with_403(
 
 
 def test_verified_caller_is_passed_to_the_delegate_as_the_owner_of_restored_drafts() -> None:
-    """Issue #183, AC-BI-001: the upload route hands the verified `(sub, iss)` to the restore."""
+    """The upload route hands the verified `(sub, iss)` to the restore."""
     stage = _FakeRestoreStage()
     client = _client_with_fake(stage)
     cast("FastAPI", client.app).dependency_overrides[get_principal] = lambda: Principal(
@@ -343,11 +340,11 @@ def test_no_verified_principal_means_no_owner_is_passed_to_the_delegate() -> Non
     assert stage.owners == [None]
 
 
-# --- issue #195: instrument.restore audit rows (upload path) --------------------------
+# --- instrument.restore audit rows (upload path) --------------------------
 
 
 def test_post_restorations_audits_the_principal() -> None:
-    """AC-BI-001/008: the upload restore writes started + succeeded rows for the caller.
+    """The upload restore writes started + succeeded rows for the caller.
 
     The ComplianceOfficer gate (autouse) presents `compliance_officer_principal()`; the audit
     context is built from the same `get_principal`. (Under the local-test bypass this gated route
@@ -372,7 +369,7 @@ def test_post_restorations_audits_the_principal() -> None:
 
 
 def test_post_restorations_returns_503_when_audit_unavailable_and_restores_nothing() -> None:
-    """AC-BI-011: the opening row cannot be written -> 503, the delegate never runs."""
+    """The opening row cannot be written -> 503, the delegate never runs."""
     stage = _FakeRestoreStage()
     store = InMemoryAuditStore(fail_on_outcome={"applied": AuditPostgresUnavailableError("db")})
     client = _client_with_fake(stage, audit_store=store)
@@ -399,7 +396,7 @@ def test_post_restorations_checksum_rejection_audits_a_failed_row() -> None:
     ]
 
 
-# --- issue #214: the real restore through the route, down to the graph log and back -----------
+# --- the real restore through the route, down to the graph log and back -----------
 
 
 def _real_restore_dependencies() -> RestoreDependencies:

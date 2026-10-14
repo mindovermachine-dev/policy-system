@@ -1,4 +1,4 @@
-"""#199 AC-BI-004: hand-copied status/action Literals equal the domain schema.
+"""Hand-copied status/action Literals equal the domain schema.
 
 `rules.py`, `service.py` and `audit_actions.py` declare their `Literal`s under
 `from __future__ import annotations` and/or `TYPE_CHECKING`, so they are not
@@ -89,7 +89,7 @@ _CONTEXT = "PolicyLifecycleRuleContext"
 
 @pytest.mark.parametrize("label", ["Policy", "Standard", "Control"])
 def test_rules_current_status_literal_equals_schema_status_enum(label: str) -> None:
-    """#199 AC-BI-004: the rules `current_status` Literal equals each lifecycle label's status enum.
+    """The rules `current_status` Literal equals each lifecycle label's status enum.
 
     Args:
         label: A label whose `status` enum the rule context shares.
@@ -99,7 +99,7 @@ def test_rules_current_status_literal_equals_schema_status_enum(label: str) -> N
 
 
 def test_rules_action_literal_is_required_status_keys_plus_read() -> None:
-    """#199 AC-BI-004: rules `action` Literal is the required-status action keys plus `read`."""
+    """Rules `action` Literal is the required-status action keys plus `read`."""
     literal = _literal_values(_field_annotation(rules, _CONTEXT, "action"))
     required = rules._REQUIRED_STATUS_BY_ACTION  # pyright: ignore[reportPrivateUsage]
     assert set(literal) == {*required, "read"}
@@ -107,13 +107,13 @@ def test_rules_action_literal_is_required_status_keys_plus_read() -> None:
 
 
 def test_service_policy_status_literal_equals_schema_status_enum() -> None:
-    """#199 AC-BI-004: `service.PolicyStatus` equals the Policy `status` enum."""
+    """`service.PolicyStatus` equals the Policy `status` enum."""
     literal = _literal_values(_alias_annotation(service, "PolicyStatus"))
     assert literal == enum_values("Policy", "status")
 
 
 def test_audit_transition_status_literals_match_schema_status_enum() -> None:
-    """#199 AC-BI-004: `to_status` is the whole enum; `from_status` omits terminal `deprecated`."""
+    """`to_status` is the whole enum; `from_status` omits terminal `deprecated`."""
     statuses = enum_values("Policy", "status")
     to_status = _literal_values(
         _field_annotation(audit_actions, "PolicyTransitionDetails", "to_status")

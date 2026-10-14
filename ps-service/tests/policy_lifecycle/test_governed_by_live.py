@@ -1,4 +1,4 @@
-"""Live FalkorDB proof of the `GOVERNED_BY` write paths (issue #185, S10; gateway-backed #211).
+"""Live FalkorDB proof of the `GOVERNED_BY` write paths.
 
 The rig tests (`test_claim_create_gateway.py`, `test_fork_repoint_gateway.py`) prove the groups'
 contracts over in-memory fakes but cannot detect a difference between the in-memory graph and a
@@ -12,7 +12,7 @@ Run with:
 `uv run pytest ps-service/tests/policy_lifecycle/test_governed_by_live.py -m falkordb_live -q`
 (deselected by default). Uses a uniquely named throwaway graph, deleted afterwards.
 
-Issue #211 (S9): the claim create and the fork repoint are gateway groups. The graph is SEEDED
+The claim create and the fork repoint are gateway groups. The graph is SEEDED
 with the frozen legacy writer (`legacy_create_policy_draft`, `_legacy_reference.py`) and direct
 statements, as a pre-gateway writer left it (identity-less edges); every write under test goes
 through the gateway. Written, not run in the implementation sandbox (no FalkorDB).

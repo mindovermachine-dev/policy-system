@@ -1,23 +1,20 @@
-"""Helm release: Authentik-issuer wiring + narrow no-op comparison (AC-BI-001 completion,
-AC-BI-005, AC-BI-018; PLAN.md §5/S15, reworked for issue #129's S8).
+"""Helm release: Authentik-issuer wiring + narrow no-op comparison.
 
-Issue #129 replaces the app-registration-derived `issuer`/`audience`/`cliClientId`/`scopes`
-computation with fixed constants pointed at the bundled Authentik instance instead (no tenant
-app registrations, AC-BI-001) -- CHANGES.md row F1's path-based issuer shape
+`issuer`/`audience`/`cliClientId`/`scopes` are fixed constants pointed at the bundled Authentik
+instance (no tenant app registrations), using a path-based issuer shape
 (`https://<hostname>/auth/application/o/ps-cli/`, sharing PS Service's own already-resolved
-hostname, not a second Authentik-only hostname) and row F3 (S7/S8/S6 land as one combined unit,
-built in that internal order).
+hostname, not a second Authentik-only hostname).
 
-The no-op comparison still covers exactly the same **5** leaf fields as before -- `llm.
-existingSecret`, `psService.auth.{issuer,audience,cliClientId,scopes}` -- ground truth unchanged
-from `ensure_release`'s own shape (`release_values_json`), only the *values* fed into it changed.
+The no-op comparison covers exactly **5** leaf fields -- `llm.existingSecret`,
+`psService.auth.{issuer,audience,cliClientId,scopes}` -- matching `ensure_release`'s own shape
+(`release_values_json`).
 
-`psService.auth.audience`/`cliClientId` are now both the fixed literal `ps-cli` (S4's blueprint:
-one OAuth2 Provider, one Application, both named `ps-cli` -- PLAN.md §0.5, no separate
-API-app/CLI-app split). `scopes` is `openid profile email offline_access` -- S4's blueprint's
-own actual `property_mappings` (IMPL_SLICE_0B's Bug 3 finding: without an `offline_access` scope
-mapping bound to the Provider, Authentik never issues a `refresh_token`, breaking every ps-cli
-command after the first `auth login`), never an `api://<id>/access_as_user` URI form.
+`psService.auth.audience`/`cliClientId` are both the fixed literal `ps-cli` (one OAuth2
+Provider, one Application, both named `ps-cli`, no separate API-app/CLI-app split). `scopes` is
+`openid profile email offline_access` -- the blueprint's actual `property_mappings` (without an
+`offline_access` scope mapping bound to the Provider, Authentik never issues a `refresh_token`,
+breaking every ps-cli command after the first `auth login`), never an
+`api://<id>/access_as_user` URI form.
 """
 
 from __future__ import annotations
@@ -37,7 +34,7 @@ AUTHENTIK_APP_SLUG = "ps-cli"
 AUTHENTIK_SCOPES = "openid profile email offline_access"
 # Mirrors conftest.py's DEFAULT_OWNER_EMAIL (what `fill_tls_contact_email` writes).
 DEFAULT_OWNER_EMAIL = "owner@example.test"
-# Issue #165: PS Service reaches Authentik in-cluster (never through the public Ingress, which
+# PS Service reaches Authentik in-cluster (never through the public Ingress, which
 # does not route the admin API); the invitee-facing link is built from the public URL instead.
 AUTHENTIK_IN_CLUSTER_BASE_URL = "http://policy-system-authentik-server/auth"
 
@@ -60,14 +57,14 @@ def _auth(values: dict[str, object]) -> dict[str, str]:
 
 
 def _authentik(values: dict[str, object]) -> dict[str, str]:
-    """Narrows `values["psService"]["authentik"]` (issue #165) like `_auth` narrows `auth`."""
+    """Narrows `values["psService"]["authentik"]` like `_auth` narrows `auth`."""
     ps_service = cast("dict[str, object]", values["psService"])
     return cast("dict[str, str]", ps_service["authentik"])
 
 
 def _bootstrap_owner(values: dict[str, object]) -> dict[str, str]:
     """Narrows `values["psService"]["authzBootstrapOwner"]` the same way `_auth` narrows
-    `values["psService"]["auth"]` (issue #161).
+    `values["psService"]["auth"]`.
     """
     ps_service = cast("dict[str, object]", values["psService"])
     return cast("dict[str, str]", ps_service["authzBootstrapOwner"])
@@ -101,7 +98,7 @@ def test_fresh_release_sets_existing_secret_and_authentik_issuer_audience_cli_cl
     assert values is not None, "helm upgrade --install was never called"
     assert _llm(values)["existingSecret"] == LLM_SECRET_NAME
     auth = _auth(values)
-    # Path-based issuer (CHANGES.md F1): "https://<same-hostname-as-ps-service>/auth/
+    # Path-based issuer: "https://<same-hostname-as-ps-service>/auth/
     # application/o/ps-cli/" -- never a second, Authentik-only hostname.
     assert auth["issuer"].startswith("https://")
     assert auth["issuer"].endswith(f"/auth/application/o/{AUTHENTIK_APP_SLUG}/")
@@ -113,8 +110,8 @@ def test_fresh_release_sets_existing_secret_and_authentik_issuer_audience_cli_cl
 def test_issuer_is_path_based_under_ps_services_own_hostname_never_a_second_hostname(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """CHANGES.md row F1: rejects the original dual-hostname/dual-DNS-label design (infeasible --
-    one Azure Public IP has exactly one `dnsSettings.domainNameLabel`). The issuer's hostname
+    """The issuer is path-based, because one Azure Public IP has exactly one
+    `dnsSettings.domainNameLabel`, which rules out a dual-hostname design. The issuer's hostname
     must be the *exact same* hostname PS Service's own Ingress uses, never an external
     IdP's host, and never a distinct `auth-*` label.
     """
@@ -155,7 +152,7 @@ def test_scopes_includes_offline_access_so_ps_cli_ever_receives_a_refresh_token(
 def test_audience_and_cli_client_id_are_both_the_fixed_ps_cli_literal_not_an_entra_app_id(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """PLAN.md §0.5: one fixed OAuth2 Provider/Application (`ps-cli`), never a separate
+    """One fixed OAuth2 Provider/Application (`ps-cli`), never a separate
     API-app/CLI-app split -- `audience` and `cliClientId` are the SAME literal, not two distinct
     app IDs.
     """
@@ -174,7 +171,7 @@ def test_audience_and_cli_client_id_are_both_the_fixed_ps_cli_literal_not_an_ent
 def test_rerun_with_unchanged_inputs_makes_no_helm_upgrade_call(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """AC-BI-018's literal claim: a rerun against unchanged inputs makes zero `helm upgrade`
+    """A rerun against unchanged inputs makes zero `helm upgrade`
     calls (not merely "reports success" -- the call itself must not happen).
     """
     _seed(deploy_ps_fixture)
@@ -189,7 +186,7 @@ def test_rerun_with_unchanged_inputs_makes_no_helm_upgrade_call(
     assert second_calls == first_calls
 
 
-def test_rerun_only_compares_the_nine_script_set_fields_not_falkordb_or_llm_provider_from_values_prod(  # noqa: E501 - CHANGES.md Appendix A's exact corrected test name, not abbreviated
+def test_rerun_only_compares_the_nine_script_set_fields_not_falkordb_or_llm_provider_from_values_prod(  # noqa: E501 - full test name, not abbreviated
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
     """Seeds `helm get values` with the 9 fields a fresh run would itself produce, PLUS extra
@@ -202,7 +199,7 @@ def test_rerun_only_compares_the_nine_script_set_fields_not_falkordb_or_llm_prov
     all -- permanently defeating idempotency.
 
     The exact issuer value must be read back from a first real run rather than hardcoded, since
-    it is now derived from the fixture's own seeded public-IP/DNS-label state (S16), not a static
+    it is now derived from the fixture's own seeded public-IP/DNS-label state, not a static
     tenant-id literal.
     """
     _seed(deploy_ps_fixture)
@@ -273,7 +270,7 @@ def test_changed_scopes_triggers_a_new_helm_upgrade_call(
 def test_fresh_release_sets_the_owner_email_as_subject_and_the_computed_issuer(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """AC-BI-014/AC-BI-022: the owner's email is the `sub` (`sub_mode: user_username`) and the
+    """The owner's email is the `sub` (`sub_mode: user_username`) and the
     issuer is the one the script computes, so one deploy sets the whole bootstrap identity.
     """
     _seed(deploy_ps_fixture)
@@ -292,7 +289,7 @@ def test_fresh_release_sets_the_owner_email_as_subject_and_the_computed_issuer(
 def test_fresh_release_splits_the_authentik_urls_in_cluster_api_and_public_link(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """OD-1 = B: PS Service calls Authentik at the in-cluster Service; only the invitee link uses
+    """PS Service calls Authentik at the in-cluster Service; only the invitee link uses
     the public host (`https://<host>/auth`, the same host the issuer names).
     """
     _seed(deploy_ps_fixture)
@@ -353,7 +350,7 @@ def test_a_changed_authentik_url_triggers_a_new_helm_upgrade_call(
 def test_blank_owner_email_without_stdin_fails_naming_the_flag_before_any_az_call(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """AC-BI-014/AC-BI-016: a blank owner email that never got answered is an actionable failure,
+    """A blank owner email that never got answered is an actionable failure,
     not a silent omission from the release values.
     """
     config = deploy_ps_fixture.config_path

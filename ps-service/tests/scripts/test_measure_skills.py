@@ -1,4 +1,4 @@
-"""Unit tests for `scripts/measure_skills.py` (issue #200, AC-BI-001).
+"""Unit tests for `scripts/measure_skills.py`.
 
 Fixture skill trees are written to `tmp_path`, so the tests do not depend on the real skills.
 """

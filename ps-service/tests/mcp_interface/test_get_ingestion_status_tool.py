@@ -1,4 +1,4 @@
-"""Tests for the `get_ingestion_status` MCP tool (issue #194, S2 and S5).
+"""Tests for the `get_ingestion_status` MCP tool.
 
 S5 covers failure outcomes: a failed run reports the same named `error:` text
 `ingest_regulation` returns, an unexpected exception is sanitized, and a run that is left
@@ -41,7 +41,7 @@ from ps_service.ingestion_runs import IngestionRunRow, dispatch
 from ps_service.logging import configure, resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
 
-# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+# The sync tool writes `ingestion_run.*` rows: keep them off Postgres.
 pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 _RECONCILER = ("system:ingestion-run-reconciler", "system:ingestion-run-reconciler")
@@ -76,7 +76,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> InMemoryIngestionRunStore:
 def test_a_never_submitted_run_id_returns_the_unknown_shape(
     run_id: str, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-004: unknown (or unparseable) ids answer `unknown`, never raise."""
+    """Unknown (or unparseable) ids answer `unknown`, never raise."""
     _ = store
 
     assert body(call_get_ingestion_status(run_id)) == {
@@ -109,7 +109,7 @@ def test_a_store_outage_returns_the_fixed_unavailable_error(
     )
 
 
-# --- S5: failure outcomes, sanitization, never stuck at "running" -----------------------------
+# --- failure outcomes, sanitization, never stuck at "running" -----------------------------
 
 
 @pytest.fixture
@@ -164,7 +164,7 @@ def test_a_mid_run_pipeline_failure_polls_as_the_same_error_ingest_regulation_re
     pipeline_store: InMemoryIngestionRunStore,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-013: `failed`, no result, the exact named error the blocking tool returns."""
+    """`failed`, no result, the exact named error the blocking tool returns."""
     _ = pipeline_store
     emitter = configure()
     _use_real_pipeline_stages(
@@ -193,7 +193,7 @@ def test_a_mid_run_pipeline_failure_polls_as_the_same_error_ingest_regulation_re
 def test_a_graph_unreachable_mid_run_polls_as_the_fixed_unavailable_error(
     monkeypatch: pytest.MonkeyPatch, pipeline_store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-013/015: a connection failure on the native graph never leaks host detail."""
+    """A connection failure on the native graph never leaks host detail."""
     _ = pipeline_store
     fake = build_fake_pipeline_dependencies(rid="cra-1.0")
 
@@ -219,7 +219,7 @@ def test_an_unexpected_background_exception_is_sanitized_but_logged_server_side(
     pipeline_store: InMemoryIngestionRunStore,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-014/015: the row is `failed` with the generic text; detail stays in the log."""
+    """The row is `failed` with the generic text; detail stays in the log."""
     _ = pipeline_store
     emitter = configure()
     _use_real_pipeline_stages(monkeypatch)
@@ -258,7 +258,7 @@ def test_an_unexpected_background_exception_is_sanitized_but_logged_server_side(
 def test_a_failed_terminal_write_is_reconciled_to_failed_on_the_next_poll(
     monkeypatch: pytest.MonkeyPatch, pipeline_store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-014 / AC-BI-008: a lost terminal write never leaves the run `running` forever."""
+    """A lost terminal write never leaves the run `running` forever."""
     _use_real_pipeline_stages(monkeypatch)
     pipeline_store.fail_next_complete = 1
 
@@ -280,7 +280,7 @@ def test_a_failed_terminal_write_is_reconciled_to_failed_on_the_next_poll(
 def test_a_run_row_left_running_by_a_restarted_process_polls_as_interrupted(
     pipeline_store: InMemoryIngestionRunStore,
 ) -> None:
-    """AC-BI-014: a `running` row with no worker in this process is reported interrupted."""
+    """A `running` row with no worker in this process is reported interrupted."""
     run_id = _seed_running_row(pipeline_store)
 
     assert _status(run_id) == {
@@ -394,7 +394,7 @@ def test_a_workers_own_completion_keeps_the_submitters_attribution(
 def test_polling_a_running_or_finished_run_writes_no_audit_row(
     monkeypatch: pytest.MonkeyPatch, pipeline_store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-014: polls are write-free for a live and for a finished run."""
+    """Polls are write-free for a live and for a finished run."""
     pipeline = use_gated_real_pipeline(monkeypatch)
     try:
         run_id = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])

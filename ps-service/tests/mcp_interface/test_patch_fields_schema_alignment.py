@@ -1,4 +1,4 @@
-"""#199 the MCP patch-field validation follows the schema-derived sets and enum order."""
+"""The MCP patch-field validation follows the schema-derived sets and enum order."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from ps_service.mcp_interface import mcp_server
 
 
 def test_add_control_to_draft_fields_are_the_control_set_without_type() -> None:
-    """#199 AC-BI-007: add-control-to-draft narrows the derived Control set by `type` only."""
+    """add-control-to-draft narrows the derived Control set by `type` only."""
     narrowed = mcp_server._ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS  # pyright: ignore[reportPrivateUsage]  # pin test reads the tool's private allow-list by design
 
     assert narrowed == patchable_fields("Control") - {"type"}
@@ -33,7 +33,7 @@ def test_add_control_to_draft_fields_are_the_control_set_without_type() -> None:
 
 @pytest.mark.parametrize("label", ["Standard", "Control"])
 def test_bad_implementation_status_error_lists_the_schema_value_order(label: str) -> None:
-    """#199 AC-BI-003: the rejection text enumerates the schema's values in schema order."""
+    """The rejection text enumerates the schema's values in schema order."""
     values = enum_values(label, "implementation_status")
     enum_checks = (
         mcp_server._STANDARD_IMPLEMENTATION_STATUS_VALUES  # pyright: ignore[reportPrivateUsage]  # pin test reads the tool's private enum tuple by design

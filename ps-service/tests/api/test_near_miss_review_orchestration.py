@@ -1,4 +1,4 @@
-"""Audit emission of `run_resolve_near_miss` (issue #195, AC-BI-012/011/010/001).
+"""Audit emission of `run_resolve_near_miss`.
 
 Hand-written structural fakes (no `unittest.mock`): a recording `InMemoryAuditStore` whose ordered
 `events` list is shared with the fake graph so audit-before-effect is asserted on real ordering.
@@ -259,7 +259,7 @@ def test_resolve_failure_is_still_raised_when_the_failed_row_cannot_be_written()
 def test_resolve_without_a_gateway_is_503_after_the_not_found_check_and_before_any_audit_row(
     decision: Decision,
 ) -> None:
-    """Issue #210 (F2): the resolve writes through the gateway, so no gateway fails it closed.
+    """The resolve writes through the gateway, so no gateway fails it closed.
 
     The check comes after the not-found check (an unknown review is still a 404 and writes no
     row) and before the opening audit row (no row for a resolution that cannot run).
@@ -280,7 +280,7 @@ def test_resolve_without_a_gateway_is_503_after_the_not_found_check_and_before_a
 def test_resolve_anchors_the_group_to_the_opening_audit_rows_id(
     decision: Decision, process_gateway: ProcessGateway
 ) -> None:
-    """Issue #210 (A6): the resolution writes under the audit event of its own opening row.
+    """The resolution writes under the audit event of its own opening row.
 
     The `GraphWriteTarget` handed to the resolution names the `policy_system` graph, carries the
     id the store returned for the `near_miss.resolve` `applied` row (not one made up elsewhere),

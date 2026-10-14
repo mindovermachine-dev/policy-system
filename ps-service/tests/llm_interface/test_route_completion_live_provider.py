@@ -1,4 +1,4 @@
-"""AC-001 live test: RouteCompletion against the real, configured LLM Provider."""
+"""Live test: RouteCompletion against the real, configured LLM Provider."""
 
 from __future__ import annotations
 

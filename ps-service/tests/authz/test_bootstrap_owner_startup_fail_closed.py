@@ -1,16 +1,16 @@
-"""AC-BI-001/AC-BI-002: PS Service refuses to start when the RBAC bootstrap owner identity
+"""PS Service refuses to start when the RBAC bootstrap owner identity
 (subject + issuer) is not configured, mirroring `tests/auth/test_startup_fail_closed.py`'s
-`AuthConfigurationError` presence-check shape exactly (issue #144, PLAN.md Slice 1).
+`AuthConfigurationError` presence-check shape exactly.
 
 Only the fail-closed *presence* check is covered here -- `bootstrap_first_owner`'s own
-match/no-match comparison logic (AC-BI-003/AC-BI-004) is Slice 2/3's concern, exercised
+match/no-match comparison logic is covered elsewhere, exercised
 against `FakeAccessRoleStore`, not this file.
 
 `require_bootstrap_owner_configured` is wired into `create_app` immediately after
 `resolve_auth_context`, so every non-bypass test here must also satisfy
 `resolve_auth_context`'s own requirement (`auth_issuer`/`auth_audience` set) or that
 earlier gate raises `AuthConfigurationError` first and masks the assertion under test --
-same technique CHANGES.md's Helm-guard tests use, applied at the Python layer. Since
+same technique the Helm-guard tests use, applied at the Python layer. Since
 `auth_issuer`/`auth_audience` being set makes `resolve_auth_context` perform a real OIDC
 discovery fetch, `ps_service.auth.startup.fetch_discovery_document` is monkeypatched to a
 stub that succeeds without any network access, isolating these tests to the bootstrap-owner
@@ -37,7 +37,7 @@ def _config(**overrides: object) -> ServiceConfig:
         "graceful_shutdown_seconds": 10,
         "logging_dir": None,
         "is_local_test_bypass_active": False,
-        # Unconditional (issue #140): `require_authentik_credential_configured`
+        # Unconditional: `require_authentik_credential_configured`
         # carries no bypass exemption, so every test in this file needs both
         # set too -- including `test_create_app_does_not_raise_when_bypass_
         # active_even_with_bootstrap_owner_unset` below.

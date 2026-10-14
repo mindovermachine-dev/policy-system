@@ -1,10 +1,10 @@
-"""Version-file sync + verify (AC-BI-012, AC-BI-014).
+"""Version-file sync + verify.
 
 `sync-version-files.sh` writes `release_version` into the version-lockstep fields across four
 files (`ps-service/pyproject.toml`, `ps-cli/pyproject.toml`, `charts/policy-system/Chart.yaml`
 (`version` + `appVersion`)) and `ps-skills/ps-plugin/.claude-plugin/plugin.json` -- re-locking
-`uv.lock` for the two uv workspace members along the way (PLAN A-13). `charts/policy-system/
-values.yaml` is no longer synced here (issue #80 AC-BI-012 amendment): its `psService.image.tag`
+`uv.lock` for the two uv workspace members along the way. `charts/policy-system/
+values.yaml` is no longer synced here: its `psService.image.tag`
 defaults to empty and falls back to `Chart.yaml`'s `appVersion` via the chart template instead.
 `verify-version-files.sh` reads all of the above back and fails, naming every offender, when any
 field does not equal `release_version`.
@@ -98,7 +98,7 @@ def test_each_file_changes_exactly_one_line(release_fixture: ReleaseFixture) -> 
     expected_lines_changed = {
         "ps-service/pyproject.toml": 1,
         "ps-cli/pyproject.toml": 1,
-        CHART_RELATIVE_PATH: 2,  # `version:` + `appVersion:` -- two distinct fields, PLAN A-20
+        CHART_RELATIVE_PATH: 2,  # `version:` + `appVersion:` -- two distinct fields
         PLUGIN_RELATIVE_PATH: 1,
     }
     for path, expected in expected_lines_changed.items():

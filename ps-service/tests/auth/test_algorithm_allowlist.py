@@ -1,4 +1,4 @@
-"""AC-BI-009: algorithm allow-list enforcement (issue #58, Slice 7).
+"""Algorithm allow-list enforcement.
 
 The allow-list (`AuthContext.allowed_algorithms`) is computed once at
 discovery time from the issuer's *advertised*
@@ -8,7 +8,7 @@ PyJWT's own documented warning (`jwt/api_jwt.py`: "Do not compute the
 `algorithms` parameter based on the `alg` from the token itself"). These
 tests prove the allow-list is actually threaded into `PsTokenVerifier` end
 to end against a real local HTTP server
-(`tests.auth.mock_oidc_provider.MockOidcProvider`, AC-BI-017, whose
+(`tests.auth.mock_oidc_provider.MockOidcProvider`, whose
 discovery document advertises only `["RS256"]`), not just theoretically
 true by construction.
 
@@ -62,7 +62,7 @@ def _verifier(provider: MockOidcProvider, *, emitter: LogEmitter) -> PsTokenVeri
         jwks_uri=provider.jwks_uri,
         allowed_algorithms=_ALLOWED_ALGORITHMS,
     )
-    # Slice 10: `verify_token` now always logs (AC-BI-014/015) -- a real
+    # `verify_token` always logs -- a real
     # `LogEmitter` (`tests/conftest.py`'s `make_emitter`) is required so
     # `emit_log_entry`'s no-default-configured guard never trips here; this
     # file's own tests assert nothing about log content.

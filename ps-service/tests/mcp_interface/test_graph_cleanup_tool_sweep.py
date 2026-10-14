@@ -1,9 +1,9 @@
 # pyright: reportPrivateUsage=false
-"""Cross-cutting sweeps over every graph-cleanup MCP tool (issue #190, slice 17).
+"""Cross-cutting sweeps over every graph-cleanup MCP tool.
 
 Seven tools per the Container Architecture; each must be behind the authz-gate sweep
-(AC-BI-001/002), return only sanitised errors (AC-BI-018), and every audit action the executors
-write must be filterable through `list-audit-events` (AC-BI-023).
+, return only sanitised errors, and every audit action the executors
+write must be filterable through `list-audit-events`.
 """
 
 from __future__ import annotations

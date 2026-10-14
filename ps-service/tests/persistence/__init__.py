@@ -1,1 +1,1 @@
-"""Tests for `ps_service.persistence` (issue #130)."""
+"""Tests for `ps_service.persistence`."""

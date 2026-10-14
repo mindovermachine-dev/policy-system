@@ -1,9 +1,8 @@
-"""Tests for `ServiceConfig.max_request_body_bytes` + `main._MaxBodySizeMiddleware`
-(CHANGES.md OQ7, new Slice 6.9).
+"""Tests for `ServiceConfig.max_request_body_bytes` + `main._MaxBodySizeMiddleware`.
 
-Placed under `tests/api/` (this task's declared scope) even though
+Placed under `tests/api/` even though
 `ServiceConfig` itself lives in `ps_service/config.py` -- the field and the
-middleware are one OQ7 unit, and the middleware is what these tests actually
+middleware are one unit, and the middleware is what these tests actually
 exercise end to end via `TestClient`.
 """
 
@@ -17,7 +16,7 @@ from ps_service.main import create_app
 
 
 def test_service_config_defaults_max_request_body_bytes_to_100_mebibytes() -> None:
-    """CHANGES.md OQ7: default is 104_857_600 (100 MiB)."""
+    """The default is 104_857_600 (100 MiB)."""
     config = ServiceConfig(
         host="127.0.0.1", port=8000, graceful_shutdown_seconds=10, logging_dir=None
     )
@@ -90,7 +89,7 @@ def test_request_over_the_limit_returns_413_with_structured_body() -> None:
 
 
 def test_oversized_internal_content_request_returns_413_with_structured_body() -> None:
-    """AC-BI-008: the size limit covers the new content-transport payload shape,
+    """The size limit covers the new content-transport payload shape,
     not only the legacy path-based one.
     """
     client = TestClient(create_app(_app_config(max_bytes=10)))

@@ -1,11 +1,11 @@
 """Script-level proof that `scripts/deploy-ps-prod.sh` makes no Key Vault or kubectl calls for
 Authentik's or the PS Postgres credentials, and that `--rotate-authentik-secrets` no
-longer exists (issue #159, AC-BI-006's script-side half / AC-BI-009).
+longer exists.
 
 Generation of these two secrets moved entirely into the Helm chart itself (a `lookup`+
 `randAlphaNum` idiom in charts/policy-system/templates/authentik-credentials-secret.yaml/
 ps-postgres-secret.yaml), created/updated as ordinary chart-rendered resources by
-`helm upgrade --install` (this script's own `ensure_release`) -- this script no longer reads,
+`helm upgrade --install` (this script's own `ensure_release`) -- this script does not read,
 writes, or syncs either secret itself. The chart-rendering half of this proof (the Secrets
 actually render correctly) lives in charts/policy-system/tests/*.yaml (helm-unittest), since this
 Python harness's fake `helm` never actually renders the real chart (see conftest.py's own
@@ -74,7 +74,7 @@ def test_fresh_deploy_never_applies_the_authentik_or_signing_postgres_secret_its
 def test_rotate_authentik_secrets_flag_no_longer_exists(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """AC-BI-009: the flag is removed outright (PLAN.md §0.6), not redefined -- an unknown-flag
+    """The flag is removed outright, not redefined -- an unknown-flag
     usage error, same as any other unrecognized argument (parse_args's own default case arm).
     """
     _seed(deploy_ps_fixture)

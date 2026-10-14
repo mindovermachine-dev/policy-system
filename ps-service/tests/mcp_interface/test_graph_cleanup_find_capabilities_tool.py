@@ -1,4 +1,4 @@
-"""`find-capability-merge-candidates` for a granted `ComplianceOfficer` (issue #190, slice 6)."""
+"""`find-capability-merge-candidates` for a granted `ComplianceOfficer`."""
 
 from __future__ import annotations
 

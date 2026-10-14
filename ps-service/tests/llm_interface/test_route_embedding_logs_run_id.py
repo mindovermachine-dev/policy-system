@@ -1,4 +1,4 @@
-"""AC-005 test: a RouteEmbedding call emits a structured log entry with the bound run_id."""
+"""A RouteEmbedding call emits a structured log entry with the bound run_id."""
 
 from __future__ import annotations
 

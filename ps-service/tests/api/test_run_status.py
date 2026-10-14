@@ -1,6 +1,6 @@
 """Tests for ``ps_service.api.run_status`` (the process-wide run-stage registry).
 
-Increment 10 (#61, AC-BI-008 foundation). Mirrors
+Mirrors
 ``tests/dependency_health/test_registry.py`` in shape: no real pipeline, no
 FastAPI app -- just the module-level ``dict`` + lock under direct test.
 """

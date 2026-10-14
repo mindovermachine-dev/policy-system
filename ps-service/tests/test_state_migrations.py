@@ -1,6 +1,6 @@
 """Tests for `ps_service.state_migrations`, the one shared list of PS state migration sources.
 
-Service startup and the provisioning CLI (issue #205 follow-up) must apply the same ordinary
+Service startup and the provisioning CLI must apply the same ordinary
 component migrations in the same order, so the list lives in exactly one module.
 """
 

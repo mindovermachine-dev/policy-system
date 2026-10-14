@@ -1,9 +1,9 @@
-"""Creating a Policy is ONE gateway group linked to its `applied` audit row (issue #211, S6).
+"""Creating a Policy is ONE gateway group linked to its `applied` audit row.
 
 `create_policy_draft` without a Capability claim: the `applied` `policy.create_draft` row is written
-FIRST (AC-BI-008) and its id anchors ONE group holding the Policy, its optional `SUPERSEDED_BY` edge
+FIRST and its id anchors ONE group holding the Policy, its optional `SUPERSEDED_BY` edge
 and every Standard and Control with their parent edges. A gateway failure after the row is a
-`failed` row with the same details plus the persistence error (AC-BI-011); a value the gateway
+`failed` row with the same details plus the persistence error; a value the gateway
 cannot store is refused the same way. The group is atomic: a failure leaves no partial draft
 (section 9 item 11), which the direct writer's one-statement-per-node sequence could not promise.
 """
@@ -103,7 +103,6 @@ def _seed_approved_prior(rig: LifecycleRig) -> None:
 def test_a_policy_with_children_is_one_group_of_nodes_then_parent_edges(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-002 (create), AC-BI-009."""
     result = _create(lifecycle_rig, standards=_TREE)
 
     (group,) = lifecycle_rig.store.groups
@@ -146,7 +145,7 @@ def test_a_bare_policy_is_one_group_of_one_node(lifecycle_rig: LifecycleRig) -> 
 def test_the_group_is_linked_to_the_applied_row_that_was_written_before_it(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-008: the `applied` row precedes the graph write and anchors the group."""
+    """The `applied` row precedes the graph write and anchors the group."""
     _create(lifecycle_rig, standards=_TREE)
 
     (group,) = lifecycle_rig.store.groups
@@ -175,7 +174,6 @@ def test_a_taken_title_is_rejected_with_a_rejected_row_and_writes_nothing(
 def test_a_fork_links_the_prior_and_carries_its_content_as_draft_children(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-002 (fork)."""
     _seed_approved_prior(lifecycle_rig)
 
     result = _create(lifecycle_rig, supersedes_policy_id=_PRIOR)
@@ -214,7 +212,7 @@ def test_a_fork_links_the_prior_and_carries_its_content_as_draft_children(
 def test_a_forked_node_carrying_a_reserved_key_is_refused_with_a_failed_row(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """Section 9 item 6: the direct writer copied such a key; the gateway refuses it."""
+    """The gateway refuses a key it cannot store."""
     _seed_approved_prior(lifecycle_rig)
     lifecycle_rig.graph.nodes[("Control", "ctl_prior")]["embedding"] = [0.1, 0.2]
     before = dict(lifecycle_rig.graph.nodes)
@@ -231,7 +229,6 @@ def test_a_forked_node_carrying_a_reserved_key_is_refused_with_a_failed_row(
 def test_a_gateway_failure_after_the_applied_row_records_failed_with_the_same_details(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011."""
     lifecycle_rig.store.fail_appends()
 
     with pytest.raises(PolicyLifecycleGraphUnavailableError) as raised:
@@ -248,7 +245,6 @@ def test_a_gateway_failure_after_the_applied_row_records_failed_with_the_same_de
 def test_a_group_committed_but_not_applied_is_a_failure_with_a_failed_row(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011."""
     lifecycle_rig.graph.fail_on_write(redis.exceptions.ConnectionError("down"))
 
     with pytest.raises(PolicyLifecycleGraphUnavailableError) as raised:

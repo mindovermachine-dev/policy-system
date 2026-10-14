@@ -1,5 +1,4 @@
-"""HTTP tests for the companion-browser signing ceremony (issue #131, PLAN.md §3,
-CHANGES.md F2/F3, PLAN.md §4 Slice 3).
+"""HTTP tests for the companion-browser signing ceremony.
 
 Mirrors `test_enrollment_ceremony.py`'s style exactly: `TestClient` +
 `app.dependency_overrides` supplying fake `PendingApprovalStore`/
@@ -14,7 +13,7 @@ graph-touching `resolve_review` callable is a scripted fake, exactly
 mirroring this codebase's own established layered-fake convention (the one
 `falkordb_live`-marked test proving the underlying merge Cypher itself is
 correct already exists, `company_merge/test_pending_review_resolve.py`, and
-is not re-proven here -- Slice 3's job is the signing-ceremony plumbing, not
+is not re-proven here -- this module's job is the signing-ceremony plumbing, not
 the merge query).
 
 `_fake_dependencies`/`_record` are reused verbatim from
@@ -264,11 +263,10 @@ def _enroll(
 def _independent_sign_challenge(row: PendingApprovalRow) -> bytes:
     """Hand-compute the expected sign challenge *without* calling production code.
 
-    A from-scratch re-implementation of the documented recipe (PLAN.md §3,
-    CHANGES.md, AC-BI-004/AC-BI-011: canonical JSON of `tool_name`/
+    A from-scratch re-implementation of the documented recipe (canonical JSON of `tool_name`/
     `normalized_args`/`actor_subject`/`actor_issuer`, `sort_keys=True`,
     `separators=(",", ":")`, then the row's own `nonce` bytes appended,
-    then `sha256`) -- proves AC-BI-004's binding independently of
+    then `sha256`) -- proves the challenge binding independently of
     `passkey_signing.service._compute_sign_challenge`, not merely that the
     endpoint agrees with itself.
     """
@@ -289,7 +287,7 @@ def _independent_sign_challenge(row: PendingApprovalRow) -> bytes:
 
 
 def test_valid_signature_executes_the_merge_and_reports_it() -> None:
-    """PLAN.md §4 Slice 3's own defining test: a full signing ceremony, driven
+    """A full signing ceremony, driven
     entirely through the REST surface, actually executes the merge and
     reports it back through both the signing response and the resumable
     status check.
@@ -316,7 +314,7 @@ def test_valid_signature_executes_the_merge_and_reports_it() -> None:
     ]
     challenge = base64url_to_bytes(options_body["challenge"])
 
-    # AC-BI-004's binding, proven independently of the production challenge function.
+    # The challenge binding, proven independently of the production challenge function.
     assert challenge == _compute_sign_challenge(row)
     assert challenge == _independent_sign_challenge(row)
 
@@ -335,10 +333,10 @@ def test_valid_signature_executes_the_merge_and_reports_it() -> None:
     }
     assert recorded_calls == [_MergeCall(_REVIEW_ID, "merge")]
 
-    # AC-BI-010: verifiable via the resumable status check, REST side --
+    # Verifiable via the resumable status check, REST side --
     # the identical `check_pending_approval` function the MCP
-    # `near_misses_check_approval` tool also calls (CHANGES.md F1's "one
-    # implementation, two callers" rule).
+    # `near_misses_check_approval` tool also calls (one
+    # implementation, two callers).
     status_response = client.get(f"/near-misses/approvals/{row.id}")
     assert status_response.status_code == 200
     status_body = status_response.json()
@@ -346,7 +344,7 @@ def test_valid_signature_executes_the_merge_and_reports_it() -> None:
     assert status_body["winner_id"] == _WINNER_ID
     assert status_body["loser_id"] == _LOSER_ID
 
-    # PLAN.md §3 step (b): the authenticator's reported sign_count was persisted.
+    # The authenticator's reported sign_count was persisted.
     updated_credential = credential_store.get_by_credential_id(authenticator.credential_id)
     assert updated_credential is not None
     assert updated_credential.sign_count == 1
@@ -355,12 +353,12 @@ def test_valid_signature_executes_the_merge_and_reports_it() -> None:
 def test_a_different_actors_credential_is_rejected_before_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: a credential belonging to a different actor is rejected even
+    """A credential belonging to a different actor is rejected even
     if presented against this approval -- and never even reaches
     `verify_authentication_response`, proven by making that call raise if
     it is ever reached at all (mirrors `test_enrollment_ceremony.py`'s
-    identical F3 proof technique, applied here to AC-BI-005).
-    Issue #131 Slice 4: `configure()` installs the default emitter this
+    identical proof technique).
+    `configure()` installs the default emitter this
     rejection path now logs to (`error_handlers.reject`).
     """
     configure()
@@ -370,9 +368,9 @@ def test_a_different_actors_credential_is_rejected_before_verification(
             "verify_authentication must not be called for a wrong-actor credential"
         )
 
-    # Ordering proof via raise, not assert_called (AUDIT.md §2 case 6): the raise fires only if
+    # Ordering proof via raise, not assert_called the raise fires only if
     # the actor-binding check failed to reject this credential before verification.
-    # detroit-exception: wrong-actor credential never reaches verify_authentication (AC-BI-005)
+    # detroit-exception: wrong-actor credential never reaches verify_authentication
     monkeypatch.setattr("ps_service.passkey_signing.router.verify_authentication", _fail_if_called)
 
     pending_store = FakePendingApprovalStore()
@@ -412,10 +410,10 @@ def test_replaying_sign_verify_after_a_successful_sign_is_rejected_without_a_sec
     identical generic "no longer valid" error, and no second merge occurs.
 
     This is the straightforward sequential case only (sign, then sign
-    again) -- exhaustive concurrent-race/replay coverage is Slice 4's job
-    (PLAN.md §4), not this one's.
+    again) -- exhaustive concurrent-race/replay coverage belongs to the hardening tests,
+    not this one.
 
-    Issue #131 Slice 4: `configure()` installs the default emitter this
+    `configure()` installs the default emitter this
     rejection path now logs to (`error_handlers.reject`).
     """
     configure()
@@ -456,12 +454,12 @@ def test_replaying_sign_verify_after_a_successful_sign_is_rejected_without_a_sec
 def test_sign_options_and_verify_reject_an_expired_approval_without_calling_webauthn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHANGES.md F3's own regression test, applied to the sign ceremony: an
+    """Regression test for the sign ceremony: an
     expired approval is rejected by `_require_pending_and_unexpired` before
     either `sign/options` or `sign/verify` ever reaches the `webauthn`
     library.
 
-    Issue #131 Slice 4: `configure()` installs the default emitter this
+    `configure()` installs the default emitter this
     rejection path now logs to (`error_handlers.reject`).
     """
     configure()
@@ -469,7 +467,7 @@ def test_sign_options_and_verify_reject_an_expired_approval_without_calling_weba
     def _fail_if_called(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("webauthn_rp function must not be called for an expired approval")
 
-    # Ordering proof via raise, not assert_called (AUDIT.md §2 case 6); mirrors enrollment's F3
+    # Ordering proof via raise, not assert_called; mirrors enrollment's
     # proof in test_enrollment_ceremony.py, applied to the sign ceremony's own endpoints.
     # detroit-exception: proves sign/options never reaches webauthn for an expired approval
     monkeypatch.setattr(
@@ -505,7 +503,7 @@ def test_sign_options_and_verify_reject_an_expired_approval_without_calling_weba
 
 
 def test_sign_routes_never_carry_the_code_in_their_url_path() -> None:
-    """CHANGES.md F2's structural fix, extended to the new `.../sign/*` routes."""
+    """The `.../sign/*` routes never carry the code in their URL path."""
     from ps_service.passkey_signing.router import build_passkey_signing_router
 
     router = build_passkey_signing_router()

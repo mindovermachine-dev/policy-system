@@ -1,4 +1,4 @@
-"""A signing credential is only usable on the `rp_id` it was enrolled under (issue #196).
+"""A signing credential is only usable on the `rp_id` it was enrolled under.
 
 `signing_credentials` recorded no `rp_id`, and `needs_enrollment` was simply
 `not has_any_for_actor(...)`. A WebAuthn credential only works for the RP id
@@ -8,8 +8,7 @@ unusable credential in `allowCredentials`, and left the officer with a
 browser-side failure and no route back to enrollment -- the shell only enrolls
 when `needs_enrollment` is true.
 
-Fixing the loopback-IP link host (`127.0.0.1` -> `localhost`) makes this live
-rather than theoretical: an actor already enrolled under `127.0.0.1` is now
+The failure is real, not theoretical: an actor enrolled under `127.0.0.1` is
 handed `localhost` links. The same trap fires on any real host change
 (a `kind` NodePort to an Ingress domain).
 """
@@ -47,7 +46,7 @@ def _authenticated_client(
 
 
 def test_summary_requires_enrollment_when_the_only_credential_is_for_another_rp_id() -> None:
-    """AC-BI-014: a credential enrolled on a different host cannot sign here, so the
+    """A credential enrolled on a different host cannot sign here, so the
     ceremony must offer enrollment rather than report the actor as already enrolled.
     """
     pending_store = FakePendingApprovalStore()
@@ -69,7 +68,7 @@ def test_summary_requires_enrollment_when_the_only_credential_is_for_another_rp_
 
 
 def test_summary_skips_enrollment_when_a_credential_exists_for_this_rp_id() -> None:
-    """AC-BI-014's other half: scoping must not force a re-enrollment on every visit --
+    """Scoping must not force a re-enrollment on every visit --
     a credential enrolled under the current `rp_id` still suppresses it.
     """
     pending_store = FakePendingApprovalStore()
@@ -91,7 +90,7 @@ def test_summary_skips_enrollment_when_a_credential_exists_for_this_rp_id() -> N
 
 
 def test_summary_requires_enrollment_for_a_credential_predating_the_rp_id_column() -> None:
-    """AC-BI-015: a row enrolled before `rp_id` was recorded (NULL) cannot be proven
+    """A row enrolled before `rp_id` was recorded (NULL) cannot be proven
     usable on this host, so it must never suppress enrollment.
     """
     pending_store = FakePendingApprovalStore()
@@ -113,7 +112,7 @@ def test_summary_requires_enrollment_for_a_credential_predating_the_rp_id_column
 
 
 def test_sign_options_offers_only_credentials_enrolled_for_this_rp_id() -> None:
-    """AC-BI-014/AC-BI-015: `allowCredentials` must not advertise a credential the
+    """`allowCredentials` must not advertise a credential the
     browser cannot produce an assertion for -- the authenticator would simply find
     no match, surfacing as an unexplained browser-side failure.
     """

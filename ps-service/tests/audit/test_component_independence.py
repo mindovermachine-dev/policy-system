@@ -1,4 +1,4 @@
-"""AC-BI-017 (issue #130): `audit` and `persistence` stay component-independent.
+"""`audit` and `persistence` stay component-independent.
 
 `audit` is a shared component that consumers depend on, never the reverse; `persistence`
 is shared plumbing that every state-store component may import but that itself imports

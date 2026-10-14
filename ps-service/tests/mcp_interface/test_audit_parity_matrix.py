@@ -1,4 +1,4 @@
-"""Cross-transport parity of the new audit rows (issue #195, AC-BI-017 / AC-BI-001).
+"""Cross-transport parity of the new audit rows.
 
 The same operation over MCP, REST or a passkey approval records the same rows (apart from the
 actor and the run id). Per-operation parity is pinned next to each operation
@@ -92,7 +92,7 @@ def _shape(rows: list[RecordedAuditRow]) -> list[tuple[object, ...]]:
 
 
 def test_mcp_and_rest_sweeps_record_the_same_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-017: one amended instrument -> identical submit/complete rows over both transports."""
+    """One amended instrument -> identical submit/complete rows over both transports."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     mcp_store = InMemoryAuditStore()

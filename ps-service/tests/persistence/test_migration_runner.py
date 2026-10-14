@@ -1,10 +1,10 @@
-"""Tests for `ps_service.persistence.migration_runner` (issue #130 Slice 2, #144).
+"""Tests for `ps_service.persistence.migration_runner`.
 
 Fast tests inspect the shipped migration files and the runner's module
 documentation. `postgres_live`-marked tests prove what only a real Postgres
 can: that the baseline files apply, are idempotent, are applied per file
 transactionally, and leave exactly the expected schema. Deselected by default
-(BASELINE.md's tier gating) -- run explicitly with
+(tier gating) -- run explicitly with
 `uv run pytest -m postgres_live` against a reachable `PS_STATE_POSTGRES_*`
 instance (e.g. `postgres:16-alpine`, matching
 `psServiceSigning.postgres.image` in `charts/policy-system/values.yaml`).
@@ -313,7 +313,7 @@ def test_apply_emits_failure_entry_without_sql_before_raising(
 
 @pytest.mark.postgres_live
 def test_audit_events_applies_cleanly_and_creates_the_expected_table() -> None:
-    """`audit_events` round-trips an ordinary insert (issue #147)."""
+    """`audit_events` round-trips an ordinary insert."""
     _require_configured_postgres()
     conn, schema = _isolated_connection(load_config())
     try:

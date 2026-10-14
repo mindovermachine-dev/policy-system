@@ -1,5 +1,5 @@
-"""Capacity-range validation against LLM_REGION's live-reported range (AC-BI-006; superseded by
-issue #110 -- see `fail_region_not_viable` in scripts/deploy-llm.sh).
+"""Capacity-range validation against LLM_REGION's live-reported range (see
+`fail_region_not_viable` in scripts/deploy-llm.sh).
 
 Runs only at the configured `LLM_REGION` -- a capacity outside the range that region's `model
 list` response reports for the required SKU is a hard stop showing the actual range. LLM_REGION

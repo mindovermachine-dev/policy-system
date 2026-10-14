@@ -1,4 +1,4 @@
-"""`find-duplicate-obligations` for a granted `ComplianceOfficer` (issue #190, slice 9)."""
+"""`find-duplicate-obligations` for a granted `ComplianceOfficer`."""
 
 from __future__ import annotations
 

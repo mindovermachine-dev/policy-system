@@ -1,5 +1,4 @@
-"""`scripts/sync-llm-secrets-to-kind.sh`: secret write (AC-BI-016, AC-BI-013 for this script;
-PLAN.md §5/S12; CHANGES.md Row 2 adds the raw-key-value test).
+"""`scripts/sync-llm-secrets-to-kind.sh`: secret write, including the raw key values.
 
 A successful run reads the three Key Vault secrets `deploy-llm.sh` wrote and writes them into a
 Secret named `policy-system-llm-credentials`, in the active namespace, with keys renamed from the
@@ -24,7 +23,7 @@ API_VERSION_VALUE = "preview"
 
 
 def _hash8(subscription_id: str) -> str:
-    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars (PLAN.md §0.4)."""
+    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars."""
     return hashlib.sha256(subscription_id.encode("utf-8")).hexdigest()[:8]
 
 

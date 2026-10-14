@@ -1,11 +1,10 @@
-"""AC-BI-003/AC-BI-004: PS Service refuses to start when the Authentik service
-credential (`PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`) is not configured
-(issue #140, CHANGES.md Row 2/Appendix B).
+"""PS Service refuses to start when the Authentik service
+credential (`PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`) is not configured.
 
 Unlike `tests/authz/test_bootstrap_owner_startup_fail_closed.py`'s
 `require_bootstrap_owner_configured`, this check is deliberately
-**unconditional**: AC-BI-003's wording carries no local-test-bypass carve-out
-(unlike AC-BI-002's), so `require_authentik_credential_configured` raises
+**unconditional**: it carries no local-test-bypass carve-out
+(unlike the bootstrap-owner check), so `require_authentik_credential_configured` raises
 regardless of `is_local_test_bypass_active` -- every non-bypass test here
 (and the one bypass=True test) must supply both fields to reach `create_app`
 without raising.
@@ -134,7 +133,7 @@ def test_create_app_does_not_raise_when_authentik_credential_configured(
 def test_create_app_raises_even_when_local_test_bypass_is_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-003 carries no bypass carve-out (CHANGES.md Row 2): unlike
+    """The Authentik credential check carries no bypass carve-out: unlike
     `require_bootstrap_owner_configured`, the bypass being active must not
     exempt the Authentik credential check.
     """

@@ -1,9 +1,9 @@
 """Tests for the `ComplianceOfficer` authz gate on the `restore_instrument` MCP
-tool (issue #145, Slice 8): AC-BI-005 (a caller who is only `AuthenticatedUser`,
+tool: a caller who is only `AuthenticatedUser`,
 or who holds `SystemAdmin`/`SystemOwner` without an explicit `ComplianceOfficer`
-grant, is denied -- no implicit hierarchy override) and AC-BI-007 (a
+grant, is denied -- no implicit hierarchy override, is denied; a
 `ComplianceOfficer`-holding caller's call succeeds exactly as the tool already
-documents).
+documents.
 
 Mirrors `test_catalog_source_authz_gate.py`/`test_ingest_regulation_authz_gate.py`
 exactly: `_verified_actor`/`_fake_store_factory`/`FakeAccessRoleStore`/
@@ -22,14 +22,14 @@ and needs no change here.
 `test_restore_instrument_tool.py` rather than re-declared, so this file can
 never silently drift from that file's own restore-artifact fixtures.
 
-issue #163 Slice E: `build_default_restore_from_catalog_dependencies`'s DI seam is narrowed
+`build_default_restore_from_catalog_dependencies`'s DI seam is narrowed
 so `restore` is always the real, shipped `restore_instrument` -- this file's own denial/
 outage tests never even reach `build_default_restore_from_catalog_dependencies()` at all
 (the authz gate in `mcp_server.py`'s `restore_instrument` tool body returns before that call
 is ever made), so they need no restore-dependency wiring whatsoever; only the one success
 test still needs the real restore path, via the same `_use_fake_restore_infra`
 `test_restore_instrument_tool.py`'s own happy-path tests use -- its `open_db` default
-(issue #163 Slice 19) is a real, stateful FalkorDB stand-in, so this file needs no
+is a real, stateful FalkorDB stand-in, so this file needs no
 staging-specific wiring of its own either.
 """
 
@@ -75,7 +75,7 @@ _ACCESS_DENIED_MESSAGE = "error: You do not have the required access role for th
 
 @pytest.fixture(autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse
-    """The permitted call writes `instrument.restore` rows (issue #195): keep them off Postgres."""
+    """The permitted call writes `instrument.restore` rows: keep them off Postgres."""
     store = InMemoryAuditStore()
     monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
     return store
@@ -142,7 +142,7 @@ def _text(result: CallToolResult) -> str:
 
 
 def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: a real, non-bypass caller holding only `AuthenticatedUser`
+    """A real, non-bypass caller holding only `AuthenticatedUser`
     (never elevated) gets the fixed access-denied message, and no restore
     dependency is ever wired up at all -- `require_role` denies before
     `build_default_restore_from_catalog_dependencies()` is ever called
@@ -161,7 +161,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
 
 
 def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: `require_role`'s own non-hierarchical contract for
+    """`require_role`'s own non-hierarchical contract for
     `ComplianceOfficer` -- a caller holding `SystemAdmin` (but never
     separately granted `ComplianceOfficer`) is still denied, proving no
     implicit admin override reaches this gate. No restore-dependency wiring
@@ -185,7 +185,7 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
 
 
 def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: the same non-hierarchical proof, for the sole bootstrapped
+    """The same non-hierarchical proof, for the sole bootstrapped
     `SystemOwner` themselves -- unlike a `SystemAdmin`-minimum gate (where
     `SystemOwner` is deliberately also satisfying), a `ComplianceOfficer`
     minimum is exact-match only, so even `SystemOwner` needs its own
@@ -204,7 +204,7 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
 
 
 def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-007: a caller granted `ComplianceOfficer` succeeds exactly as
+    """A caller granted `ComplianceOfficer` succeeds exactly as
     `test_restore_instrument_tool.py`'s own happy path already documents --
     no change to the tool's own success-path response shape. This is the one
     test in this file that reaches the real restore path, so it (alone)
@@ -236,7 +236,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
 
 
 def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-011: a simulated store outage surfaces the distinct
+    """A simulated store outage surfaces the distinct
     `authorization_store_unavailable` result, never a silent default/success.
     No restore-dependency wiring needed, see
     `test_authenticated_user_only_caller_is_denied`'s own docstring.

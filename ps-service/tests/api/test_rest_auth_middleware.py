@@ -1,9 +1,9 @@
-"""HTTP tests for `RestAuthMiddleware` -- the REST-side 401 path (issue #58, Slice 3).
+"""HTTP tests for `RestAuthMiddleware` -- the REST-side 401 path.
 
-AC-BI-003: a protected-route request with no/malformed `Authorization` header,
+A protected-route request with no/malformed `Authorization` header,
 or a token failing signature/`iss`/`aud`/`exp`/`nbf`, gets 401 with
 `WWW-Authenticate: Bearer resource_metadata="..."` and the handler is never
-invoked. AC-BI-004: the 401 body contains neither the presented token nor
+invoked. The 401 body contains neither the presented token nor
 validation internals (key ids, library errors).
 
 Drives the real composition root (`create_app`) against
@@ -11,11 +11,11 @@ Drives the real composition root (`create_app`) against
 performs a genuine OIDC-discovery fetch against it (`ps_service.main.create_app`
 never overrides `resolve_auth_context`'s default `transport`), and
 `PsTokenVerifier` performs a genuine JWKS fetch on first use -- no
-monkeypatched transport anywhere in this file (AC-BI-017). `GET /catalog`
-(an existing, already-unauthenticated-before-this-issue route,
+monkeypatched transport anywhere in this file. `GET /catalog`
+(an existing route that was already unauthenticated,
 `ps_service/api/routes.py:378`) is the protected route under test throughout.
 
-Issue #163 remediation (Slice K): `GET /catalog`'s real, unpatched
+`GET /catalog`'s real, unpatched
 `ps_service.api.routes.list_curated_catalog` handler runs in every test
 below -- never replaced by an `AsyncMock`/spy. "Handler reached or not" is
 now observed as *state* on a hand-built fake HTTP transport
@@ -68,7 +68,7 @@ _AUDIENCE = "ps-service"
 def _configure_logging_for_auth_tests(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     configured_logging: Path,
 ) -> None:
-    """Slice 10: `PsTokenVerifier.verify_token` now always logs (AC-BI-014/015)
+    """`PsTokenVerifier.verify_token` always logs
     on every request in this file -- install a real process-wide Logging
     facade (`tests/api/conftest.py`'s own `configured_logging` fixture) so
     `emit_log_entry`'s no-default-configured guard never trips here. No test
@@ -262,7 +262,7 @@ def test_wrong_issuer_token_returns_401(mock_oidc_provider: MockOidcProvider) ->
 def test_401_body_never_contains_the_raw_token_or_pyjwt_internals(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """AC-BI-004: no presented token, no key id, no library error text in any 401 body."""
+    """No presented token, no key id, no library error text in any 401 body."""
     token = mock_oidc_provider.mint_token(aud="wrong-audience")
     client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
@@ -287,7 +287,7 @@ def test_401_body_never_contains_the_raw_token_or_pyjwt_internals(
 def test_valid_token_returns_200_and_handler_receives_matching_principal(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """AC-BI-005: a token that passes validation runs the handler with a `Principal`.
+    """A token that passes validation runs the handler with a `Principal`.
 
     The positive-detection companion to the 401/`transport.requests == []`
     tests above: proves the real handler is dispatched exactly once
@@ -313,11 +313,11 @@ def test_valid_token_returns_200_and_handler_receives_matching_principal(
 def test_local_test_bypass_active_runs_handler_with_no_principal(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """When the local-test bypass (#67) is active, no token is required and no `Principal` is bound.
+    """When the local-test bypass is active, no token is required and no `Principal` is bound.
 
     `RestAuthMiddleware` stores `None` under `scope["ps_principal"]` in this
-    mode (Slice 3, `middleware.py`'s own bypass branch) -- `get_principal`
-    must surface that as `None`, not raise or fabricate one, matching #67's
+    mode (`middleware.py`'s own bypass branch) -- `get_principal`
+    must surface that as `None`, not raise or fabricate one, matching the
     existing unauthenticated contract exactly.
     """
     client, override = _client_with_principal_capturing_handler(

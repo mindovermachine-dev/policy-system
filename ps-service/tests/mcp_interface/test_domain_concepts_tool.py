@@ -5,7 +5,7 @@ Claude Desktop exposes MCP *tools* to the model but surfaces MCP
 cannot read `psdomain://concepts` on its own. The `domain_concepts` tool
 is the slim graph schema (labels, properties, edges) rendered from the
 code-defined domain schema: no parameters, no file read, so it keeps
-working when the packaged markdown is unavailable (AC-BI-017, tool half).
+working when the packaged markdown is unavailable.
 
 Hand-written monkeypatching only -- no `unittest.mock`. Server coroutines
 are driven with bare `asyncio.run(...)`.
@@ -65,7 +65,7 @@ def test_tool_listed_alongside_cypher() -> None:
 def test_tool_returns_slim_schema_not_the_document(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-001/009/017/021: the tool renders from code and ignores the packaged file."""
+    """The tool renders from code and ignores the packaged file."""
     missing = tmp_path / "does-not-exist.md"
     _point_helper_at(monkeypatch, missing)
 
@@ -81,14 +81,14 @@ def test_tool_returns_slim_schema_not_the_document(
 
 
 def test_tool_shows_defines_edge_with_direction_cardinality_and_edge_property() -> None:
-    """AC-BI-002/009: the tool output carries the RI -> Role edge from the code schema."""
+    """The tool output carries the RI -> Role edge from the code schema."""
     text = _text_of(_call_tool())
 
     assert "(:RegulatoryInstrument)-[:DEFINES {source_ref: string !}]->(:Role)  1 : 0..*" in text
 
 
 def test_tool_lists_spine_labels_with_enum_values_and_presence_marks() -> None:
-    """AC-BI-001/009: spine nodes appear with enum values and required/conditional marks."""
+    """Spine nodes appear with enum values and required/conditional marks."""
     lines = _text_of(_call_tool()).splitlines()
 
     for label in ("RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability"):
@@ -99,7 +99,7 @@ def test_tool_lists_spine_labels_with_enum_values_and_presence_marks() -> None:
 
 
 def test_tool_lists_all_ten_labels_and_policy_proposed_status() -> None:
-    """AC-BI-001/009: every domain label is served, and Policy status includes `proposed`."""
+    """Every domain label is served, and Policy status includes `proposed`."""
     lines = _text_of(_call_tool()).splitlines()
 
     for label in (
@@ -119,7 +119,7 @@ def test_tool_lists_all_ten_labels_and_policy_proposed_status() -> None:
 
 
 def test_tool_output_has_no_markdown_prose_or_notes() -> None:
-    """AC-BI-019: the served text is the slim schema: no document headings, tables or notes."""
+    """The served text is the slim schema: no document headings, tables or notes."""
     text = _text_of(_call_tool())
 
     assert "##" not in text
@@ -151,7 +151,7 @@ def _forbidden_names_in_function(source: str, function_name: str) -> set[str]:
 
 
 def test_domain_concepts_tool_body_has_no_file_read() -> None:
-    """AC-BI-021: the tool never touches the packaged document or its error class."""
+    """The tool never touches the packaged document or its error class."""
     source = inspect.getsource(mcp_server.domain_concepts)
 
     assert _forbidden_names_in_function(source, "domain_concepts") == set()
@@ -173,7 +173,7 @@ def test_file_read_in_a_tool_body_would_be_detected() -> None:
 
 
 def test_resource_helpers_remain_for_the_resource() -> None:
-    """AC-BI-021: the resource still uses the helpers the tool no longer calls."""
+    """The resource uses the helpers the tool does not call."""
     assert callable(mcp_server.read_domain_concepts)
     assert callable(mcp_server._domain_concepts_path)  # pyright: ignore[reportPrivateUsage]  # asserting the helper survives for the resource
     assert issubclass(mcp_server.McpResourceUnavailableError, Exception)

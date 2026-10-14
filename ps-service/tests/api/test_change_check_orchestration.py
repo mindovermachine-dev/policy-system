@@ -1,19 +1,16 @@
-"""Unit tests for `run_change_check_sweep` (issue #73, PLAN.md §4 Slices 2-3).
+"""Unit tests for `run_change_check_sweep`.
 
 Exercises the real `ChangeCheckDependencies`-driven sweep against
 `build_fake_change_check_dependencies` doubles: no real graph, poll, or
-re-ingest call is ever made. Slice 2 covers the poll-stage buckets
-(`current` / `poll_failed` / `not_configured`, AC-BI-003/AC-BI-005
-partial/AC-BI-006 poll half). Slice 3 wires the `finding_ids` branch for
-real -- `_reingest_one`'s D2-D7 call contract (AC-BI-004, AC-BI-005 core).
-Slice 6 adds the dedicated `_emit_sweep`/`_emit_instrument` run-id
-proof (AC-BI-008 full, D8) -- a real `LogEmitter`, not a stub, mirroring
+re-ingest call is ever made. The poll-stage tests cover the buckets
+(`current` / `poll_failed` / `not_configured`). The `finding_ids` branch is
+wired for real -- `_reingest_one`'s call contract. The `_emit_sweep` /
+`_emit_instrument` run-id proof uses a real `LogEmitter`, not a stub, mirroring
 `test_ingestion_orchestration.py`'s own
 `test_emits_started_and_succeeded_entries_with_run_id_source_and_caller_and_duration`
-shape. Slice 7 adds the dedicated AC-BI-009 proof: exactly-once
-processing, no fan-out, no reprocessing within one sweep run -- a direct,
-executed proof over Slice 2-5's already-shipped single-pass loop (PLAN.md
-§1 D2), not just an inspection claim.
+shape. A dedicated proof shows exactly-once processing, no fan-out, no
+reprocessing within one sweep run -- a direct, executed proof over the
+single-pass loop, not just an inspection claim.
 """
 
 from __future__ import annotations
@@ -116,7 +113,7 @@ def test_sweep_opens_the_single_tenant_graph_and_passes_it_to_poll_for_amendment
     make_emitter: MakeEmitter,
 ) -> None:
     """The fake `poll_for_amendments` callable is invoked with the exact
-    `FakeGraphHandle` instance `open_single_tenant` returned (AC-BI-003's
+    `FakeGraphHandle` instance `open_single_tenant` returned (the
     "against the merged `policy_system` graph").
     """
     emitter, _ = make_emitter()
@@ -136,7 +133,7 @@ def test_sweep_opens_the_single_tenant_graph_and_passes_it_to_poll_for_amendment
 def test_sweep_calls_read_tracked_instruments_exactly_once(
     app_config: ServiceConfig, make_emitter: MakeEmitter
 ) -> None:
-    """D2's own "once" claim, made concrete: `read_tracked_instruments`'s call count is 1."""
+    """The "once" claim, made concrete: `read_tracked_instruments`'s call count is 1."""
     emitter, _ = make_emitter()
     fake = build_fake_change_check_dependencies(tracked=(_node("A"), _node("B")))
 
@@ -166,9 +163,9 @@ def test_sweep_calls_trigger_reingestion_with_the_exact_ac_bi_004_argument_contr
     app_config: ServiceConfig,
     make_emitter: MakeEmitter,
 ) -> None:
-    """`trigger_reingestion` is called with the exact D4 argument contract: positional
+    """`trigger_reingestion` is called with the exact argument contract: positional
     `identifier`/`short_name`/`new_version`, keyword `adapter`/`graph` bound to the
-    exact objects `default_adapter`/`open_native` returned (AC-BI-004's direct proof).
+    exact objects `default_adapter`/`open_native` returned.
     """
     emitter, _ = make_emitter()
     tracked = (_node("CRA-1.0"),)
@@ -221,7 +218,7 @@ def test_sweep_reports_amendment_reingested_with_detail_and_reingest_run_id_on_f
 ) -> None:
     """A fresh (`superseded`) `trigger_reingestion` result -> `amendment_reingested`,
     `reingest_run_id` carrying the real re-ingest run id, `detail` naming both the new
-    instrument id and `superseded` (D7).
+    instrument id and `superseded`.
     """
     emitter, _ = make_emitter()
     tracked = (_node("CRA-1.0"),)
@@ -267,8 +264,8 @@ def test_sweep_reports_amendment_reingested_with_none_run_id_on_already_processe
     make_emitter: MakeEmitter,
 ) -> None:
     """An `already_processed` `trigger_reingestion` result -> still `amendment_reingested`,
-    but `reingest_run_id is None` and `detail` names `already_processed` (D7, the
-    cross-run staleness case, PLAN.md §0.3).
+    but `reingest_run_id is None` and `detail` names `already_processed` (the
+    cross-run staleness case).
     """
     emitter, _ = make_emitter()
     tracked = (_node("CRA-1.0"),)
@@ -314,7 +311,7 @@ def test_sweep_reports_reingest_failed_when_no_catalog_entry_resolves_the_findin
 ) -> None:
     """No curated catalog entry for the finding's base-act CELEX -> `reingest_failed`,
     `detail` names the celex, and `trigger_reingestion`/`open_native`/`default_adapter`
-    are never called (D5 -- the missing-entry short-circuit happens before any write;
+    are never called (the missing-entry short-circuit happens before any write;
     the fake's `_never_*` stand-ins raise `AssertionError` if any of them is reached).
     """
     emitter, _ = make_emitter()
@@ -347,9 +344,8 @@ def test_sweep_reports_reingest_failed_when_no_catalog_entry_resolves_the_findin
 
 
 class NationalTranspositionNotSupportedError(Exception):
-    """Locally-defined test double proving D10's name-matching works without
-    importing the real `ps_service.change_monitor.errors` type (PLAN.md §4
-    Slice 4).
+    """Locally-defined test double proving name-matching works without
+    importing the real `ps_service.change_monitor.errors` type.
     """
 
 
@@ -359,9 +355,9 @@ def test_sweep_reports_skipped_when_trigger_reingestion_raises_national_transpos
 ) -> None:
     """`trigger_reingestion` raising an exception literally named
     `NationalTranspositionNotSupportedError` -> `skipped`, `detail` is
-    `str(exc)` verbatim (D10), and the sweep's next tracked instrument
+    `str(exc)` verbatim, and the sweep's next tracked instrument
     (scripted after this one, no finding of its own) still reports its own
-    correct outcome (continuation proof, folds in AC-BI-006).
+    correct outcome (continuation proof).
     """
     emitter, _ = make_emitter()
     tracked = (_node("CRA-1.0"), _node("GDPR-1.0"))
@@ -402,7 +398,7 @@ def test_sweep_does_not_confuse_a_different_exception_type_sharing_no_special_na
     make_emitter: MakeEmitter,
 ) -> None:
     """A plain `RuntimeError` (no special name) -> `reingest_failed`, not
-    `skipped` -- disproves any substring/prefix match on D10's name check.
+    `skipped` -- disproves any substring/prefix match on the name check.
     """
     emitter, _ = make_emitter()
     tracked = (_node("CRA-1.0"),)
@@ -434,10 +430,10 @@ def test_sweep_does_not_confuse_a_different_exception_type_sharing_no_special_na
 
 
 class ChangeMonitorStateError(Exception):
-    """Name-agnostic test double for a generic reingest-stage failure (PLAN.md
-    §4 Slice 5, D6) -- this bucket catches *anything* not name-matched to
-    the national-transposition case; the exact class name is irrelevant to
-    D10's check, only chosen to read as a plausible real failure.
+    """Name-agnostic test double for a generic reingest-stage failure -- this bucket
+    catches *anything* not name-matched to the national-transposition case; the
+    exact class name is irrelevant to the name check, only chosen to read as a
+    plausible real failure.
     """
 
 
@@ -449,8 +445,8 @@ def test_sweep_isolates_a_reingest_failure_and_continues_to_remaining_instrument
     raises a plain, name-agnostic exception double, the second succeeds
     normally -> the first outcome is `reingest_failed` (scrubbed `detail`),
     the second is `amendment_reingested` -- both present in the final
-    result (AC-BI-006's isolation + continuation proof, at the reingest
-    stage specifically, complementing Slice 2's poll-stage proof).
+    result (isolation + continuation proof, at the reingest
+    stage specifically, complementing the poll-stage proof).
     """
     emitter, _ = make_emitter()
     tracked = (_node("CRA-1.0"), _node("GDPR-1.0"))
@@ -496,7 +492,7 @@ def test_reingest_failed_detail_is_an_enumerated_reason_not_raw_exception_text(
     """A `trigger_reingestion` exception whose message embeds an absolute
     filesystem path and a `host:port` token -> the returned `detail` is the
     enumerated `unexpected_error` reason code and carries no part of the
-    exception text at all (AC-BI-007).
+    exception text at all.
     """
     emitter, _ = make_emitter()
     tracked = (_node("CRA-1.0"),)
@@ -537,7 +533,7 @@ def test_sweep_emits_started_and_succeeded_change_check_sweep_entries_carrying_t
     make_emitter: MakeEmitter,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-008 (full, D8): `_emit_sweep` writes a `started` entry before the
+    """`_emit_sweep` writes a `started` entry before the
     sweep runs and a `succeeded` entry after, both `component="api",
     action="change_check_sweep"`, both carrying the exact `run_id` passed
     into `run_change_check_sweep(run_id=...)` -- through a real `LogEmitter`,
@@ -569,7 +565,7 @@ def test_sweep_emits_one_change_check_instrument_entry_per_tracked_instrument_ca
     make_emitter: MakeEmitter,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-008 (full, D8): 3 tracked instruments, mixed poll-stage buckets ->
+    """3 tracked instruments, mixed poll-stage buckets ->
     3 `component="api", action="change_check_instrument"` entries, each
     `entity_id` equal to its instrument id, each `outcome` matching the
     bucket it landed in, all three carrying the same sweep `run_id` -- not
@@ -608,7 +604,7 @@ def test_sweep_emits_one_change_check_instrument_entry_per_tracked_instrument_ca
     assert all(line["run_id"] == "sweep-run-2" for line in instrument_lines)
 
 
-# --- Slice 7: AC-BI-009 dedicated proof (exactly-once processing, no fan-out) ---
+# --- Dedicated proof (exactly-once processing, no fan-out) ---
 
 
 def test_sweep_calls_trigger_reingestion_at_most_once_per_tracked_instrument_id(
@@ -618,7 +614,7 @@ def test_sweep_calls_trigger_reingestion_at_most_once_per_tracked_instrument_id(
     """5 tracked instruments, 2 with findings -> `trigger_reingestion` is
     called exactly twice, once per finding's own tracked instrument
     (identified here by each instrument's own distinct `celex`, the value
-    D4 says is passed as `identifier`) -- no duplicates, and no identifier
+    passed as `identifier`) -- no duplicates, and no identifier
     outside the two finding instruments' own celex values.
     """
     emitter, _ = make_emitter()
@@ -764,12 +760,12 @@ def test_change_check_sweep_still_resolves_via_catalog_find_by_celex_and_canonic
     app_config: ServiceConfig,
     make_emitter: MakeEmitter,
 ) -> None:
-    """CHARACTERIZATION (issue #193, AC-BI-010; passes before and after the change).
+    """CHARACTERIZATION: the sweep keeps the catalog's canonical short_name.
 
     The sweep resolves a finding's CELEX through the real catalog ``find_by_celex``
     and re-ingests under the catalog's own canonical (lowercase) ``short_name``,
     opening that exact native graph name. Ingest-side short_name normalization
-    (#193) must not leak into the sweep: it would open ``CRA_native`` beside the
+    must not leak into the sweep: it would open ``CRA_native`` beside the
     ``cra_native`` graph the original ingest and restore wrote.
     """
     emitter, _ = make_emitter()

@@ -1,8 +1,8 @@
-"""Capacity-range validation against the selected region's live-reported range (AC-BI-009/010),
-plus the spike's null-capacity bugfix (PLAN.md §5/S8).
+"""Capacity-range validation against the selected region's live-reported range,
+including the null-capacity case.
 
 `validate_capacity_range` runs once, against `select_region`'s already-chosen region only (no
-fallback-region reporting -- unlike `scripts/deploy-llm.sh`'s post-#110 `fail_region_not_viable`,
+fallback-region reporting -- unlike `scripts/deploy-llm.sh`'s `fail_region_not_viable`,
 `deploy-ps-prod.sh` never auto-picks a *different* region once one is already selected; a capacity
 failure here is a hard stop).
 """
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
 def test_capacity_minimum_null_coalesces_to_zero_not_a_bash_crash(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Bugfix 1/6 (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "capacity.minimum:
-    null"). Azure reports `capacity.minimum: null` for SKUs with no enforced floor
-    (GlobalStandard/DataZoneStandard, which `scripts/ps-defaults.conf` actually configures) --
+    """A null capacity minimum is treated as no floor. Azure reports
+    `capacity.minimum: null` for SKUs with no enforced floor (GlobalStandard/DataZoneStandard,
+    which `scripts/ps-defaults.conf` actually configures) --
     `model_capacity_range`'s bash arithmetic must coalesce this to `0` via `// 0` in the `jq`
     query, not crash on the literal string "null". The conftest baseline already defaults to a
     null minimum (see `seed_model_availability`'s own docstring), so this test is a stronger,

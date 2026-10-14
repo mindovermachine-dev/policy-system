@@ -1,9 +1,9 @@
 """Tests for the `ComplianceOfficer` authz gate on the `check_regulations` MCP
-tool (issue #145, Slice 9): AC-BI-005 (a caller who is only `AuthenticatedUser`,
+tool: a caller who is only `AuthenticatedUser`,
 or who holds `SystemAdmin`/`SystemOwner` without an explicit `ComplianceOfficer`
-grant, is denied -- no implicit hierarchy override) and AC-BI-007 (a
-`ComplianceOfficer`-holding caller's call succeeds exactly as the tool already
-documents).
+grant, is denied -- no implicit hierarchy override -- and a
+`ComplianceOfficer`-holding caller's call succeeds exactly as the tool
+documents.
 
 Mirrors `test_catalog_source_authz_gate.py`/`test_ingest_regulation_authz_gate.py`/
 `test_restore_instrument_authz_gate.py` exactly: `_verified_actor`/
@@ -125,7 +125,7 @@ def _install_fake_change_check_dependencies(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: a real, non-bypass caller holding only `AuthenticatedUser`
+    """A real, non-bypass caller holding only `AuthenticatedUser`
     (never elevated) gets the fixed access-denied message, and no sweep ever
     runs.
     """
@@ -142,7 +142,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
 
 
 def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: `require_role`'s own non-hierarchical contract for
+    """`require_role`'s own non-hierarchical contract for
     `ComplianceOfficer` -- a caller holding `SystemAdmin` (but never
     separately granted `ComplianceOfficer`) is still denied, proving no
     implicit admin override reaches this gate.
@@ -165,7 +165,7 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
 
 
 def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: the same non-hierarchical proof, for the sole bootstrapped
+    """The same non-hierarchical proof, for the sole bootstrapped
     `SystemOwner` themselves -- unlike a `SystemAdmin`-minimum gate (where
     `SystemOwner` is deliberately also satisfying), a `ComplianceOfficer`
     minimum is exact-match only, so even `SystemOwner` needs its own
@@ -184,7 +184,7 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
 
 
 def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-007: a caller granted `ComplianceOfficer` succeeds exactly as
+    """A caller granted `ComplianceOfficer` succeeds exactly as
     `test_check_regulations_tool.py`'s own happy path already documents --
     no change to the tool's own success-path response shape.
     """
@@ -209,7 +209,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
 
 
 def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-011: a simulated store outage surfaces the distinct
+    """A simulated store outage surfaces the distinct
     `authorization_store_unavailable` result, never a silent default/success,
     and no sweep ever runs.
     """

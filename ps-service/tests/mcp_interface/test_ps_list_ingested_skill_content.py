@@ -1,4 +1,4 @@
-"""Content lint for `ps-list-ingested/SKILL.md` (issue #77).
+"""Content lint for `ps-list-ingested/SKILL.md`.
 
 Reads the real SKILL.md (no mocks) and pins what the skill instructs: which
 connector and tools it uses, the fixed read-only query, and the output shape.

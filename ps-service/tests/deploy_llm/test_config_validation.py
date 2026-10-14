@@ -1,4 +1,4 @@
-"""Config validation for `scripts/deploy-llm.sh` (AC-BI-001, PLAN.md §5/S1).
+"""Config validation for `scripts/deploy-llm.sh`.
 
 `validate_config` must reject a malformed `scripts/llm-defaults.conf` -- named field, named
 file, actionable message -- before any `az` call is made (enforced here simply by there being
@@ -117,8 +117,8 @@ def test_rejects_empty_embed_model_name(deploy_llm_fixture: DeployLlmFixture) ->
 
 def test_valid_config_does_not_exit_on_validation(deploy_llm_fixture: DeployLlmFixture) -> None:
     _write_config(deploy_llm_fixture, VALID_CONFIG)
-    # A valid config proceeds past validate_config() into the naming/confirmation-table step
-    # (S2), which needs a subscription id to compute names -- seeded here so this test keeps
+    # A valid config proceeds past validate_config() into the naming/confirmation-table step,
+    # which needs a subscription id to compute names -- seeded here so this test keeps
     # verifying "validation itself never blocks a valid config", not an unrelated az failure.
     deploy_llm_fixture.seed_subscription()
 
@@ -126,7 +126,7 @@ def test_valid_config_does_not_exit_on_validation(deploy_llm_fixture: DeployLlmF
 
     assert run.returncode != 1, run.output
     # `log_step` unconditionally announces "==> Loading and validating {CONFIG_DISPLAY_PATH}" at
-    # startup (issue #110), so CONFIG_DISPLAY_PATH alone always appears in output -- a
+    # startup, so CONFIG_DISPLAY_PATH alone always appears in output -- a
     # fail_validation message is distinguished by the trailing colon (`"%s: %s\n"`).
     assert f"{CONFIG_DISPLAY_PATH}:" not in run.output
 

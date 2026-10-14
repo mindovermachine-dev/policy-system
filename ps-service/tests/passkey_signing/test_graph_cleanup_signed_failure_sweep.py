@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
-"""Fail-closed and sanitised failure over HTTP for EVERY cleanup executor (issue #190, slice 17).
+"""Fail-closed and sanitised failure over HTTP for EVERY cleanup executor.
 
-AC-BI-022: the audit row cannot be written -> no graph edit. AC-BI-018: a graph write fails ->
+If the audit row cannot be written, there is no graph edit. If a graph write fails,
 no partial change is reported and the error carries no internal detail. The five signing
 worlds (capability merge, obligation merge, release, capability unmerge, obligation unmerge)
 are driven through the real signing router, executor registry and executors.
@@ -84,7 +84,7 @@ class _Response(Protocol):
 
 
 def _fail_graph_write(world: _World, error: Exception) -> None:
-    fail = getattr(world, "fail_graph_write", None)  # the gateway-backed worlds (since #212)
+    fail = getattr(world, "fail_graph_write", None)  # the gateway-backed worlds
     if fail is not None:
         fail(error)
         return

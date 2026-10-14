@@ -1,4 +1,4 @@
-"""Content lint for `ps-ingest-regulation/SKILL.md` and its docs (issue #193).
+"""Content lint for `ps-ingest-regulation/SKILL.md` and its docs.
 
 Pins that the skill, the Container Architecture row and the user guide describe
 the live-graph identity check (no curated-catalog cross-check) consistently.
@@ -25,7 +25,7 @@ def _flat(path: Path) -> str:
 
 
 def _flat_skill_with_references() -> str:
-    """SKILL.md plus its on-demand reference files (issue #200), whitespace-flattened."""
+    """SKILL.md plus its on-demand reference files, whitespace-flattened."""
     parts = [_SKILL.read_text(encoding="utf-8")]
     parts += [(_SKILL_DIR / ref).read_text(encoding="utf-8") for ref in _REFERENCES]
     return " ".join("\n".join(parts).split())

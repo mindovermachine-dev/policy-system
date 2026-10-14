@@ -1,9 +1,9 @@
-"""Static and executed assertions on `.github/workflows/on_main.yml`'s header lint (AC-BI-025).
+"""Static and executed assertions on `.github/workflows/on_main.yml`'s header lint.
 
 The lint job must fail *visibly* on a direct push with a non-conventional header and must be
 independent of the release path (no job may `needs:` it, so a lint failure never blocks a
-release -- AC-BI-025 says the `release` job still runs). Range mode receives
-`github.event.before..github.sha` through `env:` (CHANGES X-09) and needs the full history
+release -- the `release` job still runs). Range mode receives
+`github.event.before..github.sha` through `env:` and needs the full history
 (`fetch-depth: 0`) to walk the range. One test executes the body against the fixture repo.
 """
 
@@ -123,7 +123,7 @@ def test_lint_body_falls_back_to_head_on_workflow_dispatch(
 
 
 # --------------------------------------------------------------------------------------
-# `release` job (S5/S6, AC-BI-001..004, 017 layer 1)
+# `release` job
 # --------------------------------------------------------------------------------------
 
 

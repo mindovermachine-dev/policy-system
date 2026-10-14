@@ -1,4 +1,4 @@
-"""The amendment sweep resolves the Graph Write Gateway first (issue #213, AC-BI-008 sweep half).
+"""The amendment sweep resolves the Graph Write Gateway first.
 
 The sweep writes the re-ingest succession through the gateway, including a `finalize` or
 link-only re-ingest that runs no pipeline stage. So the gateway is resolved unconditionally,

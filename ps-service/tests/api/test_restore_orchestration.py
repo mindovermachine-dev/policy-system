@@ -1,4 +1,4 @@
-"""Tests for `ps_service.api.restore_orchestration` (D5/D6.3, PLAN.md §0.7).
+"""Tests for `ps_service.api.restore_orchestration`.
 
 `run_restoration` is a thin wrapper calling `ps_service.restore.
 restore_instrument` through an injected `RestoreDependencies` bundle (mirrors
@@ -235,7 +235,7 @@ def test_run_restoration_translates_other_errors_to_stage_failed(
     ],
 )
 def test_run_restoration_surfaces_whitelisted_content_rejections_verbatim(message: str) -> None:
-    """GH #104 / AC-BI-007: both `ArtifactContentRejectedError` raise sites reach the
+    """Both `ArtifactContentRejectedError` raise sites reach the
     caller verbatim (type-prefixed), never as the generic `content_validation failed`.
     """
     stage = _FakeRestoreStage(error=ArtifactContentRejectedError(message))
@@ -250,7 +250,7 @@ def test_run_restoration_surfaces_whitelisted_content_rejections_verbatim(messag
 
 
 def test_run_restoration_cap_trims_the_reason_tail_never_the_rejected_label_prefix() -> None:
-    """GH #104 / AC-BI-008: the rejected name sits at a fixed offset (<= 60 chars) of a
+    """The rejected name sits at a fixed offset (<= 60 chars) of a
     message that is scrubbed then capped at 300 -- so the cap can only ever trim the
     echoed allow-list tail. Bound: a label longer than ~240 chars would itself be cut,
     and a path- or host:port-shaped label is rewritten by `_scrub_text` by design.
@@ -287,8 +287,8 @@ def test_run_restoration_cap_trims_the_reason_tail_never_the_rejected_label_pref
 def test_run_restoration_keeps_non_whitelisted_delegate_errors_generic(
     delegate_error: Exception, expected_stage: str, configured_logging: Path
 ) -> None:
-    """GH #104 boundary: only `ArtifactContentRejectedError` joined the safe-verbatim
-    list. `RestoreConcurrencyConflictError` (its message embeds the single-tenant graph
+    """Only `ArtifactContentRejectedError` is on the safe list of surfaced rejections.
+    `RestoreConcurrencyConflictError` (its message embeds the single-tenant graph
     name) and unexpected failures still collapse to the generic `<stage> failed`.
     """
     _ = configured_logging
@@ -365,7 +365,7 @@ def test_manifest_payload_converts_to_instrument_manifest_field_for_field() -> N
 
 
 def test_main_never_statically_imports_restore_or_company_merge_at_module_load() -> None:
-    """M6 guarantee (mirrors `test_main.py`'s existing AST-scan proof).
+    """Mirrors `test_main.py`'s AST-scan proof.
 
     `ps_service.main`'s own source must never statically import
     `ps_service.restore` or `ps_service.company_merge` -- both are pulled in
@@ -417,7 +417,7 @@ def test_restore_orchestration_module_only_imports_restore_instrument_function_l
 
 
 def test_run_restoration_forwards_the_owner_to_the_delegate() -> None:
-    """Issue #183: the caller's verified `(sub, iss)` reaches `restore_instrument` as `owner`."""
+    """The caller's verified `(sub, iss)` reaches `restore_instrument` as `owner`."""
     stage = _FakeRestoreStage()
     owner = ("alice@example.com", "https://idp.example/")
 
@@ -445,7 +445,7 @@ def test_run_restoration_passes_no_owner_when_none_is_given() -> None:
 def test_masked_restore_failure_is_logged_server_side_with_traceback(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """AC-BI-012: the exception class, message, traceback, instrument id and caller are logged."""
+    """The exception class, message, traceback, instrument id and caller are logged."""
     emitter, log_path = make_emitter()
     stage = _FakeRestoreStage(error=RuntimeError("boom at 10.0.0.5:6379"))
 
@@ -471,7 +471,7 @@ def test_masked_restore_failure_is_logged_server_side_with_traceback(
 def test_masked_restore_failure_keeps_the_client_message_scrubbed(
     make_emitter: MakeEmitter,
 ) -> None:
-    """AC-BI-013: logging the real cause server-side does not change what the client sees."""
+    """Logging the real cause server-side does not change what the client sees."""
     emitter, _log_path = make_emitter()
     stage = _FakeRestoreStage(error=RuntimeError("boom at 10.0.0.5:6379 /srv/secret/path"))
 

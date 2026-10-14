@@ -1,4 +1,4 @@
-"""HTTP tests for `GET /.well-known/oauth-protected-resource` (issue #58, Slice 8, AC-BI-010).
+"""HTTP tests for `GET /.well-known/oauth-protected-resource`.
 
 RFC 9728 (OAuth 2.0 Protected Resource Metadata): unauthenticated
 `GET /.well-known/oauth-protected-resource` returns `resource`,
@@ -8,8 +8,8 @@ is configured (omitted entirely, never rendered `null`, when absent).
 
 Drives the real composition root (`create_app`) against
 `tests.auth.mock_oidc_provider`'s real local HTTP server -- no monkeypatched
-transport (AC-BI-017), matching `test_rest_auth_middleware.py`'s convention.
-`RestAuthMiddleware`'s `_EXEMPT_PREFIX = "/.well-known/"` (Slice 3) already
+transport, matching `test_rest_auth_middleware.py`'s convention.
+`RestAuthMiddleware`'s `_EXEMPT_PREFIX = "/.well-known/"` already
 covers this path, so every test below calls the route with **no**
 `Authorization` header at all, proving the route is genuinely exempt rather
 than merely returning a body a client happens not to need.
@@ -46,7 +46,7 @@ def _config(provider: MockOidcProvider | None, **overrides: object) -> ServiceCo
         "graceful_shutdown_seconds": 10,
         "logging_dir": None,
         "is_local_test_bypass_active": provider is None,
-        # Unconditional (issue #140): `require_authentik_credential_configured`
+        # Unconditional: `require_authentik_credential_configured`
         # carries no bypass exemption, unlike the auth/bootstrap-owner fields
         # below -- both dict entries must be set regardless of `provider`.
         "authentik_api_token": "test-authentik-token",
@@ -118,7 +118,7 @@ def test_reachable_with_no_authorization_header() -> None:
 
 
 def test_local_test_bypass_active_returns_200_with_empty_authorization_servers() -> None:
-    """PLAN.md's documented degenerate case: bypass active, no `AuthContext`, still 200."""
+    """Degenerate case: bypass active, no `AuthContext`, still 200."""
     client = TestClient(create_app(_config(None)))
 
     response = client.get(_PATH)
@@ -133,7 +133,7 @@ def test_local_test_bypass_active_returns_200_with_empty_authorization_servers()
 def test_no_duplicate_route_registered_inside_the_mcp_mount(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """PLAN.md §0.1: `AuthSettings.resource_server_url=None` means the MCP SDK never
+    """`AuthSettings.resource_server_url=None` means the MCP SDK never
     auto-registers its own protected-resource-metadata route under `/mcp` --
     this is the one endpoint, reachable only at the top level.
     """
@@ -147,7 +147,7 @@ def test_no_duplicate_route_registered_inside_the_mcp_mount(
 def test_path_specific_document_for_the_mcp_url_names_that_url_as_the_resource(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """Issue #237: a client given `https://<host>/mcp/` requires `resource` to equal it."""
+    """A client given `https://<host>/mcp/` requires `resource` to equal it."""
     client = TestClient(create_app(_config(mock_oidc_provider)))
 
     for suffix in ("mcp/", "mcp"):

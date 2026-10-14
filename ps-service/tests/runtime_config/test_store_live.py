@@ -1,9 +1,9 @@
-"""`postgres_live` tests for `PsycopgRuntimeConfigStore` against a real Postgres (issue #130).
+"""`postgres_live` tests for `PsycopgRuntimeConfigStore` against a real Postgres.
 
 Proves what only a real database can: the state write and its `audit_events` row commit or
-roll back together (AC-BI-011), exactly one audit row per `set`/`reset` with typed details
-(AC-BI-012), nothing is written for a rejected `set` (AC-BI-005), and concurrent writers on
-one key record a consistent old-value chain (advisory lock, CHANGES.md F3).
+roll back together, exactly one audit row per `set`/`reset` with typed details,
+nothing is written for a rejected `set`, and concurrent writers on
+one key record a consistent old-value chain (advisory lock).
 
 Deselected by default -- run with `uv run pytest -m postgres_live` against a reachable
 `PS_STATE_POSTGRES_*` instance. The shared `public` schema is reused across the session, so

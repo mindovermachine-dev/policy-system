@@ -1,6 +1,6 @@
-"""Every shipped skill names the single `ps-mcp` connector and none of the old ones (issue #178).
+"""Every shipped skill names the single `ps-mcp` connector and none of the old ones.
 
-Walks every Markdown file under `ps-skills/ps-plugin/` (AC-BI-003, AC-BI-005). The old names are
+Walks every Markdown file under `ps-skills/ps-plugin/`. The old names are
 built by concatenation so this file never spells them itself (the repo-wide rename gate is a
 plain grep).
 """

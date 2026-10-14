@@ -1,19 +1,18 @@
-"""Tests for `ps-author-policy`'s branch-detection sequence (issue #137, Slice 1).
+"""Tests for `ps-author-policy`'s branch-detection sequence.
 
 Proves the tool-call SEQUENCE that `ps-skills/ps-plugin/skills/
 ps-author-policy/SKILL.md`'s Process section documents (branch detection:
 not-found / fresh / resume / fork / disagreement) actually works end to end
 against the real `cypher`/`create-policy-draft`/`get-policy` MCP tools --
 "red" here means proving this sequence, not that the tools themselves don't
-exist yet (they already do, issue #136). Every scenario drives the real
+exist yet (they already do). Every scenario drives the real
 tool functions directly (never the SKILL.md prose, which pytest cannot
 execute) and asserts on the fake graph's recorded `write_queries`/
 `cypher_queries` and on each tool's return value/raised exception, mirroring
-PLAN.md §5 Slice 1's own scenario descriptions and CHANGES.md Appendix B.2's
-6th (disagreement) scenario.
+the scenario descriptions, including the 6th (disagreement) scenario.
 
-Fake graph: CHANGES.md Appendix A's `_HybridGraph` (F-1's resolution),
-combining `test_cypher_tool.py`'s `_FakeGraphHandle` per-call result/error
+Fake graph: a `_HybridGraph`, combining `test_cypher_tool.py`'s
+`_FakeGraphHandle` per-call result/error
 FIFO-queue scripting for the freehand `cypher` tool with
 `test_policy_lifecycle_tools.py`'s `_FakeGraph` literal-query-substring
 dispatch for the write-side content-CRUD tools -- extended here with one
@@ -23,23 +22,22 @@ column-list substring), reused by BOTH `get-policy` (the resume/owned and
 resume/not-owned scenarios) and `create-policy-draft`'s own
 `supersedes_policy_id` prior-status check (`_read_transition_target`, the
 fork scenarios) -- not spelled out row-by-row in Appendix A's code sample,
-but called for by its own note ("add the analogous fixed strings ... read
-verbatim from graph_writer.py the same way test_policy_lifecycle_tools.py:
-94-101 does -- do not invent them"); see IMPL_SLICE_1.md for the exact
-citation. A second additional branch handles `read_policy_tree_for_fork`'s
+but required by the same convention: the fixed strings are read from
+graph_writer.py the way test_policy_lifecycle_tools.py does, never invented.
+A second additional branch handles `read_policy_tree_for_fork`'s
 own distinguishing `"RETURN s.id, properties(s), c.id, properties(c)"`
 query (issued by a successful fork's `_build_forked_standard_drafts`,
 BEFORE the graph write) -- routed to its own empty-result branch so it is
 never miscounted as a write. A third additional branch treats
 `backfill_governance_status`'s three idempotent `SET` statements (issued
-ahead of every `read_policy_tree*` read, D-7) as a structural no-op, exactly
+ahead of every `read_policy_tree*` read) as a structural no-op, exactly
 as `test_policy_lifecycle_tools.py`'s own `_TreeFakeGraph`/`_StatefulFakeGraph`
 already do.
 
 `_verified_actor`/`_install_graph`/`_install_audit_store`/
 `_install_access_role_store` are local copies of
-`test_policy_lifecycle_tools.py`'s own helpers of the same name, read
-verbatim from that file per PLAN.md §0.6.
+`test_policy_lifecycle_tools.py`'s own helpers of the same name, taken
+from that file.
 """
 
 from __future__ import annotations
@@ -87,7 +85,7 @@ _PROPOSED_POLICY_ID = "pol_data_protection_policy_cccccc"
 _DRAFT_POLICY_B_ID = "pol_encryption_key_mgmt_policy_dddddd"
 
 
-# --- the exact Cypher query shapes PLAN.md §5 Slice 1 steps 2-3 specify ----
+# --- the exact Cypher query shapes the skill's steps 2-3 specify ----
 
 
 def _capability_existence_query(name: str) -> str:
@@ -105,7 +103,7 @@ def _capability_governed_by_query(name: str) -> str:
     )
 
 
-# --- fakes (CHANGES.md Appendix A, extended per this file's own docstring) -
+# --- fakes (extended per this file's own docstring) -
 
 
 @contextlib.contextmanager
@@ -159,7 +157,7 @@ def _governed_by_result(rows: list[object]) -> _FakeQueryResult:
 class _PolicyTreeFixture:
     """Minimal stand-in for `graph_writer.read_policy_tree`'s own `PolicyRecord`.
 
-    Zero Standards/Controls throughout -- Slice 1's branch-detection
+    Zero Standards/Controls throughout -- the branch-detection
     scenarios never need tree children, only the Policy's own id/status/
     owner.
     """
@@ -173,7 +171,7 @@ class _PolicyTreeFixture:
 
 
 class _HybridGraph:
-    """CHANGES.md Appendix A's fake, extended with a Policy-tree fixture.
+    """A fake graph, extended with a Policy-tree fixture.
 
     Combines `test_cypher_tool.py`'s `_FakeGraphHandle` per-call
     result/error scripting (generalized to a FIFO queue -- the disagreement
@@ -210,13 +208,13 @@ class _HybridGraph:
         if "RETURN p.version, p.status, s.id, s.status, c.id, c.status" in q:
             # `graph_writer.backfill_governance_status`'s three idempotent,
             # already-backfilled-safe `SET` statements -- issued ahead of
-            # every `read_policy_tree*` read (D-7). A structural no-op here,
+            # every `read_policy_tree*` read. A structural no-op here,
             # exactly as `test_policy_lifecycle_tools.py`'s own
             # `_TreeFakeGraph`/`_StatefulFakeGraph` treat them (never
             # recorded as a "write" this test cares about).
             return _FakeQueryResult()
         if "RETURN cap.id, g.id" in q:
-            # `graph_writer.read_capability_governors` (issue #185): the fresh
+            # `graph_writer.read_capability_governors`: the fresh
             # create's existence/ungoverned pre-check.
             requested = cast("list[str]", (params or {})["capability_ids"])
             return _FakeQueryResult(
@@ -342,7 +340,7 @@ class _FakeAuditStore:
         )
 
     def record_standalone_with_event_id(self, **kwargs: object) -> str:
-        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        """`record_standalone`, returning an id the process gateway's log accepts."""
         self.record_standalone(**kwargs)  # pyright: ignore[reportArgumentType]
         event_id = str(uuid.uuid4())
         installed_process_gateway().rig.store.audit_rows.add(event_id)
@@ -443,7 +441,7 @@ def test_scenario_2_no_governing_policy_is_the_fresh_branch(
     )
     _install_graph(monkeypatch, handle)
     _install_audit_store(monkeypatch, _FakeAuditStore())
-    # The claim is a guarded gateway group (issue #211): the Capability must exist in the graph
+    # The claim is a guarded gateway group: the Capability must exist in the graph
     # the gateway writes.
     rig = installed_process_gateway().rig
     PolicyGraphSeeder(rig.graphs.open("policy_system")).seed_capability(_CAPABILITY_ID)
@@ -458,7 +456,7 @@ def test_scenario_2_no_governing_policy_is_the_fresh_branch(
     assert len(handle.cypher_queries) == 2
     assert handle.write_queries == []
 
-    # Scaffold (issue #185): the skill passes the ids step 2 returned.
+    # Scaffold: the skill passes the ids step 2 returned.
     found_ids = [row[1] for row in existence_rows]
     with _verified_actor(sub=_ACTOR_SUBJECT):
         create_result = _call_create_policy_draft(
@@ -537,7 +535,7 @@ def test_scenario_3_resume_caller_owned_draft(monkeypatch: pytest.MonkeyPatch) -
     assert body["policy_id"] == _DRAFT_POLICY_ID
     assert body["status"] == "draft"
     assert body["owner_subject"] == _ACTOR_SUBJECT
-    # A read-only resume detection -- Slice 2's field loop does the writing.
+    # A read-only resume detection -- the Policy-loop file's field loop does the writing.
     assert handle.write_queries == []
 
 
@@ -572,7 +570,7 @@ def test_scenario_4_governing_draft_not_caller_owned_reports_access_denied(
 
     assert get_result.is_error is False
     assert _text(get_result) == "error: you do not have access to this Policy"
-    # D-1/D-2: not forkable either (only an approved prior can be forked) --
+    # not forkable either (only an approved prior can be forked) --
     # block and report, never a competing `create-policy-draft` call.
     assert handle.write_queries == []
 
@@ -597,7 +595,7 @@ def test_scenario_5_fork_from_approved_prior_succeeds(monkeypatch: pytest.Monkey
     )
     _install_graph(monkeypatch, handle)
     _install_audit_store(monkeypatch, _FakeAuditStore())
-    # The fork's `SUPERSEDED_BY` edge is a gateway group (issue #211): the approved prior must
+    # The fork's `SUPERSEDED_BY` edge is a gateway group: the approved prior must
     # exist in the graph the gateway writes.
     rig = installed_process_gateway().rig
     PolicyGraphSeeder(rig.graphs.open("policy_system")).seed_policy(
@@ -625,7 +623,7 @@ def test_scenario_5_fork_from_approved_prior_succeeds(monkeypatch: pytest.Monkey
     assert body["version"] == "2"
     assert body["superseded_policy_id"] == _APPROVED_POLICY_ID
     # The new forked draft's own persisted node, plus the Policy-level SUPERSEDED_BY lineage
-    # edge (D-2's own fork write shape): one gateway group, no direct write.
+    # edge (the own fork write shape): one gateway group, no direct write.
     assert handle.write_queries == []
     (group,) = rig.store.groups
     assert [entry.name for entry in group.entries] == ["Policy", "SUPERSEDED_BY"]
@@ -661,7 +659,7 @@ def test_scenario_5b_fork_from_proposed_prior_reports_named_error(
     ]
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        # D-2: the fork is ALWAYS attempted for a proposed/approved prior --
+        # the fork is ALWAYS attempted for a proposed/approved prior --
         # never blocked pre-emptively -- and this exact attempt is rejected
         # by the tool itself with the named
         # `PolicySupersedePriorNotApprovedError`.
@@ -679,7 +677,7 @@ def test_scenario_5b_fork_from_proposed_prior_reports_named_error(
     assert handle.write_queries == []
 
 
-# --- (6) multi-Capability GOVERNED_BY disagreement (D-6, CHANGES.md B.2) --
+# --- (6) multi-Capability GOVERNED_BY disagreement --
 
 
 def test_scenario_6_multi_capability_governed_by_disagreement_blocks_both(
@@ -696,10 +694,9 @@ def test_scenario_6_multi_capability_governed_by_disagreement_blocks_both(
     configure()
     _install_graph(monkeypatch, handle)
 
-    # PLAN.md §5 Slice 1 steps 2-3: the existence-check loop runs for every
-    # named Capability first, then the GOVERNED_BY loop runs for every
-    # Capability that exists (CHANGES.md Appendix A note: either ordering is
-    # fine; this matches the SKILL.md Process text this slice writes).
+    # The existence-check loop runs for every named Capability first, then
+    # the GOVERNED_BY loop runs for every Capability that exists (either
+    # ordering is fine; this matches the SKILL.md Process text).
     _call_cypher(_capability_existence_query(_CAPABILITY_NAME))
     _call_cypher(_capability_existence_query(_CAPABILITY_B_NAME))
     a_governed = _call_cypher(_capability_governed_by_query(_CAPABILITY_NAME))
@@ -708,12 +705,12 @@ def test_scenario_6_multi_capability_governed_by_disagreement_blocks_both(
     assert _cypher_body(a_governed)["rows"] == []
     assert _cypher_body(b_governed)["rows"] == [[_DRAFT_POLICY_B_ID, "draft", None, None]]
     assert len(handle.cypher_queries) == 4
-    # Disagreement (D-6): report and ask the user how to proceed -- no
+    # Disagreement: report and ask the user how to proceed -- no
     # `create-policy-draft`/`get-policy` call for either Capability.
     assert handle.write_queries == []
 
 
-# --- (7) issue #185: a SUPERSEDED_BY successor of the governing Policy ----
+# --- (7) a SUPERSEDED_BY successor of the governing Policy ----
 
 _FORK_POLICY_ID = "pol_data_protection_policy_ffffff"
 
@@ -725,7 +722,7 @@ def _fork_rows_result(rows: list[list[str | None]]) -> _FakeQueryResult:
 def test_scenario_7_owned_draft_fork_is_resumed_and_never_re_forked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-007: governing Policy approved + owned draft fork => resume, no second fork."""
+    """Governing Policy approved + owned draft fork => resume, no second fork."""
     configure()
     tree = _PolicyTreeFixture(id=_FORK_POLICY_ID, title="Data Protection Policy v2", status="draft")
     handle = _HybridGraph(

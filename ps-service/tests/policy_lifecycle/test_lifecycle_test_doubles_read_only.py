@@ -1,4 +1,4 @@
-"""Issue #211, S0: the lifecycle test doubles do not interpret graph writes.
+"""the lifecycle test doubles do not interpret graph writes.
 
 Policy Lifecycle submits every write as a gateway group, so the stand-in it READS through must
 refuse a write statement instead of silently applying it (a write that reached it would be a

@@ -1,4 +1,4 @@
-"""File-mode invariants over `scripts/release/` (CHANGES X-10).
+"""File-mode invariants over `scripts/release/`.
 
 Every script directly invoked by a workflow step is executable; every `lib/*.sh` is sourced
 only and must not be. `os.access(..., os.X_OK)` reads the working tree, so an untracked new

@@ -1,7 +1,6 @@
-r"""AC-BI-003 (live): FalkorDB itself rejects a write that evades the textual guard (issue #215).
+r"""Live: FalkorDB itself rejects a write that evades the textual guard.
 
-Spike result (S2.0, recorded in `.orchestrator/tracker/issue-215/SPIKE_RO_QUERY.md`; image
-`falkordb/falkordb:latest`, digest 23c7a71f7c72):
+Observed behaviour (image `falkordb/falkordb:latest`, digest 23c7a71f7c72):
 
 - The chosen write is `CALL db.idx.fulltext.createNodeIndex('Spike','name')`. The Query Engine's
   textual guard (`\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|FOREACH)\b`) lets it through, because
@@ -11,7 +10,7 @@ Spike result (S2.0, recorded in `.orchestrator/tracker/issue-215/SPIKE_RO_QUERY.
   `graph.RO_QUERY is to be executed only on read-only queries`.
 - `GRAPH.RO_QUERY` on a graph key that does not exist raises `Invalid graph operation on empty
   key` where `GRAPH.QUERY` answers `[[0]]` and creates the key; `ReadOnlyGraph` maps exactly that
-  reply to an empty result, so `GraphUnseededError` is preserved (AC-BI-004).
+  reply to an empty result, so `GraphUnseededError` is preserved.
 - `db.idx.vector.createNodeIndex` is not registered on this image: not used.
 """
 

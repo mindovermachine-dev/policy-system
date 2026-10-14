@@ -1,4 +1,4 @@
-"""Static guard (issue #165 AC-BI-005): the chart ships no token literal and prints none.
+"""Static guard: the chart ships no token literal and prints none.
 
 The shared Authentik/PS Service API token is generated at install time
 (`templates/authentik-api-token-secret.yaml`). No values file may carry a token value, and

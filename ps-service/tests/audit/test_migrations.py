@@ -1,4 +1,4 @@
-"""Tests for audit migration 0002 (issue #195, Slice 11): `details` filter expression indexes.
+"""Tests for audit migration 0002: `details` filter expression indexes.
 
 Fast, file-level checks (no Postgres); the live application of the file is covered by
 `tests/persistence/test_migration_runner.py` and `tests/audit/test_store_query.py`.

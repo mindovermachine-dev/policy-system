@@ -1,9 +1,8 @@
-"""Naming + confirmation table + `[Y/n]` prompt for `scripts/deploy-llm.sh` (AC-BI-002; PLAN.md
-§5/S2, contributes AC-BI-010).
+"""Naming + confirmation table + `[Y/n]` prompt for `scripts/deploy-llm.sh`.
 
-Region selection (a later slice) hasn't run yet at this point in the flow, so the table's
+Region selection has not run yet at this point in the flow, so the table's
 "region" row shows the configured candidate list in order, not a single resolved region
-(PLAN.md §0.2) -- resource group / account / deployment / Key Vault rows show the actual
+-- resource group / account / deployment / Key Vault rows show the actual
 resolved values, since none of those depend on which region ends up selected.
 """
 
@@ -21,7 +20,7 @@ SUBSCRIPTION_ID = "11111111-2222-3333-4444-555555555555"
 
 
 def _hash8(subscription_id: str) -> str:
-    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars (PLAN.md §0.4)."""
+    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars."""
     return hashlib.sha256(subscription_id.encode("utf-8")).hexdigest()[:8]
 
 
@@ -98,7 +97,7 @@ def test_yes_flag_prints_table_but_skips_reading_stdin(
 
 def test_deploy_llm_common_lib_is_not_executable() -> None:
     """`scripts/lib/deploy-llm-common.sh` is sourced only, mirroring `scripts/release/lib/*.sh`'s
-    lib/non-lib distinction (PLAN.md §4).
+    lib/non-lib distinction.
     """
     lib = Path(__file__).resolve().parents[3] / "scripts" / "lib" / "deploy-llm-common.sh"
     assert lib.exists(), f"{lib} does not exist"

@@ -19,7 +19,7 @@ def test_resolve_default_log_path_when_no_env_override_then_under_repo_root_logs
     resolved = resolve_default_log_path(repo_root=fake_repo_root)
 
     assert resolved == fake_repo_root / "logs" / "ps-service.jsonl"
-    assert resolved.parent.is_dir()  # M12: directory actually created, not just computed
+    assert resolved.parent.is_dir()  # directory actually created, not just computed
 
 
 def test_resolve_default_log_path_when_env_override_set_then_uses_override_dir(

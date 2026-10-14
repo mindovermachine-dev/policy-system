@@ -1,28 +1,27 @@
-"""Tests proving `PsycopgAccessRoleStore` writes through `AuditStore` in-transaction (issue #147).
+"""Tests proving `PsycopgAccessRoleStore` writes through `AuditStore` in-transaction.
 
 `postgres_live`-marked throughout: whether `grant`/`revoke`/`bootstrap_first_owner`
 actually persist exactly one `audit_events` row alongside their own state
 change, in the *same* Postgres transaction (so a failure in either half rolls
 back both), can only be proven against a real Postgres instance.
 
-PLAN.md/CHANGES.md Appendix A1's Slice 2 boundary: this is the slice that
-repoints `ps_service.authz.store` off the retired `access_role_grant_events`
-table (absent from the baseline schema, `tests/persistence/test_migration_runner.py`) and onto
-`AuditStore.record`, in the same cursor/transaction as the state-changing
-`INSERT`/`DELETE` -- AC-BI-006 ("exactly one `audit_events` row... and no
-code path writes to `access_role_grant_events`") and AC-BI-010 (an
-`AuditStore.record` failure rolls back the state change too) are this file's
-whole job.
+`ps_service.authz.store` writes through `AuditStore.record`, in the same
+cursor/transaction as the state-changing `INSERT`/`DELETE`, and not to the
+retired `access_role_grant_events` table (absent from the baseline schema,
+`tests/persistence/test_migration_runner.py`). This file proves exactly one
+`audit_events` row per change, no code path writing to
+`access_role_grant_events`, and that an `AuditStore.record` failure rolls back
+the state change too.
 
-Slice 3 (below the Slice 2 tests) adds AC-BI-012's own real-Postgres proof:
+The denial tests below add the real-Postgres proof that
 each of the four denial types (access denied, self-grant/revoke, SystemOwner
 floor, bootstrap identity mismatch) writes exactly one `outcome='rejected'`
 row, reached via the real `ps_service.authz.service.grant_role`/`revoke_role`/
 `PsycopgAccessRoleStore.bootstrap_first_owner` call chain -- not a synthetic
-call directly against `AuditStore`. Plus CHANGES.md item 3's leak-check: a
+call directly against `AuditStore`. Plus the leak-check: a
 `record_standalone` connection failure never leaks host/port/driver detail.
 
-Deselected by default (BASELINE.md's tier gating) -- run explicitly with
+Deselected by default (tier gating) -- run explicitly with
 `uv run pytest -m postgres_live` against a reachable `PS_STATE_POSTGRES_*`
 instance.
 """
@@ -90,7 +89,7 @@ def _unique_subject(label: str) -> str:
 class _RaisingAuditStore:
     """An `AuditStore`-shaped fake whose `record` always raises `psycopg.Error`.
 
-    Used to simulate the `audit_events` insert itself failing (AC-BI-010),
+    Used to simulate the `audit_events` insert itself failing,
     without needing to actually break the real Postgres schema (which would
     risk affecting other tests sharing this session's database). Injected in
     place of the real `PsycopgAuditStore` into `PsycopgAccessRoleStore`, so
@@ -162,7 +161,7 @@ def _active_roles_for(conn: psycopg.Connection[TupleRow], *, subject: str) -> se
 
 @pytest.mark.postgres_live
 def test_no_code_path_writes_to_the_dropped_access_role_grant_events_table() -> None:
-    """AC-BI-006's second half: the retired grant-events table is absent."""
+    """The retired grant-events table is absent."""
     _require_configured_postgres()
     config = load_config()
 
@@ -180,7 +179,7 @@ def test_no_code_path_writes_to_the_dropped_access_role_grant_events_table() -> 
 
 @pytest.mark.postgres_live
 def test_grant_produces_exactly_one_applied_audit_event_alongside_the_assignment_row() -> None:
-    """AC-BI-006: a real `grant()` call writes exactly one `access_role_assignments` row
+    """A real `grant()` call writes exactly one `access_role_assignments` row
     and exactly one `audit_events` row (`action='access_role.grant'`, `outcome='applied'`).
     """
     _require_configured_postgres()
@@ -210,7 +209,7 @@ def test_grant_produces_exactly_one_applied_audit_event_alongside_the_assignment
 
 @pytest.mark.postgres_live
 def test_revoke_produces_exactly_one_applied_audit_event_and_removes_the_assignment() -> None:
-    """AC-BI-006: a real `revoke()` call (non-`SystemOwner` path) deletes the assignment
+    """A real `revoke()` call (non-`SystemOwner` path) deletes the assignment
     row and writes exactly one `audit_events` row (`action='access_role.revoke'`,
     `outcome='applied'`).
     """
@@ -246,7 +245,7 @@ def test_revoke_produces_exactly_one_applied_audit_event_and_removes_the_assignm
 
 @pytest.mark.postgres_live
 def test_revoke_of_system_owner_produces_exactly_one_applied_audit_event() -> None:
-    """AC-BI-006, `_revoke_system_owner`'s own advisory-locked path: revoking `SystemOwner`
+    """`_revoke_system_owner`'s own advisory-locked path: revoking `SystemOwner`
     (with a second owner already present, so the floor check passes) writes exactly one
     `audit_events` row through the same mechanism as the plain revoke path.
     """
@@ -290,7 +289,7 @@ def test_revoke_of_system_owner_produces_exactly_one_applied_audit_event() -> No
 def test_bootstrap_first_owner_produces_exactly_one_applied_bootstrap_audit_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-006: the winning `bootstrap_first_owner` call writes exactly one
+    """The winning `bootstrap_first_owner` call writes exactly one
     `audit_events` row (`action='access_role.bootstrap'`, `outcome='applied'`) alongside
     its two `access_role_assignments` rows (`AuthenticatedUser` + `SystemOwner`).
 
@@ -353,7 +352,7 @@ def test_bootstrap_first_owner_produces_exactly_one_applied_bootstrap_audit_even
 
 @pytest.mark.postgres_live
 def test_audit_store_record_failure_during_grant_rolls_back_the_assignment_insert() -> None:
-    """AC-BI-010: when `AuditStore.record` fails, `grant`'s own `access_role_assignments`
+    """When `AuditStore.record` fails, `grant`'s own `access_role_assignments`
     `INSERT` is not applied either (same transaction rolls back both), and the caller
     gets a named `error:`-shaped exception (`AccessRoleAssignmentPersistenceError`).
     """
@@ -385,7 +384,7 @@ def test_audit_store_record_failure_during_grant_rolls_back_the_assignment_inser
 
 @pytest.mark.postgres_live
 def test_audit_store_record_failure_during_revoke_rolls_back_the_assignment_delete() -> None:
-    """AC-BI-010, revoke side: when `AuditStore.record` fails during `revoke`, the
+    """Revoke side: when `AuditStore.record` fails during `revoke`, the
     `access_role_assignments` `DELETE` is not applied either -- the target keeps the
     role it had before the failed revoke attempt.
     """
@@ -424,7 +423,7 @@ def test_audit_store_record_failure_during_revoke_rolls_back_the_assignment_dele
     assert events == []
 
 
-# --- Slice 3: AC-BI-012 denial-recording, real Postgres proof ------------------------------
+# --- denial-recording, real Postgres proof ------------------------------
 
 
 @pytest.mark.postgres_live
@@ -504,7 +503,7 @@ def test_record_revoke_rejected_writes_exactly_one_rejected_audit_event() -> Non
 
 @pytest.mark.postgres_live
 def test_denied_grant_produces_exactly_one_rejected_audit_event() -> None:
-    """AC-BI-012, access-denied denial: a real `grant_role` call by an actor holding no
+    """Access-denied denial: a real `grant_role` call by an actor holding no
     grant-eligible role writes exactly one rejected `access_role.grant` audit event -- the
     real service-layer call chain, not a synthetic call directly against a store method.
     """
@@ -543,10 +542,10 @@ def test_denied_grant_produces_exactly_one_rejected_audit_event() -> None:
 
 @pytest.mark.postgres_live
 def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
-    """AC-BI-012, self-revoke-blocked denial: a real `revoke_role` call where the actor
+    """Self-revoke-blocked denial: a real `revoke_role` call where the actor
     targets their own subject writes exactly one rejected `access_role.revoke` audit event.
 
-    Post-#182 `block_self_target` exempts a `SystemOwner` from the self-grant/revoke block
+    `block_self_target` exempts a `SystemOwner` from the self-grant/revoke block
     except for revoking `SystemOwner` itself, and a non-`SystemOwner` is turned away by RBAC
     before the self-target rule is reached -- so the only reachable self-revoke denial is a
     `SystemOwner` revoking their own `SystemOwner` role.
@@ -594,7 +593,7 @@ def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
 def test_denied_system_owner_floor_revoke_produces_exactly_one_rejected_audit_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-012, SystemOwner-floor denial: a real `revoke_role` call against the sole
+    """SystemOwner-floor denial: a real `revoke_role` call against the sole
     remaining active SystemOwner writes exactly one rejected `access_role.revoke` audit event.
 
     Uses a throwaway, isolated schema (same technique as
@@ -675,10 +674,10 @@ def test_denied_system_owner_floor_revoke_produces_exactly_one_rejected_audit_ev
 def test_bootstrap_identity_mismatch_produces_exactly_one_rejected_bootstrap_audit_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-012, bootstrap-identity-mismatch denial (the fourth denial type): the empty-store,
-    non-matching-principal branch of `bootstrap_first_owner` (unchanged since Slice 2) writes
+    """Bootstrap-identity-mismatch denial (the fourth denial type): the empty-store,
+    non-matching-principal branch of `bootstrap_first_owner` writes
     exactly one `outcome='rejected'` `access_role.bootstrap_rejected` audit event -- proven
-    here against real Postgres for the first time.
+    here against real Postgres.
     """
     _require_configured_postgres()
     configured_owner_subject = _unique_subject("bootstrap-owner")
@@ -732,13 +731,13 @@ def test_bootstrap_identity_mismatch_produces_exactly_one_rejected_bootstrap_aud
     ]
 
 
-# --- CHANGES.md item 3: denial-path leak-check ----------------------------------------------
+# --- denial-path leak-check ----------------------------------------------
 
 
 @pytest.mark.postgres_live
 def test_record_standalone_connection_failure_leaks_no_host_or_port_or_driver_detail() -> None:
-    """CHANGES.md item 3: the denial-path leak-check, mirroring Slice 4's query-path equivalent
-    (PLAN.md:819-823's own assertion shape, applied here to `record_standalone` instead of
+    """The denial-path leak-check, mirroring the query-path equivalent
+    (the same assertion shape, applied here to `record_standalone` instead of
     `query`).
 
     A genuine connection failure (misconfigured host/port, refused fast rather than via DNS
@@ -774,7 +773,7 @@ def test_record_standalone_connection_failure_leaks_no_host_or_port_or_driver_de
 
 @pytest.mark.postgres_live
 def test_denial_recording_connection_failure_surfaces_with_no_leak() -> None:
-    """CHANGES.md item 3, service-layer half: the same connection failure, reached via the
+    """Service-layer half of the leak-check: the same connection failure, reached via the
     real `ps_service.authz.store.PsycopgAccessRoleStore.record_grant_rejected` ->
     `AuditStore.record_standalone` path, surfaces with the same no-leak guarantee.
     """

@@ -1,43 +1,42 @@
-"""Tests for `ps-author-policy`'s Standard field-by-field authoring loop (issue #137, Slice 3).
+"""Tests for `ps-author-policy`'s Standard field-by-field authoring loop.
 
-Four proofs, per PLAN.md Section 5 "Slice 3":
+Four proofs:
 
 1. `test_add_standard_then_field_loop_persists_every_field_in_documented_order`
    -- a scripted `create-policy-draft` -> `add-standard-to-draft` ->
    `update-standard-draft` x6 sequence against a module-local `_HybridGraph`
-   (adapted from `test_ps_author_policy_policy_loop.py`'s own shape, Slice
-   2), proving the tool-call SEQUENCE `ps-skills/ps-plugin/skills/
+   (adapted from `test_ps_author_policy_policy_loop.py`'s own shape),
+   proving the tool-call SEQUENCE `ps-skills/ps-plugin/skills/
    ps-author-policy/SKILL.md`'s new "Standard authoring loop" sub-flow
    documents: `add-standard-to-draft(policy_id, title=<derived>)` with no
-   `fields` (mirrors Policy's own title-only creation, D-3-style), then one
+   `fields` (mirrors Policy's own title-only creation), then one
    `update-standard-draft` call per S-001..S-006 criterion in
    `standard-rubric.md`'s listed order (S-002 Role Clarity's two properties,
    `implementer_role`/`reviewer_role`, persisted together in one call, the
-   same one-criterion/compound-field pattern Slice 2 used for Policy's own
+   same one-criterion/compound-field pattern the Policy-loop file used for Policy's own
    `scope_in`/`scope_out` scaffold pair) -- and that `title`/`status` never
-   appear in any `fields` payload sent to either tool (D-3's immutability
-   guard, checked at the call-construction level, same as Slice 2).
+   appear in any `fields` payload sent to either tool (immutability
+   guard, checked at the call-construction level, same as the Policy-loop file).
 2. `test_add_another_standard_under_same_policy_succeeds` -- after one
    Standard's field loop completes, a second `add-standard-to-draft` call
    under the SAME `policy_id` is a valid, accepted sequence against the real
-   tool/fake (AC-BI-007's "add another Standard" outcome) -- proving the
+   tool/fake (the "add another Standard" outcome) -- proving the
    sequence is executable, not which outcome an LLM would pick.
 3. `test_finish_after_one_completed_standard_needs_no_further_call` -- the
    sequence started sequence in (1)/(2) is already complete and well-formed
    once one Standard's field loop finishes: no further tool call is needed,
    and (via the same pure-formula helper as test 4) an all-Pass vector for
    that Standard's six criteria genuinely clears `pass_threshold` -- proving
-   "finish" (AC-BI-007's third outcome) is a genuinely valid terminal state.
+   "finish" (the third outcome) is a genuinely valid terminal state.
 4. `test_overall_score_formula_matches_hand_arithmetic_for_passing_and_failing_vectors`
-   -- pure-function check of `scoring-model.md` Section 4's formula against
+   -- pure-function check of `scoring-model.md`'s formula against
    `standard-rubric.md`'s real 6 criterion weights (verified directly
    against the file: 0.20+0.15+0.15+0.20+0.10+0.20 == 1.00,
-   `pass_threshold: 80`), same shape as Slice 2's test 2.
+   `pass_threshold: 80`), same shape as the Policy-loop file's test 2.
 
 Two real-code findings, verified directly against `service.py`/
-`mcp_server.py` (not trusted from PLAN.md's prose), each the opposite of
-what Slice 2 found for Policy -- flagged in IMPL_SLICE_3.md, not silently
-resolved:
+`mcp_server.py` (not taken on trust from the plan's prose), each the opposite of
+what holds for Policy:
 
 - **S-006 Lifecycle Honesty's own property, `implementation_status`, IS
   patchable** (`service._STANDARD_PATCHABLE_FIELDS`, service.py:134-145,
@@ -50,7 +49,7 @@ resolved:
   `updated_fields`** (`mcp_server.py:2372-2377` returns exactly
   `{"standard_id", "policy_id", "title", "status"}` -- unlike
   `update-policy-draft`'s response, which does carry `updated_fields`,
-  `mcp_server.py:2192-2195`). Slice 2's test could assert persisted-field
+  `mcp_server.py:2192-2195`). The Policy-loop file's test could assert persisted-field
   identity straight off each call's own JSON response; this file cannot --
   it instead asserts the persisted VALUES via `_HybridGraph`'s own recorded
   `write_params` (the params dict each `query()` call received), captured
@@ -58,7 +57,7 @@ resolved:
   observable.
 
 Fake graph: adapted from `test_ps_author_policy_policy_loop.py`'s own
-`_HybridGraph` (itself CHANGES.md Appendix A's fake as corrected by Slice 1),
+`_HybridGraph` (itself corrected by the branch-detection file),
 extended with `find_standard_with_parent`'s own dispatch branch (needed
 because `update-standard-draft`'s preamble, `_read_standard_with_parent_
 backfilled`, reads it TWICE -- once before, once after the idempotent
@@ -70,7 +69,7 @@ that branch is kept too). Every write (the `create-policy-draft` MERGE, the
 `add-standard-to-draft` MERGE, and every `update-standard-draft` SET) is
 routed to the same generic write bucket (this slice never needs per-write-
 type branching to route correctly -- the read-shaped branches above are
-checked first, same "more specific match wins" ordering discipline Slice 1
+checked first, same "more specific match wins" ordering discipline the branch-detection file
 established), but now with the query's own `params` dict also captured
 (`write_params`, parallel to `write_queries`) -- needed per the second
 finding above. Module-local, no cross-file import -- matches this
@@ -137,7 +136,7 @@ _CHANGE_RATIONALE = (
 # The Process order this file proves: `standard-rubric.md`'s own S-001..S-006
 # listed order. S-002 Role Clarity's two properties persisted together in one
 # call (one criterion, one Socratic question, one `update-standard-draft`
-# call -- the same compound-field pattern Slice 2 used for Policy's own
+# call -- the same compound-field pattern the Policy-loop file used for Policy's own
 # `scope_in`/`scope_out`). S-006 IS in this loop (see module docstring finding).
 _LOOP_CALLS: tuple[dict[str, object], ...] = (
     {"procedure": _PROCEDURE},
@@ -151,7 +150,7 @@ _LOOP_CALLS: tuple[dict[str, object], ...] = (
 _DISALLOWED_FIELD_KEYS = frozenset({"title", "status"})
 
 
-# --- fakes (adapted from test_ps_author_policy_policy_loop.py, Slice 2) ----
+# --- fakes (adapted from test_ps_author_policy_policy_loop.py) ----
 
 
 @contextlib.contextmanager
@@ -221,7 +220,7 @@ class _StandardParentFixture:
 
 
 class _HybridGraph:
-    """Adapted from `test_ps_author_policy_policy_loop.py`'s own `_HybridGraph` (Slice 2).
+    """Adapted from `test_ps_author_policy_policy_loop.py`'s own `_HybridGraph`.
 
     Extended with `find_standard_with_parent`'s own dispatch branch (`RETURN
     p.id, p.owner_subject, p.owner_issuer, p.status, s.status, s.title`) --
@@ -259,7 +258,7 @@ class _HybridGraph:
             # both `read_policy_tree` (via `_read_transition_target`, for
             # add-standard-to-draft) and `find_standard_with_parent` (via
             # `_read_standard_with_parent_backfilled`, for
-            # update-standard-draft). Structural no-op, same as Slice 1/2.
+            # update-standard-draft). Structural no-op, same as the earlier loop files.
             return _FakeQueryResult()
         if "RETURN p.id, p.owner_subject, p.owner_issuer, p.status, s.status, s.title" in q:
             # `graph_writer.find_standard_with_parent` -- checked BEFORE the
@@ -284,7 +283,7 @@ class _HybridGraph:
             # own `_read_transition_target` preamble (service.py:1498).
             # Checked BEFORE `find_existing_policy`'s shorter substring
             # below (its own `RETURN` clause contains it) -- same ordering
-            # discipline Slice 1/2 already established.
+            # discipline the earlier loop files already established.
             if self.policy_tree is None:
                 return _FakeQueryResult(result_set=[])
             pt = self.policy_tree
@@ -351,7 +350,7 @@ class _FakeAuditStore:
         self.calls.append(kwargs)
 
     def record_standalone_with_event_id(self, **kwargs: object) -> str:
-        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        """`record_standalone`, returning an id the process gateway's log accepts."""
         self.record_standalone(**kwargs)
         event_id = str(uuid.uuid4())
         installed_process_gateway().rig.store.audit_rows.add(event_id)
@@ -401,7 +400,7 @@ def _call_add_standard_to_draft(*, policy_id: str, title: str) -> CallToolResult
 
 
 def _call_update_standard_draft(standard_id: str, fields: dict[str, object]) -> CallToolResult:
-    # D-3-style immutability guard, checked at the call-construction level --
+    # immutability guard, checked at the call-construction level --
     # no test scenario below is even ALLOWED to build a `fields` payload
     # naming either immutable key, regardless of what assertions follow.
     assert _DISALLOWED_FIELD_KEYS.isdisjoint(fields), (
@@ -468,7 +467,7 @@ def test_add_standard_then_field_loop_persists_every_field_in_documented_order(
         policy_id = _new_policy(monkeypatch, handle)
         standard_id = _complete_one_standard(handle, policy_id=policy_id, title=_STANDARD_TITLE)
 
-    # Every write is a gateway group (issue #211): group 0 is create-policy-draft, group 1
+    # Every write is a gateway group: group 0 is create-policy-draft, group 1
     # add-standard-to-draft, and the groups after them are the update-standard-draft calls, one per
     # `_LOOP_CALLS` entry that changes something, in order.
     assert handle.write_queries == []
@@ -516,7 +515,7 @@ def test_add_another_standard_under_same_policy_succeeds(monkeypatch: pytest.Mon
         policy_id = _new_policy(monkeypatch, handle)
         first_id = _complete_one_standard(handle, policy_id=policy_id, title=_STANDARD_TITLE)
 
-        # AC-BI-007's "add another Standard" outcome: a second
+        # the "add another Standard" outcome: a second
         # `add-standard-to-draft` call under the SAME `policy_id`, after the
         # first Standard's own rubric passes -- always attempted, never
         # blocked by the tool/fake for "already has a Standard".
@@ -543,7 +542,7 @@ def test_finish_after_one_completed_standard_needs_no_further_call(
         policy_id = _new_policy(monkeypatch, handle)
         _complete_one_standard(handle, policy_id=policy_id, title=_STANDARD_TITLE)
 
-    # "Finish" (AC-BI-007's third outcome) is a user-facing choice, never a
+    # "Finish" (the third outcome) is a user-facing choice, never a
     # tool call -- the sequence built above is already complete and
     # well-formed exactly as it stands: no further `add-standard-to-draft`/
     # `update-standard-draft` call happened or is needed.
@@ -569,7 +568,7 @@ def test_finish_after_one_completed_standard_needs_no_further_call(
 
 # standard-rubric.md's real 6 criteria, in listed order, with their real
 # weights (verified against the file directly: 0.20+0.15+0.15+0.20+0.10+
-# 0.20 == 1.00). `scoring-model.md` §5: pass_threshold: 80 (same threshold
+# 0.20 == 1.00). `scoring-model.md`: pass_threshold: 80 (same threshold
 # constant every rubric file uses).
 _STANDARD_RUBRIC_WEIGHTS: tuple[tuple[str, float], ...] = (
     ("S-001", 0.20),  # Procedure Specificity
@@ -582,14 +581,14 @@ _STANDARD_RUBRIC_WEIGHTS: tuple[tuple[str, float], ...] = (
 _PASS_THRESHOLD = 80
 
 # No existing production function computes this formula anywhere in
-# ps_service (Slice 2's own grep already confirmed zero hits outside
+# ps_service (the Policy-loop file's grep already confirmed zero hits outside
 # `company_merge/dedup.py`'s unrelated `best_overall_score`). Per the task's
 # own scope: a test-local pure-function helper verifying documented
-# arithmetic, not promoted to a shipped module -- same as Slice 2.
+# arithmetic, not promoted to a shipped module -- same as the Policy-loop file.
 
 
 def _overall_score(scores: dict[str, int]) -> float:
-    """`scoring-model.md` §4: `100 * Σ(weight_i * score_i) / 2` (every `max_score_i == 2`)."""
+    """`scoring-model.md`: `100 * Σ(weight_i * score_i) / 2` (every `max_score_i == 2`)."""
     return (
         100
         * sum(weight * scores[criterion_id] for criterion_id, weight in _STANDARD_RUBRIC_WEIGHTS)

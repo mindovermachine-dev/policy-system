@@ -1,4 +1,4 @@
-"""Audit emission of the `check_regulations` / `POST /change-checks` sweep (issue #195, Slice 10).
+"""Audit emission of the `check_regulations` / `POST /change-checks` sweep.
 
 Each re-ingest the sweep actually runs is bracketed by an `ingestion_run.submit` opening row
 (fail-closed) and an `ingestion_run.complete` terminal row (best-effort) with
@@ -265,7 +265,7 @@ def test_reingest_complete_row_counts_are_zero_when_the_outcome_has_no_merge_sta
 def test_already_processed_and_resumed_reingests_write_no_audit_row(
     run_id: str | None, app_config: ServiceConfig, make_emitter: MakeEmitter
 ) -> None:
-    """`resume` / `already_processed` ingest nothing (CHANGES F-4): no pair, outcome unchanged."""
+    """`resume` / `already_processed` ingest nothing: no pair, outcome unchanged."""
     emitter, _ = make_emitter()
     store = InMemoryAuditStore()
     fake = _fake(results=[_outcome(run_id)], tracked=(_node("CRA-1"),))
@@ -460,7 +460,7 @@ def test_terminal_row_failure_is_logged_with_reingest_run_id_and_sweep_result_un
 def test_sweep_resume_records_the_sweep_pair_and_one_gateway_row_with_the_same_resource_id(
     app_config: ServiceConfig, make_emitter: MakeEmitter, process_gateway: ProcessGateway
 ) -> None:
-    """A resume that starts at extraction (#209): the sweep's caller-actor submit/complete pair
+    """A resume that starts at extraction: the sweep's caller-actor submit/complete pair
     and the single system-actor gateway row carry the re-ingest run id as `resource_id`, and the
     extraction and derivation stages write under that gateway row's id.
     """

@@ -1,8 +1,8 @@
-"""Decline path: answering `N` at the confirmation prompt (contributes AC-BI-019; PLAN.md §5/S5).
+"""Decline path: answering `N` at the confirmation prompt.
 
 On `N`, `deploy-ps-prod.sh` prints the config file path and exits 0 -- nothing past the confirmation
-prompt runs (no RBAC preflight, no provider registration, no resource creation -- none of which
-exist yet at S5, but the same call-log assertion `deploy-llm.sh`'s own decline-path tests use
+prompt runs (no RBAC preflight, no provider registration, no resource creation; none of which
+have run by then). The same call-log assertion `deploy-llm.sh`'s own decline-path tests use
 still proves it here: no `az` call beyond the one needed to compute the table).
 """
 

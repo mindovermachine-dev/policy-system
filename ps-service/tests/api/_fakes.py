@@ -123,17 +123,17 @@ class FakeGraphHandle:
 
     ``results`` is consumed in order, one :class:`FakeQueryResult` per ``query()``
     call; once exhausted every further call yields an empty result. When
-    ``error`` is set, every ``query()`` call raises it instead (issue #135's
+    ``error`` is set, every ``query()`` call raises it instead (the
     pre-flight-check failure fixture -- e.g. a graph-unreachable error raised
     before any stage runs).
 
-    ``responses_by_query``/``errors_by_query`` (issue #146) are an *additional*,
+    ``responses_by_query``/``errors_by_query`` are an *additional*,
     opt-in dispatch keyed by the query's own literal text, checked before the
     ``results``/``error`` FIFO fallback above: a real FalkorDB graph answers each
     distinct Cypher query independently from its own persisted state, regardless
     of call order or how many other queries preceded it -- unlike a plain FIFO
     queue, which only gives the right answer when a test's callee issues exactly
-    the one call sequence the queue was built for. ``single_tenant`` now receives
+    the one call sequence the queue was built for. ``single_tenant`` receives
     two structurally different queries in a caller-dependent order/count (the
     collision check, then -- only when the caller reaches it -- the pre-flight
     check), so :func:`build_fake_pipeline_dependencies` uses this dispatch for
@@ -350,7 +350,7 @@ class FakeDeriveStage:
         error_once: bool = False,
     ) -> None:
         """Prime the recorder, an optional error to raise, and the canned
-        ``unmatched_obligation_ids`` (issue #64 slice 9 -- lets a test exercise
+        ``unmatched_obligation_ids`` (lets a test exercise
         the derivation stage's summary with a non-empty count without
         scripting a real capability-derivation failure).
         """
@@ -403,7 +403,7 @@ class FakeMergeStage:
     """Stand-in for ``merge_baseline_graph``.
 
     ``new_obligations`` / ``new_capabilities`` / ``matched_capabilities`` script the net-new and
-    matched facts the real merge computes (issue #201: the sweep's audit row takes them from the
+    matched facts the real merge computes (the sweep's audit row takes them from the
     merge result). With ``writes_nodes`` the stage also issues one ``MERGE`` per net-new
     Obligation / Capability on the single-tenant handle it was given, as the real merge's
     ``ON CREATE`` writes do, so a test can compare the audited counts with the graph delta.
@@ -424,7 +424,7 @@ class FakeMergeStage:
         """Prime the recorder, an optional error to raise and the scripted merge facts.
 
         ``governance_counts`` is ``(policies, standards, controls, status_overridden)`` -- what
-        the shared draft-governance import reports on the returned ``MergeResult`` (issue #227).
+        the shared draft-governance import reports on the returned ``MergeResult``.
         """
         self._recorder = recorder
         self._error = error
@@ -454,7 +454,7 @@ class FakeMergeStage:
         """Record the call and return (or raise) a canned :class:`MergeResult`.
 
         The call records the gateway it was handed (``submitter``, both graph names and the audit
-        event id, issue #210). A call that carries a ``governance`` import (the internal
+        event id). A call that carries a ``governance`` import (the internal
         pipeline) also records its ``governance_owner`` and the ``emitter`` it was handed.
         """
         _ = (baseline_graph, call_embedding)
@@ -649,37 +649,36 @@ def build_fake_pipeline_dependencies(
         derive_error: If set, the derive stage raises this.
         merge_error: If set, the merge stage raises this.
         derive_unmatched_obligation_ids: Canned ``unmatched_obligation_ids`` for
-            the fake derive stage's ``DerivationResult`` (issue #64 slice 9).
+            the fake derive stage's ``DerivationResult``.
         internal_rid: The ``regulatory_instrument_id`` the fake
-            ``ingest_internal`` stage returns (issue #54, S2).
+            ``ingest_internal`` stage returns.
         ingest_internal_error: If set, the ``ingest_internal`` stage raises
             this instead of returning.
         preflight_hit: If ``True``, the single-tenant graph's pre-flight
-            existence query (issue #135) returns a matching row, simulating an
+            existence query returns a matching row, simulating an
             already-fully-merged ``RegulatoryInstrument``.
         preflight_error: If set, the single-tenant graph's pre-flight
-            existence query raises this instead of returning (issue #135,
-            AC-BI-006 -- e.g. a graph-unreachable error).
+            existence query raises this instead of returning (e.g. a graph-unreachable error).
         collision_row: If set, an ``(instrument_id, celex)`` pair the
             single-tenant graph's cross-instrument short_name collision query
-            (issue #146, ``check_short_name_collision``) returns as its one
+            (``check_short_name_collision``) returns as its one
             candidate row -- simulating a different CELEX already recorded
             under this exact ``short_name``.
         collision_error: If set, the single-tenant graph's collision-check
-            query raises this instead of returning (issue #146, mirrors
+            query raises this instead of returning (mirrors
             ``preflight_error``).
         celex_row: If set, the ``RegulatoryInstrument.id`` the single-tenant
-            graph's CELEX-existence query (issue #193, ``_CELEX_EXISTS_QUERY``)
+            graph's CELEX-existence query (``_CELEX_EXISTS_QUERY``)
             returns -- simulating a CELEX already ingested under that id.
         celex_error: If set, the CELEX-existence query raises this instead of
-            returning (issue #193, AC-BI-007 -- e.g. a graph-unreachable error).
-        recorder: The :class:`StageRecorder` every fake stage records into (issue #201 --
-            lets a test share a timeline with a native-graph ledger). Defaults to a fresh one.
-        merge_new_obligations: Net-new Obligations the fake merge reports (issue #201).
+            returning (e.g. a graph-unreachable error).
+        recorder: The :class:`StageRecorder` every fake stage records into (lets a test share
+            a timeline with a native-graph ledger). Defaults to a fresh one.
+        merge_new_obligations: Net-new Obligations the fake merge reports.
         merge_new_capabilities: Net-new Capabilities the fake merge reports.
         merge_matched_capabilities: Capabilities the fake merge resolves onto existing nodes.
         merge_governance_counts: ``(policies, standards, controls, status_overridden)`` the fake
-            merge reports as its draft-governance import counts (issue #227).
+            merge reports as its draft-governance import counts.
         errors_once: Make the injected ``*_error`` of each external stage fire on its first call
             only (a transient failure: the next sweep's retry of that stage succeeds).
         merge_writes_nodes: Also write one node per net-new Obligation / Capability to the
@@ -774,9 +773,9 @@ def build_fake_pipeline_dependencies(
     )
 
 
-# --- default Cellar stub (issue #193, CHANGES.md H1/Appendix H1) -------------
+# --- default Cellar stub ---------------------------------------------------
 #
-# After #193 every catalog-source ingestion request resolves its CELEX through
+# Every catalog-source ingestion request resolves its CELEX through
 # `resolve_via_cellar` -- there is no curated fast path that skips the network.
 # A test that POSTs `/ingestions` (or calls the `ingest_regulation` MCP tool)
 # with a fake pipeline and no fetch patch of its own would therefore reach the
@@ -849,11 +848,11 @@ def install_default_cellar_stub_unless_live(
     install_default_cellar_stub(monkeypatch)
 
 
-# --- change-check fakes (issue #73, PLAN.md §4 Slice 2) ---------------------
+# --- change-check fakes ----------------------------------------------------
 
 
 def _never_open_native(config: ServiceConfig, short_name: str) -> GraphHandle:
-    """Fail loudly if a Slice 2 test's faked sweep ever opens the native graph."""
+    """Fail loudly if a poll-only test's faked sweep ever opens the native graph."""
     _ = config
     message = f"open_native must not be called in this test (short_name={short_name!r})"
     raise AssertionError(message)
@@ -876,9 +875,9 @@ def _never_trigger_reingestion(
 
     Mirrors :class:`FakeIngestionAdapter`'s own "never invoked" pattern.
     The default wiring (no ``reingestion_result`` passed to
-    :func:`build_fake_change_check_dependencies`) -- used by every Slice 2
-    test (no findings ever reach the `finding_ids` branch) and by Slice 3's
-    D5 "no curated catalog entry" test (the missing-entry short-circuit
+    :func:`build_fake_change_check_dependencies`) -- used by every poll-only
+    test (no findings ever reach the `finding_ids` branch) and by the
+    "no curated catalog entry" test (the missing-entry short-circuit
     happens before `trigger_reingestion` would ever be called).
     """
     _ = (adapter, graph, submitter, audit_anchor, emitter, run_id, run_pipeline)
@@ -890,25 +889,25 @@ def _never_trigger_reingestion(
 
 
 def _never_default_adapter() -> MetadataFetchingAdapter:
-    """Fail loudly if a Slice 2 test's faked sweep ever builds the default adapter."""
+    """Fail loudly if a poll-only test's faked sweep ever builds the default adapter."""
     raise AssertionError("default_adapter must not be called in this test")
 
 
 def _never_find_catalog_entry(celex: str) -> CatalogEntry | None:
-    """Fail loudly if a Slice 2 test's faked sweep ever looks up a catalog entry."""
+    """Fail loudly if a poll-only test's faked sweep ever looks up a catalog entry."""
     message = f"find_catalog_entry must not be called in this test (celex={celex!r})"
     raise AssertionError(message)
 
 
 @dataclass(frozen=True, slots=True)
 class TriggerReingestionCallRecord:
-    """One recorded ``trigger_reingestion`` invocation (issue #73 Slice 3, D4).
+    """One recorded ``trigger_reingestion`` invocation.
 
     Captures the bound argument *values* only -- a plain Python function
     call collapses positional/keyword calling convention by the time the
     callee sees it, so identifier/short_name/new_version/adapter/graph are
     recorded uniformly regardless of how the caller passed them; a test
-    asserts on these values (PLAN.md §4 Slice 3's "argument contract").
+    asserts on these values (the "argument contract").
     """
 
     identifier: str
@@ -955,8 +954,8 @@ def build_fake_change_check_dependencies(
     amendment-reingest dependency (`find_catalog_entry`/`open_native`/
     `default_adapter`/`trigger_reingestion`) is wired to a stand-in that
     raises `AssertionError` if ever called (`_never_*` above) -- correct for
-    Slice 2's poll-only tests (no findings ever reach the `finding_ids`
-    branch) and for Slice 3's D5 "no curated catalog entry" test taken
+    poll-only tests (no findings ever reach the `finding_ids`
+    branch) and for the "no curated catalog entry" test taken
     alone (see below).
 
     Args:
@@ -965,30 +964,30 @@ def build_fake_change_check_dependencies(
         poll_report: The `PollReport` the fake `poll_for_amendments` returns.
             Defaults to an empty report (`polled_count=len(tracked)`, no
             findings, no failures) when omitted.
-        catalog_entries: When given (issue #73 Slice 3), wires a real
+        catalog_entries: When given, wires a real
             `{celex: CatalogEntry}` lookup for `find_catalog_entry` --
             `.get(celex)` returns `None` for an unmapped celex exactly like
-            the real `find_by_celex` (D5), so an empty dict (`{}`) is a
+            the real `find_by_celex`, so an empty dict (`{}`) is a
             valid, deliberate way to script "no curated entry for any
             celex" without needing a raising fake. `None` (default) keeps
             the `_never_find_catalog_entry` stand-in.
-        reingestion_result: When given (issue #73 Slice 3), wires
+        reingestion_result: When given, wires
             `trigger_reingestion` to a recording fake that always returns
             this `ReingestionOutcome`, and wires `open_native`/
             `default_adapter` to recording fakes returning `native_graph`/
             `ingestion_adapter` (or a fresh sentinel of each, if omitted).
-            `None` (default) keeps all three `_never_*` stand-ins -- D5's
+            `None` (default) keeps all three `_never_*` stand-ins -- the
             "never called" assertions rely on this default. Ignored when
             `reingestion_results` is also given.
-        reingestion_results: When given (issue #73 Slices 4-5), wires
+        reingestion_results: When given, wires
             `trigger_reingestion` to a recording fake that consumes this
             sequence **in call order** -- one entry per call, mirroring
             `FakeGraphHandle.results`'s own "consumed in order" pattern. A
             `ReingestionOutcome` entry is returned; a `BaseException`
             *instance* is raised instead (scripting a per-instrument
-            `trigger_reingestion` failure -- D10's national-transposition
-            case, D6's generic-failure case, or a mix across multiple
-            tracked instruments in one sweep, e.g. Slice 5's isolation
+            `trigger_reingestion` failure -- a national-transposition
+            case, a generic-failure case, or a mix across multiple
+            tracked instruments in one sweep, e.g. an isolation
             proof). Calling `trigger_reingestion` more times than entries
             scripted raises `AssertionError` (a test-authoring bug, not
             production behavior). Takes priority over `reingestion_result`
@@ -1000,12 +999,12 @@ def build_fake_change_check_dependencies(
         ingestion_adapter: The `IngestionAdapter` `default_adapter` returns;
             only meaningful when `reingestion_result`/`reingestion_results`
             is given. Defaults to a fresh `FakeIngestionAdapter()` sentinel.
-        will_reingest_error: When given (issue #195), the fake `will_reingest` probe raises it
+        will_reingest_error: When given, the fake `will_reingest` probe raises it
             instead of answering. Without it the probe answers like the real one against the
             scripted result: False when the next scripted `ReingestionOutcome` carries
             `run_id=None` (a `resume` / `already_processed` outcome), otherwise True.
         pipeline: The stage / adapter / graph-opener doubles the sweep's pipeline runner uses
-            (issue #201). Defaults to a fresh :func:`build_fake_pipeline_dependencies`.
+            Defaults to a fresh :func:`build_fake_pipeline_dependencies`.
 
     Returns:
         A :class:`FakeChangeCheckDependencies` whose `dependencies` can be
@@ -1146,7 +1145,7 @@ def build_fake_change_check_dependencies(
     )
 
 
-# --- curated-source fakes (issue #125, PLAN.md Slice 1) ---------------------
+# --- curated-source fakes --------------------------------------------------
 
 
 class FakeCuratedSourceResponse:
@@ -1179,8 +1178,7 @@ class FakeCuratedSourceTransport:
     Satisfies `ps_service.curated_source.http_fetch.CuratedSourceTransport`
     structurally -- mirrors `tests/ingestion/adapters/cellar_eli/test_fetch.py`'s
     own `_RecordingTransport` (mocking at the transport boundary, L2 Testing
-    Patterns), shared here since more than one `tests/api/` file now needs it
-    (issue #125).
+    Patterns), shared here since more than one `tests/api/` file needs it.
     """
 
     def __init__(self, body: bytes) -> None:
@@ -1208,7 +1206,7 @@ class FakeFailingCuratedSourceTransport:
 
 
 class FakeCuratedArtifactTransport:
-    """Scripts a different response body per requested filename (issue #125, Slice 2).
+    """Scripts a different response body per requested filename.
 
     One `fetch_artifact` call makes three requests (`manifest.json`,
     `baseline.json`, `native.json`) under the same instrument subdirectory --
@@ -1237,12 +1235,11 @@ class FakeCuratedArtifactTransport:
 
 
 def _default_fake_resolve_effective_source(config: ServiceConfig) -> EffectiveCatalogSource:
-    """Config-only resolution: no persisted override, mirrors pre-Slice-3 behavior.
+    """Config-only resolution: no persisted override.
 
     Touches no FalkorDB fixture at all -- the safe default for every test
-    that isn't specifically exercising the FalkorDB-persisted override
-    (issue #125, Slice 3), so `build_fake_curated_catalog_dependencies`
-    stays a drop-in for every existing caller.
+    that isn't specifically exercising the FalkorDB-persisted override, so
+    `build_fake_curated_catalog_dependencies` stays a drop-in for every existing caller.
     """
     return EffectiveCatalogSource(url=config.curated_source_base_url, is_override=False)
 
@@ -1252,7 +1249,7 @@ def build_fake_curated_catalog_dependencies(
     *,
     resolve_effective_source: ResolveEffectiveSourceCall | None = None,
 ) -> CuratedCatalogDependencies:
-    """Wire the real ``fetch_catalog`` to a fake HTTP transport (PLAN.md Slice 1 test 1).
+    """Wire the real ``fetch_catalog`` to a fake HTTP transport.
 
     Deliberately not a canned-entries stand-in: per L2 Testing Patterns
     ("mock at component boundaries... not internals of the component under
@@ -1266,7 +1263,7 @@ def build_fake_curated_catalog_dependencies(
         transport: A fake satisfying ``CuratedSourceTransport`` (mirrors
             ``tests/ingestion/adapters/cellar_eli/test_fetch.py``'s own
             ``_RecordingTransport``/``_FailingTransport`` fakes).
-        resolve_effective_source: When given (issue #125, Slice 3), wires a
+        resolve_effective_source: When given, wires a
             real or fake override-resolution call so a test can prove
             `GET /catalog` reflects a persisted override. `None` (default)
             wires a no-FalkorDB-touching stand-in that always resolves to
@@ -1287,7 +1284,7 @@ def build_fake_curated_catalog_dependencies(
     )
 
 
-# --- compliance-officer access-role fakes (issue #145, PLAN.md §3.2) --------
+# --- compliance-officer access-role fakes -----------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -1333,21 +1330,20 @@ def install_compliance_officer_grant(
     ``tests/authz/test_require_access_role_dependency.py`` already proves
     works for this exact dependency, extended here so it also flows through a
     real ``TestClient`` HTTP round trip (that file only ever calls the
-    dependency callable directly against a bare ``Request``). Issue #145 gates
+    dependency callable directly against a bare ``Request``).
     ``POST /restorations``, ``POST /restorations/from-catalog``,
-    ``POST /exports``, and ``POST /change-checks`` behind
+    ``POST /exports``, and ``POST /change-checks`` are gated behind
     ``require_access_role(AccessRole.COMPLIANCE_OFFICER)``, which has no
-    local-test-bypass carve-out (PLAN.md §3.2) -- it raises ``AccessDeniedError``
+    local-test-bypass carve-out -- it raises ``AccessDeniedError``
     whenever ``get_principal`` returns ``None``, which is exactly what happens
     under every existing test file's own ``is_local_test_bypass_active=True``
     config absent this helper. So every route-level test exercising a
     happy path (or any body-validation path that must reach the handler)
     needs this to present a principal at all.
 
-    Issue #163 Slice K (AUDIT.md ``api_group.md``): ``get_principal`` was
-    flagged as an internal-collaborator violation, fixed everywhere it could
-    be -- ``test_rest_auth_middleware.py``'s own ``list_curated_catalog``
-    sites now wrap the *real* ``get_principal`` via
+    ``get_principal`` is an internal collaborator, so it is not patched
+    wherever a seam exists -- ``test_rest_auth_middleware.py``'s own
+    ``list_curated_catalog`` sites wrap the *real* ``get_principal`` via
     ``app.dependency_overrides[get_principal]``, since that route (and
     ``resolve_near_miss``/``check_merge_pending_approval``) inject it through
     a declared ``Depends(get_principal)`` route parameter, a seam
@@ -1372,7 +1368,7 @@ def install_compliance_officer_grant(
         granted: ``True`` wires a principal whose resolved roles include
             ``ComplianceOfficer``. ``False`` wires an authenticated-but-denied
             principal instead.
-        roles: Overrides the denied principal's own held roles (AC-BI-005's
+        roles: Overrides the denied principal's own held roles (the
             no-hierarchy-override proof) -- e.g.
             ``frozenset({AccessRole.SYSTEM_ADMIN})`` /
             ``frozenset({AccessRole.SYSTEM_OWNER})``, proving neither
@@ -1396,7 +1392,7 @@ def install_compliance_officer_grant(
         _ = (config, kwargs)
         return _FakeComplianceAccessRoleStore(resolved_roles)
 
-    # (full reasoning: this function's own "Issue #163 Slice K" docstring paragraph above)
+    # (full reasoning: this function's own docstring paragraph above)
     # detroit-exception: called as a raw function inside require_access_role's own closure
     monkeypatch.setattr(dependencies, "get_principal", _get_principal)
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _store_factory)
@@ -1415,7 +1411,7 @@ def install_no_principal(monkeypatch: pytest.MonkeyPatch) -> None:
     explicit, self-documenting call so a test can override a file's own
     autouse `install_compliance_officer_grant(monkeypatch, granted=True)`
     fixture and prove `require_access_role`'s "no verified principal at all"
-    denial path (issue #145, AC-BI-003/006) without relying on an untyped
+    denial path without relying on an untyped
     inline lambda (which basedpyright cannot resolve the parameter type of
     when passed through `monkeypatch.setattr`'s string-target overload).
 

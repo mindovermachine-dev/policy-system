@@ -1,7 +1,7 @@
 """Tests for the `SystemAdmin`-or-above authz gate on the `invite-user` MCP
-tool (issue #140): AC-BI-001 (a non-`SystemAdmin` caller is denied, `error:`-
-prefixed, without contacting Authentik), AC-BI-002 (the local-test bypass
-skips the role check entirely), and a store-outage fail-closed case mirroring
+tool: a non-`SystemAdmin` caller is denied (`error:`-
+prefixed, without contacting Authentik), the local-test bypass
+skips the role check entirely, and a store-outage fail-closed case mirroring
 `test_catalog_source_authz_gate.py`'s own coverage of the same
 `require_role`/`PsycopgAccessRoleStore` gate shape.
 
@@ -42,7 +42,7 @@ _EMAIL = "target@example.com"
 
 @pytest.fixture(autouse=True)
 def _in_memory_audit_store(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]  # autouse
-    """Invites write `user.invite` rows (issue #195): keep them off a real Postgres."""
+    """Invites write `user.invite` rows: keep them off a real Postgres."""
     store = InMemoryAuditStore()
     monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
 
@@ -78,7 +78,7 @@ def _canned_create_invitation(
 
 
 def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-001: a real, non-bypass caller holding only `AuthenticatedUser`
+    """A real, non-bypass caller holding only `AuthenticatedUser`
     (never elevated) gets the fixed access-denied message, and Authentik is
     never contacted.
     """
@@ -95,7 +95,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
 
 
 def test_local_test_bypass_skips_role_check_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-002: under the local-test bypass, no bearer token is bound at
+    """Under the local-test bypass, no bearer token is bound at
     all and the role check is skipped entirely -- the tool proceeds straight
     to (a fake) Authentik and succeeds.
     """

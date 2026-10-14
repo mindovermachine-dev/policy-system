@@ -10,7 +10,7 @@ per L2 DRY ("extract a shared function/class... once a pattern repeats a
 third time"): `tests/logging/conftest.py` and `tests/llm_interface/
 conftest.py` each already carry an identical local copy (the 1st and 2nd
 occurrences, the latter's own docstring noting DRY's threshold wasn't yet
-met); `tests/ingestion/test_pipeline.py`'s AC-005 run-id test is the third,
+met); `tests/ingestion/test_pipeline.py`'s run-id test is the third,
 so this shared root-level copy is what it uses instead of adding a fourth
 duplicate. The two pre-existing local copies are left as-is (out of scope
 for this batch to touch); pytest resolves the nearer conftest.py first, so

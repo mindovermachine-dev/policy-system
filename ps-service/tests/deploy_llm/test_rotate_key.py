@@ -1,5 +1,4 @@
-"""`--rotate-key` mode: active-slot detection + regenerate-the-inactive-key (AC-BI-014,
-AC-BI-013 second enforcement; PLAN.md §5/S10, §0.6).
+"""`--rotate-key` mode: active-slot detection + regenerate-the-inactive-key .
 
 Branches immediately after flag parsing -- skips config validation, the confirmation table, RBAC
 preflight, and region/quota selection entirely, none of which matter for rotating an
@@ -33,7 +32,7 @@ def _seed_provisioned_account(
     fixture: DeployLlmFixture, *, active_secret_value: str
 ) -> tuple[str, str]:
     """Seeds an existing account/keyvault with a stored AZURE-API-KEY secret matching
-    <active_secret_value> -- whichever of key1/key2 that equals is the "active" slot §0.6 says
+    <active_secret_value> -- whichever of key1/key2 that equals is the "active" slot that
     rotation must leave untouched.
     """
     fixture.seed_subscription(id_=SUBSCRIPTION_ID)

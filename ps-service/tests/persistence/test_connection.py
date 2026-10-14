@@ -1,4 +1,4 @@
-"""Tests for `ps_service.persistence.connection` (issue #130, PLAN.md Slice 1).
+"""Tests for `ps_service.persistence.connection`.
 
 The connection helper and connectivity probe moved out of `ps_service.authz.store`;
 these tests pin their fail-closed behaviour under the new `state_postgres_*` config

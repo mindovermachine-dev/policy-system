@@ -1,4 +1,4 @@
-"""End-to-end tests for `scripts/grant-access-role.sh` (issue #174).
+"""End-to-end tests for `scripts/grant-access-role.sh`.
 
 The script runs for real as a subprocess against a real stdlib `http.server` on 127.0.0.1 that
 speaks PS Service's Streamable HTTP MCP shape (`/mcp/`: initialize -> session id,

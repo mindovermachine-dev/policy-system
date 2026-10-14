@@ -1,18 +1,18 @@
-"""Tests for the `GetDomainConcepts` MCP resource (PLAN_REVIEWED.md §6, Batch 5).
+"""Tests for the `GetDomainConcepts` MCP resource.
 
-Covers AC-009 (resource listed under a stable URI with a markdown mime type),
-AC-010 (read returns the backing file verbatim -- no restructured schema),
-AC-011 (a missing / unreadable file surfaces a clean resource-read error, never
-a stack trace across the boundary) and AC-012 (client input cannot redirect the
+Covers the resource being listed under a stable URI with a markdown mime type,
+a read returning the backing file as-is (no restructured schema),
+a missing / unreadable file surfacing a clean resource-read error (never
+a stack trace across the boundary) and client input being unable to redirect the
 read: zero-parameter helper, fixed absolute path, unknown/traversal URIs are
 rejected by the SDK before the read function runs).
 
 `pytest-asyncio` is not installed; server coroutines are driven with bare
-`asyncio.run(...)` (PLAN_REVIEWED.md Residual risk 8). Hand-written structural
+`asyncio.run(...)` . Hand-written structural
 fakes / monkeypatching only -- no `unittest.mock`.
 
-F-11: `ReadResourceContents.content` is a `str`, not `bytes`.
-AC-BI-017: a missing / unreadable file makes the resource return a path-free
+`ReadResourceContents.content` is a `str`, not `bytes`.
+A missing / unreadable file makes the resource return a path-free
 `error:` text body (the private `_load_domain_concepts` raises
 `McpResourceUnavailableError`; the registered resource function catches it).
 """
@@ -65,7 +65,7 @@ def test_read_helper_takes_no_parameters() -> None:
 
 
 def test_domain_concepts_path_is_absolute_and_fixed() -> None:
-    """AC-BI-012: the resource resolves from the installed package, not a repo checkout.
+    """The resource resolves from the installed package, not a repo checkout.
 
     Asserts the filename and that the resolved location is a descendant of
     `ps_service.mcp_interface`'s own installed package directory -- never
@@ -86,7 +86,7 @@ def test_domain_concepts_path_is_absolute_and_fixed() -> None:
 
 
 def test_packaged_copy_matches_docs_artifacts_source() -> None:
-    """AC-BI-012 anti-drift guard: the packaged copy is byte-identical to the source.
+    """Anti-drift guard: the packaged copy is byte-identical to the source.
 
     `docs/artifacts/ps-domain-concepts.md` is the checkout-relative canonical
     source -- safe to reference here since tests always run inside a
@@ -123,7 +123,7 @@ def test_load_raises_domain_error_on_missing_file(
 def test_read_returns_clean_error_string_on_missing_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-017 (resource half): a missing file yields a path-free `error:` text."""
+    """A missing file yields a path-free `error:` text."""
     missing = tmp_path / "does-not-exist.md"
     _point_helper_at(monkeypatch, missing)
 
@@ -178,7 +178,7 @@ def test_read_resource_via_server_missing_file_error_is_clean(
 
 
 def test_resource_returns_the_real_packaged_document_byte_for_byte() -> None:
-    """AC-BI-010: no monkeypatching; the resource is the packaged file, equal to the docs copy."""
+    """No monkeypatching; the resource is the packaged file, equal to the docs copy."""
     raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
     [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
     packaged = (

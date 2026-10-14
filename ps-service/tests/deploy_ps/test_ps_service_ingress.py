@@ -1,12 +1,11 @@
-"""PS Service Ingress for `scripts/deploy-ps-prod.sh` (AC-BI-015 completion; PLAN.md §5/S18).
+"""PS Service Ingress for `scripts/deploy-ps-prod.sh`.
 
-`ensure_ps_service_ingress` is ported verbatim from `spikes/deploy-ps-azure/deploy-ps-prod.sh`'s own
-equivalent (the trusted empirical reference): a TLS-terminated `Ingress` targeting the chart's
-own rendered PS Service `Service` (name/port confirmed by reading `charts/policy-system/
-templates/ps-service-service.yaml` before writing this slice: `{{ include
-"policy-system.fullname" . }}-ps-service`, port name `http`), fronted by S17's `ClusterIssuer`
-(the `cert-manager.io/cluster-issuer` annotation) and S16's app-routing ingress class. `main()`'s
-closing `print_provisioning_summary` (also new in this slice) prints the resulting HTTPS URL and
+`ensure_ps_service_ingress` is a TLS-terminated `Ingress` targeting the chart's
+own rendered PS Service `Service` (name/port as defined in `charts/policy-system/
+templates/ps-service-service.yaml`: `{{ include
+"policy-system.fullname" . }}-ps-service`, port name `http`), fronted by the `ClusterIssuer`
+(the `cert-manager.io/cluster-issuer` annotation) and the app-routing ingress class. `main()`'s
+closing `print_provisioning_summary` prints the resulting HTTPS URL and
 never a secret value.
 """
 
@@ -17,7 +16,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from conftest import DeployPsFixture
 
-# Mirrors scripts/deploy-ps-prod.sh's own S18/S16/S17 literals -- hardcoded here rather than parsed
+# Mirrors scripts/deploy-ps-prod.sh's own literals -- hardcoded here rather than parsed
 # from the script, same precedent as every other deploy_ps test module.
 PS_SERVICE_NAME = "policy-system-ps-service"
 CLUSTER_ISSUER_NAME = "letsencrypt-prod"
@@ -74,9 +73,8 @@ def test_rerun_with_unchanged_ingress_reports_no_change_via_apply_unchanged_outp
 
     output_lines = deploy_ps_fixture.read_kubectl_apply_output_log()
     # Filtered to this Ingress's own name specifically, not "the last ingress/ line overall" --
-    # S5 (#129/CHANGES.md row F1) added a second Ingress apply (Authentik's, ensure_authentik_
-    # ingress) right after this one in main(), so PS Service's own line is no longer necessarily
-    # last.
+    # a second Ingress apply (Authentik's, ensure_authentik_ingress) follows this one in main(),
+    # so PS Service's own line is not necessarily last.
     ps_service_ingress_lines = [
         line for line in output_lines if line.startswith(f"ingress/{PS_SERVICE_NAME} ")
     ]

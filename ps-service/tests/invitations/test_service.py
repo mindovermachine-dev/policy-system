@@ -1,4 +1,4 @@
-"""`invite_user_audited`: audit-first orchestration around the Authentik call (issue #195)."""
+"""`invite_user_audited`: audit-first orchestration around the Authentik call."""
 
 from __future__ import annotations
 

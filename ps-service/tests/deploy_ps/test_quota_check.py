@@ -1,7 +1,7 @@
-"""Quota preflight at the selected region (AC-BI-009/010), plus 4 of the spike's 6 proven
-bugfixes (PLAN.md §5/S8): the real per-model+SKU usage key, the empty-usage-list skip, jq-`floor`
-float handling, and the already-deployed skip. The other 2 (capacity-minimum null coalesce,
-model-version) are covered by test_capacity_validation.py and this module's
+"""Quota preflight at the selected region, covering the real per-model+SKU usage key, the
+empty-usage-list skip, jq-`floor` float handling, and the already-deployed skip. The
+capacity-minimum null coalesce and model-version cases are covered by
+test_capacity_validation.py and this module's
 `test_deployment_create_call_includes_the_real_model_version_from_model_list` respectively.
 
 `check_quota` runs once, against `select_region`'s already-chosen region only -- no
@@ -40,10 +40,9 @@ def _usage_list_calls(fixture: DeployPsFixture) -> list[str]:
 def test_quota_key_matches_real_azure_usage_entry_shape_openai_dot_sku_dot_modelname(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Bugfix 2/6 (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Quota preflight
-    always a no-op"). `quota_usage_key` must build the real Azure usage-entry name
+    """`quota_usage_key` must build the real Azure usage-entry name
     ("OpenAI.<Sku>.<ModelName>") -- the literal "chat"/"embed" keys `scripts/deploy-llm.sh`
-    (issue #105) still uses never match any real entry, so an insufficient-quota scenario keyed
+    still uses never match any real entry, so an insufficient-quota scenario keyed
     correctly must actually be *seen* and hard-stop, not silently pass. `seed_usage` already
     writes the real-shaped key (see conftest's own docstring) -- this test proves the production
     code's `quota_usage_key` reads it back correctly.
@@ -63,8 +62,7 @@ def test_quota_key_matches_real_azure_usage_entry_shape_openai_dot_sku_dot_model
 def test_empty_usage_list_skips_quota_check_with_a_note_not_a_hard_fail(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Bugfix 3/6 (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Empty usage list on
-    a subscription/region with zero prior deployments"). Azure reports no usage entries at all
+    """Azure reports no usage entries at all
     for a region with no prior deployment -- this must be read as "can't check yet", printing a
     note and continuing, not as "0 remaining" (a false hard-fail).
     """
@@ -81,8 +79,7 @@ def test_empty_usage_list_skips_quota_check_with_a_note_not_a_hard_fail(
 def test_float_usage_values_compare_correctly_via_jq_floor_not_bash_arithmetic(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Bugfix 4/6 (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Float arithmetic in
-    bash"). Azure reports `currentValue`/`limit` as floats (e.g. `950.5`) -- bash `$(( ))` cannot
+    """Azure reports `currentValue`/`limit` as floats (e.g. `950.5`) -- bash `$(( ))` cannot
     parse a decimal point and errors outright ("invalid arithmetic operator"), rather than merely
     miscomparing. `model_remaining_quota` must do the subtraction in `jq` (`floor`) instead, so a
     float-valued but *sufficient* quota still passes cleanly.
@@ -133,8 +130,7 @@ def test_quota_check_runs_only_against_the_selected_region(
 def test_rerun_with_existing_deployment_skips_its_own_quota_check_no_false_fail(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Bugfix 5/6 (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Idempotent-rerun
-    false 'insufficient quota'"). Once a deployment already exists, its own allocated capacity
+    """Once a deployment already exists, its own allocated capacity
     counts against `currentValue`, so re-requesting the same capacity on a rerun would otherwise
     read as "0 remaining" even though no *new* capacity is actually needed. `check_quota` must
     skip a model's quota check entirely once `deployment_exists` says that model's deployment is
@@ -157,13 +153,10 @@ def test_rerun_with_existing_deployment_skips_its_own_quota_check_no_false_fail(
 def test_deployment_create_call_includes_the_real_model_version_from_model_list(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Bugfix 6/6 (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Missing
-    --model-version"). `az cognitiveservices account deployment create` (S9) hard-requires
-    `--model-version`; `model_version` must read `.model.version` from the already-fetched
-    `model list` response so S9's deployment-create call can pass it. S9 hasn't landed yet
-    (deploy-ps-prod.sh doesn't create deployments this slice), so this slice's own extension-point
-    step logs the resolved versions it computes for S9 to consume -- proving `model_version`
-    parses the real per-model version string, not a placeholder.
+    """`az cognitiveservices account deployment create` hard-requires `--model-version`;
+    `model_version` must read `.model.version` from the already-fetched `model list` response so
+    the deployment-create call can pass it -- proving `model_version` parses the real per-model
+    version string, not a placeholder.
     """
     deploy_ps_fixture.fill_tls_contact_email()
     deploy_ps_fixture.seed_subscription()

@@ -1,12 +1,12 @@
-"""Tests for `execute_cypher_query`'s success-path shape mapping (AC-001).
+"""Tests for `execute_cypher_query`'s success-path shape mapping.
 
-PLAN_REVIEWED.md §5, Increment 4: a scripted fake `GraphHandle`/
+A scripted fake `GraphHandle`/
 `GraphQueryResult` proves the exact `QueryResult(columns, rows, row_count)`
 mapping from FalkorDB's `header`/`result_set` shape, plus the empty-result
 and falsy-header edge cases.
 
-Batch 4/Increment 6 wired `_log` into `execute_cypher_query`'s success path,
-so every call here now needs a live emitter (or a configured process
+`execute_cypher_query` logs on its success path,
+so every call here needs a live emitter (or a configured process
 default) or it raises `LoggingLifecycleError` -- mirrors
 `tests/llm_interface/test_route_completion_mocked.py`'s established
 throwaway-emitter fixture pattern; these tests don't assert on log content,
@@ -50,7 +50,7 @@ class _ScriptedQueryResult:
 
 class _ScriptedGraphHandle:
     """Satisfies `GraphHandle` structurally -- reports itself as seeded
-    (D11) for `_SEED_CHECK_QUERY`, and returns the one scripted
+    for `_SEED_CHECK_QUERY`, and returns the one scripted
     `_ScriptedQueryResult` for the caller's own query. This module tests the
     success-path shape mapping, not the unseeded-graph guard (see
     `test_execute_cypher_query_unseeded.py`), so the graph here must always

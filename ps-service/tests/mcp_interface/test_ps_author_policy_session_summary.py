@@ -1,18 +1,18 @@
-"""Tests for `ps-author-policy`'s session-end summary (issue #137, Slice 6).
+"""Tests for `ps-author-policy`'s session-end summary.
 
-One end-to-end scripted sequence tying Slices 2-5 together, per PLAN.md
-Section 5 "Slice 6": fresh Policy (scaffold + P-002..P-006) -> 1 passing
-Standard (S-001..S-006, `procedure` carrying a `Sources:` suffix per Slice
-5's own contract) -> 1 passing Control (C-001..C-006) -> a final
+One end-to-end scripted sequence tying the Policy, Standard, Control and
+citation loops together: fresh Policy (scaffold + P-002..P-006) -> 1 passing
+Standard (S-001..S-006, `procedure` carrying a `Sources:` suffix per the
+citation contract) -> 1 passing Control (C-001..C-006) -> a final
 `get-policy` call -> a final `cypher` content re-read -- against a single
 `_HybridGraph` instance, combining `test_ps_author_policy_control_loop.py`'s
-own write-side dispatch branches (Slice 4: `find_control_with_parent`,
+own write-side dispatch branches (the Control-loop file: `find_control_with_parent`,
 `find_standard_with_parent`, `read_policy_tree`, `find_existing_policy`)
 with `test_ps_author_policy_branch_detection.py`'s own freehand-`cypher`
-FIFO-queue branch (Slice 1) -- the two halves of this skill's own tool
+FIFO-queue branch -- the two halves of this skill's own tool
 surface (content-CRUD writes plus read-only `cypher`) exercised together in
 one session for the first time. `read_policy_tree`'s own dispatch is made
-STATEFUL here (unlike Slices 2-4's always-empty-children fixture): the test
+STATEFUL here (unlike the earlier loop files' always-empty-children fixture): the test
 helper appends the created Standard/Control to the shared `_PolicyFixture`
 right after each create call succeeds, so the final `get-policy` call's own
 tree read reflects everything created earlier in the same session -- this
@@ -20,7 +20,7 @@ is the one new capability this slice's fake needs that no earlier slice's
 fake required, because no earlier slice's test ever called `get-policy`
 *after* creating content.
 
-Three assertions, per PLAN.md Section 5 Slice 6's own test description:
+Three assertions:
 
 (a) the final `get-policy` call's returned tree includes every created id
     (Policy, Standard, Control) in the right parent/child relationship;
@@ -28,7 +28,7 @@ Three assertions, per PLAN.md Section 5 Slice 6's own test description:
     written -- checked two ways: directly, via the fake's own recorded
     `write_params` (the only place `update-standard-draft`/
     `update-control-draft`'s persisted VALUES are observable at all,
-    Slices 3/4's own finding -- their MCP response never echoes
+    the earlier loop files' finding -- their MCP response never echoes
     `updated_fields`), and via a final `cypher` read scripted to return
     exactly those same persisted values, proving the Process's own
     "re-read via cypher" instruction is a real, executable step against
@@ -37,7 +37,7 @@ Three assertions, per PLAN.md Section 5 Slice 6's own test description:
     tool name actually passed to `mcp_server.server.call_tool` across the
     whole sequence) confirms `propose-policy`/`approve-policy`/
     `reject-policy`/`revert-policy-to-draft` were never invoked -- direct
-    enforcement of AC-BI-010's "never calling it itself," not merely a
+    enforcement of the "never calling it itself," not merely a
     documentation check.
 
 Fake graph: module-local, no cross-file import -- matches this directory's
@@ -96,7 +96,7 @@ _POLICY_LOOP_FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 # --- Standard content: S-001..S-006 (S-001's `procedure` carries the
-# session's one `Sources:` suffix, per Slice 5's own citation contract) -----
+# session's one `Sources:` suffix  , per the citation contract) -----
 
 _PROCEDURE_WITH_SOURCE = (
     "Query each production data store's encryption-at-rest flag weekly; file a "
@@ -128,8 +128,8 @@ _FORBIDDEN_TOOLS = frozenset(
 
 
 # --- fakes (merges test_ps_author_policy_control_loop.py's write-side
-# dispatch, Slice 4, with test_ps_author_policy_branch_detection.py's own
-# freehand-cypher FIFO-queue branch, Slice 1) ------------------------------
+# dispatch, with test_ps_author_policy_branch_detection.py's own
+# freehand-cypher FIFO-queue branch) ------------------------------
 
 
 @contextlib.contextmanager
@@ -179,7 +179,7 @@ class _StandardFixture:
 
 @dataclass
 class _PolicyFixture:
-    """The whole tree `read_policy_tree` walks -- STATEFUL, unlike Slices 2-4's
+    """The whole tree `read_policy_tree` walks -- STATEFUL, unlike the earlier loop files'
     always-empty-children fixture: the test helper appends each created
     Standard/Control here right after its own create call succeeds, so a
     LATER `read_policy_tree`-shaped read (this slice's own final
@@ -201,7 +201,7 @@ class _StandardParentFixture:
     """Stand-in for `graph_writer.find_standard_with_parent`'s own `StandardWithParent`.
 
     Read by `update-standard-draft`'s and `add-control-to-draft`'s own
-    preambles -- carried over unchanged from Slices 3/4.
+    preambles -- carried over unchanged from the earlier loop files.
     """
 
     policy_id: str
@@ -217,7 +217,7 @@ class _ControlParentFixture:
     """Stand-in for `graph_writer.find_control_with_parent`'s own `ControlWithParent`.
 
     Read (twice) by `update-control-draft`'s own preamble -- carried over
-    unchanged from Slice 4.
+    unchanged from the earlier loop file.
     """
 
     standard_id: str
@@ -230,8 +230,8 @@ class _ControlParentFixture:
 
 
 class _HybridGraph:
-    """Slice 4's own write-side `_HybridGraph`, extended with a STATEFUL
-    `read_policy_tree` dispatch (`_PolicyFixture` above) and Slice 1's own
+    """The Control-loop file's write-side `_HybridGraph`, extended with a STATEFUL
+    `read_policy_tree` dispatch (`_PolicyFixture` above) and the branch-detection file's own
     freehand-`cypher` FIFO-queue branch, checked after every literal-dispatch
     branch (same "more specific match wins" ordering discipline every
     earlier slice already established) -- this slice's own final `cypher`
@@ -335,7 +335,7 @@ class _HybridGraph:
             # The skill's own freehand `cypher`-tool call (session-end
             # content re-read) -- dequeue the next scripted outcome. The
             # " SET "/"MERGE (" exclusion matters here in a way it didn't in
-            # Slice 1's own fake: this slice is the first to combine the
+            # the branch-detection file's fake: this slice is the first to combine the
             # freehand-cypher queue with the write-side content-CRUD tools
             # in one graph, and `update-*-draft`'s own SET statements (e.g.
             # `"MATCH (p:Policy {id: $policy_id}) SET p += $set_properties"`)
@@ -389,7 +389,7 @@ class _FakeAuditStore:
         self.calls.append(kwargs)
 
     def record_standalone_with_event_id(self, **kwargs: object) -> str:
-        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        """`record_standalone`, returning an id the process gateway's log accepts."""
         self.record_standalone(**kwargs)
         event_id = str(uuid.uuid4())
         installed_process_gateway().rig.store.audit_rows.add(event_id)
@@ -562,8 +562,8 @@ def test_full_session_creates_full_tree_never_calls_a_status_transition_tool(
 
     # --- (b) persisted content matches what was written, verified two ways:
     # directly via the gateway log (the only place the update tools' persisted VALUES are
-    # observable, Slices 3/4's own finding)...
-    # Since issue #211 every Policy, Standard and Control write went through the gateway. Group
+    # observable, the earlier loop files' finding)...
+    # Every Policy, Standard and Control write went through the gateway. Group
     # order: [0] create-policy-draft, [1:7] the six Policy updates, [7] add-standard, [8:14] the
     # Standard updates (the sixth restates the default `implementation_status`, so it logs
     # nothing), then add-control and the Control updates (the last restates the default as well).
@@ -601,7 +601,7 @@ def test_full_session_creates_full_tree_never_calls_a_status_transition_tool(
     assert handle.cypher_queries == [content_query]
 
     # --- (c) mechanical call-log check: none of the four status-transition
-    # tools were ever invoked anywhere in this session (AC-BI-010) ----------
+    # tools were ever invoked anywhere in this session ----------
     assert _FORBIDDEN_TOOLS.isdisjoint(call_log)
     assert call_log.count("cypher") == 1
     assert call_log.count("get-policy") == 1

@@ -1,4 +1,4 @@
-"""Tests for the `tools/backup-restore-verify` seed helpers (issue #216, slice V3).
+"""Tests for the `tools/backup-restore-verify` seed helpers.
 
 The helpers run for real inside the ps-service pod; here only their pure parts are exercised,
 with the access-role store seam and the restore callable injected.
@@ -84,14 +84,14 @@ def test_seed_content_main_configures_logging_and_installs_a_gateway_before_the_
     def restore(*_args: object, **_kwargs: object) -> None:
         events.append("restore")
 
-    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec (§1.2)
+    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec
     monkeypatch.setattr(module, "configure_logging", configure)
-    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec (§1.2)
+    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec
     monkeypatch.setattr(module, "load_config", _FakeConfig)
-    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec (§1.2)
+    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec
     monkeypatch.setattr(module, "build_default_restore_from_catalog_dependencies", object)
     monkeypatch.setattr(module, "PsycopgAuditStore", _FakeAuditStore)
-    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec (§1.2)
+    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec
     monkeypatch.setattr(module, "run_restoration_from_catalog_source", restore)
     gateway = _FakeGateway(events)
 
@@ -101,9 +101,9 @@ def test_seed_content_main_configures_logging_and_installs_a_gateway_before_the_
     def install(installed: object) -> None:
         events.append(f"install:{installed is gateway}")
 
-    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec (§1.2)
+    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec
     monkeypatch.setattr(module, "build_default_graph_write_gateway", build)
-    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec (§1.2)
+    # detroit-exception: seed CLI entrypoint wiring; the call order IS the spec
     monkeypatch.setattr(module, "install_graph_write_gateway", install)
 
     assert module.main(["--instrument", "A-1.0"]) == 0

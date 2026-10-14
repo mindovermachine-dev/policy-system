@@ -1,4 +1,4 @@
-"""``POST /ingestions`` (catalog) writes the native graph through the gateway (#208, slice 6).
+"""``POST /ingestions`` (catalog) writes the native graph through the gateway.
 
 The route's ingest stage is handed the process's Graph Write Gateway and the id of a system audit
 row recorded for the run; with no gateway the run fails closed before any stage. The stages
@@ -48,7 +48,7 @@ def _noop_emit(**_kwargs: object) -> None:
 
 @pytest.fixture(autouse=True)
 def _stub_run_log(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]  # autouse
-    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
+    # detroit-exception: process-wide atexit logging facade, not a business fake
     monkeypatch.setattr("ps_service.api.ingestion_orchestration.emit_log_entry", _noop_emit)
 
 
@@ -154,7 +154,7 @@ def _raising(error: Exception):
     return record
 
 
-# --- ingest then extract: one run, one audit event (#209, AC-BI-007) ---
+# --- ingest then extract: one run, one audit event ---
 
 
 _UNIT = ExtractionUnit(

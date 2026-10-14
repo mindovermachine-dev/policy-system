@@ -1,9 +1,9 @@
-"""The Standard and Control draft tools write through the Graph Write Gateway (issue #211, S4).
+"""The Standard and Control draft tools write through the Graph Write Gateway.
 
 `update-standard-draft`, `add-standard-to-draft`, `add-control-to-draft` and `update-control-draft`
 on the process gateway rig (the true boundary), read back through the lifecycle read double over the
-same `policy_system` graph. Each write is one group with no audit link and no audit row (AC-BI-008);
-a cleared property is absent afterwards (AC-BI-007); without a gateway the tool fails closed and
+same `policy_system` graph. Each write is one group with no audit link and no audit row;
+a cleared property is absent afterwards; without a gateway the tool fails closed and
 writes nothing; a gateway failure is `error: FalkorDB write failed: ...`.
 """
 
@@ -152,7 +152,6 @@ _IDS = [tool for tool, _ in _WRITES]
 def test_update_standard_draft_answers_the_same_shape_and_clears_a_property_in_one_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-007, AC-BI-008."""
     rig, graph, audit = _setup(monkeypatch)
 
     with _verified_actor(sub=_ACTOR):
@@ -178,7 +177,6 @@ def test_update_standard_draft_answers_the_same_shape_and_clears_a_property_in_o
 def test_update_control_draft_answers_the_same_shape_and_clears_a_property_in_one_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-007, AC-BI-008."""
     rig, graph, audit = _setup(monkeypatch)
 
     with _verified_actor(sub=_ACTOR):
@@ -205,7 +203,6 @@ def test_update_control_draft_answers_the_same_shape_and_clears_a_property_in_on
 def test_add_standard_to_draft_writes_the_node_and_edge_in_one_group_without_an_audit_link(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008, AC-BI-009."""
     rig, graph, audit = _setup(monkeypatch)
 
     with _verified_actor(sub=_ACTOR):
@@ -228,7 +225,6 @@ def test_add_standard_to_draft_writes_the_node_and_edge_in_one_group_without_an_
 def test_add_control_to_draft_writes_the_node_and_edge_in_one_group_without_an_audit_link(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008, AC-BI-009."""
     rig, graph, audit = _setup(monkeypatch)
 
     with _verified_actor(sub=_ACTOR):
@@ -249,7 +245,6 @@ def test_add_control_to_draft_writes_the_node_and_edge_in_one_group_without_an_a
 def test_adding_the_same_standard_twice_logs_one_group_and_the_second_answer_is_the_same(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009."""
     rig, _, _ = _setup(monkeypatch)
 
     with _verified_actor(sub=_ACTOR):

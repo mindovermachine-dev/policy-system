@@ -1,15 +1,15 @@
-"""End-to-end proof of `release.sh`'s no-release path and its fail-fast boundary (S5/S6/S7).
+"""End-to-end proof of `release.sh`'s no-release path and its fail-fast boundary .
 
-`release.sh` reads the baseline release tag through `gh tt semver`, validates it (CHANGES X-01,
-`lib/semver.sh`) *before any git command runs*, classifies the commits since that baseline
+`release.sh` reads the baseline release tag through `gh tt semver`, validates it
+(`lib/semver.sh`) *before any git command runs*, classifies the commits since that baseline
 (`git log -z ... | bump-from-commits.sh`), and on `bump=none` writes a summary and exits 0 --
 no commit, no tag, no version files touched. An invalid baseline must fail before any git
-command or file write: the git-shim log (X-01) stays empty, `git status --porcelain` stays
+command or file write: the git-shim log stays empty, `git status --porcelain` stays
 empty, and `HEAD`/tags are unchanged. On `bump!=none` the driver also syncs and verifies the
-version-lockstep fields (`sync-version-files.sh` / `verify-version-files.sh`, S7), then commits,
-tags and atomically pushes the release (`publish-release.sh`, S8). A push rejected because `main`
+version-lockstep fields (`sync-version-files.sh` / `verify-version-files.sh`), then commits,
+tags and atomically pushes the release (`publish-release.sh`). A push rejected because `main`
 moved upstream exits the driver non-zero with no retry; the next run against the new `main` tip
-recomputes and self-heals (D-03, S9) -- proven here end-to-end alongside `publish-release.sh`'s
+recomputes and self-heals -- proven here end-to-end alongside `publish-release.sh`'s
 own unit tests.
 """
 
@@ -90,7 +90,7 @@ def test_feat_commit_leaves_five_fields_synced_to_next_minor(
     plugin = json.loads((work_dir / PLUGIN_RELATIVE_PATH).read_text("utf-8"))
     assert plugin["version"] == expected_release_version
 
-    # S8: release.sh now also commits, tags and pushes -- the release lands on origin.
+    # release.sh now also commits, tags and pushes -- the release lands on origin.
     assert expected_release_version in release_fixture.work.tags()
     refs = release_fixture.origin_refs()
     assert refs["refs/heads/main"] == release_fixture.work.head()
@@ -100,7 +100,7 @@ def test_feat_commit_leaves_five_fields_synced_to_next_minor(
 def test_second_run_after_release_commit_creates_nothing(
     release_fixture: ReleaseFixture,
 ) -> None:
-    """AC-BI-017/018: once a release lands, the very next run finds nothing to release."""
+    """Once a release lands, the very next run finds nothing to release."""
     release_fixture.commit("feat(release): automate lockstep versioning - resolves #79")
 
     release_fixture.run_script("release.sh")
@@ -120,7 +120,7 @@ def test_second_run_after_release_commit_creates_nothing(
 def test_next_run_after_rejection_releases_successfully(
     release_fixture: ReleaseFixture,
 ) -> None:
-    """D-03/AC-BI-019: a rejected push self-heals -- the next run, from a fresh checkout of the
+    """A rejected push self-heals -- the next run, from a fresh checkout of the
     new `main` tip, recomputes and releases successfully.
     """
     release_fixture.commit("feat(release): automate lockstep versioning - resolves #79")

@@ -1,6 +1,4 @@
-r"""Live verification: `resolve_via_cellar` against the real Cellar/ELI service
-(Increment 17, `.orchestrator/tracker/issue-61-ingest-celex-cellar-fallback/PLAN.md`
-§3 Increment 17).
+r"""Live verification: `resolve_via_cellar` against the real Cellar/ELI service.
 
 `@pytest.mark.cellar_live` on every test in this module (via `pytestmark`):
 real network calls to `publications.europa.eu` -- excluded from the fast
@@ -9,58 +7,31 @@ regression suite (`-m "not cellar_live"`) and must be run explicitly:
     uv run pytest ps-service/tests/api/test_ingestion_orchestration_live.py \
         -m cellar_live -q
 
-Purpose: `resolve_via_cellar` (`ps_service.api.ingestion_orchestration`) has
-been extensively unit-tested against fixture XHTML (Increments 5/6) -- this
-module re-proves its two load-bearing claims against genuine Cellar/ELI data
-instead of a fake:
+Purpose: `resolve_via_cellar` (`ps_service.api.ingestion_orchestration`) is
+unit-tested against fixture XHTML; this module re-proves its two load-bearing
+claims against genuine Cellar/ELI data instead of a fake:
 
 1. A real, well-formed CELEX for a real regulation that is *not* in the
    curated `REGULATION_CATALOG` (`ps_service.api.catalog`) resolves
    successfully, with a real title-derived `short_name` and `version ==
-   "1.0"` (D-slug, AC-BI-004).
-2. The document is fetched at most once per resolution+Stage-1 pair (D2,
-   AC-BI-006) -- proven here with a counting wrapper around the *real*
-   `fetch_xhtml`, not a fake, so a defect only real Cellar XHTML structure
-   could expose (e.g. a second hidden fetch inside `extract_metadata` or
-   `parse_structure`) would actually be caught.
+   "1.0"`.
+2. The document is fetched at most once per resolution+Stage-1 pair -- proven
+   here with a counting wrapper around the *real* `fetch_xhtml`, not a fake,
+   so a defect only real Cellar XHTML structure could expose (e.g. a second
+   hidden fetch inside `extract_metadata` or `parse_structure`) would
+   actually be caught.
 
 CELEX used: `32023R1114`, Regulation (EU) 2023/1114 (the Markets in
 Crypto-Assets Regulation / MiCA) -- real, well-formed
 (`^3\\d{4}[A-Z]\\d{4}$`), type `R` (regulation), and confirmed absent from
 `REGULATION_CATALOG` (`ps_service/api/catalog.py`) as of 2026-09-27.
 
-**Re-substitution note (2026-09-27, Slice 0 baseline fix):** this module
-previously used `32022R2554` (DORA, see substitution note below). DORA was
-curated into `REGULATION_CATALOG` on 2026-09-15
-(`curated-content/catalog.json`), which broke this module's own
-non-curated-CELEX premise
-(`test_celex_under_test_is_genuinely_absent_from_the_curated_catalog`).
-Replaced with MiCA, re-confirmed absent from the catalog and genuinely
-Cellar-resolvable at fix time -- unrelated to the 32019R0881 finding below,
-which stays as originally recorded.
-
-**Substitution note, found during this increment's own red run, not assumed:**
-the task brief that seeded this file specified `32019R0881` (the EU
-Cybersecurity Act / ENISA Regulation) as the live-verification CELEX. Running
-against it surfaced a genuine defect, not a test bug or a network issue:
-`extract_metadata`'s heading-text-matching extraction mechanism for
-`effective_date` (`metadata.py`, since superseded by RDF-based resolution per
-issue #62) only recognised an Article heading containing "Transposition" or
-"Entry into force and application"; 32019R0881's real final article (Art. 69)
-is headed simply "Entry into force" (no "and application"), so resolution
-raised `CellarParseError` -> `PipelineStageError`, not the happy path this
-module exists to demonstrate. Confirmed against six other real, non-curated
-regulations (DORA, DSA, the AI Act, the P2B Regulation, the Terrorist Content
-Online Regulation, the Data Act) -- all six resolve cleanly, so this is a
-narrow heading-phrasing gap specific to 32019R0881's drafting, not a systemic
-`resolve_via_cellar` defect. Out of this test-only increment's scope to fix
-(PLAN.md §3 Increment 17: "Changes: none"); reported to the orchestrator in
-`IMPL_17.md` as a follow-up-worthy finding. DORA was substituted at the time
-so this module still delivered its actual purpose -- a genuine, passing live
-proof of `resolve_via_cellar`'s happy path and fetch-once behaviour --
-without erasing the 32019R0881 finding, which stays fully documented here and
-in `IMPL_17.md` rather than silently dropped. (DORA was itself later
-superseded by MiCA -- see the re-substitution note above.)
+The CELEX must stay absent from the curated catalog: once a regulation is
+curated into `REGULATION_CATALOG` it does not exercise the non-curated
+premise
+(`test_celex_under_test_is_genuinely_absent_from_the_curated_catalog`
+guards this), so the CELEX has to be swapped for another real,
+Cellar-resolvable, non-curated regulation.
 """
 
 from __future__ import annotations
@@ -81,7 +52,7 @@ class _CountingFetch:
 
     Deliberately a *wrapper* around the live function, not a replacement --
     the point is to prove "exactly one real HTTP call" against genuine
-    Cellar/ELI, matching Increment 5's own counting-fake technique but with
+    Cellar/ELI, matching the counting-fake technique of the unit tests but with
     the fake's fixed-body return swapped for a real network round-trip.
     """
 
@@ -121,11 +92,11 @@ def test_resolve_via_cellar_live_fetch_of_a_real_noncurated_celex() -> None:
 
 
 def test_resolve_via_cellar_fetches_the_real_document_at_most_once_for_the_run() -> None:
-    """The fetch-once proof (D2, AC-BI-006), against real infrastructure: a
+    """The fetch-once proof, against real infrastructure: a
     counting wrapper around the real `fetch_xhtml` is passed explicitly via
     `cellar_fetch=`. Simulating Stage 1 by calling
     `resolution.adapter.fetch_regulatory_instrument_structure(celex)` directly
-    (same technique Increment 5's fake-based test used) must not trigger a
+    (the same technique the fake-based tests use) must not trigger a
     second live HTTP call -- proving the cached-bytes adapter genuinely
     avoids a second real round-trip, not just a second call against a fake.
     """

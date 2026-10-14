@@ -1,6 +1,6 @@
-"""Arithmetic and boundary validation for `next-version.sh` (AC-BI-006, 007, 008, 013).
+"""Arithmetic and boundary validation for `next-version.sh`.
 
-`next-version.sh` is the one place PLAN.md's `X` (CHANGES X-14: `release_version` in code) is
+`next-version.sh` is the one place `release_version` is
 computed from a baseline semver and a bump size. It re-validates both its input and its output
 against `lib/semver.sh`'s `validate_semver` -- the "second layer at sinks" L1 requires around
 arithmetic that feeds a future `git tag`.

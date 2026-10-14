@@ -1,9 +1,9 @@
-"""Logic tests for `scripts/lib/local-tls.sh` (issue #165, Slice 3C) with a fake `openssl`.
+"""Logic tests for `scripts/lib/local-tls.sh` with a fake `openssl`.
 
 Real-cryptography checks (CA/leaf extensions, strict TLS handshake, idempotence, permissions)
 run real `openssl` and a local TLS server, so they live in `test_local_tls_integration.py`
-under the `integration` marker (L2 Testing Patterns; FLAWS F-7). Here: tool preflight, the
-Secret apply idiom and the certificate-refresh decision (D-C: apply the blueprint through the
+under the `integration` marker (L2 Testing Patterns). Here: tool preflight, the
+Secret apply idiom and the certificate-refresh decision (the blueprint is applied through the
 API instead of restarting the server).
 """
 

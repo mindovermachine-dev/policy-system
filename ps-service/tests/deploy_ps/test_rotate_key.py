@@ -1,14 +1,14 @@
 """`--rotate-key` mode for `scripts/deploy-ps-prod.sh`: active-slot detection + regenerate-the-
-inactive-key, carried over from `scripts/deploy-llm.sh`'s own proven implementation (AC-BI-015
-completion, AC-BI-017's mocked portion; PLAN.md §5/S18).
+inactive-key, carried over from `scripts/deploy-llm.sh`'s own proven implementation.
 
 Branches immediately after flag parsing (`parse_args`, checked in `main()` BEFORE any of
-S5-S18's provisioning body runs) -- skips config validation, the confirmation table, RBAC
+the provisioning body runs) -- skips config validation, the confirmation table, RBAC
 preflight, and region/quota/AKS/Helm provisioning entirely, none of which matter for rotating an
 already-provisioned account's key. Reuses `llm_account_name`/`llm_keyvault_name` from
-`scripts/lib/deploy-llm-common.sh` -- the exact same names `main()`'s own S9 step would compute
-for this subscription -- and `require_account_exists`/`require_keyvault_exists`, the same
-preflight-guard shape `scripts/deploy-llm.sh`'s own `--rotate-key` uses (mirrors
+`scripts/lib/deploy-llm-common.sh` -- the exact same names `main()`'s own provisioning step
+would compute for this subscription -- and
+`require_account_exists`/`require_keyvault_exists`, the same preflight-guard shape
+`scripts/deploy-llm.sh`'s own `--rotate-key` uses (mirrors
 `ps-service/tests/deploy_llm/test_rotate_key.py`'s own structure).
 """
 

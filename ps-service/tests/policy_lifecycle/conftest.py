@@ -1,4 +1,4 @@
-"""Fixtures for the Policy Lifecycle tests that write through the Graph Write Gateway (#211)."""
+"""Fixtures for the Policy Lifecycle tests that write through the Graph Write Gateway."""
 
 from __future__ import annotations
 

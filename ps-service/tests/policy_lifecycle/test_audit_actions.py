@@ -1,4 +1,4 @@
-"""Tests for `ps_service.policy_lifecycle.audit_actions` (issue #134, PLAN.md S10).
+"""Tests for `ps_service.policy_lifecycle.audit_actions`.
 
 Proves the `policy.*` actions resolve to the right typed `details` model,
 and that Pydantic's existing generic validation (reused from
@@ -60,9 +60,8 @@ def test_create_draft_details_accepts_a_well_formed_rejected_payload() -> None:
 
 
 def test_create_draft_details_accepts_a_supersedes_policy_id_payload() -> None:
-    """Issue #136, TASK.md's Implementation-decisions paragraph:
-    `supersedes_policy_id` was added directly to this existing model rather
-    than a new/separate one -- this proves a fork's real payload shape
+    """`supersedes_policy_id` lives on this existing model rather
+    than a separate one -- this proves a fork's real payload shape
     validates through the SAME registered model the ordinary create-draft
     path uses, and that `policy.create_draft` still resolves to
     `PolicyCreateDraftDetails` -- a regression guard against someone
@@ -145,7 +144,7 @@ def test_transition_details_accepts_every_registered_reason_code() -> None:
 
 
 def test_create_draft_details_accepts_capability_ids_and_new_reason_codes() -> None:
-    """Issue #185: a fresh draft's audit payload names the Capabilities it claims."""
+    """A fresh draft's audit payload names the Capabilities it claims."""
     applied = PolicyCreateDraftDetails.model_validate(
         {"affected_node_ids": ("policy-1",), "capability_ids": ("cap_a", "cap_b")}
     )

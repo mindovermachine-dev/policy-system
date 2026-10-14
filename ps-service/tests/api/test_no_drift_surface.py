@@ -1,6 +1,6 @@
-"""The drift detector adds no REST route, no MCP tool and no `/ready` field (issue #215, S5c).
+"""The drift detector adds no REST route, no MCP tool and no `/ready` field.
 
-AC-BI-007: drift detection is internal. The structure of the OpenAPI document (every path,
+Drift detection is internal. The structure of the OpenAPI document (every path,
 parameter, request and response schema) and of the MCP tool list (names and input schemas) is
 compared with a snapshot taken from the commit before the detector existed
 (`tests/fixtures/api-surface/service-surface-before-drift-detector.json`, generated from a

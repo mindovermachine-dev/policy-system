@@ -1,4 +1,4 @@
-"""Shared audit-actor resolution (issue #195, AC-BI-001 helper half)."""
+"""Shared audit-actor resolution (helper shared by the audit emitters)."""
 
 from __future__ import annotations
 

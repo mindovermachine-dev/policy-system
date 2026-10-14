@@ -1,7 +1,8 @@
-"""`release-capability-governance` (preview + approval) through the MCP tool (issue #190, slice 14).
+"""`release-capability-governance` (preview + approval) through the MCP tool.
 
-AC-BI-013 (draft policy: preview, no writes, approval bound to capability and policy), AC-BI-014 /
-D12 (approved, deprecated, proposed rejected with a pointer, no approval), AC-BI-018 (sanitised).
+Covers a draft policy (preview, no writes, approval bound to capability and policy),
+approved / deprecated / proposed policies (rejected with a pointer, no approval)
+and sanitised errors.
 Gate behaviour is in `test_graph_cleanup_authz_gate.py`.
 """
 

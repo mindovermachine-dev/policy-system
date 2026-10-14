@@ -1,6 +1,6 @@
-"""Creating a Policy that claims Capabilities is a guarded gateway group (AC-BI-005, #211, S7).
+"""Creating a Policy that claims Capabilities is a guarded gateway group.
 
-The order is the one of `internal_seed/persist.py` (CHANGES M1): the graph must be caught up, the
+The order is the one of `internal_seed/persist.py`: the graph must be caught up, the
 log position P0 is read, then the guard re-resolves every claimed Capability in Python (exists, not
 a `merged` tombstone, no governor) and refuses with nothing logged -- no stamp, no group -- if the
 claim no longer holds; only then are legacy edges stamped and the group submitted with
@@ -84,7 +84,6 @@ def _governors(rig: LifecycleRig) -> dict[str, list[str]]:
 def test_a_claim_is_one_group_with_an_identified_governed_by_edge_per_capability(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-005."""
     _seed_caps(lifecycle_rig)
 
     result = _claim(lifecycle_rig)
@@ -152,7 +151,6 @@ def _assert_refused_without_a_trace(rig: LifecycleRig, before_position: int) -> 
 def test_a_capability_that_becomes_governed_after_the_pre_read_refuses_the_claim_and_logs_nothing(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-005."""
     _seed_caps(lifecycle_rig, legacy_edges=True)
     lifecycle_rig.seed_policy("pol_gov", owner=_ACTOR, legacy_edges=False)
     position = lifecycle_rig.store.last_position("policy_system")
@@ -172,7 +170,7 @@ def test_a_capability_that_becomes_governed_after_the_pre_read_refuses_the_claim
 def test_a_capability_that_becomes_merged_after_the_pre_read_refuses_the_claim_and_logs_nothing(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-005: a tombstone is not a governable Capability."""
+    """A tombstone is not a governable Capability."""
     _seed_caps(lifecycle_rig, legacy_edges=True)
     position = lifecycle_rig.store.last_position("policy_system")
 
@@ -191,7 +189,7 @@ def test_a_capability_that_becomes_merged_after_the_pre_read_refuses_the_claim_a
 def test_an_unrelated_write_between_the_position_read_and_the_submit_refuses_the_claim(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-005, Decision 2: the position guard is coarser than the in-statement guard."""
+    """The position guard is coarser than the in-statement guard."""
     _seed_caps(lifecycle_rig)
     lifecycle_rig.hooked.before_submit(lifecycle_rig.append_unrelated_group)
 
@@ -208,7 +206,7 @@ def test_an_unrelated_write_between_the_position_read_and_the_submit_refuses_the
 def test_a_stale_refusal_after_a_legacy_stamp_leaves_the_stamp_logged_and_no_claim_group(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """CHANGES A1: the stamp is idempotent housekeeping (null link, no data change); it stays."""
+    """The stamp is idempotent housekeeping (null link, no data change); it stays."""
     _seed_caps(lifecycle_rig, legacy_edges=True)
     lifecycle_rig.hooked.before_submit(lifecycle_rig.append_unrelated_group)
 
@@ -240,7 +238,6 @@ def test_a_claim_on_a_graph_with_legacy_edges_stamps_them_then_submits_the_group
 def test_a_gateway_failure_after_the_guard_records_failed_and_raises_the_persistence_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-011."""
     _seed_caps(lifecycle_rig)
     lifecycle_rig.store.fail_appends()
 
@@ -265,7 +262,7 @@ def test_a_group_committed_but_not_applied_is_a_failure_of_the_claim(
 
 
 def test_a_fork_never_claims_and_reads_no_governors(lifecycle_rig: LifecycleRig) -> None:
-    """D-2: `capability_ids` is silently ignored on a fork; the plain create path runs."""
+    """`capability_ids` is silently ignored on a fork; the plain create path runs."""
     lifecycle_rig.seed_policy("pol_prior", title=_TITLE, status="approved", owner=_ACTOR)
     _seed_caps(lifecycle_rig)
 

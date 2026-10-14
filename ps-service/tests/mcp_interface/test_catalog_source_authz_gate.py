@@ -1,26 +1,22 @@
 """Tests for the `SystemAdmin`-or-above authz gate on the catalog-source MCP
-tools (issue #133, Slice 4): AC-BI-008 (a non-`SystemAdmin` caller is denied
-on each of `set-catalog-source`/`reset-catalog-source`/`get-catalog-source`)
-and AC-BI-009 (a `SystemAdmin` caller's calls succeed exactly as each tool
-already documents).
+tools: a non-`SystemAdmin` caller is denied
+on each of `set-catalog-source`/`reset-catalog-source`/`get-catalog-source`,
+and a `SystemAdmin` caller's calls succeed exactly as each tool
+already documents.
 
-PLAN.md §3.3: under the local-test bypass, the gate is skipped entirely --
-that behavior is unchanged and already covered by every one of the ~12
-bypass-active tests in `test_catalog_source_skills.py`, deliberately left
-untouched by this slice. Every test here instead binds a real, non-bypass
+Under the local-test bypass, the gate is skipped entirely --
+that behavior is covered by the bypass-active tests in
+`test_catalog_source_skills.py`. Every test here instead binds a real, non-bypass
 `AccessToken` (`_verified_actor`, below), so `config.is_local_test_bypass_active`
 is `False` and the new `authz_service.require_role(...)` check in each
 tool's body actually runs.
 
 `_verified_actor`/`_fake_store_factory` are local copies of
 `test_near_miss_tools.py:168-201`'s own helpers, already re-established a
-second time by `test_access_role_tools.py` (PLAN.md §3.3 names this exact
-pattern as the one to reuse, "no new test infrastructure needs
-inventing"). The runtime-config store fake (`_install_store`, plus `_DEFAULT_URL`/
+second time by `test_access_role_tools.py`. The runtime-config store fake
+(`_install_store`, plus `_DEFAULT_URL`/
 `_OVERRIDE_URL`) is imported directly from `test_catalog_source_skills.py` rather than
-re-declared, so this file can never silently drift from that file's own fixture shapes
-(issue #130 moved the override from FalkorDB to `runtime_config`; only the fixture changed
-here, no gate assertion).
+re-declared, so this file can never silently drift from that file's own fixture shapes.
 """
 
 from __future__ import annotations
@@ -64,8 +60,8 @@ _ACCESS_DENIED_MESSAGE = "error: You do not have the required access role for th
 def _verified_actor(*, sub: str, iss: str = _CALLER_ISSUER) -> Generator[None]:
     """Bind a real, verified `AccessToken` onto the MCP SDK's own auth contextvar.
 
-    Local copy of `test_near_miss_tools.py`'s own `_verified_actor` (issue
-    #131) -- `_resolve_authz_actor`/`_resolve_principal` both read
+    Local copy of `test_near_miss_tools.py`'s own `_verified_actor` --
+    `_resolve_authz_actor`/`_resolve_principal` both read
     `get_access_token()` off this exact contextvar, normally populated by
     `AuthContextMiddleware` from a real HTTP request. Deliberately never
     sets `PS_SERVICE_LOCAL_TEST_BYPASS`, so `config.is_local_test_bypass_active`
@@ -86,7 +82,7 @@ def _fake_store_factory(store: object) -> Callable[..., object]:
 
     Monkeypatched onto `mcp_server.PsycopgAccessRoleStore` -- each gated
     tool body calls it as `PsycopgAccessRoleStore(config,
-    audit_store=PsycopgAuditStore(config))` (issue #147), so this must accept (and
+    audit_store=PsycopgAuditStore(config))`, so this must accept (and
     ignore) both the positional `config` and the `audit_store` keyword.
     """
 
@@ -99,9 +95,9 @@ def _fake_store_factory(store: object) -> Callable[..., object]:
 def _seeded_store() -> FakeAccessRoleStore:
     """A store with one already-bootstrapped `SystemOwner` under a *different*
     subject, so a later real caller in these tests never wins the
-    once-ever bootstrap race themselves (AC-BI-001) and instead genuinely
-    defaults to `AuthenticatedUser` alone (AC-BI-002) -- the precondition
-    AC-BI-008's denial actually needs.
+    once-ever bootstrap race themselves and instead genuinely
+    defaults to `AuthenticatedUser` alone -- the precondition
+    the denial actually needs.
     """
     store = FakeAccessRoleStore(expected_owner=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER))
     store.bootstrap_first_owner((_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER))
@@ -131,7 +127,7 @@ _TOOLS_AND_ARGS: list[tuple[str, dict[str, object]]] = [
 def test_authenticated_user_only_caller_is_denied(
     tool: str, args: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-008: a real, non-bypass caller holding only `AuthenticatedUser`
+    """A real, non-bypass caller holding only `AuthenticatedUser`
     (never elevated) gets the fixed access-denied message on each of the
     three catalog-source tools, and nothing is persisted.
     """
@@ -163,7 +159,7 @@ def test_authenticated_user_only_caller_is_denied(
 def test_system_admin_caller_succeeds_exactly_as_documented(
     tool: str, args: dict[str, object], expected: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-009: the same shape of caller, after being granted `SystemAdmin`
+    """The same shape of caller, after being granted `SystemAdmin`
     via the existing `grant-access-role` flow (here seeded directly on the
     fake store, equivalent to that flow's own effect), succeeds on each
     tool exactly as it already documents -- no change to any tool's own
@@ -190,11 +186,11 @@ def test_system_admin_caller_succeeds_exactly_as_documented(
 def test_store_outage_fails_closed_instead_of_defaulting_or_succeeding(
     tool: str, args: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-011 (Slice 5, exhaustive): a simulated store outage on each of the three
+    """A simulated store outage on each of the three
     catalog-source tools surfaces the distinct `authorization_store_unavailable` result,
     never a silent default/success -- these three call sites' own fail-closed catches
-    (`except (AccessDeniedError, AuthorizationStoreUnavailableError)`) were introduced in
-    Slice 4 but never previously exercised by an MCP round trip against a raising store.
+    (`except (AccessDeniedError, AuthorizationStoreUnavailableError)`) are exercised
+    by an MCP round trip against a raising store.
     """
     configure()
     monkeypatch.setattr(
@@ -213,7 +209,7 @@ def test_store_outage_fails_closed_instead_of_defaulting_or_succeeding(
 def test_sole_bootstrapped_system_owner_also_satisfies_the_system_admin_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`require_role`'s own `SystemAdmin`-or-above hierarchy fix (PLAN.md §0.8)
+    """`require_role`'s own `SystemAdmin`-or-above hierarchy fix
     reaches this gate too: the very first-ever caller, auto-bootstrapped to
     `SystemOwner` alone (never separately granted `SystemAdmin`), still
     passes `set-catalog-source`'s gate -- otherwise the sole `SystemOwner`

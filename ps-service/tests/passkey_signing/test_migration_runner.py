@@ -1,4 +1,4 @@
-"""Tests for `ps_service.passkey_signing.migration_runner` (issue #131, PLAN.md §0.6).
+"""Tests for `ps_service.passkey_signing.migration_runner`.
 
 `postgres_live`-marked throughout: the runner's whole job (actually apply
 `.sql` DDL, track it in `schema_migrations`, be idempotent on a repeat run)

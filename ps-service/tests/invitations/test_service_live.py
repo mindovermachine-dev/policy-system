@@ -1,4 +1,4 @@
-"""`user.invite` rows against a real Postgres (issue #195, F-2a). `postgres_live`-marked.
+"""`user.invite` rows against a real Postgres. `postgres_live`-marked.
 
 The invite flows through `invite_user_audited` into `PsycopgAuditStore` on an isolated schema and
 is read back through `authz.service.list_audit_events` by action, actor and resource id.

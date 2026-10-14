@@ -1,19 +1,14 @@
-"""Resource-provider registration + poll for `scripts/deploy-ps-prod.sh` (AC-BI-008; PLAN.md §5/S7).
+"""Resource-provider registration + poll for `scripts/deploy-ps-prod.sh`.
 
 Every required provider namespace is registered and polled to `Registered` before any dependent
-resource create -- the spike's own confirmed finding: a fresh subscription has only
-`Microsoft.Authorization` registered by default (`spikes/deploy-ps-azure/deploy-ps-prod.sh`'s
-`REQUIRED_PROVIDERS` comment).
+resource create -- a fresh subscription has only
+`Microsoft.Authorization` registered by default (see the script's `REQUIRED_PROVIDERS` comment).
 
-Interim scope note (see IMPL_SLICE_7.md): S8/S9 (LLM provisioning) don't exist yet at this
-slice, so this file's "registered and polled before LLM provisioning" ordering test (below)
-cannot yet assert ordering against an actual `cognitiveservices`/`aks`/etc. call the way
-PLAN.md's own test name implies. It instead asserts the two things provable today: every
-required namespace ends up `Registered`, and `main()` itself completes (exit 0) only after
-registration finishes, since provider registration is the last step `main()` performs as of
-this slice. Once S8/S9 land and add a call this test can order against, strengthen this
-assertion to a real call-log ordering check (register precedes the first LLM-provisioning
-call).
+Scope note: this file's "registered and polled before LLM provisioning" test (below) does not
+assert ordering against an actual `cognitiveservices`/`aks`/etc. call. It asserts the two things
+provable without one: every required namespace ends up `Registered`, and `main()` itself
+completes (exit 0). A stronger check would assert in the call log that register precedes the
+first LLM-provisioning call.
 """
 
 from __future__ import annotations

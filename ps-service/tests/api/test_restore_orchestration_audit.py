@@ -1,4 +1,4 @@
-"""Audit emission of the restore orchestration (issue #195, AC-BI-002/003/008/010/011/015).
+"""Audit emission of the restore orchestration.
 
 `run_restoration_from_catalog_source` (catalog) and `run_restoration` (upload) write an
 `instrument.restore` opening row (`applied`, `status=started`) immediately before the restore
@@ -377,7 +377,7 @@ def test_restore_rows_never_contain_the_source_url(make_emitter: MakeEmitter) ->
     assert "secret-path" not in dumped
 
 
-# --- Slice 5: the upload path (`POST /restorations`) --------------------------------
+# --- the upload path (`POST /restorations`) --------------------------------
 
 
 def _upload_request(*, blob_b64: str | None = None) -> RestorationRequest:
@@ -502,11 +502,11 @@ def test_upload_restore_stage_failure_writes_failed_row_with_a_reason_code_only(
     assert "/var/secret" not in json.dumps([row.details for row in store.rows])
 
 
-# --- issue #214: the audit linkage and the graph-write outcomes -----------------------------
+# --- the audit linkage and the graph-write outcomes -----------------------------
 
 
 def test_the_opening_rows_event_id_reaches_the_restore_as_its_groups_anchor() -> None:
-    """AC-BI-012: the restore's graph groups are logged under the opening row's event id."""
+    """The restore's graph groups are logged under the opening row's event id."""
     store = InMemoryAuditStore()
     delegate = _Delegate(store)
 

@@ -1,4 +1,4 @@
-"""Guard for the `deploy-ps` -> `deploy-ps-prod` rename (issue #165, AC-BI-011 name half).
+"""Guard for the `deploy-ps` -> `deploy-ps-prod` rename.
 
 Marked `integration`: it spawns a real `git ls-files` subprocess (L2 Testing Patterns).
 Lists tracked plus untracked-not-ignored files, so it is valid both before and after the

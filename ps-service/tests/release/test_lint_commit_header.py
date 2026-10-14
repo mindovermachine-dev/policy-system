@@ -1,9 +1,8 @@
 """`scripts/release/lint-commit-header.sh` -- the conventional-header guard rail.
 
-AC-BI-024 (header mode names the offending header and the expected form), AC-BI-025's lint
-half (range mode names the offending SHA; HEAD fallback when `before` is unknown) and
-AC-BI-026 (the `deliver` suffix ` - resolves #N` is part of the description). The regex is
-the single shared one from `lib/conventional-header.sh` (PLAN B.6 as amended by CHANGES X-04).
+Header mode names the offending header and the expected form; range mode names the offending
+SHA (HEAD fallback when `before` is unknown); the `deliver` suffix ` - resolves #N` is part of
+the description. The regex is the single shared one from `lib/conventional-header.sh`.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ EXPECTED_FORM = "type(scope)!: description"
 ZERO_SHA = "0" * 40
 UNKNOWN_SHA = "deadbeef" * 5
 
-# Real `main` headers (PLAN A-32): (b) slash-separated pseudo-type, (c) untyped prose.
+# Real `main` headers: (b) slash-separated pseudo-type, (c) untyped prose.
 FIXTURE_B_HEADER = "ps-service/ps-cli: FalkorDB-only readiness gate + LLM fail-fast - resolves #75"
 FIXTURE_C_HEADER = (
     "Accept authored Policy/Standard/Control in internal ingestion; "
@@ -101,7 +100,7 @@ def test_range_mode_passes_when_every_commit_in_the_range_is_typed(
     assert EXPECTED_FORM not in run.stdout
 
 
-# --- merge commits (run #117: a merge landed on `main` via direct push, no PR) --------------
+# --- merge commits (a merge landing on `main` via direct push, no PR) --------------
 
 
 def test_range_mode_skips_a_merge_commit(release_fixture: ReleaseFixture) -> None:

@@ -1,10 +1,8 @@
-"""Idempotent rerun against the same subscription/config makes zero changes (AC-BI-011;
-PLAN.md §5/S9).
+"""Idempotent rerun against the same subscription/config makes zero changes.
 
-No new production logic was expected to be needed here if S1-S8 already implement "check
-existence/value before acting" throughout (§0.1 step 8/9, §0.5) -- this slice's job is to *prove*
-that end-to-end property, which is exactly what AC-BI-011 asks for. State is seeded directly via
-the `seed_existing_*` fixture helpers (PLAN.md §2.4) rather than by running the script twice, so
+The script checks existence/value before acting throughout; these tests *prove* that
+end-to-end property. State is seeded directly via
+the `seed_existing_*` fixture helpers rather than by running the script twice, so
 these tests also prove idempotency does not depend on this exact script having created the state.
 """
 

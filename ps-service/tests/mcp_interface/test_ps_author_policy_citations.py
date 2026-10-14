@@ -1,35 +1,35 @@
-r"""Tests for `ps-author-policy`'s citation-persistence contract (issue #137, Slice 5).
+r"""Tests for `ps-author-policy`'s citation-persistence contract.
 
-Three proofs, per PLAN.md Section 5 "Slice 5":
+Three proofs:
 
 1. `test_update_standard_draft_persists_procedure_with_sources_suffix` -- a
    scripted `create-policy-draft` -> `add-standard-to-draft` ->
    `update-standard-draft(standard_id, fields={"procedure": "<drafted
    text>\n\nSources: https://example.org/guidance"})` call against a
    module-local `_HybridGraph` fake (adapted from
-   `test_ps_author_policy_standard_loop.py`'s own shape, Slice 3), asserting
+   `test_ps_author_policy_standard_loop.py`'s own shape), asserting
    the persisted value's exact `Sources:` suffix via the fake's recorded
-   `write_params` -- a direct, mechanical check of AC-BI-013's persistence
+   `write_params` -- a direct, mechanical check of the persistence
    contract, independent of how the citation was decided.
 2. `test_update_control_draft_persists_execution_method_with_sources_suffix`
    -- the same shape one level deeper (`add-control-to-draft` ->
    `update-control-draft(control_id, fields={"execution_method": "<drafted
    text>\n\nSources: https://example.org/guidance"})`), adapted from
-   `test_ps_author_policy_control_loop.py`'s own shape (Slice 4).
+   `test_ps_author_policy_control_loop.py`'s own shape.
 3. `test_update_standard_draft_without_sources_suffix_round_trips` -- a
    negative case: a plain `update-standard-draft` call on `procedure` with
-   NO `Sources:` suffix (the Slice 3 default path) still round-trips
+   NO `Sources:` suffix (the default path) still round-trips
    correctly -- confirming the tool itself neither requires nor rejects the
    suffix either way. The discipline that a `Sources:` line is appended
    only when research was actually used, and only for actually-retrieved
    URLs, is the SKILL's own discipline (SKILL.md's "Web research and
    citations" note), never something `update-standard-draft`/
    `update-control-draft` enforce -- this file documents that boundary,
-   which is exactly why PLAN.md Section 1(a)'s later content-lint test also
+   which is exactly why the content-lint test also
    checks the Guardrails text states the rule explicitly.
 
 Fake graph: adapted from `test_ps_author_policy_control_loop.py`'s own
-`_HybridGraph` (Slice 4), trimmed to only the dispatch branches this
+`_HybridGraph`, trimmed to only the dispatch branches this
 slice's three scenarios actually exercise: seed-check,
 `backfill_governance_status`'s idempotent no-op,
 `find_standard_with_parent` (`update-standard-draft`'s own preamble, and
@@ -40,9 +40,9 @@ slice's three scenarios actually exercise: seed-check,
 routed to one generic bucket with `params` captured alongside each query's
 text (`write_params`), since neither `update-standard-draft`'s nor
 `update-control-draft`'s own MCP response echoes back `updated_fields`
-(Slices 3/4's own findings) -- the persisted VALUE, including any
+(the earlier loop files' findings) -- the persisted VALUE, including any
 `Sources:` suffix, is only observable via the fake's recorded params, the
-same technique Slices 3/4 already established. Module-local, no
+same technique the earlier loop files already established. Module-local, no
 cross-file import -- matches this directory's established convention.
 """
 
@@ -103,7 +103,7 @@ _EXECUTION_METHOD_WITH_SOURCE = (
 )
 
 
-# --- fakes (adapted from test_ps_author_policy_control_loop.py, Slice 4) ---
+# --- fakes (adapted from test_ps_author_policy_control_loop.py) ---
 
 
 @contextlib.contextmanager
@@ -137,7 +137,7 @@ class _PolicyTreeFixture:
 
     Needed because `add-standard-to-draft`'s own preamble,
     `_read_transition_target` (service.py:1498), still reads the Policy tree
-    this way -- carried over unchanged from Slices 3/4.
+    this way -- carried over unchanged from the earlier loop files.
     """
 
     id: str
@@ -154,7 +154,7 @@ class _StandardParentFixture:
 
     Read by both `update-standard-draft`'s own preamble and
     `add-control-to-draft`'s own preamble -- carried over unchanged from
-    Slices 3/4.
+    the earlier loop files.
     """
 
     policy_id: str
@@ -170,7 +170,7 @@ class _ControlParentFixture:
     """Stand-in for `graph_writer.find_control_with_parent`'s own `ControlWithParent`.
 
     Read (twice) by `update-control-draft`'s own preamble -- carried over
-    unchanged from Slice 4.
+    unchanged from the earlier loop file.
     """
 
     standard_id: str
@@ -183,14 +183,14 @@ class _ControlParentFixture:
 
 
 class _HybridGraph:
-    """Trimmed from `test_ps_author_policy_control_loop.py`'s own `_HybridGraph` (Slice 4).
+    """Trimmed from `test_ps_author_policy_control_loop.py`'s own `_HybridGraph`.
 
     Only the dispatch branches this slice's three scenarios actually
     exercise: seed-check, `backfill_governance_status`'s idempotent no-op,
     `find_standard_with_parent`, `find_control_with_parent`,
     `read_policy_tree`, `find_existing_policy`. Every write is routed to
     one generic bucket, with `params` captured alongside each query's text
-    (`write_params`) -- same convention as Slices 3/4, needed because
+    (`write_params`) -- same convention as the earlier loop files, needed because
     neither `update-standard-draft`'s nor `update-control-draft`'s own MCP
     response echoes back `updated_fields`.
     """
@@ -212,7 +212,7 @@ class _HybridGraph:
         if "RETURN p.version, p.status, s.id, s.status, c.id, c.status" in q:
             # `graph_writer.backfill_governance_status`'s idempotent no-op --
             # issued ahead of every read branch below. Structural no-op,
-            # same as Slices 1-4.
+            # same as the earlier loop files.
             return _FakeQueryResult()
         if "RETURN s.id, p.id, p.owner_subject, p.owner_issuer, p.status, c.status, c.title" in q:
             # `graph_writer.find_control_with_parent` -- `update-control-
@@ -251,7 +251,7 @@ class _HybridGraph:
             # `graph_writer.read_policy_tree` -- `add-standard-to-draft`'s
             # own preamble. Checked BEFORE `find_existing_policy`'s shorter
             # substring below (its own `RETURN` clause contains it) -- same
-            # ordering discipline Slices 1-4 already established.
+            # ordering discipline the earlier loop files already established.
             if self.policy_tree is None:
                 return _FakeQueryResult(result_set=[])
             pt = self.policy_tree
@@ -316,7 +316,7 @@ class _FakeAuditStore:
         self.calls.append(kwargs)
 
     def record_standalone_with_event_id(self, **kwargs: object) -> str:
-        """`record_standalone`, returning an id the process gateway's log accepts (issue #211)."""
+        """`record_standalone`, returning an id the process gateway's log accepts."""
         self.record_standalone(**kwargs)
         event_id = str(uuid.uuid4())
         installed_process_gateway().rig.store.audit_rows.add(event_id)
@@ -445,9 +445,9 @@ def _new_control(
 def test_update_standard_draft_persists_procedure_with_sources_suffix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-013: a `procedure` value that used web research persists its
+    """A `procedure` value that used web research persists its
     literal `Sources: <url>` suffix, verbatim, via the same
-    `update-standard-draft` call Slice 3's field loop already uses.
+    `update-standard-draft` call the Standard-loop file's field loop already uses.
     """
     configure()
     handle = _HybridGraph()
@@ -483,7 +483,7 @@ def test_update_control_draft_persists_execution_method_with_sources_suffix(
 ) -> None:
     """Same contract as (1), one level deeper: `execution_method` (C-002)
     persists its literal `Sources: <url>` suffix via the same
-    `update-control-draft` call Slice 4's field loop already uses.
+    `update-control-draft` call the Control-loop file's field loop already uses.
     """
     configure()
     handle = _HybridGraph()
@@ -530,7 +530,7 @@ def test_update_control_draft_persists_execution_method_with_sources_suffix(
 def test_update_standard_draft_without_sources_suffix_round_trips(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Slice 3 default path (research declined/not used): a plain
+    """The default path (research declined/not used): a plain
     `procedure` value with NO `Sources:` suffix still round-trips correctly
     -- proving `update-standard-draft` neither requires nor rejects the
     suffix. The append-only-when-used, only-real-URLs discipline is the

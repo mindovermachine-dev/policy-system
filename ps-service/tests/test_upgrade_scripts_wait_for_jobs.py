@@ -1,4 +1,4 @@
-"""Static contract test: every policy-system `helm upgrade` waits for Jobs (issue #205).
+"""Static contract test: every policy-system `helm upgrade` waits for Jobs.
 
 The chart renders a provisioning Job (`ps-state-provision`) that must finish before ps-service can
 start (it fails closed until the immutable graph log tables exist). `helm --wait` does not wait

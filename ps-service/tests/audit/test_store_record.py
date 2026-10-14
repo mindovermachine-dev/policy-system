@@ -1,4 +1,4 @@
-"""Tests for `ps_service.audit.store.PsycopgAuditStore.record` (issue #147, Slice 1).
+"""Tests for `ps_service.audit.store.PsycopgAuditStore.record`.
 
 `postgres_live`-marked throughout, mirroring
 `tests/authz/test_migration_runner.py`'s own marker/skip convention: whether
@@ -6,7 +6,7 @@ an `INSERT` into a real `audit_events` table actually lands correctly, and
 whether an error genuinely precedes any `cur.execute` call, can only be
 proven end-to-end against a real Postgres instance plus a cursor spy.
 
-Deselected by default (BASELINE.md's tier gating) -- run explicitly with
+Deselected by default (tier gating) -- run explicitly with
 `uv run pytest -m postgres_live` against a reachable `PS_STATE_POSTGRES_*`
 instance.
 """
@@ -40,7 +40,7 @@ STATE_MIGRATION_SOURCES = [
 class _ExecuteSpyCursor:
     """Wraps a real cursor, recording whether `execute` was ever called.
 
-    Proves AC-BI-005's "raises before any insert" claim directly, rather
+    Proves the "raises before any insert" claim directly, rather
     than inferring it from the absence of a row afterward (which a rollback
     could also explain).
     """
@@ -133,7 +133,7 @@ def test_record_returns_the_new_audit_event_id() -> None:
 
 @pytest.mark.postgres_live
 def test_record_standalone_with_event_id_returns_the_id_of_the_committed_row() -> None:
-    """Issue #210: the id returned names the row the standalone transaction committed."""
+    """The id returned names the row the standalone transaction committed."""
     _require_configured_postgres()
     config = load_config()
     store = PsycopgAuditStore(config)
@@ -241,9 +241,9 @@ def test_a_rolled_back_transaction_after_record_leaves_no_partial_row() -> None:
     """A caller that rolls back after `record` leaves the table exactly as it was before.
 
     `record` never commits or rolls back its own transaction (store-level
-    application of AC-BI-004's rollback principle) -- proves the surrounding
+    application of the rollback principle) -- proves the surrounding
     transaction, not `record` itself, owns commit/rollback, which is exactly
-    what lets Slice 2's real callers join `record`'s insert into their own
+    what lets real callers join `record`'s insert into their own
     grant/revoke transaction.
     """
     _require_configured_postgres()

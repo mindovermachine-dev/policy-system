@@ -1,12 +1,12 @@
-"""Tests for `ps_service.audit.store.PsycopgAuditStore.query` (issue #147, Slice 4).
+"""Tests for `ps_service.audit.store.PsycopgAuditStore.query`.
 
 `postgres_live`-marked throughout, mirroring `test_store_record.py`'s own
 marker/skip convention: whether newest-first ordering, per-filter
 correctness, keyset pagination (no duplicate/skipped rows across pages), and
-the AC-BI-011 no-leak guarantee actually hold can only be proven against a
+the no-leak guarantee actually hold can only be proven against a
 real Postgres instance.
 
-Deselected by default (BASELINE.md's tier gating) -- run explicitly with
+Deselected by default (tier gating) -- run explicitly with
 `uv run pytest -m postgres_live` against a reachable `PS_STATE_POSTGRES_*`
 instance.
 """
@@ -85,7 +85,7 @@ def _insert_event(
 
 @pytest.mark.postgres_live
 def test_query_returns_matching_events_newest_first_and_paginates_without_gaps_or_dupes() -> None:
-    """AC-BI-007: filters combine correctly, results are newest first, and a `page_size`
+    """Filters combine correctly, results are newest first, and a `page_size`
     smaller than the result set produces a `next_cursor` that advances through every
     remaining row exactly once (no duplicates, no skips).
     """
@@ -181,7 +181,7 @@ def test_query_returns_matching_events_newest_first_and_paginates_without_gaps_o
 
 @pytest.mark.postgres_live
 def test_query_time_range_filter_excludes_events_outside_the_bound() -> None:
-    """AC-BI-007: `occurred_from`/`occurred_to` narrow to the events in that window."""
+    """`occurred_from`/`occurred_to` narrow to the events in that window."""
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
@@ -231,7 +231,7 @@ def test_query_time_range_filter_excludes_events_outside_the_bound() -> None:
 
 @pytest.mark.postgres_live
 def test_query_connection_failure_leaks_no_host_or_port_or_driver_detail() -> None:
-    """AC-BI-011: a genuine connection failure surfaces as `AuditPostgresUnavailableError`
+    """A genuine connection failure surfaces as `AuditPostgresUnavailableError`
     with a fixed, generic message -- never one containing the configured host/port,
     mirroring `test_store_transactional_audit.py`'s own `record_standalone` leak-check.
     """
@@ -253,7 +253,7 @@ def test_query_connection_failure_leaks_no_host_or_port_or_driver_detail() -> No
     assert message == "The audit store is temporarily unavailable."
 
 
-# --- issue #195, Slice 11: the allow-listed `details` filter (real Postgres) ---
+# --- the allow-listed `details` filter (real Postgres) ---
 
 
 def _store_with_migrations() -> tuple[AuditStore, object]:

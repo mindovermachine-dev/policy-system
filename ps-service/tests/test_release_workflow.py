@@ -6,26 +6,25 @@ the workflow it asserts on is the release pipeline *of ps-service*, the root
 `ps-service/tests` is already inside basedpyright's `include` list — a root-level
 `tests/` would be a strict-type-checking blind spot.
 
-`pyyaml` provenance (PLAN D-4): `yaml` is **not** a declared dev dependency. It arrives
+`pyyaml`: `yaml` is **not** a declared dev dependency. It arrives
 as a `litellm` runtime transitive, pinned in the shared `uv.lock`, and is therefore
-present in the workspace venv every test run already uses. Declaring it directly is a
-legitimate hardening follow-on, deliberately not made part of issue #60 (adding a
-dependency is a permission-gated action).
+present in the workspace venv every test run already uses. Declaring it directly would be a
+legitimate hardening follow-on (adding a dependency is a permission-gated action).
 
-Assertion style (FLAWS F-07b): every assertion is made against the **parsed structure**
+Assertion style: every assertion is made against the **parsed structure**
 (`yaml.safe_load` for the job graph, `needs:` edges, `permissions:` maps and `with:`
 mappings) or against `shlex.split` **token vectors** of `run:` bodies, so argument order
 and flag/value pairing are asserted rather than mere text presence. No substring
 matching against the raw YAML text is used to prove a structural property.
 
-Gate mechanism (FLAWS F-01): the push must be gated on **both** matrix legs
+Gate mechanism: the push must be gated on **both** matrix legs
 *structurally*. These tests therefore assert the cross-job dependency graph — `needs:`
 edges, `permissions:` maps and the absence of a registry login in the build job — and
 never step ordering inside a single job. GitHub's implicit `success()` over `needs:`
 requires every matrix leg green, which is the property under test.
 
-GitHub Actions cannot be executed locally, so AC-BI-001/AC-BI-005 and the workflow
-halves of AC-BI-004/AC-BI-006 are covered here statically only (constraint C-1).
+GitHub Actions cannot be executed locally, so the workflow properties are covered here
+statically only.
 """
 
 from __future__ import annotations
@@ -73,7 +72,7 @@ _ROUTE_AROUND_THE_GATE = ("always(", "failure(", "cancelled(")
 
 _BASH_TIMEOUT_SECONDS = 10.0
 
-# Slice 1 (issue #81): the `github-release` job builds and uploads the ps-cli wheel.
+# The `github-release` job builds and uploads the ps-cli wheel.
 _UV_BUILD_STEP_TOKENS = ["uv", "build", "--package", "ps-cli", "--out-dir", "dist"]
 _WHEEL_GLOB_TOKEN = "dist/ps_cli-*.whl"
 _SHA256SUMS_FILENAME = "SHA256SUMS"
@@ -179,7 +178,7 @@ def _effective_tokens(job: dict[str, object], step: dict[str, object]) -> list[s
     """Tokenise a step's `run:` body with its workflow/job/step `env:` bindings substituted in.
 
     The workflow deliberately routes values through `env:` instead of interpolating `${{ }}`
-    into shell text (FLAWS F-11), so `$ARCH` in a body and `ARCH: ${{ matrix.arch }}` in the
+    into shell text, so `$ARCH` in a body and `ARCH: ${{ matrix.arch }}` in the
     step's `env:` are one fact split across two places. Resolving the chain here lets an
     identity assertion compare a single fully-expanded token vector -- one reason to fail --
     instead of pairing a raw token against a separate lookup. Names with no binding (shell
@@ -204,7 +203,7 @@ def test_workflow_yaml_parses_and_every_needs_target_is_a_defined_job() -> None:
     """`on_semver.yml` parses, and every `needs:` edge points at a job that exists.
 
     Catches the failure mode substring assertions miss entirely: a typo in a `needs:`
-    target, which GitHub rejects at workflow load time (FLAWS F-07c).
+    target, which GitHub rejects at workflow load time.
     """
     jobs = _jobs()
     _require_release_graph(jobs)
@@ -219,7 +218,7 @@ def test_workflow_yaml_parses_and_every_needs_target_is_a_defined_job() -> None:
 
 
 def test_placeholder_deploy_to_prod_job_is_gone() -> None:
-    """The scaffold's `deploy-to-prod` placeholder job no longer exists."""
+    """The scaffold's `deploy-to-prod` placeholder job does not exist."""
     jobs = _jobs()
 
     assert "deploy-to-prod" not in jobs, "the placeholder `deploy-to-prod` job is still present"
@@ -239,7 +238,7 @@ def _ancestry_check_step() -> dict[str, object]:
 
 
 def test_gate_checks_out_the_full_history_its_ancestry_check_needs() -> None:
-    """AC-BI-004: `git merge-base` needs the whole graph, so the gate's checkout is unshallow."""
+    """`git merge-base` needs the whole graph, so the gate's checkout is unshallow."""
     checkouts = _steps_using(_job(_GATE_JOB), "actions/checkout")
 
     assert checkouts, "the gate job no longer checks the repository out"
@@ -249,7 +248,7 @@ def test_gate_checks_out_the_full_history_its_ancestry_check_needs() -> None:
 
 
 def test_gate_still_fails_the_run_on_a_tag_that_is_not_an_ancestor_of_main() -> None:
-    """AC-BI-004: the existing off-main gate is reused, not weakened or bypassed."""
+    """The existing off-main gate is reused, not weakened or bypassed."""
     tokens = _tokens(str(_ancestry_check_step()["run"]))
 
     assert "--is-ancestor" in tokens, "the gate no longer runs `git merge-base --is-ancestor`"
@@ -257,19 +256,19 @@ def test_gate_still_fails_the_run_on_a_tag_that_is_not_an_ancestor_of_main() -> 
 
 
 def test_gate_verifies_the_raw_git_tag_not_the_normalised_image_tag() -> None:
-    """FLAWS F-13: the `v`-strip added for AC-BI-001 must not change what the gate verifies."""
+    """The `v`-strip must not change what the gate verifies."""
     assert _mapping(_ancestry_check_step(), "env").get("TAG_NAME") == (
         f"${{{{ steps.{_RESOLVE_TAG_STEP_ID}.outputs.git-tag }}}}"
     ), "the gate must verify the raw git tag, not the normalised image tag"
 
 
 # --------------------------------------------------------------------------------------
-# The structural push gate (FLAWS F-01) — cross-job, never step order
+# The structural push gate — cross-job, never step order
 # --------------------------------------------------------------------------------------
 
 
 def test_publish_is_the_only_job_that_can_write_to_the_registry() -> None:
-    """AC-BI-005/AC-BI-007 and L1 "Security by Design": only `publish` can write to GHCR.
+    """Only `publish` can write to GHCR.
 
     Structural, not ordinal: the build job declares `contents: read` only and contains no
     registry login, so no build step *can* push regardless of where it sits in the job.
@@ -309,10 +308,10 @@ def test_publish_is_the_only_job_that_can_write_to_the_registry() -> None:
 
 
 def test_publish_job_needs_both_the_gate_and_the_build_job() -> None:
-    """AC-BI-007: the push cannot run unless the gate and every build leg succeeded.
+    """The push cannot run unless the gate and every build leg succeeded.
 
     GitHub's implicit `success()` over `needs:` requires **all** legs of the `build` matrix
-    green. This is the structural replacement for the deleted step-ordering test (F-01).
+    green. This is a structural check of the cross-job graph rather than of step ordering.
     """
     _require_release_graph(_jobs())
     needs = _needs(_job(_PUBLISH_JOB))
@@ -323,7 +322,7 @@ def test_publish_job_needs_both_the_gate_and_the_build_job() -> None:
 
 
 def test_publish_job_declares_no_job_level_if_condition() -> None:
-    """AC-BI-007: a job-level `if:` replaces the implicit `success()` over `needs:`."""
+    """A job-level `if:` replaces the implicit `success()` over `needs:`."""
     _require_release_graph(_jobs())
 
     assert "if" not in _job(_PUBLISH_JOB), (
@@ -332,14 +331,14 @@ def test_publish_job_declares_no_job_level_if_condition() -> None:
 
 
 def test_build_job_itself_depends_on_the_gate() -> None:
-    """AC-BI-004: nothing is built for a tag the off-main gate has not cleared."""
+    """Nothing is built for a tag the off-main gate has not cleared."""
     _require_release_graph(_jobs())
 
     assert _needs(_job(_BUILD_JOB)) == [_GATE_JOB], "`build` must itself depend on the gate"
 
 
 def test_build_is_the_matrix_job_so_that_needing_it_needs_every_leg() -> None:
-    """AC-BI-007: the smoke tests live in the matrix job `publish` declares in its `needs:`."""
+    """The smoke tests live in the matrix job `publish` declares in its `needs:`."""
     assert "matrix" in _mapping(_job(_BUILD_JOB), "strategy"), (
         "`build` must be the matrix job, so that needing it needs every leg"
     )
@@ -369,7 +368,7 @@ def test_no_build_step_pushes_to_a_registry() -> None:
 
 
 def test_matrix_covers_exactly_amd64_and_arm64_on_native_runners() -> None:
-    """AC-BI-006: one native runner per architecture, no emulation."""
+    """One native runner per architecture, no emulation."""
     matrix = _mapping(_mapping(_job(_BUILD_JOB), "strategy"), "matrix")
     legs = matrix.get("include")
 
@@ -381,12 +380,12 @@ def test_matrix_covers_exactly_amd64_and_arm64_on_native_runners() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# The published tags (AC-BI-001) and the single tag derivation (F-13)
+# The published tags and the single tag derivation
 # --------------------------------------------------------------------------------------
 
 
 def test_publish_creates_a_manifest_list_tagged_with_the_release_tag_and_latest() -> None:
-    """AC-BI-001/AC-BI-006: one `imagetools create` merges both legs into two tags.
+    """One `imagetools create` merges both legs into two tags.
 
     Asserted as a token vector, so flag/value pairing and argument order are proven, not
     just the presence of the strings somewhere in the body.
@@ -413,7 +412,7 @@ def test_publish_creates_a_manifest_list_tagged_with_the_release_tag_and_latest(
 
 
 def test_image_tag_is_derived_from_the_gated_tag_by_one_expression() -> None:
-    """AC-BI-001/F-13: exactly one place normalises the tag, and publish consumes it.
+    """Exactly one place normalises the tag, and publish consumes it.
 
     Two derivations would let the verified tag and the published tag drift apart.
     """
@@ -500,7 +499,7 @@ def test_resolve_tag_prefers_the_raw_tag_and_falls_back_to_the_bare_tag(tmp_path
 
     `v1.2.3` and `1.2.3` must resolve to the identical `git-tag`/`image-tag` pair; a
     pre-release prefix such as `rc1.2.3` must survive untouched; and when both the raw and
-    bare tags exist (`v2.0.0`), the raw tag is preferred as `git-tag` (FLAWS F-07d).
+    bare tags exist (`v2.0.0`), the raw tag is preferred as `git-tag`.
     """
     bash = shutil.which("bash")
     git = shutil.which("git")
@@ -617,15 +616,15 @@ def test_github_release_step_invokes_the_script_with_the_workflow_token() -> Non
 
 
 # --------------------------------------------------------------------------------------
-# ps-cli wheel build + upload (issue #81, Slice 1, X-02) -- after create-github-release.sh
+# ps-cli wheel build + upload -- after create-github-release.sh
 # --------------------------------------------------------------------------------------
 
 
 def test_github_release_checkout_is_pinned_to_the_release_tag_commit() -> None:
-    """CHANGES.md X-02: the checkout is pinned to the release commit, like `publish`'s own pin.
+    """The checkout is pinned to the release commit, like `publish`'s own pin.
 
     Without a `ref:`, a `workflow_dispatch` re-run could build the wheel from whatever
-    `main` HEAD is at re-run time instead of the tagged release commit (AC-BI-002).
+    `main` HEAD is at re-run time instead of the tagged release commit.
     """
     checkouts = _steps_using(_job(_GITHUB_RELEASE_JOB), "actions/checkout")
 
@@ -636,7 +635,7 @@ def test_github_release_checkout_is_pinned_to_the_release_tag_commit() -> None:
 
 
 def test_github_release_job_builds_the_wheel_after_creating_the_release() -> None:
-    """Slice 1 (AC-BI-002): `uv build --package ps-cli` runs after `create-github-release.sh`.
+    """`uv build --package ps-cli` runs after `create-github-release.sh`.
 
     The wheel must be built only once the release exists; ordering is asserted by list
     index, not by trusting the steps happen to be adjacent in the file.
@@ -666,7 +665,7 @@ def test_github_release_job_builds_the_wheel_after_creating_the_release() -> Non
 
 
 def test_github_release_job_uploads_wheel_and_sha256sums_with_the_release_token() -> None:
-    """Slice 1 (AC-BI-001/AC-BI-002): `gh release upload` ships the wheel + SHA256SUMS.
+    """`gh release upload` ships the wheel + SHA256SUMS.
 
     Token vector, not substring match: the release tag, the wheel glob, and the checksum
     file must all be arguments of the same `gh release upload` invocation, authenticated
@@ -696,14 +695,14 @@ def test_github_release_job_uploads_wheel_and_sha256sums_with_the_release_token(
 
 
 def test_github_release_job_permissions_stay_contents_write_only() -> None:
-    """Slice 1 (AC-BI-002): adding the build/upload steps must not widen the job's token scope."""
+    """Adding the build/upload steps must not widen the job's token scope."""
     assert _mapping(_job(_GITHUB_RELEASE_JOB), "permissions") == {"contents": "write"}
 
 
 def test_uv_build_produces_the_wheel_naming_pattern_and_matching_metadata_version(
     tmp_path: Path,
 ) -> None:
-    """Slice 1: a real local `uv build` rehearsal proves the artifact shape the CI step relies on.
+    """A real local `uv build` rehearsal proves the artifact shape the CI step relies on.
 
     Not a YAML assertion -- this runs the exact command the new CI step runs and inspects
     the real wheel it produces, so the naming pattern and METADATA `Version` the later
@@ -745,12 +744,12 @@ def test_uv_build_produces_the_wheel_naming_pattern_and_matching_metadata_versio
 
 
 # --------------------------------------------------------------------------------------
-# Credentials (AC-BI-005) and the smoke gate's subject (AC-BI-007)
+# Credentials and the smoke gate's subject
 # --------------------------------------------------------------------------------------
 
 
 def test_only_secret_referenced_by_the_publishing_job_is_github_token() -> None:
-    """AC-BI-005: no long-lived PAT anywhere in the job that writes to GHCR."""
+    """No long-lived PAT anywhere in the job that writes to GHCR."""
     publish = yaml.safe_dump(_job(_PUBLISH_JOB))
     referenced = set(_SECRET_REFERENCE.findall(publish))
 
@@ -758,7 +757,7 @@ def test_only_secret_referenced_by_the_publishing_job_is_github_token() -> None:
 
 
 def test_ghcr_login_uses_the_workflow_token() -> None:
-    """AC-BI-005: the GHCR login is the scoped `GITHUB_TOKEN`, against `ghcr.io`."""
+    """The GHCR login is the scoped `GITHUB_TOKEN`, against `ghcr.io`."""
     logins = _steps_using(_job(_PUBLISH_JOB), "docker/login-action")
     assert len(logins) == 1, f"expected exactly one GHCR login step, found {len(logins)}"
 
@@ -769,9 +768,9 @@ def test_ghcr_login_uses_the_workflow_token() -> None:
 
 
 def test_smoke_test_step_runs_the_container_image_module_against_the_built_tag() -> None:
-    """AC-BI-007: the smoke test runs against the tag the build step just produced.
+    """The smoke test runs against the tag the build step just produced.
 
-    This is the first link of the identity chain (FLAWS F-02); the remaining links —
+    This is the first link of the identity chain; the remaining links —
     export, upload, download, push — are asserted by the four tests in the section below.
     """
     build = _job(_BUILD_JOB)
@@ -788,7 +787,7 @@ def test_smoke_test_step_runs_the_container_image_module_against_the_built_tag()
         "-m",
         "container_image",
         "-q",
-        "-n0",  # issue #197: addopts enables xdist; the smoke step starts containers, stay serial
+        "-n0",  # addopts enables xdist; the smoke step starts containers, stay serial
     ]
     assert _mapping(smoke[0], "env").get("PS_CONTAINER_IMAGE_REF") == _SMOKE_TAG_EXPRESSION, (
         "the smoke test must target the tag the build step produced"
@@ -796,7 +795,7 @@ def test_smoke_test_step_runs_the_container_image_module_against_the_built_tag()
 
 
 # --------------------------------------------------------------------------------------
-# The image-identity chain (FLAWS F-02): the thing we tested is the thing we ship.
+# The image-identity chain: the thing we tested is the thing we ship.
 #
 # `_SMOKE_TAG_EXPRESSION` is the one image identity. The build step produces it, the smoke
 # step tests it, and the four tests below pin every remaining hop by which those exact bytes
@@ -808,7 +807,7 @@ def test_smoke_test_step_runs_the_container_image_module_against_the_built_tag()
 
 
 def test_build_job_exports_the_smoke_tested_image_to_a_tarball() -> None:
-    """AC-BI-007: the bytes that passed the smoke test are captured, not re-derived later.
+    """The bytes that passed the smoke test are captured, not re-derived later.
 
     `docker image save` must name the *same* tag the build step produced and the smoke step
     tested, so the fully-expanded vector is compared against `_SMOKE_TAG_EXPRESSION` itself.
@@ -828,7 +827,7 @@ def test_build_job_exports_the_smoke_tested_image_to_a_tarball() -> None:
 
 
 def test_build_job_uploads_the_exported_tarball_as_the_per_arch_artifact() -> None:
-    """AC-BI-007: the exported tarball is the artifact `publish` later downloads by name.
+    """The exported tarball is the artifact `publish` later downloads by name.
 
     Dropping this step (or renaming the artifact) severs the chain: `publish` would have no
     smoke-tested bytes to load, and only a rebuild could still produce something to push.
@@ -844,7 +843,7 @@ def test_build_job_uploads_the_exported_tarball_as_the_per_arch_artifact() -> No
 
 
 def test_publish_job_downloads_both_uploaded_image_artifacts() -> None:
-    """AC-BI-006/AC-BI-007: `publish` starts from both legs' smoke-tested tarballs."""
+    """`publish` starts from both legs' smoke-tested tarballs."""
     downloads = _steps_using(_job(_PUBLISH_JOB), "actions/download-artifact")
 
     assert [
@@ -857,7 +856,7 @@ def test_publish_job_downloads_both_uploaded_image_artifacts() -> None:
 
 
 def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() -> None:
-    """AC-BI-002/AC-BI-007: what is pushed is what was smoke-tested, byte for byte.
+    """What is pushed is what was smoke-tested, byte for byte.
 
     A contiguous token subsequence pins the load-tag-push hop: load the downloaded
     tarball, tag **that loaded image** — `ps-service:smoke-$arch`, the tag the smoke
@@ -866,7 +865,7 @@ def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() 
     anywhere else breaks this subsequence.
 
     Deliberately a subsequence match, not a full-body equality: the two arches are
-    pushed one after another, each under a bounded retry loop (#192), so the
+    pushed one after another, each under a bounded retry loop, so the
     surrounding control flow (a helper function plus a retry loop) differs from a
     plain serial loop. The provenance chain this test protects is unaffected by
     that — each arch still loads, tags and pushes only its own tarball.
@@ -912,10 +911,10 @@ def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() 
 
 
 def test_publish_job_pushes_arches_sequentially_with_bounded_retry() -> None:
-    """#192: concurrent per-arch pushes raced on GHCR (`unknown blob`); push serially, retried.
+    """Per-arch pushes must not race on GHCR (`unknown blob`); push serially, retried.
 
-    AC-CI-001: no backgrounding (`&`) and no `wait`, so the pushes cannot overlap.
-    AC-CI-002/AC-CI-003: a bounded retry loop whose exhaustion still fails the step.
+    No backgrounding (`&`) and no `wait`, so the pushes cannot overlap.
+    A bounded retry loop whose exhaustion still fails the step.
     """
     publish = _job(_PUBLISH_JOB)
     push_step = next(
@@ -952,7 +951,7 @@ def _invokes_docker_build(body: str) -> bool:
 
 
 def test_publish_job_never_rebuilds_the_image() -> None:
-    """AC-BI-007: no second image identity is created in the job that holds the push token.
+    """No second image identity is created in the job that holds the push token.
 
     A `docker build` — or a `build-push-action` — inside `publish` would ship bytes no smoke
     test ever ran against, however green both build legs were. `docker buildx imagetools`
@@ -977,7 +976,7 @@ def test_publish_job_never_rebuilds_the_image() -> None:
 
 
 def test_no_job_runs_under_an_always_or_failure_condition() -> None:
-    """AC-BI-004/AC-BI-007: nothing routes around the gate.
+    """Nothing routes around the gate.
 
     `if: always()` / `failure()` / `!cancelled()` on a job or a step would run it even
     after the gate or a smoke test failed, defeating the `needs:` graph.
@@ -997,7 +996,7 @@ def test_no_job_runs_under_an_always_or_failure_condition() -> None:
 
 
 def test_no_run_body_interpolates_a_github_expression() -> None:
-    """FLAWS F-11: `${{ }}` never reaches a shell body; values arrive through `env:`.
+    """`${{ }}` never reaches a shell body; values arrive through `env:`.
 
     Direct interpolation splices an attacker-controllable string into the script text
     before the shell parses it.

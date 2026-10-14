@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ps_service.query_engine.cypher_query import (
-    _GRAPH_UNSEEDED_DETAIL,  # pyright: ignore[reportPrivateUsage]  # test pins the exact sanitized detail string (AC-BI-015)
+    _GRAPH_UNSEEDED_DETAIL,  # pyright: ignore[reportPrivateUsage]  # test pins the exact sanitized detail string
 )
 from ps_service.query_engine.errors import (
     GraphUnseededError,
@@ -40,7 +40,7 @@ def test_graph_unseeded_error_message_is_exactly_the_constructor_argument() -> N
 
 
 def test_graph_unseeded_error_message_contains_no_host_port_or_path_detail() -> None:
-    """AC-BI-015: the message is a fixed, sanitized string -- a direct
+    """The message is a fixed, sanitized string -- a direct
     string-content assertion, mirroring `mcp_interface.mcp_server
     ._GRAPH_UNAVAILABLE_DETAIL`'s own sanitization test shape
     (`tests/mcp_interface/test_cypher_tool.py`).

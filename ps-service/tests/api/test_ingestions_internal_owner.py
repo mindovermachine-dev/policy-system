@@ -1,6 +1,6 @@
 """``POST /ingestions`` (internal) refuses a governance-bearing seed with no verified caller.
 
-Issue #227, AC-BI-001: an imported Policy tree is created ``draft`` and owned by the ingesting
+An imported Policy tree is created ``draft`` and owned by the ingesting
 caller, so a seed that carries a Policy and arrives without a verified identity is refused at
 the door (401 ``owner_required``) before any stage, audit row, or graph write. A seed with no
 Policy is not gated.
@@ -60,7 +60,7 @@ def _stub_run_log(  # pyright: ignore[reportUnusedFunction]  # autouse
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Stub the process-wide logging facade, as every route test of this package does."""
-    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
+    # detroit-exception: process-wide atexit logging facade, not a business fake
     monkeypatch.setattr("ps_service.api.ingestion_orchestration.emit_log_entry", _noop_emit)
 
 

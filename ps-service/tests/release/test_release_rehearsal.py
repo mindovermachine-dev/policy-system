@@ -1,17 +1,16 @@
-"""End-to-end rehearsal of the release pipeline against a real clone of this repo (S14,
-AC-BI-023, AC-BI-031, "re-runs all").
+"""End-to-end rehearsal of the release pipeline against a real clone of this repo.
 
 Everything else under `ps-service/tests/release/` drives the scripts through a synthetic
-fixture repo (`conftest.ReleaseFixture`) and a fake `gh` (DECISIONS X-07). This module is the
+fixture repo (`conftest.ReleaseFixture`) and a fake `gh`. This module is the
 one exception: it clones THIS repository's real `main` branch into `tmp_path`, adds a synthetic
-`feat(release): ... - resolves #79` commit on top of the real tip, and runs `release.sh`
+`feat(release): ...` commit on top of the real tip, and runs `release.sh`
 against that clone with the REAL `gh` binary (no `PS_RELEASE_GH` override) -- proving the whole
 pipeline end-to-end against real files, real tags and the real `gh-tt` extension, not just the
 hermetic fixture's approximation of them.
 
-Why this is `integration` (DECISIONS X-07) and excluded from the default suite:
+Why this is `integration` and excluded from the default suite:
 
-- `gh tt semver` / `gh tt semver bump` need no GitHub API call (PLAN A-05: pure local `git`
+- `gh tt semver` / `gh tt semver bump` need no GitHub API call (pure local `git`
   subprocesses), but they DO need the `gh-tt` extension installed for the invoking user -- a
   devcontainer/CI setup step, not something this suite can seed. `HOME` is therefore a fresh
   `tmp_path` directory carrying only a symlink to the real `~/.local/share/gh` extension store
@@ -94,7 +93,7 @@ def _run(
 
 
 def _highest_real_release_tag(git: Path) -> str:
-    """The highest bare-semver tag in this repository (mirrors `gh tt semver`, PLAN A-01/A-02)."""
+    """The highest bare-semver tag in this repository (mirrors `gh tt semver`)."""
     result = _run([str(git), "tag", "--list"], cwd=REPO_ROOT)
     tags = [tag for tag in result.stdout.split() if BARE_SEMVER_REGEX.match(tag)]
     assert tags, f"expected at least one bare-semver tag in {REPO_ROOT}"
@@ -111,7 +110,7 @@ def _link_real_gh_extensions(home: Path) -> None:
     """Symlink the real `~/.local/share/gh` (the `gh-tt` extension store) into a throwaway HOME.
 
     This is the only piece of the real `HOME` this test borrows -- installing `gh-tt` is a
-    devcontainer/CI prerequisite (PLAN A-05), not something a test can seed hermetically, but
+    devcontainer/CI prerequisite, not something a test can seed hermetically, but
     every commit identity is set explicitly via env vars, so no git config/credentials from the
     real `HOME` are needed or exposed.
     """
@@ -185,7 +184,7 @@ def test_release_rehearsal_on_a_clone_of_this_repo(tmp_path: Path) -> None:
 
     _run([str(RELEASE_SCRIPT)], cwd=work, env=environment)
 
-    # A new tag landed, bumping the real baseline's MINOR version (A-31/D-04: only `feat`s and
+    # A new tag landed, bumping the real baseline's MINOR version (only `feat`s and
     # `fix`/`perf`s sit on `main` since the baseline; adding one more `feat` keeps the bump minor).
     tags_after = _run([str(git), "tag", "--list"], cwd=work).stdout.split()
     assert expected_release_version in tags_after, (
@@ -201,7 +200,7 @@ def test_release_rehearsal_on_a_clone_of_this_repo(tmp_path: Path) -> None:
     ).stdout.strip()
     assert tag_commit == head_after_release, "the new tag must point at the release commit (HEAD)"
 
-    # All five version-lockstep fields equal the computed release version (AC-BI-012).
+    # All five version-lockstep fields equal the computed release version.
     ps_service_pyproject = tomllib.loads(
         (work / "ps-service" / "pyproject.toml").read_text(encoding="utf-8")
     )

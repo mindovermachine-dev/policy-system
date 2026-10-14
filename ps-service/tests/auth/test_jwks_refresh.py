@@ -1,11 +1,11 @@
-"""AC-BI-008: JWKS kid-miss refetch-once (issue #58, Slice 6).
+"""JWKS kid-miss refetch-once.
 
 `PsTokenVerifier` delegates key lookup to `jwt.PyJWKClient.get_signing_key_from_jwt`,
 which already implements "on a cached-`kid` miss, refresh the JWK Set once and
-retry" natively (PLAN.md §0.2, `jwt/jwks_client.py::get_signing_key`) -- no
+retry" natively (`jwt/jwks_client.py::get_signing_key`) -- no
 hand-rolled retry state machine exists anywhere in this codebase. These tests
 prove that integration actually happens end to end against a real local HTTP
-server (`tests.auth.mock_oidc_provider.MockOidcProvider`, AC-BI-017), not just
+server (`tests.auth.mock_oidc_provider.MockOidcProvider`), not just
 theoretically true by construction: a verifier whose cache was primed with the
 provider's *original* key must still successfully validate a token signed
 with a key added *after* that priming fetch (`rotate_key()`), by refetching
@@ -14,7 +14,7 @@ a retry loop), a token signed with a `kid` the provider never published at
 all.
 
 Exercises `PsTokenVerifier` directly (not through `RestAuthMiddleware`/
-`create_app`) -- Slices 3/4 already prove the REST 401/200 plumbing around
+`create_app`) -- other tests already prove the REST 401/200 plumbing around
 this verifier end to end; this file's job is narrowly the JWKS-refresh
 integration itself, using `MockOidcProvider.jwks_request_count` as the one
 ground-truth signal for "how many times was `/jwks.json` actually fetched."
@@ -53,7 +53,7 @@ def _verifier(provider: MockOidcProvider, *, emitter: LogEmitter) -> PsTokenVeri
         jwks_uri=provider.jwks_uri,
         allowed_algorithms=_ALLOWED_ALGORITHMS,
     )
-    # Slice 10: `verify_token` now always logs (AC-BI-014/015) -- a real
+    # `verify_token` always logs -- a real
     # `LogEmitter` (`tests/conftest.py`'s `make_emitter`) is required so
     # `emit_log_entry`'s no-default-configured guard never trips here; this
     # file's own tests assert nothing about log content.

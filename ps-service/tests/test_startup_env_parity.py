@@ -1,11 +1,10 @@
-"""Proves the container smoke test's env vars are sufficient to boot `create_app` (issue #148).
+"""Proves the container smoke test's env vars are sufficient to boot `create_app`.
 
-Release to Production run #56 (v3.1.0) failed both arch builds: issue #140 added a new
-unconditional config-completeness check (`require_authentik_credential_configured`, AC-BI-003),
-its env vars were added to every fast fixture that constructs a `ServiceConfig` or sets env
-vars for `create_app`, except `test_container_image.py`'s `docker run --env` list -- the one
-consumer that boots the actual packaged image. Nothing caught that until the release tag build
-itself tried to boot the image (issue #148).
+The unconditional config-completeness check (`require_authentik_credential_configured`)
+needs its env vars in every fast fixture that constructs a `ServiceConfig` or sets env vars for
+`create_app`, and in `test_container_image.py`'s `docker run --env` list -- the one consumer that
+boots the actual packaged image. A gap in that list would otherwise surface only when the release
+tag build itself tried to boot the image.
 
 This test closes that gap without Docker: `REQUIRED_STARTUP_ENV` (`ps_test_support`) is the
 exact same dict `test_container_image.py` passes to every `docker run`, so proving `create_app`
@@ -32,7 +31,7 @@ def test_container_smoke_env_boots_create_app(monkeypatch: pytest.MonkeyPatch) -
     """The exact env `test_container_image.py` passes to `docker run` must let `create_app` boot.
 
     Mirrors `_start_service`/`catalog_only_service`'s fixed env exactly: `PS_SERVICE_HOST`
-    pinned to loopback, `PS_SERVICE_LOCAL_TEST_BYPASS=true` (no OIDC credentials, issue #67),
+    pinned to loopback, `PS_SERVICE_LOCAL_TEST_BYPASS=true` (no OIDC credentials),
     and `REQUIRED_STARTUP_ENV` on top. `PS_FALKORDB_HOST` is deliberately absent -- it only
     affects runtime dependency health, never `create_app`'s synchronous startup checks.
     """

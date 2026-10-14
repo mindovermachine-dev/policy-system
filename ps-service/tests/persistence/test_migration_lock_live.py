@@ -1,4 +1,4 @@
-"""`postgres_live` tests for the migration advisory lock shared by both runners (#205 follow-up).
+"""`postgres_live` tests for the migration advisory lock shared by both runners.
 
 The service (ordinary runner, `ps_state`) and the provisioning command (privileged runner, admin
 credential) can run against one empty database at the same time. Both take one

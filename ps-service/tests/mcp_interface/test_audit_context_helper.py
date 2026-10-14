@@ -1,4 +1,4 @@
-"""The one MCP audit-context resolution shared by every audited tool (issue #218).
+"""The one MCP audit-context resolution shared by every audited tool.
 
 REST resolves the audit actor once in `provide_audit_context`; MCP does it in `_audit_context`.
 These tests pin that helper's contract, and that `mcp_server.py` has no other copy of it.
@@ -72,7 +72,7 @@ def test_returns_the_authenticated_caller_message_without_a_caller_and_without_b
 
 
 def test_mcp_server_resolves_the_audit_actor_in_exactly_one_place() -> None:
-    """AC-BI-003: no tool re-inlines the resolve-and-catch block or builds its own context."""
+    """No tool re-inlines the resolve-and-catch block or builds its own context."""
     source = inspect.getsource(mcp_server)
 
     assert source.count("resolve_audit_actor(") == 1

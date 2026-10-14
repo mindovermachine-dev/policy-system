@@ -1,9 +1,9 @@
-"""The `create-policy-draft` MCP tool writes through the Graph Write Gateway (issue #211, S6).
+"""The `create-policy-draft` MCP tool writes through the Graph Write Gateway.
 
-Without a Capability claim (S7) a create is ONE group anchored to the `applied` audit row, which is
+Without a Capability claim a create is ONE group anchored to the `applied` audit row, which is
 written first. The process gateway (the autouse rig) is the boundary; the audit store is the
 event-id-reporting fake whose ids the rig's log accepts. Without a gateway the tool answers
-`error:` and writes no audit row at all (fail closed, M4).
+`error:` and writes no audit row at all (fail closed).
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ def _text(result: CallToolResult) -> str:
 def test_a_created_policy_is_one_group_linked_to_the_applied_row_and_readable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-002, AC-BI-008."""
+    """A create with standards writes one group linked to the `applied` row and reads back."""
     rig, audit = _setup(monkeypatch)
 
     with _verified_actor(sub=_ACTOR):
@@ -138,7 +138,7 @@ def test_a_taken_title_is_a_named_error_and_writes_no_second_group(
 def test_without_a_gateway_the_tool_fails_closed_with_no_audit_row_and_no_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """M4: not even a `rejected` row exists without a gateway."""
+    """Not even a `rejected` row exists without a gateway."""
     rig, audit = _setup(monkeypatch)
     install_graph_write_gateway(None)
 
@@ -153,7 +153,7 @@ def test_without_a_gateway_the_tool_fails_closed_with_no_audit_row_and_no_write(
 def test_a_gateway_failure_is_the_prefixed_persistence_error_and_a_failed_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-011."""
+    """A failing append answers the prefixed error, records `failed`, leaves the graph empty."""
     rig, audit = _setup(monkeypatch)
     rig.store.fail_appends()
 

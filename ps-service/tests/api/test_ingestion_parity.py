@@ -1,4 +1,4 @@
-"""MCP and REST sync ingests record equivalent `ingestion_run` rows (issue #195, AC-BI-017).
+"""MCP and REST sync ingests record equivalent `ingestion_run` rows.
 
 `POST /ingestions` and the `ingest_regulation` MCP tool both call
 `run_audited_catalog_ingestion`; this proves the rows depend only on the actor and the run, not on

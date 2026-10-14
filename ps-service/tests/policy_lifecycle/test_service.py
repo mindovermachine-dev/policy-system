@@ -1,9 +1,9 @@
-"""Tests for the `ps_service.policy_lifecycle.service` entry points (issue #134).
+"""Tests for the `ps_service.policy_lifecycle.service` entry points.
 
-Since issue #211 every write is a Graph Write Gateway group, so these tests run the real service
+Every write is a Graph Write Gateway group, so these tests run the real service
 functions over the gateway rig (`LifecycleRig`: in-memory log and FalkorDB fakes, the true
 boundaries) and assert on the graph the groups built, the log and the audit rows -- including that
-the `applied` row precedes the append (AC-BI-008). The graph handle the service reads through is
+the `applied` row precedes the append. The graph handle the service reads through is
 the rig's read-only double; it refuses any write statement.
 """
 
@@ -337,7 +337,7 @@ def test_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig) -> Non
         )
 
 
-# --- `propose_policy` (issue #134, S15) -------------------------------------
+# --- `propose_policy` -------------------------------------
 
 
 def _rig_graph(
@@ -596,7 +596,7 @@ def test_propose_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig
         )
 
 
-# --- `approve_policy` (issue #134, S17/S25) ---------------------------------
+# --- `approve_policy` ---------------------------------
 
 _MANAGER = ("carol", "https://issuer.example")
 _OWNER_OTHER_ISSUER = (_OWNER[0], "https://other-issuer.example")
@@ -673,7 +673,7 @@ def test_owner_who_also_holds_policy_manager_self_approval_is_blocked(
 
 
 def test_same_subject_different_issuer_approver_succeeds(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-017's critical regression case: same `sub`, different `iss`, is a different person."""
+    """Critical regression case: same `sub`, different `iss`, is a different person."""
     policy = _approvable_proposed(owner=_OWNER)
     graph = _rig_graph(lifecycle_rig, {"pol_x": policy})
     audit_store = lifecycle_rig.audit
@@ -952,7 +952,7 @@ def _third_party_takes_c2(rig: LifecycleRig) -> PolicyReadGraph:
 def test_approve_fork_guard_mismatch_raises_conflict_and_writes_nothing_else(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-006: governed state changed after the pre-read -> no row, nothing moved."""
+    """Governed state changed after the pre-read -> no row, nothing moved."""
     _fork_of_approved_prior(lifecycle_rig, governed={"c1": "pol_old", "c2": "pol_old"})
     audit_store = lifecycle_rig.audit
 
@@ -973,7 +973,7 @@ def test_approve_fork_guard_mismatch_raises_conflict_and_writes_nothing_else(
 def test_approve_fork_of_deprecated_prior_with_no_governed_caps_uses_plain_cascade(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """D-5 (CHANGES F-1): legacy forks without GOVERNED_BY edges stay approvable."""
+    """Legacy forks without GOVERNED_BY edges stay approvable."""
     successor = _approvable_proposed(policy_id="pol_new")
     prior = _approvable_proposed(policy_id="pol_old", status="deprecated")
     graph = _rig_graph(
@@ -993,7 +993,7 @@ def test_approve_fork_of_deprecated_prior_with_no_governed_caps_uses_plain_casca
 def test_approve_fork_when_sibling_fork_already_approved_leaves_caps_on_sibling(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """D-5 / OQ-4: F2 approve finds zero caps on P (they moved to F1); plain cascade, caps stay."""
+    """F2 approve finds zero caps on P (they moved to F1); plain cascade, caps stay."""
     f2 = _approvable_proposed(policy_id="pol_f2")
     prior = _approvable_proposed(policy_id="pol_old", status="deprecated")
     graph = _rig_graph(
@@ -1068,14 +1068,14 @@ def test_approve_fork_audit_payloads_validate_against_the_registered_model(
         PolicyTransitionDetails.model_validate(dict(call.details))
 
 
-# --- `reject_policy` (issue #134, S19) --------------------------------------
+# --- `reject_policy` --------------------------------------
 #
-# Mirrors `approve_policy`'s own test list exactly (same AC-BI-006/008/017
+# Mirrors `approve_policy`'s own test list exactly (same
 # test shapes), with the target status reversed to `"draft"` and the action
 # `"policy.reject"` -- proving the gate stack (RBAC, `block_self_approval`,
 # `require_status`) is genuinely shared with `approve_policy`, not
 # reimplemented differently. No auto-deprecation test: `reject_policy` never
-# calls `find_approved_prior` (D-10 is approve-only).
+# calls `find_approved_prior` (that lookup is approve-only).
 
 
 def test_policy_manager_non_owner_rejects_successfully_and_cascades_to_draft(
@@ -1136,7 +1136,7 @@ def test_owner_who_also_holds_policy_manager_self_rejection_is_blocked(
 
 
 def test_same_subject_different_issuer_rejecter_succeeds(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-017's critical regression case: same `sub`, different `iss`, is a different person."""
+    """Critical regression case: same `sub`, different `iss`, is a different person."""
     policy = _approvable_proposed(owner=_OWNER)
     graph = _rig_graph(lifecycle_rig, {"pol_x": policy})
     audit_store = lifecycle_rig.audit
@@ -1269,12 +1269,12 @@ def test_reject_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig)
         )
 
 
-# --- `revert_policy_to_draft` (issue #134, S21) ------------------------------
+# --- `revert_policy_to_draft` ------------------------------
 #
 # Structurally distinct from `approve_policy`/`reject_policy`: owner-only, no
 # `PolicyManager` RBAC gate at all. The non-owner test below deliberately
 # grants the non-owner caller `PolicyManager` to prove this is genuinely
-# owner-only, not role-gated (AC-BI-002/007).
+# owner-only, not role-gated.
 
 
 def test_owner_reverts_own_proposed_policy_succeeds_and_cascades_to_draft(
@@ -1406,7 +1406,7 @@ def test_revert_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig)
         )
 
 
-# --- `update_policy_draft` (issue #136, Slice 1; gateway-backed since #211) ---
+# --- `update_policy_draft` ---
 
 
 def _seed_rig(rig: LifecycleRig, policy: _PolicyFixture | None, **extra: object) -> PolicyReadGraph:
@@ -1425,7 +1425,7 @@ def _seed_rig(rig: LifecycleRig, policy: _PolicyFixture | None, **extra: object)
 
 
 def test_update_policy_draft_applies_only_supplied_fields(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-008: only the supplied fields are written, nothing else."""
+    """Only the supplied fields are written, nothing else."""
     graph = _seed_rig(lifecycle_rig, _draft_policy(), description="old", scope_in="kept")
     store = FakeAccessRoleStore()
 
@@ -1472,7 +1472,7 @@ def test_update_policy_draft_clears_a_field_via_explicit_none(lifecycle_rig: Lif
 
 
 def test_update_policy_draft_rejects_non_owner_non_elevated(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-002."""
+    """A non-owner without an elevated role is rejected."""
     graph = _seed_rig(lifecycle_rig, _draft_policy())
     store = FakeAccessRoleStore()
 
@@ -1489,7 +1489,7 @@ def test_update_policy_draft_rejects_non_owner_non_elevated(lifecycle_rig: Lifec
 
 
 def test_update_policy_draft_allows_system_owner_override(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-002's carve-out: a non-owner `SystemOwner` still succeeds."""
+    """A non-owner `SystemOwner` still succeeds."""
     graph = _seed_rig(lifecycle_rig, _draft_policy())
     store = FakeAccessRoleStore()
     store.grant(actor=_GRANTER, target=_OTHER, access_role=AccessRole.SYSTEM_OWNER)
@@ -1508,7 +1508,7 @@ def test_update_policy_draft_allows_system_owner_override(lifecycle_rig: Lifecyc
 
 
 def test_update_policy_draft_rejects_non_draft_status(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-004."""
+    """A target that is not `draft` is rejected."""
     policy = _PolicyFixture(id="pol_x", title="X", status="proposed", version="1", owner=_OWNER)
     graph = _seed_rig(lifecycle_rig, policy)
     store = FakeAccessRoleStore()
@@ -1530,7 +1530,7 @@ def test_update_policy_draft_rejects_non_draft_status(lifecycle_rig: LifecycleRi
 
 
 def test_update_policy_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-012."""
+    """A missing target raises the not-found error."""
     graph = _seed_rig(lifecycle_rig, None)
     store = FakeAccessRoleStore()
 
@@ -1548,7 +1548,7 @@ def test_update_policy_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> No
 def test_update_policy_draft_graph_failure_raises_translated_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-013's 'graph unavailable' failure mode."""
+    """The 'graph unavailable' failure mode."""
     graph = _seed_rig(lifecycle_rig, _draft_policy())
     lifecycle_rig.store.fail_appends()
     store = FakeAccessRoleStore()
@@ -1565,7 +1565,7 @@ def test_update_policy_draft_graph_failure_raises_translated_error(
 
 
 # --- `add_standard_to_draft` / `update_standard_draft` / `add_control_to_draft` /
-# --- `update_control_draft` (issue #136, Slices 2-5; gateway-backed since #211) -------------
+# --- `update_control_draft` -------------
 
 
 def _seed_tree_rig(
@@ -1608,7 +1608,7 @@ def _seed_tree_rig(
 def test_add_standard_to_draft_creates_standard_with_deterministic_id(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-009: the returned `standard_id` matches the id formula deterministically."""
+    """The returned `standard_id` matches the id formula deterministically."""
     graph = _seed_tree_rig(lifecycle_rig, standard=False)
     store = FakeAccessRoleStore()
 
@@ -1637,7 +1637,7 @@ def test_add_standard_to_draft_creates_standard_with_deterministic_id(
 def test_add_standard_to_draft_implementation_status_independent_of_governance_status(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007: governance `status` is always `draft`, `implementation_status`
+    """Governance `status` is always `draft`, `implementation_status`
     defaults to `draft` too unless the caller supplied a different one.
     """
     graph = _seed_tree_rig(lifecycle_rig, standard=False)
@@ -1660,7 +1660,7 @@ def test_add_standard_to_draft_implementation_status_independent_of_governance_s
 
 
 def test_add_standard_to_draft_rejects_non_owner_non_elevated(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-003."""
+    """A non-owner without an elevated role is rejected."""
     graph = _seed_tree_rig(lifecycle_rig, standard=False)
     store = FakeAccessRoleStore()
 
@@ -1678,7 +1678,7 @@ def test_add_standard_to_draft_rejects_non_owner_non_elevated(lifecycle_rig: Lif
 
 
 def test_add_standard_to_draft_allows_system_owner_override(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-003's carve-out: a non-owner `SystemOwner` still succeeds."""
+    """A non-owner `SystemOwner` still succeeds."""
     graph = _seed_tree_rig(lifecycle_rig, standard=False)
     store = FakeAccessRoleStore()
     store.grant(actor=_GRANTER, target=_OTHER, access_role=AccessRole.SYSTEM_OWNER)
@@ -1700,7 +1700,7 @@ def test_add_standard_to_draft_allows_system_owner_override(lifecycle_rig: Lifec
 def test_add_standard_to_draft_rejects_non_draft_parent_status(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-004."""
+    """A parent Policy that is not `draft` is rejected."""
     graph = _seed_tree_rig(lifecycle_rig, policy_status="proposed", standard=False)
     store = FakeAccessRoleStore()
 
@@ -1724,7 +1724,7 @@ def test_add_standard_to_draft_rejects_non_draft_parent_status(
 def test_add_standard_to_draft_raises_not_found_for_missing_parent_policy(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-012."""
+    """A missing parent Policy raises the not-found error."""
     graph = _seed_tree_rig(lifecycle_rig, policy=False)
     store = FakeAccessRoleStore()
 
@@ -1743,7 +1743,7 @@ def test_add_standard_to_draft_raises_not_found_for_missing_parent_policy(
 def test_add_standard_to_draft_graph_failure_raises_translated_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-013's 'graph unavailable' failure mode."""
+    """The 'graph unavailable' failure mode."""
     graph = _seed_tree_rig(lifecycle_rig, standard=False)
     lifecycle_rig.store.fail_appends()
     store = FakeAccessRoleStore()
@@ -1760,11 +1760,11 @@ def test_add_standard_to_draft_graph_failure_raises_translated_error(
         )
 
 
-# --- `update_standard_draft` (issue #136, Slice 3) ---------------------------
+# --- `update_standard_draft` ---------------------------
 
 
 def test_update_standard_draft_applies_only_supplied_fields(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-008."""
+    """Only the supplied fields are written."""
     graph = _seed_tree_rig(lifecycle_rig)
     store = FakeAccessRoleStore()
 
@@ -1789,7 +1789,7 @@ def test_update_standard_draft_applies_only_supplied_fields(lifecycle_rig: Lifec
 
 
 def test_update_standard_draft_rejects_non_owner_non_elevated(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-003."""
+    """A non-owner without an elevated role is rejected."""
     graph = _seed_tree_rig(lifecycle_rig)
     store = FakeAccessRoleStore()
 
@@ -1808,7 +1808,7 @@ def test_update_standard_draft_rejects_non_owner_non_elevated(lifecycle_rig: Lif
 def test_update_standard_draft_ownership_is_transitive_from_parent_policy(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-003: proves the gate genuinely reads the parent-Policy traversal
+    """Proves the gate genuinely reads the parent-Policy traversal
     row, not some nonexistent Standard-level ownership field: a non-owner of
     the PARENT POLICY is rejected even though the Standard being mutated has
     no ownership field of its own.
@@ -1828,7 +1828,7 @@ def test_update_standard_draft_ownership_is_transitive_from_parent_policy(
 
 
 def test_update_standard_draft_allows_system_owner_override(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-003's carve-out: a non-owner `SystemOwner` still succeeds."""
+    """A non-owner `SystemOwner` still succeeds."""
     graph = _seed_tree_rig(lifecycle_rig)
     store = FakeAccessRoleStore()
     store.grant(actor=_GRANTER, target=_OTHER, access_role=AccessRole.SYSTEM_OWNER)
@@ -1847,7 +1847,7 @@ def test_update_standard_draft_allows_system_owner_override(lifecycle_rig: Lifec
 
 
 def test_update_standard_draft_rejects_non_draft_status(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-004: the STANDARD's own status gates this, not the parent Policy's."""
+    """The STANDARD's own status gates this, not the parent Policy's."""
     graph = _seed_tree_rig(lifecycle_rig, standard_status="proposed")
     store = FakeAccessRoleStore()
 
@@ -1868,7 +1868,7 @@ def test_update_standard_draft_rejects_non_draft_status(lifecycle_rig: Lifecycle
 
 
 def test_update_standard_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-012."""
+    """A missing target raises the not-found error."""
     graph = _seed_tree_rig(lifecycle_rig, policy=False)
     store = FakeAccessRoleStore()
 
@@ -1886,7 +1886,7 @@ def test_update_standard_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> 
 def test_update_standard_draft_graph_failure_raises_translated_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-013's 'graph unavailable' failure mode."""
+    """The 'graph unavailable' failure mode."""
     graph = _seed_tree_rig(lifecycle_rig)
     lifecycle_rig.store.fail_appends()
     store = FakeAccessRoleStore()
@@ -1905,10 +1905,10 @@ def test_update_standard_draft_graph_failure_raises_translated_error(
 def test_update_standard_draft_backfills_legacy_null_status_before_gating(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """CHANGES.md finding #2 (High): a legacy Standard minted before any
+    """A legacy Standard minted before any
     backfilling call (e.g. via the internal-seed adapter) can still have a
     `NULL` own `status` even though its parent Policy is genuinely `draft`.
-    Without the backfill-then-reread fix (`_read_standard_with_parent_backfilled`),
+    Without the backfill-then-reread step (`_read_standard_with_parent_backfilled`),
     this call would be spuriously rejected with
     `PolicyInvalidStatusTransitionError` (current_status=None) even though
     the Standard is legitimately draft-eligible once backfilled.
@@ -1931,13 +1931,13 @@ def test_update_standard_draft_backfills_legacy_null_status_before_gating(
     assert lifecycle_rig.logged_groups == 2  # the backfill group, then the edit
 
 
-# --- `add_control_to_draft` (issue #136, Slice 4) ----------------------------
+# --- `add_control_to_draft` ----------------------------
 
 
 def test_add_control_to_draft_creates_control_with_deterministic_id(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-009-shaped: the returned `control_id` matches the id formula deterministically."""
+    """The returned `control_id` matches the id formula deterministically."""
     graph = _seed_tree_rig(lifecycle_rig)
     store = FakeAccessRoleStore()
 
@@ -1968,7 +1968,7 @@ def test_add_control_to_draft_creates_control_with_deterministic_id(
 def test_add_control_to_draft_defaults_implementation_status_planned_not_draft(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007: Control's own `implementation_status` default is `"planned"`,
+    """Control's own `implementation_status` default is `"planned"`,
     the one deliberate divergence from `add_standard_to_draft`'s own `"draft"`
     default -- easy to copy-paste wrong.
     """
@@ -1993,7 +1993,7 @@ def test_add_control_to_draft_defaults_implementation_status_planned_not_draft(
 
 
 def test_add_control_to_draft_rejects_non_owner_non_elevated(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-003."""
+    """A non-owner without an elevated role is rejected."""
     graph = _seed_tree_rig(lifecycle_rig)
     store = FakeAccessRoleStore()
 
@@ -2014,7 +2014,7 @@ def test_add_control_to_draft_rejects_non_owner_non_elevated(lifecycle_rig: Life
 def test_add_control_to_draft_ownership_is_transitive_from_parent_policy(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-003: proves the gate genuinely reads the parent-Policy traversal
+    """Proves the gate genuinely reads the parent-Policy traversal
     row, not some nonexistent Standard-level ownership field -- mirrors
     `test_update_standard_draft_ownership_is_transitive_from_parent_policy`.
     """
@@ -2035,7 +2035,7 @@ def test_add_control_to_draft_ownership_is_transitive_from_parent_policy(
 
 
 def test_add_control_to_draft_allows_system_owner_override(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-003's carve-out: a non-owner `SystemOwner` still succeeds."""
+    """A non-owner `SystemOwner` still succeeds."""
     graph = _seed_tree_rig(lifecycle_rig)
     store = FakeAccessRoleStore()
     store.grant(actor=_GRANTER, target=_OTHER, access_role=AccessRole.SYSTEM_OWNER)
@@ -2058,7 +2058,7 @@ def test_add_control_to_draft_allows_system_owner_override(lifecycle_rig: Lifecy
 def test_add_control_to_draft_rejects_non_draft_parent_status(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-004: the STANDARD's own status gates this, not the parent Policy's."""
+    """The STANDARD's own status gates this, not the parent Policy's."""
     graph = _seed_tree_rig(lifecycle_rig, standard_status="proposed")
     store = FakeAccessRoleStore()
 
@@ -2083,7 +2083,7 @@ def test_add_control_to_draft_rejects_non_draft_parent_status(
 def test_add_control_to_draft_raises_not_found_for_missing_parent_standard(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-012."""
+    """A missing parent Standard raises the not-found error."""
     graph = _seed_tree_rig(lifecycle_rig, policy=False)
     store = FakeAccessRoleStore()
 
@@ -2103,7 +2103,7 @@ def test_add_control_to_draft_raises_not_found_for_missing_parent_standard(
 def test_add_control_to_draft_graph_failure_raises_translated_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-013's 'graph unavailable' failure mode."""
+    """The 'graph unavailable' failure mode."""
     graph = _seed_tree_rig(lifecycle_rig)
     lifecycle_rig.store.fail_appends()
     store = FakeAccessRoleStore()
@@ -2124,9 +2124,9 @@ def test_add_control_to_draft_graph_failure_raises_translated_error(
 def test_add_control_to_draft_backfills_legacy_null_status_before_gating(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """CHANGES.md finding #2 (High): a legacy Standard minted before any
+    """A legacy Standard minted before any
     backfilling call can still have a `NULL` own `status` even though its
-    parent Policy is genuinely `draft`. Without the backfill-then-reread fix
+    parent Policy is genuinely `draft`. Without the backfill-then-reread step
     (`_read_standard_with_parent_backfilled`), this call would be spuriously
     rejected with `PolicyInvalidStatusTransitionError` (current_status=None)
     even though the Standard is legitimately draft-eligible once backfilled.
@@ -2150,11 +2150,11 @@ def test_add_control_to_draft_backfills_legacy_null_status_before_gating(
     assert lifecycle_rig.logged_groups == 2  # the backfill group, then the add
 
 
-# --- `update_control_draft` (issue #136, Slice 5) -----------------------------
+# --- `update_control_draft` -----------------------------
 
 
 def test_update_control_draft_applies_only_supplied_fields(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-008."""
+    """Only the supplied fields are written."""
     graph = _seed_tree_rig(lifecycle_rig, control=True)
     store = FakeAccessRoleStore()
 
@@ -2181,7 +2181,7 @@ def test_update_control_draft_applies_only_supplied_fields(lifecycle_rig: Lifecy
 
 
 def test_update_control_draft_rejects_non_owner_non_elevated(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-003."""
+    """A non-owner without an elevated role is rejected."""
     graph = _seed_tree_rig(lifecycle_rig, control=True)
     store = FakeAccessRoleStore()
 
@@ -2233,7 +2233,7 @@ def test_update_control_draft_ownership_traverses_two_hops_not_one(
 
 
 def test_update_control_draft_allows_system_owner_override(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-003's carve-out: a non-owner `SystemOwner` still succeeds."""
+    """A non-owner `SystemOwner` still succeeds."""
     graph = _seed_tree_rig(lifecycle_rig, control=True)
     store = FakeAccessRoleStore()
     store.grant(actor=_GRANTER, target=_OTHER, access_role=AccessRole.SYSTEM_OWNER)
@@ -2252,7 +2252,7 @@ def test_update_control_draft_allows_system_owner_override(lifecycle_rig: Lifecy
 
 
 def test_update_control_draft_rejects_non_draft_status(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-004: the CONTROL's own status gates this, not the root Policy's."""
+    """The CONTROL's own status gates this, not the root Policy's."""
     graph = _seed_tree_rig(lifecycle_rig, control=True, control_status="proposed")
     store = FakeAccessRoleStore()
 
@@ -2273,7 +2273,7 @@ def test_update_control_draft_rejects_non_draft_status(lifecycle_rig: LifecycleR
 
 
 def test_update_control_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-012."""
+    """A missing target raises the not-found error."""
     graph = _seed_tree_rig(lifecycle_rig, policy=False)
     store = FakeAccessRoleStore()
 
@@ -2291,7 +2291,7 @@ def test_update_control_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> N
 def test_update_control_draft_graph_failure_raises_translated_error(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-013's 'graph unavailable' failure mode."""
+    """The 'graph unavailable' failure mode."""
     graph = _seed_tree_rig(lifecycle_rig, control=True)
     lifecycle_rig.store.fail_appends()
     store = FakeAccessRoleStore()
@@ -2310,10 +2310,10 @@ def test_update_control_draft_graph_failure_raises_translated_error(
 def test_update_control_draft_backfills_legacy_null_status_before_gating(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """CHANGES.md finding #2 (High), two-hop case: a legacy Control minted
+    """Two-hop case: a legacy Control minted
     before any backfilling call can still have a `NULL` own `status` even
     though its root Policy is genuinely `draft`. Without the backfill-then-
-    reread fix (`_read_control_with_parent_backfilled`), this call would be
+    reread step (`_read_control_with_parent_backfilled`), this call would be
     spuriously rejected with `PolicyInvalidStatusTransitionError`
     (current_status=None) even though the Control is legitimately
     draft-eligible once backfilled.
@@ -2335,7 +2335,7 @@ def test_update_control_draft_backfills_legacy_null_status_before_gating(
     assert lifecycle_rig.logged_groups == 2  # the backfill group, then the edit
 
 
-# --- `create_policy_draft`'s `supersedes_policy_id` fork (issue #136, Slice 6) --
+# --- `create_policy_draft`'s `supersedes_policy_id` fork --
 
 _PRIOR_POLICY_ID = "pol_data_protection_policy_prior01"
 _PRIOR_STANDARD_ID = "std_encryption_standard_prior01"
@@ -2345,8 +2345,8 @@ _PRIOR_CONTROL_ID = "ctrl_key_rotation_prior01"
 def _seed_prior(rig: LifecycleRig, *, status: str = "approved", version: str = "3") -> None:
     """The approved prior tree of the fork tests, as the rig graph holds it.
 
-    Both children still carry the SOURCE's own `"approved"` status, proving AC-BI-007 (forked
-    children come out `"draft"`, never copied from the source).
+    Both children still carry the SOURCE's own `"approved"` status, proving forked
+    children come out `"draft"`, never copied from the source.
     """
     rig.seed_policy(
         _PRIOR_POLICY_ID,
@@ -2378,7 +2378,7 @@ def _seed_prior(rig: LifecycleRig, *, status: str = "approved", version: str = "
 def test_supersede_fork_mints_new_policy_with_successor_version(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-005's version arithmetic, string-typed: prior `"5"` -> new `"6"`
+    """Version arithmetic, string-typed: prior `"5"` -> new `"6"`
     (a non-`"1"`-adjacent value, so this cannot pass by coincidence with the
     ordinary-draft default).
     """
@@ -2441,7 +2441,7 @@ def test_supersede_fork_forks_full_standard_control_content_not_just_titles(
 def test_supersede_fork_forked_children_are_draft_not_copied_from_approved_source(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-007: governance status is re-derived as `"draft"`, never copied
+    """Governance status is re-derived as `"draft"`, never copied
     from the source Standard/Control's own `"approved"` status.
     """
     _seed_prior(lifecycle_rig)
@@ -2461,7 +2461,7 @@ def test_supersede_fork_forked_children_are_draft_not_copied_from_approved_sourc
 
 
 def test_supersede_fork_never_writes_to_prior_tree_nodes(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-006: the superseded Policy's own content, and its original
+    """The superseded Policy's own content, and its original
     Standard/Control children, are never mutated by the fork -- the prior tree's nodes are
     exactly as they were seeded, and the only prior id in the new group is the
     `SUPERSEDED_BY` edge's own SOURCE endpoint.
@@ -2489,7 +2489,7 @@ def test_supersede_fork_never_writes_to_prior_tree_nodes(lifecycle_rig: Lifecycl
 
 
 def test_supersede_missing_prior_raises_not_found(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-011: a nonexistent `supersedes_policy_id` is rejected before any
+    """A nonexistent `supersedes_policy_id` is rejected before any
     write or audit event.
     """
     with pytest.raises(PolicyNotFoundError):
@@ -2507,7 +2507,7 @@ def test_supersede_missing_prior_raises_not_found(lifecycle_rig: LifecycleRig) -
 
 
 def test_supersede_non_approved_prior_raises_named_error(lifecycle_rig: LifecycleRig) -> None:
-    """AC-BI-011: an existing-but-not-`approved` prior is rejected before any
+    """An existing-but-not-`approved` prior is rejected before any
     write or audit event, no fork attempted.
     """
     _seed_prior(lifecycle_rig, status="draft")
@@ -2532,7 +2532,7 @@ def test_supersede_non_approved_prior_raises_named_error(lifecycle_rig: Lifecycl
 def test_supersede_records_audit_event_with_supersedes_policy_id(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """AC-BI-014: the fork's `applied` `policy.create_draft` audit event's
+    """The fork's `applied` `policy.create_draft` audit event's
     own `details.supersedes_policy_id` is asserted directly -- not just that
     no exception was raised.
     """
@@ -2571,7 +2571,7 @@ def test_ordinary_create_policy_draft_still_has_null_supersedes_policy_id_in_aud
     assert lifecycle_rig.audit.rows[0].details.get("supersedes_policy_id") is None
 
 
-# --- Issue #185: fresh drafts claim Capabilities via `capability_ids` --------
+# --- Fresh drafts claim Capabilities via `capability_ids` --------
 
 
 def test_fresh_draft_with_capability_ids_issues_guarded_claim_and_audits_ids(
@@ -2715,7 +2715,7 @@ def test_lost_claim_race_records_failed_audit_with_empty_ids_and_writes_no_child
 def test_fork_ignores_capability_ids_reads_no_governors_and_writes_no_governed_by(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """D-2: `capability_ids` is silently ignored when `supersedes_policy_id` is set (AC-BI-004)."""
+    """`capability_ids` is silently ignored when `supersedes_policy_id` is set."""
     _seed_prior(lifecycle_rig)
 
     create_policy_draft(
@@ -2735,7 +2735,7 @@ def test_fork_ignores_capability_ids_reads_no_governors_and_writes_no_governed_b
 def test_every_capability_claim_audit_payload_validates_against_the_registered_model(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """Rejected, applied and failed `policy.create_draft` payloads for #185 are valid details.
+    """Rejected, applied and failed `policy.create_draft` payloads are valid details.
 
     A `failed` event for a lost race carries a `reason_code` (rejected AND
     failed may carry one) and `capability_ids=()`.

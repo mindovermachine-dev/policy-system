@@ -1,19 +1,19 @@
 """Live proof that `POST /ingestions` imports the engineering-practices tree as caller-owned drafts.
 
-`@pytest.mark.falkordb_live @pytest.mark.llm_live` (issue #227): the real `ENGPRAC-1.0` seed is
+`@pytest.mark.falkordb_live @pytest.mark.llm_live`: the real `ENGPRAC-1.0` seed is
 POSTed through the real route, real `internal_ingestion` and real `merge` stages against real
 FalkorDB (the merge's Capability dedup embeds, hence the LLM credentials), into a **disposable**
 single-tenant graph -- never the shared `policy_system` graph. Proves, against real
 infrastructure:
 
-1. the response is 200 and every stage succeeded (AC-BI-003);
+1. the response is 200 and every stage succeeded;
 2. the disposable graph holds 11 Policies, 21 Standards and 39 Controls, all `draft`, every
    Policy owned by the caller's `(sub, iss)`, with the 12/21/39/11/24 governance and
-   classification edges (AC-BI-002/004);
+   classification edges;
 3. restoring the same curated instrument into a second scratch graph produces the same
-   Policy/Standard/Control ids and edge counts (AC-BI-005);
+   Policy/Standard/Control ids and edge counts;
 4. after one Policy is approved through the real lifecycle service by a different manager, a
-   second ingest leaves that approved tree, its owner and every count untouched (AC-BI-006).
+   second ingest leaves that approved tree, its owner and every count untouched.
 
 Unverified in the development environment that wrote it (no FalkorDB with the graph module was
 available): run it with `-m falkordb_live` against a real instance.
@@ -148,7 +148,7 @@ def ingest_env(
     facade.configure(log_path=tmp_path / "ingest.jsonl")
     app = create_app(config)
     app.dependency_overrides[get_principal] = lambda: Principal(sub=_OWNER[0], iss=_OWNER[1])
-    # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
+    # Every pipeline stage writes through the Graph Write Gateway. `TestClient` is not
     # entered, so the app lifespan never installs it: install the real one the way a deployed
     # service does. Not run in the implementation sandbox.
     gateway = build_default_graph_write_gateway(config)
@@ -205,7 +205,7 @@ def _restore_into(
 def test_ingest_imports_the_tree_as_caller_owned_drafts(
     ingest_env: tuple[TestClient, FalkorDB, str, ServiceConfig],
 ) -> None:
-    """AC-BI-002/003/004: 200, all stages succeeded, 11/21/39 drafts owned by the caller."""
+    """200, all stages succeeded, 11/21/39 drafts owned by the caller."""
     client, db, graph_name, _config = ingest_env
 
     response = client.post("/ingestions", json={"source": "internal", "content": _SEED})
@@ -236,7 +236,7 @@ def test_ingest_imports_the_tree_as_caller_owned_drafts(
 def test_ingest_and_restore_produce_the_same_governance_tree(
     ingest_env: tuple[TestClient, FalkorDB, str, ServiceConfig], make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-005: one shared write function, so ingest and restore agree node for node."""
+    """One shared write function, so ingest and restore agree node for node."""
     client, db, graph_name, config = ingest_env
     restored_graph_name = f"policy_system_gh227_restore_{uuid.uuid4().hex[:8]}"
     emitter, _log_path = make_emitter()
@@ -258,7 +258,7 @@ def test_ingest_and_restore_produce_the_same_governance_tree(
 def test_reingest_after_approval_leaves_the_approved_tree_untouched(
     ingest_env: tuple[TestClient, FalkorDB, str, ServiceConfig],
 ) -> None:
-    """AC-BI-006: a second ingest changes neither the approved tree, its owner, nor any count."""
+    """A second ingest changes neither the approved tree, its owner, nor any count."""
     client, db, graph_name, config = ingest_env
     assert (
         client.post("/ingestions", json={"source": "internal", "content": _SEED}).status_code == 200

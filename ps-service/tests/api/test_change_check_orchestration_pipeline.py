@@ -1,4 +1,4 @@
-"""The `check_regulations` sweep runs the full UC-4 pipeline, succession last (issue #201).
+"""The `check_regulations` sweep runs the full pipeline, succession last.
 
 Entry is the real `run_change_check_sweep`; the code under test includes the REAL
 `trigger_reingestion` / `will_reingest` / `classify_reingestion` / `succession`. The boundaries
@@ -180,7 +180,7 @@ def test_the_audit_pair_brackets_the_run_and_shares_its_run_id_with_the_stages(
 def test_every_succession_group_carries_the_opening_row_id(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-010: version, stage markers, link, supersede and clear are all anchored to the
+    """Version, stage markers, link, supersede and clear are all anchored to the
     sweep's `ingestion_run.submit` row.
     """
     emitter, _ = make_emitter()
@@ -236,7 +236,7 @@ def test_sweep_finalizes_a_crashed_succession_without_stages_and_audits_it_as_a_
 ) -> None:
     """The native link landed (edge + `linked` marker) but `policy_system` was never written.
 
-    The `finalize` runs no stage but writes the succession, so (issue #213) it records the
+    The `finalize` runs no stage but writes the succession, so it records the
     `ingestion_run.submit` row lazily, just before its first group, and the matching
     `.complete` row; both groups carry the submit row's id.
     """
@@ -285,7 +285,7 @@ def test_a_link_only_run_whose_audit_row_cannot_be_written_aborts_the_sweep_and_
 def test_a_pending_marker_group_fails_the_run_and_the_next_sweep_catches_up_before_it_reads(
     succession_rig: SuccessionRig, make_emitter: MakeEmitter
 ) -> None:
-    """AC-BI-009: the stage marker is committed to the log but not applied (FalkorDB went away).
+    """The stage marker is committed to the log but not applied (FalkorDB went away).
 
     The first sweep fails closed (`graph_unavailable`); once FalkorDB is back, the next sweep
     applies the pending entries BEFORE it classifies the graph, so it resumes after the marked

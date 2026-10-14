@@ -1,4 +1,4 @@
-"""Increment 21 (#51a) -- the live external ingestion capstone.
+"""The live external ingestion capstone.
 
 ``@pytest.mark.falkordb_live @pytest.mark.llm_live``: drives the real
 ``POST /ingestions`` route with a ``source: "catalog"`` request for the CRA
@@ -7,7 +7,7 @@ FalkorDB and real Azure OpenAI, and asserts the merged compliance spine
 lands in a **disposable** single-tenant graph
 (``policy_system_api_capstone_test``) -- never the real, shared
 ``policy_system`` graph, whose node count is read before and after and
-asserted unchanged (AC-BI-005).
+asserted unchanged.
 
 **Bounded, not exhaustive** (cost/time mitigation, mirroring
 ``tests/domain_mapper/test_live_capstone.py``): the Domain Mapping Adapter is
@@ -18,21 +18,21 @@ This is injected purely through ``app.dependency_overrides`` +
 production-code change.
 
 All fixtures/helpers are local to this module (``tests/api/conftest.py`` is
-owned by a concurrent increment). The autouse ``_isolate_logging`` fixture
+left untouched). The autouse ``_isolate_logging`` fixture
 ``delenv``s ``PS_LLMINTERFACE_MODEL``/``_EMBED_MODEL`` for every test, so both
 are captured at import time (before collection) and re-set via ``monkeypatch``
 before the app's build-time ``load_config()`` runs -- otherwise the route hits
-``IngestionConfigIncompleteError`` (503) and never runs the pipeline (M3).
+``IngestionConfigIncompleteError`` (503) and never runs the pipeline.
 
-**AC-BI-003 coverage.** The first half -- stages auto-chain, each consuming the
+**Coverage.** The first half -- stages auto-chain, each consuming the
 prior stage's output with no manual step -- is proven end to end by
 ``test_catalog_celex_ingestion_populates_merged_spine`` (the merged spine only
 exists if all four stages ran in sequence). The second half -- re-ingesting the same
-CELEX -- is no longer a re-extraction that must converge: since issue #193 the identity
+CELEX -- is not a re-extraction that must converge: the identity
 check refuses a CELEX already in the graph with ``409 celex_already_ingested`` before any
 stage runs, so the second POST changes nothing. That makes the graph snapshot after the
-second POST exactly equal to the first, deterministically (the old LLM-drift ``xfail``,
-issue #34, can no longer be reached through this route).
+second POST exactly equal to the first, deterministically (an LLM-drift ``xfail``
+cannot be reached through this route).
 """
 
 from __future__ import annotations
@@ -215,7 +215,7 @@ def capstone(
     install_compliance_officer_grant(monkeypatch, granted=True)  # the catalog route is role-gated
     app = create_app(config)
     app.dependency_overrides[provide_pipeline_dependencies] = _limited_dependencies
-    # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
+    # Every pipeline stage writes through the Graph Write Gateway. `TestClient` is not
     # entered, so the app lifespan never installs it: install the real one (PS state Postgres and
     # FalkorDB) the way a deployed service does. Not run in the implementation sandbox.
     install_graph_write_gateway(build_default_graph_write_gateway(config))
@@ -257,7 +257,7 @@ def capstone(
 
 
 def test_catalog_celex_ingestion_populates_merged_spine(capstone: _CapstoneData) -> None:
-    """AC-BI-002: the catalog POST runs all four stages and writes the spine to the merged graph."""
+    """The catalog POST runs all four stages and writes the spine to the merged graph."""
     assert capstone.response_1_status == 200
     assert capstone.response_1_body["regulatory_instrument_id"] == _CRA_REGULATORY_INSTRUMENT_ID
     assert capstone.response_1_body["source"] == "catalog"
@@ -293,9 +293,9 @@ def test_catalog_celex_ingestion_populates_merged_spine(capstone: _CapstoneData)
 
 
 def test_second_catalog_ingestion_is_refused_and_changes_nothing(capstone: _CapstoneData) -> None:
-    """AC-BI-003 (re-ingestion half): the same CELEX is refused 409 and the graph is untouched.
+    """Re-ingestion half: the same CELEX is refused 409 and the graph is untouched.
 
-    The identity check (issue #193) rejects a CELEX already in the graph under any
+    The identity check rejects a CELEX already in the graph under any
     ``short_name`` before the Domain Mapper or Company Merge run, so no node or edge of any
     label changes -- an exact snapshot comparison, not a drift-tolerant one.
     """
@@ -306,5 +306,5 @@ def test_second_catalog_ingestion_is_refused_and_changes_nothing(capstone: _Caps
 
 
 def test_real_policy_system_graph_node_count_unchanged(capstone: _CapstoneData) -> None:
-    """AC-BI-005: the shared ``policy_system`` graph is provably untouched by the whole run."""
+    """The shared ``policy_system`` graph is provably untouched by the whole run."""
     assert capstone.real_policy_system_after == capstone.real_policy_system_before

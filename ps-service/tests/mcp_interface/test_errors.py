@@ -1,4 +1,4 @@
-"""Tests for `ps_service.mcp_interface.errors` (PLAN_REVIEWED.md §5, Batch 1).
+"""Tests for `ps_service.mcp_interface.errors`.
 
 Each error type: subclasses `Exception`, round-trips its message, and is
 importable both from its own module and re-exported from the package

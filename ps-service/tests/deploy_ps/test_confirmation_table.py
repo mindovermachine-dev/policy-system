@@ -1,11 +1,9 @@
-"""Naming + confirmation table + `[Y/n]` prompt for `scripts/deploy-ps-prod.sh` (contributes
-AC-BI-019; PLAN.md §5/S5).
+"""Naming + confirmation table + `[Y/n]` prompt for `scripts/deploy-ps-prod.sh`.
 
-Region *selection* (a later slice, S8) hasn't run yet at this point in the flow, so the table's
+Region *selection* hasn't run yet at this point in the flow, so the table's
 region row shows the configured candidate list in order, not a single resolved region -- same
 convention as `deploy-llm.sh`'s own table. Unlike `deploy-llm.sh`, this table also shows the AKS
-cluster name and DNS label, both new S5 naming-lib additions (`aks_cluster_name`/`dns_label`,
-PLAN.md §0.4).
+cluster name and DNS label, both naming-lib additions (`aks_cluster_name`/`dns_label`).
 
 Every test here writes a config with `TLS_CONTACT_EMAIL` already filled in, so the only
 interactive `read` the script performs is the `[Y/n]` confirmation prompt itself --
@@ -40,7 +38,7 @@ AUTHZ_OWNER_EMAIL="owner@example.test"
 
 
 def _hash8(subscription_id: str) -> str:
-    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars (PLAN.md §0.4)."""
+    """Independently reproduce `sha256(subscription-id)`'s first 8 hex chars."""
     return hashlib.sha256(subscription_id.encode("utf-8")).hexdigest()[:8]
 
 
@@ -116,7 +114,7 @@ def test_yes_flag_prints_table_but_skips_reading_stdin(
 
 def test_deploy_llm_common_lib_is_not_executable() -> None:
     """`scripts/lib/deploy-llm-common.sh` is sourced only, mirroring `scripts/deploy-llm.sh`'s
-    own lib/non-lib distinction (PLAN.md §4) -- unaffected by deploy-ps-prod.sh's new additions.
+    own lib/non-lib distinction -- unaffected by deploy-ps-prod.sh's new additions.
     """
     import os
     from pathlib import Path

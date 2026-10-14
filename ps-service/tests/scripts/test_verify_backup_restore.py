@@ -1,4 +1,4 @@
-"""Tests for `scripts/verify-backup-restore.sh backup` (issue #216, slice V1).
+"""Tests for `scripts/verify-backup-restore.sh backup`.
 
 The script runs for real against a fake `kubectl` on PATH (the external CLI is the process
 boundary). The fake records its argv, answers `psql` count queries from a counter file that

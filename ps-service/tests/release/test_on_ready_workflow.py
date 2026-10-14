@@ -1,7 +1,7 @@
-"""Static and executed assertions on `.github/workflows/on_ready.yml`'s header lint (AC-BI-024).
+"""Static and executed assertions on `.github/workflows/on_ready.yml`'s header lint.
 
 Structural assertions read the parsed job graph (`needs:`, `permissions:`); wiring assertions
-use `shlex` token vectors of the `run:` body (CHANGES X-15); one test executes the body under
+use `shlex` token vectors of the `run:` body; one test executes the body under
 bash against the fixture repository so the workflow step and the script are proven together.
 GitHub Actions cannot run locally, so the job's *scheduling* is covered statically only.
 """

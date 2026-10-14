@@ -1,17 +1,15 @@
-"""Tests for the registered `get-catalog-listing` MCP tool (issue #127, Group 1).
+"""Tests for the registered `get-catalog-listing` MCP tool.
 
-Slice 1.1 covers the happy path: `get_catalog_listing` (zero parameters --
-AC-BI-005's validation surface does not apply, mirrors `check_regulations`/
+The happy path: `get_catalog_listing` (zero parameters --
+there is no validation surface; mirrors `check_regulations`/
 `near_misses_list`) delegates in-process to `resolve_effective_source` +
-`fetch_catalog` (D-CATALOG-NO-ORCH-LAYER, a byte-for-byte mirror of
+`fetch_catalog` (a byte-for-byte mirror of
 `list_curated_catalog`'s own body, `routes.py:224-240`), via the shared
-`_run_mcp_action` audit wrapper (D-AUDIT-WRAPPER), returning a
+`_run_mcp_action` audit wrapper, returning a
 `CuratedCatalogResponse.model_dump()`.
 
-Slice 1.2 (added below in a follow-up edit) wires `CuratedSourceFetchError`
-(D-CATALOG-ERROR) and the residual unexpected-exception safety net.
-
-Slice 1.3 (added below in a follow-up edit) proves principal resolution
+Failure states wire `CuratedSourceFetchError` and the residual
+unexpected-exception safety net; principal resolution is proven
 under a real verified bearer token.
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
@@ -20,7 +18,7 @@ convention. The fake `CuratedCatalogDependencies` bundle
 (`tests/api/_fakes.py::build_fake_curated_catalog_dependencies`,
 `FakeCuratedSourceTransport`) is the existing fixture the REST-side
 `GET /catalog` test suite already uses -- reused here unchanged, not
-reinvented, per PLAN.md's own instruction.
+reinvented.
 
 `pytest-asyncio` is not installed; this file drives the tool with a bare
 `asyncio.run(server.call_tool(...))`, exactly like `test_cypher_tool.py`/
@@ -110,20 +108,20 @@ def _call_get_catalog_listing() -> CallToolResult:
     return result
 
 
-# --- Slice 1.1: happy path ---------------------------------------------------
+# --- happy path ---------------------------------------------------
 
 
 def test_happy_path_returns_full_listing_with_principal_logged(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """AC-BI-002/003: the full curated catalog is returned field-for-field,
+    """The full curated catalog is returned field-for-field,
     including an internal entry with `jurisdiction=None`, with no local
     filesystem path read anywhere in the call chain -- the fake HTTP
     transport is the only I/O seam exercised (it takes no `Path` argument at
     all, so no `ps-cli`-style local catalog repo read is possible in this
     path). Also asserts the `mcp_interface` started/succeeded log pair
-    carries the resolved principal (AC-BI-007, catalog half -- partial;
-    Slice 1.3 proves the failed-call case and the real-bearer-token case).
+    carries the resolved principal (the failed-call case and the real-bearer-token case are
+    proven separately below).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -166,7 +164,7 @@ def test_happy_path_returns_full_listing_with_principal_logged(
         assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
 
 
-# --- Slice 1.2: failure-state completeness -----------------------------------
+# --- failure-state completeness -----------------------------------
 
 
 def test_source_unreachable_returns_named_error_naming_the_source(
@@ -198,7 +196,7 @@ def test_source_unreachable_returns_named_error_naming_the_source(
 def test_get_catalog_listing_returns_error_string_when_override_read_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-010: an override-read failure is a named `error:` string with no connection
+    """An override-read failure is a named `error:` string with no connection
     detail -- the default source is never fetched in the override's place.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -267,7 +265,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     assert failed_line.get("exception_type") == "ValueError"
 
 
-# --- Slice 1.3 auth infra: mirrors test_mcp_auth.py's/
+# --- auth infra: mirrors test_mcp_auth.py's/
 # test_ingest_regulation_tool.py's own pattern exactly ------------------------
 
 
@@ -287,7 +285,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
 
     Mirrors `test_mcp_auth.py::_authenticated_test_client`/
     `test_ingest_regulation_tool.py::_authenticated_test_client` exactly --
-    this module's Slice 1.3 tests drive `get-catalog-listing` (not `cypher`)
+    this module's real-token tests drive `get-catalog-listing` (not `cypher`)
     through the same genuinely auth-enforcing mounted app, never the
     bypass-shaped one every other test in this module builds via a bare
     `server.call_tool`.
@@ -379,7 +377,7 @@ def _call_get_catalog_listing_over_http(client: TestClient, *, token: str) -> st
 def test_real_verified_token_principal_threads_through_to_audit_log(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
-    """AC-BI-001/007: under a real, verified bearer token -- driven through
+    """Under a real, verified bearer token -- driven through
     the actual mounted Streamable HTTP transport, mirroring
     `test_mcp_auth.py`'s own pattern, never a bare in-process
     `server.call_tool` -- the token's `sub` claim (never
@@ -422,12 +420,12 @@ def test_real_verified_token_principal_threads_through_to_audit_log(
 def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """AC-BI-001: `_resolve_principal`'s existing, unchanged fallback
+    """`_resolve_principal`'s existing, unchanged fallback
     contract -- with no bearer token presented at all (a bare in-process
-    `server.call_tool`, like every Slice 1.1/1.2 test above) and the
+    `server.call_tool`, like the happy-path and failure-state tests above) and the
     local-test bypass active, `LOCAL_TEST_PRINCIPAL_ID` still reaches the
-    `mcp_interface` log entries' `principal` (already proven by Slice 1.1's
-    own test; re-proven here as this slice's own dedicated auth/audit
+    `mcp_interface` log entries' `principal` (already proven by the
+    happy-path test; re-proven here as a dedicated auth/audit
     completeness check, mirroring `test_ingest_regulation_tool.py`'s
     identically-purposed test).
     """
@@ -455,7 +453,7 @@ def test_local_test_bypass_principal_still_threads_through_when_no_token_is_pres
 def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principal(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
-    """AC-BI-007: a FAILED call -- reusing Slice 1.2's source-unreachable
+    """A FAILED call -- reusing the source-unreachable
     `CuratedSourceFetchError` branch -- still carries the resolved
     real-token principal on its `outcome="failed"` `mcp_interface` log
     entry, not only the succeeded-call case proven above.

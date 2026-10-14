@@ -1,20 +1,16 @@
-"""HTTP tests for `POST /change-checks` (issue #73, PLAN.md §4 Slices 1-2).
+"""HTTP tests for `POST /change-checks`.
 
-Slice 1's vertical-stub proof (`create_change_check` depended only on
-`provide_run_id`) used the shared bare `client` fixture directly, since no
-dependency needed overriding yet. Slice 2 wires `create_change_check` to a
-real `ChangeCheckDependencies` (`config`/`dependencies`, via
+`create_change_check` takes a real `ChangeCheckDependencies` (`config`/`dependencies`, via
 `provide_change_check_dependencies`) exactly like `POST /ingestions`/
-`POST /restorations` -- so every test here now builds its own `TestClient`
+`POST /restorations` -- so every test here builds its own `TestClient`
 with `app.dependency_overrides[provide_change_check_dependencies]` set to a
 fake bundle (mirrors `test_ingestions_catalog.py`'s/
 `test_routes_restorations.py`'s own established pattern), rather than the
 bare `client` fixture, which would otherwise reach the real, unmocked
 `build_default_change_check_dependencies()` and attempt a live FalkorDB
-call. AC-BI-001's "no auth dependency" is unaffected by this -- the route
-still takes no auth dependency of any kind.
+call.
 
-Slice 6 (D8) wires `run_change_check_sweep` to unconditionally emit
+`run_change_check_sweep` unconditionally emits
 `change_check_sweep`/`change_check_instrument` log entries through the
 process-default emitter, which none of these fast HTTP tests `configure()`s
 -- so every test *except* the one dedicated run-id proof below explicitly
@@ -83,21 +79,21 @@ def _stub_run_log(  # pyright: ignore[reportUnusedFunction]  # requested via use
     """Stub the Logging boundary so `run_change_check_sweep` needs no `configure()`d facade.
 
     Mirrors `test_ingestions_catalog.py`'s own `_stub_run_log` fixture exactly,
-    for the identical reason: `_emit_sweep`/`_emit_instrument` (D8) emit through
+    for the identical reason: `_emit_sweep`/`_emit_instrument` emit through
     the process-wide default emitter, which these fast HTTP tests deliberately
     do not `configure()`. Not autouse (unlike the ingestion precedent) because
     one test in this file -- the dedicated run-id proof -- needs the real
     facade instead; every other test requests this explicitly via
     `@pytest.mark.usefixtures("_stub_run_log")`.
     """
-    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
+    # detroit-exception: process-wide atexit logging facade, not a business fake
     monkeypatch.setattr("ps_service.api.change_check_orchestration.emit_log_entry", _noop_emit)
 
 
 def _client_with_fake(
     fake: FakeChangeCheckDependencies, *, audit_store: InMemoryAuditStore | None = None
 ) -> TestClient:
-    """A `TestClient` over `fake`; audit rows (issue #195) go to memory, never Postgres."""
+    """A `TestClient` over `fake`; audit rows go to memory, never Postgres."""
     app = create_app(_APP_CONFIG)
     app.dependency_overrides[provide_change_check_dependencies] = lambda: fake.dependencies
     store = audit_store if audit_store is not None else InMemoryAuditStore()
@@ -109,10 +105,10 @@ def _client_with_fake(
 def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+    """Every test below drives a caller holding `ComplianceOfficer` by default.
 
     `POST /change-checks` is now gated behind `require_access_role`, which has
-    no local-test-bypass carve-out (PLAN.md §3.2). The dedicated denial-proof
+    no local-test-bypass carve-out. The dedicated denial-proof
     tests below re-monkeypatch this away for their own scenario (the same
     `monkeypatch` fixture instance, so the later call simply wins).
     """
@@ -122,8 +118,7 @@ def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytes
 @pytest.mark.usefixtures("_stub_run_log")
 def test_post_change_checks_returns_200_with_run_id_and_empty_instruments() -> None:
     """A bare `POST /change-checks` (no body), no tracked instruments -> 200 with a
-    non-empty run id and an empty `instruments` list (AC-BI-001 trivial, AC-BI-008
-    trivial).
+    non-empty run id and an empty `instruments` list (trivially).
     """
     client = _client_with_fake(build_fake_change_check_dependencies(tracked=()))
 
@@ -137,9 +132,8 @@ def test_post_change_checks_returns_200_with_run_id_and_empty_instruments() -> N
 
 @pytest.mark.usefixtures("_stub_run_log")
 def test_post_change_checks_succeeds_with_compliance_officer_grant() -> None:
-    """Issue #145: renamed from the pre-#145 `..._has_no_auth_dependency` -- the route is
-    now gated behind `require_access_role(AccessRole.COMPLIANCE_OFFICER)`, so "no auth
-    header of any kind set" alone no longer implies success; it succeeds here because
+    """The route is gated behind `require_access_role(AccessRole.COMPLIANCE_OFFICER)`,
+    so "no auth header of any kind set" alone does not imply success; it succeeds here because
     the file's own autouse `_grant_compliance_officer` fixture presents a principal
     holding the role, not because no gate exists.
     """
@@ -154,8 +148,7 @@ def test_post_change_checks_succeeds_with_compliance_officer_grant() -> None:
 def test_post_change_checks_reports_poll_stage_buckets_via_dependency_override() -> None:
     """`app.dependency_overrides[provide_change_check_dependencies]` (mirrors
     `test_routes_restorations.py:104`'s exact override pattern): the three
-    poll-stage buckets appear correctly in the JSON response (issue #73,
-    PLAN.md §4 Slice 2).
+    poll-stage buckets appear correctly in the JSON response.
     """
     tracked = (
         TrackedInstrumentNode(
@@ -195,7 +188,7 @@ def test_post_change_checks_reports_poll_stage_buckets_via_dependency_override()
 @pytest.mark.usefixtures("_stub_run_log")
 def test_post_change_checks_reingests_a_detected_amendment_via_dependency_override() -> None:
     """A detected amendment, resolved through a curated catalog entry, is re-ingested
-    end to end through a real `TestClient` round trip (issue #73, PLAN.md §4 Slice 3):
+    end to end through a real `TestClient` round trip:
     the response's `instruments[0]` reports `amendment_reingested` with the fresh
     re-ingest's `run_id` and a `detail` naming the outcome.
     """
@@ -246,8 +239,7 @@ def test_post_change_checks_reingests_a_detected_amendment_via_dependency_overri
 
 
 class NationalTranspositionNotSupportedError(Exception):
-    """Locally-defined test double proving D10's name-matching (issue #73,
-    PLAN.md §4 Slice 4) -- not an import of the real
+    """Locally-defined test double proving name-matching -- not an import of the real
     `ps_service.change_monitor.errors` type.
     """
 
@@ -256,7 +248,7 @@ class NationalTranspositionNotSupportedError(Exception):
 def test_post_change_checks_reports_skipped_via_dependency_override() -> None:
     """`trigger_reingestion` raising an exception literally named
     `NationalTranspositionNotSupportedError` -> `skipped`, through a real
-    `TestClient` round trip (issue #73, PLAN.md §4 Slice 4).
+    `TestClient` round trip.
     """
     tracked = (
         TrackedInstrumentNode(
@@ -302,17 +294,16 @@ def test_post_change_checks_reports_skipped_via_dependency_override() -> None:
 def test_post_change_checks_response_run_id_matches_the_provide_run_id_binding(
     configured_logging: Path, read_lines: ReadLines
 ) -> None:
-    """AC-BI-008 (full, D8): the response `run_id` is the one actually bound
+    """The response `run_id` is the one actually bound
     on the request -- `create_change_check` passes no explicit `emitter`, so
     `run_change_check_sweep`'s `_emit_sweep`/`_emit_instrument` entries flow
     through the process-default emitter `configured_logging` installs (the
     same precedent as `test_run_context.py`'s
     `test_log_lines_emitted_during_a_request_carry_the_returned_run_id`).
-    Combined with Slice 2's already-passing ps-cli-level
+    Combined with the ps-cli-level
     `test_handle_check_prints_run_id_first_then_one_line_per_instrument`
-    (run_id printed first), AC-BI-008's three clauses ("minted," "returned
-    in the REST response," "printed by ps-cli") each have a passing,
-    executed test.
+    (run_id printed first), each of the three clauses ("minted," "returned
+    in the REST response," "printed by ps-cli") has an executed test.
     """
     client = _client_with_fake(build_fake_change_check_dependencies(tracked=()))
 
@@ -331,7 +322,7 @@ def test_post_change_checks_response_run_id_matches_the_provide_run_id_binding(
 
 
 def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Issue #145, AC-BI-003/006: no verified principal -- 403, sweep never starts."""
+    """No verified principal -- 403, sweep never starts."""
     install_no_principal(monkeypatch)
     fake = build_fake_change_check_dependencies(tracked=())
     client = _client_with_fake(fake)
@@ -363,7 +354,7 @@ def test_authenticated_user_without_compliance_officer_is_denied_with_403(
 def test_system_admin_without_explicit_grant_is_denied_with_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    """`SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
     install_compliance_officer_grant(
         monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
     )
@@ -380,7 +371,7 @@ def test_system_admin_without_explicit_grant_is_denied_with_403(
 def test_system_owner_without_explicit_grant_is_denied_with_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
+    """`SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
     install_compliance_officer_grant(
         monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_OWNER})
     )
@@ -430,7 +421,7 @@ def _amended_fake() -> FakeChangeCheckDependencies:
 
 @pytest.mark.usefixtures("_stub_run_log")
 def test_post_change_checks_audits_the_principal() -> None:
-    """Issue #195 (AC-BI-001/007): the pair's actor is the verified principal, not the bypass."""
+    """The pair's actor is the verified principal, not the bypass."""
     store = InMemoryAuditStore()
     client = _client_with_fake(_amended_fake(), audit_store=store)
     principal = compliance_officer_principal()
@@ -451,7 +442,7 @@ def test_post_change_checks_audits_the_principal() -> None:
 
 @pytest.mark.usefixtures("_stub_run_log")
 def test_post_change_checks_returns_503_when_audit_unavailable() -> None:
-    """AC-BI-011: an unwritable opening row aborts the sweep with a 503; nothing re-ingests."""
+    """An unwritable opening row aborts the sweep with a 503; nothing re-ingests."""
     store = InMemoryAuditStore(
         fail_on_outcome={"applied": AuditPostgresUnavailableError("db down")}
     )

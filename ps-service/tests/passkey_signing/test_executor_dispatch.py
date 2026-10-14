@@ -1,4 +1,4 @@
-"""Approval-executor registry and `sign/verify` dispatch (issue #190, slice 10 sub-step c).
+"""Approval-executor registry and `sign/verify` dispatch .
 
 A signed approval runs the executor registered for its `tool_name`; the outcome the
 executor returns is stored on the row. An unregistered `tool_name`, or an executor that

@@ -1,6 +1,6 @@
 """Tests for `ps_service.policy_lifecycle.graph_writer`'s read functions (`find_*`, `read_*`).
 
-Every write is a Graph Write Gateway group since issue #211 and is tested over the gateway rig
+Every write is a Graph Write Gateway group now and is tested over the gateway rig
 (`test_backfill_gateway.py`, `test_draft_edit_gateway.py`, `test_create_gateway.py`,
 `test_claim_create_gateway.py`, `test_cascade_gateway.py`, `test_fork_repoint_gateway.py`). The
 fakes here are shallow call recorders matched by a distinguishing substring.
@@ -30,15 +30,14 @@ class _RecordedCall:
     params: dict[str, object] | None
 
 
-# --- `find_approved_prior` (issue #134, S24) --------------------------------
+# --- `find_approved_prior` --------------------------------
 #
-# No production code anywhere in issue #134 ever CREATES a `SUPERSEDED_BY`
-# edge (that is #136's own fork tool, `supersedes_policy_id`, explicitly out
-# of this issue's scope) -- so these tests seed the edge directly via a
+# No production code anywhere in this module's scope ever CREATES a `SUPERSEDED_BY`
+# edge (the fork tool's `supersedes_policy_id` does) -- so these tests seed the edge directly via a
 # test-only Cypher `MERGE` against this file's own fake `GraphHandle`, the
-# same way a real fixture would have to until #136 ships its own writer.
-# A future #136 implementer: this is why no `create_superseded_by_edge`-shaped
-# helper exists in `graph_writer.py` yet.
+# same way a real fixture would have to without a dedicated writer.
+# This is why no `create_superseded_by_edge`-shaped helper exists in
+# `graph_writer.py`.
 
 
 class _SupersededByFakeGraph:
@@ -109,7 +108,7 @@ def test_no_superseded_by_edge_returns_none() -> None:
     assert find_approved_prior(graph, "pol-new") is None
 
 
-# --- `find_standard_with_parent` (issue #136, Slice 3) ---
+# --- `find_standard_with_parent` ---
 
 
 @dataclass
@@ -157,7 +156,7 @@ def test_find_standard_with_parent_returns_none_when_no_match() -> None:
     assert find_standard_with_parent(graph, "std-missing") is None
 
 
-# --- `find_control_with_parent` (issue #136, Slice 5) ---
+# --- `find_control_with_parent` ---
 
 
 class _FindControlWithParentFakeGraph:
@@ -212,7 +211,7 @@ def test_find_control_with_parent_returns_none_when_no_match() -> None:
 
 
 # --- `read_policy_tree_for_fork` / `create_policy_draft`'s `version`/
-# `supersedes_policy_id` params (issue #136, Slice 6) -----------------------
+# `supersedes_policy_id` params -----------------------
 
 
 class _ReadPolicyTreeForForkFakeGraph:
@@ -282,7 +281,7 @@ def test_read_policy_tree_for_fork_returns_empty_tuple_for_zero_standards() -> N
     assert read_policy_tree_for_fork(graph, "pol-1") == ()
 
 
-# --- `read_capability_governors` (issue #185; the claim itself is gateway-tested in
+# --- `read_capability_governors` (the claim itself is gateway-tested in
 # `test_claim_create_gateway.py`) --------
 
 
@@ -324,7 +323,7 @@ def test_read_capability_governors_issues_a_read_without_write_keywords() -> Non
     assert not any(kw in query for kw in ("MERGE", "CREATE", "SET ", "DELETE"))
 
 
-# --- fork governance read + atomic approve re-point (issue #185) ------------
+# --- fork governance read + atomic approve re-point ------------
 
 
 def test_read_fork_governance_is_none_without_an_inbound_superseded_by_edge() -> None:

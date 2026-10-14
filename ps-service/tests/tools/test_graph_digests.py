@@ -1,4 +1,4 @@
-"""Tests for `tools/backup-restore-verify/graph_digests.py` (issue #216, slice V3).
+"""Tests for `tools/backup-restore-verify/graph_digests.py`.
 
 The tool is loaded by file path (`tools/` is not a package). Its only seam is the FalkorDB
 driver connection (`open_read_only_database(connect=...)`): the fake driver below answers the

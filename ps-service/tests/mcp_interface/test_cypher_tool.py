@@ -1,15 +1,15 @@
 """Tests for the registered `cypher` MCP tool driven through
-`server.call_tool` (PLAN_REVIEWED.md §6, Batch 4).
+`server.call_tool`.
 
-Covers AC-001/002/003/005 via the tool boundary, the Q6 acquisition-failure
+Covers the tool boundary, the acquisition-failure
 sanitisation split (host/port/driver/env-var detail must never cross the MCP
-boundary -- L2 line 125), F-07 (`ServiceConfigurationError` and a FalkorDB
-query rejection both stay `error:` return values, never a `ToolError`), and
-F-16 (one `outcome="unavailable"` log entry on the connection-failure
-branch).
+boundary -- L2 line 125), `ServiceConfigurationError` and a FalkorDB
+query rejection both staying `error:` return values (never a `ToolError`), and
+one `outcome="unavailable"` log entry on the connection-failure
+branch.
 
 `pytest-asyncio` is not installed; server coroutines are driven with bare
-`asyncio.run(...)` (PLAN_REVIEWED.md Residual risk 8). Hand-written
+`asyncio.run(...)`. Hand-written
 structural fakes throughout -- no `unittest.mock`.
 """
 
@@ -50,7 +50,7 @@ class _FakeQueryResult:
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally. `query()` records every call
     and either returns a scripted `_FakeQueryResult` or raises a scripted
-    exception. Reports itself as seeded (D11) for `_SEED_CHECK_QUERY` --
+    exception. Reports itself as seeded for `_SEED_CHECK_QUERY` --
     this module tests the pre-existing tool-boundary shapes, not the
     unseeded-graph guard, so a read query here must still reach the
     caller's own scripted result/error.
@@ -119,7 +119,7 @@ def _text(result: CallToolResult) -> str:
 def test_cypher_tool_passes_config_query_timeout_ms_and_row_cap_to_execute_cypher_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """S2 (pulled forward from S4 per CHANGES.md Flaw 1): `cypher()` resolves
+    """`cypher()` resolves
     `config = load_config()` and must thread `config.query_timeout_ms`/
     `config.query_row_cap` all the way into the real, unmonkeypatched
     `execute_cypher_query` -- the one real production call site, not just a
@@ -154,9 +154,9 @@ def test_cypher_tool_passes_config_query_timeout_ms_and_row_cap_to_execute_cyphe
 def test_truncated_result_propagates_true_through_cypher_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """S4 (issue #38, AC-BI-008): a result set exceeding the configured
+    """A result set exceeding the configured
     `PS_QUERY_ROW_CAP` reaches the real `cypher()` tool's returned dict with
-    `truncated: True` -- proof that `QueryResult.truncated` (S3) actually
+    `truncated: True` -- proof that `QueryResult.truncated` actually
     crosses the MCP boundary through the real production call path, not
     just through a direct `handle_mcp_tool_call(...)` call.
     """
@@ -202,7 +202,7 @@ def test_success_via_call_tool_returns_json_content(monkeypatch: pytest.MonkeyPa
 def test_delegates_in_process_via_call_tool(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """S2: `cypher()` reaches the real, in-process, unmonkeypatched
+    """`cypher()` reaches the real, in-process, unmonkeypatched
     `execute_cypher_query` (never a subprocess, never a reimplementation) --
     proven by the real `query_engine`/`execute_cypher_query` log entry only
     that function emits, plus the fake `graph` collaborator's own recorded
@@ -343,7 +343,7 @@ def test_resolve_graph_wraps_any_failure_as_graph_unavailable(
 def test_cypher_tool_attaches_local_test_principal_when_bypass_active(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """Slice 5 (issue #67, AC-BI-005, AC-BI-008): with the bypass active, a
+    """With the bypass active, a
     query answered successfully through the real `cypher()` tool carries the
     fixed local principal on its `query_engine` log entry -- the concrete
     proof, at this boundary, that the bypass answers queries with no
@@ -370,7 +370,7 @@ def test_cypher_tool_attaches_local_test_principal_when_bypass_active(
 def test_cypher_tool_omits_principal_when_bypass_inactive(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """Slice 5 (issue #67, AC-BI-008): with the bypass inactive (the
+    """With the bypass inactive (the
     default), the `query_engine` log entry carries no `principal` key at
     all -- the real `cypher()` tool never invents an identity when the
     bypass is off.

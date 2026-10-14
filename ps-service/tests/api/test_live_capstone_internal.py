@@ -1,4 +1,4 @@
-"""GH #76, Slice 4 -- the live internal-regulation ingestion capstone.
+"""The live internal-regulation ingestion capstone.
 
 ``@pytest.mark.falkordb_live @pytest.mark.llm_live``: drives the real
 ``POST /ingestions`` route with a ``source: "internal"`` request for the
@@ -12,12 +12,11 @@ asserted unchanged. Structurally mirrors ``tests/api/test_live_capstone_external
 (same disposable-graph naming/cleanup pattern, same one-module-scoped-
 fixture-many-assertions shape, same safety property).
 
-**Why this still needs real LLM credentials (GH #76 CHANGES.md item 1)**:
-GH #76 deletes the ``governance_derivation`` pipeline stage outright --
-Policy/Standard/Control are now human-authored in the submitted document,
-never LLM-minted (that is AC-BI-011, proven structurally: Slice 1 deletes
-the stage and every one of its LLM call sites). But this test's pipeline is
-``internal_ingestion -> merge``, and ``merge`` (Company Merge, S4) still
+**Why this still needs real LLM credentials**:
+There is no ``governance_derivation`` pipeline stage --
+Policy/Standard/Control are human-authored in the submitted document,
+never LLM-minted. But this test's pipeline is
+``internal_ingestion -> merge``, and ``merge`` (Company Merge) still
 runs its semantic-dedup pass, which calls ``company_merge/dedup.py::
 route_embedding`` -- a real, credentialed embedding call, independent of
 governance derivation. So ``@pytest.mark.llm_live`` and its skip-guard stay;
@@ -27,8 +26,8 @@ skip cleanly.
 
 **Structural-assertion style throughout** (node/edge counts and
 cardinality) for the merge-layer proofs; **exact-id assertions** for the
-governance layer specifically, since -- unlike the old LLM-derived shape --
-Policy/Standard/Control are now exact-id-deterministic on every run (minted
+governance layer specifically, since
+Policy/Standard/Control are exact-id-deterministic on every run (minted
 by ``domain_mapper.identity.policy_id``/``standard_id``/``control_id``, pure
 hashes over the fixture's own authored titles, never LLM output).
 
@@ -45,13 +44,12 @@ file:
 2. ``test_second_identical_ingestion_is_structural_no_op`` -- re-posting the
    exact same fixture is a structural no-op, **including the governance
    layer, by exact canonical id, with no ``xfail``**: because Policy/
-   Standard/Control are now author-supplied and exact-id-deterministic
+   Standard/Control are author-supplied and exact-id-deterministic
    (the same property Role/Requirement/Obligation/Capability already had),
-   there is no LLM-wording non-determinism left for this layer to bound --
-   the ``xfail`` the old LLM-derived version of this test needed is a
-   genuine simplification GH #76 buys back, not a weakening of coverage.
+   there is no LLM-wording non-determinism for this layer to bound,
+   so no ``xfail`` is needed.
 3. ``test_dangling_edge_fixture_fails_closed_against_real_pipeline`` --
-   AC-BI-008/009: the dedicated dangling-edge fixture
+   the dedicated dangling-edge fixture
    (``authored-governance-dangling-edge.json``, a dangling ``SUPPORTED_BY``
    edge) 502s with ``failing_stage: "internal_ingestion"`` and writes
    NOTHING to its own ``{short}_native``/``{short}_baseline`` graphs or the
@@ -265,13 +263,13 @@ def capstone(
     facade.configure(log_path=tmp_path_factory.mktemp("api_internal_capstone") / "capstone.jsonl")
 
     app = create_app(config)
-    # Every pipeline stage writes through the Graph Write Gateway (#208-#210). `TestClient` is not
+    # Every pipeline stage writes through the Graph Write Gateway. `TestClient` is not
     # entered, so the app lifespan never installs it: install the real one (PS state Postgres and
     # FalkorDB) the way a deployed service does. Not run in the implementation sandbox.
     gateway = build_default_graph_write_gateway(config)
     install_graph_write_gateway(gateway)
     app.state.graph_write_gateway = gateway  # the internal route is handed it from app state
-    # Issue #227: a Policy-bearing seed needs a verified caller, who then owns the imported
+    # A Policy-bearing seed needs a verified caller, who then owns the imported
     # draft tree; the override stands in for the sign-in a deployed service performs.
     app.dependency_overrides[get_principal] = lambda: Principal(
         sub="capstone-owner", iss="https://idp.example"
@@ -339,15 +337,15 @@ def capstone(
 
 
 def test_internal_ingestion_populates_governance_spine(capstone: _InternalCapstoneData) -> None:
-    """AC-BI-004 through AC-BI-007: the internal POST runs both stages against real infra.
+    """The internal POST runs both stages against real infra.
 
     A ``RegulatoryInstrument{source_type: 'internal'}`` exists; every
     Capability has >=1 ``GOVERNED_BY`` edge; every Policy has >=1
     ``SUPPORTED_BY`` edge; every Control belongs to EXACTLY ONE Standard;
     the full Regulation -> Role -> Obligation -> Capability -> Policy ->
     Standard -> Control chain is reachable in one traversal (the "back to
-    query" proof). The pipeline is now two stages, not three --
-    ``governance_derivation`` no longer exists (GH #76).
+    query" proof). The pipeline is two stages --
+    there is no ``governance_derivation`` stage.
     """
     assert capstone.response_1_status == 200
     assert capstone.response_1_body["regulatory_instrument_id"] == _SEED_RID
@@ -427,15 +425,13 @@ def test_second_identical_ingestion_is_structural_no_op(capstone: _InternalCapst
     CODE-guaranteed identical across both runs (minted from the fixture's
     own literal names via pure-hash identity functions, never LLM output).
 
-    GH #76 extends that same guarantee to Policy/Standard/Control: they are
-    now human-authored in the submitted document and minted by
+    The same guarantee holds for Policy/Standard/Control: they are
+    human-authored in the submitted document and minted by
     ``domain_mapper.identity.policy_id``/``standard_id``/``control_id`` --
     pure functions of the fixture's own titles, not LLM output -- so
     re-ingesting the identical fixture twice converges the governance layer
-    too, by exact canonical id. Unlike the old LLM-derived version of this
-    test (which had to ``xfail``-bound the governance layer's cross-run
-    convergence against live wording non-determinism), no ``xfail`` is
-    needed here: convergence is asserted unconditionally, over the WHOLE
+    too, by exact canonical id. No ``xfail`` is
+    needed: convergence is asserted unconditionally, over the WHOLE
     snapshot (deterministic layer and governance layer alike).
     """
     assert capstone.response_2_status == 200
@@ -451,7 +447,7 @@ def test_second_identical_ingestion_is_structural_no_op(capstone: _InternalCapst
 def test_dangling_edge_fixture_fails_closed_against_real_pipeline(
     capstone: _InternalCapstoneData,
 ) -> None:
-    """AC-BI-008/009: the dangling-edge fixture 502s against the REAL pipeline, with zero writes.
+    """The dangling-edge fixture 502s against the REAL pipeline, with zero writes.
 
     Proven directly against real FalkorDB -- not the fast-fake proof
     ``tests/ingestion/adapters/internal_seed/test_persist.py`` already

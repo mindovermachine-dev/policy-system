@@ -1,9 +1,8 @@
-"""Content lint for `ps-qna/SKILL.md` (issue #109).
+"""Content lint for `ps-qna/SKILL.md`.
 
 Pins that the skill documents the null-status fallback behavior for
 entities whose status enum includes `active` but whose `status` property is
-null for every matching row (the known pre-#109 legacy-ingestion gap) —
-AC-BI-004.
+null for every matching row (the known legacy-ingestion gap).
 """
 
 from __future__ import annotations

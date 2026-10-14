@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stub the Cellar fetch boundary for every non-live test (issue #193, CHANGES.md H1).
+    """Stub the Cellar fetch boundary for every non-live test.
 
     Every ingestion request now resolves via Cellar, so a test that reaches the
     ``ingest_regulation`` tool with a fake pipeline must never hit the real
@@ -36,7 +36,7 @@ def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest aut
 
 @pytest.fixture
 def ingest_audit_store(monkeypatch: pytest.MonkeyPatch) -> object:
-    """Route the sync `ingest_regulation` tool's audit rows to memory (issue #195).
+    """Route the sync `ingest_regulation` tool's audit rows to memory.
 
     The tool writes an opening row before it runs anything, so a test that drives it must not
     reach Postgres. Opt in per module with
@@ -53,7 +53,7 @@ def ingest_audit_store(monkeypatch: pytest.MonkeyPatch) -> object:
 
 @pytest.fixture(autouse=True)
 def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse
-    """Install a rig gateway as the process's for one test (issue #208).
+    """Install a rig gateway as the process's for one test.
 
     The ingestion tools obtain their Graph Write Gateway from the process, as the app lifespan
     installs it in production. The import is lazy for the importlib cross-package reason of

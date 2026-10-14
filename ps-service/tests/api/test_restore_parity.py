@@ -1,4 +1,4 @@
-"""MCP and REST catalog restores record the same `instrument.restore` rows (issue #195, AC-BI-017).
+"""MCP and REST catalog restores record the same `instrument.restore` rows.
 
 The MCP tool and `POST /restorations/from-catalog` both delegate to
 `run_restoration_from_catalog_source`; this proves the rows depend only on the actor and the

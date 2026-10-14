@@ -1,4 +1,4 @@
-"""Tests for run_id propagation across real threads (AC#2, M5)."""
+"""Tests for run_id propagation across real threads."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def test_run_id_when_raw_thread_spawned_without_binding_then_sees_no_run_id() ->
         t.start()
         t.join()
 
-    # M5 boundary: a raw thread does not inherit the parent's contextvars binding
+    # boundary: a raw thread does not inherit the parent's contextvars binding
     assert observed["seen"] is None
 
 

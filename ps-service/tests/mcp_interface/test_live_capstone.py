@@ -1,5 +1,5 @@
-"""Batch 8 -- the `falkordb_live` end-to-end capstone for the MCP Interface
-query path (PLAN_REVIEWED.md §6 Batch 8), proving AC-001 / AC-004 / AC-005
+"""The `falkordb_live` end-to-end capstone for the MCP Interface
+query path, proving read, malformed-query and write-rejection behaviour
 against real infrastructure.
 
 Mirrors `tests/query_engine/test_live_capstone.py`'s shape exactly (marker,
@@ -18,15 +18,14 @@ Three tests, all `@pytest.mark.falkordb_live` (deselected by the default
 1. `test_live_read_only_query_returns_expected_shape` -- a real
    `MATCH (n) RETURN n LIMIT 3` via `handle_mcp_tool_call` returns a `dict`
    whose `row_count` equals `len(rows)`, is `<= 3`, and whose `columns` is
-   exactly `["n"]` (AC-001 end-to-end).
+   exactly `["n"]`.
 2. `test_live_malformed_query_returns_verbatim_error` -- a syntactically
    invalid query returns a `str` starting `"error: "` carrying FalkorDB's
-   own error text, with no `"Traceback"` (AC-005 end-to-end).
+   own error text, with no `"Traceback"`.
 3. `test_live_write_clause_rejected` -- a `CREATE ...` query returns exactly
    `"error: " + _WRITE_CLAUSE_REJECTION_MESSAGE`, and a direct
    `MATCH (n) RETURN count(n)` taken before vs. after proves the graph is
-   provably unmutated -- the guard rejected before FalkorDB was touched
-   (AC-004 end-to-end).
+   provably unmutated -- the guard rejected before FalkorDB was touched.
 """
 
 from __future__ import annotations
@@ -107,7 +106,7 @@ def _count_nodes(graph: GraphHandle) -> int:
 def test_live_read_only_query_returns_expected_shape(
     real_graph: GraphHandle, emitter: LogEmitter
 ) -> None:
-    """AC-001 live proof: a real `MATCH (n) RETURN n LIMIT 3` query against
+    """Live proof: a real `MATCH (n) RETURN n LIMIT 3` query against
     the throwaway graph, executed through the actual
     `handle_mcp_tool_call` -> `execute_cypher_query` -> real FalkorDB driver.
     """
@@ -133,7 +132,7 @@ def test_live_read_only_query_returns_expected_shape(
 def test_live_malformed_query_returns_verbatim_error(
     real_graph: GraphHandle, emitter: LogEmitter
 ) -> None:
-    """AC-005 live proof: a syntactically invalid query is executed against
+    """Live proof: a syntactically invalid query is executed against
     the real FalkorDB, which rejects it; `handle_mcp_tool_call` surfaces
     FalkorDB's own error text verbatim as an `error: ` string, never a
     formatted traceback.
@@ -150,7 +149,7 @@ def test_live_malformed_query_returns_verbatim_error(
 
 @pytest.mark.falkordb_live
 def test_live_write_clause_rejected(real_graph: GraphHandle, emitter: LogEmitter) -> None:
-    """AC-004 live proof: a write-clause query against the real graph is
+    """Live proof: a write-clause query against the real graph is
     rejected by Query Engine's guard *before* FalkorDB is ever touched.
     Proven two ways: the returned string is exactly
     `"error: " + _WRITE_CLAUSE_REJECTION_MESSAGE`, and the real graph's node

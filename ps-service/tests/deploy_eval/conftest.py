@@ -1,4 +1,5 @@
-"""Shared fixtures for `scripts/deploy-ps-eval.sh` (GH issue #165).
+"""Shared fixtures for `scripts/deploy-ps-eval.sh`.
+
 
 Same pattern as `deploy_ps/conftest.py`: the real script and the real `scripts/lib/*.sh` files are
 copied into an isolated `tmp_path/scripts` tree and run there; only the process boundary is faked.

@@ -1,4 +1,4 @@
-"""Tests for ``ps_service.api.error_handlers`` (AC-BI-009).
+"""Tests for ``ps_service.api.error_handlers`` .
 
 Covers the text scrubber directly, and proves that no error body this API
 returns — for any ``ApiError`` subclass, a bare ``RuntimeError``, or a
@@ -95,8 +95,8 @@ def test_error_body_has_the_fixed_shape() -> None:
 
 def test_is_safe_verbatim_covers_api_and_whitelisted_domain_errors() -> None:
     fake_domain_error: type[Exception] = type("DomainMapperExtractionError", (Exception,), {})
-    # GH #104 / AC-BI-007: ps_service.restore's content rejection is whitelisted by class
-    # name only, so this test never imports ps_service.restore either (AC-BI-008).
+    # ps_service.restore's content rejection is whitelisted by class
+    # name only, so this test never imports ps_service.restore either.
     fake_content_rejected: type[Exception] = type("ArtifactContentRejectedError", (Exception,), {})
 
     assert is_safe_verbatim(CatalogIdentifierNotFoundError("nope"))
@@ -112,7 +112,7 @@ def test_is_safe_verbatim_covers_api_and_whitelisted_domain_errors() -> None:
 
 
 def test_restore_owner_required_message_reaches_the_caller_verbatim() -> None:
-    """Issue #183: an owner-less internal restore tells the caller why, not just `restore failed`.
+    """An owner-less internal restore tells the caller why, not just `restore failed`.
 
     Whitelisted by class name only, like `ArtifactContentRejectedError`, so
     `error_handlers.py` still never imports `ps_service.restore`.
@@ -123,7 +123,7 @@ def test_restore_owner_required_message_reaches_the_caller_verbatim() -> None:
 
 
 def test_error_handlers_module_never_imports_ps_service_restore() -> None:
-    """GH #104 / AC-BI-008: whitelisting `ArtifactContentRejectedError` by class name must
+    """Whitelisting `ArtifactContentRejectedError` by class name must
     not add ANY `ps_service.restore` import to `error_handlers.py` -- top-level,
     function-local, or inside `if TYPE_CHECKING:` (a `TYPE_CHECKING` import is still an
     import the module "gains" textually, so `ast.walk` rather than `tree.body` is used,
@@ -272,7 +272,7 @@ def test_api_errors_map_to_their_documented_status_codes() -> None:
 def test_ingest_identity_rejections_map_to_409_with_their_own_code_and_verbatim_message(
     exc: Exception, expected_status: int, expected_code: str
 ) -> None:
-    """Issue #193 (deliverable 4): both identity rejections are 409s that surface ``str(exc)``."""
+    """Both identity rejections are 409s that surface ``str(exc)``."""
     client = TestClient(_build_app_that_raises(exc), raise_server_exceptions=False)
 
     response = client.get("/boom")
@@ -283,7 +283,7 @@ def test_ingest_identity_rejections_map_to_409_with_their_own_code_and_verbatim_
 
 
 def test_graph_write_unavailable_maps_to_503_with_its_own_code_and_verbatim_message() -> None:
-    """Issue #208: no graph write gateway is a fail-closed 503, never a direct-write fallback."""
+    """No graph write gateway is a fail-closed 503, never a direct-write fallback."""
     exc = GraphWriteUnavailableError("graph writes are unavailable: no gateway")
     client = TestClient(_build_app_that_raises(exc), raise_server_exceptions=False)
 
@@ -295,7 +295,7 @@ def test_graph_write_unavailable_maps_to_503_with_its_own_code_and_verbatim_mess
 
 
 def test_curated_mismatch_error_no_longer_exists() -> None:
-    """Issue #193: a caller's short_name is never cross-checked against the catalog."""
+    """A caller's short_name is never cross-checked against the catalog."""
     import ps_service.api.errors as api_errors
 
     assert not hasattr(api_errors, "ShortNameCuratedMismatchError")
@@ -303,7 +303,7 @@ def test_curated_mismatch_error_no_longer_exists() -> None:
 
 
 def test_audit_trail_unavailable_maps_to_503_with_fixed_message() -> None:
-    """Issue #195, AC-BI-011: a fail-closed opening-row failure is a 503, message verbatim."""
+    """A fail-closed opening-row failure is a 503, message verbatim."""
     exc = AuditTrailUnavailableError(
         "The audit trail is temporarily unavailable; the operation was not performed."
     )

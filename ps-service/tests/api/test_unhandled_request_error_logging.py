@@ -1,6 +1,6 @@
-"""An exception no handler names reaches the operator log, scrubbed (issue #228).
+"""An exception no handler names reaches the operator log, scrubbed.
 
-The catch-all handler returns the generic 500 (AC-BI-009) and writes one ``failed`` entry
+The catch-all handler returns the generic 500 and writes one ``failed`` entry
 (component ``api``, action ``unhandled_request_error``) through the real ``configure()``d
 Logging facade, mirrored to stderr, carrying the request's ``run_id``.
 """

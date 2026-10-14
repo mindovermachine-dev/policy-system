@@ -1,23 +1,16 @@
-"""cert-manager install + wait-for-Available before `ClusterIssuer` for `scripts/deploy-ps-prod.sh`
-(AC-BI-016; PLAN.md §5/S17).
+"""cert-manager install + wait-for-Available before `ClusterIssuer` for `scripts/deploy-ps-prod.sh`.
 
-`ensure_cert_manager`/`ensure_cluster_issuer` are ported verbatim from `spikes/deploy-ps-azure/
-deploy-ps-prod.sh`'s own equivalents (spike lines 1138-1183), the trusted empirical reference. The
-spike README's own confirmed finding, corrected mid-run after an original wrong assumption: the
-AKS application-routing add-on does NOT bundle cert-manager -- only the managed NGINX ingress
+`ensure_cert_manager`/`ensure_cluster_issuer` mirror the production script's behaviour. The AKS
+application-routing add-on does NOT bundle cert-manager -- only the managed NGINX ingress
 controller. This script installs cert-manager itself, via its own published OCI chart, and waits
 for its controller/webhook/cainjector deployments to report `Available` (`kubectl wait`) BEFORE
 creating the `ClusterIssuer` -- a fresh install's admission webhook needs its own cert issued
 before it can admit one; applying a `ClusterIssuer` immediately after a fresh install
-intermittently fails webhook admission otherwise (the exact race the spike found against a real
-cluster).
+intermittently fails webhook admission otherwise (a race observed against a real cluster).
 
 `test_waits_for_all_three_cert_manager_deployments_available_before_creating_cluster_issuer`
-below is the exact AC-BI-016 claim, proven as a call-log ORDERING assertion (the `kubectl wait`
-line must appear before the `ClusterIssuer` apply line) -- confirmed red-before-green by
-temporarily moving `ensure_cert_manager`'s own `kubectl wait` call to run AFTER
-`ensure_cluster_issuer` in `scripts/deploy-ps-prod.sh`'s `main()`; see IMPL_SLICE_17.md's evidence
-block.
+below proves that claim as a call-log ORDERING assertion (the `kubectl wait` line must appear
+before the `ClusterIssuer` apply line).
 """
 
 from __future__ import annotations
@@ -64,8 +57,8 @@ def test_installs_cert_manager_via_its_own_oci_chart_when_absent(
 def test_waits_for_all_three_cert_manager_deployments_available_before_creating_cluster_issuer(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """The exact AC-BI-016 claim and the exact race spikes/deploy-ps-azure/README.md's own "Bugs
-    found and fixed" section confirmed against a real cluster. An ordering assertion against the
+    """`kubectl wait` for cert-manager Available precedes the `ClusterIssuer` apply, avoiding the
+    webhook admission race seen on a real cluster. An ordering assertion against the
     raw kubectl call log -- not merely "both calls happened somewhere" -- since a regression that
     reordered the two calls (still both present) would otherwise pass a weaker test.
     """

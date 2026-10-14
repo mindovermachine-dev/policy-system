@@ -1,10 +1,10 @@
-"""The `update-policy-draft` MCP tool writes through the Graph Write Gateway (issue #211, S3).
+"""The `update-policy-draft` MCP tool writes through the Graph Write Gateway.
 
 The vertical slice: MCP tool -> service -> gateway -> log -> read back. The process gateway (the
 rig the package's autouse fixture installs) is the true boundary; the read handle is the lifecycle
 read double over that rig's `policy_system` graph, so what the gateway wrote is what the next read
-sees. A draft edit writes no audit row and its group carries no audit link (AC-BI-008); a cleared
-property is absent afterwards (AC-BI-007); with no gateway the tool fails closed and writes
+sees. A draft edit writes no audit row and its group carries no audit link; a cleared
+property is absent afterwards; with no gateway the tool fails closed and writes
 nothing.
 """
 
@@ -146,13 +146,13 @@ def test_the_tool_answers_the_same_shape_and_logs_one_group_without_an_audit_lin
     (group,) = rig.store.groups
     assert _ops(group) == ["merge_property", "remove_property"]
     assert rig.store.audit_link_of(group) is None
-    assert audit.calls == []  # AC-BI-008: a draft edit writes no audit row
+    assert audit.calls == []  # a draft edit writes no audit row
 
 
 def test_the_cleared_property_is_absent_afterwards_and_the_edit_is_visible_to_a_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-007, as a round trip through the tool and `get-policy`'s read of the same graph."""
+    """A cleared property is absent, round-tripped through the tool and `get-policy`'s read."""
     _, graph, _ = _setup(monkeypatch, description="old", scope_out="out")
 
     with _verified_actor(sub=_ACTOR):

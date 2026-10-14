@@ -1,12 +1,12 @@
-"""Tests for `handle_mcp_tool_call`'s `GraphUnseededError` delegation (D11, Slice 8.3).
+"""Tests for `handle_mcp_tool_call`'s `GraphUnseededError` delegation.
 
-PLAN.md Batch 8: `handle_mcp_tool_call` extends its existing
+`handle_mcp_tool_call` extends its existing
 `except (WriteClauseRejectedError, QueryEngineExecutionError) as exc:` tuple
 (`mcp_server.py:118`) with `GraphUnseededError`, returning `f"error: {exc}"`
 -- the exact existing delegation shape, no new branch logic in MCP
 Interface (L2 MCP Interface Patterns: "delegate, don't reimplement").
 
-Both cases live in this one module, side by side, to prove AC-BI-014's
+Both cases live in this one module, side by side, to prove the
 whole point: an unseeded graph and a seeded graph's own legitimate
 zero-row answer are distinguishable signals, not the same thing observed
 two different ways.
@@ -80,7 +80,7 @@ def test_unseeded_graph_returns_sanitized_error_string(emitter: LogEmitter) -> N
 def test_seeded_graph_genuinely_empty_result_still_returns_normal_shape(
     emitter: LogEmitter,
 ) -> None:
-    """AC-BI-014's distinguishability proof: a seeded graph answering a
+    """Distinguishability proof: a seeded graph answering a
     specific query with zero rows is NOT the unseeded signal -- it still
     returns the normal `{columns, rows: [], row_count: 0}` envelope.
     """

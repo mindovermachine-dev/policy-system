@@ -1,4 +1,4 @@
-"""Tests for the `start_ingestion` MCP tool (issue #194, S2).
+"""Tests for the `start_ingestion` MCP tool.
 
 The tool validates synchronously, records an `ingestion_runs` row, dispatches the pipeline on a
 background thread and returns a `run_id` at once. `get_ingestion_status` is used to poll the run
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     from api._fakes import ReadLines
     from ingestion_runs._fakes import InMemoryIngestionRunStore
 
-# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+# The sync tool writes `ingestion_run.*` rows: keep them off Postgres.
 pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
@@ -89,7 +89,7 @@ def _status(run_id: str) -> dict[str, object]:
 def test_happy_path_returns_a_run_id_at_once_and_polls_to_the_ingestion_result(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-005 / AC-BI-007: immediate `{run_id, status}`, then the blocking result shape."""
+    """Immediate `{run_id, status}`, then the blocking result shape."""
     _ = store
     _use_real_pipeline_stages(monkeypatch)
 
@@ -124,7 +124,7 @@ def test_happy_path_returns_a_run_id_at_once_and_polls_to_the_ingestion_result(
 def test_the_background_run_writes_its_native_graph_under_its_own_system_audit_row(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """Issue #208: the async path anchors the real ingest stage's group to a system audit row."""
+    """The async path anchors the real ingest stage's group to a system audit row."""
     _ = store
     _use_real_pipeline_stages(monkeypatch)
     gateway = installed_process_gateway()
@@ -136,7 +136,7 @@ def test_the_background_run_writes_its_native_graph_under_its_own_system_audit_r
     row = gateway.system_audit.rows[0]
     assert (row["action"], row["resource_id"]) == ("ingestion_run.submit", run_id)
     assert cast("dict[str, object]", row["details"])["trigger"] == "async_ingest"
-    # the extract and derive stages' groups follow (#209), then the merge's three (#210)
+    # the extract and derive stages' groups follow, then the merge's three
     [group, baseline_group, derivation_group, merge_group, obligation_group, capability_group] = (
         gateway.rig.store.groups
     )
@@ -173,7 +173,7 @@ def test_without_a_gateway_the_background_run_fails_closed_with_a_graph_unavaila
 def test_polled_result_equals_the_blocking_tools_response_apart_from_run_id(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-007 / AC-BI-009: same outcome as `ingest_regulation`, apart from `run_id`."""
+    """Same outcome as `ingest_regulation`, apart from `run_id`."""
     _ = store
     _use_real_pipeline_stages(monkeypatch)
     started = body(call_start_ingestion(_CELEX, _SHORT_NAME))
@@ -194,14 +194,14 @@ def test_polled_result_equals_the_blocking_tools_response_apart_from_run_id(
 def test_a_row_is_recorded_for_the_submission_before_the_call_returns(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-003: exactly one `ingestion_runs` row, under the returned id and the bypass actor."""
+    """Exactly one `ingestion_runs` row, under the returned id and the bypass actor."""
     _use_real_pipeline_stages(monkeypatch)
 
     started = body(call_start_ingestion(_CELEX, _SHORT_NAME))
 
     assert list(store.rows) == [started["run_id"]]
     row = store.rows[str(started["run_id"])]
-    # Issue #193: the recorded short_name is the normalized (upper-case) one.
+    # The recorded short_name is the normalized (upper-case) one.
     assert (row.celex, row.short_name) == (_CELEX, _SHORT_NAME.upper())
     assert (row.actor_subject, row.actor_issuer) == _BYPASS_ACTOR
 
@@ -209,7 +209,7 @@ def test_a_row_is_recorded_for_the_submission_before_the_call_returns(
 def test_the_pipeline_receives_the_submitted_run_id_celex_and_caller(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore, read_lines: ReadLines
 ) -> None:
-    """AC-BI-009: the pipeline gets the same plain arguments as in the blocking tool."""
+    """The pipeline gets the same plain arguments as in the blocking tool."""
     _ = store
     emitter = configure()
     _use_real_pipeline_stages(monkeypatch)
@@ -256,7 +256,7 @@ def test_submission_and_background_run_log_one_correlated_lifecycle_each(
 def test_run_ids_are_random_uuid4_values_that_differ_between_submissions(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-020: run ids are not sequential or guessable."""
+    """Run ids are not sequential or guessable."""
     _ = store
     _use_real_pipeline_stages(monkeypatch)
 
@@ -275,7 +275,7 @@ def test_run_ids_are_random_uuid4_values_that_differ_between_submissions(
 def test_resubmitting_an_ingested_celex_is_rejected_before_any_row_or_thread(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """Issue #193: an already-ingested CELEX is rejected, as `ingest_regulation` does."""
+    """An already-ingested CELEX is rejected, as `ingest_regulation` does."""
     _use_real_pipeline_stages(monkeypatch)
     first = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
     wait_for_run(first)
@@ -306,7 +306,7 @@ def test_a_slot_is_held_only_while_the_run_is_in_flight(
 def test_start_ingestion_returns_while_the_pipeline_is_still_running(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-005 / AC-BI-003: the call returns with the worker provably parked mid-pipeline."""
+    """The call returns with the worker provably parked mid-pipeline."""
     pipeline = use_gated_real_pipeline(monkeypatch)
     try:
         started = body(call_start_ingestion(_CELEX, _SHORT_NAME))
@@ -325,7 +325,7 @@ def test_start_ingestion_returns_while_the_pipeline_is_still_running(
 def test_polling_a_running_run_reports_the_live_stage_then_clears_it(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-006: running + current stage while parked; succeeded + no stage afterwards."""
+    """Running + current stage while parked; succeeded + no stage afterwards."""
     _ = store
     pipeline = use_gated_real_pipeline(monkeypatch)
     try:
@@ -353,13 +353,13 @@ def test_polling_a_running_run_reports_the_live_stage_then_clears_it(
     assert done["stage"] is None
 
 
-# --- S5: submission failures release the slot and start nothing -------------------------------
+# --- submission failures release the slot and start nothing -------------------------------
 
 
 def test_a_failed_row_write_at_submit_reports_it_and_starts_nothing(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """S5: the run could not be recorded, so nothing was started and the slot is free."""
+    """The run could not be recorded, so nothing was started and the slot is free."""
     _use_real_pipeline_stages(monkeypatch)
     store.fail_next_create = 1
 
@@ -397,7 +397,7 @@ def test_an_unexpected_exception_at_submit_is_sanitized_and_releases_the_slot(
     assert dispatch.in_flight_run_count() == 0
 
 
-# --- S6: bounded admission and isolation between concurrent runs ------------------------------
+# --- bounded admission and isolation between concurrent runs ------------------------------
 
 _CAP_ERROR = (
     "error: too many ingestion runs are already in progress (limit 1); "
@@ -423,7 +423,7 @@ def _record_launched_runs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Wrap the worker launcher so a test can see which runs actually got a worker.
 
     Asserting on the launcher rather than `threading.active_count()` keeps the check about this
-    tool: the process-wide count also moves with unrelated helper threads (issue #218).
+    tool: the process-wide count also moves with unrelated helper threads.
     """
     launched: list[str] = []
     real_start_background_run = mcp_server.start_background_run
@@ -432,7 +432,7 @@ def _record_launched_runs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         launched.append(run_id)
         real_start_background_run(run_id, work)
 
-    # detroit-exception: spy-through wrapping the real launcher; launched runs ARE the spec (§1.2)
+    # detroit-exception: spy-through wrapping the real launcher; launched runs ARE the spec
     monkeypatch.setattr(mcp_server, "start_background_run", _record)
     return launched
 
@@ -440,7 +440,7 @@ def _record_launched_runs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_the_default_cap_admits_one_run_and_rejects_a_second_until_the_first_finishes(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-012: over the cap -> the named rate-limit error; nothing recorded or spawned."""
+    """Over the cap -> the named rate-limit error; nothing recorded or spawned."""
     monkeypatch.delenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", raising=False)
     other_celex, other_short_name = _second_curated_entry()
     pipeline = use_gated_real_pipeline(monkeypatch, per_short_name_graphs=True)
@@ -470,7 +470,7 @@ def test_the_default_cap_admits_one_run_and_rejects_a_second_until_the_first_fin
 def test_two_concurrent_runs_are_tracked_and_completed_independently(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-019: distinct run ids, separate stage keys, separate rows and results."""
+    """Distinct run ids, separate stage keys, separate rows and results."""
     monkeypatch.setenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", "2")
     other_celex, other_short_name = _second_curated_entry()
     pipeline = use_gated_real_pipeline(monkeypatch, per_short_name_graphs=True)
@@ -515,7 +515,7 @@ def test_each_concurrent_runs_background_log_lines_carry_only_its_own_run_id(
     store: InMemoryIngestionRunStore,
     read_lines: ReadLines,
 ) -> None:
-    """AC-BI-019: log correlation does not bleed between simultaneous runs."""
+    """Log correlation does not bleed between simultaneous runs."""
     _ = store
     monkeypatch.setenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", "2")
     emitter = configure()
@@ -586,7 +586,7 @@ def test_the_duplicate_short_name_error_wins_over_the_cap_error(
     wait_for_run(first)
 
 
-# --- S7: durable audit trail (AC-BI-016 / AC-BI-017) -------------------------------------------
+# --- durable audit trail -------------------------------------------
 
 _SUBJECT = "granted-compliance-officer"
 _OWNER = "existing-system-owner"
@@ -625,7 +625,7 @@ def _grant_compliance_officer(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_start_ingestion_audits_the_verified_actor_with_trigger_async_ingest(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore, read_lines: ReadLines
 ) -> None:
-    """AC-BI-016: the durable audit entry is the proof; the log triad is correlation only."""
+    """The durable audit entry is the proof; the log triad is correlation only."""
     monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS")
     emitter = configure()
     _grant_compliance_officer(monkeypatch)
@@ -673,7 +673,7 @@ def test_the_submission_under_the_local_test_bypass_is_audited_as_the_bypass_act
 def test_completion_is_audited_once_from_the_workers_own_thread_under_the_submitter(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-017: a second entry under the same run_id, written off the submitting thread."""
+    """A second entry under the same run_id, written off the submitting thread."""
     _use_real_pipeline_stages(monkeypatch)
 
     run_id = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
@@ -713,7 +713,7 @@ def test_background_run_failure_records_failed_row_with_reason_pipeline_stage_fa
         "new_capabilities": 0,
         "matched_capabilities": 0,
     }
-    # AC-BI-010: the sanitized text stays on the run row, never in the audit row.
+    # The sanitized text stays on the run row, never in the audit row.
     assert "error" not in completion.entry.details
     assert store.rows[run_id].error == "error: extraction stage failed: extraction failed"
 
@@ -770,7 +770,7 @@ def test_a_graph_unavailable_background_run_records_reason_graph_unavailable(
 def test_completed_run_counts_equal_the_graph_delta(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-005 / AC-BI-016: the recorded counts equal what the real merge wrote."""
+    """The recorded counts equal what the real merge wrote."""
     fixture = _use_real_pipeline_stages(monkeypatch)
 
     def _count(label: str) -> int:
@@ -796,7 +796,7 @@ def test_completed_run_counts_equal_the_graph_delta(
 def test_terminal_audit_failure_is_logged_with_run_id_and_the_run_result_is_unchanged(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore, read_lines: ReadLines
 ) -> None:
-    """AC-BI-015: a lost terminal write is logged under the run id; the worker's result stands."""
+    """A lost terminal write is logged under the run id; the worker's result stands."""
     emitter = configure()
     _use_real_pipeline_stages(monkeypatch)
     store.fail_next_complete = 1
@@ -835,7 +835,7 @@ def test_start_ingestion_writes_no_audit_row_for_a_rejected_identity_check(
 def test_a_failed_opening_row_starts_no_worker_and_releases_the_slot(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """AC-BI-011 (create_run txn): no row, no audit entry, no pipeline stage, slot free."""
+    """No row, no audit entry, no pipeline stage, slot free."""
     fixture = _use_real_pipeline_stages(monkeypatch)
     store.fail_next_create = 1
 

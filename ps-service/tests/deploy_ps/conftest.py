@@ -1,6 +1,6 @@
-"""Shared fixtures for `scripts/deploy-ps-prod.sh` (GH issue #111).
+"""Shared fixtures for `scripts/deploy-ps-prod.sh`.
 
-Sibling to `ps-service/tests/deploy_llm/conftest.py` (GH issue #105) and extends the exact same
+Sibling to `ps-service/tests/deploy_llm/conftest.py` and extends the exact same
 pattern for the same reason that fixture's own docstring documents: the root `pyproject.toml`'s
 `testpaths` covers `ps-service/tests`/`ps-cli/tests` only, and this is the only test-collected
 location for a `scripts/`-level script.
@@ -13,19 +13,16 @@ runs *that* copy -- the script's own `$SCRIPT_DIR`-relative config lookup then r
 the fixture, so a test edits `DeployPsFixture.config_path` in place without ever touching the
 real, checked-in defaults file or requiring a test-only flag on the script itself.
 
-S5 (PLAN.md §5) needed only a minimal fake `az`: `account show` (subscription id) and
-`account show --query user.name` (signed-in UPN). S6 adds `role assignment list` (RBAC
-preflight); S7 adds `provider register`/`provider show` (resource-provider registration+poll).
-S8 adds `cognitiveservices model list` (region availability + capacity range + model version),
-`cognitiveservices usage list` (quota), and `cognitiveservices account deployment show`
-(check_quota's "already deployed, skip" branch) -- real command shapes read from
-`spikes/deploy-ps-azure/deploy-ps-prod.sh`'s own `select_region`/`check_quota`/`deployment_exists`,
-not guessed (PLAN.md §2.2 lists an approximate/older shape; the spike script itself is the
-trusted empirical record per PLAN.md's own framing).
-This grows across S9-S18 as later slices need more of PLAN.md §2's full API (azure-state
-seeding helpers, fake `kubectl`/`helm`, and so on) -- extend `FAKE_AZ_SCRIPT`'s `case` block and
-`DeployPsFixture`'s `seed_*`/`read_*` methods in place, mirroring `deploy_llm/conftest.py`'s own
-S2-S13 growth.
+The fake `az` covers `account show` (subscription id) and `account show --query user.name`
+(signed-in UPN), `role assignment list` (RBAC preflight), `provider register`/`provider show`
+(resource-provider registration+poll), `cognitiveservices model list` (region availability +
+capacity range + model version), `cognitiveservices usage list` (quota), and
+`cognitiveservices account deployment show` (check_quota's "already deployed, skip" branch).
+The command shapes are those the production `deploy-ps-prod.sh` functions `select_region`,
+`check_quota` and `deployment_exists` use, not guessed.
+Further coverage (azure-state seeding helpers, fake `kubectl`/`helm`, and so on) extends
+`FAKE_AZ_SCRIPT`'s `case` block and `DeployPsFixture`'s `seed_*`/`read_*` methods in place,
+mirroring `deploy_llm/conftest.py`.
 """
 
 from __future__ import annotations
@@ -47,7 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 SUBPROCESS_TIMEOUT_SECONDS = 30.0
 
-# Mirrors scripts/ps-defaults.conf's shipped defaults (PLAN.md §1) -- hardcoded here rather than
+# Mirrors scripts/ps-defaults.conf's shipped defaults -- hardcoded here rather than
 # parsed from the config file, same precedent as ps-service/tests/deploy_llm/conftest.py's own
 # DEFAULT_* constants and test_confirmation_table.py's CONFIG_WITH_TLS_EMAIL literal.
 DEFAULT_REGION_CANDIDATES = ("swedencentral", "francecentral", "westeurope", "germanywestcentral")
@@ -57,8 +54,8 @@ DEFAULT_CHAT_MODEL_VERSION = "2024-07-18"
 DEFAULT_EMBED_MODEL_NAME = "text-embedding-3-large"
 DEFAULT_EMBED_MODEL_SKU = "Standard"
 DEFAULT_EMBED_MODEL_VERSION = "1"
-# Mirrors the owner email `fill_tls_contact_email` writes (issues #161/#165: the owner's email is
-# both the Authentik username and the `sub` PS Service expects).
+# Mirrors the owner email `fill_tls_contact_email` writes (the owner's email is both the
+# Authentik username and the `sub` PS Service expects).
 DEFAULT_OWNER_EMAIL = "owner@example.test"
 # The shared Authentik API token the fake kubectl serves and the fake curl accepts (never printed).
 FAKE_AUTHENTIK_TOKEN = "test-token"
@@ -66,14 +63,14 @@ FAKE_AUTHENTIK_TOKEN = "test-token"
 # (200/350) -- tests that want quota to bind call seed_usage()/seed_empty_usage() themselves.
 AMPLE_QUOTA_LIMIT = 10_000
 
-# Mirrors scripts/deploy-ps-prod.sh's own fixed AKS-node-shape literals (S12, PLAN.md §0.6) --
+# Mirrors scripts/deploy-ps-prod.sh's own fixed AKS-node-shape literals --
 # hardcoded here rather than parsed from the script, same precedent as the constants above.
 AKS_NODE_VM_SIZE = "Standard_D4as_v7"
 AKS_NODE_VM_SIZE_FAMILY = "StandardDasv7Family"
 AKS_NODE_COUNT = 2
 AKS_NODE_VM_SIZE_VCPUS = 4
 
-# Mirrors scripts/deploy-ps-prod.sh's own AKS_RBAC_ADMIN_ROLE literal (S13). Mirrors
+# Mirrors scripts/deploy-ps-prod.sh's own AKS_RBAC_ADMIN_ROLE literal. Mirrors
 # scripts/lib/deploy-llm-common.sh's own RESOURCE_GROUP_NAME constant (S1's rename). Mirrors
 # DeployPsFixture.seed_subscription's own default id_/user_id parameters -- named here so S13's
 # new AKS-cluster/role-assignment seeding helpers can compute the exact same scope strings the
@@ -88,7 +85,7 @@ DEFAULT_USER_OBJECT_ID = "22222222-3333-4444-5555-666666666666"
 DEFAULT_TENANT_ID = "33333333-4444-5555-6666-777777777777"
 
 # Mirrors scripts/deploy-ps-prod.sh's own LLM_SECRET_NAME/CHART_REF/HELM_RELEASE_NAME literals
-# (S14/S15) -- hardcoded here rather than parsed from the script, same precedent as the
+# -- hardcoded here rather than parsed from the script, same precedent as the
 # constants above.
 LLM_SECRET_NAME = "policy-system-llm-credentials"
 CHART_REF = "oci://ghcr.io/mindovermachine-dev/charts/policy-system"
@@ -112,8 +109,8 @@ APP_ROUTING_SERVICE_NAME = "nginx"
 
 def _scope_key(scope: str) -> str:
     """Sanitize a `role assignment` `--scope` value into the same filename-safe key the fake
-    `az`'s own `tr -c '[:alnum:]' '_'` produces (PLAN.md §2.2's "keyed by a hash of <s>" -- a
-    deterministic, scope-distinct key, not a cryptographic hash). Kept as one function so
+    `az`'s own `tr -c '[:alnum:]' '_'` produces (a deterministic, scope-distinct key, not a
+    cryptographic hash). Kept as one function so
     Python-side seeding (`DeployPsFixture._write_role_assignments`) and the fake `az`'s own
     dispatch stay in lockstep without duplicating the sanitization rule in two languages
     independently.
@@ -153,7 +150,7 @@ def _cluster_name_for(subscription_id: str) -> str:
 def _default_node_resource_group(cluster_name: str, region: str) -> str:
     """Independently reproduce the fake `az aks create`'s own deterministic
     `nodeResourceGroup` shape ("MC_<rg>_<cluster>_<region>", a real AKS-managed node resource
-    group's actual naming convention) -- lets `seed_subscription`'s bundled baseline (S16) and
+    group's actual naming convention) -- lets `seed_subscription`'s bundled baseline and
     `seed_aks_cluster`'s own default pre-populate a public-IP record at the exact resource group
     a real `ensure_public_exposure`-equivalent run would look under, for whichever cluster/region
     combination a test ends up exercising.
@@ -164,9 +161,8 @@ def _default_node_resource_group(cluster_name: str, region: str) -> str:
 def _usage_key(sku: str, model_name: str) -> str:
     """Independently reproduce `quota_usage_key`'s real per-model+SKU Azure usage-entry name
     (e.g. "OpenAI.DataZoneStandard.gpt-5.4-mini") -- confirmed against a real subscription
-    (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Quota preflight always a no-op")
     that this is the actual shape `az cognitiveservices usage list` reports, not the literal
-    "chat"/"embed" keys `scripts/deploy-llm.sh` (issue #105) still uses uncorrected.
+    "chat"/"embed" keys `scripts/deploy-llm.sh` still uses uncorrected.
     """
     return f"OpenAI.{sku}.{model_name}"
 
@@ -184,8 +180,7 @@ def _model_availability_entry(
 
     `capacity_minimum=None` serializes to JSON `null` -- confirmed against a real subscription
     that Azure reports exactly this for SKUs with no enforced floor (GlobalStandard/
-    DataZoneStandard), the shape `model_capacity_range`'s `// 0` coalesce exists to handle
-    (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "capacity.minimum: null").
+    DataZoneStandard), the shape `model_capacity_range`'s `// 0` coalesce exists to handle.
     """
     return {
         "model": {
@@ -211,7 +206,7 @@ DEPLOY_PS_RELATIVE_FILES = (
     Path("scripts/lib/authentik-owner.sh"),
 )
 
-# Fake `az` (S5 -- PLAN.md §2.2 grows this across S6-S18). Dispatches on "$1 $2", same shape as
+# Fake `az`. Dispatches on "$1 $2", same shape as
 # ps-service/tests/deploy_llm/conftest.py's FAKE_AZ_SCRIPT. Every invocation is logged to
 # $PS_TEST_AZ_LOG first, unconditionally, before any dispatch runs.
 FAKE_AZ_SCRIPT = r"""#!/usr/bin/env bash
@@ -533,7 +528,7 @@ case "${1:-} ${2:-}" in
 esac
 """
 
-# Fake `kubectl` (S14, PLAN.md §2.4 extended) -- `create secret --dry-run=client` is a pure,
+# Fake `kubectl` -- `create secret --dry-run=client` is a pure,
 # stateless transform (no state read/write), so it is deliberately NOT logged to
 # $PS_TEST_KUBECTL_LOG: logging it would race against the concurrently-running "apply -f -" stage
 # of the same pipe (both processes start at once; cross-process log order is not deterministic --
@@ -684,7 +679,7 @@ case "${1:-} ${2:-}" in
 esac
 """
 
-# Fake `helm` (S15, PLAN.md §2.3). `upgrade --install <release> <chart-ref> [-f <file>]
+# Fake `helm`. `upgrade --install <release> <chart-ref> [-f <file>]
 # [--set k=v ...]` parses every `--set` into the same nested JSON shape
 # `release_values_json`/`helm get values -o json` use, written to
 # `helm-state/releases/<release>.json`. `-f`/`--values` is consumed but never read -- the fake
@@ -770,8 +765,8 @@ class ScriptRun:
 class DeployPsFixture:
     """`scripts/deploy-ps-prod.sh` copied into an isolated tree, plus the fake `az`.
 
-    Grows across S6-S18 as later slices need more of it (fake `kubectl`/`helm`, more
-    `azure-state` seeding helpers -- see PLAN.md §2), mirroring `DeployLlmFixture`'s own growth.
+    Mirrors `DeployLlmFixture`, extended with fake `kubectl`/`helm` and more `azure-state`
+    seeding helpers.
     """
 
     root: Path
@@ -805,7 +800,7 @@ class DeployPsFixture:
         text = self.config_path.read_text(encoding="utf-8")
         replaced = text.replace('TLS_CONTACT_EMAIL=""', f'TLS_CONTACT_EMAIL="{email}"')
         assert replaced != text, f'{self.config_path}: TLS_CONTACT_EMAIL="" not found to replace'
-        # Issues #161/#165: every full-success run also needs the owner's email (the first
+        # Every full-success run also needs the owner's email (the first
         # SystemOwner and Authentik admin), or the run stops before any `az` call.
         replaced = replaced.replace(
             'AUTHZ_OWNER_EMAIL=""', f'AUTHZ_OWNER_EMAIL="{DEFAULT_OWNER_EMAIL}"'
@@ -833,7 +828,7 @@ class DeployPsFixture:
             "PS_TEST_KUBECTL_STATE_DIR": str(self.kubectl_state),
             "PS_TEST_HELM_STATE_DIR": str(self.helm_state),
             "PS_TEST_HELM_LOG": str(self.helm_log),
-            # Issue #165: the owner-creation step's fake Authentik API (`curl`) and the shared
+            # The owner-creation step's fake Authentik API (`curl`) and the shared
             # token the fake kubectl serves as base64 (a real Secret's data field).
             "PS_TEST_CURL_STATE": str(self.curl_state),
             "PS_TEST_CURL_LOG": str(self.curl_log),
@@ -962,7 +957,7 @@ class DeployPsFixture:
 
     def seed_role_assignments(self, *roles: str, scope: str | None = None) -> None:
         """Write the fake `az role assignment list --scope <scope>` response -- newline-separated
-        role names, scope-keyed (PLAN.md §2.2) since S13 added a SECOND, cluster-scoped role
+        role names, scope-keyed since there is a SECOND, cluster-scoped role
         check distinct from this subscription-scoped one. `scope` defaults to the subscription
         root `seed_subscription`'s own default `id_` uses -- pass it explicitly when seeding
         against a `seed_subscription(id_=...)` call that used a non-default id. Empty call
@@ -972,7 +967,7 @@ class DeployPsFixture:
         self._write_role_assignments(resolved_scope, roles)
 
     def _write_role_assignments(self, scope: str, roles: tuple[str, ...]) -> None:
-        """Shared by `seed_role_assignments` (S6) and `seed_aks_rbac_granted` (S13) -- one
+        """Shared by `seed_role_assignments` and `seed_aks_rbac_granted` -- one
         scope-keyed write path (`_scope_key`), matching the fake `az`'s own `role assignment`
         dispatch exactly.
         """
@@ -989,13 +984,13 @@ class DeployPsFixture:
         resource_group: str = RESOURCE_GROUP_NAME,
         node_resource_group: str | None = None,
     ) -> str:
-        """Pre-populate an already-existing AKS cluster (S13) -- for
+        """Pre-populate an already-existing AKS cluster -- for
         `test_rerun_with_existing_cluster_makes_no_aks_create_call`. Returns the cluster's
         deterministic fake resource ID (`_aks_cluster_resource_id`, the same shape the fake
         `az aks create` itself writes) so a test can target `seed_aks_rbac_granted` at the exact
         same scope a real `grant_aks_rbac_access` run would use, without recomputing it.
 
-        `node_resource_group` (S16) defaults to the same "MC_<rg>_<cluster>_swedencentral" shape
+        `node_resource_group` defaults to the same "MC_<rg>_<cluster>_swedencentral" shape
         the fake `az aks create` itself computes for a fresh cluster in the baseline-selected
         region (`_default_node_resource_group`) -- a test pre-seeding an existing cluster this
         way still reaches S16's public-exposure steps without a nodeResourceGroup lookup
@@ -1018,7 +1013,7 @@ class DeployPsFixture:
         return resource_id
 
     def seed_approuting_enabled(self, cluster_name: str) -> None:
-        """Marks the application-routing add-on as already enabled for <cluster_name> (S16) --
+        """Marks the application-routing add-on as already enabled for <cluster_name> --
         for `test_rerun_with_addon_already_enabled_makes_no_approuting_enable_call`. Combine with
         `seed_aks_cluster` (the add-on can only be queried on an existing cluster).
         """
@@ -1034,10 +1029,10 @@ class DeployPsFixture:
         name: str = APP_ROUTING_SERVICE_NAME,
     ) -> None:
         """Pre-populate the app-routing add-on's managed ingress-nginx Service's LoadBalancer
-        external IP (S16) -- LB IP allocation is external to this script (PLAN.md §2.1), so every
+        external IP -- LB IP allocation is external to this script, so every
         test whose run reaches `fetch_ingress_public_ip` needs this pre-seeded rather than
         produced by any fake `az`/`kubectl` call itself. Bundled into `seed_subscription`'s own
-        baseline below so S5-S15's own tests -- which never call this method directly -- still
+        baseline below so tests that never call this method directly still
         get an IP on the very first poll attempt, never a real `sleep`.
         """
         directory = self.kubectl_state / "services" / namespace
@@ -1069,8 +1064,8 @@ class DeployPsFixture:
         fqdn: str | None = None,
         region: str = "swedencentral",
     ) -> str:
-        """Pre-populate a public IP resource at <node_resource_group>/<ip> (S16) -- LB IP
-        allocation is external to this script (PLAN.md §2.1: TEST-owned state, not written by any
+        """Pre-populate a public IP resource at <node_resource_group>/<ip> -- LB IP
+        allocation is external to this script (TEST-owned state, not written by any
         other fake `az` call). Writes both the canonical `public-ips/<node-rg>/<ip>.json` record
         AND an id-keyed reverse index (`public-ip-ids/<sanitized-id>`) the fake `az network
         public-ip show/update` need, since those only ever receive a bare resource ID
@@ -1099,7 +1094,7 @@ class DeployPsFixture:
 
     def read_public_ip(self, node_resource_group: str, ip: str) -> dict[str, object] | None:
         """Reads back `public-ips/<node-rg>/<ip>.json` -- the fake `az network public-ip
-        show`/`update`'s own current record for that IP, or None if never seeded/created (S16).
+        show`/`update`'s own current record for that IP, or None if never seeded/created.
         """
         path = self.azure_state / "public-ips" / node_resource_group / f"{ip}.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
@@ -1111,7 +1106,7 @@ class DeployPsFixture:
         namespace: str = CERT_MANAGER_NAMESPACE,
     ) -> None:
         """Marks cert-manager's controller/webhook/cainjector deployments as already `Available`
-        (S17) -- the fake `kubectl wait --for=condition=Available ...` reads these markers.
+        -- the fake `kubectl wait --for=condition=Available ...` reads these markers.
         Bundled into `seed_subscription`'s own baseline below so S5-S16's own tests -- which
         never call this method directly, and whose runs now also reach `ensure_cert_manager` --
         get an immediate, non-blocking `kubectl wait` success (this fake never actually sleeps;
@@ -1124,7 +1119,7 @@ class DeployPsFixture:
 
     def seed_aks_rbac_granted(self, cluster_resource_id: str) -> None:
         """Pre-populate the `AKS_RBAC_ADMIN_ROLE` as already granted at <cluster_resource_id>
-        scope (S13) -- for
+        scope -- for
         `test_rerun_with_role_already_granted_makes_no_role_assignment_create_call`. Pass the
         resource ID `seed_aks_cluster` returned so both target the identical scope.
         """
@@ -1171,15 +1166,14 @@ class DeployPsFixture:
     ) -> None:
         """Write `azure-state/model-availability/<region>.json` -- the fake `az cognitiveservices
         model list --location <region>` response `select_region`/`validate_capacity_range`/
-        `model_version` (S8) parse. One entry per configured model; `lifecycleStatus` is
+        `model_version` parse. One entry per configured model; `lifecycleStatus` is
         `GenerallyAvailable` when its `*_ga` flag is true, `Preview` otherwise.
 
         `chat_capacity_minimum`/`embed_capacity_minimum` default to `None` (JSON `null`) rather
         than `1` -- unlike `deploy_llm/conftest.py`'s own equivalent, this default deliberately
         matches the real Azure shape confirmed for the DataZoneStandard/Standard SKUs
-        `scripts/ps-defaults.conf` actually configures (spikes/deploy-ps-azure/README.md "Bugs
-        found and fixed"), so every test using the baseline -- not just the one dedicated bugfix
-        test -- exercises `model_capacity_range`'s `// 0` coalesce.
+        `scripts/ps-defaults.conf` actually configures, so every test using the baseline -- not just
+        one dedicated test -- exercises `model_capacity_range`'s `// 0` coalesce.
         """
         payload = [
             _model_availability_entry(
@@ -1211,7 +1205,7 @@ class DeployPsFixture:
         embed: tuple[float, float],
     ) -> None:
         """Write `azure-state/usage/<region>.json` -- the fake `az cognitiveservices usage list
-        --location <region>` response `check_quota` (S8) parses. `chat`/`embed` are each
+        --location <region>` response `check_quota` parses. `chat`/`embed` are each
         `(current_value, limit)`, keyed by the real per-model+SKU usage-entry name
         (`quota_usage_key`'s shape, e.g. "OpenAI.DataZoneStandard.gpt-5.4-mini") -- not the
         literal "chat"/"embed" keys `deploy_llm/conftest.py`'s own `seed_usage` still writes for
@@ -1242,12 +1236,10 @@ class DeployPsFixture:
     def seed_empty_usage(self, region: str) -> None:
         """Write an explicit empty `az cognitiveservices usage list` response for <region> --
         confirmed against a real subscription/region with zero prior deployments that Azure
-        reports no usage entries at all, not a "0 used, full limit available" baseline
-        (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Empty usage list on a
-        subscription/region with zero prior deployments"). Behaviorally identical to never
-        calling `seed_usage` for <region> at all (the fake `az`'s own absent-file fallback is
-        also `[]`) -- this method exists so a test can say so explicitly rather than relying on
-        that fallback silently.
+        reports no usage entries at all, not a "0 used, full limit available" baseline.
+        Behaviorally identical to never calling `seed_usage` for <region> at all (the fake `az`'s
+        own absent-file fallback is also `[]`) -- this method exists so a test can say so explicitly
+        rather than relying on that fallback silently.
         """
         directory = self.azure_state / "usage"
         directory.mkdir(parents=True, exist_ok=True)
@@ -1262,9 +1254,9 @@ class DeployPsFixture:
     ) -> None:
         """Write `azure-state/vm-skus/<region>.json` -- the fake `az vm list-skus --location
         <region> --size <size> --all -o json` response `vm_size_allowed`/`vm_size_restricted`
-        (S12) parse. Defaults to unrestricted (empty `restrictions[]`) so `seed_subscription`'s
+        parse. Defaults to unrestricted (empty `restrictions[]`) so `seed_subscription`'s
         bundled baseline never blocks on this preflight -- same bundling rationale as
-        `seed_model_availability`/`seed_usage`'s own docstrings. PLAN.md §2.1: this state is
+        `seed_model_availability`/`seed_usage`'s own docstrings. This state is
         TEST-owned, not written by any other fake `az` call in this fixture -- it stands in for
         real Azure subscription state (what the subscription's SKU catalog actually reports), not
         something `deploy-ps-prod.sh` itself creates.
@@ -1289,10 +1281,10 @@ class DeployPsFixture:
         self, region: str, *, current: float = 0, limit: float = AMPLE_QUOTA_LIMIT
     ) -> None:
         """Write `azure-state/vm-usage/<region>.json` -- the fake `az vm list-usage --location
-        <region> -o json` response `vm_family_quota_sufficient` (S12) parses. One entry, for
+        <region> -o json` response `vm_family_quota_sufficient` parses. One entry, for
         AKS_NODE_VM_SIZE_FAMILY only -- real `az vm list-usage` returns every core-count family on
-        the subscription, but `deploy-ps-prod.sh` only ever reads the one it needs. PLAN.md §2.1:
-        same TEST-owned state as `seed_vm_skus` above.
+        the subscription, but `deploy-ps-prod.sh` only ever reads the one it needs.
+        Same TEST-owned state as `seed_vm_skus` above.
         """
         payload = [
             {
@@ -1319,7 +1311,7 @@ class DeployPsFixture:
     def seed_existing_resource_group(
         self, name: str = "rg-policy-system", *, location: str = "swedencentral"
     ) -> None:
-        """Pre-populate an already-existing resource group (S9). Proving "zero create calls" on
+        """Pre-populate an already-existing resource group. Proving "zero create calls" on
         a full rerun requires every create-if-absent target -- the resource group included -- to
         already exist, not just the account/deployments/vault. Same state shape as
         `deploy_llm/conftest.py::DeployLlmFixture.seed_existing_resource_group`'s own equivalent.
@@ -1336,7 +1328,7 @@ class DeployPsFixture:
         key1: str = "FAKE-KEY-1-INITIAL",
         key2: str = "FAKE-KEY-2-INITIAL",
     ) -> None:
-        """Pre-populate an already-existing AIServices account and its key pair (S9) -- for
+        """Pre-populate an already-existing AIServices account and its key pair -- for
         idempotency tests that need an account without going through a prior `deploy-ps-prod.sh`
         run.
         Defaults match the fake `az`'s own `cognitiveservices account create` defaults, so a
@@ -1353,13 +1345,13 @@ class DeployPsFixture:
         )
 
     def seed_existing_keyvault(self, name: str) -> None:
-        """Pre-populate an already-existing Key Vault marker (S9)."""
+        """Pre-populate an already-existing Key Vault marker."""
         directory = self.azure_state / "keyvaults"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / f"{name}.json").touch()
 
     def seed_existing_secret(self, vault: str, name: str, value: str) -> None:
-        """Pre-populate an already-existing Key Vault secret value (S9)."""
+        """Pre-populate an already-existing Key Vault secret value."""
         directory = self.azure_state / "keyvaults" / f"{vault}-secrets"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / name).write_text(value, encoding="utf-8")
@@ -1375,7 +1367,7 @@ class DeployPsFixture:
         return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
     def read_kubectl_log(self) -> list[str]:
-        """Every argv line the fake `kubectl` recorded, in order (S14) -- `create secret
+        """Every argv line the fake `kubectl` recorded, in order -- `create secret
         --dry-run=client` is deliberately unlogged (a pure, stateless transform; see
         `FAKE_KUBECTL_SCRIPT`'s own module comment), so only `apply -f` lines appear here.
         """
@@ -1395,7 +1387,7 @@ class DeployPsFixture:
 
     def read_kubectl_apply_output_log(self) -> list[str]:
         """Every `<kind>/<name> {created,configured,unchanged}` line the fake `kubectl apply -f
-        -` printed to its own stdout, in order (S14) -- the exact machine-readable signal
+        -` printed to its own stdout, in order -- the exact machine-readable signal
         `apply_output_changed` (scripts/deploy-ps-prod.sh) greps for, captured here as test-only
         instrumentation since the script itself only ever sees it inside a `$(...)` command
         substitution.
@@ -1407,7 +1399,7 @@ class DeployPsFixture:
         )
 
     def seed_curl(self, **state: object) -> None:
-        """Merge <state> into the fake Authentik API's state file (issue #165) -- e.g.
+        """Merge <state> into the fake Authentik API's state file -- e.g.
         `unreachable=True`, `devices={pk: [...]}`, `token_reject_status=401`.
         """
         current: dict[str, object] = {}
@@ -1435,7 +1427,7 @@ class DeployPsFixture:
         return state.get("users", {})
 
     def read_helm_log(self) -> list[str]:
-        """Every argv line the fake `helm` recorded, in order (S15)."""
+        """Every argv line the fake `helm` recorded, in order."""
         return (
             self.helm_log.read_text(encoding="utf-8").splitlines() if self.helm_log.exists() else []
         )
@@ -1454,7 +1446,7 @@ class DeployPsFixture:
     def seed_helm_release(
         self, values: dict[str, object], release: str = HELM_RELEASE_NAME
     ) -> None:
-        """Pre-populate an already-deployed Helm release's full `helm get values` shape (S15) --
+        """Pre-populate an already-deployed Helm release's full `helm get values` shape --
         for idempotent-rerun tests, and for
         `test_rerun_only_compares_the_five_script_set_fields_not_falkordb_or_llm_provider_from_values_prod`,
         which seeds this with extra `-f values-prod.yaml`-sourced fields
@@ -1505,7 +1497,7 @@ def deploy_ps_fixture(tmp_path: Path) -> DeployPsFixture:
     fake_helm = bin_dir / "helm"
     fake_helm.write_text(FAKE_HELM_SCRIPT, encoding="utf-8")
     fake_helm.chmod(0o755)
-    # Issue #165: the owner-creation step talks to Authentik's API through `curl`; the stateful
+    # The owner-creation step talks to Authentik's API through `curl`; the stateful
     # fake (recorded real response shapes) lives under tests/fixtures/fakes/.
     fakes_dir = REPO_ROOT / "ps-service" / "tests" / "fixtures" / "fakes"
     curl_lines = (fakes_dir / "curl").read_text(encoding="utf-8").splitlines()

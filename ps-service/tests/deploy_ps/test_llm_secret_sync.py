@@ -1,13 +1,12 @@
-"""LLM secret sync into AKS + `values-prod.yaml` direct reference (AC-BI-013 script-half;
-PLAN.md §5/S14).
+"""LLM secret sync into AKS + `values-prod.yaml` direct reference.
 
-`ensure_llm_secret` reads the three LLM credentials S9 already wrote to Key Vault
+`ensure_llm_secret` reads the three LLM credentials already written to Key Vault
 (`AZURE-API-KEY`/`AZURE-API-BASE`/`AZURE-API-VERSION`, dash-named to match Key Vault's own
 character restrictions) and writes them into the cluster as a Kubernetes Secret, underscore-keyed
 (`AZURE_API_KEY`/`AZURE_API_BASE`/`AZURE_API_VERSION`, the environment-variable convention
 `charts/policy-system` expects) -- same `create --dry-run=client -o yaml | apply` idiom as
 `scripts/sync-llm-secrets-to-kind.sh`, minus its kind-only context guard (this script already
-pointed kubectl at the right cluster via S13's `ensure_aks_credentials`).
+pointed kubectl at the right cluster via `ensure_aks_credentials`).
 
 The no-op claim is proven via `kubectl apply`'s own machine-readable stdout ("unchanged" vs.
 "created"/"configured"), not a separate diff computed by this test suite -- `apply_output_changed`
@@ -48,8 +47,8 @@ def _seed(fixture: DeployPsFixture) -> None:
 
 def _llm_secret_apply_output_lines(fixture: DeployPsFixture) -> list[str]:
     """Filters `read_kubectl_apply_output_log()` down to only the LLM Secret's own lines --
-    S16/S17 (later slices) also `kubectl apply` a ClusterIssuer on every run, so the LLM Secret's
-    line is no longer necessarily the log's last entry.
+    later steps also `kubectl apply` a ClusterIssuer on every run, so the LLM Secret's
+    line is not necessarily the log's last entry.
     """
     return [
         line
@@ -116,12 +115,10 @@ def test_values_prod_file_constant_resolves_to_the_real_chart_file_path() -> Non
 
     Deliberately reads the literal back out of the script rather than independently re-deriving
     "the correct" relative path: a wrong number of `../` segments in the real assignment is
-    exactly the bug this test exists to catch. `scripts/deploy-ps-prod.sh` lives ONE directory below
-    the repo root (`scripts/`), unlike `spikes/deploy-ps-azure/deploy-ps-prod.sh` (the empirical
-    reference this constant's value is modeled on), which lives TWO directories below
-    (`spikes/deploy-ps-azure/`) and therefore correctly uses two `../` segments where this script
-    needs only one. Reproducing the formula instead of reading it back would risk both sides
-    sharing the same off-by-one mistake and passing regardless.
+    exactly the bug this test exists to catch. `scripts/deploy-ps-prod.sh` lives one directory below
+    the repo root (`scripts/`), so it needs only one `../` segment.
+    Reproducing the formula instead of reading it back would risk both sides sharing the same
+    off-by-one mistake and passing regardless.
     """
     import re
     from pathlib import Path

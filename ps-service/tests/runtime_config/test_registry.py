@@ -1,4 +1,4 @@
-"""Tests for the runtime-config key registry (issue #130, Slice 3)."""
+"""Tests for the runtime-config key registry."""
 
 from __future__ import annotations
 

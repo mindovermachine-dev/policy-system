@@ -1,9 +1,9 @@
 """Tests for the `ComplianceOfficer` authz gate on the `ingest_regulation` MCP
-tool (issue #145, Slice 7): AC-BI-005 (a caller who is only `AuthenticatedUser`,
+tool: a caller who is only `AuthenticatedUser`,
 or who holds `SystemAdmin`/`SystemOwner` without an explicit `ComplianceOfficer`
-grant, is denied -- no implicit hierarchy override) and AC-BI-007 (a
+grant, is denied -- no implicit hierarchy override; a
 `ComplianceOfficer`-holding caller's call succeeds exactly as the tool already
-documents).
+documents.
 
 Mirrors `test_catalog_source_authz_gate.py` exactly (named in the orchestrator's
 own briefing as the pattern to reuse): `_verified_actor`/`_fake_store_factory`/
@@ -18,7 +18,7 @@ Every test here binds a real, non-bypass `AccessToken` (`_verified_actor`), so
 `authz_service.require_role(...)` check in `ingest_regulation`'s body actually
 runs -- distinct from every test in `test_ingest_regulation_tool.py`, which
 drives the tool under the local-test bypass (or, for its own two real-token
-Slice 1.4 tests, now seeds a `ComplianceOfficer` grant via
+tests, now seeds a `ComplianceOfficer` grant via
 `_grant_compliance_officer`) and needs no change here.
 
 `_CELEX`/`_SHORT_NAME`/`_configure_complete_llm_env` are imported directly from
@@ -48,7 +48,7 @@ from mcp_interface.test_ingest_regulation_tool import (
     _RID,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _SHORT_NAME,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _configure_complete_llm_env,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _use_real_pipeline_stages,  # pyright: ignore[reportPrivateUsage]  -- issue #163 Slice 20: reuse the one real-stage pipeline fixture builder for full-pipeline-success tests, rather than a second copy of its own reasoning in this file
+    _use_real_pipeline_stages,  # pyright: ignore[reportPrivateUsage]  -- reuse the one real-stage pipeline fixture builder for full-pipeline-success tests, rather than a second copy of its own reasoning in this file
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
@@ -57,7 +57,7 @@ from ps_service.mcp_interface import mcp_server
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+# The sync tool writes `ingestion_run.*` rows: keep them off Postgres.
 pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 _SYSTEM_OWNER_SUBJECT = "existing-system-owner"
@@ -132,7 +132,7 @@ def _text(result: CallToolResult) -> str:
 
 
 def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: a real, non-bypass caller holding only `AuthenticatedUser`
+    """A real, non-bypass caller holding only `AuthenticatedUser`
     (never elevated) gets the fixed access-denied message, and no pipeline
     stage ever runs.
     """
@@ -152,7 +152,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
 
 
 def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: `require_role`'s own non-hierarchical contract for
+    """`require_role`'s own non-hierarchical contract for
     `ComplianceOfficer` -- a caller holding `SystemAdmin` (but never
     separately granted `ComplianceOfficer`) is still denied, proving no
     implicit admin override reaches this gate.
@@ -177,7 +177,7 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
 
 
 def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-005: the same non-hierarchical proof, for the sole bootstrapped
+    """The same non-hierarchical proof, for the sole bootstrapped
     `SystemOwner` themselves -- unlike a `SystemAdmin`-minimum gate (where
     `SystemOwner` is deliberately also satisfying), a `ComplianceOfficer`
     minimum is exact-match only, so even `SystemOwner` needs its own
@@ -198,7 +198,7 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
 
 
 def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-007: a caller granted `ComplianceOfficer` succeeds exactly as
+    """A caller granted `ComplianceOfficer` succeeds exactly as
     `test_ingest_regulation_tool.py`'s own curated-CELEX happy path already
     documents -- no change to the tool's own success-path response shape.
     """
@@ -231,7 +231,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
 
 
 def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-011: a simulated store outage surfaces the distinct
+    """A simulated store outage surfaces the distinct
     `authorization_store_unavailable` result, never a silent default/success,
     and no pipeline stage ever runs.
     """

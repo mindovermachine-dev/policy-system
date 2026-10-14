@@ -1,10 +1,9 @@
 """Tests for the `set-catalog-source`/`reset-catalog-source`/`get-catalog-source`
-MCP tools (issues #125, #130): the tools keep their names and contracts while the override now
-lives in `runtime_config` (a hand-written `InMemoryRuntimeConfigStore` stands in for
-`PsycopgRuntimeConfigStore` at the persistence boundary; it still applies the catalog key's
-real type check and validator). AC-BI-006 (the shared validator rejects), AC-BI-007/008
-(set/get/reset round trips and REST parity), AC-BI-010/011 (fail closed / named errors), and
-CHANGES F4 (the local-test bypass records a sentinel actor).
+MCP tools: the override lives in `runtime_config` (a hand-written
+`InMemoryRuntimeConfigStore` stands in for `PsycopgRuntimeConfigStore` at the persistence
+boundary; it still applies the catalog key's real type check and validator). Covers the
+shared validator rejecting, set/get/reset round trips and REST parity, fail-closed / named
+errors, and the local-test bypass recording a sentinel actor.
 
 `pytest-asyncio` is not installed; tool coroutines are driven with bare
 `asyncio.run(...)`, exactly like `test_cypher_tool.py`/`test_near_miss_tools.py`.
@@ -107,7 +106,7 @@ def _shared_validator_message(url: str) -> str:
 
 
 def test_set_then_get_round_trip_uses_runtime_config_store(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-007: a valid `set-catalog-source` call is persisted and visible to `get` at once."""
+    """A valid `set-catalog-source` call is persisted and visible to `get` at once."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     store = _install_store(monkeypatch)
@@ -125,7 +124,7 @@ def test_set_then_get_round_trip_uses_runtime_config_store(monkeypatch: pytest.M
 def test_set_catalog_source_rejects_file_scheme_and_plain_http_via_shared_validator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-006: rejected exactly as before -- same validator, same message, nothing written."""
+    """Rejected by the shared validator with its message, nothing written."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     store = _install_store(monkeypatch)
@@ -142,7 +141,7 @@ def test_set_catalog_source_rejects_file_scheme_and_plain_http_via_shared_valida
 def test_set_catalog_source_under_local_test_bypass_records_sentinel_actor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHANGES F4: audit rows need an actor, and the bypass has no real one."""
+    """Audit rows need an actor, and the bypass has no real one."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     store = _install_store(monkeypatch)
@@ -171,7 +170,7 @@ def test_reset_catalog_source_under_local_test_bypass_records_sentinel_actor(
 def test_set_and_reset_return_named_error_string_when_config_write_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-011: a failed write (or its audit insert) is a named `error:` string, no change."""
+    """A failed write (or its audit insert) is a named `error:` string, no change."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     store = _install_store(monkeypatch)
@@ -207,7 +206,7 @@ def test_set_and_reset_return_the_store_unavailable_error_string(
 
 
 def test_reset_then_get_returns_default_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-008."""
+    """After a reset, `get-catalog-source` returns the default source."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     store = _install_store(monkeypatch)
@@ -254,7 +253,7 @@ def test_get_catalog_source_reports_default_when_no_override(
 def test_get_catalog_source_returns_error_string_when_override_read_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-010: no fall back to the default source, and no host/port/driver detail."""
+    """No fall back to the default source, and no host/port/driver detail."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     store = _install_store(monkeypatch)
@@ -281,7 +280,7 @@ def test_get_catalog_source_returns_error_string_when_stored_value_no_longer_val
 
 
 def test_catalog_source_tools_are_exactly_three_and_names_unchanged() -> None:
-    """AC-BI-001: no new tool (in particular no generic `set-config`) was added."""
+    """The catalog-source tools are exactly three, and there is no generic `set-config` tool."""
     tools = asyncio.run(mcp_server.server.list_tools())
     names = {tool.name for tool in tools}
 
@@ -313,7 +312,7 @@ def _client_with_store_and_transport(
 
 
 def test_get_catalog_uses_the_override_set_via_mcp_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-007: `set-catalog-source` takes effect on the very next `GET /catalog` call."""
+    """`set-catalog-source` takes effect on the very next `GET /catalog` call."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     store = _install_store(monkeypatch)
@@ -330,7 +329,7 @@ def test_get_catalog_uses_the_override_set_via_mcp_tool(monkeypatch: pytest.Monk
 def test_get_catalog_reverts_to_default_after_reset_catalog_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008, end to end: `reset-catalog-source` makes `GET /catalog` use the default again."""
+    """End to end: `reset-catalog-source` makes `GET /catalog` use the default again."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     store = _install_store(monkeypatch)
@@ -346,7 +345,7 @@ def test_get_catalog_reverts_to_default_after_reset_catalog_source(
 
 
 def test_get_catalog_fails_closed_when_the_override_read_fails() -> None:
-    """AC-BI-010 via `GET /catalog`: named 503, never the env-var/default source."""
+    """Via `GET /catalog`: named 503, never the env-var/default source."""
     configure()
     store = InMemoryRuntimeConfigStore(_app_config(), fail_reads=True)
 

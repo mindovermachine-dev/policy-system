@@ -1,5 +1,4 @@
-"""Tests for `ps_service.api.export_orchestration` (issue #71 PLAN.md S2,
-CHANGES.md Appendix A1/A2's merged "new S1" slice).
+"""Tests for `ps_service.api.export_orchestration`.
 
 `run_export` is a thin wrapper calling the injected `ExportStage` delegate
 through an `ExportDependencies` bundle (mirrors `RestoreDependencies`). These
@@ -60,7 +59,7 @@ _NATIVE_BYTES = b'{"nodes": [], "edges": []}'
 
 @pytest.fixture(autouse=True)
 def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture
-    """The gateway and system audit recorder the app lifespan installs (issue #213)."""
+    """The gateway and system audit recorder the app lifespan installs."""
     with process_gateway_installed():
         yield
 
@@ -218,7 +217,7 @@ def test_run_export_success_returns_accepted_response_shape(make_emitter: MakeEm
     assert response.manifest.celex == "32024R2847"
     assert [s.stage for s in response.stages] == ["embedded", "serialized", "cataloged"]
     assert len(stage.calls) == 1
-    # D1's scratch-directory proof: the delegate's own repo_root is never a
+    # Scratch-directory proof: the delegate's own repo_root is never a
     # real repo path -- it is rooted under the OS temp directory.
     call = stage.calls[0]
     assert str(call.repo_root).startswith(tempfile.gettempdir())

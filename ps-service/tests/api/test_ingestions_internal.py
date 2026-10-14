@@ -1,9 +1,7 @@
-"""HTTP tests for ``POST /ingestions`` -- the internal-document ingestion path (issue #54, S2).
+"""HTTP tests for ``POST /ingestions`` -- the internal-document ingestion path.
 
-Replaces the now-deleted ``test_internal_request_returns_501_referencing_54``
-(``tests/api/test_ingestions_catalog.py``): a ``source: "internal"`` request no
-longer 501s -- it carries the intake document's content directly in the
-request body (issue #91 -- no server-side path resolution) and runs the
+A ``source: "internal"`` request carries the intake document's content directly in the
+request body (no server-side path resolution) and runs the
 internal-seed pipeline's stages (``internal_ingestion``, ``merge``), via the
 same ``app.dependency_overrides`` fake ``PipelineDependencies`` pattern every
 other route test in this package uses (``tests/api/_fakes.py``).
@@ -83,7 +81,7 @@ def _stub_run_log(  # pyright: ignore[reportUnusedFunction]  # module autouse fi
     rationale -- ``run_internal_ingestion_pipeline`` emits its own
     ``ingestion_run`` entries through the same process-wide default emitter.
     """
-    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
+    # detroit-exception: process-wide atexit logging facade, not a business fake
     monkeypatch.setattr("ps_service.api.ingestion_orchestration.emit_log_entry", _noop_emit)
 
 
@@ -112,7 +110,7 @@ def _close_gateway_rigs() -> Iterator[None]:  # pyright: ignore[reportUnusedFunc
 
 def _client_with_fake(fake_deps: PipelineDependencies, rig: GatewayRig | None = None) -> TestClient:
     """A ``TestClient`` whose pipeline dependencies are ``fake_deps``, over a gateway rig."""
-    rig = rig or GatewayRig()  # the internal route fails closed without a gateway (issue #208)
+    rig = rig or GatewayRig()  # the internal route fails closed without a gateway
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
     app.dependency_overrides[get_principal] = lambda: Principal(sub="owner-1", iss="https://idp")
@@ -180,15 +178,15 @@ def _real_stage_dependencies(rig: GatewayRig, store: RigReadHandle) -> PipelineD
 def test_post_ingestions_internal_runs_real_pipeline(configured_logging: Path) -> None:
     """A well-formed internal request runs the real ``internal_ingestion`` and ``merge`` stages.
 
-    Issue #227: ``content`` is the parsed ``engineering-practices-seed.json``; the seed is
+    ``content`` is the parsed ``engineering-practices-seed.json``; the seed is
     ingested by the real ``internal_ingestion`` stage and merged by the real ``merge`` stage
-    (no faked merge any more), so the draft governance import is exercised end to end. The
+    (no faked merge), so the draft governance import is exercised end to end. The
     caller is ``("owner-1", "https://idp")`` -- every stored Policy is ``draft`` and owned by
-    them (AC-BI-002), the tree is complete (AC-BI-004) and the merge summary reports its
-    counts (AC-BI-011).
+    them, the tree is complete and the merge summary reports its
+    counts.
     """
     del configured_logging  # the real merge logs through the process-default emitter
-    rig = GatewayRig()  # the internal route fails closed without a gateway (issue #208)
+    rig = GatewayRig()  # the internal route fails closed without a gateway
     store = RigReadHandle(rig.graphs.open(POLICY_SYSTEM))
     client = _client_with_fake(_real_stage_dependencies(rig, store), rig=rig)
 
@@ -225,7 +223,7 @@ def test_post_ingestions_internal_runs_stages_in_order() -> None:
     """The internal pipeline runs ``internal_ingestion`` then ``merge`` and nothing else.
 
     Stages are fakes here (the real-stage run is the test above); the catalog-only
-    already-merged pre-flight never queries the single-tenant graph (AC-BI-005, issue #135).
+    already-merged pre-flight never queries the single-tenant graph .
     """
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     client = _client_with_fake(fake.dependencies)
@@ -244,7 +242,7 @@ def test_post_ingestions_internal_runs_stages_in_order() -> None:
 
 
 def test_merge_stage_receives_the_caller_as_governance_owner() -> None:
-    """Issue #227: the pipeline hands the verified caller to the merge stage as the import owner."""
+    """The pipeline hands the verified caller to the merge stage as the import owner."""
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     client = _client_with_fake(fake.dependencies)
 
@@ -257,7 +255,7 @@ def test_merge_stage_receives_the_caller_as_governance_owner() -> None:
 def test_merge_stage_receives_the_gateway_graph_names_and_the_ingest_audit_event(
     make_emitter: MakeEmitter,
 ) -> None:
-    """Issue #210 (3a): the internal-seed merge writes through the gateway the run resolved.
+    """The internal-seed merge writes through the gateway the run resolved.
 
     The merge gets the same submitter as the ingest stage, the single-tenant and baseline graph
     names, and the ONE system audit event id of the run (the ingest stage's group and the merge's
@@ -289,7 +287,7 @@ def test_merge_stage_receives_the_gateway_graph_names_and_the_ingest_audit_event
 
 
 def test_a_gateway_failure_in_the_merge_is_a_502_merge_failure_without_gateway_text() -> None:
-    """Issue #210 (3a, AC-BI-008): a persistence error from the merge is the usual merge 502."""
+    """A persistence error from the merge is the usual merge 502."""
     fake = build_fake_pipeline_dependencies(
         internal_rid="ENGPRAC-3.0",
         merge_error=CompanyMergePersistenceError(
@@ -311,7 +309,7 @@ def test_a_gateway_failure_in_the_merge_is_a_502_merge_failure_without_gateway_t
 
 
 def test_merge_stage_receives_the_pipeline_emitter(make_emitter: MakeEmitter) -> None:
-    """Issue #227: the emitter the run was given reaches the merge stage."""
+    """The emitter the run was given reaches the merge stage."""
     emitter, _log_path = make_emitter()
     rig = GatewayRig()
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
@@ -333,13 +331,11 @@ def test_merge_stage_receives_the_pipeline_emitter(make_emitter: MakeEmitter) ->
 
 
 def test_post_ingestions_internal_summary_reports_policies_key() -> None:
-    """AC-BI-010's structural half, now fully satisfied: the ``internal_ingestion``
-    stage's summary dict contains ``"policies"`` (GH #76 Slice 1), ``"standards"``
-    (GH #76 Slice 2), and ``"controls"`` (GH #76 Slice 3) keys -- and the
+    """The ``internal_ingestion`` stage's summary dict contains ``"policies"``,
+    ``"standards"`` and ``"controls"`` keys -- and the
     pipeline's own stage list is exactly ``["internal_ingestion", "merge"]``,
-    never the old three-stage ``governance_derivation`` shape, and no
-    ``governance_derivation``-outcome log entry is emitted anywhere in this
-    pipeline (structural: the stage itself was deleted outright in Slice 1).
+    with no ``governance_derivation`` stage and no ``governance_derivation``-outcome
+    log entry emitted anywhere in this pipeline.
     """
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     client = _client_with_fake(fake.dependencies)
@@ -360,7 +356,7 @@ def test_post_ingestions_internal_summary_reports_policies_key() -> None:
 
 
 def test_second_ingestion_same_title_is_structural_no_op() -> None:
-    """D4/AC-BI-018 (CHANGES.md; PLAN.md §6 S4 item 5): posting the exact
+    """Posting the exact
     same internal fixture TWICE in a row is safe -- both requests succeed,
     both report all three stages `succeeded`, and both runs resolve to the
     SAME ``regulatory_instrument_id`` and drive the ``merge`` stage with the
@@ -405,7 +401,7 @@ def test_second_ingestion_same_title_is_structural_no_op() -> None:
 
 
 def test_internal_source_request_still_forbids_an_unexpected_short_name_field() -> None:
-    """Issue #146 AC-BI-009: ``InternalIngestionRequest`` (``models.py``) has no
+    """``InternalIngestionRequest`` (``models.py``) has no
     ``short_name`` field, and its existing ``extra="forbid"`` config rejects
     one with 422 -- proving the model's shape is genuinely untouched by the
     catalog-only ``short_name`` requirement, not just "no diff seen".
@@ -422,7 +418,7 @@ def test_internal_source_request_still_forbids_an_unexpected_short_name_field() 
 
 
 def test_internal_ingestion_never_calls_resolve_ingestion_entry() -> None:
-    """Issue #146 AC-BI-009 / issue #193: ``routes.py``'s ``if request_body.source == "internal":``
+    """``routes.py``'s ``if request_body.source == "internal":``
     early-return never reaches ``resolve_ingestion_entry`` (the CELEX-existence and
     ``short_name``-collision identity checks) -- proving it is provably unreached on
     this path, not merely untested.
@@ -433,7 +429,7 @@ def test_internal_ingestion_never_calls_resolve_ingestion_entry() -> None:
     the only things in this pipeline that would ever query ``fake.single_tenant``
     before the pipeline's own stages run, so an empty ``fake.single_tenant.calls``
     proves it never ran, mirroring
-    ``test_post_ingestions_internal_succeeds_end_to_end``'s own AC-BI-005
+    ``test_post_ingestions_internal_succeeds_end_to_end``'s own
     assertion just above.
     """
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
@@ -448,11 +444,9 @@ def test_internal_ingestion_never_calls_resolve_ingestion_entry() -> None:
 
 
 def test_internal_ingestion_stage_failure_aborts_before_merge_and_names_stage() -> None:
-    """AC-BI-013: an ``internal_ingestion`` stage failure 502s, names the
-    stage, and no later stage (``merge``) ever runs. Replaces the deleted
-    ``test_governance_stage_failure_aborts_before_merge_and_names_stage``
-    (GH #76 removed the ``governance_derivation`` stage outright) -- this is
-    the internal pipeline's remaining first-stage failure-path proof,
+    """An ``internal_ingestion`` stage failure 502s, names the
+    stage, and no later stage (``merge``) ever runs. This is
+    the internal pipeline's first-stage failure-path proof,
     mirroring
     ``test_ingestions_catalog.py::test_stage_error_response_reports_failing_stage_and_sanitized_reason``'s
     exact shape for the catalog pipeline.
