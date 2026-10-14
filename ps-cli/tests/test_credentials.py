@@ -1,23 +1,21 @@
 """Tests for ps_cli.credentials: `CredentialStore`/`PersistenceBackend` Protocols and
-`PersistenceCredentialStore` (issue #123: msal-extensions-backed credential storage).
+`PersistenceCredentialStore` (msal-extensions-backed credential storage).
 
-Issue #121 drops `FileCredentialStore` entirely (AC-BI-008) -- any backend exception is
+There is no `FileCredentialStore` -- any backend exception is
 caught and raised as an actionable `PsCliError` instead of falling back to a plaintext
-file (AC-BI-006/007). `TokenBundle` shrinks to `refresh_token`/`issuer` only
-(AC-BI-001) -- `access_token`/`expires_at` are never persisted; the in-memory-only
-access token this issue introduces lives in `device_flow.AccessTokenCache` instead
+file. `TokenBundle` holds `refresh_token`/`issuer` only
+-- `access_token`/`expires_at` are never persisted; the in-memory-only
+access token lives in `device_flow.AccessTokenCache` instead
 (see `test_device_flow.py`).
 
-Issue #123 replaces the previous OS-credential-store-backed `KeyringCredentialStore`
-with `PersistenceCredentialStore`, an msal-extensions-shaped store taking a per-context
-persistence *factory* rather than one shared backend instance (D-123-2). There is no
+`PersistenceCredentialStore` is an msal-extensions-shaped store taking a per-context
+persistence *factory* rather than one shared backend instance. There is no
 `delete` primitive anywhere in msal-extensions' public API, so `delete_tokens` overwrites
 with an empty string, and `get_tokens` treats an empty loaded string the same as
-"nothing stored" (D-123-4) -- the old `PasswordDeleteError`-benign-no-op test has no
-msal-extensions equivalent and is removed as obsolete, not reshaped.
+"nothing stored".
 
 Portable fakes (`InMemoryPersistenceBackend`/`AlwaysRaisingPersistenceBackend`) live in
-`conftest.py` (D-121-7, reshaped for issue #123), shared across every affected test file.
+`conftest.py`, shared across every affected test file.
 """
 
 from __future__ import annotations
@@ -66,7 +64,7 @@ def test_persistence_credential_store_happy_path_round_trips(
 def test_persistence_credential_store_persists_only_refresh_token_and_issuer(
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """AC-BI-001: only `refresh_token`+`issuer` ever reach the persistence backend's own
+    """Only `refresh_token`+`issuer` ever reach the persistence backend's own
     string storage -- verified by inspecting the backend directly (not just through
     `CredentialStore.get_tokens()`), so a bug that leaked a third field into the JSON
     blob would be caught even if `TokenBundle`'s own shape somehow still round-tripped.
@@ -94,7 +92,7 @@ def test_persistence_credential_store_get_returns_none_for_missing_context(
 def test_persistence_credential_store_round_trips_with_no_refresh_token(
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """A `TokenBundle` with `refresh_token=None` round-trips (AC-BI-002's fail-closed
+    """A `TokenBundle` with `refresh_token=None` round-trips (the fail-closed
     "not-logged-in" shape is representable in the store).
     """
     store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
@@ -105,19 +103,19 @@ def test_persistence_credential_store_round_trips_with_no_refresh_token(
     assert store.get_tokens("dev") == tokens
 
 
-def test_persistence_credential_store_round_trips_a_refresh_token_exceeding_the_old_windows_keyring_limit(  # noqa: E501  # test name mirrors PLAN.md Slice 6's own literal test name verbatim
+def test_persistence_credential_store_round_trips_a_refresh_token_exceeding_the_old_windows_keyring_limit(  # noqa: E501  # the test name states the whole behaviour
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """AC-BI-005: a synthetic 5000-character `refresh_token` -- comfortably past both the
-    ~1280-char figure `TASK.md:9-11` cites and 2560 raw bytes, so the test is robust to
+    """A synthetic 5000-character `refresh_token` -- comfortably past both a ~1280-char
+    figure and 2560 raw bytes, so the test is robust to
     either interpretation of "the old limit" -- round-trips byte-for-byte through
     `PersistenceCredentialStore`'s JSON-encode -> `save()` -> `load()` -> JSON-decode path.
-    Proves the Slice 6 design note's claim directly: our own code imposes no size ceiling
+    Proves directly that our own code imposes no size ceiling
     anywhere in that round trip, unlike the old `WinVaultKeyring`-backed path whose
     ~1280-char ceiling came entirely from `CredWrite`'s own blob-size cap -- a
     Windows-OS-level constraint this store's persistence-agnostic encode/decode path
     never shared and `FilePersistenceWithDataProtection`'s DPAPI-encrypted-file backend
-    (unreachable off Windows, see this slice's own design note) does not either.
+    (unreachable off Windows) does not either.
     """
     store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
     oversized_refresh_token = "r" * 5000
@@ -135,8 +133,8 @@ def test_persistence_credential_store_isolates_credentials_per_context_name(
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Two different context names can never collide -- each gets its own persistence
-    location (D-123-1's isolation guarantee, keyed by filesystem path instead of by
-    username string as before D11).
+    location (the isolation guarantee, keyed by filesystem path rather than by
+    username string).
 
     `set_tokens("dev", ...)` then `get_tokens("prod")` must never return `"dev"`'s
     value -- proves the injected factory's own per-context backend isolation, which
@@ -154,7 +152,7 @@ def test_delete_tokens_removes_entry_then_get_returns_none(
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """`delete_tokens` removes a stored entry; a subsequent `get_tokens` returns `None`
-    (D-123-4: implemented as an empty-string overwrite, observably identical).
+    (implemented as an empty-string overwrite, observably identical).
     """
     store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
     store.set_tokens("dev", _TOKENS)
@@ -168,11 +166,9 @@ def test_delete_tokens_on_a_context_with_nothing_stored_is_a_benign_noop(
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """`delete_tokens` on a context nothing was ever saved for must not raise, and a
-    subsequent `get_tokens` must still return `None` (PLAN.md Slice 3 test 3;
-    CHANGES.md row 1 replaces the old `PasswordDeleteError`-benign-no-op test, which
-    has no msal-extensions equivalent, with this one -- proves the same "delete of
-    nothing is safe" property through D-123-4's unconditional empty-string overwrite
-    instead of a caught delete-specific exception type).
+    subsequent `get_tokens` must still return `None` -- proves the "delete of
+    nothing is safe" property through the unconditional empty-string overwrite
+    instead of a caught delete-specific exception type.
     """
     store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
 
@@ -184,10 +180,10 @@ def test_delete_tokens_on_a_context_with_nothing_stored_is_a_benign_noop(
 def test_get_tokens_with_non_persistence_error_exception_raises_actionable_ps_cli_error(
     build_always_raising_persistence: Callable[[str], AlwaysRaisingPersistenceBackend],
 ) -> None:
-    """AC-BI-006/011: a bare `OSError` (not `msal_extensions.persistence.
+    """A bare `OSError` (not `msal_extensions.persistence.
     PersistenceNotFound`) from `load` is caught and raised as `PsCliError`, naming the
     context and the exception type -- never falling back to a file, never leaking a
-    token value (AC-BI-007).
+    token value.
     """
     store = PersistenceCredentialStore(build_persistence=build_always_raising_persistence)
 
@@ -201,7 +197,7 @@ def test_get_tokens_with_non_persistence_error_exception_raises_actionable_ps_cl
 def test_set_tokens_with_non_persistence_error_exception_raises_actionable_ps_cli_error(
     build_always_raising_persistence: Callable[[str], AlwaysRaisingPersistenceBackend],
 ) -> None:
-    """AC-BI-006/007/008/011: a bare `OSError` from `save` raises `PsCliError`; the
+    """A bare `OSError` from `save` raises `PsCliError`; the
     raised message/hint never contain the token value that was being stored.
     """
     store = PersistenceCredentialStore(build_persistence=build_always_raising_persistence)
@@ -220,9 +216,9 @@ def test_set_tokens_with_non_persistence_error_exception_raises_actionable_ps_cl
 def test_delete_tokens_with_non_persistence_error_exception_raises_actionable_ps_cli_error(
     build_always_raising_persistence: Callable[[str], AlwaysRaisingPersistenceBackend],
 ) -> None:
-    """AC-BI-006/011: a bare `OSError` from `save` (delete's empty-string overwrite)
-    raises `PsCliError` -- `delete_tokens` has no benign-no-op special case any more
-    (D-123-4), so every backend exception here is genuine.
+    """A bare `OSError` from `save` (delete's empty-string overwrite)
+    raises `PsCliError` -- `delete_tokens` has no benign-no-op special case any more,
+    so every backend exception here is genuine.
     """
     store = PersistenceCredentialStore(build_persistence=build_always_raising_persistence)
 
@@ -234,8 +230,8 @@ def test_delete_tokens_with_non_persistence_error_exception_raises_actionable_ps
 
 
 def test_file_persistence_satisfies_the_persistence_backend_protocol(tmp_path: Path) -> None:
-    """CHANGES.md row 3: a real `msal_extensions.FilePersistence` -- never
-    `build_encrypted_persistence` (D-123-5's "never plaintext" rule is about what
+    """A real `msal_extensions.FilePersistence` -- never
+    `build_encrypted_persistence` (the "never plaintext" rule is about what
     production code constructs, not about this base-class shape check) -- structurally
     satisfies `PersistenceBackend`'s `save`/`load`/`get_location` shape, proven with a
     real, on-disk, unencrypted round trip. CI-safe on every platform: `FilePersistence`
@@ -256,7 +252,7 @@ def test_file_persistence_satisfies_the_persistence_backend_protocol(tmp_path: P
 def test_build_production_persistence_with_missing_pygobject_raises_actionable_ps_cli_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009/D-123-3: when PyGObject itself is missing, msal-extensions' own
+    """When PyGObject itself is missing, msal-extensions' own
     `libsecret.py` raises a bare `ImportError` (not a reshaped library type) whose
     message names the exact `apt install` command. `_build_production_persistence`
     must catch it and re-raise an actionable `PsCliError` -- verified by monkeypatching
@@ -294,15 +290,15 @@ def test_build_production_persistence_with_missing_pygobject_raises_actionable_p
 def test_build_production_persistence_with_version_mismatch_raises_actionable_ps_cli_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-009/D-123-3: the second exception type the same catch site must handle --
+    """The second exception type the same catch site must handle --
     when PyGObject is present but `gi.require_version("Secret", "1")` can't satisfy the
     requested version (or the subsequent `from gi.repository import Secret` fails),
     msal-extensions' `libsecret.py` re-raises `type(ex)(...)` over a `(ValueError,
     ImportError)` catch (`libsecret.py:28-37`) -- `gi.require_version` itself raises
     `ValueError` for an unresolvable namespace/version, so `ValueError` is the case this
     test exercises; the message text is copied verbatim from the installed
-    msal-extensions 1.3.1 source, not paraphrased. Proves AC-BI-009 catches both
-    exception types, not just `ImportError`.
+    msal-extensions 1.3.1 source, not paraphrased. Proves both
+    exception types are caught, not just `ImportError`.
     """
     real_version_mismatch_message = (
         'Require a package "gir1.2-secret-1" which could be installed by:\n'
@@ -328,7 +324,7 @@ def test_build_production_persistence_with_version_mismatch_raises_actionable_ps
 def test_build_credential_store_wires_the_production_persistence_factory() -> None:
     """`build_credential_store()` wires the production `PersistenceCredentialStore`.
 
-    Zero-argument (AC-BI-008: no `config_dir`, no `FileCredentialStore` anywhere in
+    Zero-argument (no `config_dir`, no `FileCredentialStore` anywhere in
     the get/set/delete path) -- structural identity check only, never actually calling
     `_build_production_persistence` (and so never invoking
     `msal_extensions.build_encrypted_persistence` for real) -- no test in this suite
@@ -347,7 +343,7 @@ def test_build_credential_store_wires_the_production_persistence_factory() -> No
 
 
 class _FlakyReadPersistence:
-    """Raises each queued exception from `load` once, then serves `content` (issue #180)."""
+    """Raises each queued exception from `load` once, then serves `content`."""
 
     def __init__(self, lock_path: Path, failures: list[Exception], content: str) -> None:
         self._lock_path = lock_path
@@ -371,7 +367,7 @@ class _FlakyReadPersistence:
 def test_get_tokens_retries_a_transient_keychain_error_and_returns_the_rewritten_value(
     tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
 ) -> None:
-    """AC-BI-001/003: a read racing another process's rewrite (`-67701`) is retried."""
+    """A read racing another process's rewrite (`-67701`) is retried."""
     encoded = credentials._encode_token_bundle(_TOKENS)  # pyright: ignore[reportPrivateUsage]
     backend = _FlakyReadPersistence(tmp_path / "dev.bin", [fake_keychain_error(-67701)], encoded)
     store = PersistenceCredentialStore(
@@ -383,7 +379,7 @@ def test_get_tokens_retries_a_transient_keychain_error_and_returns_the_rewritten
 
 
 def test_get_tokens_retries_a_not_found_read_caught_mid_rewrite(tmp_path: Path) -> None:
-    """AC-BI-001/003: `PersistenceNotFound` while the item is mid-rewrite is retried."""
+    """`PersistenceNotFound` while the item is mid-rewrite is retried."""
     encoded = credentials._encode_token_bundle(_TOKENS)  # pyright: ignore[reportPrivateUsage]
     not_found = msal_extensions.persistence.PersistenceNotFound(message="x", location="y")
     backend = _FlakyReadPersistence(tmp_path / "dev.bin", [not_found], encoded)
@@ -397,7 +393,7 @@ def test_get_tokens_retries_a_not_found_read_caught_mid_rewrite(tmp_path: Path) 
 def test_get_tokens_after_logout_returns_none_not_keychain_error(
     tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
 ) -> None:
-    """AC-BI-002: a removed credential (empty sentinel) reads as 'nothing stored'."""
+    """A removed credential (empty sentinel) reads as 'nothing stored'."""
     backend = _FlakyReadPersistence(tmp_path / "dev.bin", [fake_keychain_error(-67701)], "")
     store = PersistenceCredentialStore(
         build_persistence=lambda _c: backend, read_retry_delay_seconds=0
@@ -409,7 +405,7 @@ def test_get_tokens_after_logout_returns_none_not_keychain_error(
 def test_get_tokens_persistent_failure_still_fails_closed_with_status_and_no_token(
     tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
 ) -> None:
-    """AC-BI-004/005: a genuinely unavailable backend raises after bounded retries; the
+    """A genuinely unavailable backend raises after bounded retries; the
     hint carries the numeric status and never a token value.
     """
     failures: list[Exception] = [fake_keychain_error(-25308) for _ in range(10)]
@@ -429,7 +425,7 @@ def test_get_tokens_persistent_failure_still_fails_closed_with_status_and_no_tok
 def test_persistent_minus_67701_hint_says_auth_login_not_unlock(
     tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
 ) -> None:
-    """Issue #181 AC-BI-008: -67701 (errSecInvalidRecord) is not a locked keychain."""
+    """-67701 (errSecInvalidRecord) is not a locked keychain."""
     failures: list[Exception] = [fake_keychain_error(-67701) for _ in range(10)]
     backend = _FlakyReadPersistence(tmp_path / "dev.bin", failures, "refresh-tok-secret")
     store = PersistenceCredentialStore(
@@ -449,7 +445,7 @@ def test_persistent_minus_67701_hint_says_auth_login_not_unlock(
 def test_other_statuses_keep_the_unlock_hint(
     tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
 ) -> None:
-    """Issue #181 AC-BI-008: every other status keeps the existing hint byte for byte."""
+    """Every other status keeps the existing hint byte for byte."""
     failures: list[Exception] = [fake_keychain_error(-25308) for _ in range(10)]
     backend = _FlakyReadPersistence(tmp_path / "dev.bin", failures, "")
     store = PersistenceCredentialStore(
@@ -469,7 +465,7 @@ def test_other_statuses_keep_the_unlock_hint(
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "darwin", reason="reproduces the macOS Keychain rewrite race")
 def test_live_keychain_reader_survives_concurrent_rewrites(tmp_path: Path) -> None:
-    """Issue #180 reproduction (AC-BI-001/003): a reader held open against the real
+    """Reproduction: a reader held open against the real
     macOS Keychain, while another process rewrites the same entry, never raises.
 
     Uses a throwaway service/account, deleted afterwards -- never a real credential.
@@ -508,7 +504,7 @@ def test_live_keychain_reader_survives_concurrent_rewrites(tmp_path: Path) -> No
 
 
 class _ContentEchoingPersistence:
-    """Every call raises an exception whose text embeds the stored content (issue #181).
+    """Every call raises an exception whose text embeds the stored content.
 
     Models a backend whose own error message carries the secret it just handled, so the
     tests below prove `PersistenceCredentialStore` never relays that text.
@@ -539,7 +535,7 @@ class _ContentEchoingPersistence:
 def test_credential_store_error_str_and_repr_never_contain_stored_content(
     tmp_path: Path, operation: str
 ) -> None:
-    """Issue #181 AC-BI-010: a backend error echoing the secret is never relayed."""
+    """A backend error echoing the secret is never relayed."""
     secret = "RT-SENTINEL-9f3a"
     backend = _ContentEchoingPersistence(tmp_path / "dev.bin", secret, -67701)
     store = PersistenceCredentialStore(

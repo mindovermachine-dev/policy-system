@@ -1,9 +1,9 @@
-"""Tests for ps_cli.intake_validation: validate_local_seed_file (D3/D7, PLAN.md §6 S1).
+"""Tests for ps_cli.intake_validation: validate_local_seed_file.
 
 `_VALID_SEED_DOCUMENT` mirrors `docs/artifacts/internal-regulation-intake-format.md`'s
 own worked example verbatim, kept in lockstep with the equivalent fixture in
 `ps-service/tests/ingestion/adapters/internal_seed/test_schema.py` (both members
-validate the same document against their own packaged copy of the same schema, D7).
+validate the same document against their own packaged copy of the same schema).
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def _write_seed_file(tmp_path: Path, document: dict[str, Any]) -> Path:
 def test_validate_local_seed_file_accepts_the_documented_worked_example(
     tmp_path: Path,
 ) -> None:
-    """A schema-conformant file is accepted, and the parsed document is returned (D13)."""
+    """A schema-conformant file is accepted, and the parsed document is returned."""
     seed_path = _write_seed_file(tmp_path, copy.deepcopy(_VALID_SEED_DOCUMENT))
 
     document = validate_local_seed_file(seed_path)
@@ -109,9 +109,9 @@ def test_validate_local_seed_file_accepts_the_documented_worked_example(
 def test_rejects_seed_missing_required_property(tmp_path: Path) -> None:
     """A `RegulatoryInstrument` missing a required property (`source_type`) is rejected.
 
-    The raised `PsCliError` names the specific missing property -- AC-BI-019's
-    "naming the specific violation, not a generic parse error" -- not just
-    "invalid JSON" or "schema violation".
+    The raised `PsCliError` names the specific missing property -- "naming the
+    specific violation, not a generic parse error" -- not just "invalid JSON" or
+    "schema violation".
     """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     del document["nodes"][0]["properties"]["source_type"]
@@ -124,7 +124,7 @@ def test_rejects_seed_missing_required_property(tmp_path: Path) -> None:
 
 
 def test_validate_local_seed_file_rejects_unknown_top_level_field(tmp_path: Path) -> None:
-    """A submitted `graph_name` field is rejected outright (D2), not silently ignored."""
+    """A submitted `graph_name` field is rejected outright, not silently ignored."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["graph_name"] = "policy_system"
     seed_path = _write_seed_file(tmp_path, document)

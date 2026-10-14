@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-r"""Digest snapshots of FalkorDB graphs for the backup and restore verification (issue #216).
+r"""Digest snapshots of FalkorDB graphs for verifying a backup and restore round trip.
 
     graph_digests.py snapshot --graph NAME [--graph NAME ...] --out FILE [--host H] [--port P]
     graph_digests.py compare BEFORE.json AFTER.json
@@ -41,17 +41,44 @@ def open_database(
     *,
     connect: Callable[[str, int], DriverDatabase] | None = None,
 ) -> ReadOnlyDatabase:
-    """Open FalkorDB at `host`/`port` through the read-only handle."""
+    """Open FalkorDB through the read-only handle, which cannot write.
+
+    Args:
+        host: FalkorDB host name or address.
+        port: FalkorDB TCP port.
+        connect: Optional driver factory taking `(host, port)`; `None` uses the real driver.
+            Tests pass a fake here.
+
+    Returns:
+        A read-only database handle bound to `host`/`port`.
+    """
     return open_read_only_database(host, port, connect=connect)
 
 
 def snapshot_digests(database: ReadOnlyDatabase, graphs: Sequence[str]) -> dict[str, str]:
-    """Return the canonical digest of each named graph (an absent graph digests as empty)."""
+    """Compute the canonical content digest of each named graph.
+
+    Args:
+        database: Read-only handle to the FalkorDB instance holding the graphs.
+        graphs: Graph names to digest; an absent graph digests as an empty graph.
+
+    Returns:
+        Mapping of graph name to its `sha256:<hex>` digest, in the order of `graphs`.
+    """
     return {name: canonical_digest(database.select_graph(name)) for name in graphs}
 
 
 def compare_snapshots(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    """Return one line per graph whose digest differs or that only one snapshot holds."""
+    """Describe every difference between two digest snapshots.
+
+    Args:
+        before: Graph name to digest mapping taken first.
+        after: Graph name to digest mapping taken second.
+
+    Returns:
+        One human-readable line per graph that is missing from `after`, extra in `after` or
+        whose digest differs, ordered by graph name; empty when the snapshots are equal.
+    """
     differences: list[str] = []
     for name in sorted(before.keys() | after.keys()):
         if name not in after:
@@ -72,7 +99,9 @@ def _read_snapshot(path: str) -> dict[str, str]:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Graph digest snapshots for #216 verification")
+    parser = argparse.ArgumentParser(
+        description="Write and compare per-graph content digests (backup/restore verification)"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     snapshot = commands.add_parser("snapshot", help="write the digest of each named graph")
     snapshot.add_argument("--graph", action="append", default=[], help="graph name (repeatable)")
@@ -92,7 +121,25 @@ def main(
     *,
     connect: Callable[[str, int], DriverDatabase] | None = None,
 ) -> int:
-    """Run the CLI; return the process exit code."""
+    """Run the `snapshot` or `compare` command.
+
+    Args:
+        argv: Command-line arguments without the program name; `None` reads `sys.argv`.
+        connect: Optional driver factory for tests, forwarded to `open_database`.
+
+    Returns:
+        0 on success (snapshot written, or snapshots equal); 1 when `snapshot` has no
+        `--graph`, when `compare` finds differences, or when argument parsing fails.
+
+    Raises:
+        OSError: The snapshot file cannot be read or written.
+        json.JSONDecodeError: A `compare` input file is not valid JSON.
+        TypeError: A `compare` input file does not hold a JSON object.
+
+    Side Effects:
+        `snapshot` writes the `--out` JSON file and logs one event line per graph to stderr;
+        `compare` logs each difference to stderr. FalkorDB is only read.
+    """
     try:
         args = _parser().parse_args(argv)
     except SystemExit as exit_request:

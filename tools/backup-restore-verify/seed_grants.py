@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed access-role grants for the backup and restore verification (issue #216).
+"""Seed access-role grants so a backup and restore round trip has authorization data to verify.
 
 Run inside the ps-service pod (it reads the service's own configuration from the environment):
 
@@ -37,7 +37,20 @@ SEED_ROLES = (
 def seed_grants(
     store: AccessRoleStore, *, issuer: str, prefix: str, roles: Sequence[AccessRole] = SEED_ROLES
 ) -> list[tuple[str, AccessRole]]:
-    """Grant one role to each of `len(roles)` synthetic principals; return what was granted."""
+    """Grant one access role to each of a set of synthetic principals.
+
+    Args:
+        store: Access-role store that records each grant and its audit event.
+        issuer: Identity issuer recorded for the actor and every granted principal.
+        prefix: Prefix of each synthetic subject; the lower-cased role value is appended.
+        roles: Roles to grant, one principal per role; defaults to `SEED_ROLES`.
+
+    Returns:
+        `(subject, role)` pairs in the order granted.
+
+    Raises:
+        Exception: Whatever the store raises when a grant is rejected; earlier grants stay.
+    """
     actor = (SEED_ACTOR_SUBJECT, issuer)
     granted: list[tuple[str, AccessRole]] = []
     for role in roles:
@@ -48,7 +61,22 @@ def seed_grants(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Seed the grants through the service's own configuration; return the exit code."""
+    """Seed the default role grants using the service's own configuration.
+
+    Args:
+        argv: Command-line arguments without the program name; `None` reads `sys.argv`.
+            `--subject-prefix` sets the synthetic subject prefix.
+
+    Returns:
+        0 once every grant is recorded.
+
+    Raises:
+        Exception: Any configuration or store failure propagates unchanged.
+
+    Side Effects:
+        Inserts assignment rows and audit events in PS Postgres and logs one event line per
+        grant to stderr.
+    """
     parser = argparse.ArgumentParser(description="Seed access-role grants through the store")
     parser.add_argument("--subject-prefix", default="backup-restore-verify")
     args = parser.parse_args(argv)

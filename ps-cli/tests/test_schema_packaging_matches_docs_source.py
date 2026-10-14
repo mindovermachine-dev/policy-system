@@ -1,7 +1,7 @@
-"""D7: `ps-cli`'s packaged schema copy must stay byte-identical to its docs source.
+"""`ps-cli`'s packaged schema copy must stay byte-identical to its docs source.
 
 `docs/artifacts/schemas/internal-regulation-intake.v1.schema.json` is the
-single authored source of truth (D7); `ps_cli/schemas/internal_regulation_
+single authored source of truth; `ps_cli/schemas/internal_regulation_
 intake_v1.schema.json` is a vendored copy (the workspace's "no shared
 internal package between ps-service and ps-cli" rule forbids importing the
 docs copy at runtime). This test is the only thing that would catch the two

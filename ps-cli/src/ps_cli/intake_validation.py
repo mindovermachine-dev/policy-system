@@ -1,10 +1,9 @@
-"""Local JSON Schema validation for `ps-cli ingest document`'s submitted file (D3/D7).
+"""Local JSON Schema validation for `ps-cli ingest document`'s submitted file.
 
 `validate_local_seed_file` is called by `handlers.handle_ingest_document` before
-any network call reaches PS Service (AC-BI-019/B4). `ps-cli` and `ps-service`
-share a filesystem in every environment this issue targets (D3's deployment
-reconciliation) -- `ps-cli` validates the same file, at the same relative path,
-that `ps-service` will independently resolve and validate itself server-side.
+any network call reaches PS Service. `ps-cli` and `ps-service` share a filesystem in
+every supported environment -- `ps-cli` validates the same file, at the same relative
+path, that `ps-service` will independently resolve and validate itself server-side.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ _SCHEMA_RESOURCE_NAME = "internal_regulation_intake_v1.schema.json"
 def _load_validator() -> Draft202012Validator:
     """Load and compile `ps-cli`'s packaged copy of the schema; cached for the process lifetime.
 
-    Reads the packaged copy (D7: `ps_cli/schemas/internal_regulation_intake_v1
+    Reads the packaged copy (`ps_cli/schemas/internal_regulation_intake_v1
     .schema.json`, byte-identical to `docs/artifacts/schemas/internal-regulation-
     intake.v1.schema.json`) via `importlib.resources`, never a relative
     filesystem path, so resolution is identical whether run from source or an
@@ -50,7 +49,7 @@ def _read_seed_document(path: Path) -> dict[str, object]:
 
     Raises `PsCliError` if `path` does not exist, is not a regular file, or is
     not valid JSON, or if the parsed JSON is not itself an object -- always
-    naming the specific problem, never a generic parse failure (AC-BI-019).
+    naming the specific problem, never a generic parse failure.
     """
     if not path.is_file():
         raise PsCliError(
@@ -97,14 +96,25 @@ def _describe_first_violation(
 def validate_local_seed_file(path: Path) -> dict[str, object]:
     """Validate the local file at `path` against the packaged intake-format JSON Schema.
 
-    Raises `PsCliError` naming the specific missing/invalid property (never a
-    generic parse error, AC-BI-019) when `path` is missing, unreadable, not
-    valid JSON, or fails schema validation. Returns the parsed document on a
-    conforming file, so `handlers.handle_ingest_document` can hand it
-    straight to `client.ingest_internal()` without re-reading/re-parsing the
-    file a second time (issue #91). Called by `handlers.handle_ingest_document`
-    before `client.ingest_internal()` -- a rejection here means zero HTTP
-    calls are ever made (D3/B4).
+    Returns the parsed document on a conforming file, so
+    `handlers.handle_ingest_document` can hand it straight to
+    `client.ingest_internal()` without re-reading and re-parsing the file. Called before
+    `client.ingest_internal()` -- a rejection here means zero HTTP calls are ever made.
+
+    Parameters:
+        path: Local file expected to hold the internal-regulation intake JSON.
+
+    Returns:
+        The parsed JSON object (top-level mapping) that conforms to the schema.
+
+    Raises:
+        PsCliError: `path` does not exist or is not a regular file, is not valid
+            JSON, does not hold a JSON object at its root, or fails schema
+            validation. The message names the specific missing/invalid property,
+            never a generic parse error.
+
+    Side Effects:
+        Reads `path`; the compiled schema is loaded once per process and cached.
     """
     document = _read_seed_document(path)
     validator = _load_validator()

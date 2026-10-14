@@ -2,9 +2,9 @@
 
 Vendored per L2 Project Structure's "fully decoupled... vendors its own copy" rule.
 These are `ps-cli`'s own shapes for the JSON bodies PS Service returns, not imports of
-`ps_service.api.models` (that would violate AC-BI-004's architecture boundary — see
-`ps-cli/tests/test_architecture_boundary.py`). Per PLAN.md §1 D6, no Pydantic: a
-`TypedDict` for the raw JSON shape, and a frozen `dataclass` for the parsed result a
+`ps_service.api.models` (that would violate the architecture boundary enforced by
+`ps-cli/tests/test_architecture_boundary.py`). There is no Pydantic: a `TypedDict`
+describes the raw JSON shape, and a frozen `dataclass` holds the parsed result a
 command handler consumes.
 """
 

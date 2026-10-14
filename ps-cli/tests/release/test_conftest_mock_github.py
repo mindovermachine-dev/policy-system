@@ -1,11 +1,11 @@
-"""Slice 2 smoke test for the fake-`curl` test harness (GH issue #81, CHANGES.md X-01).
+"""Smoke test for the fake-`curl` test harness.
 
 `ps-cli/tests/release/conftest.py`'s `fake_curl`/`wheel_builder` fixtures are the
-infrastructure every later `install.sh` slice (3-9) trusts; per PLAN.md §0's own framing for
-infra slices, an untested fixture every later slice trusts is exactly the kind of foundation
-that must be provable on its own before anything is built on top of it.
+infrastructure every `install.sh` test trusts; an untested fixture every test trusts is
+exactly the kind of foundation that must be provable on its own before anything is built
+on top of it.
 
-This test drives the fake `curl` exactly the two ways the rewritten `install.sh` (Slice 3)
+This test drives the fake `curl` exactly the two ways the rewritten `install.sh`
 will: a metadata fetch with no `-o` (`curl -fsSL "<releases/latest URL>"`), then a file
 download with `-o <dest> <url>` using the `browser_download_url` the metadata handed back --
 and checks the downloaded bytes are the real, session-built wheel's bytes via a real

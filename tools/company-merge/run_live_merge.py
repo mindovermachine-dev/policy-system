@@ -1,71 +1,87 @@
 #!/usr/bin/env python3
-r"""Maintainer CLI: execute the live `MergeBaselineGraph` run into `policy_system` (issue #28).
+r"""Run the live Company Merge of the three external baselines into `policy_system`.
 
-**Slice 5 of issue #28** (PLAN.md §4, amended by CHANGES.md #1/#2/#3): a
-re-runnable CLI, not ad-hoc commands. Every collaborator this script needs
-beyond argv is dependency-injected on `main()` -- `graph_provider`,
-`merge_fn` (defaults to the real `ps_service.company_merge.merge.merge_baseline_graph`),
-`clock` -- so the whole orchestration is fully unit-testable with hand-written
-fakes, with zero live FalkorDB/LLM dependency
-(`ps-service/tests/company_merge/test_run_live_merge_cli.py`).
+A re-runnable, approval-gated operator CLI. It merges the `CRA-1.0`, `NIS2-1.0` and
+`GDPR-1.0` baseline graphs into the shared `policy_system` graph by calling
+`ps_service.company_merge.merge.merge_baseline_graph` once per regulation, then writes
+a JSON before/after report.
 
-**This script is the single, approved place a live write into the real,
-shared `policy_system` graph is ever issued from in this issue's own
-tooling.** It refuses to proceed past two gates before any write:
+**This script is the single approved place a live write into the real, shared
+`policy_system` graph is issued from by the Company Merge tooling.** It refuses to
+proceed past two gates before any write:
 
-1. **Approval gate** (AC-BI-001, `ps_service.company_merge.live_merge_approval.
-   load_and_validate_approval`): a human-authored approval file, never written
-   by this script or any test, must already exist at `--approval-file` and
-   validate for the given `--run-kind` (`initial` or `rerun` -- CHANGES.md
-   #3: this selects one of two hardcoded confirmation phrases, never a
-   free-form argv value). Checked FIRST, before any graph is even selected.
-2. **Precondition check** (AC-BI-002/AC-BI-003,
-   `ps_service.company_merge.preconditions.check_obligation_has_edge_cardinality`):
-   re-run live, immediately before the merge, against all three
-   currently-mapped `{short}_baseline` graphs. Any violation on any graph
-   blocks the merge entirely -- zero `merge_baseline_graph` calls issued.
+1. **Approval gate** (`ps_service.company_merge.live_merge_approval.
+   load_and_validate_approval`): a human-authored approval file, never written by this
+   script, must already exist at `--approval-file` and validate for the given
+   `--run-kind` (`initial` or `rerun`). The run kind selects one of two hardcoded
+   confirmation phrases; it is never a free-form value. Checked first, before any
+   graph is selected.
+2. **Precondition check**
+   (`ps_service.company_merge.preconditions.check_obligation_has_edge_cardinality`):
+   re-run live, immediately before the merge, against the `cra_baseline`,
+   `gdpr_baseline` and `nis2_baseline` graphs. Any violation on any graph blocks the
+   merge entirely; no `merge_baseline_graph` call is issued.
 
-Only once both gates pass does this script call `merge_baseline_graph` for
-CRA-1.0, then NIS2-1.0, then GDPR-1.0 (in that fixed order -- CRA/NIS2 are
-refreshing already-merged data per PLAN.md §0.3's finding, GDPR is the
-genuinely new merge), each under its own `run_id`
-(`issue28-live-merge-{short}-{timestamp}`), stopping immediately if any call
-raises. A before/after snapshot of `policy_system`'s touched labels/
-relationship-types (node counts, edge counts, node id-sets, node properties
-with `embedding` stripped for Capability, DEFINES/EXPRESSES edge properties,
-and HAS/SATISFIED_BY/REQUIRES edge existence-pairs -- CHANGES.md #1) is
-written into a JSON report. On full success the approval file is renamed
-with a `.consumed-<timestamp>` suffix so it can never be silently reused for
-a later invocation; on any failure it is left untouched (a retry against the
-same still-relevant approval remains possible).
+Only once both gates pass does it merge CRA-1.0, then NIS2-1.0, then GDPR-1.0, in that
+fixed order (CRA and NIS2 refresh already-merged data, GDPR is the genuinely new
+merge, so a problem surfaces on the lower-risk case first). Each regulation runs under
+its own `run_id` (a fixed live-merge prefix, the lower-cased short name and the UTC
+start timestamp) and the run stops at the first regulation that raises.
+
+A before/after snapshot of the graph is written into the report: node counts, edge
+counts, node id sets, node properties (with `embedding` stripped from Capability
+nodes), DEFINES/EXPRESSES edge properties, and HAS/SATISFIED_BY/REQUIRES edge
+endpoint pairs. On full success the approval file is renamed with a
+`.consumed-<timestamp>` suffix so it cannot be reused; on any failure it is left
+untouched, so a retry against the same still-valid approval remains possible.
 
     uv run tools/company-merge/run_live_merge.py \\
-        --approval-file .orchestrator/tracker/issue-28-live-merge-verification/\\
-APPROVAL_LIVE_MERGE_INITIAL.md \\
+        --approval-file ./APPROVAL_LIVE_MERGE_INITIAL.md \\
         --run-kind initial
 
-**Scope (issue #227)**: this CLI merges the three EXTERNAL regulations only. It passes no
+Options:
+    --approval-file  Path to the human-authored approval record (required).
+    --run-kind       `initial` or `rerun` (required); selects the confirmation phrase
+                     the approval file must carry.
+    --report-path    Where the JSON before/after report is written (default: a
+                     UTC-timestamped file in the tool's built-in report directory).
+    --host, --port   FalkorDB location (default: env PS_FALKORDB_HOST /
+                     PS_FALKORDB_PORT, else localhost:6379).
+
+Exit codes:
+    0   Full success; the report path and consumed approval path are printed.
+    1   FalkorDB failed during the precondition check, the merge threshold or
+        embedding model is not configured, or the Graph Write Gateway could not be
+        built (for example the PS state database is not configured).
+    2   The approval gate failed.
+    3   At least one baseline graph violates the precondition.
+    4   `merge_baseline_graph` or the per-regulation audit row failed partway through;
+        the report lists the error.
+
+**Scope.** This CLI merges the three external regulations only. It passes no
 `governance=` to `merge_baseline_graph`, which imports an internal-sourced baseline's
-Policy/Standard/Control tree as caller-owned drafts and so needs an owner: pointed at an
-internal baseline that carries a Policy, the merge fails closed with
-`GovernanceOwnerRequiredError` (and the run is reported as a `merge_fn` failure, exit code 4).
-Internal documents are ingested through `POST /ingestions` (or restored), not through this tool.
+Policy/Standard/Control tree as caller-owned drafts and so needs an owner: pointed at
+an internal baseline that carries a Policy, the merge fails closed with
+`GovernanceOwnerRequiredError` and the run is reported as a failure (exit code 4).
+Internal documents are ingested through `POST /ingestions` (or restored), not through
+this tool.
 
-**Writes go through the Graph Write Gateway (issue #210).** `merge_baseline_graph` no longer
-writes `policy_system` directly: every write is a logged group submitted to the gateway, which
-anchors it to an audit event. This CLI builds the gateway from config
-(`build_default_graph_write_gateway`) and, for each regulation, records one system-actor
-`ingestion_run.submit` audit row whose `resource_id` is that run's id
-(`build_system_audit_recorder`), then hands the gateway, the two graph names and the row's id to
-the merge. It fails closed: if the PS state database is not configured (no gateway can be built)
-it exits 1 before any graph is selected, and if the audit row cannot be written the run stops
-as a `merge_fn` failure (exit 4) before that regulation's merge. The CLI therefore needs the PS
-state database (`PS_STATE_POSTGRES_*`) in addition to FalkorDB.
+**Writes go through the Graph Write Gateway.** `merge_baseline_graph` does not write
+`policy_system` directly: every write is a logged group submitted to the gateway,
+which anchors it to an audit event. This CLI builds the gateway from the service
+configuration (`build_default_graph_write_gateway`) and, for each regulation, records
+one system-actor `ingestion_run.submit` audit row whose `resource_id` is that run's id
+(`build_system_audit_recorder`), then hands the gateway, the two graph names and the
+row's id to the merge. It fails closed: if the PS state database is not configured no
+gateway can be built and it exits 1 before any graph is selected; if the audit row
+cannot be written the run stops as a merge failure (exit 4) before that regulation's
+merge. The CLI therefore needs the PS state database (`PS_STATE_POSTGRES_*`) in
+addition to FalkorDB.
 
-Requires a running FalkorDB instance with `cra_baseline`/`gdpr_baseline`/
-`nis2_baseline` and `policy_system` reachable, the PS state Postgres, and
-`PS_COMPANYMERGE_SIMILARITY_THRESHOLD`/`PS_LLMINTERFACE_EMBED_MODEL` resolvable
-via `ps_service.config.load_config()`.
+Requires a running FalkorDB with `cra_baseline`, `gdpr_baseline`, `nis2_baseline` and
+`policy_system` reachable, the PS state Postgres, and
+`PS_COMPANYMERGE_SIMILARITY_THRESHOLD` and `PS_LLMINTERFACE_EMBED_MODEL` resolvable
+through `ps_service.config.load_config()`.
 """
 
 from __future__ import annotations
@@ -121,9 +137,8 @@ DEFAULT_PORT = int(os.environ.get("PS_FALKORDB_PORT", "6379"))
 # `check_baseline_preconditions.py`'s own `_CURRENTLY_MAPPED_SHORT_NAMES`.
 _PRECONDITION_CHECK_SHORT_NAMES = ("CRA", "GDPR", "NIS2")
 
-# Fixed run order (PLAN.md §4.1 step 8, as directed for this slice): CRA and NIS2 first --
-# refreshing already-merged data per PLAN.md §0.3's finding -- GDPR last as the genuinely new
-# merge, so a problem surfaces on the lower-risk idempotent case first.
+# Fixed run order: CRA and NIS2 first (refreshing already-merged data), GDPR last as the
+# genuinely new merge, so a problem surfaces on the lower-risk idempotent case first.
 _RUN_ORDER: tuple[tuple[str, str], ...] = (
     ("CRA", "CRA-1.0"),
     ("NIS2", "NIS2-1.0"),
@@ -137,12 +152,11 @@ _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 _MERGE_FAILURE_EXIT_CODE = 4
 
-# The five node labels / relationship types this issue's live merge touches (PLAN.md §4.1 steps
-# 7/9, CHANGES.md #1). Own copy of `tests/company_merge/_live_merge_assertions.py`'s query
-# shapes -- this is PRODUCTION code, which cannot import a test-only module, so the identical
-# query text is deliberately duplicated here (mirrors this repo's existing "own copy of an
-# established shape, not a shared import" convention, e.g. `company_merge/falkordb_client.py`'s
-# own docstring re: `domain_mapper.falkordb_client`).
+# The five node labels / relationship types the live merge touches. Own copy of
+# `tests/company_merge/_live_merge_assertions.py`'s query shapes: this is production code,
+# which cannot import a test-only module, so the query text is deliberately duplicated
+# (the repo's "own copy of an established shape, not a shared import" convention, as in
+# `company_merge/falkordb_client.py` re: `domain_mapper.falkordb_client`).
 _NODE_LABELS = ("RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability")
 _EDGE_TYPES = ("DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES")
 _PROPERTY_BEARING_EDGE_TYPES = ("DEFINES", "EXPRESSES")
@@ -178,8 +192,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--report-path",
         type=Path,
         default=None,
-        help="Where the JSON before/after report is written (default: under this issue's "
-        "own tracker directory, named with a UTC timestamp)",
+        help="Where the JSON before/after report is written (default: a UTC-timestamped "
+        "file in the tool's built-in report directory)",
     )
     parser.add_argument("--host", default=DEFAULT_HOST, help="FalkorDB host")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="FalkorDB port")
@@ -187,6 +201,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def _default_report_path(run_timestamp: str) -> Path:
+    """Return the built-in report location for a run started at `run_timestamp`."""
     repo_root = Path(__file__).resolve().parents[2]
     return (
         repo_root
@@ -213,7 +228,7 @@ def _default_graph_provider(host: str, port: int) -> GraphProvider:
 
 
 def _default_write_access(config: ServiceConfig) -> tuple[GroupSubmitter, SystemAuditRecorder]:
-    """Build the Graph Write Gateway and the system audit recorder from `config` (issue #210).
+    """Build the Graph Write Gateway and the system audit recorder from `config`.
 
     Contacts neither store. Raises if the PS state database is not configured: there is no
     direct-write fallback.
@@ -240,13 +255,12 @@ def _count(graph: GraphHandle, query: str) -> int:
 def _snapshot_graph(graph: GraphHandle) -> dict[str, object]:
     """Capture node/edge counts, id-sets, properties, and edge existence-pairs.
 
-    For every label/relationship-type this issue's live merge touches (PLAN.md §4.1 steps
-    7/9, CHANGES.md #1's extension).
+    Covers every node label and relationship type the live merge touches.
 
-    `embedding` is stripped from a Capability node's captured properties at CAPTURE time
-    (not comparison time) -- a semantic match's embedding can legitimately be backfilled
-    between the before and after snapshots (AC-BI-005's own already-proven backfill
-    mechanism) without that being a genuine before/after integrity violation.
+    `embedding` is stripped from a Capability node's captured properties at capture time
+    (not comparison time): a semantic match's embedding can legitimately be backfilled
+    between the before and after snapshots without that being a genuine before/after
+    integrity violation.
     """
     node_counts = {
         label: _count(graph, f"MATCH (n:{label}) RETURN count(n)") for label in _NODE_LABELS
@@ -299,7 +313,7 @@ def _snapshot_graph(graph: GraphHandle) -> dict[str, object]:
 
 
 def _run_precondition_check(provider: GraphProvider) -> dict[str, tuple[object, ...]]:
-    """Return every currently-mapped baseline graph's AC-BI-002 violations, by graph name.
+    """Return every currently-mapped baseline graph's HAS-edge violations, by graph name.
 
     Empty dict means the invariant holds everywhere.
     """
@@ -314,7 +328,7 @@ def _run_precondition_check(provider: GraphProvider) -> dict[str, tuple[object, 
 
 
 def _check_approval_gate(args: argparse.Namespace) -> int | None:
-    """Gate 1 (AC-BI-001), checked FIRST -- nothing else has run yet. `None` means proceed."""
+    """Gate 1 (approval), checked first -- nothing else has run yet. `None` means proceed."""
     try:
         load_and_validate_approval(
             args.approval_file,
@@ -329,7 +343,7 @@ def _check_approval_gate(args: argparse.Namespace) -> int | None:
 
 
 def _check_precondition_gate(provider: GraphProvider, *, host: str, port: int) -> int | None:
-    """Gate 2 (AC-BI-002/AC-BI-003) -- the first real graph read this script makes.
+    """Gate 2 (precondition) -- the first real graph read this script makes.
 
     Deliberately after the approval gate. `None` means proceed.
     """
@@ -470,6 +484,7 @@ class _RunOutcome:
 
 
 def _write_report(args: argparse.Namespace, run_timestamp: str, outcome: _RunOutcome) -> Path:
+    """Write the JSON before/after report and return its path (`--report-path` or the default)."""
     report = {
         "approval_file": str(args.approval_file),
         "run_kind": args.run_kind,
@@ -498,15 +513,39 @@ def main(
     clock: ClockFn | None = None,
     write_access: WriteAccessBuilder = _default_write_access,
 ) -> int:
-    """Run the approval-gated, precondition-gated live merge for CRA/NIS2/GDPR.
+    """Run the approval-gated, precondition-gated live merge for CRA, NIS2 and GDPR.
 
-    `graph_provider`/`merge_fn`/`clock` are test-only injection seams (no CLI flag exposes
-    them): left at their defaults, a real invocation connects to real FalkorDB and calls the
-    real `merge_baseline_graph`. Returns a process exit code: `0` on full success; `1` on a
-    FalkorDB/query failure during the precondition check or an unresolved
-    `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`/`PS_LLMINTERFACE_EMBED_MODEL`; `2` on an approval
-    gate failure; `3` on an AC-BI-002 precondition violation; `4` if `merge_fn` raises for any
-    regulation partway through the run.
+    Args:
+        argv: Command-line arguments (`--approval-file` and `--run-kind` are required;
+            see `--help`); `None` reads `sys.argv`.
+        graph_provider: Maps a graph name to a FalkorDB graph handle. Test-only seam (no
+            CLI flag exposes it); `None` connects to FalkorDB at `--host`/`--port`.
+        merge_fn: The merge to run per regulation; the default is the real
+            `merge_baseline_graph`. Test-only seam.
+        clock: Returns the current time; the default is the UTC wall clock. Test-only
+            seam.
+        write_access: Builds the `(submitter, audit recorder)` pair from the service
+            configuration; the default builds the real Graph Write Gateway and
+            recorder. Test-only seam.
+
+    Returns:
+        Process exit code: `0` on full success; `1` on a FalkorDB or query failure during
+        the precondition check, an unset `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` or
+        `PS_LLMINTERFACE_EMBED_MODEL`, or a gateway that cannot be built; `2` on an
+        approval gate failure; `3` on a precondition violation; `4` if `merge_fn` or the
+        per-regulation audit row raises for any regulation partway through the run.
+
+    Raises:
+        SystemExit: Raised by argparse on invalid arguments or `--help`.
+        OSError: If the approval file cannot be renamed after a successful run, or the
+            report cannot be written.
+
+    Side Effects:
+        Runs `merge_baseline_graph` against the live graph through the gateway, records
+        one audit row per regulation, writes the JSON before/after report (creating its
+        parent directories), and on full success renames the approval file with a
+        `.consumed-<timestamp>` suffix. Prints the outcome to stdout, or failures to
+        stderr.
     """
     args = _parse_args(argv)
     clock_fn: ClockFn = clock if clock is not None else lambda: datetime.now(UTC)

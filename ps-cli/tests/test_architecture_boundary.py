@@ -1,4 +1,4 @@
-"""AC-BI-004: ps-cli must only ever reach PS Service over REST, never a direct dependency.
+"""ps-cli must only ever reach PS Service over REST, never a direct dependency.
 
 This is a structural, AST-based guard (not a regex) that walks every module under
 ``ps-cli/src/ps_cli`` and asserts none of them imports a data-store client, an LLM

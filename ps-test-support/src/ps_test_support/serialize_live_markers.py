@@ -1,8 +1,8 @@
-"""Pytest plugin: keep live marker groups out of xdist (issue #197).
+"""Pytest plugin: keep live marker groups out of xdist.
 
 `addopts` in the root `pyproject.toml` runs every invocation under `pytest-xdist` (`-n auto`).
-The live marker groups drive real external services -- `falkordb_live` alone spans 51 test
-files that share one FalkorDB graph -- and are not safe to run concurrently. This plugin, loaded
+The live marker groups drive real external services -- `falkordb_live` tests
+share one FalkorDB graph -- and are not safe to run concurrently. This plugin, loaded
 with `-p ps_test_support.serialize_live_markers` from `addopts`, forces a single process
 whenever the `-m` expression selects at least one test that carries a live marker and no `-n`
 was passed on the command line.
@@ -62,7 +62,29 @@ def _selects_live_marker(expression: str) -> bool:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_cmdline_main(config: pytest.Config) -> None:
-    """Force a single process before xdist reads `numprocesses`, when live tests are selected."""
+    """Force a single process before xdist reads `numprocesses`, when live tests are selected.
+
+    Purpose: live marker groups drive real external services and are unsafe to run
+    concurrently, so a `-m` expression that selects one must not fan out to xdist workers.
+
+    Parameters:
+        config: The pytest configuration; its `markexpr` option is the `-m` expression
+            (empty or unset means nothing to do) and its invocation arguments are searched
+            for an explicit `-n`/`--numprocesses`.
+
+    Returns:
+        None. The hook only mutates `config`.
+
+    Side Effects:
+        When no `-n` was passed on the command line and the `-m` expression selects at
+        least one live marker, sets `config.option.numprocesses = 0` and
+        `config.option.dist = "no"`, so the run stays in a single process. Otherwise
+        leaves the configuration untouched.
+
+    Raises:
+        SyntaxError: If the `-m` expression is not valid (raised by
+            expression compilation).
+    """
     expression = config.getoption("markexpr") or ""
     if _passed_n_explicitly(config.invocation_params.args) or not expression:
         return

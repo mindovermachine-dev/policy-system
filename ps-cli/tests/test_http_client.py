@@ -1,4 +1,4 @@
-"""Tests for ps_cli.http_client: PsServiceClient construction, AC-BI-009 warning,
+"""Tests for ps_cli.http_client: PsServiceClient construction, insecure-URL warning,
 and its various endpoint methods.
 """
 
@@ -17,14 +17,14 @@ from ps_cli.errors import PsCliError
 from ps_cli.http_client import (
     _UNEXPECTED_RESPONSE_SHAPE_MSG,  # pyright: ignore[reportPrivateUsage]  # asserted verbatim, per check_health()'s existing precedent
     PsServiceClient,
-    _should_warn_insecure,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Inc. 7: unit-tested directly per its own AC
+    _should_warn_insecure,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly
 )
 from ps_cli.models import ReadinessResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# Shared wire-contract literal (issue #91, CHANGES.md A2): both ps-service's and
+# Shared wire-contract literal : both ps-service's and
 # ps-cli's own test suites read the internal-ingestion envelope's field name from
 # this one file (canonically owned by ps-service, since it defines the internal
 # envelope contract), so a one-sided rename of `content` breaks the *other* side's
@@ -36,7 +36,7 @@ _ENVELOPE_CONTRACT: dict[str, object] = json.loads(_ENVELOPE_CONTRACT_PATH.read_
 
 
 class TestShouldWarnInsecure:
-    """Table-driven proof of the AC-BI-009 heuristic (PLAN.md §1 D4)."""
+    """Table-driven proof of the insecure-URL heuristic."""
 
     @pytest.mark.parametrize(
         ("url", "expect_warning"),
@@ -55,7 +55,7 @@ class TestShouldWarnInsecure:
 
 
 class TestPsServiceClientConstruction:
-    """AC-BI-009: the insecure-URL warning is printed to stderr, once, at construction."""
+    """The insecure-URL warning is printed to stderr, once, at construction."""
 
     def test_insecure_non_loopback_url_prints_warning_to_stderr(
         self, capsys: pytest.CaptureFixture[str]
@@ -153,7 +153,7 @@ def _internal_not_implemented_handler(request: httpx.Request) -> httpx.Response:
 
 
 class TestIngestInternal:
-    """Increment 14: PsServiceClient.ingest_internal(content)."""
+    """PsServiceClient.ingest_internal(content)."""
 
     def test_parses_a_200_success_response(self) -> None:
         """A 200 POST /ingestions body with source "internal" parses into an IngestionResult."""
@@ -270,7 +270,7 @@ def _export_success_handler(request: httpx.Request) -> httpx.Response:
 
 
 class TestExportInstrument:
-    """Issue #71, new S3 (CHANGES.md A2): PsServiceClient.export_instrument(instrument_id)."""
+    """PsServiceClient.export_instrument(instrument_id)."""
 
     def test_parses_a_200_success_response(self) -> None:
         """A 200 POST /exports body parses into an ExportResult."""
@@ -309,7 +309,7 @@ class TestExportInstrument:
     def test_404_export_instrument_not_found_raises_ps_cli_error(self) -> None:
         """A 404 export_instrument_not_found body maps to PsCliError.
 
-        Exercises the *existing*, unmodified `_raise_from_error_body` (D7) -- proves
+        Exercises the *existing*, unmodified `_raise_from_error_body` -- proves
         no new client-side classification code is needed for export's error shapes.
         """
         client = PsServiceClient(
@@ -350,7 +350,7 @@ class TestExportInstrument:
         assert "serialize" in excinfo.value.msg
 
     def test_503_export_config_incomplete_raises_ps_cli_error(self) -> None:
-        """A 503 export_config_incomplete body maps to PsCliError per D7's mapping."""
+        """A 503 export_config_incomplete body maps to PsCliError."""
         client = PsServiceClient(
             "http://127.0.0.1:8000",
             transport=httpx.MockTransport(
@@ -368,7 +368,7 @@ class TestExportInstrument:
         assert "export_config_incomplete" in excinfo.value.msg
 
     def test_connect_error_raises_ps_cli_error_with_actionable_message(self) -> None:
-        """A transport-level ConnectError maps to PsCliError per D5's mapping."""
+        """A transport-level ConnectError maps to PsCliError."""
         client = PsServiceClient(
             "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
         )
@@ -379,7 +379,7 @@ class TestExportInstrument:
         assert "Could not reach PS Service" in excinfo.value.msg
 
     def test_read_timeout_raises_ps_cli_error(self) -> None:
-        """A transport-level ReadTimeout maps to PsCliError per D5's mapping."""
+        """A transport-level ReadTimeout maps to PsCliError."""
 
         def _handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ReadTimeout("timed out", request=request)
@@ -392,7 +392,7 @@ class TestExportInstrument:
         assert "did not respond in time" in excinfo.value.msg
 
     def test_posts_with_the_extended_export_read_timeout(self) -> None:
-        """D8: export_instrument() passes the extended 1800s read timeout, not restore's 300s.
+        """export_instrument() passes the extended 1800s read timeout, not restore's 300s.
 
         Export always runs a real LLM embeddings backfill, unlike restore's dedup
         replay which reuses the artifact's own embeddings.
@@ -417,7 +417,7 @@ def _health_handler(request: httpx.Request) -> httpx.Response:
 
 
 class TestCheckHealth:
-    """Slice 4: PsServiceClient.check_health()."""
+    """PsServiceClient.check_health()."""
 
     def test_check_health_returns_status_string_on_success(self) -> None:
         """A 200 GET /health body's `status` field is returned as-is."""
@@ -430,7 +430,7 @@ class TestCheckHealth:
         assert status == "alive"
 
     def test_check_health_raises_ps_cli_error_on_connect_failure(self) -> None:
-        """A transport-level ConnectError maps to PsCliError per D5/D6's mapping."""
+        """A transport-level ConnectError maps to PsCliError."""
         client = PsServiceClient(
             "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
         )
@@ -471,7 +471,7 @@ def _service_version_handler(request: httpx.Request) -> httpx.Response:
 
 
 class TestGetServiceVersion:
-    """Slice 2 (issue #82): PsServiceClient.get_service_version()."""
+    """PsServiceClient.get_service_version()."""
 
     def test_get_service_version_returns_version_string_on_success(self) -> None:
         """A 200 GET /health body's `version` field is returned as-is."""
@@ -484,7 +484,7 @@ class TestGetServiceVersion:
         assert version == "1.4.0"
 
     def test_get_service_version_raises_ps_cli_error_on_connect_failure(self) -> None:
-        """A transport-level ConnectError maps to PsCliError per D5/D6's mapping."""
+        """A transport-level ConnectError maps to PsCliError."""
         client = PsServiceClient(
             "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
         )
@@ -500,10 +500,9 @@ class TestGetServiceVersion:
     def test_get_service_version_raises_ps_cli_error_on_connection_reset(self) -> None:
         """A transport-level ReadError (e.g. connection reset) maps to PsCliError too.
 
-        Not just ConnectError/ConnectTimeout/ReadTimeout. Regression test: this used to
-        propagate as a raw httpx.ReadError, crashing `ps-cli --version` with a traceback
-        instead of the documented "unavailable" line, even though AC-BI-008 requires
-        `--version` to exit 0 whenever PS Service is unreachable.
+        Not just ConnectError/ConnectTimeout/ReadTimeout. A raw httpx.ReadError must not
+        escape and crash `ps-cli --version` with a traceback: it must produce the documented
+        "unavailable" line, because `--version` exits 0 whenever PS Service is unreachable.
         """
         client = PsServiceClient(
             "http://127.0.0.1:8000", transport=httpx.MockTransport(_read_error_handler)
@@ -555,7 +554,7 @@ def _make_ready_handler(body: object) -> Callable[[httpx.Request], httpx.Respons
 
 
 class TestCheckReadiness:
-    """Slice 5: PsServiceClient.check_readiness()."""
+    """PsServiceClient.check_readiness()."""
 
     def test_check_readiness_returns_readiness_result_when_ready(self) -> None:
         """A ready /ready body parses into a ReadinessResult with an empty list."""
@@ -584,7 +583,7 @@ class TestCheckReadiness:
         )
 
     def test_check_readiness_raises_ps_cli_error_on_connect_failure(self) -> None:
-        """A transport-level ConnectError maps to PsCliError per D5/D6's mapping."""
+        """A transport-level ConnectError maps to PsCliError."""
         client = PsServiceClient(
             "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
         )
@@ -623,14 +622,14 @@ class TestCheckReadiness:
         assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
 
 
-# --- Issue #121 Group 3 (AC-BI-002/003/004/005/006/009): token use, refresh-once ----
+# --- token use, refresh-once -----------------------------------------------------
 #
 # `PsServiceClient` threads its own `transport` constructor argument into
-# `device_flow.ensure_valid_access_token` too (issue #121: `self._transport`), so one
+# `device_flow.ensure_valid_access_token` too (`self._transport`), so one
 # `httpx.MockTransport` can answer PS Service's resource-metadata endpoint, the fake
 # issuer's openid-configuration and token endpoints, *and* PS Service's own business
 # endpoint -- a genuine wire-level fake, not a `resolve_auth_parameters` monkeypatch,
-# per CHANGES.md MINOR-2's "fake-transport, refresh-call-counting" design.
+# with a refresh-call-counting fake transport.
 
 _FAKE_ISSUER = "https://issuer.example"
 _FAKE_CLIENT_ID = "ps-cli-test-client"
@@ -718,7 +717,7 @@ def _build_auth_and_business_transport(
 
 
 class TestAuthenticatedRequestsAttachBearerHeader:
-    """Issue #121 (AC-BI-003/004): exactly one refresh per invocation, then reused."""
+    """Exactly one refresh per invocation, then reused."""
 
     def test_ingest_internal_attaches_authorization_header_from_a_freshly_refreshed_token(
         self,
@@ -750,7 +749,7 @@ class TestAuthenticatedRequestsAttachBearerHeader:
     def test_two_authenticated_calls_on_the_same_client_share_exactly_one_refresh(
         self,
     ) -> None:
-        """AC-BI-003/004's core proof: a second authenticated call on the *same*
+        """Core proof: a second authenticated call on the *same*
         `PsServiceClient` instance reuses the in-memory `AccessTokenCache` -- the fake
         refresh endpoint is called exactly once across both calls, and both requests
         carry the identical bearer token.
@@ -780,7 +779,7 @@ class TestAuthenticatedRequestsAttachBearerHeader:
     def test_check_health_attaches_no_authorization_header_even_with_credential_store_given(
         self,
     ) -> None:
-        """D-57-6: `check_health` is exempt -- never attaches a header, never refreshes,
+        """`check_health` is exempt -- never attaches a header, never refreshes,
         even given credentials.
         """
         captured_headers: list[str | None] = []
@@ -805,7 +804,7 @@ class TestAuthenticatedRequestsAttachBearerHeader:
         assert refresh_calls == [0]
 
     def test_construction_with_no_auth_params_is_byte_for_byte_unaffected(self) -> None:
-        """The pre-#57 construction shapes still work: no header is ever attached.
+        """The pre-authentication construction shapes still work: no header is ever attached.
 
         Proves the load-bearing backward-compatibility property: every existing
         construction site (`PsServiceClient(base_url)`,
@@ -826,7 +825,7 @@ class TestAuthenticatedRequestsAttachBearerHeader:
 
 
 class TestAuthenticationFailsClosed:
-    """Issue #121 (AC-BI-002/009): no-refresh-token / refresh-fails fail closed."""
+    """No-refresh-token / refresh-fails fail closed."""
 
     def test_ingest_internal_with_no_stored_credential_raises_without_sending_request(
         self,
@@ -900,13 +899,13 @@ class TestAuthenticationFailsClosed:
 
 
 class TestUnauthorizedResponseMapping:
-    """Issue #57 Slice 18 (AC-BI-014): a 401 maps to one actionable error, never the body."""
+    """A 401 maps to one actionable error, never the body."""
 
     def test_ingest_internal_maps_401_response_to_actionable_error_not_generic_http_error(
         self,
     ) -> None:
         """A bare 401, with PS Service's own structured error body attached, still maps
-        to exactly the AC-BI-014 wording -- the body's own `code`/`message` never leak
+        to exactly the actionable 401 wording -- the body's own `code`/`message` never leak
         into `.msg` or `.hint`, proving the 401 check runs before
         `_raise_from_error_body` would otherwise parse and surface that body.
         """
@@ -939,9 +938,9 @@ class TestUnauthorizedResponseMapping:
         assert excinfo.value.hint is None
 
     def test_401_error_never_contains_the_bearer_token_value_that_was_sent(self) -> None:
-        """Issue #57 Slice 22 (AC-BI-018): a marker access token, already attached as
+        """A marker access token, already attached as
         the request's own bearer header when the 401 comes back, never leaks into
-        `.msg`/`.hint` -- a proof pass over Slice 18's actual code, not a new
+        `.msg`/`.hint` -- a proof pass over the existing code, not a new
         behavior.
         """
         marker_access_token = "marker-access-token-should-never-print-79c3"

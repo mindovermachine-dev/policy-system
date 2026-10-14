@@ -107,7 +107,14 @@ PATTERNS: tuple[ProvenancePattern, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    """A single provenance match in a docstring or comment."""
+    """A single provenance match in a docstring or comment.
+
+    Attributes:
+        file: Repository-relative path of the file containing the match.
+        line: 1-based line number of the match.
+        pattern_id: Identifier of the pattern that matched.
+        text: The matched text.
+    """
 
     file: str
     line: int
@@ -447,6 +454,9 @@ def tracked_targets(root: Path, timeout: float = GIT_TIMEOUT_SECONDS) -> list[Ta
 
     Returns:
         One target per tracked file.
+
+    Raises:
+        GitError: If git is missing, times out, or exits non-zero.
     """
     listing = run_git(["ls-files", "-z", "--", "*.py"], root, timeout)
     return [

@@ -17,6 +17,18 @@ Usage (a single command line, wrapped here for width):
     python tools/graph-ingestion/merge_capabilities.py
       --decisions docs/test-data/eu-regulations/capability_merges.json
       --graph-name policy_system
+
+Options:
+    --decisions   JSON file of merge decisions (required): a list of objects with
+                  `keep` (id to keep), `drop` (list of ids to retire) and optional `note`.
+    --graph-name  Graph to modify (default: policy_system).
+    --host/--port FalkorDB location (default: env PS_FALKORDB_HOST / PS_FALKORDB_PORT,
+                  else localhost:6379).
+    --dry-run     Print what would be merged without writing.
+
+A decision whose `keep` node is missing is skipped, and a `drop` id that no longer
+exists is reported as already merged, so re-running is safe. Exit code `0` after
+processing all decisions.
 """
 
 from __future__ import annotations
@@ -53,16 +65,62 @@ if TYPE_CHECKING:
 
 
 def load_decisions(path: Path) -> list[dict[str, Any]]:
+    """Read the merge decisions file.
+
+    Args:
+        path: Path to a JSON file holding a list of `{keep, drop, note?}` objects.
+
+    Returns:
+        The parsed list of decisions.
+
+    Raises:
+        OSError: If the file cannot be opened.
+        json.JSONDecodeError: If the file is not valid JSON.
+    """
     with path.open() as f:
         return json.load(f)
 
 
 def node_exists(graph: _Graph, cap_id: str) -> bool:
+    """Report whether a Capability node with the given id is in the graph.
+
+    Args:
+        graph: Graph handle to query.
+        cap_id: The Capability `id` to look up.
+
+    Returns:
+        `True` if a Capability with that id exists, otherwise `False`.
+
+    Raises:
+        Exception: Any error the FalkorDB client raises while querying.
+
+    Side Effects:
+        Runs one read-only query.
+    """
     result = graph.query("MATCH (n:Capability {id: $id}) RETURN n.id", params={"id": cap_id})
     return bool(result.result_set)
 
 
 def rewire_and_delete(graph: _Graph, keep_id: str, drop_id: str) -> None:
+    """Move every edge of one Capability onto another, then delete the first.
+
+    Outgoing and incoming edges of any type are re-created on the kept node with their
+    properties (merging with an equal edge already present). The dropped id is then
+    appended to the kept node's `merged_from` list and the dropped node is deleted.
+
+    Args:
+        graph: Graph handle to modify.
+        keep_id: `id` of the Capability that survives; must exist.
+        drop_id: `id` of the Capability to retire; must exist.
+
+    Raises:
+        Exception: Any error the FalkorDB client raises. A failure part-way leaves
+            the graph partly rewired; re-running the same decision completes it.
+
+    Side Effects:
+        Writes to the graph: creates edges, updates `merged_from` and deletes the
+        dropped node together with its remaining edges.
+    """
     outgoing = graph.query(
         "MATCH (d:Capability {id: $id})-[r]->(o) RETURN type(r), labels(o)[0], o.id, properties(r)",
         params={"id": drop_id},
@@ -106,6 +164,24 @@ def rewire_and_delete(graph: _Graph, keep_id: str, drop_id: str) -> None:
 
 
 def main() -> int:
+    """Apply the merge decisions file to the graph.
+
+    Returns:
+        `0` once all decisions are processed; a missing `keep` node or an already
+        merged `drop` node is reported and skipped, not treated as a failure.
+
+    Raises:
+        SystemExit: Raised by argparse on invalid arguments or `--help`.
+        OSError: If the decisions file cannot be read.
+        json.JSONDecodeError: If the decisions file is not valid JSON.
+        KeyError: If a decision lacks `keep` or `drop`.
+        Exception: Any error the FalkorDB client raises, including a connection
+            failure (not caught here).
+
+    Side Effects:
+        Unless `--dry-run`, rewrites edges and deletes nodes in the graph. Prints one
+        line per decision outcome and a final count of applied and skipped merges.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)

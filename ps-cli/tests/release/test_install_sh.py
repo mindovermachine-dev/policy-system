@@ -1,16 +1,16 @@
-"""Red-then-green tests for the rewritten `install.sh` (GH issue #81, Slices 3-6).
+"""Tests for the rewritten `install.sh`.
 
 Exercises `install.sh` as a real `bash` subprocess against the `fake_curl`/`fake_uv`/
-`wheel_builder` fixtures built in Slice 2 (`ps-cli/tests/release/conftest.py`), per
-CHANGES.md X-01: no `PS_CLI_GITHUB_API_BASE` env-var seam is added to production
+`wheel_builder` fixtures in `ps-cli/tests/release/conftest.py`. No
+`PS_CLI_GITHUB_API_BASE` env-var seam is added to production
 `install.sh` -- the fake `curl` prepended onto `PATH` is the only test-only surface, and
 `install.sh` itself never learns it is being faked (only `PATH` changes).
 
 Each positive-path test sandboxes the real `uv tool install` this script runs via
-`UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` pointed at fresh `tmp_path` subdirectories (PLAN.md §1,
-confirmed working), then proves the installed version by invoking
-`<UV_TOOL_BIN_DIR>/ps-cli --version` as its own sandboxed subprocess -- the "back to the CLI
-surface" half of each vertical slice, not just "the script exited 0".
+`UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` pointed at fresh `tmp_path` subdirectories, then proves
+the installed version by invoking `<UV_TOOL_BIN_DIR>/ps-cli --version` as its own
+sandboxed subprocess -- the "back to the CLI surface" half of each
+scenario, not just "the script exited 0".
 
 Marker policy: unmarked (not `integration`), matching `conftest.py`'s own documented
 precedent -- every subprocess here (`bash`, `curl`, `uv`, `sha256sum`/`shasum`) talks only to
@@ -37,7 +37,7 @@ INSTALL_SH = REPO_ROOT / "ps-cli" / "install.sh"
 
 INSTALL_TIMEOUT_SECONDS = 180.0
 VERSION_CHECK_TIMEOUT_SECONDS = 30.0
-# Slice 7's `PS_CLI_REF` path does a real `git clone` + real `uv` dependency resolution against
+# The `PS_CLI_REF` path does a real `git clone` + real `uv` dependency resolution against
 # this repo's real `main` branch over the network -- generously longer than the local, hermetic
 # fake-`curl` runs above, which never leave 127.0.0.1-free loopback-less local processes.
 GIT_PLUS_INSTALL_TIMEOUT_SECONDS = 300.0
@@ -54,7 +54,7 @@ def _run_install_sh(
     """Run `install.sh` as a real `bash` subprocess, sandboxed into fresh `tmp_path` dirs.
 
     `include_inherited_path` prepends `path_dirs` onto the real, inherited `PATH` by default
-    (every Slice 3-7/9 scenario). Slice 8's no-`gh`-on-`PATH` proof passes `False` instead: the
+    (every scenario except one). The no-`gh`-on-`PATH` proof passes `False` instead: the
     inherited `PATH` on this devcontainer resolves `gh` from the same directory as `bash` and
     the GNU coreutils `install.sh` needs, so appending it would silently re-admit `gh` no matter
     what `path_dirs` excludes.
@@ -195,7 +195,7 @@ def test_checksum_mismatch_aborts_and_never_invokes_uv(
 def test_ps_cli_ref_installs_via_git_plus_url_skipping_release_resolution(
     tmp_path: Path, fake_curl: FakeCurl
 ) -> None:
-    """AC-BI-007: `PS_CLI_REF` installs via `git+...@<ref>#subdirectory=ps-cli`, never
+    """`PS_CLI_REF` installs via `git+...@<ref>#subdirectory=ps-cli`, never
     entering the release-resolution/`curl` machinery -- proven by asserting `fake_curl.log`
     stays empty, not just that the process happens to exit 0.
 
@@ -242,8 +242,7 @@ _GH_FREE_REQUIRED_TOOLS = (
 
 def _build_gh_free_bin_dir(tmp_path: Path) -> Path:
     """A private bin dir symlinking exactly the executables `install.sh` (plus the fake `curl`
-    test double's own coreutils use, e.g. `cat`) shells out to, never `gh` (AC-BI-008;
-    CHANGES.md X-04 -- no existing precedent to imitate, written fresh).
+    test double's own coreutils use, e.g. `cat`) shells out to, never `gh`.
 
     Locates each tool via `shutil.which` on the real machine. On this devcontainer `gh` is
     apt-installed into the *same* directory (`/usr/bin`) as `bash` and the GNU coreutils
@@ -269,7 +268,7 @@ def _build_gh_free_bin_dir(tmp_path: Path) -> Path:
 def test_install_succeeds_with_no_gh_on_path(
     tmp_path: Path, fake_curl: FakeCurl, wheel_builder: WheelBuilder
 ) -> None:
-    """AC-BI-008: `install.sh` succeeds with only `curl`, `sha256sum`/`shasum`, and `uv` (plus
+    """`install.sh` succeeds with only `curl`, `sha256sum`/`shasum`, and `uv` (plus
     the POSIX utilities it shells out to) on `PATH` -- `gh` is never required and, here, is
     positively confirmed absent from the assembled `PATH` rather than merely assumed absent.
     """
@@ -301,10 +300,10 @@ def test_install_succeeds_with_no_gh_on_path(
 def test_rerunning_install_upgrades_to_the_newer_release(
     tmp_path: Path, fake_curl: FakeCurl, wheel_builder: WheelBuilder
 ) -> None:
-    """AC-BI-009: re-running `install.sh` against the same sandboxed `UV_TOOL_DIR`/
+    """Re-running `install.sh` against the same sandboxed `UV_TOOL_DIR`/
     `UV_TOOL_BIN_DIR` (simulating the same machine) lands the newer of two releases.
 
-    Empirically confirmed (see IMPL_SLICE_4.md) that plain `uv tool install <local-wheel-path>`
+    Empirically confirmed that plain `uv tool install <local-wheel-path>`
     already uninstalls the previous version and installs the new one when the two differ --
     `install.sh` downloads each run's wheel to a fresh `mktemp -d` path with the release's own
     version baked into its filename, so no `--reinstall` flag was needed in `install.sh` itself.

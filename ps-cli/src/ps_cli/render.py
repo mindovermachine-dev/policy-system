@@ -2,12 +2,8 @@
 
 `handle_config_get_contexts` (`ps_cli/modules/config_handlers.py`) is this
 module's current consumer -- generic over `headers`/`rows`, with no
-knowledge of "context" shapes specifically, per L1 DRY (extract shared
-logic into a single location), mirroring the existing `toml_writer.py`
-shared-module precedent. (Issue #127 removed its other former consumer,
-`handle_get_catalog`, which rendered the local curated catalog as a table
-the same way; this module itself was untouched -- `handle_config_get_contexts`
-still needs it.)
+knowledge of "context" shapes specifically, so that table rendering lives in one
+location (L1 DRY), like the shared `toml_writer.py` module.
 """
 
 from __future__ import annotations
@@ -20,15 +16,23 @@ from rich.text import Text
 
 
 def build_table(headers: list[str], rows: list[list[str]]) -> Table:
-    """Build a bordered, bold-headered `rich.table.Table` from sanitized headers/rows.
+    """Build a bordered, bold-headered `rich.table.Table` from sanitized headers and rows.
 
-    Exported separately from `print_table()` so a test can render the same `Table`
-    through its own forced-color `Console` to prove the header row really carries
-    bold styling (AC-BI-003/AC-BI-005) -- `print_table()`'s own auto-detecting
-    `Console` never emits color to a non-terminal stream (AC-BI-010), so that assertion
-    is otherwise unobservable from `print_table()`'s output alone. Callers with
-    zero rows must use `print_table()` instead (AC-BI-007/AC-BI-008); this function does
-    not special-case empty `rows`.
+    Exposed separately from `print_table()` so a test can render the same `Table`
+    through its own forced-colour `Console` and prove the header row carries bold
+    styling: `print_table()`'s auto-detecting `Console` never emits colour to a
+    non-terminal stream, so that is otherwise unobservable. Callers with zero rows
+    must use `print_table()`, which prints nothing; this function does not
+    special-case empty `rows`.
+
+    Args:
+        headers: Column header texts, already sanitized.
+        rows: Table rows, each holding one already-sanitized cell text per header.
+            Cells are wrapped in `rich.text.Text` so rich does not interpret
+            `[tag]` markup in them.
+
+    Returns:
+        The populated table; nothing is printed.
     """
     table = Table(show_header=True, header_style="bold")
     for header in headers:
@@ -41,16 +45,24 @@ def build_table(headers: list[str], rows: list[list[str]]) -> Table:
 def print_table(headers: list[str], rows: list[list[str]]) -> None:
     r"""Print `headers`/`rows` as a bordered, bold-headered, aligned table to stdout.
 
-    Prints nothing at all if `rows` is empty (AC-BI-007/AC-BI-008, L2 ps-cli Output
-    ':192' Silence on success). Every cell is sanitized (control characters
-    stripped, AC-BI-009) and wrapped in `rich.text.Text` rather than passed as a raw
-    `str` (prevents rich's own `[tag]`-markup interpretation, AC-BI-009) before being
-    handed to `build_table()`. Constructs a fresh `Console(file=sys.stdout, width=...)`
-    on every call with no `force_terminal` override, so `Console`'s own
-    `sys.stdout.isatty()` auto-detection decides whether the header's bold styling is
-    emitted as real ANSI SGR codes (interactive terminal) or omitted entirely
-    (piped/redirected, AC-BI-010) -- verified empirically that this alone, with no
-    extra configuration, produces zero `\x1b[` bytes when `file` is not a tty.
+    Prints nothing at all when `rows` is empty (silence on success, per the L2
+    ps-cli output rules). Every cell is sanitized (control characters stripped) and
+    wrapped in `rich.text.Text` so rich's own `[tag]` markup is not interpreted.
+    A fresh `Console` is built on every call with no `force_terminal` override, so
+    `Console`'s `isatty()` detection decides whether the bold header is emitted as
+    ANSI codes (interactive terminal) or omitted (piped or redirected output). The
+    console width is computed from the data so no cell is truncated.
+
+    Args:
+        headers: Column header texts.
+        rows: Table rows, each holding one cell text per header.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Writes the rendered table to `sys.stdout`; writes nothing when `rows` is
+        empty.
     """
     if not rows:
         return
@@ -66,17 +78,21 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
 
 
 def _sanitize_cell(value: str) -> str:
-    r"""Strip non-printable characters (AC-BI-009's control-sequence half).
+    r"""Strip non-printable characters from a cell so it cannot inject control sequences.
 
-    Wrapping a cell in `Text` (see `build_table()`) stops rich's *own* `[tag]` markup
-    syntax from being interpreted, but does nothing about a literal ANSI/control byte
-    sequence embedded in the source string itself (e.g. a title containing
-    `\x1b[31m`) -- verified empirically that rich passes such bytes through unchanged,
-    since they are not part of its markup grammar. `str.isprintable()` returns `False`
-    for control characters (ESC, BEL, etc.) while leaving ordinary punctuation/bracket
-    characters -- including a literal `[bold]` -- untouched, so this only removes bytes
-    that could trigger unintended side effects in a real terminal, never legitimate
-    content.
+    Wrapping a cell in `Text` stops rich's own `[tag]` markup from being interpreted
+    but does nothing about a literal ANSI or control byte sequence in the source
+    string (e.g. a title containing `\x1b[31m`); rich passes such bytes through
+    unchanged. `str.isprintable()` is `False` for control characters (ESC, BEL, ...)
+    but `True` for ordinary punctuation and brackets, so only bytes that could
+    trigger unintended terminal behaviour are removed and legitimate content,
+    including a literal `[bold]`, is untouched.
+
+    Args:
+        value: The raw cell text.
+
+    Returns:
+        `value` without its non-printable characters.
     """
     return "".join(ch for ch in value if ch.isprintable())
 
@@ -84,20 +100,22 @@ def _sanitize_cell(value: str) -> str:
 def _console_width_for(*columns: list[str]) -> int:
     """Compute a `Console` width wide enough that `Table` never truncates any cell.
 
-    Grounds AC-BI-004, AC-BI-006. `Console`'s default width auto-detects the real
-    terminal size, falling back to 80 columns when stdout is not a terminal --
-    verified empirically that `Table` silently truncates any cell wider than that
-    budget with a trailing "...", which would drop characters from a long instrument
-    title or context URL, violating AC-BI-004 ("each row still contains the same four
-    fields as before") even though it never raises. Computed per column as the longest
-    string in that column
-    (header or data) plus 3 (two single-space cell paddings + one border character),
-    summed across columns, plus one closing border character -- deterministic and driven
-    only by the data actually being printed, never a hardcoded guess (AC-BI-006's literal
-    wording).
+    `Console`'s default width auto-detects the terminal size and falls back to 80
+    columns when stdout is not a terminal; `Table` then silently truncates any wider
+    cell with a trailing "...", dropping characters from a long title or URL. The
+    width is therefore computed per column as the longest string in that column
+    (header or data) plus 3 (two cell paddings and one border character), summed
+    across columns, plus one closing border character. It depends only on the data
+    printed.
 
-    Note: width is computed via len() (codepoint count), which undercounts double-width
-    Unicode (e.g. CJK) and could still be truncated by Table in that case -- no current
-    ps-cli data exercises this, so it is an accepted known limitation, not fixed here.
+    Width is measured with `len()` (code points), which undercounts double-width
+    Unicode such as CJK, so a table with such text can still be truncated; this is a
+    known limitation.
+
+    Args:
+        *columns: One list of cell texts per column, header included.
+
+    Returns:
+        The console width in character cells; `1` when there are no columns.
     """
     return sum(max((len(v) for v in col), default=0) + 3 for col in columns) + 1

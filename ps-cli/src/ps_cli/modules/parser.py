@@ -1,7 +1,9 @@
 """ps-cli's argparse definition: `build_parser()`.
 
-Mirrors gh-tt's `modules/tt_parser.py` — this module only builds the parser; it
-never calls `parse_args()` itself (that's `ps_cli.cli.run()`'s job).
+Builds the complete command-line surface (`get`, `ingest`, `config`, `auth`,
+`export`) with its shared flags and parse-time validators. This module only
+builds the parser; it never calls `parse_args()` itself, which is
+`ps_cli.cli.run()`'s job.
 """
 
 from __future__ import annotations
@@ -13,32 +15,38 @@ from ps_cli.config import is_valid_service_url
 
 # A context name is always a safe bare TOML key by construction (alnum start,
 # alnum/`_`/`-` body, 1-64 chars) -- no quoting logic needed by `toml_writer`.
-# Not derived from any cited doc; a documented assumption, see PLAN.md (issue
-# #56) §1 D6 / §5 Risk 2.
+# This charset is the CLI's own convention, not taken from an external specification.
 _CONTEXT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
-# A curated instrument id (e.g. "CRA-1.0", `curated-content/catalog.json`'s real entries,
-# D1) is not constrained by any existing server-side pattern -- `RestorationManifestPayload
+# A curated instrument id (e.g. "CRA-1.0", `curated-content/catalog.json`'s real entries)
+# is not constrained by any existing server-side pattern -- `RestorationManifestPayload
 # .instrument_id`/`CatalogInstrumentEntry.instrument_id` (ps_service/api/models.py) are both
 # bare `Field(min_length=1)`, no `pattern=`. This charset is instead this module's own
 # documented assumption -- alnum start, alnum/`_`/`-`/`.` body, no `/`, matching every real
 # `catalog.json` entry (`CRA-1.0`, `GDPR-1.0`, `NIS2-1.0`) while rejecting a path-traversal
-# payload at parse time (L1 "Fail Fast at Boundaries"). Originally chosen because `restore
-# instrument <instrument_id>` used the value to build a local filesystem path
-# (`catalog_repo.read_artifact`, Slice 7.1); issue #127 removed that command and
-# `catalog_repo` entirely, but this type/pattern survives (D-DECOMMISSION-SHARED-HELPER) --
-# `export instrument`'s own `instrument_id` positional (`_add_export_parser`) still uses it,
-# and the same charset remains the right validation for an id that will reach PS Service.
+# payload at parse time (L1 "Fail Fast at Boundaries"). `export instrument`'s
+# `instrument_id` positional (`_add_export_parser`) uses it, and the strict charset is the
+# right validation for an id that will be sent on to PS Service.
 _INSTRUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def _context_name_type(value: str) -> str:
-    """`type=` callback for a context-name positional (`set-context`/`use-context`).
+    """Validate a context name given to `set-context`/`use-context` (an argparse `type=` callback).
 
-    Format-validates against PLAN.md (issue #56) §1 D6's charset: alnum start,
-    alnum/`_`/`-` body, 1-64 characters total. Same `type=`-callback convention
-    as `_instrument_id_type` -- raises `argparse.ArgumentTypeError` (exit 2), never a
-    post-parse `assert_contract`/`PsCliError` check.
+    Format validation belongs at parse time, so a bad name exits with usage
+    status 2 before any handler runs. The accepted charset is alphanumeric start,
+    alphanumeric/`_`/`-` body, 1-64 characters in total; such a name is always a
+    safe bare TOML key.
+
+    Args:
+        value: The raw command-line text for the context name.
+
+    Returns:
+        `value` unchanged when it matches the accepted charset.
+
+    Raises:
+        argparse.ArgumentTypeError: `value` does not match the charset; argparse
+            reports it and exits with status 2.
     """
     if not _CONTEXT_NAME_PATTERN.fullmatch(value):
         msg = (
@@ -50,11 +58,20 @@ def _context_name_type(value: str) -> str:
 
 
 def _service_url_type(value: str) -> str:
-    """`type=` callback for `--url` (`config set-context`): format-validate at parse time.
+    """Validate the `--url` value of `config set-context` (an argparse `type=` callback).
 
-    Reuses `ps_cli.config.is_valid_service_url()` (PLAN.md (issue #56) §1 D5)
-    rather than a second `urlparse` check of its own, per L1 DRY (`level1-
-    coding-principles.md:55-58`).
+    Delegates to `ps_cli.config.is_valid_service_url()` so the parse-time check and
+    the configuration loader share one definition of a usable service URL.
+
+    Args:
+        value: The raw command-line text for the PS Service URL.
+
+    Returns:
+        `value` unchanged when it is a valid http(s) URL.
+
+    Raises:
+        argparse.ArgumentTypeError: `value` is not a valid http(s) URL; argparse
+            reports it and exits with status 2.
     """
     if not is_valid_service_url(value):
         msg = f"'{value}' is not a valid http(s) URL"
@@ -63,29 +80,39 @@ def _service_url_type(value: str) -> str:
 
 
 def _auth_scopes_type(value: str) -> tuple[str, ...]:
-    """`type=` callback for `--auth-scopes`: a comma-separated string -> `tuple[str, ...]`.
+    """Split the `--auth-scopes` value into a tuple of scopes (an argparse `type=` callback).
 
-    Chosen over `action="append"` repeated-flag style since `targets.toml`'s own
-    `scopes` field (`ps_cli.targets.AuthOverrides.scopes`) is a TOML array either
-    way, and a single comma-separated flag reads more naturally next to `--url` on
-    one command line (issue #57 Slice 8, flagged as a non-load-bearing UX choice).
-    Each comma-separated element is stripped of surrounding whitespace.
+    A single comma-separated flag was chosen over a repeated flag because it reads
+    more naturally next to `--url` on one command line, while `targets.toml` stores
+    the scopes as an array either way.
+
+    Args:
+        value: Comma-separated scope names, e.g. `"openid,profile"`.
+
+    Returns:
+        The scopes in order, each stripped of surrounding whitespace. Empty elements
+        are kept (`"a,,b"` yields three items).
     """
     return tuple(item.strip() for item in value.split(","))
 
 
 def _instrument_id_type(value: str) -> str:
-    """`type=` callback for the `instrument_id` positional (`export instrument`).
+    """Validate the `export instrument` `instrument_id` positional (an argparse `type=` callback).
 
-    Format-validates at parse time -- same `type=`-callback convention as
-    `_context_name_type`. Rejects anything outside `_INSTRUMENT_ID_PATTERN`'s
-    charset (which already excludes `/`); the redundant explicit `..`
-    substring check below is defense-in-depth documentation, not load-
-    bearing on its own -- see `_INSTRUMENT_ID_PATTERN`'s own comment for why
-    this matters (the value was originally used to build a local filesystem
-    path via `restore instrument`, before issue #127 removed that command;
-    the strict charset is retained regardless, as the right validation for
-    an id sent on to PS Service, e.g. by `export instrument`).
+    Accepts an alphanumeric start followed by letters, digits, `_`, `-` or `.`
+    (1-128 characters), which excludes `/`; a `..` substring is rejected as well,
+    as defence in depth against path traversal. The strict charset is the right
+    validation for an id that is sent on to PS Service.
+
+    Args:
+        value: The raw command-line text for the instrument id, e.g. `"CRA-1.0"`.
+
+    Returns:
+        `value` unchanged when it is a valid instrument id.
+
+    Raises:
+        argparse.ArgumentTypeError: `value` is outside the accepted charset or
+            contains `..`; argparse reports it and exits with status 2.
     """
     if not _INSTRUMENT_ID_PATTERN.fullmatch(value) or ".." in value:
         msg = (
@@ -98,13 +125,21 @@ def _instrument_id_type(value: str) -> str:
 
 
 def _document_path_type(value: str) -> str:
-    """`type=` callback for the `document_path` positional: format-validate at parse time.
+    """Validate the `document_path` positional of `ingest document` (an argparse `type=` callback).
 
-    Same rationale as `_instrument_id_type` -- format validation belongs at parse
-    time via `type=`, not in the handler. `value` is a plain local
-    filesystem path (relative to the operator's cwd, or absolute), resolved
-    the ordinary way -- not resolved against any PS Service or ps-cli-owned
-    root (issue #91).
+    Format validation belongs at parse time, not in the handler. The value is a
+    plain local filesystem path (relative to the current directory, or absolute),
+    resolved the ordinary way and not against any PS Service or ps-cli root.
+
+    Args:
+        value: The raw command-line text for the document path.
+
+    Returns:
+        `value` unchanged when it is a non-empty path ending in `.json`.
+
+    Raises:
+        argparse.ArgumentTypeError: `value` is empty or does not end in `.json`;
+            argparse reports it and exits with status 2.
     """
     if not value or not value.endswith(".json"):
         msg = f"'{value}' must be a non-empty path ending in '.json'"
@@ -116,16 +151,23 @@ def _add_export_parser(
     top_level_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],  # pyright: ignore[reportPrivateUsage]  # argparse: no public alias for add_subparsers()'s return type
     verbose_parent_parser: argparse.ArgumentParser,
 ) -> None:
-    """Add the `export` verb group to `top_level_subparsers` (issue #71).
+    """Add the `export` verb group and its `instrument` leaf to `top_level_subparsers`.
 
-    Extracted out of `build_parser()` itself (rather than inlined alongside every
-    other verb group there) purely to keep that already-large function under
-    ruff's `PLR0915` statement-count budget -- no behavioral difference from
-    inlining. Mirrors `restore`'s block: `POST /exports` /
-    `client.export_instrument`, in the opposite direction. `destination` is a
-    second, optional positional (`nargs="?"`, default `None`) rather than a
-    `type=` callback -- writability is a runtime filesystem check, not a format
-    check, so it belongs in the handler, not here (PLAN.md §1 D8).
+    Wires `export instrument <instrument_id> [destination]` to the
+    `export_instrument` command. `destination` is an optional positional
+    (`nargs="?"`, default `None`) rather than a `type=` callback: writability is a
+    runtime filesystem check, not a format check, so the handler performs it.
+    Split out of `build_parser()` only to keep that function within the
+    statement-count limit.
+
+    Args:
+        top_level_subparsers: The top-level subparsers action to register the
+            group on.
+        verbose_parent_parser: Parent parser carrying the shared `-v`/`--context`
+            flags, inherited by every parser added here.
+
+    Returns:
+        None. The parsers are registered on `top_level_subparsers` in place.
     """
     export_parser = top_level_subparsers.add_parser(
         "export",
@@ -160,17 +202,23 @@ def _add_config_parser(
     top_level_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],  # pyright: ignore[reportPrivateUsage]  # argparse: no public alias for add_subparsers()'s return type
     verbose_parent_parser: argparse.ArgumentParser,
 ) -> None:
-    """Add the `config` subcommand group to `top_level_subparsers` (issue #56, PLAN.md §1 D7).
+    """Add the `config` subcommand group to `top_level_subparsers`.
 
-    Manages named PS Service targets (contexts) in `targets.toml`. `set-context`
-    (Slice 14; issue #57 Slice 8's `--auth-*` flags), `use-context` (Slice 25), and
-    `get-contexts` (Slice 28) are all wired here. This is the one exception to the
-    verb-then-resource shape every other group follows -- it mirrors kubectl's own
-    `kubectl config` subcommands, whose leaves are verb-noun compounds
-    (`set-context`/`use-context`/`get-contexts`), not nested `config <verb>
-    <resource>`. Extracted out of `build_parser()` itself purely to keep that
-    already-large function under ruff's `PLR0915` statement-count budget -- no
-    behavioral difference from inlining, same rationale as `_add_export_parser()`.
+    The group manages named PS Service targets (contexts) in `targets.toml` through
+    `set-context`, `use-context` and `get-contexts`. It is the one exception to the
+    verb-then-resource shape every other group follows: like kubectl's own
+    `kubectl config`, its leaves are verb-noun compounds rather than nested
+    `config <verb> <resource>`. Split out of `build_parser()` only to keep that
+    function within the statement-count limit.
+
+    Args:
+        top_level_subparsers: The top-level subparsers action to register the
+            group on.
+        verbose_parent_parser: Parent parser carrying the shared `-v`/`--context`
+            flags, inherited by every parser added here.
+
+    Returns:
+        None. The parsers are registered on `top_level_subparsers` in place.
     """
     config_parser = top_level_subparsers.add_parser(
         "config",
@@ -219,15 +267,19 @@ def _add_config_parser(
 
 
 def _add_set_context_auth_flags(set_context_parser: argparse.ArgumentParser) -> None:
-    """Add the four `--auth-*` override flags to `set_context_parser` (issue #57 Slice 8).
+    """Add the four `--auth-*` override flags to `set_context_parser`.
 
-    Extracted out of `build_parser()` itself purely to keep that already-large
-    function under ruff's `PLR0915` statement-count budget -- no behavioral
-    difference from inlining, same rationale as `_add_export_parser()`. Per-context
-    OIDC parameter overrides, layered onto device-flow discovery
-    (`ps_cli.oidc_discovery.resolve_auth_parameters`). All four default to `None` --
-    omitting a flag leaves that field untouched by `handle_config_set_context`'s
-    per-field merge, it does not clear it (AC-BI-006).
+    The flags are per-context OIDC parameter overrides layered onto device-flow
+    discovery (`ps_cli.oidc_discovery.resolve_auth_parameters`). All four default to
+    `None`; omitting a flag leaves that field untouched by
+    `handle_config_set_context`'s per-field merge rather than clearing it. Split out
+    of `build_parser()` only to keep that function within the statement-count limit.
+
+    Args:
+        set_context_parser: The `config set-context` parser to add the flags to.
+
+    Returns:
+        None. The flags are registered on `set_context_parser` in place.
     """
     set_context_parser.add_argument(
         "--auth-issuer",
@@ -256,20 +308,22 @@ def _add_auth_parser(
     top_level_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],  # pyright: ignore[reportPrivateUsage]  # argparse: no public alias for add_subparsers()'s return type
     verbose_parent_parser: argparse.ArgumentParser,
 ) -> None:
-    """Add the `auth` command group to `top_level_subparsers` (issue #57 Slice 13).
+    """Add the `auth` command group (`login`, `status`, `logout`) to `top_level_subparsers`.
 
-    Mirrors `gh auth login/status/logout` -- L2's own stated precedent for this group
-    ("adapted from the proven shape of gh-tt"), not kubectl. `config` is the closest
-    existing exception-group precedent in this repo (`_add_config_parser`'s own
-    docstring), but `auth`'s three leaves are plain verbs, not verb-noun compounds.
-    `login` (Slice 13) takes only the shared `-v`/`--context` parents -- the context to
-    authenticate is resolved exactly like every other command (D-57-5). `status`/
-    `logout` (Slices 19/20) get their parser leaves now too, since later slices need
-    them, but only `login`'s `AUTH_DISPATCH` entry has a real handler this slice --
-    see `auth_handlers.py`'s own module docstring for why `status`/`logout` still get
-    placeholder dispatch entries rather than being left out of the dict entirely.
-    Extracted out of `build_parser()` itself purely to keep that already-large function
-    under ruff's `PLR0915` statement-count budget, same rationale as `_add_export_parser`.
+    The group follows the shape of `gh auth login/status/logout`: three plain-verb
+    leaves. Each leaf takes only the shared `-v`/`--context` flags, because the
+    context to authenticate is resolved exactly like it is for every other command.
+    Split out of `build_parser()` only to keep that function within the
+    statement-count limit.
+
+    Args:
+        top_level_subparsers: The top-level subparsers action to register the
+            group on.
+        verbose_parent_parser: Parent parser carrying the shared `-v`/`--context`
+            flags, inherited by every parser added here.
+
+    Returns:
+        None. The parsers are registered on `top_level_subparsers` in place.
     """
     auth_parser = top_level_subparsers.add_parser(
         "auth",
@@ -304,34 +358,28 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the top-level parser: a strict kubectl-style `<verb> <resource>` surface.
 
     Every top-level group except `config` is a verb (`get`, `ingest`, `export`);
-    each verb group is itself an `add_subparsers()` group whose leaves are
-    resource nouns (e.g. `ingest document`, `export instrument`) -- `ps-cli <verb>
-    <resource> [name] [flags]`, modeled on kubectl. `config` is the one exception
-    group, mirroring kubectl's own `kubectl config` subcommands: its leaves are
-    verb-noun compounds (`set-context`/`use-context`/`get-contexts`) rather than
-    nested `config <verb> <resource>`.
+    each verb group holds resource-noun leaves (e.g. `ingest document`,
+    `export instrument`), giving `ps-cli <verb> <resource> [name] [flags]`.
+    `config` is the one exception group: like `kubectl config`, its leaves are
+    verb-noun compounds (`set-context`/`use-context`/`get-contexts`). `auth` adds
+    `login`/`status`/`logout`.
 
-    Each leaf subparser sets `command` via `set_defaults()` (L2's prescribed
-    "values derived at parse time" pattern) to the key `run()` looks up in
-    `DISPATCH`. Every verb group's own `<verb>_command` subparsers dest (e.g.
-    `get_command`, `ingest_command`) is `required=True`, so once a `group` is
-    chosen, a successful `parse_args()` call always yields a `command` for it --
-    `run()` never has to guard against a missing one at that level. The top-level
-    `group` itself is not required (an operator can run `ps-cli` bare, or `ps-cli
-    --version`, with no subcommand at all -- `run()` handles both before dispatch).
+    Each leaf sets `command` through `set_defaults()` to the key `run()` looks up in
+    its dispatch tables. Every verb group's subparsers are `required=True`, so once a
+    group is chosen a successful parse always yields a `command`. The top-level
+    group itself is optional: bare `ps-cli` and `ps-cli --version` parse without a
+    subcommand and `run()` handles both before dispatch.
 
-    `-v`/`--verbose` and `--context <name>` (issue #56, PLAN.md §1 D7) are shared flags
-    (L2 `## ps-cli` "parent parsers for flags shared across subcommands") available
-    before or after any subcommand, mirroring gh-tt's `parent_parser` reuse.
-    `default=SUPPRESS` on both shared actions is deliberate, not incidental: `argparse`'s
-    subparser dispatch parses each subcommand into a *fresh* namespace and then
-    unconditionally copies every one of its attributes onto the parent namespace (see
-    `argparse.py::_SubParsersAction.__call__`) -- without `SUPPRESS`, a leaf subparser's
-    own unset `-v`/`--context` (default `False`/`None`) would silently clobber a value
-    already given before the subcommand name. `run()` reads these via
-    `getattr(args, "verbose", False)`/`getattr(args, "context", None)`, never
-    `args.verbose`/`args.context` directly, since no level of the parser setting them
-    leaves the attribute absent rather than its default.
+    `-v`/`--verbose` and `--context <name>` are shared flags available before or
+    after any subcommand. Both use `default=SUPPRESS`: argparse parses each
+    subcommand into a fresh namespace and copies every attribute onto the parent
+    namespace, so an unset leaf default would otherwise overwrite a value given
+    before the subcommand name. As a consequence the attributes are absent, not
+    `False`/`None`, when the flags were never given; read them with `getattr`.
+
+    Returns:
+        The fully configured `argparse.ArgumentParser` (`prog="ps-cli"`). Each call
+        builds a fresh, independent parser; calling it has no side effects.
     """
     verbose_parent_parser = argparse.ArgumentParser(add_help=False)
     verbose_parent_parser.add_argument(
@@ -347,8 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_context_name_type,
         help=(
             "Use this named context's PS Service URL for this invocation only "
-            "(overrides targets.toml's current_context; never persisted). "
-            "See PLAN.md (issue #56) §1 D3/D7."
+            "(overrides targets.toml's current_context; never persisted)."
         ),
     )
 
@@ -365,9 +412,8 @@ def build_parser() -> argparse.ArgumentParser:
     top_level_subparsers = parser.add_subparsers(dest="group", required=False)
 
     # `get` (read-only lookups): service health. Its only leaf, `get health`, reports
-    # PS Service's reachability/health/readiness (issue #127 removed the sibling
-    # `get catalog` leaf, which read the local curated-content repo -- see
-    # `ps-get-catalog-listing`, the skill that replaced it).
+    # PS Service's reachability/health/readiness. Catalog listing is reached via the
+    # `ps-get-catalog-listing` skill, not this CLI.
     get_parser = top_level_subparsers.add_parser(
         "get",
         parents=[verbose_parent_parser],
@@ -407,23 +453,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest_document_parser.set_defaults(command="ingest_document")
 
-    # `config` subcommand group (issue #56, PLAN.md §1 D7; issue #57 Slice 8's
-    # `--auth-*` flags). Extracted into `_add_config_parser()` purely to keep
-    # `build_parser()` itself under ruff's `PLR0915` statement-count budget -- no
-    # behavioral difference from inlining, same rationale as `_add_export_parser()`.
+    # `config` subcommand group (includes the `--auth-*` flags). Extracted into
+    # `_add_config_parser()` purely to keep `build_parser()` under ruff's `PLR0915`
+    # statement-count budget -- no behavioral difference from inlining.
     _add_config_parser(top_level_subparsers, verbose_parent_parser)
 
-    # `auth` subcommand group (issue #57 Slice 13): OIDC device-flow login. See
-    # `_add_auth_parser`'s own docstring for why it, like `config`, is factored into a
-    # helper rather than inlined.
+    # `auth` subcommand group: OIDC device-flow login. Factored into a helper, like
+    # `config`, for the same statement-count reason.
     _add_auth_parser(top_level_subparsers, verbose_parent_parser)
 
     # `export` (export an already-ingested instrument's baseline/native graphs plus a
-    # generated manifest into local files, issue #71). See `_add_export_parser`'s own
-    # docstring for why this one verb group is factored into a helper rather than
-    # inlined like every other. (Issue #127 removed the sibling `restore` verb group,
-    # which used to sit here and which this comment used to mirror -- restoring a
-    # curated instrument is now reached via the `ps-restore-instrument` skill instead.)
+    # generated manifest into local files). Factored into a helper for the same
+    # statement-count reason. Restoring a curated instrument is reached via the
+    # `ps-restore-instrument` skill, not this CLI.
     _add_export_parser(top_level_subparsers, verbose_parent_parser)
 
     return parser

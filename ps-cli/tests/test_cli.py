@@ -1,7 +1,5 @@
 """Tests for ps_cli.cli: run() (which wires ps_cli.modules.parser.build_parser() and
 ps_cli.modules.handlers.DISPATCH together), and __main__.py's AST shape.
-
-PLAN.md §3 Increments 10, 12, 13.
 """
 
 from __future__ import annotations
@@ -48,7 +46,7 @@ _MAIN_MODULE_PATH = Path(__file__).resolve().parent.parent / "src" / "ps_cli" / 
 
 
 class _UnusedPsServiceClientMethods:
-    """Base for hand-written `PsServiceClientProtocol` fakes below (PLAN.md §1 D10).
+    """Base for hand-written `PsServiceClientProtocol` fakes below.
 
     Every method raises unless a subclass overrides it -- a fake overrides
     only the method its own test actually exercises, so an unexpected call
@@ -130,9 +128,9 @@ class _FakeFailingClient(_UnusedPsServiceClientMethods):
 class _FakeKeyboardInterruptClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose check_health() raises KeyboardInterrupt.
 
-    Simulates an operator pressing Ctrl-C mid-call (issue #122) -- `check_health()`
-    stands in for any blocking call; `run()`'s own catch site is command-agnostic
-    (AC-BI-007), so this single fake proves the general boundary, not anything
+    Simulates an operator pressing Ctrl-C mid-call -- `check_health()`
+    stands in for any blocking call; `run()`'s own catch site is command-agnostic,
+    so this single fake proves the general boundary, not anything
     specific to `get health`.
     """
 
@@ -191,7 +189,7 @@ def test_run_omits_failure_site_when_not_verbose(capsys: pytest.CaptureFixture[s
 def test_run_returns_130_and_prints_cancelled_on_keyboard_interrupt(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-001/007/010: Ctrl-C during any blocking command exits 130, cancel message
+    """Ctrl-C during any blocking command exits 130, cancel message
     to stderr only, no traceback -- not specific to `auth login` (`get health` here).
     """
     fake_client = _FakeKeyboardInterruptClient()
@@ -208,7 +206,7 @@ def test_run_returns_130_and_prints_cancelled_on_keyboard_interrupt(
 def test_run_keyboard_interrupt_message_is_not_formatted_as_ps_cli_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-004: the cancel message is plain text, never `PsCliError`'s `❌`/`💡` shape."""
+    """The cancel message is plain text, never `PsCliError`'s `❌`/`💡` shape."""
     fake_client = _FakeKeyboardInterruptClient()
 
     run(["get", "health"], client=fake_client)
@@ -221,7 +219,7 @@ def test_run_keyboard_interrupt_message_is_not_formatted_as_ps_cli_error(
 def test_run_returns_two_and_prints_one_line_on_unexpected_exception(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-002/009/010: an unhandled bug exits 2, one `{type}: {message}` line to
+    """An unhandled bug exits 2, one `{type}: {message}` line to
     stderr only, no traceback -- unless `-v` was given (separate test below).
     """
     fake_client = _FakeUnexpectedErrorClient()
@@ -238,7 +236,7 @@ def test_run_returns_two_and_prints_one_line_on_unexpected_exception(
 def test_run_prints_full_traceback_for_unexpected_exception_when_verbose(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-005: `-v` on an unhandled bug prints the full traceback, not just a
+    """`-v` on an unhandled bug prints the full traceback, not just a
     single-frame pointer (unlike `PsCliError`'s own `-v` behavior) -- still exits 2.
     """
     fake_client = _FakeUnexpectedErrorClient()
@@ -267,12 +265,9 @@ def test_run_version_prints_two_lines_and_returns_zero_when_versions_match(
 ) -> None:
     """`ps-cli --version` prints client then service version lines and returns 0.
 
-    Supersedes the old `test_run_with_version_flag_prints_version_and_returns_zero`,
-    which called `run(["--version"])` with `client=None` -- now that `--version`
-    resolves a client and calls `get_service_version()` (AC-BI-005/007), that would
-    silently perform a real network call on every test run instead of testing what
-    its name promised (PLAN.md §5 Slice 5, flagged as a decided fold-in, not a silent
-    drop, in §7 Risk 6).
+    Injects a fake client: `--version` resolves a client and calls
+    `get_service_version()`, so `client=None` would silently perform a real network
+    call on every test run.
     """
     monkeypatch.setattr(cli, "installed_version", _fake_installed_version)
     fake_client = _FakeVersionClient("1.4.0")
@@ -288,11 +283,10 @@ def test_run_version_prints_two_lines_and_returns_zero_when_versions_match(
 def test_run_version_reports_unavailable_with_error_msg_when_service_client_raises(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-008: a `PsCliError` from `get_service_version()` reports "unavailable (.msg)".
+    """A `PsCliError` from `get_service_version()` reports "unavailable (.msg)".
 
     Uses `.msg` verbatim, never `str(error)` (which would add the `❌`/`💡` decoration --
-    `errors.py`'s `PsCliError.__str__`) -- and prints to stdout, not stderr, per D7/CHANGES.md
-    X-06 (user-confirmed, closed).
+    `errors.py`'s `PsCliError.__str__`) -- and prints to stdout, not stderr.
     """
     fake_client = _FakeVersionErrorClient(
         PsCliError(
@@ -313,7 +307,7 @@ def test_run_version_reports_unavailable_with_error_msg_when_service_client_rais
 def test_run_version_reports_unavailable_when_config_resolution_itself_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-008: `_resolve_client`'s own `load_config()` failure is caught the same way.
+    """`_resolve_client`'s own `load_config()` failure is caught the same way.
 
     Reuses this file's own broken-`targets.toml` fixture (`current_context` naming a
     context absent from `[contexts]`, e.g. `test_run_config_set_context_never_constructs_
@@ -333,7 +327,7 @@ def test_run_version_reports_unavailable_when_config_resolution_itself_fails(
 def test_run_version_with_unreachable_real_service_returns_zero_without_crashing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-008's real-network proof, mirroring `test_run_with_unreachable_real_service_
+    """Real-network proof, mirroring `test_run_with_unreachable_real_service_
     returns_one_without_crashing`'s exact bind-then-close-socket pattern -- but `--version`
     returns 0, not 1, and the failure is reported on stdout, not stderr.
     """
@@ -372,9 +366,9 @@ def test_run_version_prints_client_version_line_even_when_service_is_unavailable
 def test_run_version_warns_on_stderr_when_client_and_service_versions_differ(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-009: a version mismatch prints exactly one `warning: ...` line to stderr.
+    """A version mismatch prints exactly one `warning: ...` line to stderr.
 
-    Only the success path can trigger this (not the "unavailable" path, D6) -- stdout
+    Only the success path can trigger this (not the "unavailable" path) -- stdout
     still carries its normal two lines, and exit code stays 0.
     """
     monkeypatch.setattr(cli, "installed_version", _fake_installed_version)
@@ -393,7 +387,7 @@ def test_run_version_warns_on_stderr_when_client_and_service_versions_differ(
 def test_run_version_emits_no_warning_when_versions_match(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Negative case for AC-BI-009: matching versions print nothing to stderr."""
+    """Negative case: matching versions print nothing to stderr."""
     monkeypatch.setattr(cli, "installed_version", _fake_installed_version)
     fake_client = _FakeVersionClient("1.4.0")
 
@@ -403,7 +397,7 @@ def test_run_version_emits_no_warning_when_versions_match(
 
 
 def test_main_module_only_imports_and_conditionally_calls_main() -> None:
-    """AC-BI-005 literal proof: __main__.py's AST is exactly an import + a conditional call.
+    """Literal proof: __main__.py's AST is exactly an import + a conditional call.
 
     Parses `ps_cli/__main__.py`'s source and asserts its module body contains
     exactly two statements: an `ImportFrom` (`from ps_cli.cli import main`) and
@@ -435,12 +429,12 @@ def test_main_module_only_imports_and_conditionally_calls_main() -> None:
 def test_run_with_unreachable_real_service_returns_one_without_crashing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-007's real-network proof (PLAN.md §3 Increment 13).
+    """Real-network proof.
 
     `run()` with `client=None` builds a real `PsServiceClient` from
     `PS_CLI_SERVICE_URL`, pointed at a definitely-closed local port (bind a
     socket, close it, reuse the freed port number -- a small accepted TOCTOU
-    flake risk per PLAN.md, not engineered away). Asserts an actionable
+    flake risk, not engineered away). Asserts an actionable
     message on stderr, exit code 1, and -- by simply not wrapping the call in
     `pytest.raises` -- that no exception escapes `run()`.
     """
@@ -465,15 +459,12 @@ def _build_ingest_document_handler_with_resource_metadata(
     `GET /ready` (the `ingest document` pre-flight check), and `POST /ingestions`,
     recording each `/ingestions` request's `Authorization`.
 
-    Issue #126 retargeted this from the now-removed `near-misses list`/
-    `GET /near-misses` to `ingest document`/`POST /ingestions`, the closest
-    surviving authenticated business call -- no behavioral change to what this
-    test proves (`_resolve_client` wires a real bearer token into a real
-    business call).
+    The call is `ingest document` -> `POST /ingestions`, an authenticated business
+    call (`_resolve_client` wires a real bearer token into a real business call).
 
-    Issue #121: `ensure_valid_access_token` always refreshes on a cache miss
-    (AC-BI-003), which requires a real OIDC discovery round trip against *some*
-    resource-metadata endpoint -- this one server now plays all three roles
+    `ensure_valid_access_token` always refreshes on a cache miss, which requires a real
+    OIDC discovery round trip against *some*
+    resource-metadata endpoint -- this one server plays all three roles
     (mirrors `test_integration_auth_full_cycle.py::_build_resource_metadata_handler`'s
     own recipe). Closure-based factory -- `HTTPServer` requires a handler *class*,
     not an instance, so the captured values must be closed over some way other
@@ -529,7 +520,7 @@ def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_busi
     mock_oidc_provider: MockOidcProvider,
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """Issue #111 Slice 2: closes a real coverage gap on already-shipped AC-BI-003 code.
+    """Closes a real coverage gap in the shipped token-refresh code.
 
     Every existing test either injects a fake client (bypassing `_resolve_client`'s
     `PsServiceClient(...)` construction entirely) or uses `client=None` only against
@@ -546,9 +537,9 @@ def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_busi
     -- the exact `client=None` path that forces `_resolve_client` to build a real
     `PsServiceClient` -- pointed at that local server.
 
-    Issue #121: there is no persisted access_token to seed directly any more
-    (AC-BI-001) -- `ensure_valid_access_token` always refreshes on a cache miss
-    (AC-BI-003), so this test seeds a real refresh_token and lets a genuine refresh
+    There is no persisted access_token to seed directly --
+    `ensure_valid_access_token` always refreshes on a cache miss, so this test seeds a
+    real refresh_token and lets a genuine refresh
     happen against `mock_oidc_provider`.
     """
     del portable_persistence  # only needed so build_credential_store() has a portable backend
@@ -611,7 +602,7 @@ def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_busi
 # (read-only reference; ps-cli never imports ps_service). This is what a real,
 # unmodified ps-service returns today for `ingest document`, via a 501
 # response `PsServiceClient.ingest_internal()` maps to a `PsCliError` carrying
-# this exact message (per Increment 14's `TestIngestInternal`).
+# this exact message (as `TestIngestInternal` in the client tests asserts).
 _INTERNAL_NOT_IMPLEMENTED_MESSAGE = (
     "Internal-document ingestion is not implemented in this walking-skeleton "
     "release; it is tracked in issue #54 (mindovermachine-dev/policy-system)."
@@ -641,7 +632,7 @@ class _FakeInternalIngest501Client(_UnusedPsServiceClientMethods):
 
     Mirrors exactly what `PsServiceClient.ingest_internal()` raises for the
     real, unmodified ps-service's current `internal_ingestion_not_implemented`
-    501 response (Increment 14's `TestIngestInternal`), so this test proves
+    501 response, so this test proves
     `cli.run()`'s handling of that failure without a real network call.
     """
 
@@ -659,8 +650,8 @@ class _FakeInternalIngest501Client(_UnusedPsServiceClientMethods):
         )
 
 
-# A minimal schema-valid document (issue #54 D7's JSON Schema) -- these two
-# tests exercise `cli.run()`'s wiring *past* S1's new local-validation step
+# A minimal schema-valid document (the internal-seed JSON Schema) -- these two
+# tests exercise `cli.run()`'s wiring *past* the local-validation step
 # (`ps_cli.intake_validation.validate_local_seed_file`), not that step itself
 # (which has its own dedicated tests in `ps-cli/tests/test_intake_validation.py`
 # and `ps-cli/tests/modules/test_handlers.py`) -- so the on-disk fixture here
@@ -694,14 +685,14 @@ def test_ingest_document_prints_run_id_on_mocked_success(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Covers AC-BI-003's CLI plumbing only, per orchestrator decision 1 (2026-08-30).
+    """Covers the CLI plumbing only.
 
-    PS Service's real internal pipeline is issue #54, not started; this test
+    PS Service's real internal pipeline is not implemented; this test
     proves ps-cli's command/argument/REST wiring against a mocked success
     response -- it is NOT proof the real service can ingest an internal
-    fixture, and AC-BI-003 must not be marked done on the strength of this
-    test alone. The seed fixture is written directly under `tmp_path` (issue
-    #91: `ingest document` now takes a plain local filesystem path, not one
+    fixture, so it does not prove end-to-end ingestion on its own.
+    The seed fixture is written directly under `tmp_path` (`ingest document`
+    takes a plain local filesystem path, not one
     resolved against a configured fixtures root) so local validation passes
     and the call reaches the fake client, unrelated to what this test itself
     proves.
@@ -723,13 +714,13 @@ def test_ingest_document_surfaces_real_service_501_as_clean_failure(
 ) -> None:
     """What running this command against the real, unmodified ps-service produces today.
 
-    Expected and correct per orchestrator decision 1 -- PS Service's
+    Expected and correct -- PS Service's
     `POST /ingestions` with `source: "internal"` currently 501s
-    (`internal_ingestion_not_implemented`) until issue #54's backend lands.
-    Asserts AC-BI-008's shape: exit 1, the `internal_ingestion_not_implemented`
+    (`internal_ingestion_not_implemented`) until the internal pipeline lands.
+    Asserts exit 1, the `internal_ingestion_not_implemented`
     message surfaced in stderr, no traceback substring present. The seed
-    fixture is written directly under `tmp_path` (issue #91: no more
-    fixtures-root indirection) so local validation passes and the call
+    fixture is written directly under `tmp_path` (no fixtures-root
+    indirection) so local validation passes and the call
     reaches the fake client, unrelated to what this test itself proves.
     """
     document_path = tmp_path / "seeds/internal-sop.json"
@@ -781,7 +772,7 @@ def test_ingest_document_fails_fast_when_llm_interface_unreachable(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-009: LLM Interface unhealthy blocks `ingest document` before any network call.
+    """LLM Interface unhealthy blocks `ingest document` before any network call.
 
     The fixture is schema-valid so local validation passes and the pre-flight check is
     actually reached -- proving it is *this* check, not local validation, that blocks.
@@ -803,7 +794,7 @@ def test_ingest_document_fails_fast_when_llm_interface_unreachable(
 def test_ingest_document_does_not_block_when_only_cellar_eli_unreachable(
     tmp_path: Path,
 ) -> None:
-    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `ingest document`."""
+    """Cellar_eli alone (LLM Interface healthy) never blocks `ingest document`."""
     document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeReadinessGatedInternalIngestClient(
@@ -844,7 +835,7 @@ def test_ingest_document_still_rejects_invalid_local_file_before_any_network_cal
     assert "Traceback" not in captured.err
 
 
-# --- issue #56 Slice 24: CONFIG_DISPATCH split (PLAN.md §1 D8, critical) ------------------
+# --- CONFIG_DISPATCH split ---------------------------------------------------------------
 
 
 def test_run_config_set_context_never_constructs_ps_service_client(
@@ -852,15 +843,14 @@ def test_run_config_set_context_never_constructs_ps_service_client(
     monkeypatch: pytest.MonkeyPatch,
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """`config set-context` never calls `load_config()` -- the critical D8 property.
+    """`config set-context` never calls `load_config()` -- a critical property.
 
     `targets.toml`'s `current_context` names a context absent from `[contexts]` -- a
-    broken value that `load_config()` would raise `PsCliError` on (AC-BI-008). This test
+    broken value that `load_config()` would raise `PsCliError` on. This test
     succeeds anyway (exit 0) with a client fake whose every method raises if called, proving
     both that `load_config()` was never reached (it would have raised) and that
     `PsServiceClient`/the injected client were never touched -- `command in CONFIG_DISPATCH`
-    routed straight to `handle_config_set_context`, never the `else` branch (PLAN.md §4
-    Slice 24).
+    routed straight to `handle_config_set_context`, never the `else` branch.
     """
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
@@ -886,24 +876,21 @@ def test_run_config_set_context_surfaces_actionable_credential_store_error_via_r
     unusable_persistence: Callable[[str], AlwaysRaisingPersistenceBackend],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-006/007's CLI-level proof: the real dispatch chain, not just the
+    """CLI-level proof: the real dispatch chain, not just the
     `CredentialStore` unit level, surfaces an actionable `PsCliError` naming the
-    context but never a token value -- issue #121 replaces the old
-    fallback-warning/exit-0 behavior entirely (`FileCredentialStore` is gone,
-    AC-BI-008).
+    context but never a token value, with no fallback warning and no exit-0 path.
 
     Exercises `run()` -> `CONFIG_DISPATCH` -> `handle_config_set_context` ->
     `build_credential_store` -> `PersistenceCredentialStore` end to end -- a wiring bug
     anywhere in that chain would fail this test even though every narrower slice
     still passes on its own. `set-context` is the only command that ever touches
-    `CredentialStore` (D13's unconditional `delete_tokens`) -- `use-context`/
+    `CredentialStore` (its unconditional `delete_tokens`) -- `use-context`/
     `get-contexts` have no `credential_store` param by design, so this single
-    command's proof fully covers AC-BI-006/007's "every command that reads or
-    writes it" wording for this issue's scope.
+    command's proof covers every command that reads or writes it.
 
     `unusable_persistence` (`conftest.py`) monkeypatches the production persistence
     factory to raise a bare `OSError` -- reproducing "the failure is a raw OS-level
-    exception, not a reshaped library-specific error type" (TASK.md issue #121, the
+    exception, not a reshaped library-specific error type" (the
     original motivating case was a raw `win32ctypes.pywin32.pywintypes.error`) --
     rather than any narrower library-specific exception subclass.
     """
@@ -923,7 +910,7 @@ def test_run_config_set_context_surfaces_actionable_credential_store_error_via_r
     assert "credentials.toml" not in captured.err
 
 
-# --- issue #56 Slice 26: --context flag wiring + AC-BI-005 end-to-end proof --------------
+# --- --context flag wiring, end-to-end proof ---------------------------------------------
 
 
 def test_ac_bi_005_set_context_then_use_context_drives_subsequent_resolution(
@@ -931,13 +918,13 @@ def test_ac_bi_005_set_context_then_use_context_drives_subsequent_resolution(
     monkeypatch: pytest.MonkeyPatch,
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """AC-BI-005's literal scenario: `set-context` then `use-context` drives resolution.
+    """`set-context` then `use-context` drives resolution.
 
-    CHANGES.md F3: the only assertion mechanism used is a direct, independent
+    The only assertion mechanism used is a direct, independent
     `load_config()` check -- deterministic, no network, no `PsServiceClient`
     mocking/capture -- exactly what every real command's own `load_config()` call would
     resolve to next. The two `run()` calls use an uncallable client fake (this is `config
-    set-context`/`use-context`, neither of which ever touches `PsServiceClient` -- D8).
+    set-context`/`use-context`, neither of which ever touches `PsServiceClient`).
     """
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
@@ -955,7 +942,7 @@ def test_ac_bi_005_set_context_then_use_context_drives_subsequent_resolution(
     assert load_config(context=None, config_dir=tmp_path).service_url == "https://ps.example.com"
 
 
-# --- issue #56 Slice 27: --context single-invocation override, AC-BI-006 end-to-end ------
+# --- --context single-invocation override, end to end ------------------------------------
 
 
 def test_ac_bi_006_context_param_overrides_for_one_call_only_not_persisted(
@@ -963,7 +950,7 @@ def test_ac_bi_006_context_param_overrides_for_one_call_only_not_persisted(
 ) -> None:
     """`--context`'s resolved value overrides `current_context` for one call only.
 
-    Continues Slice 26's fixture: two contexts (`dev`, `prod`), `current_context="prod"`.
+    Uses the previous test's fixture shape: two contexts (`dev`, `prod`), `current_context="prod"`.
     `load_config(context="dev", ...)` resolves to `dev`'s URL for that one call; a second,
     independent `load_config()` call with no `context` param (simulating the next
     invocation with no `--context` given) still resolves to `prod`'s URL -- proving the
@@ -992,27 +979,27 @@ def test_ac_bi_006_context_param_overrides_for_one_call_only_not_persisted(
 def test_parser_context_flag_before_subcommand_parses_correctly() -> None:
     """`ps-cli --context dev get health` (flag before subcommand) parses `args.context`.
 
-    The issue's own literal example (PLAN.md §1 D7's shared-parent-parser `SUPPRESS`
-    mechanism, §0.4) -- proves the flag survives the subparser dispatch's namespace copy
-    when given before the subcommand name, not only after it. Uses `get health` (`get
-    catalog` was removed by issue #127) -- either leaf exercises the same shared-parser
-    mechanism, since the assertion is only about `args.context`, not the resolved command.
+    Exercises the shared-parent-parser `SUPPRESS` mechanism: proves the flag survives
+    the subparser dispatch's namespace copy when given before the subcommand name,
+    not only after it. Uses `get health` -- any leaf exercises the same shared-parser
+    mechanism, since the assertion is only about `args.context`, not the resolved
+    command.
     """
     args = build_parser().parse_args(["--context", "dev", "get", "health"])
 
     assert args.context == "dev"
 
 
-# --- issue #56 Slice 28: get-contexts, real dispatch (AC-BI-007 end-to-end proof) -------
+# --- get-contexts, real dispatch ---------------------------------------------------------
 
 
 def test_run_config_get_contexts_never_constructs_ps_service_client_and_prints_contexts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`config get-contexts` reaches `handle_config_get_contexts()` via the real
-    `run()` -> `CONFIG_DISPATCH` chain (AC-BI-007), never constructing a `PsServiceClient`
-    -- mirroring Slice 24's `set-context` proof (D8). A broken `current_context` (naming a
-    context absent from `[contexts]`, which `load_config()` would raise on -- AC-BI-008)
+    `run()` -> `CONFIG_DISPATCH` chain, never constructing a `PsServiceClient`
+    -- mirroring the `set-context` proof. A broken `current_context` (naming a
+    context absent from `[contexts]`, which `load_config()` would raise on)
     is deliberately present, proving `get-contexts` stays usable exactly when it is most
     needed: diagnosing a broken `targets.toml`.
     """
@@ -1034,7 +1021,7 @@ def test_run_config_get_contexts_never_constructs_ps_service_client_and_prints_c
     assert "https://ps.example.com" in captured.out
 
 
-# --- issue #71, new S3 (CHANGES.md A2): `ps-cli export instrument` end to end ----------------
+# --- `ps-cli export instrument` end to end -----------------------------------------------
 
 _EXPORT_MANIFEST = ExportManifest(
     instrument_id="CRA-1.0",
@@ -1073,8 +1060,8 @@ def test_run_export_instrument_writes_files_and_prints_summary_on_mocked_success
 ) -> None:
     """The full parser -> dispatch -> handler -> client wiring for `export instrument`.
 
-    Uses an `external`-source fake manifest -- the internal-source notice (AC-BI-014)
-    is a later slice's own dedicated test, not this one's concern either way.
+    Uses an `external`-source fake manifest -- the internal-source notice
+    has its own dedicated test, not this one's concern either way.
     """
     fake_client = _FakeExportSuccessClient()
 
@@ -1113,7 +1100,7 @@ def test_run_export_instrument_writes_files_and_prints_summary_on_mocked_success
 def test_run_export_instrument_defaults_destination_to_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-006: omitting `destination` writes the three files to the operator's cwd.
+    """Omitting `destination` writes the three files to the operator's cwd.
 
     Mirrors `test_run_export_instrument_writes_files_and_prints_summary_on_mocked_success`
     but omits the `destination` positional entirely, relying on
@@ -1135,7 +1122,7 @@ def test_run_export_instrument_defaults_destination_to_cwd(
 def test_run_export_instrument_nonexistent_destination_fails_before_calling_client(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-008: a destination that doesn't exist fails fast, before PS Service is called.
+    """A destination that doesn't exist fails fast, before PS Service is called.
 
     Uses the bare `_UnusedPsServiceClientMethods()` fake -- if `handle_export_instrument`
     ever called `export_instrument()` before the destination check, this test would fail
@@ -1158,7 +1145,7 @@ def test_run_export_instrument_nonexistent_destination_fails_before_calling_clie
 def test_run_export_instrument_unwritable_destination_fails_before_calling_client(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-008: a destination that exists but isn't writable fails fast, same as above.
+    """A destination that exists but isn't writable fails fast, same as above.
 
     Uses a dedicated subdirectory of `tmp_path` (never `tmp_path` itself) so the
     permission-bit change is scoped to a directory this test controls end to end; the
@@ -1206,7 +1193,7 @@ _EXPORT_NATIVE_BLOB_V2 = b'{"native": true, "amended": true}'
 class _FakeExportSuccessClientV2(_UnusedPsServiceClientMethods):
     """A second duck-typed `export_instrument()` fake returning different content than V1.
 
-    Simulates a re-export after the source instrument changed (AC-BI-010).
+    Simulates a re-export after the source instrument changed.
     """
 
     def export_instrument(self, instrument_id: str) -> ExportResult:
@@ -1223,7 +1210,7 @@ class _FakeExportSuccessClientV2(_UnusedPsServiceClientMethods):
 def test_run_export_instrument_overwrites_prior_export_deterministically(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-010: re-exporting to the same destination fully replaces the prior artifact.
+    """Re-exporting to the same destination fully replaces the prior artifact.
 
     Runs the full `run(...)` dispatch twice against the same `tmp_path`, with two fake
     clients returning two *different* `ExportResult`s (different instrument id, blob
@@ -1275,7 +1262,7 @@ def test_run_export_instrument_overwrites_prior_export_deterministically(
     assert 'Cyber Resilience Act"' not in first_run_manifest_text
 
 
-# --- issue #71, S14 (AC-BI-014): internal-source confidentiality notice -----------------------
+# --- internal-source confidentiality notice ----------------------------------------------
 
 _EXPORT_MANIFEST_INTERNAL = ExportManifest(
     instrument_id="INTERNAL-POLICY-1.0",
@@ -1309,9 +1296,9 @@ class _FakeExportSuccessClientInternal(_UnusedPsServiceClientMethods):
 def test_run_export_instrument_internal_source_prints_confidentiality_notice(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-014: an internal-source export prints an explicit confidentiality notice.
+    """An internal-source export prints an explicit confidentiality notice.
 
-    Exact wording is non-load-bearing (PLAN.md S14) -- only that a notice mentioning
+    Exact wording is non-load-bearing -- only that a notice mentioning
     both "internal" and "confidential" appears on stdout after the usual summary lines.
     """
     fake_client = _FakeExportSuccessClientInternal()
@@ -1330,11 +1317,11 @@ def test_run_export_instrument_internal_source_prints_confidentiality_notice(
 def test_run_export_instrument_external_source_prints_no_confidentiality_notice(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-014: an external-source export's stdout is unchanged -- no notice, no regression.
+    """An external-source export's stdout is unchanged -- no notice, no regression.
 
     Byte-for-byte identical to
     `test_run_export_instrument_writes_files_and_prints_summary_on_mocked_success`'s own
-    stdout assertions -- proving AC-BI-014's addition is a no-op for the common case.
+    stdout assertions -- proving the notice is a no-op for the common case.
     """
     fake_client = _FakeExportSuccessClient()
 
@@ -1354,13 +1341,13 @@ def test_run_export_instrument_external_source_prints_no_confidentiality_notice(
     assert "NOTICE" not in captured.out
 
 
-# --- issue #68 Slice 10: `ps-cli get health` end to end, through cli.run() -------------------
+# --- `ps-cli get health` end to end, through cli.run() -----------------------------------
 
 
 class _FakeHealthClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in with scripted check_health()/check_readiness().
 
-    Mirrors `ps-cli/tests/modules/test_handlers.py::_FakeHealthClient` (Slices 8-9) at the
+    Mirrors `ps-cli/tests/modules/test_handlers.py::_FakeHealthClient` at the
     `cli.run()` layer instead of calling `handle_get_health()` directly -- this file exercises
     the full parser -> dispatch -> handler -> client wire-up, not just the handler in
     isolation.
@@ -1382,7 +1369,7 @@ class _FakeHealthClient(_UnusedPsServiceClientMethods):
 
 def test_run_get_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture[str]) -> None:
     """`run(["get", "health"], client=<fully healthy fake>)` returns 0 and prints the three summary
-    lines to stdout (AC-BI-004 end-to-end, D11).
+    lines to stdout.
     """
     fake_client = _FakeHealthClient(
         health_status="alive",
@@ -1402,8 +1389,7 @@ def test_run_get_health_returns_one_with_distinct_message_when_not_ready(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """`run(["get", "health"], client=<not-ready fake>)` returns 1; stderr names the unhealthy
-    dependency and is textually distinct from the unreachable-target wording (AC-BI-001,
-    AC-BI-007, AC-BI-008 end-to-end).
+    dependency and is textually distinct from the unreachable-target wording.
     """
     fake_client = _FakeHealthClient(
         health_status="alive",
@@ -1422,11 +1408,11 @@ def test_run_get_health_returns_one_with_distinct_message_when_not_ready(
 def test_run_get_health_with_unreachable_real_service_returns_one_without_crashing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-009's real-network proof for `get health`, mirroring `test_run_with_unreachable_
-    real_service_returns_one_without_crashing`'s exact pattern (PLAN.md §4 Slice 10):
+    """Real-network proof for `get health`, mirroring `test_run_with_unreachable_
+    real_service_returns_one_without_crashing`'s exact pattern:
     `run(["get", "health"])` with `client=None` builds a real `PsServiceClient` from
     `PS_CLI_SERVICE_URL`, pointed at a definitely-closed local port (bind a socket, close it,
-    reuse the freed port number -- a small accepted TOCTOU flake risk per PLAN.md, not
+    reuse the freed port number -- a small accepted TOCTOU flake risk, not
     engineered away). Asserts an actionable message on stderr, exit code 1, and -- by simply
     not wrapping the call in `pytest.raises` -- that no exception escapes `run()`.
     """
@@ -1449,11 +1435,11 @@ def test_run_get_health_with_context_flag_resolves_named_targets_url(
     monkeypatch: pytest.MonkeyPatch,
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """AC-BI-005/AC-BI-006 end-to-end for `get health`, per CHANGES.md M2 (the only valid proof
-    mechanism for this slice): an independent `load_config(context=..., config_dir=...)`
-    check performed after `config set-context`/`config use-context` calls against an
+    """End-to-end proof for `get health`'s `--context` resolution: an independent
+    `load_config(context=..., config_dir=...)` check performed after
+    `config set-context`/`config use-context` calls against an
     isolated `PS_CLI_CONFIG_DIR`, mirroring `test_ac_bi_005_set_context_then_use_context_
-    drives_subsequent_resolution`'s exact pattern (issue #56 Slice 26).
+    drives_subsequent_resolution`'s exact pattern.
 
     Deliberately does **not** call `run(["get", "health", "--context", <name>], client=<fake>)`:
     `_resolve_client()` (`cli.py:42-55`) returns an injected `client` unchanged before
@@ -1462,7 +1448,7 @@ def test_run_get_health_with_context_flag_resolves_named_targets_url(
     nothing about `--context`. `_resolve_client()`'s own `load_config(context=context).
     service_url` call is exactly what this test proves resolves correctly; `get health`'s
     `DISPATCH` entry reaches that same generic code path as every other client-backed
-    command (D9), so this proof transfers to `get health` without needing to invoke it at all.
+    command, so this proof transfers to `get health` without needing to invoke it at all.
     """
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
@@ -1480,7 +1466,7 @@ def test_run_get_health_with_context_flag_resolves_named_targets_url(
     assert load_config(context=None, config_dir=tmp_path).service_url == "https://ps.example.com"
 
 
-# --- issue #82 Slice 8: `--version --context` (AC-BI-006, AC-BI-007) --------------------
+# --- `--version --context` ---------------------------------------------------------------
 
 
 def test_parser_version_flag_accepts_context_before_and_after() -> None:
@@ -1503,7 +1489,6 @@ def test_ac_bi_006_version_context_flag_targets_the_named_contexts_url_for_one_c
 ) -> None:
     """`--version --context dev` queries `dev`'s URL for this invocation only.
 
-    No implementation change needed for this slice (PLAN.md §5 Slice 8) --
     `_report_service_version` already threads `args`/`client` through the
     existing `_resolve_client`, unchanged. Mirrors `test_ac_bi_006_context_param_
     overrides_for_one_call_only_not_persisted`'s style, adapted to prove the

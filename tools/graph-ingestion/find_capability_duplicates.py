@@ -16,7 +16,7 @@ rather than being tuned to any one regulation's phrasing.
 
 Results are reported as ranked pairs, not transitively-merged clusters --
 single-linkage clustering here would chain unrelated capabilities together
-through weak intermediate matches (verified empirically: it happily grouped
+through weak intermediate matches (for example, it would group
 "Security Risk Assessment", "Vulnerability Management", "Secure
 Configuration Management" and "Incident & Vulnerability Reporting" into one
 "cluster" on nothing but shared generic words). A human reviewing a flat
@@ -25,6 +25,17 @@ up near the top.
 
 Usage:
     python tools/graph-ingestion/find_capability_duplicates.py --graph-name policy_system
+
+Options:
+    --graph-name  Graph to read (default: policy_system).
+    --host/--port FalkorDB location (default: env PS_FALKORDB_HOST / PS_FALKORDB_PORT,
+                  else localhost:6379).
+    --threshold   Minimum cosine similarity, 0 to 1, for a pair to be reported
+                  (default: 0.35).
+    --top         Maximum number of pairs to print (default: 30).
+
+The tool only reads the graph. Exit code `0` after printing the report, including when
+there are fewer than two Capabilities or no pair reaches the threshold.
 """
 
 from __future__ import annotations
@@ -66,12 +77,32 @@ STOPWORDS = {"and", "the", "of", "a", "an", "to", "for", "in", "on", "&", "or", 
 
 
 def tokens(cap: dict[str, Any]) -> set[str]:
+    """Split a Capability's name and description into lower-case word tokens.
+
+    Args:
+        cap: Capability properties; `name` is required, `description` is optional.
+
+    Returns:
+        The set of distinct alphanumeric words with `STOPWORDS` removed.
+
+    Raises:
+        KeyError: If `name` is missing.
+    """
     text = f"{cap['name']} {cap.get('description', '')}"
     words = re.sub(r"[^a-z0-9\s]", " ", text.lower()).split()
     return {w for w in words if w not in STOPWORDS}
 
 
 def build_idf(cap_tokens: dict[str, set[str]]) -> dict[str, float]:
+    """Compute a smoothed inverse document frequency for every token in the corpus.
+
+    Args:
+        cap_tokens: Token set per Capability id; each Capability counts as one document.
+
+    Returns:
+        A map from token to weight `ln((n + 1) / (df + 1)) + 1`, so words shared by
+        many Capabilities weigh less. Every token present in `cap_tokens` has an entry.
+    """
     n = len(cap_tokens)
     df: Counter[str] = Counter()
     for toks in cap_tokens.values():
@@ -80,6 +111,19 @@ def build_idf(cap_tokens: dict[str, set[str]]) -> dict[str, float]:
 
 
 def cosine(toks_a: set[str], toks_b: set[str], idf: dict[str, float]) -> float:
+    """Compute the IDF-weighted cosine similarity of two token sets.
+
+    Args:
+        toks_a: Tokens of the first Capability.
+        toks_b: Tokens of the second Capability.
+        idf: Token weights; must contain every token in both sets.
+
+    Returns:
+        A score from 0.0 (nothing shared, or either set empty) to 1.0 (identical).
+
+    Raises:
+        KeyError: If a token of either set has no entry in `idf`.
+    """
     if not toks_a or not toks_b:
         return 0.0
     weights_a = {w: idf[w] for w in toks_a}
@@ -94,11 +138,41 @@ def cosine(toks_a: set[str], toks_b: set[str], idf: dict[str, float]) -> float:
 
 
 def fetch_capabilities(graph: _Graph) -> list[dict[str, Any]]:
+    """Read the properties of every Capability node.
+
+    Args:
+        graph: Graph handle to query.
+
+    Returns:
+        One property mapping per Capability, in query order; empty if there are none.
+
+    Raises:
+        Exception: Any error the FalkorDB client raises.
+
+    Side Effects:
+        Runs one read-only query.
+    """
     result = graph.query("MATCH (n:Capability) RETURN n")
     return [row[0].properties for row in result.result_set]
 
 
 def fetch_source_regulations(graph: _Graph, cap_id: str) -> list[Any]:
+    """Find the regulations whose Obligations require a Capability.
+
+    Args:
+        graph: Graph handle to query.
+        cap_id: `id` of the Capability.
+
+    Returns:
+        The distinct `id`s of RegulatoryInstrument nodes reaching the Capability through
+        DEFINES, HAS and REQUIRES; empty if no such path exists.
+
+    Raises:
+        Exception: Any error the FalkorDB client raises.
+
+    Side Effects:
+        Runs one read-only query.
+    """
     result = graph.query(
         """
         MATCH (reg:RegulatoryInstrument)-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)
@@ -116,7 +190,22 @@ def print_pair_report(
     by_id: dict[str, dict[str, Any]],
     top: int,
 ) -> None:
-    """Print the ranked candidate pairs (with their source regulations) for review."""
+    """Print the ranked candidate pairs, with their source regulations, for review.
+
+    Args:
+        graph: Graph handle used to look up each Capability's source regulations
+            (once per Capability).
+        scored_pairs: `(score, id_a, id_b)` tuples, best score first.
+        by_id: Capability properties by id; must contain every id in `scored_pairs`.
+        top: Number of pairs to print. If more exist, a line counts the remainder.
+
+    Raises:
+        KeyError: If a pair names an id missing from `by_id`.
+        Exception: Any error the FalkorDB client raises.
+
+    Side Effects:
+        Runs read-only queries and writes the report to stdout.
+    """
     reg_cache: dict[str, list[Any]] = {}
 
     def regs_for(cap_id: str) -> list[Any]:
@@ -141,6 +230,21 @@ def print_pair_report(
 
 
 def main() -> int:
+    """Score every Capability pair and print the ranked duplicate candidates.
+
+    Returns:
+        `0` after printing the report. That includes the cases of fewer than two
+        Capabilities and of no pair reaching `--threshold`; both print an explanatory
+        line instead of a list.
+
+    Raises:
+        SystemExit: Raised by argparse on invalid arguments or `--help`.
+        Exception: Any error the FalkorDB client raises, including a connection
+            failure (not caught here).
+
+    Side Effects:
+        Runs read-only queries and writes the report to stdout; never modifies the graph.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)

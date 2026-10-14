@@ -1,51 +1,36 @@
 """Shared pytest fixtures for `ps-cli/tests/`.
 
-See CHANGES.md (issue #56) F2: closes FLAWS.md's blocking finding that, once
-`load_config()`'s `config_dir` default becomes `resolve_config_dir()` (real
-$HOME/.config/ps-cli/` absent `PS_CLI_CONFIG_DIR`), every pre-existing
-`test_config.py` test calling bare `load_config()` would silently start
-reading real machine state.
+Every test gets an isolated, empty config dir by default, so a test calling bare
+`load_config()` never reads the real machine's `$HOME/.config/ps-cli/`.
 
-Issue #121, D-121-7: `FileCredentialStore` (and the "no OS credential-storage
-backend -> file fallback" scenario it used to cover) is gone entirely (AC-BI-008).
-Before this issue, "no real OS credential-storage backend available" and "test the
-fallback path" were the same test scenario -- afterward they are two distinct
-scenarios with two distinct correct outcomes.
-
-Issue #123: the OS-credential-store dependency used through #121 is replaced
-outright by `msal-extensions`, whose
-`BasePersistence` shape has no `(service_name, username)` key pair -- one
-persistence instance is bound to one on-disk location (see
-`ps_cli/credentials.py`'s own module docstring, D-123-1/D-123-2). This module
-now provides:
+Credential storage is `msal-extensions` based: its `BasePersistence` shape has no
+`(service_name, username)` key pair -- one persistence instance is bound to one
+on-disk location (see `ps_cli/credentials.py`'s module docstring). There is no file
+fallback store, so "no real OS credential-storage backend available" is a distinct
+scenario from any fallback path. This module provides:
 
 - `InMemoryPersistenceBackend` -- a portable, always-working in-memory fake
   bound to one `lock_path`, for every test that just needs *a* working
   persistence backend without depending on a real OS-level secret store being
-  present. Replaces the old backend-keyed in-memory fake this module used to
-  provide (issue #121, D-121-7).
+  present.
 - `AlwaysRaisingPersistenceBackend` -- unconditionally raises a bare `OSError`
   from `save`/`load` (deliberately *not* any `msal_extensions`-specific type),
   reproducing "the real failure is a raw OS-level exception, not a reshaped
   library type" -- reserved for the small set of tests that specifically prove
-  AC-BI-006/007/011. Replaces the old always-raising fake for the previous
-  OS-credential-store dependency.
+  the unusable-backend behaviour.
 
 `build_in_memory_persistence`/`build_always_raising_persistence` hand back a
 per-context *factory* (`Callable[[str], PersistenceBackend]`, not a single
 shared instance) for direct `PersistenceCredentialStore(build_persistence=...)`
 construction -- matching `PersistenceCredentialStore`'s own factory-injection
-shape (D-123-2), since one persistence instance can no longer serve every
-context the way one shared `KeyringBackend` instance could.
+shape, since one persistence instance cannot serve more than one context.
 
 `portable_persistence`/`unusable_persistence` additionally monkeypatch
 `ps_cli.credentials._build_production_persistence` -- the seam
 `build_credential_store()`'s zero-argument production wiring calls internally (the
 real msal-extensions-backed factory, see `credentials.py`) -- so a test that
 exercises `build_credential_store()`'s own production wiring gets a
-portable/always-failing backend instead of depending on real OS state. Same purpose
-as before (previously monkeypatching the old OS-credential-store dependency's three
-free functions), now hooked at this seam.
+portable/always-failing backend instead of depending on real OS state.
 """
 
 from __future__ import annotations
@@ -67,7 +52,7 @@ def _isolated_ps_cli_config_dir(  # pyright: ignore[reportUnusedFunction]  # pyt
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every ps-cli test gets a fresh, empty config dir by default so no test ever reads
-    or writes the real machine's $HOME/.config/ps-cli/ (PLAN.md D2's default). Individual
+    or writes the real machine's $HOME/.config/ps-cli/ (the default). Individual
     tests may still override PS_CLI_CONFIG_DIR or pass config_dir=... explicitly.
     """
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path / "isolated-ps-cli-config"))
@@ -77,9 +62,8 @@ class InMemoryPersistenceBackend:
     """A hand-written, in-memory `PersistenceBackend` fake, bound to one `lock_path`.
 
     No OS/network dependency, portable to any machine or CI runner regardless of what
-    (if any) real OS-level secret store is present there (issue #123, replaces the old
-    backend-keyed in-memory fake). `lock_path` mirrors a real `BasePersistence`
-    instance's own one-instance-one-location shape (D-123-1): `get_location()` returns
+    (if any) real OS-level secret store is present there. `lock_path` mirrors a real
+    `BasePersistence` instance's own one-instance-one-location shape: `get_location()` returns
     `str(lock_path)` so `PersistenceCredentialStore`'s
     `CrossPlatLock(persistence.get_location() + ".lockfile")` has a real, on-disk path
     to lock, even though this fake's actual stored content lives purely in memory,
@@ -128,13 +112,12 @@ class AlwaysRaisingPersistenceBackend:
     Reproduces "the real failure is a raw OS-level exception, not a reshaped
     `msal_extensions`-specific type" -- deliberately *not*
     `msal_extensions.persistence.PersistenceNotFound` or any other library type, since
-    the whole point of AC-BI-006/007/011 is that the real Windows/Linux failure mode is
+    the whole point of those tests is that the real Windows/Linux failure mode is
     not one of those. Reserved for the small set of tests that specifically prove
-    AC-BI-006/007/011 -- every other test that just needs a portable working store uses
+    the unusable-backend behaviour -- every other test that just needs a portable working store uses
     `InMemoryPersistenceBackend` instead. `get_location()` still returns a real,
     writable path (never raises) so `CrossPlatLock` can actually acquire its lock
-    before `save`/`load` raises inside it. Replaces the old always-raising fake for the
-    previous OS-credential-store dependency.
+    before `save`/`load` raises inside it.
     """
 
     def __init__(self, lock_path: Path) -> None:
@@ -179,12 +162,11 @@ def build_in_memory_persistence(
 
     Replaces the old shared backend fixture for test files that construct
     `PersistenceCredentialStore` directly (e.g. test_credentials.py) rather than via
-    `build_credential_store()` -- gives each distinct `context` string its own backend
-    instance and its own on-disk lock path, mirroring D-123-2's
-    one-persistence-per-context design (the old shared fake for the previous
-    OS-credential-store dependency was one instance keyed internally by
-    `(service, username)`; this fixture achieves the same "one fixture instance covers
-    every context used in a test" ergonomic the new, differently-shaped way).
+    For test files that construct `PersistenceCredentialStore` directly (e.g.
+    test_credentials.py) rather than via `build_credential_store()`. Gives each
+    distinct `context` string its own backend instance and its own on-disk lock
+    path, mirroring the one-persistence-per-context design, so one fixture instance
+    covers every context used in a test.
     """
     backends: dict[str, InMemoryPersistenceBackend] = {}
 
@@ -200,9 +182,8 @@ def build_in_memory_persistence(
 def build_always_raising_persistence(
     tmp_path: Path,
 ) -> Callable[[str], AlwaysRaisingPersistenceBackend]:
-    """A per-context `AlwaysRaisingPersistenceBackend` factory, for AC-BI-006/007/011
-    proof sites -- replaces the old always-raising fixture for the previous
-    OS-credential-store dependency.
+    """A per-context `AlwaysRaisingPersistenceBackend` factory, for the tests that
+    prove behaviour against an unusable credential backend.
     """
 
     def _build(context: str) -> AlwaysRaisingPersistenceBackend:
@@ -247,7 +228,7 @@ def unusable_persistence(
     factory (bare `OSError`), and return that same factory.
 
     Lets a test exercise `build_credential_store()`'s real, zero-argument production
-    wiring against a simulated unusable backend (AC-BI-006/007/011), without depending
+    wiring against a simulated unusable backend (unusable backend), without depending
     on real OS state or ever actually invoking
     `msal_extensions.build_encrypted_persistence`.
     """

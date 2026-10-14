@@ -1,17 +1,18 @@
-"""Tests for ps_cli.device_flow (issue #57 Slices 9-12; issue #121 critical-flaw fix).
+"""Tests for ps_cli.device_flow.
 
-Slices 9-11 drive the real `ps_test_support.mock_oidc_provider.MockOidcProvider`'s
+The device-authorization and polling tests drive the real
+`ps_test_support.mock_oidc_provider.MockOidcProvider`'s
 device-authorization/token endpoints directly (no monkeypatching) -- this *is* the
-IdP's own endpoint, mirroring `test_oidc_discovery.py`'s own Slice 6 convention.
-The one unrecognized-error-code case (Slice 11) uses `httpx.MockTransport` instead,
+IdP's own endpoint, mirroring `test_oidc_discovery.py`'s convention.
+The one unrecognized-error-code case uses `httpx.MockTransport` instead,
 since the real provider only ever emits the four documented RFC 8628 error codes.
 
-Issue #121: `TokenBundle` shrinks to `refresh_token`/`issuer` only (AC-BI-001) --
+`TokenBundle` holds `refresh_token`/`issuer` only --
 every construction below drops `access_token`/`expires_at`. The in-memory-only
 access token now lives in a required `access_token_cache: AccessTokenCache`
-parameter threaded through `ensure_valid_access_token` (D-121-2). `AccessTokenCache.expires_at`
+parameter threaded through `ensure_valid_access_token`. `AccessTokenCache.expires_at`
 is kept so a run that outlives the token TTL (a long ingest) refreshes once more, without
-breaking AC-BI-003's "exactly one refresh per (fresh-process) invocation", whose cache
+breaking "exactly one refresh per (fresh-process) invocation", whose cache
 always starts empty.
 """
 
@@ -66,7 +67,7 @@ def _fail_if_called(_: float) -> None:
     pytest.fail("sleep() should not have been called")
 
 
-# --- Slice 9: request_device_authorization() ---------------------------------------
+# --- request_device_authorization() ---------------------------------------
 
 
 def test_request_device_authorization_happy_path_returns_provider_minted_fields(
@@ -129,7 +130,7 @@ def test_request_device_authorization_malformed_body_raises_ps_cli_error() -> No
         request_device_authorization(params, transport=httpx.MockTransport(_handle))
 
 
-# --- Slice 10: poll_for_token() (pending/slow_down) ---------------------------------
+# --- poll_for_token() (pending/slow_down) ---------------------------------
 
 
 def test_poll_for_token_pending_then_provider_completes_returns_tokens(
@@ -203,7 +204,7 @@ def test_poll_for_token_malformed_success_body_raises_ps_cli_error(
         )
 
 
-# --- Slice 11: poll_for_token() (expired_token/access_denied/unrecognized) ----------
+# --- poll_for_token() (expired_token/access_denied/unrecognized) ----------
 
 
 def test_poll_for_token_expired_device_code_raises_actionable_error(
@@ -272,11 +273,11 @@ def test_poll_for_token_unrecognized_error_code_raises_generic_error_not_crash()
     assert "some_unrecognized_error" in excinfo.value.msg
 
 
-# --- Slice 12: token_bundle_from_response() / complete_device_login() --------------
+# --- token_bundle_from_response() / complete_device_login() --------------
 
 
 def test_token_bundle_from_response_persists_only_refresh_token_and_issuer() -> None:
-    """AC-BI-001: `token_bundle_from_response` never carries `access_token`/`expires_at`
+    """`token_bundle_from_response` never carries `access_token`/`expires_at`
     into the persisted `TokenBundle` shape.
     """
     response = TokenResponse(access_token="at", refresh_token="rt", expires_in=3600)
@@ -317,8 +318,7 @@ def test_complete_device_login_full_flow_round_trips_via_real_provider(
     assert bundle.issuer == mock_oidc_provider.issuer
 
 
-# --- Issue #57 Group 3 (AC-BI-002/003/004/005/009): ensure_valid_access_token,
-# retargeted onto AccessTokenCache by issue #121 -----------
+# --- ensure_valid_access_token, backed by AccessTokenCache -----------
 
 
 class _FakeCredentialStore:
@@ -407,13 +407,12 @@ def _transport_for(
 
 
 class TestEnsureValidAccessToken:
-    """AC-BI-002 (fail closed), AC-BI-003 (exactly one refresh per empty cache),
-    AC-BI-004 (in-memory reuse), AC-BI-005 (rotation), plus issue #121's critical-flaw
-    fix: a populated-but-stale cache still triggers exactly one more refresh.
+    """Fail closed, exactly one refresh per empty cache, in-memory reuse, rotation,
+    plus: a populated-but-stale cache still triggers exactly one more refresh.
     """
 
     def test_no_stored_credentials_raises_actionable_error(self) -> None:
-        """AC-BI-002: no bundle at all -> the "no stored credentials" fail-closed error."""
+        """No bundle at all -> the "no stored credentials" fail-closed error."""
         store = _FakeCredentialStore()
 
         with pytest.raises(PsCliError) as excinfo:
@@ -429,7 +428,7 @@ class TestEnsureValidAccessToken:
         assert "ps-cli auth login" in (excinfo.value.hint or "")
 
     def test_stored_bundle_with_no_refresh_token_raises_actionable_error(self) -> None:
-        """AC-BI-002: a stored bundle with `refresh_token=None` -> "could not be refreshed"."""
+        """A stored bundle with `refresh_token=None` -> "could not be refreshed"."""
         store = _FakeCredentialStore()
         store.set_tokens("dev", TokenBundle(refresh_token=None, issuer="http://issuer.example"))
 
@@ -448,8 +447,8 @@ class TestEnsureValidAccessToken:
     def test_empty_cache_always_refreshes_regardless_of_how_long_the_bundle_has_been_stored(
         self, mock_oidc_provider: MockOidcProvider
     ) -> None:
-        """AC-BI-003's literal "regardless of any prior token's expiry": there is no
-        persisted expiry left to vary at all (AC-BI-001) -- an empty
+        """Regardless of any prior token's expiry: there is no
+        persisted expiry left to vary at all -- an empty
         `AccessTokenCache` always calls the refresh endpoint on a cache miss, proven
         against the real provider so the returned access token is genuine, not just a
         return-value stand-in.
@@ -478,7 +477,7 @@ class TestEnsureValidAccessToken:
     def test_populated_fresh_cache_returns_cached_token_with_zero_further_transport_calls(
         self,
     ) -> None:
-        """AC-BI-004: a pre-populated, still-fresh `AccessTokenCache` short-circuits --
+        """A pre-populated, still-fresh `AccessTokenCache` short-circuits --
         no store read, no network call. `service_url`/`credential_store` are both
         deliberately unusable (an unreachable host, a store that fails the test if
         touched) -- if the cache-hit path ever regressed into consulting either, this
@@ -511,7 +510,7 @@ class TestEnsureValidAccessToken:
     def test_populated_but_stale_cache_triggers_exactly_one_more_refresh(
         self, mock_oidc_provider: MockOidcProvider
     ) -> None:
-        """Issue #121 critical-flaw fix (CHANGES.md Appendix A1): a cache that already
+        """A cache that already
         holds a token, but whose `expires_at` is in the past, is treated as a cache
         miss -- exactly one more refresh happens, and the cache is updated with the
         newly-refreshed token, not left holding the stale one. This is the proof that
@@ -551,7 +550,7 @@ class TestEnsureValidAccessToken:
     def test_expired_bundle_with_valid_refresh_token_refreshes_and_rotates_store(
         self, mock_oidc_provider: MockOidcProvider
     ) -> None:
-        """AC-BI-005: a cache-miss refresh yields a *new* access_token, and the store
+        """A cache-miss refresh yields a *new* access_token, and the store
         afterward holds the *rotated* refresh_token, not the original.
         """
         transport = _transport_for(mock_oidc_provider)
@@ -581,7 +580,7 @@ class TestEnsureValidAccessToken:
     def test_refresh_request_carries_forward_the_resolved_scope(
         self, mock_oidc_provider: MockOidcProvider
     ) -> None:
-        """Issue #119, AC-BI-003: the refresh-token POST sends `params.scopes` as `scope`
+        """The refresh-token POST sends `params.scopes` as `scope`
         -- proven with `offline_access` in the mix, the scope this fix cares about -- not
         just the initial device-flow request. Without this, a bundle refreshed once would
         still lose its refresh_token on the *second* refresh.
@@ -626,7 +625,7 @@ class TestEnsureValidAccessToken:
     def test_refresh_rejected_for_unrecognized_scope_fails_closed_like_any_refresh_error(
         self,
     ) -> None:
-        """Issue #119, AC-BI-004: an IdP that rejects the newly-added `offline_access`
+        """An IdP that rejects the newly-added `offline_access`
         scope (e.g. `invalid_scope`) is handled by the existing generic refresh-failure
         path -- no special-casing added, no new crash mode.
 
@@ -679,7 +678,7 @@ class TestEnsureValidAccessToken:
     ) -> None:
         """Simulates a second process racing on an already-rotated refresh_token: the
         provider's own "already rotated" `invalid_grant` rejection surfaces as
-        AC-BI-002's fail-closed error, not a crash.
+        the fail-closed error, not a crash.
         """
         transport = _transport_for(mock_oidc_provider)
         initial = _obtain_real_tokens(mock_oidc_provider)
@@ -719,17 +718,17 @@ class TestEnsureValidAccessToken:
         assert "ps-cli auth login" in (excinfo.value.hint or "")
 
 
-# --- Slice 22: AC-BI-018 never log a token value ------------------------------------
+# --- never log a token value ------------------------------------
 
 _MARKER_REFRESH_TOKEN = "marker-refresh-token-should-never-print-79c3"
 
 
 def test_device_flow_never_prints_a_token_value_on_any_error_path() -> None:
-    """A proof pass over every `PsCliError` raised across Slices 10/11
-    (`poll_for_token`'s own error paths) and 16/17 (`ensure_valid_access_token`'s
-    refresh path), with a distinctive marker value deliberately in scope when each
-    is raised, checked for in `.msg`/`.hint` (AC-BI-018). No production-code change
-    expected -- this is a proof pass over Slice 1's actual code.
+    """A proof pass over every `PsCliError` raised across
+    `poll_for_token`'s own error paths and `ensure_valid_access_token`'s
+    refresh path, with a distinctive marker value deliberately in scope when each
+    is raised, checked for in `.msg`/`.hint`. No production-code change
+    is expected -- this is a proof pass over the actual code.
     """
     params = ResolvedAuthParameters(
         issuer="http://issuer.example",
@@ -739,7 +738,7 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path() -> None:
         device_authorization_endpoint="http://issuer.example/device_authorization",
         token_endpoint="http://issuer.example/token",
     )
-    # Slices 10/11: no access/refresh token exists yet at this point in the flow --
+    # Polling: no access/refresh token exists yet at this point in the flow --
     # `device_code` is the one secret-like value in scope, so it stands in for
     # "a token value" here.
     device_auth = DeviceAuthorization(
@@ -770,7 +769,7 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path() -> None:
     _assert_poll_error_never_leaks_device_code("access_denied")
     _assert_poll_error_never_leaks_device_code("some_unrecognized_error")
 
-    # Slices 16/17: ensure_valid_access_token's refresh path, with a marker
+    # Refresh: ensure_valid_access_token's refresh path, with a marker
     # refresh token already in scope when each failure is raised.
     _fake_issuer = "http://localhost"
 
@@ -850,13 +849,13 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path() -> None:
     _assert_refresh_failure_never_leaks_marker(_discovery_success_then(_malformed_shape_handler))
 
 
-# --- Issue #179 (AC-BI-008): transport failures vs credential rejection -------------
+# --- transport failures vs credential rejection -------------
 
 
 class TestRefreshFailureClassification:
     """`ensure_valid_access_token` separates "cannot verify" from "credential rejected".
 
-    Both keep the existing user-facing wording (AC-BI-013): the split is the
+    Both keep the existing user-facing wording: the split is the
     exception *type*, never the message.
     """
 

@@ -1,78 +1,64 @@
 #!/usr/bin/env python3
-r"""Maintainer script: empirically validate Company Merge's semantic-match threshold (issue #29).
+"""Sweep candidate similarity thresholds for Company Merge's semantic Capability match.
 
-**Increment 1 of issue #29** (PLAN.md §1 Increment 1, CHANGES.md row M3's path
-substitution to `tools/company-merge/` and row m2's AST import-scan test): the thinnest
-possible real slice -- a labeled `SimilarityPair` shape, `score_pair()` scoring one pair
-through the *exact* production path Company Merge itself uses
-(`ps_service.llm_interface.embedding.route_embedding`, always fresh for `text_a` and
-reused from `text_b_cached_embedding` when present for `text_b` -- issue #100 Slice 4,
-CHANGES.md row F1 -- then `ps_service.company_merge.similarity.cosine_similarity`
-directly on the two resulting vectors, never a reimplementation, AC-BI-004/AC-BI-005/
-AC-BI-006), and a 3-candidate `build_dataset()` that mechanically proves the AC-BI-003
-identical-Capability-name exclusion rule rather than merely omitting such a pair by hand.
+Scores a labeled dataset of Capability-name pairs through the same embedding and cosine
+path Company Merge uses in production, tallies precision, recall and F1 at every
+candidate threshold, and recommends the best one. Use it to validate or re-tune
+`PS_COMPANYMERGE_SIMILARITY_THRESHOLD` against real embeddings.
 
-**Increment 2** (PLAN.md §1 Increment 2, AC-BI-007): `sweep_dataset()` scores a whole
-dataset against a whole range of candidate thresholds while fetching each unique text's
-embedding at most once, via a single `dict[str, tuple[float, ...]]` cache
-(`_embed()`) shared across every pair and every threshold.
+How a pair is scored: `text_a` (the incoming side) is always embedded fresh through
+`ps_service.llm_interface.embedding.route_embedding`; `text_b` (the existing-candidate
+side) reuses the cached `embedding` of the real curated-content node it cites when one
+exists, and is otherwise embedded fresh. The two vectors are compared with
+`ps_service.company_merge.similarity.cosine_similarity`, never a reimplementation.
+Each unique text is embedded at most once per run, however many pairs and thresholds
+reference it.
 
-**Increment 3** (PLAN.md §1 Increment 3, AC-BI-008): no `try`/`except` anywhere in
-`_embed`/`sweep_dataset` -- a `LlmProviderError` from any `route_embedding` call
-propagates unchanged, aborting the whole sweep with no partial `ThresholdResult` list,
-mirroring `ps_service.company_merge.dedup.find_best_semantic_match`'s own documented
-"no try/except in this function" (`dedup.py:181-182`) and `dedupe_canonical_nodes`'s
-call-order-based "abort with no partial write" guarantee (`dedup.py:313-315`).
+The built-in dataset has 10 true-match pairs (a human-authored name-style paraphrase
+paired with a real Capability node's own `name`) and 11 true-non-match pairs (two real,
+distinct Capability nodes' `name` fields). Every pair cites the real GDPR, NIS2 or CRA
+Capability node id(s) it is drawn from and carries a non-empty rationale. When the
+dataset is built, it is checked against every Capability node in
+`curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json`: a pair whose two sides are the same
+string and whose string names two or more real nodes is rejected with
+`SweepDatasetValidationError`, because Company Merge resolves identical names by exact
+key before any semantic scoring happens.
 
-**Increment 4** (PLAN.md §1 Increment 4, CHANGES.md row M3's path substitution):
-`build_dataset()` now returns the full labeled dataset -- 10 true-match pairs (PLAN.md
-§3.2, human-authored name-style paraphrase grounded in a real node's own `description`
-paired with that node's real `name`) and 11 true-non-match pairs (PLAN.md §3.1, two
-real, distinct Capability nodes' `name` fields verbatim) -- every pair citing the real
-GDPR/NIS2/CRA Capability node id(s) it is drawn from (AC-BI-001) with a non-empty
-`rationale` (AC-BI-002). `build_dataset()` also runs a real mechanical exclusion guard
-(AC-BI-003's general form, not just a handful of illustrative examples): it loads every
-real Capability node from `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` at
-construction time (issue #100), computes the set of `name` values shared by two or more
-of the 778 real Capability node entries, and raises `SweepDatasetValidationError` if any
-dataset pair's `text_a` and `text_b` are identical to each other AND that shared string
-names two or more real corpus nodes -- proven against the whole 778-node curated-content
-corpus, not merely asserted by convention.
+Failure behavior: a `LlmProviderError` from any embedding call propagates unchanged and
+aborts the whole sweep; no partial results are produced or written.
 
-**Increment 5** (PLAN.md §1 Increment 5 / §4 "CLI surface"/"Dependency injection seam",
-CHANGES.md row M2): `main(argv=None, *, call_embedding=None, config_loader=load_config) ->
-int` -- a re-runnable CLI. `--model` defaults to `config_loader().llm_interface_embed_model`
-(AC-BI-005), failing closed with a stderr message and exit code `1` if neither `--model` nor
-that config field is resolvable, mirroring `run_live_merge.py`'s `_resolve_merge_config`
-pattern. `--threshold-start`/`--threshold-stop`/`--threshold-step` (default `0.70`/`0.95`/
-`0.01`, PLAN.md/CHANGES.md row m3) build the candidate threshold range. `--dataset` is a
-real CLI flag (unlike `call_embedding`/`config_loader`, which have no flag) taking a path to
-a JSON file of `SimilarityPair`-shaped objects; when omitted, the module-level
-`DEFAULT_DATASET` constant (`build_dataset()`'s full 21-pair set, computed once at import)
-is used. `--recommendation-path` is parsed (default: this issue's own
-`.orchestrator/tracker/issue-29-similarity-threshold/SWEEP_RECOMMENDATION.md`) but not yet
-acted on -- the recommendation writer is a later increment; this script only prints the
-per-threshold table to stdout. `configure_logging()` is called before `sweep_dataset()` (PLAN.md
-§0 F5), and `if __name__ == "__main__": sys.exit(main(sys.argv[1:]))` is this script's normal
-entrypoint.
+Selection: the entry with the highest F1 wins; on equal F1 the higher threshold wins,
+which biases the recommendation toward precision (fewer false Capability merges). The
+recommendation is printed and written as a short Markdown block.
 
-**Increment 6** (PLAN.md §1 Increment 6, AC-BI-009): `select_recommendation(results) ->
-ThresholdResult` picks the highest-`f1` entry from a full sweep, breaking a tie toward
-the HIGHER threshold (CHANGES.md row m3, biasing the recommendation toward precision --
-fewer false Capability merges). `render_recommendation(result) -> str` renders that pick
-as a short Markdown block naming the specific threshold value and its precision/recall/F1
-(each to 3 decimal places) plus the TP/FP/TN/FN counts. `main()` now calls both after
-`sweep_dataset()`, prints the rendered block to stdout in addition to the per-threshold
-table, and writes it to `--recommendation-path` (default: this issue's own
-`.orchestrator/tracker/issue-29-similarity-threshold/SWEEP_RECOMMENDATION.md`), creating
-parent directories as needed.
+    uv run tools/company-merge/company_merge_similarity_sweep.py [--model M]
 
-Later increments (not implemented here -- see `.orchestrator/tracker/
-issue-29-similarity-threshold/PLAN.md`) add the live sweep execution against the real
-Azure embedding endpoint and the config/chart/docs reconciliation it feeds. This module
-is exercised via `ps-service/tests/company_merge/
-test_similarity_threshold_sweep_scoring.py`, `test_similarity_threshold_dataset.py`, and
-`test_company_merge_similarity_sweep_cli.py`.
+Options:
+    --model                 Embedding model for every pair (default: the
+                            `llm_interface_embed_model` of the service configuration,
+                            i.e. PS_LLMINTERFACE_EMBED_MODEL).
+    --threshold-start       First candidate threshold (default: 0.70).
+    --threshold-stop        Last candidate threshold, inclusive (default: 0.95).
+    --threshold-step        Increment between candidate thresholds (default: 0.01).
+    --dataset               JSON file of pair objects (`text_a`, `text_b`, `label` of
+                            `match` or `non_match`, `rationale`, optional
+                            `cited_node_ids`) replacing the built-in 21-pair dataset.
+                            A file dataset is trusted as already curated: the
+                            identical-name check runs only for the built-in dataset.
+    --recommendation-path   Where the rendered recommendation Markdown is written
+                            (default: the tool's built-in output location); parent
+                            directories are created if needed.
+
+Output: a per-threshold table (threshold, precision, recall, F1, TP, FP, TN, FN) and
+the recommendation block on stdout, and the recommendation file.
+
+Exit codes:
+    0   The sweep completed and the recommendation was written.
+    1   Neither `--model` nor PS_LLMINTERFACE_EMBED_MODEL resolves to a model.
+
+Requires a configured embedding provider (its own credentials resolvable by LiteLLM)
+unless the embedding transport is injected, and the curated-content baselines checked
+out in the repository.
 """
 
 from __future__ import annotations
@@ -103,24 +89,21 @@ if TYPE_CHECKING:
 class SimilarityPair:
     """One labeled Capability-name pair for the similarity-threshold sweep dataset.
 
-    `text_a`/`text_b` are name-shaped strings -- either a real Capability node's own
-    `name` field, verbatim, or a human-authored name-style paraphrase -- never a
-    description sentence, because `route_embedding` is only ever called on a
-    Capability's `name` in production (`ps_service.company_merge.dedup`'s
-    `_TEXT_PROPERTY_BY_LABEL`).
-
-    `text_b_cached_embedding` mirrors `ExistingCanonicalNode.embedding` in
-    `ps_service.company_merge.dedup.find_best_semantic_match`'s own reuse-if-cached
-    treatment (`dedup.py:194-201`): `text_b` plays the "existing candidate" role in
-    every pair, so when the real curated-content node it cites already carries a
-    cached `embedding`, that cached vector is reused instead of a fresh
-    `route_embedding` call (issue #100 Slice 4, CHANGES.md row F1). `text_a` always
-    plays the "incoming" role and is never short-circuited this way, regardless of
-    whether its own underlying node (for a non-match pair) has a real cached
-    embedding too -- mirroring `incoming_text`'s always-fresh treatment
-    (`dedup.py:187-190`). `None` here (the default, and always the case for a
-    `--dataset` override file loaded via `_load_dataset_from_path`) falls back to a
-    fresh fetch for `text_b`, exactly like `entry.embedding is None` in production.
+    Attributes:
+        text_a: Name-shaped string for the incoming side: a real Capability node's own
+            `name` or a human-authored name-style paraphrase, never a description
+            sentence, because production only embeds a Capability's `name`. Always
+            embedded fresh.
+        text_b: Name-shaped string for the existing-candidate side.
+        label: `"match"` if the two names denote the same capability, `"non_match"` if
+            they are distinct capabilities.
+        cited_node_ids: Ids of the real curated-content Capability node(s) the pair is
+            drawn from. The last id is the node behind `text_b`.
+        rationale: Why the pair carries its label.
+        text_b_cached_embedding: The cached `embedding` of the node behind `text_b`,
+            reused instead of a fresh embedding call, as production reuses an existing
+            canonical node's cached embedding. `None` (the default, and always the case
+            for pairs loaded from a `--dataset` file) means `text_b` is embedded fresh.
     """
 
     text_a: str
@@ -137,20 +120,31 @@ def score_pair(
     model: str,
     call_embedding: EmbeddingCaller | None = None,
 ) -> float:
-    """Score `pair` through Company Merge's real production scoring path.
+    """Score `pair` through Company Merge's production scoring path.
 
-    `text_a` is always resolved fresh via `route_embedding` with the given `model`
-    (AC-BI-005 -- "the same model config Company Merge uses in production"). `text_b`
-    reuses `pair.text_b_cached_embedding` when present, only calling `route_embedding`
-    when it is `None` -- mirroring `find_best_semantic_match`'s reuse-if-cached
-    treatment of an existing canonical entry's embedding (`dedup.py:194-201`; issue
-    #100 Slice 4, CHANGES.md row F1). Either way, `ps_service.company_merge.similarity.
-    cosine_similarity` is called directly on the two resulting vectors (AC-BI-004 --
-    never a reimplementation). `call_embedding` defaults to `None`, which
-    `route_embedding` itself resolves to the real `default_embedding_caller`
-    (AC-BI-006 -- no new endpoint/credential/dependency is ever constructed here). A
-    `LlmProviderError` from either `route_embedding` call propagates unchanged -- no
-    try/except in this function.
+    `text_a` is always embedded fresh with `model`. `text_b` reuses
+    `pair.text_b_cached_embedding` when present and is embedded fresh only when it is
+    `None`. The cosine similarity of the two vectors comes from
+    `ps_service.company_merge.similarity.cosine_similarity`, not a reimplementation.
+
+    Args:
+        pair: The labeled pair to score.
+        model: Embedding model identifier passed to `route_embedding`; must be one the
+            configured provider serves.
+        call_embedding: Embedding transport. `None` lets `route_embedding` use the real
+            default caller, so no new endpoint or credential is constructed here.
+
+    Returns:
+        The cosine similarity of the two embeddings (at most 1.0, higher means more
+        similar).
+
+    Raises:
+        LlmProviderError: Propagated unchanged from either embedding call.
+        LoggingLifecycleError: Propagated from `route_embedding` if no default log
+            emitter has been configured.
+
+    Side Effects:
+        Makes up to two embedding calls to the configured provider.
     """
     embedding_a = tuple(
         route_embedding(pair.text_a, model=model, call_embedding=call_embedding).vector
@@ -164,7 +158,7 @@ def score_pair(
 
 
 def _is_identical_name_pair(text_a: str, text_b: str) -> bool:
-    """AC-BI-003's exclusion rule: identical Capability-name strings never reach scoring.
+    """Report whether two names are the identical string, which scoring must exclude.
 
     Mirrors Company Merge's own exact-key match (`ps_service.company_merge.dedup`),
     which resolves an identical name before `find_best_semantic_match`'s
@@ -175,13 +169,13 @@ def _is_identical_name_pair(text_a: str, text_b: str) -> bool:
 
 
 class SweepDatasetValidationError(Exception):
-    """`build_dataset()`'s dataset violates AC-BI-003's general exclusion rule.
+    """The built-in dataset contains a same-string pair drawn from a shared name.
 
-    Raised when a dataset pair's `text_a`/`text_b` are identical to each other AND
-    that shared string is a real Capability `name` present on two or more nodes across
-    `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` -- such a pair would resolve
-    via Company Merge's own exact-key match before semantic scoring ever runs, so it
-    must never reach the shipped dataset (PLAN.md §1 Increment 4, §3.3; issue #100).
+    Raised by `build_dataset()` when a pair's `text_a` and `text_b` are the identical
+    string and that string is the `name` of two or more real Capability nodes across
+    `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json`. Company Merge would resolve
+    such a pair by its exact-key match before semantic scoring runs, so it must never
+    reach the dataset.
     """
 
 
@@ -191,13 +185,8 @@ _TOOLS_COMPANY_MERGE_DIR = Path(__file__).resolve().parent
 class CuratedContentCorpusError(Exception):
     """A `curated-content/{id}/baseline.json` file is missing or fails to parse.
 
-    Raised by `_load_curated_content_capability_nodes()` (AC-BI-003) -- never
-    returns an empty or partial Capability node list silently. Follows this
-    component's domain-specific-exception convention (mirrors
-    `SweepDatasetValidationError`/`SweepDatasetFileError` in this same module,
-    `docs/coding-standards/level2-python-instructions.md`'s "domain-specific
-    exception types per component" rule) rather than raising a bare
-    `Exception`/`ValueError`/`FileNotFoundError`.
+    Raised while loading the curated Capability nodes, which never silently returns an
+    empty or partial list.
     """
 
 
@@ -208,18 +197,13 @@ _CURATED_CONTENT_INSTRUMENT_DIRS = ("GDPR-1.0", "NIS2-1.0", "CRA-1.0")
 def _load_curated_content_capability_nodes() -> tuple[SerializedNode, ...]:
     """Load every Capability node from the three curated-content baseline exports.
 
-    Reads `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` (AC-BI-001) via
-    `export.serialize.parse_serialized_graph_json` -- never a hand-rolled
-    `json.loads` of the node shape, and never a stale spike-era fixture directory.
-    Filters the returned `SerializedGraph.nodes` to `label == "Capability"`.
+    Reads `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` through
+    `export.serialize.parse_serialized_graph_json` and keeps the nodes labeled
+    `Capability`.
 
-    Raises `CuratedContentCorpusError` if any of the three `baseline.json` files is
-    missing or fails to parse as a `SerializedGraph` (AC-BI-003) -- this function
-    never returns an empty or partial result for a missing/malformed file; a
-    failure on any one of the three instruments aborts the whole load.
-
-    Wired in as `_repeated_capability_names_from_corpus`'s body (issue #100 Slice 2)
-    -- its only in-module caller.
+    Raises:
+        CuratedContentCorpusError: If any of the three files is missing or does not
+            parse as a serialized graph; a failure on any one aborts the whole load.
     """
     nodes: list[SerializedNode] = []
     for instrument_dir in _CURATED_CONTENT_INSTRUMENT_DIRS:
@@ -242,15 +226,10 @@ def _load_curated_content_capability_nodes() -> tuple[SerializedNode, ...]:
 def _capability_nodes_by_id() -> dict[str, SerializedNode]:
     """Index every real curated-content Capability node by its `id` property.
 
-    Built from `_load_curated_content_capability_nodes()` -- used by `build_dataset()`
-    to look up each spec's `text_b`-side node and attach its cached `embedding`
-    (issue #100 Slice 4, CHANGES.md row F1), mirroring
-    `ps_service.company_merge.dedup.find_best_semantic_match`'s reuse-if-cached
-    treatment of `ExistingCanonicalNode.embedding` (`dedup.py:194-201`). When the same
-    id is present in more than one loaded instrument file (the 10 cross-regulation
-    shared-id groups), the last one loaded wins -- both entries represent the same
-    real capability with the same cached embedding in practice, so this is not a
-    meaningful ambiguity.
+    `build_dataset()` uses it to look up each spec's `text_b`-side node and attach its
+    cached `embedding`. When the same id appears in more than one instrument file (the
+    cross-regulation shared-id groups) the last one loaded wins; the entries describe
+    the same capability with the same cached embedding in practice.
     """
     return {
         cast("str", node.properties["id"]): node
@@ -263,13 +242,10 @@ def _text_b_cached_embedding(
 ) -> tuple[float, ...] | None:
     """The `text_b`-side cited node's own cached `embedding`, if present.
 
-    `cited_node_ids[-1]` is always the id corresponding to `text_b` by this module's
-    existing tuple-ordering convention -- every `_MATCH_PAIR_SPECS` entry's single id
-    names `text_b`'s own node, and every `_NON_MATCH_PAIR_SPECS` entry orders
-    `text_a`'s node id first and `text_b`'s node id second. Returns `None` if the node
-    is missing from `nodes_by_id` or carries no `embedding` property --
-    `_score_dataset`/`score_pair` fall back to a fresh fetch in that case, mirroring
-    `entry.embedding is None` in `dedup.py:195-200`.
+    `cited_node_ids[-1]` is always the id of `text_b`'s node: every match spec's single
+    id names it, and every non-match spec lists `text_a`'s node first and `text_b`'s
+    second. Returns `None` if the node is missing from `nodes_by_id` or carries no
+    `embedding` property, in which case scoring embeds `text_b` fresh.
     """
     node = nodes_by_id.get(cited_node_ids[-1])
     if node is None:
@@ -283,14 +259,10 @@ def _text_b_cached_embedding(
 def _repeated_capability_names_from_corpus() -> frozenset[str]:
     """Capability `name` values shared by two or more curated-content nodes.
 
-    Sourced from `_load_curated_content_capability_nodes()` (curated-content,
-    AC-BI-002/AC-BI-007) -- never a stale spike-era fixture directory. Returns the
-    `name` values shared by two or more of the 778 real Capability nodes across
-    `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` (10 such names, confirmed
-    by direct count during planning -- every one of the 10 is the *same* node id
-    cited from more than one regulation's extraction, never two distinct nodes that
-    happen to share a name). `_assert_dataset_excludes_real_identical_name_pairs`
-    checks the shipped dataset against this set, at full curated-content scale.
+    Counts names across the Capability nodes of
+    `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json`.
+    `_assert_dataset_excludes_real_identical_name_pairs` checks the built-in dataset
+    against this set, at full curated-content scale.
     """
     names = (
         cast("str", node.properties["name"]) for node in _load_curated_content_capability_nodes()
@@ -302,15 +274,12 @@ def _repeated_capability_names_from_corpus() -> frozenset[str]:
 def _assert_dataset_excludes_real_identical_name_pairs(
     pairs: tuple[SimilarityPair, ...], repeated_names: frozenset[str]
 ) -> None:
-    """AC-BI-003, proven at corpus scale.
+    """Raise if any pair is a same-string pair drawn from a name shared by real nodes.
 
-    Raise if any pair is a same-string pair drawn from a Capability name that two or
-    more real corpus nodes share. A real mechanical check, not a manual curation
-    discipline -- `repeated_names` is
-    computed from all 778 real Capability nodes across curated-content
-    (`_repeated_capability_names_from_corpus`), so this catches any such pair
-    regardless of which regulation(s) it came from, not just the handful of names
-    cited by name in PLAN.md's prose.
+    A mechanical check rather than a manual curation discipline: `repeated_names` is
+    computed from every real Capability node across curated-content
+    (`_repeated_capability_names_from_corpus`), so it catches any such pair whichever
+    regulation it came from.
     """
     violations = tuple(
         pair
@@ -329,12 +298,10 @@ def _assert_dataset_excludes_real_identical_name_pairs(
 
 _CandidateSpec = tuple[str, str, Literal["match", "non_match"], tuple[str, ...], str]
 
-# 10 true-match pairs (PLAN.md §3.2, Slice 3): each is (human-authored name-style
-# paraphrase, the real node's own `name`, "match", the real node's id, a rationale
-# grounded in the real node's own `description`). Every real name/id/description cited
-# below was independently re-verified against the real
-# `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` files for this dispatch (issue
-# #100 Slice 3) -- not copied blindly from PLAN.md's prose.
+# 10 true-match pairs: each is (human-authored name-style paraphrase, the real node's own
+# `name`, "match", the real node's id, a rationale grounded in the real node's own
+# `description`). Every name, id and description cited below comes from the real
+# `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` files.
 _MATCH_PAIR_SPECS: tuple[_CandidateSpec, ...] = (
     (
         "Assessing and Mitigating Privacy Risks Before High-Risk Processing Begins",
@@ -449,13 +416,10 @@ _MATCH_PAIR_SPECS: tuple[_CandidateSpec, ...] = (
     ),
 )
 
-# 11 true-non-match pairs (PLAN.md §3.1, Slice 3, with CHANGES.md row F2's 2-pair
-# substitution already applied): each cites two real, distinct Capability nodes' own
-# `name` fields verbatim, with a rationale explaining why the extraction kept them as
-# separate capabilities despite shared vocabulary. Every real name/id/description
-# cited below was independently re-verified against the real
-# `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` files for this dispatch (issue
-# #100 Slice 3).
+# 11 true-non-match pairs: each cites two real, distinct Capability nodes' own `name`
+# fields, with a rationale explaining why the extraction kept them as separate
+# capabilities despite shared vocabulary. Every name, id and description cited below
+# comes from the real `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` files.
 _NON_MATCH_PAIR_SPECS: tuple[_CandidateSpec, ...] = (
     (
         "Confidentiality Control",
@@ -521,9 +485,7 @@ _NON_MATCH_PAIR_SPECS: tuple[_CandidateSpec, ...] = (
         ),
     ),
     (
-        # CHANGES.md row F2 substitution (replaces the original "Administrative Fine
-        # Framework" / "Administrative Fines Framework" pair, which was a mislabeled
-        # duplicate, not a genuine hard negative).
+        # A genuine hard negative: the two nodes have different descriptions.
         "Information Sharing Policy",
         "Information Sharing Tools",
         "non_match",
@@ -538,9 +500,7 @@ _NON_MATCH_PAIR_SPECS: tuple[_CandidateSpec, ...] = (
         ),
     ),
     (
-        # CHANGES.md row F2 substitution (replaces the original "Authority Designation
-        # Process" / "Authority Designation Workflow" pair, which was a mislabeled
-        # duplicate -- the two nodes shared a byte-identical description).
+        # A genuine hard negative: the two nodes have different descriptions.
         "CE Marking Display",
         "CE Marking Labeling",
         "non_match",
@@ -621,7 +581,19 @@ class ThresholdResult:
     """Precision/recall/F1 and confusion-matrix counts for one candidate threshold.
 
     Produced by `sweep_dataset()` for each threshold in its `thresholds` argument,
-    scored against the same dataset and the same shared embedding cache (AC-BI-007).
+    scored against the same dataset and the same shared embedding cache.
+
+    Attributes:
+        threshold: The candidate similarity threshold; a pair is predicted a match when
+            its score is at least this value.
+        precision: Share of predicted matches that are true matches, 0.0 when none were
+            predicted.
+        recall: Share of true matches that were predicted, 0.0 when there are none.
+        f1: Harmonic mean of precision and recall, 0.0 when both are zero.
+        true_positive: Matches predicted as matches.
+        false_positive: Non-matches predicted as matches (false merges).
+        true_negative: Non-matches predicted as non-matches.
+        false_negative: Matches predicted as non-matches (missed merges).
     """
 
     threshold: float
@@ -644,12 +616,10 @@ def _embed(
     """Return `text`'s embedding, fetching it via `route_embedding` at most once.
 
     Checks `cache` first (keyed by the exact `text` string); on a miss, calls
-    `route_embedding` and stores the resulting vector before returning it -- every
-    caller shares the same `cache` dict, so a text repeated across pairs and/or
-    thresholds is fetched exactly once for the lifetime of that cache (AC-BI-007). A
-    `LlmProviderError` from `route_embedding` propagates unchanged -- no try/except in
-    this function (AC-BI-008), mirroring `find_best_semantic_match`'s own documented
-    behavior (`ps_service.company_merge.dedup`, `dedup.py:181-182`).
+    `route_embedding` and stores the vector before returning it. Callers share one
+    `cache`, so a text repeated across pairs or thresholds is fetched once. A
+    `LlmProviderError` from `route_embedding` propagates unchanged; nothing is caught
+    here, as in Company Merge's own `find_best_semantic_match`.
     """
     cached = cache.get(text)
     if cached is not None:
@@ -668,15 +638,12 @@ def _score_dataset(
 ) -> tuple[tuple[SimilarityPair, float], ...]:
     """Score every pair once, resolving `text_a` fresh and `text_b` reused-if-cached.
 
-    `text_a` (the "incoming" side of every pair) is always resolved through `_embed`,
-    sharing one embedding cache local to this `sweep_dataset()` call, populated lazily
-    and reused across every pair -- never a direct `route_embedding` call from this
-    loop for `text_a`. `text_b` (the "existing candidate" side) reuses
-    `pair.text_b_cached_embedding` when present; only when it is `None` is `text_b`
-    resolved through the same shared `_embed`/cache path. This mirrors
-    `find_best_semantic_match`'s own `incoming_text`-always-fresh /
-    `existing_index`-entry-reuse-if-cached split (`dedup.py:187-201`; issue #100
-    Slice 4, CHANGES.md row F1).
+    `text_a` (the "incoming" side) is always resolved through `_embed`, which shares one
+    embedding cache local to the call, populated lazily and reused across every pair.
+    `text_b` (the "existing candidate" side) reuses `pair.text_b_cached_embedding` when
+    present and goes through the same `_embed` cache only when it is `None`. This
+    mirrors the always-fresh incoming text and reuse-if-cached existing entry of
+    Company Merge's `find_best_semantic_match`.
     """
     cache: dict[str, tuple[float, ...]] = {}
     scored: list[tuple[SimilarityPair, float]] = []
@@ -693,6 +660,7 @@ def _score_dataset(
 def _threshold_result(
     scored_pairs: tuple[tuple[SimilarityPair, float], ...], threshold: float
 ) -> ThresholdResult:
+    """Tally the confusion matrix, precision, recall and F1 at one threshold."""
     true_positive = 0
     false_positive = 0
     true_negative = 0
@@ -741,39 +709,54 @@ def sweep_dataset(
 ) -> list[ThresholdResult]:
     """Score `pairs` once, then tally precision/recall/F1 at every threshold.
 
-    Builds exactly one embedding cache for this call (via `_embed`), populated lazily
-    as `pairs` are scored, and reused across every pair AND every threshold in
-    `thresholds` -- each unique text is fetched via `route_embedding` at most once
-    regardless of how many pairs reference it or how many thresholds are swept
-    (AC-BI-007).
+    Builds one embedding cache for the call, populated lazily as `pairs` are scored and
+    reused across every pair and every threshold, so each unique text is embedded at
+    most once however many pairs reference it or thresholds are swept.
 
-    A `LlmProviderError` from any `route_embedding` call propagates unchanged -- no
-    try/except anywhere in this function or in `_embed`/`_score_dataset` (AC-BI-008).
-    Because every pair is scored before any `ThresholdResult` is produced, a failure
-    partway through scoring aborts the whole sweep: no `ThresholdResult` is returned
-    for any threshold, never a partial list from whatever pairs happened to score
-    before the failure.
+    Args:
+        pairs: The labeled dataset to score.
+        thresholds: Candidate thresholds, in the order results should be returned. A
+            pair is predicted a match when its score is at least the threshold.
+        model: Embedding model identifier passed to `route_embedding`.
+        call_embedding: Embedding transport; `None` uses the real default caller.
+
+    Returns:
+        One `ThresholdResult` per threshold, in input order; empty if `thresholds` is
+        empty.
+
+    Raises:
+        LlmProviderError: Propagated unchanged from any embedding call. Every pair is
+            scored before any result is produced, so a failure partway aborts the
+            sweep and no partial list is returned.
+        LoggingLifecycleError: Propagated from `route_embedding` if no default log
+            emitter has been configured.
+
+    Side Effects:
+        Makes one embedding call per unique text that has no cached vector.
     """
     scored_pairs = _score_dataset(pairs, model=model, call_embedding=call_embedding)
     return [_threshold_result(scored_pairs, threshold) for threshold in thresholds]
 
 
 def build_dataset() -> tuple[SimilarityPair, ...]:
-    """The full labeled dataset (PLAN.md §1 Increment 4).
+    """Build the full labeled sweep dataset from the curated-content baselines.
 
-    10 true-match pairs + 11 true-non-match pairs, every pair citing real GDPR/NIS2/CRA
-    Capability node id(s) (AC-BI-001) with a non-empty rationale (AC-BI-002). Before
-    returning, mechanically re-proves AC-BI-003's general form against the
-    whole 778-node curated-content corpus (`_assert_dataset_excludes_real_identical_
-    name_pairs`, construction-time, raising `SweepDatasetValidationError` if violated)
-    rather than relying on the dataset having been curated by hand correctly -- see
-    that function's docstring.
+    Returns:
+        10 true-match pairs followed by 11 true-non-match pairs. Each cites the real
+        GDPR, NIS2 or CRA Capability node id(s) it is drawn from and has a non-empty
+        rationale. Each pair's `text_b_cached_embedding` is the cached `embedding` of
+        the node behind `text_b` (`cited_node_ids[-1]`), or `None` if that node has
+        none.
 
-    Also attaches `text_b_cached_embedding` to every pair (issue #100 Slice 4,
-    CHANGES.md row F1): each spec's `text_b`-side node (`cited_node_ids[-1]`) is
-    looked up in the real curated-content corpus, and its own cached `embedding` is
-    reused rather than fetched fresh when scored -- see `_text_b_cached_embedding`'s
-    docstring.
+    Raises:
+        CuratedContentCorpusError: If a curated-content `baseline.json` is missing or
+            malformed.
+        SweepDatasetValidationError: If a pair uses a name shared by two or more real
+            nodes on both of its sides. The dataset is checked mechanically against the
+            whole curated-content corpus rather than trusted to hand curation.
+
+    Side Effects:
+        Reads the three curated-content `baseline.json` files.
     """
     nodes_by_id = _capability_nodes_by_id()
     pairs = tuple(
@@ -812,18 +795,19 @@ _VALID_LABELS: tuple[Literal["match", "non_match"], ...] = ("match", "non_match"
 
 
 class SweepDatasetFileError(Exception):
-    """A `--dataset` override file could not be parsed into `SimilarityPair`s."""
+    """A `--dataset` file could not be parsed into `SimilarityPair`s (invalid `label`)."""
 
 
 def _load_dataset_from_path(path: Path) -> tuple[SimilarityPair, ...]:
     """Load a `--dataset` override file: a JSON array of `SimilarityPair`-shaped objects.
 
-    Each entry requires `text_a`, `text_b`, `label` (`"match"`/`"non_match"`),
-    `cited_node_ids` (a list of strings), and `rationale`. This is the mechanism a test
-    uses to substitute a small, hermetic fixture for the CLI's own `--dataset` flag --
-    never a way to skip AC-BI-003's exclusion guard, which only `build_dataset()` runs (a
-    dataset file loaded this way is trusted as already-curated, exactly like Increment 4's
-    own hand-authored `_CANDIDATE_SPECS`).
+    Each entry requires `text_a`, `text_b`, `label` (`"match"`/`"non_match"`) and
+    `rationale`; `cited_node_ids` (a list of strings) is optional. Tests use this to
+    substitute a small, hermetic fixture for the built-in dataset. The identical-name
+    exclusion check runs only in `build_dataset()`, so a file dataset is trusted as
+    already curated. Raises `SweepDatasetFileError` for an invalid `label` and
+    `KeyError` for a missing required field; `OSError` and `json.JSONDecodeError`
+    propagate if the file cannot be read or is not JSON.
     """
     raw = json.loads(path.read_text(encoding="utf-8"))
     pairs: list[SimilarityPair] = []
@@ -897,8 +881,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--recommendation-path",
         type=Path,
         default=_DEFAULT_RECOMMENDATION_PATH,
-        help="Where the rendered recommendation Markdown is written (default: this "
-        "issue's own tracker dir); parent directories are created if needed",
+        help="Where the rendered recommendation Markdown is written (default: the "
+        "tool's built-in output location); parent directories are created if needed",
     )
     return parser.parse_args(argv)
 
@@ -908,11 +892,10 @@ def _resolve_model(
 ) -> str | int:
     """Fail-closed `--model` resolution. An `int` return is the process exit code.
 
-    Mirrors `run_live_merge.py`'s `_resolve_merge_config` pattern: an explicit `--model`
-    always wins; otherwise `config_loader()` (the real `load_config` by default) must
-    resolve `llm_interface_embed_model` (AC-BI-005 -- "the same model config Company Merge
-    uses in production"), or the script exits with a clear stderr message rather than
-    silently falling back to some other value.
+    An explicit `--model` always wins; otherwise `config_loader()` (the real
+    `load_config` by default) must resolve `llm_interface_embed_model`, the model
+    Company Merge uses in production, or a clear message goes to stderr and `1` is
+    returned instead of silently falling back to some other value.
     """
     if args.model is not None:
         return cast("str", args.model)
@@ -948,18 +931,21 @@ def _print_threshold_table(results: list[ThresholdResult]) -> None:
 
 
 def select_recommendation(results: list[ThresholdResult]) -> ThresholdResult:
-    """Pick the recommended threshold from a full sweep's results (AC-BI-009).
+    """Pick the recommended threshold from a full sweep's results.
 
-    Selection rule: the entry with the highest `f1`. **Tie-break: on equal `f1`, the
-    HIGHER `threshold` wins** (CHANGES.md row m3, accepted as-is) -- this deliberately
-    biases the recommendation toward precision/fewer false merges when two or more
-    thresholds score identically on F1, consistent with the domain's stated
-    anti-over-merging preference (PLAN.md Open Question 3 / CHANGES.md row m3). This is
-    not an incidental consequence of iteration order: `max()`'s key is the
-    `(f1, threshold)` tuple, so the higher-threshold candidate always wins a tie
-    regardless of `results`' input order.
+    Selection rule: the entry with the highest `f1`. On equal `f1` the higher
+    `threshold` wins, which deliberately biases the recommendation toward precision
+    (fewer false merges) in line with the domain's anti-over-merging preference. This
+    does not depend on iteration order: `max()` keys on the `(f1, threshold)` tuple.
 
-    Raises `ValueError` if `results` is empty -- there is nothing to recommend.
+    Args:
+        results: The `ThresholdResult` list of a full sweep, in any order.
+
+    Returns:
+        The entry with the highest F1, the higher threshold winning a tie.
+
+    Raises:
+        ValueError: If `results` is empty, since there is nothing to recommend.
     """
     if not results:
         raise ValueError("select_recommendation requires at least one ThresholdResult")
@@ -969,12 +955,14 @@ def select_recommendation(results: list[ThresholdResult]) -> ThresholdResult:
 def render_recommendation(result: ThresholdResult) -> str:
     """Render `result` as a short Markdown block naming the recommended threshold.
 
-    Names the specific recommended `threshold` value and its precision/recall/F1
-    (each formatted to a fixed 3 decimal places -- AC-BI-009's "backed by the
-    precision/recall/F1 figures measured at that value"), plus the TP/FP/TN/FN
-    confusion-matrix counts, so a human reading `SWEEP_RECOMMENDATION.md` understands
-    exactly what was measured and why this value was chosen (`select_recommendation`'s
-    higher-threshold-on-tie rule).
+    Args:
+        result: The chosen `ThresholdResult`.
+
+    Returns:
+        Markdown text naming the threshold and its precision, recall and F1 (each to 3
+        decimal places), the TP/FP/TN/FN counts, and the selection rule (highest F1,
+        ties toward the higher threshold), so a reader of the written recommendation
+        file sees exactly what was measured and why the value was chosen.
     """
     return (
         "# Company Merge similarity-threshold sweep recommendation\n"
@@ -1004,30 +992,37 @@ def main(
     call_embedding: EmbeddingCaller | None = None,
     config_loader: Callable[[], ServiceConfig] = load_config,
 ) -> int:
-    """Run the similarity-threshold sweep and print one row per candidate threshold.
+    """Run the similarity-threshold sweep, print the table and write the recommendation.
 
-    `call_embedding`/`config_loader` are test-only injection seams (no CLI flag exposes
-    them, PLAN.md §4's "Dependency injection seam"): left at their defaults, a real
-    invocation calls the real, already-configured embedding provider
-    (`route_embedding`'s own `default_embedding_caller`) and the real
-    `ps_service.config.load_config`. `--dataset` (a real CLI flag) overrides the built-in
-    `DEFAULT_DATASET` with a JSON file's worth of pairs; omitted, it sweeps the full
-    21-pair `DEFAULT_DATASET`.
+    Configures logging before sweeping, because `route_embedding` raises
+    `LoggingLifecycleError` without a default emitter. After the sweep it picks the
+    highest-F1 threshold (ties toward the higher one), prints the per-threshold table
+    and the rendered Markdown block, and writes the block to `--recommendation-path`,
+    creating parent directories.
 
-    Calls `configure_logging()` before `sweep_dataset()` (PLAN.md §0 F5 -- `route_embedding`
-    raises `LoggingLifecycleError` without a configured default emitter). A
-    `LlmProviderError` from any `route_embedding` call propagates unchanged out of
-    `sweep_dataset()` and out of this function -- no try/except here, mirroring
-    `sweep_dataset()`'s own AC-BI-008 guarantee.
+    Args:
+        argv: Command-line arguments (see `--help`); `None` reads `sys.argv`.
+        call_embedding: Embedding transport. Test-only seam (no CLI flag exposes it);
+            `None` uses the real default caller and the configured provider.
+        config_loader: Loads the service configuration used to resolve the default
+            `--model`. Test-only seam; the default is `ps_service.config.load_config`.
 
-    After the sweep, `select_recommendation()` picks the highest-F1 threshold (ties
-    broken toward the higher threshold) and `render_recommendation()` renders it as a
-    Markdown block, which is printed to stdout (in addition to the per-threshold table)
-    and written to `--recommendation-path` (AC-BI-009), creating parent directories as
-    needed.
+    Returns:
+        Process exit code: `0` on success; `1` if `--model` is not given and
+        `PS_LLMINTERFACE_EMBED_MODEL` does not resolve through `config_loader()`.
 
-    Returns a process exit code: `0` on success; `1` if `--model` is not given and
-    `PS_LLMINTERFACE_EMBED_MODEL` is not resolvable via `config_loader()`.
+    Raises:
+        SystemExit: Raised by argparse on invalid arguments or `--help`.
+        SweepDatasetFileError: If a `--dataset` file has a pair with an invalid label.
+        LlmProviderError: Propagated unchanged from any embedding call; nothing is
+            written in that case.
+        ValueError: If `--threshold-step` is not positive.
+        OSError: If a `--dataset` file cannot be read or the recommendation file
+            cannot be written.
+
+    Side Effects:
+        Configures logging, calls the embedding provider, prints to stdout (or the
+        failed model resolution to stderr) and writes the recommendation file.
     """
     args = _parse_args(argv)
 

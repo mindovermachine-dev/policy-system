@@ -1,19 +1,16 @@
-"""A real, local, generic mock OIDC provider (issue #58, AC-BI-017).
+"""A real, local, generic mock OIDC provider for tests.
 
 Serves its own ``/.well-known/openid-configuration`` discovery document,
-``/jwks.json`` JWK Set, and (issue #57) device-authorization + token
-endpoints over a real ``http.server.ThreadingHTTPServer`` bound to an
-ephemeral loopback port -- a real local HTTP server, not a monkeypatched
-transport, because ``jwt.PyJWKClient.fetch_data`` calls
-``urllib.request.urlopen`` directly with no injectable seam (PLAN.md §0.2).
+``/jwks.json`` JWK Set, and device-authorization + token endpoints over a real
+``http.server.ThreadingHTTPServer`` bound to an ephemeral loopback port -- a real local
+HTTP server, not a monkeypatched transport, because ``jwt.PyJWKClient.fetch_data`` calls
+``urllib.request.urlopen`` directly with no injectable seam.
 
-Deliberately generic: nothing here is shaped like any one real-world IdP (no
-tenant ids, no vendor-specific claim names) -- the **one** mock OIDC provider
-AC-BI-017 requires, reused unchanged by every later slice
-(Slice 4: 200 path/principal; Slice 5: MCP; Slice 6: `rotate_key` for the
-kid-miss-refetch-once test; Slice 7: algorithm allow-list; Slice 10: audit
-logging; issue #57 Slice 4: device-authorization + token endpoints) -- never
-a second mock provider.
+Deliberately generic: nothing here is shaped like any one real-world IdP (no tenant ids,
+no vendor-specific claim names). It is the one mock OIDC provider shared by every test
+that needs an issuer: 200 path and principal checks, MCP, ``rotate_key`` for the
+kid-miss-refetch-once test, the algorithm allow-list, audit logging, and the
+device-authorization + token endpoints -- never a second mock provider.
 
 Import convention: installed as a normal package -- a consuming test module
 imports this file directly, e.g. ``from ps_test_support.mock_oidc_provider
@@ -83,15 +80,21 @@ class _RsaSigningKey:
 class DeviceFlowState:
     """Server-side state for one in-flight device-authorization grant, keyed by `device_code`.
 
-    `client_id`/`audience`/`scope` are the values recorded off the original
-    `POST /device_authorization` request -- read back via
-    `MockOidcProvider.device_flow_state` to prove audience passthrough
-    (AC-BI-003) or, for `scope` (`ps-cli` issue #119), that a login request
-    actually asked for `offline_access`. `status` drives `POST /token`'s
-    response: `"pending"` (default) -> `authorization_pending`; `"approved"`
-    -> mints a token; `"expired"` -> `expired_token`; `"denied"` ->
-    `access_denied`. `slow_down_once` makes exactly the next poll return
-    `slow_down` before reverting to `status`.
+    Purpose: records what the original `POST /device_authorization` request asked for and
+    where the simulated user approval stands, so `POST /token` can answer polls.
+
+    Attributes:
+        client_id: The request's `client_id` form field ("" when absent).
+        audience: The request's `audience` form field, or None when absent; read back
+            to prove audience passthrough.
+        scope: The request's `scope` form field, or None when absent; read back to prove
+            a login request asked for `offline_access`.
+        status: Drives `POST /token`'s response: `"pending"` (default) ->
+            `authorization_pending`; `"approved"` -> mints a token; `"expired"` ->
+            `expired_token`; `"denied"` -> `access_denied`.
+        sub: The `sub` claim of the token minted once `status` is `"approved"`.
+        slow_down_once: When True, exactly the next poll returns `slow_down`, then the
+            flag resets and `status` applies again.
     """
 
     client_id: str
@@ -169,23 +172,38 @@ def _build_handler_class(provider: MockOidcProvider) -> type[BaseHTTPRequestHand
 class MockOidcProvider:
     """A real, ephemeral-port local OIDC provider: discovery doc + JWKS + token minting.
 
-    `jwks_request_count` lets a test assert exactly how many times `/jwks.json`
-    was fetched (Slice 6's "refetch once, not repeatedly" assertion).
-    `last_token_request_form` holds the most recent `POST /token` request's raw
-    form fields (`ps-cli` issue #119 reads its `scope` key to prove a refresh
-    request carried `offline_access` forward) -- overwritten on every call, by
-    design: these tests only ever need the one request they just made.
+    Purpose: gives tests a genuine HTTP issuer to verify tokens and run device-flow logins
+    against, without any real identity provider.
 
-    Issue #57 Slice 4 adds device-authorization + token endpoint simulation:
-    `POST /device_authorization` mints a fresh `device_code`/`user_code`
-    pair; `POST /token` polls or exchanges it. Test code drives the
-    server-side state machine directly via `complete_device_flow`,
-    `simulate_slow_down_once`, `expire_device_code`, `deny_device_code` --
-    never by actually visiting a verification URI.
+    Attributes:
+        jwks_request_count: How many times `/jwks.json` has been fetched, so a test can
+            assert "refetch once, not repeatedly".
+        last_token_request_form: The most recent `POST /token` request's raw form fields
+            (e.g. its `scope` key proves a refresh request carried `offline_access`
+            forward). Overwritten on every call, by design: tests only need the one
+            request they just made. Empty until the first token request.
+
+    Device-authorization + token endpoint simulation: `POST /device_authorization` mints a
+    fresh `device_code`/`user_code` pair; `POST /token` polls or exchanges it. Test code
+    drives the server-side state machine directly via `complete_device_flow`,
+    `simulate_slow_down_once`, `expire_device_code`, `deny_device_code` -- never by
+    actually visiting a verification URI.
+
+    Side Effects:
+        Construction starts a daemon HTTP server thread on `127.0.0.1` and generates an
+        RSA keypair; call `shutdown()` (the fixture does) to stop the thread.
     """
 
     def __init__(self) -> None:
-        """Start a fresh RSA signing key and a background HTTP server on an ephemeral port."""
+        """Start a fresh RSA signing key and a background HTTP server on an ephemeral port.
+
+        Raises:
+            OSError: If a loopback socket cannot be bound.
+
+        Side Effects:
+            Generates a 2048-bit RSA keypair (`kid` `key-1`, the active key) and starts a
+            daemon thread serving HTTP on `127.0.0.1` until `shutdown()` is called.
+        """
         self._keys: dict[str, _RsaSigningKey] = {"key-1": _RsaSigningKey("key-1")}
         self._active_kid = "key-1"
         self.jwks_request_count = 0
@@ -199,22 +217,39 @@ class MockOidcProvider:
 
     @property
     def base_url(self) -> str:
-        """This provider's own base URL, e.g. `http://127.0.0.1:54321`."""
+        """This provider's own base URL, e.g. `http://127.0.0.1:54321`.
+
+        Returns:
+            The `http://host:port` string of the running server, with no trailing slash.
+        """
         host, port = self._server.server_address[0], self._server.server_address[1]
         return f"http://{host}:{port}"
 
     @property
     def issuer(self) -> str:
-        """The `iss` value this provider advertises -- its own base URL."""
+        """The `iss` value this provider advertises -- its own base URL.
+
+        Returns:
+            The same string as `base_url`; also the default `iss` of minted tokens.
+        """
         return self.base_url
 
     @property
     def jwks_uri(self) -> str:
-        """The `jwks_uri` this provider's discovery document advertises."""
+        """The `jwks_uri` this provider's discovery document advertises.
+
+        Returns:
+            `base_url` followed by `/jwks.json`.
+        """
         return f"{self.base_url}/jwks.json"
 
     def discovery_document(self) -> dict[str, Any]:
-        """The RFC 8414/OIDC-Discovery document served at `/.well-known/openid-configuration`."""
+        """The RFC 8414/OIDC-Discovery document served at `/.well-known/openid-configuration`.
+
+        Returns:
+            A dict with `issuer`, `jwks_uri`, `id_token_signing_alg_values_supported`
+            (`["RS256"]`), `device_authorization_endpoint` and `token_endpoint`.
+        """
         return {
             "issuer": self.issuer,
             "jwks_uri": self.jwks_uri,
@@ -224,7 +259,12 @@ class MockOidcProvider:
         }
 
     def jwks_document(self) -> dict[str, Any]:
-        """The JWK Set served at `/jwks.json` -- every key this provider currently knows about."""
+        """The JWK Set served at `/jwks.json` -- every key this provider currently knows about.
+
+        Returns:
+            A dict `{"keys": [...]}` holding the public JWK (with `kid`, `use` of `sig`
+            and `alg` of `RS256`) of every key, including keys added by `rotate_key`.
+        """
         return {"keys": [key.public_jwk() for key in self._keys.values()]}
 
     def mint_token(
@@ -240,28 +280,35 @@ class MockOidcProvider:
     ) -> str:
         """Mint a signed JWT.
 
+        Purpose: produce tokens a verifier configured against this provider accepts, or
+        deliberately malformed variants (expired, unknown `kid`, wrong `iss`/`aud`).
+
         Args:
             sub: The `sub` claim.
             aud: The `aud` claim; defaults to `ps-service`.
             iss: The `iss` claim; defaults to this provider's own `issuer`.
             exp_delta: Seconds from now until `exp`; negative mints an
-                already-expired token (Slice 7).
+                already-expired token.
             kid: The signing key's `kid`. Defaults to the currently active
                 key. A `kid` naming neither the original nor a
                 `rotate_key()`-added keypair mints a token signed by a
                 *freshly generated, never-published* key -- simulating a
-                JWKS the issuer never actually advertised (Slice 6/7's
+                JWKS the issuer never actually advertised (the
                 still-unknown-`kid` case).
-            alg: The JWS `alg` header. Defaults to `RS256`; a caller passing
-                a symmetric algorithm (e.g. `HS256`) must also pass a
-                bytes/str `kid`-independent key of its own via
-                `extra_claims`-adjacent test code, since this provider only
-                holds RSA keys -- see `tests/auth/test_algorithm_allowlist.py`.
+            alg: The JWS `alg` header. Defaults to `RS256`. This provider only holds
+                RSA keys, so a symmetric algorithm such as `HS256` cannot be signed
+                here and raises; a test needing one must build that token itself.
             extra_claims: Additional/overriding claims merged in last (so a
                 test can override `exp`/`iat` etc. directly).
 
         Returns:
-            The encoded JWT.
+            The encoded JWT (compact JWS string) whose header carries the signing `kid`.
+
+        Raises:
+            TypeError: If `alg` is a symmetric algorithm such as `HS256`.
+            jwt.exceptions.InvalidKeyError: If `alg` is incompatible with an RSA key
+                (e.g. `none`).
+            NotImplementedError: If `alg` is not a known JWS algorithm.
         """
         now = int(time.time())
         claims: dict[str, object] = {
@@ -286,12 +333,16 @@ class MockOidcProvider:
 
         The first key stays servable in the JWKS (both keys are advertised),
         so a token signed by the *old* key still verifies -- only newly
-        minted tokens use the new one, letting Slice 6 mint a token whose
+        minted tokens use the new one, letting a test mint a token whose
         `kid` is genuinely absent from whatever JWKS a verifier fetched
         *before* this call.
 
         Returns:
-            The new key's `kid`.
+            The new key's `kid` (`key-<n>`, with n one more than the number of keys held).
+
+        Side Effects:
+            Generates a new RSA keypair, adds it to the JWKS and makes it the key used by
+            `mint_token` when no `kid` is passed.
         """
         new_kid = f"key-{len(self._keys) + 1}"
         self._keys[new_kid] = _RsaSigningKey(new_kid)
@@ -302,13 +353,35 @@ class MockOidcProvider:
         """Return the recorded `DeviceFlowState` for `device_code` (client_id/audience included).
 
         Lets a test read back what a `POST /device_authorization` request
-        recorded -- e.g. asserting `audience` was passed through unchanged
-        (AC-BI-003).
+        recorded -- e.g. asserting `audience` was passed through unchanged.
+
+        Parameters:
+            device_code: A `device_code` previously returned by `POST /device_authorization`.
+
+        Returns:
+            The live `DeviceFlowState` object (mutations are visible to the server).
+
+        Raises:
+            KeyError: If `device_code` was never issued by this provider.
         """
         return self._device_flow_states[device_code]
 
     def complete_device_flow(self, device_code: str, *, sub: str = "test-subject") -> None:
-        """Mark `device_code` approved as `sub`; subsequent `/token` polls succeed."""
+        """Mark `device_code` approved as `sub`; subsequent `/token` polls succeed.
+
+        Parameters:
+            device_code: A `device_code` previously issued by this provider.
+            sub: The `sub` claim of the token the next successful poll mints.
+
+        Returns:
+            None.
+
+        Raises:
+            KeyError: If `device_code` was never issued by this provider.
+
+        Side Effects:
+            Sets the grant's status to `"approved"` and records `sub`.
+        """
         self._device_flow_states[device_code].status = "approved"
         self._device_flow_states[device_code].sub = sub
 
@@ -317,25 +390,75 @@ class MockOidcProvider:
 
         Reverts to `device_code`'s underlying status (still `pending` unless
         also completed/expired/denied) on the poll after that.
+
+        Parameters:
+            device_code: A `device_code` previously issued by this provider.
+
+        Returns:
+            None.
+
+        Raises:
+            KeyError: If `device_code` was never issued by this provider.
+
+        Side Effects:
+            Sets the grant's one-shot `slow_down_once` flag.
         """
         self._device_flow_states[device_code].slow_down_once = True
 
     def expire_device_code(self, device_code: str) -> None:
-        """Make subsequent `/token` polls for `device_code` return `expired_token`."""
+        """Make subsequent `/token` polls for `device_code` return `expired_token`.
+
+        Parameters:
+            device_code: A `device_code` previously issued by this provider.
+
+        Returns:
+            None.
+
+        Raises:
+            KeyError: If `device_code` was never issued by this provider.
+
+        Side Effects:
+            Sets the grant's status to `"expired"`.
+        """
         self._device_flow_states[device_code].status = "expired"
 
     def deny_device_code(self, device_code: str) -> None:
-        """Make subsequent `/token` polls for `device_code` return `access_denied`."""
+        """Make subsequent `/token` polls for `device_code` return `access_denied`.
+
+        Parameters:
+            device_code: A `device_code` previously issued by this provider.
+
+        Returns:
+            None.
+
+        Raises:
+            KeyError: If `device_code` was never issued by this provider.
+
+        Side Effects:
+            Sets the grant's status to `"denied"`.
+        """
         self._device_flow_states[device_code].status = "denied"
 
     def handle_device_authorization_request(self, form: Mapping[str, str]) -> dict[str, Any]:
         """Mint a fresh `device_code`/`user_code` pair for `POST /device_authorization`.
 
-        Records the request's `client_id`/`audience` on the resulting
+        Records the request's `client_id`/`audience`/`scope` on the resulting
         `DeviceFlowState`, readable back via `device_flow_state`. Not
         called directly by test code -- driven through the real HTTP
         server via `do_POST`; public so it is reachable from the handler
         closure without tripping ruff's private-member-access check.
+
+        Parameters:
+            form: The decoded form fields of the request; `client_id`, `audience` and
+                `scope` are read, each optional.
+
+        Returns:
+            The JSON response body: `device_code`, `user_code` (8 upper-case hex chars),
+            `verification_uri`, `verification_uri_complete`, `expires_in` (600) and
+            `interval` (1).
+
+        Side Effects:
+            Stores a new pending `DeviceFlowState` under the new `device_code`.
         """
         device_code = secrets.token_urlsafe(16)
         user_code = secrets.token_hex(4).upper()
@@ -359,6 +482,21 @@ class MockOidcProvider:
         Not called directly by test code -- driven through the real HTTP
         server via `do_POST`; public for the same handler-closure reason as
         `handle_device_authorization_request`.
+
+        Parameters:
+            form: The decoded form fields of the request; `grant_type` selects the branch
+                (the device-code URN or `refresh_token`), then `device_code`, or
+                `client_id` and `refresh_token`, are read.
+
+        Returns:
+            A `(http_status, json_body)` pair: 200 with `access_token`, `refresh_token`,
+            `expires_in` and `token_type` on success; 400 with an `error` of
+            `authorization_pending`, `slow_down`, `expired_token`, `access_denied`,
+            `invalid_grant` (unknown or stale refresh token) or `unsupported_grant_type`.
+
+        Side Effects:
+            Overwrites `last_token_request_form`. A successful device-code exchange or
+            refresh issues a new refresh token per `client_id`, invalidating the previous.
         """
         self.last_token_request_form = dict(form)
         grant_type = form.get("grant_type")
@@ -409,7 +547,15 @@ class MockOidcProvider:
         }
 
     def shutdown(self) -> None:
-        """Stop the background HTTP server thread. Called by the `mock_oidc_provider` fixture."""
+        """Stop the background HTTP server thread. Called by the `mock_oidc_provider` fixture.
+
+        Returns:
+            None.
+
+        Side Effects:
+            Shuts the server down and joins its thread for up to 5 seconds; the provider
+            must not be used afterwards.
+        """
         self._server.shutdown()
         self._thread.join(timeout=5)
 
@@ -426,14 +572,19 @@ def mock_oidc_provider_fixture() -> Iterator[MockOidcProvider]:
     parameter every test declares (ruff F811 "redefinition of unused name"):
     pytest resolves a fixture by `@pytest.fixture(name=...)`'s explicit
     name, not by the local variable name a module happens to import it as.
-    See this module's own docstring for the exact import shape.
+    The module docstring shows the exact import shape.
 
-    Function-scoped (not session/module, despite PLAN.md's suggestion of
-    either): several later slices (6, 7) mutate provider state
+    Function-scoped (not session/module): tests mutate provider state
     (`rotate_key`, `jwks_request_count`), and a fresh instance per test is
     what keeps those tests independent of run order -- the fixed cost of a
-    real RSA keypair generation + thread start is milliseconds, negligible
-    against this suite's ~90s full run.
+    real RSA keypair generation + thread start is milliseconds.
+
+    Yields:
+        A running `MockOidcProvider`, on a fresh ephemeral loopback port.
+
+    Side Effects:
+        Starts an HTTP server thread; stops it (via `shutdown()`) on teardown even when
+        the test fails.
     """
     provider = MockOidcProvider()
     try:

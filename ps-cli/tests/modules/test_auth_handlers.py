@@ -1,20 +1,20 @@
-"""Tests for ps_cli.modules.auth_handlers (issue #57 Slices 13-14, 19-20).
+"""Tests for ps_cli.modules.auth_handlers.
 
 `handle_auth_login` has no `transport` seam of its own -- unlike
 `oidc_discovery.resolve_auth_parameters`, which `test_oidc_discovery.py`/
 `test_device_flow.py` inject an `httpx.MockTransport` into directly, this
 module's dispatch adapter calls `resolve_auth_parameters(config.service_url,
 auth_override)` with no transport override at all. So PS Service's own
-resource-metadata endpoint (and, for Slice 14's AC-BI-005 case, a "no device
-flow" issuer) must be a real, local, loopback HTTP server for these tests --
+resource-metadata endpoint (and the "no device
+flow" issuer used by one case) must be a real, local, loopback HTTP server for these tests --
 exactly the same problem `ps_test_support.mock_oidc_provider.MockOidcProvider`
 solves on the IdP side, for the same reason (see that module's own docstring).
 `_FakeJsonServer` below plays that role, generalized to serve any one JSON
 body at any one path.
 
-Slice 13's happy-path test (and its AC-BI-018 marker-token sibling below) drives
+The happy-path test (and its marker-token sibling below) drives
 the poll to completion via a `sleep` fake, same convention as `test_device_flow.py`'s
-own Slice 10 test -- and since `handle_auth_login` never exposes the freshly-minted
+own poll-loop test -- and since `handle_auth_login` never exposes the freshly-minted
 `DeviceAuthorization` to its caller (only `on_device_authorization`'s *internal*
 printing sees it), the `device_code` `mock_oidc_provider.complete_device_flow()`
 needs is read back from `mock_oidc_provider.last_token_request_form["device_code"]`
@@ -23,7 +23,7 @@ holds the just-polled device_code by the time `sleep` fires. No monkeypatch need
 `request_device_authorization` is never touched, only observed indirectly through
 the provider's own public request-log field.
 
-Issue #163 (Slice O): the one exception is `test_run_auth_login_denied_device_code_
+The one exception is `test_run_auth_login_denied_device_code_
 exits_1_with_ac_bi_009_message`, which drives `run()` (real CLI dispatch) rather
 than `handle_auth_login` directly -- `run()` exposes no `sleep=` override at all, so
 denying the device code strictly before the first real `/token` poll (avoiding a
@@ -98,7 +98,7 @@ def _build_fake_json_handler(path: str, body: dict[str, object]) -> type[BaseHTT
 class _FakeJsonServer:
     """A real, ephemeral-port local HTTP server serving one fixed JSON body at one path.
 
-    Stands in for PS Service's own resource-metadata endpoint (and, for one Slice 14
+    Stands in for PS Service's own resource-metadata endpoint (and, for one
     case, a "no device flow" issuer's discovery document) -- see this module's own
     docstring for why a real loopback server, not an `httpx.MockTransport`, is the
     seam available here.
@@ -148,9 +148,9 @@ def _resource_metadata_body(
     return body
 
 
-# Issue #121, D-121-7: the old "force no real OS credential-storage backend -> fall
-# back to file" forcer is gone -- there is no fallback left to force onto. Issue #123:
-# tests that construct a `CredentialStore` directly use the shared
+# The old "force no real OS credential-storage backend -> fall
+# back to file" forcer is gone -- there is no fallback left to force onto.
+# Tests that construct a `CredentialStore` directly use the shared
 # `build_in_memory_persistence` fixture (`conftest.py`) to build a
 # `PersistenceCredentialStore`. The three tests below that exercise `run()`'s real
 # dispatch chain never reach `build_credential_store()`'s own production wiring before
@@ -161,7 +161,7 @@ def _resource_metadata_body(
 # (`credentials.py`'s own module docstring).
 
 
-# --- Slice 13: handle_auth_login() happy path ---------------------------------------
+# --- handle_auth_login() happy path ---------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -180,14 +180,14 @@ def test_handle_auth_login_happy_path_stores_tokens_and_prints_verification_uri(
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
     oversized_refresh_token: str | None,
 ) -> None:
-    """The full Slices 5-12 chain, run once through `handle_auth_login()`.
+    """The full discovery-to-stored-credential chain, run once through `handle_auth_login()`.
 
     Asserts: printed stdout contains the provider's `verification_uri`/`user_code`;
     `credential_store.get_tokens("dev")` returns a `TokenBundle` whose `issuer` matches
     the provider and whose `refresh_token` is the one the poll actually returned --
-    issue #121, AC-BI-001: no `access_token` field exists on `TokenBundle` any more.
+    no `access_token` field exists on `TokenBundle` any more.
 
-    Parametrized (issue #123, AC-BI-003) with a 5000-character `refresh_token` --
+    Parametrized with a 5000-character `refresh_token` --
     `MockOidcProvider._handle_device_code_grant` mints its refresh token via
     `secrets.token_urlsafe(32)` with no seam of its own to override the value, so the
     `oversized_refresh_token`-parametrized case monkeypatches
@@ -272,7 +272,7 @@ def test_handle_auth_login_no_context_raises_before_any_network_call(
     assert "ps-cli config set-context" in excinfo.value.msg
 
 
-# --- Slice 14: auth login failure branches, via run() --------------------------------
+# --- auth login failure branches, via run() --------------------------------
 
 
 def _seed_dev_context(config_dir: Path, *, url: str, auth: AuthOverrides | None = None) -> None:
@@ -291,7 +291,7 @@ def test_run_auth_login_missing_client_id_exits_1_with_ac_bi_004_message(
     capsys: pytest.CaptureFixture[str],
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """No `ps_cli_client_id` in metadata, no override -> exit 1, AC-BI-004's message."""
+    """No `ps_cli_client_id` in metadata, no override -> exit 1, missing-client-id message."""
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(config_dir))
     resource_metadata_server = fake_json_server_factory(
@@ -319,7 +319,7 @@ def test_run_auth_login_missing_device_authorization_endpoint_exits_1_with_ac_bi
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """An issuer whose discovery doc has no `device_authorization_endpoint` -> exit 1,
-    AC-BI-005's message naming that issuer.
+    the message naming that issuer.
     """
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(config_dir))
@@ -363,8 +363,8 @@ def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
     build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """`deny_device_code` fired the instant the device code is minted (before the poll
-    even starts) -> the first `/token` poll returns `access_denied` -> exit 1, AC-BI-009's
-    message.
+    even starts) -> the first `/token` poll returns `access_denied` -> exit 1, with the
+    access-denied message.
     """
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(config_dir))
@@ -411,7 +411,7 @@ def test_run_auth_login_no_context_exits_1_with_no_context_message(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No `--context`, no `current_context` set -> exit 1, D-57-5's message; nothing written.
+    """No `--context`, no `current_context` set -> exit 1, no-context message; nothing written.
 
     `build_credential_store()` is constructed by `_dispatch_auth_login` regardless, but
     `handle_auth_login` raises before ever calling any of its methods -- no real OS
@@ -429,7 +429,7 @@ def test_run_auth_login_no_context_exits_1_with_no_context_message(
     assert "ps-cli config set-context" in captured.err
 
 
-# --- Slices 19-20: handle_auth_status()/handle_auth_logout() ------------------------
+# --- handle_auth_status()/handle_auth_logout() ------------------------
 
 
 class _FakeCredentialStore:
@@ -460,7 +460,7 @@ class _FakeCredentialStore:
         self._tokens.pop(context, None)
 
 
-# --- Issue #179: handle_auth_status() verifies the credential -----------------------
+# --- handle_auth_status() verifies the credential -----------------------
 #
 # Drives `handle_auth_status` through a fully-synthetic `httpx.MockTransport` standing
 # in for PS Service's resource-metadata endpoint and a (loopback) IdP -- the handler's
@@ -535,7 +535,7 @@ def _run_status(
 def test_handle_auth_status_with_refreshable_credential_prints_context_issuer_and_logged_in(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-001: a credential that refreshes -> context, issuer, "logged in"; no raise."""
+    """A credential that refreshes -> context, issuer, "logged in"; no raise."""
     _run_status(_status_store(), _status_transport(_token_ok))
 
     printed = capsys.readouterr().out
@@ -546,7 +546,7 @@ def test_handle_auth_status_with_refreshable_credential_prints_context_issuer_an
 
 
 def test_handle_auth_status_persists_the_rotated_refresh_token() -> None:
-    """AC-BI-006: the rotated refresh token is stored, so the next run still works."""
+    """The rotated refresh token is stored, so the next run still works."""
     store = _status_store()
 
     _run_status(store, _status_transport(_token_ok))
@@ -559,7 +559,7 @@ def test_handle_auth_status_persists_the_rotated_refresh_token() -> None:
 def test_handle_auth_status_with_rejected_credential_reports_not_usable_and_raises(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-002: an `invalid_grant` -> "not usable", log-in hint, non-zero, never "logged in"."""
+    """An `invalid_grant` -> "not usable", log-in hint, non-zero, never "logged in"."""
 
     def _invalid_grant(request: httpx.Request) -> httpx.Response:
         del request
@@ -575,7 +575,7 @@ def test_handle_auth_status_with_rejected_credential_reports_not_usable_and_rais
 
 
 def test_handle_auth_status_with_no_refresh_token_reports_not_usable() -> None:
-    """AC-BI-002: a stored bundle with no refresh token cannot ever refresh."""
+    """A stored bundle with no refresh token cannot ever refresh."""
 
     def _unreachable(request: httpx.Request) -> httpx.Response:
         raise AssertionError(request.url)
@@ -589,7 +589,7 @@ def test_handle_auth_status_with_no_refresh_token_reports_not_usable() -> None:
 def test_handle_auth_status_with_no_stored_credential_prints_not_logged_in_and_raises(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-003: nothing stored -> "not logged in" and a non-zero exit (reverses D-121-6)."""
+    """Nothing stored -> "not logged in" and a non-zero exit."""
     with pytest.raises(PsCliError) as excinfo:
         _run_status(_FakeCredentialStore(), _status_transport(_token_ok))
 
@@ -605,7 +605,7 @@ def test_handle_auth_status_with_no_stored_credential_prints_not_logged_in_and_r
 def test_handle_auth_status_when_unverifiable_reports_cannot_verify_not_logged_in_or_unusable(
     scenario: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-004: transport failures and 5xx say nothing about the credential."""
+    """Transport failures and 5xx say nothing about the credential."""
 
     def _handle_token(request: httpx.Request) -> httpx.Response:
         if scenario == "idp_connect_error":
@@ -634,7 +634,7 @@ def test_handle_auth_status_when_unverifiable_reports_cannot_verify_not_logged_i
 def test_handle_auth_status_when_credential_store_is_inaccessible_reports_store_hint(
     build_always_raising_persistence: Callable[[str], AlwaysRaisingPersistenceBackend],
 ) -> None:
-    """AC-BI-010: a store that raises on read is neither "not logged in" nor "not usable"."""
+    """A store that raises on read is neither "not logged in" nor "not usable"."""
     store = PersistenceCredentialStore(build_persistence=build_always_raising_persistence)
 
     with pytest.raises(PsCliError) as excinfo:
@@ -659,7 +659,7 @@ class _WriteFailingCredentialStore(_FakeCredentialStore):
 
 
 def test_handle_auth_status_when_persisting_the_rotated_token_fails_reports_store_error() -> None:
-    """AC-BI-010: a store failure on the post-refresh write is not "not usable"."""
+    """A store failure on the post-refresh write is not "not usable"."""
     store = _WriteFailingCredentialStore()
     _FakeCredentialStore.set_tokens(
         store, "dev", TokenBundle(refresh_token="rt", issuer=_STATUS_ISSUER)
@@ -674,7 +674,7 @@ def test_handle_auth_status_when_persisting_the_rotated_token_fails_reports_stor
 
 
 def test_handle_auth_status_with_no_context_raises_ps_cli_error() -> None:
-    """AC-BI-009: `context_name is None` raises up front (D-57-5), as `handle_auth_login` does."""
+    """`context_name is None` raises up front, as `handle_auth_login` does."""
     with pytest.raises(PsCliError) as excinfo:
         _run_status(_FakeCredentialStore(), _status_transport(_token_ok), context=None)
 
@@ -686,7 +686,7 @@ def test_handle_auth_status_with_no_context_raises_ps_cli_error() -> None:
 def test_handle_auth_status_output_never_contains_a_secret(
     outcome: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-005: neither the stored refresh token nor the access token ever prints."""
+    """Neither the stored refresh token nor the access token ever prints."""
 
     def _handle_token(request: httpx.Request) -> httpx.Response:
         if outcome == "logged_in":
@@ -710,7 +710,7 @@ def test_handle_auth_status_output_never_contains_a_secret(
 
 
 def test_handle_auth_logout_deletes_stored_tokens() -> None:
-    """A pre-seeded bundle -> gone afterward (AC-BI-016's real removal)."""
+    """A pre-seeded bundle -> gone afterward (a real removal)."""
     credential_store = _FakeCredentialStore()
     credential_store.set_tokens(
         "dev", TokenBundle(refresh_token="rt", issuer="https://issuer.example")
@@ -746,7 +746,7 @@ def test_handle_auth_logout_prints_nothing_on_success(
     assert captured.err == ""
 
 
-# --- Slice 22: AC-BI-018 never log a token value -------------------------------------
+# --- never log a token value -------------------------------------
 
 
 def test_handle_auth_login_output_never_contains_the_stored_refresh_token_value(
@@ -757,7 +757,7 @@ def test_handle_auth_login_output_never_contains_the_stored_refresh_token_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`auth login`'s confirmation line and verification-URI printout never contain
-    the stored refresh-token value (AC-BI-018), proven with a distinctive marker
+    the stored refresh-token value, proven with a distinctive marker
     value forced through the real device-flow/token-minting path (same
     `mock_oidc_provider_module.secrets.token_urlsafe` approved-boundary seam the
     oversized-refresh-token happy-path test above uses) -- not a full stub of
@@ -767,8 +767,8 @@ def test_handle_auth_login_output_never_contains_the_stored_refresh_token_value(
     No `access_token` marker check any more: `_print_device_authorization` only ever
     prints `verification_uri`/`user_code`, and `handle_auth_login`'s own confirmation
     line only ever prints `issuer` -- neither ever touches an access token, and
-    (issue #121, AC-BI-001) `TokenBundle` has no `access_token` field to persist
-    either, so that half of AC-BI-018 is a structural guarantee, not something this
+    `TokenBundle` has no `access_token` field to persist
+    either, so that half is a structural guarantee, not something this
     test needs to separately prove.
     """
     marker_refresh_token = "marker-refresh-token-should-never-print-79c3"

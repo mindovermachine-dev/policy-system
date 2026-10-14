@@ -1,6 +1,6 @@
-"""Proves `serialize_live_markers` keeps live marker groups out of xdist (issue #197).
+"""Proves `serialize_live_markers` keeps live marker groups out of xdist.
 
-Red-before-green: the plugin does not exist before this slice. `addopts` in the root
+`addopts` in the root
 `pyproject.toml` turns xdist on for every invocation, including `-m falkordb_live`, whose
 tests share one external FalkorDB graph and are not safe to run concurrently. The plugin forces
 a single process whenever `-m` selects a live-marked test and no `-n` was passed explicitly.

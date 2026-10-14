@@ -1,38 +1,38 @@
 #!/usr/bin/env python3
-r"""Maintainer CLI shim: AC-BI-002/AC-BI-003 baseline precondition check (issue #28).
+"""Report whether each baseline graph satisfies Company Merge's HAS-edge precondition.
 
-Thin wrapper over `ps_service.company_merge.preconditions.check_obligation_has_edge_cardinality`
--- the real check (Domain Mapper's #15 structural guarantee, reconfirmed as
-Company Merge's own precondition) lives there; this script only connects to
-FalkorDB, selects each currently-mapped regulation's `{short}_baseline` graph,
-and prints a human- or machine-readable go/no-go report. Mirrors
-`tools/curated-export/export_instrument.py`'s argparse/env-var/connection-guard
-shape; unlike that precedent's `monkeypatch.setattr(cli_module, "FalkorDB", ...)`
-substitution, this CLI uses a true `graph_provider` constructor-injection seam
-(PLAN.md §2.2, corrected by CHANGES.md #7) -- a deliberate improvement, not a
-literal mirror.
+Connects to FalkorDB, opens the `cra_baseline`, `gdpr_baseline` and `nis2_baseline`
+graphs and checks that every Obligation has exactly one incoming HAS edge from a Role
+(the check is `check_obligation_has_edge_cardinality` in
+`ps_service.company_merge.preconditions`). For each graph it prints the Obligation
+count, the number of violations and a GO or NO-GO verdict, followed by one line per
+offending Obligation.
 
-The list of currently-mapped regulations (`CRA`, `GDPR`, `NIS2`) is a
-deliberate, hardcoded enumeration, never discovered via `db.list_graphs()`.
-BASELINE.md flagged a stray, differently-cased `CRA_baseline` graph alongside
-`cra_baseline` in real FalkorDB; a name-pattern-based discovery
-(`name.endswith("_baseline")`) is exactly the kind of mechanism that could
-accidentally match it (or any future non-regulation `*_baseline`-named graph).
-Hardcoding the three short names and deriving each graph name via
-`baseline_graph_name(short_name)` makes the stray `CRA_baseline` graph
-structurally unreachable by this tool, by construction -- never queried at
-all, not filtered post-hoc.
+The three regulations are a fixed, hardcoded list, never discovered through
+`db.list_graphs()`. A name-pattern discovery (`name.endswith("_baseline")`) could match
+a stray, differently-cased `CRA_baseline` graph or any future non-regulation graph with
+a `_baseline` suffix; deriving each name with `baseline_graph_name(short_name)` makes
+such graphs unreachable by construction, because they are never queried at all.
 
-This tool is strictly read-only reporting: it never calls `merge_baseline_graph`
-or any write path. It does not itself gate anything -- `tools/company-merge/
-run_live_merge.py` (a separate slice) is what actually enforces AC-BI-003's
-block on a live merge; this CLI exists so a human/orchestrator can check the
-go/no-go signal independently, at any time.
+This tool is read-only: it issues only one Obligation-listing query plus the precondition
+check, and never calls `merge_baseline_graph` or any other write path. It does not gate
+anything itself; `tools/company-merge/run_live_merge.py` is the tool that blocks a live
+merge on the same precondition. Run this one to read the go/no-go signal at any time.
 
-    uv run tools/company-merge/check_baseline_preconditions.py [--format json]
+    uv run tools/company-merge/check_baseline_preconditions.py [--host H] [--port P] [--format json]
 
-Requires a running FalkorDB instance with `cra_baseline`/`gdpr_baseline`/
-`nis2_baseline` already populated.
+Options:
+    --host      FalkorDB host (default: env PS_FALKORDB_HOST, else localhost).
+    --port      FalkorDB port (default: env PS_FALKORDB_PORT, else 6379).
+    --format    `text` (default) for a human-readable report, `json` for one JSON object
+                keyed by graph name with `obligation_count` and `violations`.
+
+Exit codes:
+    0   All three baseline graphs report zero violations.
+    1   At least one graph reports a violation, or FalkorDB cannot be reached or queried
+        (a one-line message goes to stderr, no traceback).
+
+Requires a running FalkorDB with the three baseline graphs already populated.
 """
 
 from __future__ import annotations
@@ -61,15 +61,16 @@ if TYPE_CHECKING:
 DEFAULT_HOST = os.environ.get("PS_FALKORDB_HOST", "localhost")
 DEFAULT_PORT = int(os.environ.get("PS_FALKORDB_PORT", "6379"))
 
-# Deliberately hardcoded, not discovered via `db.list_graphs()` -- see module docstring.
+# Deliberately hardcoded, not discovered via `db.list_graphs()`: a name-pattern discovery
+# could match a stray differently-cased graph.
 _CURRENTLY_MAPPED_SHORT_NAMES = ("CRA", "GDPR", "NIS2")
 
-# Identical, verbatim, to `preconditions._OBLIGATION_HAS_EDGE_CARDINALITY_QUERY` (private to
-# that module -- not re-exported). Reused here, unchanged, ONLY to derive `obligation_count` for
-# reporting: `check_obligation_has_edge_cardinality` returns violations only, not the total row
-# count, and every Obligation produces exactly one row (`OPTIONAL MATCH` never drops a row), so
-# `len(rows)` from this exact query equals the total Obligation count. This tool never issues any
-# query against FalkorDB other than this one, exhaustive, read-only query.
+# Same query as `preconditions._OBLIGATION_HAS_EDGE_CARDINALITY_QUERY` (private to that
+# module, not re-exported). Used only to derive `obligation_count` for reporting:
+# `check_obligation_has_edge_cardinality` returns violations only, not the total row
+# count, and every Obligation produces exactly one row (`OPTIONAL MATCH` never drops a
+# row), so `len(rows)` from this query equals the total Obligation count. This tool
+# issues no other query against FalkorDB.
 _OBLIGATION_ROW_QUERY = (
     "MATCH (o:Obligation) OPTIONAL MATCH (:Role)-[h:HAS]->(o) RETURN o.id, count(h)"
 )
@@ -154,14 +155,27 @@ def main(
     *,
     graph_provider: Callable[[str], GraphHandle] | None = None,
 ) -> int:
-    """Check AC-BI-002/AC-BI-003's precondition against all three baseline graphs.
+    """Check the HAS-edge precondition on all three baseline graphs and print a report.
 
-    `graph_provider` is a test-only injection seam (no CLI flag exposes it --
-    there is no way to serialize a fake Python callable through argv): left
-    `None`, a real invocation connects to real FalkorDB via `--host`/`--port`.
-    Returns a process exit code: `0` only if all three currently-mapped
-    baseline graphs report zero violations; `1` if any graph reports at least
-    one violation, or if connecting to / querying FalkorDB fails.
+    Args:
+        argv: Command-line arguments (`--host`, `--port`, `--format`); `None` reads
+            `sys.argv`. `--format` must be `text` or `json`; anything else makes
+            argparse exit with status 2.
+        graph_provider: Maps a short name (`CRA`, `GDPR`, `NIS2`) to its baseline graph
+            handle. Test-only seam (no CLI flag exposes it, as a callable cannot pass
+            through argv); `None` connects to the real FalkorDB at `--host`/`--port`.
+
+    Returns:
+        Process exit code: `0` only if every baseline graph has zero violations; `1` if
+        any graph has at least one violation or if connecting to or querying FalkorDB
+        fails.
+
+    Raises:
+        SystemExit: Raised by argparse on invalid arguments or `--help`.
+
+    Side Effects:
+        Opens a FalkorDB connection and runs read-only queries. Writes the report to
+        stdout, or the failure message to stderr; never writes to any graph.
     """
     args = _parse_args(argv)
     provider = (

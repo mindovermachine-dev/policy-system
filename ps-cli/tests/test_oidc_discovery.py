@@ -1,13 +1,14 @@
-"""Tests for ps_cli.oidc_discovery (issue #57 Slices 5-6).
+"""Tests for ps_cli.oidc_discovery.
 
-Slice 5: `fetch_protected_resource_metadata()`/`resolve_client_id()` against a fake
+Protected-resource metadata: `fetch_protected_resource_metadata()`/
+`resolve_client_id()` against a fake
 PS-Service resource-metadata endpoint -- an `httpx.MockTransport`, not the real
 `MockOidcProvider` (this is PS Service's own endpoint, not the IdP's), mirroring
 `test_http_client.py`'s own testing convention for PS-Service-side endpoints.
 
-Slice 6: `fetch_openid_configuration()`/`resolve_auth_parameters()` against the real
+OpenID configuration: `fetch_openid_configuration()`/`resolve_auth_parameters()` against the real
 `ps_test_support.mock_oidc_provider.MockOidcProvider` -- this *is* the IdP's own
-endpoint, the one D-57-3 exists to let both packages test against consistently.
+endpoint, shared so both packages test against it consistently.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from ps_cli.oidc_discovery import (
     OidcDiscoveryDocument,
     ProtectedResourceMetadata,
     ResolvedAuthParameters,
-    _assert_secure_or_loopback,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly, per its own AC-BI-017
+    _assert_secure_or_loopback,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly
     fetch_openid_configuration,
     fetch_protected_resource_metadata,
     resolve_auth_parameters,
@@ -70,7 +71,7 @@ def _read_timeout_transport() -> httpx.MockTransport:
     return httpx.MockTransport(_handle)
 
 
-# --- Slice 5: fetch_protected_resource_metadata() ---------------------------------
+# --- fetch_protected_resource_metadata() ---------------------------------
 
 
 def test_fetch_protected_resource_metadata_parses_happy_path_body() -> None:
@@ -125,7 +126,7 @@ def test_fetch_protected_resource_metadata_malformed_body_raises_ps_cli_error() 
         fetch_protected_resource_metadata(_SERVICE_URL, transport=transport)
 
 
-# --- Slice 5: resolve_client_id() --------------------------------------------------
+# --- resolve_client_id() --------------------------------------------------
 
 
 def test_resolve_client_id_uses_metadata_value_when_no_override() -> None:
@@ -160,7 +161,7 @@ def test_resolve_client_id_raises_naming_both_places_when_neither_is_set() -> No
     assert "auth.client_id in targets.toml" in excinfo.value.msg
 
 
-# --- Slice 6: fetch_openid_configuration() (real MockOidcProvider) ----------------
+# --- fetch_openid_configuration() (real MockOidcProvider) ----------------
 
 
 def test_fetch_openid_configuration_parses_real_provider_discovery_document(
@@ -185,7 +186,7 @@ def test_fetch_openid_configuration_ignores_unknown_fields(
     assert document.issuer == mock_oidc_provider.issuer
 
 
-# --- Baseline fix (issue #129, discovered in IMPL_SLICE_0B.md): trailing-slash issuer ---
+# --- trailing-slash issuer ---
 
 
 def test_fetch_openid_configuration_issuer_with_trailing_slash_requests_single_slash_url() -> None:
@@ -245,7 +246,7 @@ def test_fetch_openid_configuration_issuer_without_trailing_slash_still_works() 
     ]
 
 
-# --- Slice 6: resolve_auth_parameters() --------------------------------------------
+# --- resolve_auth_parameters() --------------------------------------------
 
 
 def _resource_metadata_handler(
@@ -359,8 +360,8 @@ def test_resolve_auth_parameters_scopes_override_wins(
 ) -> None:
     """`auth.scopes` override wins over `scopes_supported` from the resource metadata.
 
-    `offline_access` is still appended on top (issue #119, AC-BI-001) -- the override
-    replaces the *discovered* scope set, not this module's own refresh-capability
+    `offline_access` is still appended on top -- the override
+    swaps out the *discovered* scope set, not this module's own refresh-capability
     guarantee.
     """
     transport = _SplitTransport(
@@ -376,7 +377,7 @@ def test_resolve_auth_parameters_scopes_override_wins(
 def test_resolve_auth_parameters_does_not_duplicate_offline_access_when_already_advertised(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """Issue #119, AC-BI-002: a server that already advertises `offline_access` in its
+    """A server that already advertises `offline_access` in its
     `scopes_supported` doesn't get it appended a second time.
     """
     transport = _SplitTransport(
@@ -391,7 +392,7 @@ def test_resolve_auth_parameters_does_not_duplicate_offline_access_when_already_
 def test_resolve_auth_parameters_does_not_duplicate_offline_access_in_an_override(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """Issue #119, AC-BI-002: an `auth.scopes` override that already lists
+    """An `auth.scopes` override that already lists
     `offline_access` doesn't get it appended a second time either.
     """
     transport = _SplitTransport(_resource_metadata_handler(mock_oidc_provider, scopes=["openid"]))
@@ -427,7 +428,7 @@ def test_resolve_auth_parameters_missing_device_authorization_endpoint_raises_na
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
     """An issuer whose discovery document has no `device_authorization_endpoint` ->
-    `PsCliError` naming the issuer (AC-BI-005).
+    `PsCliError` naming the issuer.
     """
     _ = mock_oidc_provider  # unused: this issuer's own discovery doc is bypassed below
 
@@ -458,7 +459,7 @@ def test_resolve_auth_parameters_missing_device_authorization_endpoint_raises_na
     assert "http://no-device-flow.example" in excinfo.value.msg
 
 
-# --- Slice 21: AC-BI-017 HTTPS-or-loopback enforcement ------------------------------
+# --- HTTPS-or-loopback enforcement ------------------------------
 
 
 class TestAssertSecureOrLoopback:
@@ -490,7 +491,7 @@ def _evil_authorization_servers_handler(*, issuer: str) -> httpx.MockTransport:
     """A resource-metadata transport naming `issuer` as the sole authorization server.
 
     Fails the test (`AssertionError`) if any request other than the resource-metadata
-    fetch is ever made -- proving the AC-BI-017 refusal fires before the
+    fetch is ever made -- proving the insecure-issuer refusal fires before the
     openid-configuration leg is ever attempted.
     """
 
@@ -515,7 +516,7 @@ def test_resolve_auth_parameters_discovered_insecure_issuer_raises_before_openid
     None
 ):
     """A *discovered* issuer of `http://evil.example.com` -> `PsCliError`, and the
-    openid-configuration fetch on that issuer is never attempted (AC-BI-017).
+    openid-configuration fetch on that issuer is never attempted.
     """
     transport = _evil_authorization_servers_handler(issuer="http://evil.example.com")
 
@@ -530,7 +531,7 @@ def test_resolve_auth_parameters_overridden_insecure_issuer_raises_before_openid
     None
 ):
     """An `auth.issuer` *override* of `http://evil.example.com` -> `PsCliError`, same
-    as the discovered case -- AC-BI-017's refusal applies regardless of
+    as the discovered case -- the refusal applies regardless of
     discovered-vs-overridden origin. The discovered `authorization_servers` entry is
     deliberately a different, bogus host, to prove it is the *override* driving the
     refusal, not a coincidence of the discovered value.
@@ -549,7 +550,7 @@ def test_resolve_auth_parameters_overridden_insecure_issuer_raises_before_openid
 
 def test_resolve_auth_parameters_insecure_device_auth_endpoint_raises_before_device_post() -> None:
     """The issuer itself is fine (loopback), but its discovery document names an
-    insecure `device_authorization_endpoint` -> `PsCliError` before Slice 9's
+    insecure `device_authorization_endpoint` -> `PsCliError` before the
     device-authorization POST is ever attempted (`resolve_auth_parameters` never
     returns, so `device_flow.request_device_authorization` is never even reached).
     """
@@ -588,10 +589,10 @@ def test_resolve_auth_parameters_insecure_device_auth_endpoint_raises_before_dev
 def test_resolve_auth_parameters_loopback_issuer_and_endpoints_are_not_refused(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """A loopback `http://127.0.0.1:<port>` issuer/endpoints -- the shape every prior
-    slice's tests already use -- are not refused by AC-BI-017's check. The most
-    important regression check in this slice: Slices 5/6/9/10/11/12/13/14/15/16/17
-    all run their own tests against loopback URLs against the real `MockOidcProvider`.
+    """A loopback `http://127.0.0.1:<port>` issuer/endpoints -- the shape the
+    other tests already use -- are not refused by the check. The most
+    important regression check here: the discovery, device-flow and auth-handler tests
+    all run against loopback URLs against the real `MockOidcProvider`.
     """
     transport = _SplitTransport(_resource_metadata_handler(mock_oidc_provider))
 
@@ -605,7 +606,7 @@ def test_resolve_auth_parameters_loopback_issuer_and_endpoints_are_not_refused(
     assert result.token_endpoint == f"{mock_oidc_provider.base_url}/token"
 
 
-# --- Issue #179 (AC-BI-008): transport failures vs rejected/malformed discovery -----
+# --- transport failures vs rejected/malformed discovery -----
 
 
 @pytest.mark.parametrize(

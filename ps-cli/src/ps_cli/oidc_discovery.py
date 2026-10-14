@@ -1,27 +1,24 @@
-"""ps-cli OIDC discovery: PS-Service resource metadata + IdP openid-configuration.
+"""ps-cli OIDC discovery: PS Service resource metadata and IdP openid-configuration.
 
-Issue #57 Slices 5-6. Two distinct discovery documents are fetched here, from two
-distinct servers, and must not be confused:
+Two distinct discovery documents are fetched here, from two distinct servers, and must
+not be confused:
 
-- `ProtectedResourceMetadata` (RFC 9728) is served by **PS Service itself**, at
-  `<service_url>/.well-known/oauth-protected-resource`
-  (`ps_service.api.protected_resource`) -- it names the authorization server(s) that
-  can mint tokens PS Service accepts, plus (optionally) `ps_cli_client_id`, this
-  project's own extension field. Vendored field-for-field from
-  `ps_service.api.models.ProtectedResourceMetadata` (`ps-service/src/ps_service/api/
-  models.py:350-368`) rather than imported -- `ps_cli` must never import
-  `ps_service.*` (L2 Project Structure's decoupling rule; enforced by this repo's own
+- `ProtectedResourceMetadata` (RFC 9728) is served by PS Service itself, at
+  `<service_url>/.well-known/oauth-protected-resource`. It names the authorization
+  server(s) that can mint tokens PS Service accepts, plus (optionally)
+  `ps_cli_client_id`, this project's own extension field. Its shape is mirrored
+  field-for-field from the service's response model rather than imported, because
+  `ps_cli` must never import `ps_service.*` (the decoupling rule enforced by
   `test_architecture_boundary.py`).
-- `OidcDiscoveryDocument` (RFC 8414 / OIDC Discovery) is served by the **IdP**
+- `OidcDiscoveryDocument` (RFC 8414 / OIDC Discovery) is served by the IdP
   (authorization server) named in that resource metadata, at
-  `<issuer>/.well-known/openid-configuration` -- it names the endpoints device-flow
+  `<issuer>/.well-known/openid-configuration`. It names the endpoints device-flow
   login actually calls (`device_authorization_endpoint`, `token_endpoint`).
 
-`resolve_auth_parameters()` ties the two together plus `AuthOverrides`
-(`ps_cli.targets`, issue #57 Slice 1) into one `ResolvedAuthParameters`: an
-override always wins over a discovered default, and every "nothing was found and
-there is no override either" case fails closed with an actionable `PsCliError`
-rather than an `IndexError`/`KeyError`.
+`resolve_auth_parameters()` combines the two with `AuthOverrides` (`ps_cli.targets`)
+into one `ResolvedAuthParameters`: an override always wins over a discovered default,
+and every case where nothing was found and there is no override fails closed with an
+actionable `PsCliError` rather than an `IndexError`/`KeyError`.
 """
 
 from __future__ import annotations
@@ -57,9 +54,9 @@ _UNEXPECTED_DISCOVERY_DOCUMENT_SHAPE_MSG = (
     "the issuer returned an unexpected openid-configuration shape"
 )
 
-# AC-BI-004's literal wording: the error must name both places a client id may be
-# set. Kept as a module-level constant so tests can assert its exact text, mirroring
-# `http_client.py::_UNEXPECTED_RESPONSE_SHAPE_MSG`'s own precedent.
+# The error must name both places a client id may be set. Kept as a module-level
+# constant so tests can assert its exact text, as `http_client.py` does for its own
+# unexpected-response message.
 _NO_CLIENT_ID_MSG = (
     "No OIDC client id is configured: it is not present in the resource metadata, "
     "and no override is set for auth.client_id in targets.toml."
@@ -70,30 +67,33 @@ _NO_AUTHORIZATION_SERVERS_MSG = (
     "is set for auth.issuer in targets.toml."
 )
 
-# Issue #119: the standard OIDC scope that signals "issue a refresh token too" --
-# without it, most IdPs (confirmed against Entra ID) mint an access-token-only
-# response, leaving `TokenBundle.refresh_token` permanently `None` and every later
-# `ensure_valid_access_token()` call fail-closed the moment that access token expires.
+# The standard OIDC scope that signals "issue a refresh token too". Without it, most
+# IdPs (Entra ID included) mint an access-token-only response, leaving
+# `TokenBundle.refresh_token` permanently `None` so every later
+# `ensure_valid_access_token()` call fails closed once the access token expires.
 _OFFLINE_ACCESS_SCOPE = "offline_access"
 
-# Issue #57 Slice 21 (AC-BI-017): module-local, deliberately duplicated from
-# `http_client.py`'s own `_LOOPBACK_HOSTNAMES` rather than imported/shared -- that
-# constant is private to `http_client.py` and serves a *warn* semantic there
-# (`_should_warn_insecure`) vs. a *refuse* semantic here (`_assert_secure_or_loopback`).
-# Three identical literal strings is well under this codebase's own third-occurrence
-# DRY threshold.
+# Module-local on purpose: duplicated from `http_client.py`'s private
+# `_LOOPBACK_HOSTNAMES` rather than shared, because it serves a *warn* semantic there
+# (`_should_warn_insecure`) and a *refuse* semantic here (`_assert_secure_or_loopback`).
+# Three identical literal strings is under the codebase's third-occurrence DRY threshold.
 _LOOPBACK_HOSTNAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 @dataclass(frozen=True)
 class ProtectedResourceMetadata:
-    """RFC 9728 Protected Resource Metadata.
+    """RFC 9728 Protected Resource Metadata as served by PS Service.
 
-    Vendored mirror of `ps_service.api.models.ProtectedResourceMetadata`,
-    field-for-field (never imported; see this module's own docstring).
-    `ps_cli_client_id` is `None` when PS Service's `PS_AUTH_CLI_CLIENT_ID` is unset
-    (the server omits the field entirely via `response_model_exclude_none=True` in
-    that case).
+    Mirrors PS Service's response model field-for-field without importing it, so
+    `ps_cli` stays decoupled from `ps_service`. Immutable.
+
+    Attributes:
+        resource: The protected resource identifier PS Service reports.
+        authorization_servers: Issuer URLs of the authorization servers whose tokens
+            PS Service accepts; may be empty.
+        scopes_supported: Scopes PS Service advertises; may be empty.
+        ps_cli_client_id: OIDC client id for ps-cli, or `None` when PS Service's
+            `PS_AUTH_CLI_CLIENT_ID` is unset (the server then omits the field).
     """
 
     resource: str
@@ -104,13 +104,17 @@ class ProtectedResourceMetadata:
 
 @dataclass(frozen=True)
 class OidcDiscoveryDocument:
-    """The three `/.well-known/openid-configuration` fields this issue needs.
+    """The three `/.well-known/openid-configuration` fields device-flow login needs.
 
-    Every other field an IdP's discovery document may return is ignored --
-    `tomllib`-style "trusted shape" parsing (`targets.py:70-77`'s own comment)
-    applies equally to this external, less-trusted document, except here the parse
-    is defensive (`isinstance` checks), not a bare `cast`, since this document comes
-    from a third-party IdP, not this codebase's own writer.
+    Every other field an IdP's discovery document may return is ignored. The document
+    comes from a third-party IdP, so it is parsed defensively with `isinstance` checks
+    rather than a bare `cast`. Immutable.
+
+    Attributes:
+        issuer: The issuer identifier the IdP reports.
+        device_authorization_endpoint: Device-authorization URL, or `None` when the IdP
+            does not support device flow.
+        token_endpoint: Token URL, or `None` when the IdP does not advertise one.
     """
 
     issuer: str
@@ -120,11 +124,19 @@ class OidcDiscoveryDocument:
 
 @dataclass(frozen=True)
 class ResolvedAuthParameters:
-    """The fully-resolved set of OIDC parameters device-flow login needs to run.
+    """The fully resolved set of OIDC parameters device-flow login needs to run.
 
-    `audience` is simply `override.audience` (AC-BI-003) -- RFC 8628 device
-    authorization has no standard audience-discovery mechanism, so there is no
-    discovered default for it.
+    `audience` comes only from the `auth.audience` override: RFC 8628 device
+    authorization has no standard audience discovery, so there is no discovered
+    default. Immutable.
+
+    Attributes:
+        issuer: The issuer URL used for discovery; https or loopback.
+        client_id: The OIDC client id to authenticate as.
+        scopes: Requested scopes; always includes `offline_access`, no duplicates.
+        audience: The `auth.audience` override, or `None` when not configured.
+        device_authorization_endpoint: Device-authorization URL; https or loopback.
+        token_endpoint: Token URL; https or loopback.
     """
 
     issuer: str
@@ -136,14 +148,12 @@ class ResolvedAuthParameters:
 
 
 def _raise_connection_error(url: str, cause: BaseException) -> NoReturn:
-    """Raise the actionable `PsCliError` for a connect failure to `url`.
+    """Raise the actionable `CannotVerifyError` for a connect failure to `url`.
 
-    Mirrors `http_client.py::_raise_connection_error`'s wording style
-    (`http_client.py:119-124`), duplicated here rather than imported -- this module
-    talks to two different logical resources (PS Service's own metadata endpoint,
-    and an arbitrary IdP's discovery endpoint), neither of which is `PsServiceClient`
-    itself, so constructing one just to make a single GET before any credential
-    exists would be the wrong layering.
+    Reports a certificate-verification failure (with the trust hint) separately from
+    a plain unreachable server. Kept here rather than reusing `PsServiceClient`
+    because discovery targets PS Service's metadata endpoint and an arbitrary IdP,
+    and no credential exists yet to build a client with.
     """
     detail = type(cause).__name__
     if is_certificate_verification_error(cause):
@@ -160,25 +170,20 @@ def _raise_connection_error(url: str, cause: BaseException) -> NoReturn:
 
 
 def _raise_read_timeout_error(url: str, cause: BaseException) -> NoReturn:
-    """Raise the actionable `PsCliError` for a read-timeout waiting on `url`.
-
-    Mirrors `http_client.py::_raise_read_timeout_error`'s wording style
-    (`http_client.py:127-129`).
-    """
+    """Raise the actionable `CannotVerifyError` for a read timeout waiting on `url`."""
     raise CannotVerifyError(
         msg=f"{url} did not respond in time.", detail=type(cause).__name__
     ) from cause
 
 
 def _assert_secure_or_loopback(url: str, *, what: str) -> None:
-    """Raise `PsCliError` if `url` is neither `https://` nor a loopback address (AC-BI-017).
+    """Raise `PsCliError` if `url` is neither `https://` nor a loopback address.
 
-    Unlike `http_client.py::_should_warn_insecure` (which only warns about
-    `service_url`, PS Service's own URL), this *refuses* -- `resolve_auth_parameters`
-    calls this on the resolved issuer and on the discovery document's
-    `device_authorization_endpoint`/`token_endpoint`, since those are the endpoints a
-    device-code, refresh token, or access token is actually sent to. `what` names the
-    parameter in the raised message (e.g. `"issuer"`, `"device_authorization_endpoint"`).
+    Unlike `http_client.py::_should_warn_insecure`, which only warns about PS
+    Service's own URL, this refuses: `resolve_auth_parameters` applies it to the
+    resolved issuer and to the discovery document's endpoints, which are where a
+    device code, refresh token or access token is actually sent. `what` names the
+    parameter in the raised message (e.g. `"issuer"`).
     """
     parsed = urlparse(url)
     if parsed.scheme != "https" and parsed.hostname not in _LOOPBACK_HOSTNAMES:
@@ -193,8 +198,7 @@ def _get_json(url: str, *, transport: httpx.BaseTransport | None) -> object:
 
     Raises `CannotVerifyError` (a `PsCliError`) on a connect failure, a read timeout, or
     a 5xx status, and a plain `PsCliError` on any other non-2xx status or a non-JSON
-    body -- the shared network-error mapping both `fetch_protected_resource_metadata()`
-    and `fetch_openid_configuration()` need.
+    body. This is the shared network-error mapping for both discovery fetches.
     """
     with httpx.Client(
         timeout=_DISCOVERY_TIMEOUT, transport=transport, verify=build_ssl_context()
@@ -219,7 +223,8 @@ def _get_json(url: str, *, transport: httpx.BaseTransport | None) -> object:
 def _parse_protected_resource_metadata(payload: object) -> ProtectedResourceMetadata:
     """Parse a `GET /.well-known/oauth-protected-resource` 200 body.
 
-    Raises `PsCliError` (generic, defensive) if the shape does not match.
+    Raises `PsCliError` if the payload is not an object, or `resource`,
+    `authorization_servers`, `scopes_supported` or `ps_cli_client_id` has the wrong type.
     """
     if not isinstance(payload, dict):
         raise PsCliError(msg=_UNEXPECTED_RESOURCE_METADATA_SHAPE_MSG)
@@ -253,10 +258,24 @@ def _parse_protected_resource_metadata(payload: object) -> ProtectedResourceMeta
 def fetch_protected_resource_metadata(
     service_url: str, *, transport: httpx.BaseTransport | None = None
 ) -> ProtectedResourceMetadata:
-    """`GET <service_url>/.well-known/oauth-protected-resource` -- PS Service's own endpoint.
+    """Fetch PS Service's OAuth protected-resource metadata.
 
-    Raises `PsCliError` on connection failure/timeout, a non-2xx response, or a
-    malformed body.
+    Args:
+        service_url: PS Service base URL without a trailing slash; the request goes to
+            `<service_url>/.well-known/oauth-protected-resource`.
+        transport: Optional `httpx` transport that replaces the network (tests only).
+
+    Returns:
+        The parsed `ProtectedResourceMetadata`.
+
+    Raises:
+        CannotVerifyError: PS Service could not be reached, failed the TLS check,
+            timed out, or answered 5xx.
+        PsCliError: PS Service answered another non-2xx status, a non-JSON body, or a
+            body of the wrong shape.
+
+    Side Effects:
+        One HTTPS GET.
     """
     url = f"{service_url}{_RESOURCE_METADATA_PATH}"
     payload = _get_json(url, transport=transport)
@@ -264,11 +283,18 @@ def fetch_protected_resource_metadata(
 
 
 def resolve_client_id(metadata: ProtectedResourceMetadata, override: AuthOverrides | None) -> str:
-    """Resolve the OIDC client id: `override.client_id` wins, else `ps_cli_client_id`.
+    """Resolve the OIDC client id: the override wins, else the one PS Service advertises.
 
-    `override.client_id` wins if set, else `metadata.ps_cli_client_id` is used.
-    Raises `PsCliError` naming both places a client id may be set (AC-BI-004) if
-    neither is present.
+    Args:
+        metadata: PS Service's resource metadata; supplies `ps_cli_client_id`.
+        override: The context's `auth` overrides, or `None` when none are configured.
+
+    Returns:
+        `override.client_id` if set, else `metadata.ps_cli_client_id`.
+
+    Raises:
+        PsCliError: Neither is set; the message names both places a client id may be
+            configured.
     """
     if override is not None and override.client_id is not None:
         return override.client_id
@@ -280,11 +306,14 @@ def resolve_client_id(metadata: ProtectedResourceMetadata, override: AuthOverrid
 def _parse_openid_discovery_document(payload: object) -> OidcDiscoveryDocument:
     """Parse a `GET /.well-known/openid-configuration` 200 body.
 
+    Raises `PsCliError` if the payload is not an object, `issuer` is missing or not a
+    string, or either endpoint is present but not a string.
+
     Only `issuer`/`device_authorization_endpoint`/`token_endpoint` are read; every
     other field the IdP returns is ignored. `issuer` is required; the other two are
     optional (an IdP that does not support device flow may omit
     `device_authorization_endpoint` entirely -- that is a valid, parseable document,
-    just one `resolve_auth_parameters()` later rejects for this issue's purposes).
+    just one `resolve_auth_parameters()` later rejects because login needs it).
     """
     if not isinstance(payload, dict):
         raise PsCliError(msg=_UNEXPECTED_DISCOVERY_DOCUMENT_SHAPE_MSG)
@@ -327,10 +356,24 @@ def _normalize_issuer_for_discovery_url(issuer: str) -> str:
 def fetch_openid_configuration(
     issuer: str, *, transport: httpx.BaseTransport | None = None
 ) -> OidcDiscoveryDocument:
-    """`GET <issuer>/.well-known/openid-configuration` -- the IdP's own endpoint.
+    """Fetch an IdP's OpenID Connect discovery document.
 
-    Raises `PsCliError` on connection failure/timeout, a non-2xx response, or a
-    malformed body.
+    Args:
+        issuer: The IdP issuer URL; one trailing slash is ignored when building the
+            request URL `<issuer>/.well-known/openid-configuration`.
+        transport: Optional `httpx` transport that replaces the network (tests only).
+
+    Returns:
+        The parsed `OidcDiscoveryDocument`.
+
+    Raises:
+        CannotVerifyError: The IdP could not be reached, failed the TLS check, timed
+            out, or answered 5xx.
+        PsCliError: The IdP answered another non-2xx status, a non-JSON body, or a
+            body of the wrong shape.
+
+    Side Effects:
+        One HTTPS GET.
     """
     url = f"{_normalize_issuer_for_discovery_url(issuer)}{_OPENID_CONFIGURATION_PATH}"
     payload = _get_json(url, transport=transport)
@@ -343,22 +386,35 @@ def resolve_auth_parameters(
     *,
     transport: httpx.BaseTransport | None = None,
 ) -> ResolvedAuthParameters:
-    """Resolve every OIDC parameter device-flow login needs, override-wins-else-discovered.
+    """Resolve every OIDC parameter device-flow login needs; overrides win over discovery.
 
-    Fetches PS Service's resource metadata, resolves `client_id` (`resolve_client_id`),
-    resolves `issuer` (`override.issuer` if set, else `metadata.authorization_servers[0]`
-    -- raising `PsCliError` if `authorization_servers` is empty and there is no
-    override, failing closed rather than raising `IndexError`), resolves `scopes`
-    (`override.scopes` if set, else `tuple(metadata.scopes_supported)`, always with
-    `offline_access` appended if not already present -- issue #119, AC-BI-001/002),
-    then fetches `openid-configuration` from the *resolved* issuer (never the discovered one when
-    an override replaced it) and reads `device_authorization_endpoint`/
-    `token_endpoint`, raising `PsCliError` naming the issuer if either is absent
-    (AC-BI-005). Also refuses (`_assert_secure_or_loopback`, AC-BI-017) a resolved
-    issuer, `device_authorization_endpoint`, or `token_endpoint` that is neither
-    `https://` nor a loopback address -- checked on the issuer before ever fetching
-    its openid-configuration, and on each endpoint immediately after parsing that
-    document, before any later code ever POSTs to either.
+    Fetches PS Service's resource metadata, then resolves the client id
+    (`resolve_client_id`), the issuer (`override.issuer`, else the first of
+    `metadata.authorization_servers`) and the scopes (`override.scopes`, else
+    `metadata.scopes_supported`, with `offline_access` appended when absent so the
+    login yields a refresh token). It then fetches `openid-configuration` from the
+    resolved issuer (never the discovered one when an override replaced it) and reads
+    its device-authorization and token endpoints. The issuer and both endpoints must
+    be `https://` or loopback; the issuer is checked before it is contacted.
+
+    Args:
+        service_url: PS Service base URL without a trailing slash.
+        override: The context's `auth` overrides, or `None` when none are configured.
+        transport: Optional `httpx` transport that replaces the network (tests only).
+
+    Returns:
+        The `ResolvedAuthParameters` ready for device-flow login.
+
+    Raises:
+        CannotVerifyError: PS Service or the IdP could not be reached, failed the TLS
+            check, timed out, or answered 5xx.
+        PsCliError: No client id is configured; no issuer is discoverable and none is
+            overridden; the issuer is not https/loopback; the IdP lacks a device
+            authorization endpoint or a token endpoint; an endpoint is not
+            https/loopback; or a discovery response is malformed.
+
+    Side Effects:
+        Two HTTPS GETs (resource metadata, then openid-configuration).
     """
     metadata = fetch_protected_resource_metadata(service_url, transport=transport)
     client_id = resolve_client_id(metadata, override)
@@ -369,8 +425,8 @@ def resolve_auth_parameters(
         issuer = metadata.authorization_servers[0]
     else:
         raise PsCliError(msg=_NO_AUTHORIZATION_SERVERS_MSG)
-    # AC-BI-017: refuse before ever contacting a non-loopback-http issuer at all --
-    # before the openid-configuration fetch below, not just before a token is sent.
+    # Refuse before contacting a non-loopback http issuer at all, not just before a
+    # token is sent.
     _assert_secure_or_loopback(issuer, what="issuer")
 
     scopes = (
@@ -378,12 +434,10 @@ def resolve_auth_parameters(
         if override is not None and override.scopes is not None
         else tuple(metadata.scopes_supported)
     )
-    # Issue #119, AC-BI-001/002: always ask for `offline_access` so a device-flow
-    # login can be refreshed, on top of whatever PS Service's own resource-metadata
-    # scopes (or an operator's `auth.scopes` override) already ask for -- appended
-    # here, not folded into `PS_AUTH_SCOPES`/deploy config, so it can never regress
-    # per-deployment (see #119's Solution). Deduplicated: a server or override that
-    # already lists it must not send it twice.
+    # Always ask for `offline_access` so a device-flow login can be refreshed, on top
+    # of the scopes PS Service or an `auth.scopes` override already ask for. Appended
+    # here rather than set in deploy config so no deployment can lose it; not added
+    # twice when the server or override already lists it.
     if _OFFLINE_ACCESS_SCOPE not in scopes:
         scopes = (*scopes, _OFFLINE_ACCESS_SCOPE)
     audience = override.audience if override is not None else None
@@ -394,8 +448,8 @@ def resolve_auth_parameters(
             msg=f"issuer '{issuer}' does not support device authorization "
             "(its openid-configuration has no device_authorization_endpoint)."
         )
-    # AC-BI-017: checked immediately after parsing the discovery document, before
-    # Slice 9/10/16 code ever POSTs to either endpoint.
+    # Checked right after parsing the discovery document, before any later code POSTs
+    # to either endpoint.
     _assert_secure_or_loopback(
         discovery_document.device_authorization_endpoint, what="device_authorization_endpoint"
     )

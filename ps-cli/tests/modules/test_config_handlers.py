@@ -1,19 +1,12 @@
-"""Tests for ps_cli.modules.config_handlers: `handle_config_set_context()` (issue #56).
+"""Tests for ps_cli.modules.config_handlers.
 
-Slice 22: writes `targets.toml`, never a credential (AC-BI-012, PLAN.md §4 Slice 22).
-Slice 23: `delete_tokens` on every re-run, unconditionally (AC-BI-014, PLAN.md §4
-Slice 23, D13).
-Slice 25: `handle_config_use_context()` -- success + unknown-name error (AC-BI-005 half,
-AC-BI-009 command half, PLAN.md §4 Slice 25).
+Covers `handle_config_set_context()` (writes `targets.toml`, never a credential;
+calls `delete_tokens` on every re-run, unconditionally), `handle_config_use_context()`
+(success and unknown-name error) and `handle_config_get_contexts()`.
 
-Issue #57 Slice 1 (D-57-2) rewrites `targets.toml`'s `[contexts]` shape from flat
-`name = "url"` strings to nested `[contexts.<name>]` tables with a `url` key; every
-fixture and assertion below that touched the old flat shape is updated to the new one.
-
-Issue #121: `build_credential_store()` becomes zero-argument (D-121-5) -- the old
-`PS_CLI_CONFIG_DIR`-drives-`credentials.toml`-resolution proof this file used to carry
-(CHANGES.md issue #56 F7) no longer applies and is deleted (see the note where it used
-to live, just above the Slice 25 section).
+`targets.toml`'s `[contexts]` section uses nested `[contexts.<name>]` tables with a
+`url` key. `build_credential_store()` takes no arguments, so `config_dir` plays no
+role in credential resolution.
 """
 
 from __future__ import annotations
@@ -54,7 +47,7 @@ def test_handle_config_set_context_writes_url_creates_new_entry(
 
 # A set of fake-credential marker strings used elsewhere in this test suite
 # (`tests/test_credentials.py`) -- a literal grep-style check that none of them ever land
-# in `targets.toml`'s raw content, structurally proving AC-BI-012 rather than merely
+# in `targets.toml`'s raw content, structurally proving this rather than merely
 # trusting `TargetsFile`'s schema shape.
 _CREDENTIAL_MARKER_STRINGS = (
     "super-secret-token-value-should-never-print",
@@ -67,7 +60,7 @@ def test_handle_config_set_context_file_content_never_contains_a_credential_valu
     tmp_path: Path,
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """`targets.toml`'s raw file content has the URL, never a credential marker (AC-BI-012)."""
+    """`targets.toml`'s raw file content has the URL, never a credential marker."""
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
@@ -102,9 +95,9 @@ class _RecordingCredentialStore:
 def test_handle_config_set_context_deletes_credential_unconditionally_on_every_call(
     tmp_path: Path,
 ) -> None:
-    """`delete_tokens` fires on every `set-context` call, including the first (AC-BI-014).
+    """`delete_tokens` fires on every `set-context` call, including the first.
 
-    D13: deletion is unconditional, not "only when the name already existed" -- a recording
+    Deletion is unconditional, not "only when the name already existed" -- a recording
     spy proves both the brand-new-context call and the re-run call each trigger a delete.
     """
     spy = _RecordingCredentialStore()
@@ -115,23 +108,13 @@ def test_handle_config_set_context_deletes_credential_unconditionally_on_every_c
     assert spy.deleted == ["prod", "prod"]
 
 
-# Issue #121: the old `test_handle_config_set_context_credential_delete_resolves_under_
-# ps_cli_config_dir_env_var` test (proving `PS_CLI_CONFIG_DIR`-driven isolation across two
-# different `config_dir`s) is deleted here, not salvaged -- `build_credential_store()` is
-# now zero-argument (D-121-5), so `config_dir` plays no role in credential resolution at
-# all any more. What that test's premise actually cared about -- two different contexts
-# never colliding -- is already covered by `test_credentials.py`'s
-# `test_keyring_credential_store_isolates_credentials_per_context_name`, which isolates by
-# context *name* within one `KeyringCredentialStore`, the only isolation axis left.
-
-
-# --- issue #56 Slice 25: handle_config_use_context() -----------------------------------
+# --- handle_config_use_context() -------------------------------------------------------
 
 
 def test_handle_config_set_context_writes_auth_issuer_override(
     tmp_path: Path, portable_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
-    """`auth_issuer="https://issuer.example"` writes `ContextEntry.auth.issuer` (AC-BI-006)."""
+    """`auth_issuer="https://issuer.example"` writes `ContextEntry.auth.issuer`."""
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
         "prod",
@@ -153,7 +136,7 @@ def test_handle_config_set_context_preserves_existing_auth_when_only_url_flag_gi
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Re-running `set-context` with only `--url` (no `--auth-*` flags) leaves the
-    context's existing `auth` table untouched (AC-BI-006: omitted flags never clear).
+    context's existing `auth` table untouched (omitted flags never clear).
     """
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
@@ -179,7 +162,7 @@ def test_handle_config_set_context_overwrites_only_the_passed_auth_field_leaving
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Passing only `--auth-audience` on a re-run overwrites just that field, leaving
-    `issuer`/`client_id`/`scopes` exactly as they were (AC-BI-006's per-field wording).
+    `issuer`/`client_id`/`scopes` exactly as they were (per-field wording).
     """
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
@@ -254,7 +237,7 @@ def test_handle_config_use_context_raises_listing_valid_names_for_unknown_contex
     assert "prod" in combined
 
 
-# --- issue #56 Slice 28: handle_config_get_contexts() ----------------------------------
+# --- handle_config_get_contexts() ------------------------------------------------------
 
 
 def test_handle_config_get_contexts_marks_current_context(
@@ -263,7 +246,7 @@ def test_handle_config_get_contexts_marks_current_context(
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Two contexts, one current -- both appear in stdout as a bordered table; exactly one
-    line carries `*`, the current context's line (AC-BI-005).
+    line carries `*`, the current context's line.
     """
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
@@ -290,7 +273,7 @@ def test_handle_config_get_contexts_does_not_truncate_a_wide_url(
     capsys: pytest.CaptureFixture[str],
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """AC-BI-006, handler level: a 120-char context URL is never truncated."""
+    """Handler level: a 120-char context URL is never truncated."""
     del portable_persistence  # only needed so build_credential_store() has a portable backend
     wide_url = "https://" + "a" * 112
     assert len(wide_url) == 120
@@ -304,7 +287,7 @@ def test_handle_config_get_contexts_does_not_truncate_a_wide_url(
 def test_handle_config_get_contexts_renders_a_hostile_url_literally(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    r"""AC-BI-009, handler level: a hand-edited `targets.toml` carrying a control-sequence
+    r"""Handler level: a hand-edited `targets.toml` carrying a control-sequence
     URL renders literally, no crash.
 
     `write_targets()`'s escaper (`toml_writer.escape_basic_string`) only escapes
@@ -333,8 +316,8 @@ def test_handle_config_get_contexts_shows_auth_overrides_column(
     capsys: pytest.CaptureFixture[str],
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
-    """The "Auth Overrides" column lists field *names* only, never their values
-    (issue #57 Slice 8): "-" for a context with no overrides, "issuer, audience" for
+    """The "Auth Overrides" column lists field *names* only, never their values:
+    "-" for a context with no overrides, "issuer, audience" for
     one with those two fields set, and the literal override values themselves never
     appear anywhere in stdout.
     """
@@ -364,7 +347,7 @@ def test_handle_config_get_contexts_shows_auth_overrides_column(
 def test_handle_config_get_contexts_with_no_targets_toml_prints_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """No `targets.toml` -> empty stdout; not an error state (AC-BI-007)."""
+    """No `targets.toml` -> empty stdout; not an error state."""
     handle_config_get_contexts(config_dir=tmp_path)
 
     assert capsys.readouterr().out == ""
@@ -373,7 +356,7 @@ def test_handle_config_get_contexts_with_no_targets_toml_prints_nothing(
 def test_handle_config_get_contexts_with_empty_contexts_table_prints_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-008 (empty-`[contexts]` sub-case): a targets.toml with no contexts prints nothing."""
+    """Empty-`[contexts]` sub-case: a targets.toml with no contexts prints nothing."""
     write_targets(tmp_path, TargetsFile(current_context=None, contexts={}))
 
     handle_config_get_contexts(config_dir=tmp_path)

@@ -1,17 +1,14 @@
 """ps-cli target/context configuration: `targets.toml` (named contexts) resolution.
 
-New module introduced by issue #56 (multi-target config model). `targets.toml` maps
-named contexts (e.g. "dev", "prod") to PS Service URLs and records which context is
-currently selected (`current_context`). See PLAN.md (issue #56) §1 D1 for the file
-schema, D2 for config-directory resolution, and D4 for why a malformed `targets.toml`
-raises `PsCliError` (unlike `ps-cli.toml`'s unwrapped-crash behavior today).
-
-Issue #57 Slice 1 (D-57-2) rewrites the `[contexts]` table's shape from flat
-`name = "url"` strings to nested `[contexts.<name>]` tables (`url` required, an
-optional `[contexts.<name>.auth]` sub-table for per-context OIDC parameter overrides).
-`ContextEntry`/`AuthOverrides` are the parsed shape; a pre-#57 flat-string context
-value raises `PsCliError` naming the file, pointing the operator at `config
-set-context` to rewrite it, rather than an unhandled `AttributeError`/`TypeError`.
+`targets.toml` maps named contexts (e.g. "dev", "prod") to PS Service URLs and records
+which context is currently selected (`current_context`). Each context is a nested
+`[contexts.<name>]` table (`url` required, plus an optional `[contexts.<name>.auth]`
+sub-table for per-context OIDC parameter overrides). `ContextEntry`/`AuthOverrides` are
+the parsed shape. A malformed `targets.toml` raises `PsCliError`, because the file is
+hand-edited by operators and a parse failure is a user-facing error. A context whose
+value is an older flat `name = "url"` string raises `PsCliError` naming the file and
+pointing the operator at `config set-context` to rewrite it, rather than an unhandled
+`AttributeError`/`TypeError`.
 """
 
 from __future__ import annotations
@@ -33,11 +30,13 @@ _TARGETS_FILE_NAME = "targets.toml"
 
 
 def resolve_config_dir() -> Path:
-    """Resolve ps-cli's config directory.
+    """Resolve the directory that holds ps-cli's `targets.toml`.
 
-    `PS_CLI_CONFIG_DIR`, when set, wins outright; otherwise defaults to
-    `~/.config/ps-cli/`, mirroring `gh`'s `GH_CONFIG_DIR` convention. See
-    PLAN.md (issue #56) §1 D2.
+    `PS_CLI_CONFIG_DIR`, when set and non-empty, wins outright; otherwise the default is
+    `~/.config/ps-cli/`, mirroring `gh`'s `GH_CONFIG_DIR` convention.
+
+    Returns:
+        The directory as a `Path`. The directory is not created and need not exist.
     """
     override = os.environ.get("PS_CLI_CONFIG_DIR")
     if override:
@@ -50,10 +49,9 @@ class AuthOverrides:
     """Per-context OIDC parameter overrides, layered onto device-flow discovery.
 
     Every field is `None` when not overridden by the operator -- `write_targets()`
-    omits a `None` field's line entirely rather than writing it empty. See PLAN.md
-    (issue #57) §2 Slice 1, D-57-2. Override-resolution logic (merging these onto
-    discovered defaults) is a later slice's job -- this dataclass only carries the
-    parsed shape.
+    omits a `None` field's line entirely rather than writing it empty. Merging these
+    onto discovered defaults is done elsewhere; this dataclass only carries the parsed
+    shape.
     """
 
     issuer: str | None
@@ -64,7 +62,13 @@ class AuthOverrides:
 
 @dataclass(frozen=True)
 class ContextEntry:
-    """One named context's PS Service URL, plus any per-context auth overrides."""
+    """One named context's PS Service URL, plus any per-context auth overrides.
+
+    Attributes:
+        url: Base URL of the PS Service for this context.
+        auth: Per-context OIDC parameter overrides, or `None` when the context
+            defines none.
+    """
 
     url: str
     auth: AuthOverrides | None
@@ -75,8 +79,7 @@ class TargetsFile:
     """Parsed contents of `targets.toml`: named contexts plus the currently-selected one.
 
     `current_context` is `None` when the key is absent from the file (no context has
-    been selected yet) — distinct from an explicitly-empty string. See PLAN.md
-    (issue #56) §1 D1.
+    been selected yet) — distinct from an explicitly-empty string.
     """
 
     current_context: str | None
@@ -101,10 +104,10 @@ def _parse_context_entry(
     """Parse one `[contexts.<name>]` table into a `ContextEntry`.
 
     Raises `PsCliError` naming `targets_path` if `raw_value` is not a table -- the
-    pre-issue-#57 shape wrote a bare string (`dev = "http://..."`) directly under
+    older shape wrote a bare string (`dev = "http://..."`) directly under
     `[contexts]`; a deliberate, explicit "old targets.toml format" error instead of a
     raw `AttributeError`/`TypeError` from treating a `str` as a `dict` (L1 "Fail Fast
-    at Boundaries"). See PLAN.md (issue #57) §2 Slice 1, D-57-2.
+    at Boundaries").
 
     When `strict=False`, an old-format entry is skipped (returns `None`) with a
     warning to stderr instead of raising -- the seam `set_context`'s own recovery
@@ -141,22 +144,35 @@ def _parse_context_entry(
 def load_targets(config_dir: Path, *, strict: bool = True) -> TargetsFile | None:
     """Load and parse `<config_dir>/targets.toml`.
 
-    Returns `None` if the file does not exist — `targets.toml` is entirely optional;
-    a caller falls through to the legacy resolver in that case (see PLAN.md
-    (issue #56) §1 D3, case 4). Raises `PsCliError` naming the file path if the file
-    exists but contains invalid TOML (AC-BI-010) — a deliberate divergence from
-    `ps-cli.toml`'s unwrapped-crash behavior for malformed TOML today: `targets.toml`
-    is operator-hand-edited, so a parse failure here is a user-facing error, not a
-    packaging/environment bug. See PLAN.md (issue #56) §1 D4.
+    `targets.toml` is entirely optional: a missing file yields `None`, and the caller
+    falls through to the project-override/packaged-default resolver. A file that exists
+    but contains invalid TOML is a user-facing error, not a packaging bug, because the
+    file is operator-hand-edited (a deliberate divergence from `ps-cli.toml`, whose
+    malformed TOML crashes unwrapped).
 
-    With the default `strict=True`, also raises `PsCliError` if any context's value
-    is the pre-issue-#57 flat-string shape (see `_parse_context_entry`) -- correct
-    for every read-only or select-a-context caller (`load_config()`,
-    `use-context`), which must not silently proceed against a file it cannot fully
-    trust. `handle_config_set_context()` passes `strict=False`: its whole job is
-    fixing one named context, which an unrelated old-format sibling must not block
-    (see `_parse_context_entry`'s own docstring) -- old-format entries are dropped
-    with a warning rather than blocking the write.
+    With the default `strict=True`, a context whose value is the older flat-string
+    shape is also an error -- correct for every read-only or select-a-context caller
+    (`load_config()`, `use-context`), which must not silently proceed against a file it
+    cannot fully trust. `handle_config_set_context()` passes `strict=False`: its whole
+    job is fixing one named context, which an unrelated old-format sibling must not
+    block, so old-format entries are dropped with a warning on stderr instead.
+
+    Parameters:
+        config_dir: Directory expected to contain `targets.toml`.
+        strict: When `True` (default), an old-format context raises; when `False`, it
+            is skipped with a stderr warning.
+
+    Returns:
+        The parsed `TargetsFile`, or `None` when `<config_dir>/targets.toml` does not
+        exist. Skipped old-format contexts are absent from `contexts`.
+
+    Raises:
+        PsCliError: The file exists but is not valid TOML (the message names the file
+            path), or, when `strict` is true, a context value is not a table.
+
+    Side Effects:
+        Reads the file; with `strict=False`, prints one warning line to stderr per
+        skipped old-format context.
     """
     targets_path = config_dir / _TARGETS_FILE_NAME
     if not targets_path.is_file():
@@ -172,7 +188,7 @@ def load_targets(config_dir: Path, *, strict: bool = True) -> TargetsFile | None
     # always emits this exact shape -- a `cast` here documents the trusted shape
     # rather than re-validating it defensively, matching `config.py`'s own `cast`
     # usage for trusted, internally-produced TOML shapes. A context value that is
-    # *not* this trusted shape (the pre-#57 flat string) is still explicitly
+    # *not* this trusted shape (the older flat string) is still explicitly
     # detected and rejected (or, non-strict, dropped) by `_parse_context_entry`
     # above, not silently cast away.
     raw_contexts = cast("dict[str, object]", raw.get("contexts", {}))
@@ -190,15 +206,27 @@ def resolve_auth_override(config: CliConfig, config_dir: Path) -> AuthOverrides 
     """Resolve `config.context_name`'s `AuthOverrides` from `targets.toml`, or `None`.
 
     Shared by every call site that must resolve `credential_store`/`auth_override`
-    independently of `cli.py::_resolve_client` (issue #57's `auth` subcommands, which
-    must never go through a path requiring an already-valid token) -- its callers are
-    `_resolve_client` and the `auth` subcommands, extracted here so the lookup stays
-    identical (`http_client.py`'s cited "extract once a pattern repeats" convention).
-    Reads `targets.toml` fresh on every call rather than threading a `TargetsFile`
-    through from wherever `load_config()` already read it internally -- mirrors
-    `config_handlers.py`'s own handlers, none of which share a load across calls
-    either. Returns `None` whenever `config.context_name` is `None` (no context
-    resolved) or the named context sets no `auth` table.
+    independently of `cli.py::_resolve_client`: that function and the `auth`
+    subcommands (which must never go through a path requiring an already-valid token)
+    both call it, so the lookup stays identical. Reads `targets.toml` fresh on every
+    call rather than threading a `TargetsFile` through from wherever `load_config()`
+    already read it internally, as `config_handlers.py`'s handlers do.
+
+    Parameters:
+        config: The resolved CLI configuration; only `context_name` is used.
+        config_dir: Directory expected to contain `targets.toml`.
+
+    Returns:
+        The named context's `AuthOverrides`, or `None` when `config.context_name` is
+        `None` (no context resolved), `targets.toml` does not exist, the context is
+        not defined, or the context sets no `auth` table.
+
+    Raises:
+        PsCliError: `targets.toml` exists but is invalid TOML or holds an old-format
+            (flat-string) context, as for a strict `load_targets` read.
+
+    Side Effects:
+        Reads `<config_dir>/targets.toml` when `config.context_name` is set.
     """
     if config.context_name is None:
         return None
@@ -212,12 +240,11 @@ def resolve_auth_override(config: CliConfig, config_dir: Path) -> AuthOverrides 
 def _format_auth_table(name: str, auth: AuthOverrides) -> str:
     """Render `[contexts.<name>.auth]`, one line per non-`None` `AuthOverrides` field.
 
-    Hand-rolled inline rather than via a shared generic nested-table writer -- see
-    PLAN.md (issue #57) Slice 1's DRY-threshold citation (`http_client.py:289-291`):
-    only two nested-table call sites exist in this codebase (this one, and
-    `credentials.py`'s per-context `[credentials.<context>]` token-bundle table),
-    under this codebase's own stated "extract... once a pattern repeats a third
-    time" threshold. Fields are emitted alphabetically for deterministic,
+    Hand-rolled inline rather than via a shared generic nested-table writer: only two
+    nested-table call sites exist in this codebase (this one, and `credentials.py`'s
+    per-context `[credentials.<context>]` token-bundle table), under the codebase's
+    "extract once a pattern repeats a third time" threshold. Fields are emitted
+    alphabetically for deterministic,
     diff-friendly output, mirroring `format_flat_table`'s sorted-key convention.
     """
     lines = [f"[contexts.{name}.auth]"]
@@ -235,16 +262,29 @@ def _format_auth_table(name: str, auth: AuthOverrides) -> str:
 def write_targets(config_dir: Path, targets: TargetsFile) -> None:
     """Serialize `targets` to `<config_dir>/targets.toml`, creating `config_dir` if needed.
 
-    Uses `toml_writer`'s hand-rolled escaper/array-formatter (D16) rather than a new
-    TOML-writing dependency. `current_context=None` omits the `current_context` line
-    entirely (not `current_context = ""`) so it round-trips back to `None`, not an
-    empty string, matching `load_targets()`'s own None-vs-empty-string distinction.
-    Each context is written as a nested `[contexts.<name>]` table (`url`, required),
-    followed by `[contexts.<name>.auth]` only when `auth` is not `None` -- a `None`
-    `AuthOverrides` field is omitted entirely, mirroring `current_context`'s own
-    None-omission convention. `url` is never omitted -- always required. Contexts are
-    written sorted by name for deterministic, diff-friendly output. See PLAN.md
-    (issue #56) §1 D1, D16; PLAN.md (issue #57) §2 Slice 1, D-57-2.
+    Uses `toml_writer`'s hand-rolled escaper/array-formatter rather than a TOML-writing
+    dependency. `current_context=None` omits the `current_context` line entirely (not
+    `current_context = ""`) so it round-trips back to `None`, not an empty string,
+    matching `load_targets()`'s None-vs-empty-string distinction. Each context is
+    written as a nested `[contexts.<name>]` table (`url`, always written), followed by
+    `[contexts.<name>.auth]` only when `auth` is not `None`; a `None` `AuthOverrides`
+    field is omitted entirely. Contexts are written sorted by name for deterministic,
+    diff-friendly output. Context names are written as bare TOML keys, so callers must
+    pass only names already validated as safe bare keys.
+
+    Parameters:
+        config_dir: Target directory; created (with parents) when missing.
+        targets: The contexts and current-context pointer to persist.
+
+    Returns:
+        None.
+
+    Raises:
+        OSError: The directory cannot be created or the file cannot be written
+            (propagated unwrapped).
+
+    Side Effects:
+        Creates `config_dir` if needed and overwrites `<config_dir>/targets.toml`.
     """
     config_dir.mkdir(parents=True, exist_ok=True)
 

@@ -1,17 +1,16 @@
 """Integration test: `ps-cli --version` against one or more real spawned `ps-service`s.
 
 Marked `@pytest.mark.integration` only (the marker is already registered in the root
-`pyproject.toml` -- no new marker needed). This is the true end-to-end proof for
-AC-BI-001/003/004/005/006 (issue #82, Slice 8.5, added by Repair as CHANGES.md C-01):
-`ps-service` runs as a real OS subprocess, `ps_cli.cli.run()` runs in this test process
-and makes a real HTTP round trip against it -- no mocks anywhere in this file.
+`pyproject.toml` -- no new marker needed). This is the true end-to-end proof of the
+`--version` contract: `ps-service` runs as a real OS subprocess, `ps_cli.cli.run()`
+runs in this test process and makes a real HTTP round trip against it -- no mocks
+anywhere in this file.
 
 Vendors its own copies of `_find_free_port`, `_spawn_ps_service`, `_wait_until_healthy`,
 `_terminate`, and the `running_ps_service` fixture from
-`test_integration_regulations_list.py:68-155`, per that file's own decoupling docstring
-(lines 9-12) and L2 Project Structure's "ps-service and ps-cli are fully decoupled ...
-each vendors its own copy of anything it needs" -- this file must never import anything
-from `ps_service`.
+`test_integration_regulations_list.py`: ps-service and ps-cli are fully decoupled and
+each vendors its own copy of anything it needs, so this file must never import
+anything from `ps_service`.
 """
 
 from __future__ import annotations
@@ -153,7 +152,7 @@ def test_version_against_real_spawned_service_reports_matching_versions(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-001/003/004/005 true happy path: `--version` against a real, spawned
+    """True happy path: `--version` against a real, spawned
     `ps-service`, over `PS_CLI_SERVICE_URL` -- a genuine HTTP round trip, no mocks.
 
     Both expected version strings are read in-process via `importlib.metadata.version`
@@ -179,15 +178,14 @@ def test_ac_bi_006_context_override_hits_the_real_named_service(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-006's real-network proof: `--version --context dev` reaches the real,
+    """Real-network proof: `--version --context dev` reaches the real,
     running `dev` server even while the *current* context ("prod") is unreachable.
 
     `dev` is a real spawned `ps_service` subprocess (`running_ps_service`); `prod`
     points at a definitely-closed local port -- bind a socket, close it, reuse the
-    freed port number, mirroring `test_cli.py`'s existing bind-close pattern (e.g.
-    `test_ac_bi_006_version_context_flag_targets_the_named_contexts_url_for_one_call`,
-    `test_cli.py:1499-1507`). `config set-context`/`use-context` never construct a
-    `PsServiceClient` (PLAN.md issue #56 D8), so `client=None` is safe for those calls.
+    freed port number, mirroring `test_cli.py`'s existing bind-close pattern.
+    `config set-context`/`use-context` never construct a
+    `PsServiceClient`, so `client=None` is safe for those calls.
 
     The control call (no `--context` override) proves the first call's success was
     load-bearing, not a coincidental default: with "prod" active and unreachable, the

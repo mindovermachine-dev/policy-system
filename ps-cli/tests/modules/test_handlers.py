@@ -1,11 +1,11 @@
 """Tests for ps_cli.modules.handlers.
 
-`handle_ingest_document`'s full happy-path wiring (PLAN.md §3 Increment 15) is
+`handle_ingest_document`'s full happy-path wiring is
 deliberately not unit-tested at this layer -- its coverage there is exactly two
 `cli.run()`-level tests in `ps-cli/tests/test_cli.py`, which prove the full
-wiring (parser -> dispatch -> handler -> client) end to end. Issue #54's S1
-slice adds exactly one test at this layer for the new local-validation-before-
-any-network-call behavior (`validate_local_seed_file`, D3/B4) -- distinct from
+wiring (parser -> dispatch -> handler -> client) end to end. Exactly one test at
+this layer covers the local-validation-before-any-network-call behavior
+(`validate_local_seed_file`) -- distinct from
 happy-path wiring, and the one place a fake client can assert zero calls were
 made.
 """
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 
 class _UnusedPsServiceClientMethods:
-    """Base for hand-written `PsServiceClientProtocol` fakes below (PLAN.md §1 D10).
+    """Base for hand-written `PsServiceClientProtocol` fakes below.
 
     Every method raises unless a subclass overrides it -- a fake overrides
     only the method its own test actually exercises, so an unexpected call
@@ -75,8 +75,7 @@ def test_handle_ingest_document_validates_locally_before_any_http_call(
     `client` here is a bare `_UnusedPsServiceClientMethods` instance --
     its `ingest_internal` raises `AssertionError` if ever called, so the
     absence of that failure (only `PsCliError` is raised, from local
-    validation) is itself the proof of zero HTTP calls (issue #54 D3/B4,
-    AC-BI-019).
+    validation) is itself the proof of zero HTTP calls.
     """
     invalid_document: dict[str, object] = {
         "nodes": [],
@@ -114,8 +113,8 @@ _MINIMAL_VALID_INTERNAL_SEED_DOCUMENT: dict[str, object] = {
 class _FakeInternalIngestClient(_UnusedPsServiceClientMethods):
     """Hand-written fake implementing `ingest_internal()`'s signature.
 
-    Scripted to return a fixed `IngestionResult`, used only for issue #35
-    Slice 5's pending_reviews stage-line tests, which need a specific
+    Scripted to return a fixed `IngestionResult`, used only for the pending_reviews
+    stage-line tests, which need a specific
     `IngestionResult` to exercise `handle_ingest_document`'s conditional-append
     idiom for `pending_reviews`.
     """
@@ -138,9 +137,9 @@ def test_handle_ingest_document_surfaces_nonzero_pending_reviews(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Issue #35, Slice 5 (AC-BI-010): `handle_ingest_document`'s own
+    """`handle_ingest_document`'s own
     stage-print loop appends `" (pending_reviews: {n})"` when the merge
-    stage's summary reports a nonzero count (CHANGES.md C2).
+    stage's summary reports a nonzero count.
     """
     document_path = tmp_path / "seed.json"
     document_path.write_text(json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8")
@@ -174,7 +173,7 @@ def test_handle_ingest_document_stage_line_byte_identical_when_no_pending_review
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-010 corollary for the internal-seed pipeline: pending_reviews ==
+    """For the internal-seed pipeline: pending_reviews ==
     0 (or absent) prints exactly the pre-existing line, unchanged.
     """
     document_path = tmp_path / "seed.json"
@@ -227,7 +226,7 @@ class _FakeHealthClient(_UnusedPsServiceClientMethods):
 def test_handle_get_health_prints_reachable_alive_ready_on_happy_path(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A fully healthy, fully ready target prints exactly the three summary lines (D10/D11)."""
+    """A fully healthy, fully ready target prints exactly the three summary lines."""
     fake = _FakeHealthClient(
         health_status="alive",
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=[]),
@@ -244,7 +243,7 @@ def test_handle_get_health_raises_ps_cli_error_naming_unhealthy_dependencies_whe
     None
 ):
     """A not-ready target with a named unhealthy dependency raises PsCliError with that name
-    in the hint (AC-BI-001 handler half, AC-BI-007).
+    in the hint.
     """
     fake = _FakeHealthClient(
         health_status="alive",
@@ -260,7 +259,7 @@ def test_handle_get_health_raises_ps_cli_error_naming_unhealthy_dependencies_whe
 
 
 def test_handle_get_health_raises_ps_cli_error_with_no_hint_when_no_dependency_named() -> None:
-    """A not-ready target with no unhealthy dependency named (§0.3's line-970 nuance) still
+    """A not-ready target with no unhealthy dependency named still
     raises, but with no hint -- proving the hint is genuinely conditional, not always-present.
     """
     fake = _FakeHealthClient(
@@ -276,7 +275,7 @@ def test_handle_get_health_raises_ps_cli_error_with_no_hint_when_no_dependency_n
 
 def test_handle_get_health_not_ready_message_never_says_could_not_reach() -> None:
     """The not-ready error's rendered text is textually distinct from the unreachable-target
-    error's wording (AC-BI-008), proven by an executed assertion, not just inspection.
+    error's wording, proven by an executed assertion, not just inspection.
     """
     fake = _FakeHealthClient(
         health_status="alive",

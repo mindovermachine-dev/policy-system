@@ -1,6 +1,6 @@
-"""Tests for ps_cli.modules.parser: for issue #56 Slice 14, `_context_name_type`/
-`_service_url_type` plus `config set-context` parsing (PLAN.md §1 D5/D6/D7), and
-`_instrument_id_type` (issue #66 Slice 7.4).
+"""Tests for ps_cli.modules.parser: the `_context_name_type`, `_service_url_type` and
+`_instrument_id_type` validators plus the parsing of the `config`, `get` and
+`export` commands.
 """
 
 from __future__ import annotations
@@ -10,37 +10,37 @@ import argparse
 import pytest
 
 from ps_cli.modules.parser import (
-    _context_name_type,  # pyright: ignore[reportPrivateUsage]  # issue #56 Slice 14: unit-tested directly per its own AC
-    _instrument_id_type,  # pyright: ignore[reportPrivateUsage]  # issue #66 Slice 7.4: unit-tested directly per its own AC, mirrors _context_name_type
-    _service_url_type,  # pyright: ignore[reportPrivateUsage]  # issue #56 Slice 14: unit-tested directly per its own AC, mirrors _context_name_type
+    _context_name_type,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly
+    _instrument_id_type,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly
+    _service_url_type,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly
     build_parser,
 )
 
 
 def test_context_name_type_accepts_alnum_start_with_hyphen_and_underscore_body() -> None:
-    """A context name starting alnum with `-`/`_` in the body is accepted unchanged (D6)."""
+    """A context name starting alnum with `-`/`_` in the body is accepted unchanged."""
     assert _context_name_type("prod-eu_1") == "prod-eu_1"
 
 
 def test_context_name_type_rejects_leading_hyphen() -> None:
-    """A context name starting with `-` is rejected (D6's alnum-start requirement)."""
+    """A context name starting with `-` is rejected (alnum-start requirement)."""
     with pytest.raises(argparse.ArgumentTypeError):
         _context_name_type("-prod")
 
 
 def test_service_url_type_accepts_valid_http_and_https_urls() -> None:
-    """A well-formed http(s) URL with a hostname is accepted unchanged (D5)."""
+    """A well-formed http(s) URL with a hostname is accepted unchanged."""
     assert _service_url_type("https://ps.example.com") == "https://ps.example.com"
 
 
 def test_service_url_type_rejects_url_with_no_scheme() -> None:
-    """A URL missing a scheme is rejected via `is_valid_service_url()` (D5)."""
+    """A URL missing a scheme is rejected via `is_valid_service_url()`."""
     with pytest.raises(argparse.ArgumentTypeError):
         _service_url_type("ps.example.com")
 
 
 def test_build_parser_parses_config_set_context_with_url() -> None:
-    """`ps-cli config set-context prod --url https://ps.example.com` parses correctly (D7)."""
+    """`ps-cli config set-context prod --url https://ps.example.com` parses correctly."""
     args = build_parser().parse_args(
         ["config", "set-context", "prod", "--url", "https://ps.example.com"]
     )
@@ -51,8 +51,9 @@ def test_build_parser_parses_config_set_context_with_url() -> None:
 
 
 def test_set_context_parser_accepts_auth_flags() -> None:
-    """`--auth-issuer`/`--auth-client-id`/`--auth-audience`/`--auth-scopes` all parse
-    (issue #57 Slice 8, AC-BI-006). `--auth-scopes "openid,profile"` splits into a
+    """`--auth-issuer`/`--auth-client-id`/`--auth-audience`/`--auth-scopes` all parse.
+
+    `--auth-scopes "openid,profile"` splits into a
     `tuple[str, ...]`.
     """
     args = build_parser().parse_args(
@@ -103,7 +104,7 @@ def test_build_parser_config_set_context_with_malformed_url_exits_two(
 
 
 def test_build_parser_parses_config_use_context() -> None:
-    """`ps-cli config use-context prod` parses correctly (D7, issue #56 Slice 25)."""
+    """`ps-cli config use-context prod` parses correctly."""
     args = build_parser().parse_args(["config", "use-context", "prod"])
 
     assert args.command == "config_use_context"
@@ -113,7 +114,7 @@ def test_build_parser_parses_config_use_context() -> None:
 def test_build_parser_config_use_context_with_leading_hyphen_name_exits_two(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A `use-context` name starting with `-` exits 2, same as `set-context`'s (Slice 25)."""
+    """A `use-context` name starting with `-` exits 2, same as `set-context`'s."""
     with pytest.raises(SystemExit) as excinfo:
         build_parser().parse_args(["config", "use-context", "-prod"])
 
@@ -121,7 +122,7 @@ def test_build_parser_config_use_context_with_leading_hyphen_name_exits_two(
 
 
 def test_build_parser_parses_config_get_contexts() -> None:
-    """`ps-cli config get-contexts` (no arguments) parses correctly (D7, Slice 28)."""
+    """`ps-cli config get-contexts` (no arguments) parses correctly."""
     args = build_parser().parse_args(["config", "get-contexts"])
 
     assert args.command == "config_get_contexts"
@@ -132,7 +133,7 @@ def test_build_parser_config_set_context_with_leading_hyphen_name_exits_two(
 ) -> None:
     """A `name` starting with `-` also exits 2 -- argparse treats it as an option-like
     token before `_context_name_type` ever runs, so `name` is reported missing rather
-    than format-invalid; still exit code 2 either way, per PLAN.md Slice 14.
+    than format-invalid; still exit code 2 either way.
     """
     with pytest.raises(SystemExit) as excinfo:
         build_parser().parse_args(
@@ -144,7 +145,7 @@ def test_build_parser_config_set_context_with_leading_hyphen_name_exits_two(
 
 
 def test_instrument_id_type_accepts_alnum_hyphen_dot() -> None:
-    """A well-formed instrument id like 'CRA-1.0' is accepted unchanged (D13/D17)."""
+    """A well-formed instrument id like 'CRA-1.0' is accepted unchanged."""
     assert _instrument_id_type("CRA-1.0") == "CRA-1.0"
 
 
@@ -156,11 +157,8 @@ def test_instrument_id_type_rejects_leading_hyphen() -> None:
 
 def test_instrument_id_type_rejects_path_traversal_segment() -> None:
     """An instrument id containing '..' is rejected -- defense-in-depth against a
-    path-traversal payload, retained even after issue #127 removed this type's
-    original filesystem-path-building consumer (`restore instrument`, via the now-
-    deleted `catalog_repo.read_artifact`) -- `export instrument` still uses this
-    same `type=` callback, and the strict charset remains the right validation for
-    an id sent on to PS Service either way.
+    path-traversal payload. `export instrument` uses this `type=` callback, and the
+    strict charset is the right validation for an id sent on to PS Service.
     """
     with pytest.raises(argparse.ArgumentTypeError):
         _instrument_id_type("../../etc")
@@ -173,7 +171,7 @@ def test_instrument_id_type_rejects_forward_slash() -> None:
 
 
 def test_build_parser_parses_get_health() -> None:
-    """`ps-cli get health` (no arguments) parses correctly (D8): a resource leaf
+    """`ps-cli get health` (no arguments) parses correctly: a resource leaf
     under the `get` verb group.
     """
     args = build_parser().parse_args(["get", "health"])
@@ -183,7 +181,7 @@ def test_build_parser_parses_get_health() -> None:
 
 
 def test_build_parser_get_health_accepts_context_flag_before_and_after() -> None:
-    """`--context` works both before and after `get health`, via the shared parent parser (D8)."""
+    """`--context` works both before and after `get health`, via the shared parent parser."""
     args_before = build_parser().parse_args(["--context", "prod", "get", "health"])
     args_after = build_parser().parse_args(["get", "health", "--context", "prod"])
 
@@ -192,7 +190,7 @@ def test_build_parser_get_health_accepts_context_flag_before_and_after() -> None
 
 
 def test_build_parser_version_help_text_mentions_client_and_service() -> None:
-    """AC-BI-010: `--version`'s help text states it prints both client and service versions.
+    """`--version`'s help text states it prints both client and service versions.
 
     Asserts the exact `--version` help sentence appears in `format_help()` (public API)
     rather than reaching into argparse's private `_actions` list. A weaker substring check

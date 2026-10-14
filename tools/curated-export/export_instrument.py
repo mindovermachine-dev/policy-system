@@ -1,38 +1,43 @@
 #!/usr/bin/env python3
-r"""Maintainer CLI shim: curate one already-ingested instrument (issue #66, D4).
+r"""Curate one already-ingested instrument into the curated-content catalog.
 
-Thin wrapper over `ps_service.export.export_instrument.export_instrument` --
-the real orchestration (embed -> serialize -> checksum -> manifest ->
-catalog.json) lives there; this script only parses arguments, resolves a
-real FalkorDB connection, a real embedding transport and (since issue #213)
-a Graph Write Gateway and a system audit recorder, and reports the outcome.
+Reads the instrument's `{short}_baseline` and `{short}_native` graphs from FalkorDB,
+backfills embeddings through a real LLM Provider, and writes the curated artifact
+(manifest, baseline and native files) under `<repo-root>/curated-content/<instrument-id>/`
+and updates `catalog.json` in two places: `<repo-root>/curated-content/catalog.json` and
+the copy packaged with PS Service (`--packaged-copy-path`). The orchestration itself
+lives in `ps_service.export.export_instrument.export_instrument`; this script parses
+arguments, connects to FalkorDB, wires the embedding transport, the Graph Write Gateway
+and the system audit recorder, and reports the outcome.
 
-The embedding backfill is written through the gateway, never directly: the
-script builds its own gateway from the service configuration (so it needs the
-PS state Postgres, `PS_STATE_POSTGRES_*`, reachable, like the service), with
-`--host`/`--port` applied to the gateway's FalkorDB as well so reads and
-writes hit the same server. It records one `export.instrument` system audit
-row first (fail-closed: no row, no embedding, no write) and anchors the
-backfill group to it. Same CLI-shim shape as `tools/graph-ingestion/load_graph.py`:
-argparse, `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` env-driven connection
-defaults, a top-level connection guard printing a hint and exiting non-zero.
+The embedding backfill is written through the gateway, never directly. The script
+builds its own gateway from the service configuration, so the PS state Postgres
+(`PS_STATE_POSTGRES_*`) must be reachable, as it is for the service. `--host` and
+`--port` apply to the gateway's FalkorDB as well, so reads and writes hit the same
+server. One `export.instrument` system audit row is recorded first and the backfill is
+anchored to it; if the row cannot be written, nothing is embedded or written
+(fail-closed).
 
-Unlike every other script in `tools/`, this one always needs a real,
-configured LLM Provider -- Export's D7 embedding backfill is the one place
-in this whole feature that calls out to an LLM (Restore never does, by
-design, so it never needs one). Run it against an already-ingested source,
-e.g.:
+Unlike the other scripts in `tools/`, this one always needs a configured LLM Provider:
+the embedding backfill is the only step that calls out to one. Example:
 
     uv run tools/curated-export/export_instrument.py \\
         --short-name CRA --instrument-id CRA-1.0 --version "1.0" \\
         --celex 32024R2847 --title "Cyber Resilience Act" \\
         --source-type external --jurisdiction EU
 
-Requires a running FalkorDB instance with the source `{short}_baseline`/
-`{short}_native` graphs already populated (ingestion already run for this
-instrument), and `PS_LLMINTERFACE_EMBED_MODEL` set (or `--embed-model`
-passed explicitly) plus that provider's own credentials (e.g.
-`AZURE_API_KEY`/`AZURE_API_BASE`/`AZURE_API_VERSION`) resolvable by LiteLLM.
+Requires:
+    A running FalkorDB with the source `{short}_baseline`/`{short}_native` graphs
+    already populated (ingestion already run for this instrument);
+    `PS_LLMINTERFACE_EMBED_MODEL` set, or `--embed-model` passed, plus that provider's
+    own credentials (for example `AZURE_API_KEY`/`AZURE_API_BASE`/`AZURE_API_VERSION`)
+    resolvable by LiteLLM; and a reachable PS state Postgres.
+
+Exit codes:
+    0   The export succeeded; the written paths are printed.
+    1   No embedding model is configured, FalkorDB is unreachable, the audit trail is
+        unavailable, the embedding backfill could not be written, the LLM provider
+        failed, or the source graphs are not exportable. A message goes to stderr.
 """
 
 from __future__ import annotations
@@ -83,9 +88,9 @@ DEFAULT_PORT = int(os.environ.get("PS_FALKORDB_PORT", "6379"))
 # standard repo-root resolution every tools/ script anchored two directories deep uses.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPO_ROOT = _REPO_ROOT
-# CHANGES.md MA3's exact packaged-copy destination -- ps_service.api.curated_content's
-# importlib.resources-packaged copy of catalog.json, always under this checkout's own
-# ps-service tree regardless of what --repo-root a caller passes for curated-content output.
+# The copy of catalog.json that `ps_service.api.curated_content` packages via
+# importlib.resources: always under this checkout's own ps-service tree, regardless of
+# which --repo-root a caller passes for curated-content output.
 DEFAULT_PACKAGED_COPY_PATH = (
     _REPO_ROOT / "ps-service" / "src" / "ps_service" / "api" / "curated_content" / "catalog.json"
 )
@@ -133,7 +138,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--packaged-copy-path",
         type=Path,
         default=DEFAULT_PACKAGED_COPY_PATH,
-        help=f"Second catalog.json destination, MA3 (default: {DEFAULT_PACKAGED_COPY_PATH})",
+        help="Second catalog.json destination, the copy packaged with PS Service "
+        f"(default: {DEFAULT_PACKAGED_COPY_PATH})",
     )
     parser.add_argument(
         "--embed-model",
@@ -154,20 +160,39 @@ def main(
     build_gateway: Callable[[ServiceConfig], GraphWriteGateway] = build_default_graph_write_gateway,
     build_audit: Callable[[ServiceConfig], SystemAuditRecorder] = build_system_audit_recorder,
 ) -> int:
-    """Parse args, connect to real FalkorDB, and run `export_instrument` for real.
+    """Parse arguments, connect to FalkorDB and export one instrument for real.
 
-    `call_embedding` is a test-only injection seam (no CLI flag exposes it --
-    there is no way to serialize a fake Python callable through argv): left
-    `None`, a real invocation always calls the real `default_embedding_caller`
-    (real LiteLLM/provider traffic). `load_service_config`, `build_gateway` and `build_audit`
-    are the same kind of seam for the service-configuration, graph-write-gateway and
-    audit-recorder composition: left at their defaults a real invocation wires the real ones.
-    Returns a process exit code.
+    Args:
+        argv: Command-line arguments (`--short-name`, `--instrument-id`, `--version`,
+            `--title` and `--source-type` are required; see `--help`); `None` reads
+            `sys.argv`.
+        call_embedding: Embedding transport. Test-only seam (no CLI flag exposes it, as
+            a callable cannot pass through argv); `None` uses the real
+            `default_embedding_caller`, which makes real LiteLLM provider calls.
+        load_service_config: Loads the service configuration; the default reads the
+            environment. Test-only seam.
+        build_gateway: Builds the Graph Write Gateway from the configuration. Test-only
+            seam; the default builds the real one.
+        build_audit: Builds the system audit recorder from the configuration. Test-only
+            seam; the default builds the real one.
+
+    Returns:
+        Process exit code: `0` on success; `1` when no embedding model is configured,
+        FalkorDB is unreachable, the audit row cannot be recorded, the backfill cannot
+        be written, the LLM provider fails, or the source graphs are not exportable.
+
+    Raises:
+        SystemExit: Raised by argparse on invalid arguments or `--help`.
+
+    Side Effects:
+        Configures logging, connects to FalkorDB, records one system audit row, writes
+        embeddings to the baseline graph through the gateway, writes the curated
+        artifact and both `catalog.json` copies, prints progress to stdout and failures
+        to stderr, and stops the gateway's reconciler on exit.
     """
     # This script is its own process composition root (like `main.py`): `RouteEmbedding`'s
-    # own `log()` call requires a configured default emitter before any `emit_log_entry`
-    # call happens (`ps_service.logging.facade`'s own contract) -- configured here, once,
-    # exactly like `main.py` does for the long-running service process.
+    # `log()` call requires a configured default emitter before any `emit_log_entry`
+    # call happens (the `ps_service.logging.facade` contract), so configure it once here.
     configure_logging()
 
     args = _parse_args(argv)
@@ -244,11 +269,30 @@ def _export_through_gateway(
     record_audit: SystemAuditRecorder,
     call_embedding: EmbeddingCaller | None,
 ) -> int:
-    """Record the Export audit row, run `export_instrument` and report; return the exit code."""
+    """Record the Export audit row, run `export_instrument` and print the outcome.
+
+    Args:
+        args: Parsed CLI arguments; `short_name`, `embed_model`, `repo_root` and
+            `packaged_copy_path` are read.
+        descriptor: Instrument metadata written to the manifest and catalog.
+        db: Connected FalkorDB client used for reads of the baseline and native graphs.
+        gateway: Submitter that carries the embedding backfill group to the graph.
+        record_audit: Records the system audit row; its id anchors the backfill group.
+        call_embedding: Embedding transport, or `None` for the real caller.
+
+    Returns:
+        `0` after a successful export; `1` after printing a message to stderr when the
+        audit trail is unavailable, the backfill cannot be written, the LLM provider
+        fails or the source graphs are not exportable.
+
+    Side Effects:
+        Records an audit row, writes embeddings and curated-content files, and prints
+        to stdout or stderr.
+    """
     baseline_name = baseline_graph_name(args.short_name)
     native_name = native_graph_name(args.short_name)
     try:
-        # Fail-closed (issue #213, AC-BI-010): without the row there is no id to anchor the
+        # Fail-closed: without the row there is no id to anchor the
         # group to, so nothing is embedded or written.
         audit_event_id = record_audit(
             action=EXPORT_INSTRUMENT_ACTION,

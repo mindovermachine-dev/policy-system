@@ -9,15 +9,22 @@
 # `python3 -c`.
 """PS CLI -- read-only Cypher access to the policy_system graph.
 
-CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH are rejected before execution,
-not just discouraged.
+Usage:
+    tools/graph-query/ps.py cypher "MATCH (n) RETURN count(n)" [--host H] [--port P]
+                            [--graph NAME] [--format text|json]
 
-Deprecated for end-user Q&A: this is a local-dev-only fallback, superseded
-by the `ps-plugin` Claude plugin (`ps-skills/ps-plugin/`, issue
-#53), which ships its own MCP connector talking to a running PS Service
-instance instead of a locally-spawned subprocess against a local FalkorDB.
-Kept for contributor workflows that want raw local graph access without
-standing up a full PS Service instance.
+Write clauses (CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH) are rejected before
+execution, not just discouraged. Connection defaults come from `PS_FALKORDB_HOST` and
+`PS_FALKORDB_PORT`; the default graph is `policy_system`.
+
+Exit codes: `0` when the query ran; `1` when the query contains a write clause or
+FalkorDB reports an error (a message goes to stderr).
+
+Deprecated for end-user Q&A: this is a local-dev-only fallback, superseded by the
+`ps-plugin` Claude plugin (`ps-skills/ps-plugin/`), which ships its own MCP connector
+talking to a running PS Service instance instead of a locally-spawned subprocess
+against a local FalkorDB. Kept for contributor workflows that want raw local graph
+access without standing up a full PS Service instance.
 """
 
 from __future__ import annotations
@@ -88,6 +95,21 @@ def _print_rows(columns: list[Any], rows: list[list[Any]], fmt: str) -> None:
 
 
 def cmd_cypher(args: argparse.Namespace) -> int:
+    """Run one read-only Cypher query against FalkorDB and print the result.
+
+    Args:
+        args: Parsed arguments; `query` is the Cypher text, `host`/`port` locate
+            FalkorDB, `graph` names the graph, `format` is `text` or `json`.
+
+    Returns:
+        `0` after printing the result table (or `(no rows)`, or the JSON object with
+        `columns`, `rows` and `row_count`); `1` when the query contains a write clause
+        (it is not executed) or FalkorDB raises an error while running it.
+
+    Side Effects:
+        Connects to FalkorDB and runs the query; writes the result to stdout and any
+        error message to stderr. Never mutates the graph.
+    """
     if _WRITE_CLAUSE.search(args.query):
         print(
             "error: this command is read-only -- query contains a write clause "
@@ -149,6 +171,14 @@ def _common_flags() -> argparse.ArgumentParser:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the `ps` argument parser with its `cypher` subcommand.
+
+    Returns:
+        A parser whose subcommand is required. `--host`, `--port`, `--graph` and
+        `--format` are accepted before or after the subcommand and default to the
+        `PS_FALKORDB_*` environment values, `policy_system` and `text`. The `cypher`
+        subcommand takes one positional Cypher `query` and sets `func` to `cmd_cypher`.
+    """
     parser = argparse.ArgumentParser(
         prog="ps",
         description="PS CLI -- read-only Cypher access to the policy_system graph.",
@@ -174,6 +204,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse arguments and run the chosen subcommand.
+
+    Args:
+        argv: Command-line arguments; `None` reads `sys.argv`.
+
+    Returns:
+        The subcommand's exit code: `0` on success, `1` on a rejected write clause or
+        a FalkorDB error.
+
+    Raises:
+        SystemExit: Raised by argparse on invalid arguments, a missing subcommand or
+            `--help`.
+
+    Side Effects:
+        Whatever the subcommand does: a read-only FalkorDB query and output to stdout
+        and stderr.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

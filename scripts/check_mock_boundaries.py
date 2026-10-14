@@ -1,8 +1,7 @@
-"""AST-based guardrail for `unittest.mock`/`monkeypatch` boundary discipline (AC-BI-009).
+"""AST-based guardrail for `unittest.mock`/`monkeypatch` boundary discipline.
 
-Walks Python test files and flags two kinds of Detroit-style-standard violations, per
-`.orchestrator/tracker/issue-163/PLAN.md` §4.2 and its Appendix A amendment
-(`.orchestrator/tracker/issue-163/CHANGES.md`):
+Walks Python test files and flags two kinds of violations of the Detroit-style testing standard
+(mock only the approved external boundaries):
 
 1. A `mock.patch(...)`/`@patch(...)`/`mock.patch.object(...)`/`monkeypatch.setattr(...)` call
    or decorator whose resolved dotted target is not listed in
@@ -12,9 +11,12 @@ Walks Python test files and flags two kinds of Detroit-style-standard violations
    within the same function, traced via a simple variable) by an already-approved-boundary
    `patch`/`setattr` call.
 
-Wired into `.insitu.yml`'s `trunk-worthy` wave (unscoped, whole-tree invocation) and into
-`.pre-commit-config.yaml` as a staged-file-scoped local hook (issue #163 Slice Q) -- it can also
-still be invoked manually via `uv run python scripts/check_mock_boundaries.py [paths...]`.
+Paths may be files or directories (searched recursively); with none given it scans
+`ps-service/tests` and `ps-cli/tests`. `--boundary-file` overrides the approved-boundary YAML.
+Each violation prints as `<file>:<line>: <message>`; the exit status is 1 when any violation is
+found and 0 otherwise. The check runs over the whole tree in the `.insitu.yml` `trunk-worthy`
+wave and over staged files as a local hook in `.pre-commit-config.yaml`; run it by hand with
+`uv run python scripts/check_mock_boundaries.py [paths...]`.
 """
 
 from __future__ import annotations
@@ -49,7 +51,11 @@ class Violation:
     message: str
 
     def format(self) -> str:
-        """Render as `<file>:<line>: <message>`, AC-BI-009's required output shape."""
+        """Render the violation in the output shape every consumer parses.
+
+        Returns:
+            The text `<file>:<line>: <message>`.
+        """
         return f"{self.file}:{self.line}: {self.message}"
 
 
@@ -58,6 +64,16 @@ def load_boundary_entries(yaml_path: Path) -> frozenset[str]:
 
     The file groups entries under category keys (`falkordb`, `postgres`, ...); this flattens
     every string list value into one comparison set. Non-string/non-list content is ignored.
+
+    Args:
+        yaml_path: Path of the approved-boundaries YAML file.
+
+    Returns:
+        The set of approved dotted-path targets; empty when the file's top level is not a mapping.
+
+    Raises:
+        OSError: The file cannot be read.
+        yaml.YAMLError: The file is not valid YAML.
     """
     raw_text = yaml_path.read_text(encoding="utf-8")
     loaded = cast("object", yaml.safe_load(raw_text))
@@ -84,16 +100,21 @@ def _classify_call(call: ast.Call) -> str | None:
     """Classify a call as a "patch", "patch_object", or "setattr" target-bearing shape.
 
     Returns `None` for calls that are not one of `mock.patch(...)`, `mock.patch.object(...)`,
-    or `monkeypatch.setattr(...)` (matched by the callee's trailing dotted component(s), the
-    same heuristic PLAN.md §4.2 point 2 uses for aliased-import resolution).
+    or `monkeypatch.setattr(...)` (matched by the callee's trailing dotted component(s), which
+    also covers aliased imports).
 
     Requires at least two dotted components for the "setattr" shape (`<something>.setattr(...)`)
-    so the bare builtin `setattr(obj, attr, value)` -- used by e.g. frozen-dataclass immutability
-    tests (`test_models.py`'s `_mutate` helper) to bypass basedpyright's static attribute check,
-    nothing to do with mocking -- is never misclassified as a mock-boundary call site (a Gap 1
-    interstitial-fix regression risk: it resolves to `None`, and after Gap 1's fix `None` is no
-    longer silently accepted, so a bare-`setattr` misclassification would wrongly demand a
-    `# detroit-exception:` comment on ordinary non-mock test code).
+    so the bare builtin `setattr(obj, attr, value)` -- used, for example, by frozen-dataclass
+    immutability tests to bypass the type checker's static attribute check and unrelated to
+    mocking -- is never taken for a mock-boundary call. Misclassifying it would demand a
+    `# detroit-exception:` comment on ordinary non-mock test code, because an unresolvable
+    target is a violation.
+
+    Args:
+        call: The call node to classify.
+
+    Returns:
+        `"patch"`, `"patch_object"` or `"setattr"`, or `None` when the call is none of them.
     """
     try:
         callee = ast.unparse(call.func)
@@ -178,7 +199,7 @@ def _suffix_matches(resolved: str, boundary_entries: frozenset[str]) -> bool:
 
     Tries the full dotted string first (exact/precise match), then progressively shorter
     trailing-component suffixes down to the final attribute/function name alone. This is the
-    deliberate, documented trade-off from PLAN.md §4.2 point 2: perfect static resolution of
+    deliberate trade-off: perfect static resolution of
     aliased imports (`from ps_service.restore import staging as s`) is out of scope, so a short
     aliased target (`s.stage_graph`) is reconciled against a fully-qualified boundary-list entry
     (`ps_service.restore.staging.stage_graph`) by matching on the trailing function name.
@@ -197,8 +218,15 @@ def _exception_comment_present(source_lines: list[str], lineno: int) -> bool:
 
     Walking the whole contiguous comment block (not just the single line directly above)
     covers a multi-line explanatory comment whose `# detroit-exception:` marker line isn't
-    the last one before the call -- e.g. `test_signing_hardening.py`'s Slice L comment, whose
-    marker is its first line, 6 lines above the `monkeypatch.setattr(...)` call it documents.
+    the last one before the call, such as an explanatory comment whose marker is its first
+    line, several lines above the `monkeypatch.setattr(...)` call it documents.
+
+    Args:
+        source_lines: The module's source split into lines.
+        lineno: One-based line number of the call.
+
+    Returns:
+        Whether the marker is on the call's line or in the comment block directly above it.
     """
     in_range = 1 <= lineno <= len(source_lines)
     if in_range and _EXCEPTION_MARKER in source_lines[lineno - 1]:
@@ -267,13 +295,13 @@ def _target_violations(
     source_lines: list[str],
     relative_path: str,
 ) -> list[Violation]:
-    """§4.2 points 1-4: flag any resolved target that is neither approved nor exception-marked.
+    """Flag any patch/setattr target that is neither approved nor exception-marked.
 
     A target that cannot be statically resolved to a dotted-path string at all (an f-string
     `ast.JoinedStr`, or any other dynamic expression `_resolve_target` can't reconstruct) is
-    NOT silently treated as compliant -- Gap 1 (issue #163 Slice L / interstitial fix): it must
-    still carry an explicit `# detroit-exception:` comment, exactly like a resolvable-but-
-    disallowed target, or it is flagged.
+    NOT silently treated as compliant: it must still carry an explicit
+    `# detroit-exception:` comment, exactly like a resolvable-but-disallowed target, or it is
+    flagged.
     """
     violations: list[Violation] = []
     for site in sites:
@@ -316,7 +344,7 @@ def _immediate_use_exempts(
     target_sites_by_call: dict[int, _TargetSite],
     boundary_entries: frozenset[str],
 ) -> bool:
-    """Appendix A point 2: exempt a construction directly passed to an approved-target call."""
+    """True if a mock construction is passed directly to an approved-target call."""
     parent = parents.get(ctor_call)
     if not isinstance(parent, ast.Call):
         return False
@@ -332,7 +360,7 @@ def _same_function_trace_exempts(
     all_sites: list[_TargetSite],
     boundary_entries: frozenset[str],
 ) -> bool:
-    """Appendix A point 3: exempt `var = Mock()` traced to a later approved `setattr`/`patch`."""
+    """True if `var = Mock()` is later passed to an approved `setattr`/`patch` in its function."""
     assign = parents.get(ctor_call)
     if not isinstance(assign, ast.Assign | ast.AnnAssign):
         return False
@@ -374,7 +402,7 @@ def _construction_violations(
     source_lines: list[str],
     relative_path: str,
 ) -> list[Violation]:
-    """Appendix A: flag bare `Mock()`/`MagicMock()`/`AsyncMock()` constructions."""
+    """Flag bare `Mock()`/`MagicMock()`/`AsyncMock()` constructions that nothing approves."""
     annotator = _ParentAnnotator()
     annotator.visit(tree)
     parents = annotator.parents
@@ -403,7 +431,19 @@ def _construction_violations(
 def scan_source(
     source: str, relative_path: str, boundary_entries: frozenset[str]
 ) -> list[Violation]:
-    """Scan one module's source text for disallowed mock-boundary and bare-construction sites."""
+    """Scan one module's source text for disallowed mock-boundary and bare-construction sites.
+
+    Args:
+        source: Python source text of a test module.
+        relative_path: Path shown in each violation and used as the parse filename.
+        boundary_entries: Approved dotted-path targets, as `load_boundary_entries` returns.
+
+    Returns:
+        The violations ordered by line number; empty when the module is clean.
+
+    Raises:
+        SyntaxError: `source` is not valid Python.
+    """
     tree = ast.parse(source, filename=relative_path)
     source_lines = source.splitlines()
     sites = _find_target_sites(tree)
@@ -427,8 +467,21 @@ def _scan_path(path: Path, boundary_entries: frozenset[str]) -> list[Violation]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the guardrail over the given paths (default: `ps-service/tests`, `ps-cli/tests`).
 
-    Prints one line per violation (`<file>:<line>: <message>`) and returns a non-zero exit
-    status if any violation was found.
+    Args:
+        argv: Command-line arguments without the program name; `None` reads `sys.argv`.
+            Positional paths are files or directories; `--boundary-file` overrides the
+            approved-boundary YAML.
+
+    Returns:
+        1 if any violation was found, otherwise 0.
+
+    Raises:
+        OSError: The boundary file or a scanned file cannot be read.
+        yaml.YAMLError: The boundary file is not valid YAML.
+        SyntaxError: A scanned file is not valid Python.
+
+    Side Effects:
+        Prints one line per violation (`<file>:<line>: <message>`) to stdout.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="*", default=list(DEFAULT_SCAN_ROOTS))

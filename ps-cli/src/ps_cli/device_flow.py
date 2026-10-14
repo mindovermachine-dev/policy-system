@@ -1,32 +1,21 @@
 """ps-cli RFC 8628 device-authorization flow: request, poll, and token conversion.
 
-Issue #57 Slices 9-12. Three HTTP-shaped steps, kept I/O-free apart from the HTTP
-calls themselves -- no `print()` anywhere in this module; Slice 13's
-`handle_auth_login` does all user-facing printing, mirroring `PsServiceClient`'s own
-split between fetch-and-parse methods and handlers' own `print()` calls
-(`handlers.py` throughout):
+The module is I/O-free apart from its HTTP calls: it never prints. The `auth login`
+handler does all user-facing output, mirroring the split between `PsServiceClient`
+(fetch and parse) and the command handlers (print).
 
-- `request_device_authorization()` -- `POST <device_authorization_endpoint>`,
-  mints a `DeviceAuthorization` (`device_code`/`user_code`/`verification_uri`/...).
-- `poll_for_token()` -- hand-rolled polling loop against `<token_endpoint>`
-  (no new dependency, per TASK.md's own Size note), honoring
-  `authorization_pending`/`slow_down` (RFC 8628 SS3.5) and raising an actionable
-  `PsCliError` on `expired_token`/`access_denied`/anything unrecognized.
-- `complete_device_login()` -- wires the two together into the one call
-  Slice 13's CLI handler makes.
-
-Deviation from PLAN.md's literal `complete_device_login(...) -> DeviceAuthorization`
-signature: that annotation contradicts PLAN.md's own prose two sentences later
-("the resulting tokens, once converted, round-trip through
-`token_bundle_from_response` correctly") -- a `DeviceAuthorization` alone carries no
-tokens to round-trip. Returning only a `DeviceAuthorization` would also mean
-`complete_device_login` never actually polls, making its name a lie. Instead,
-`complete_device_login` takes an `on_device_authorization` callback, invoked with the
-freshly-minted `DeviceAuthorization` *before* the (blocking) poll begins -- this is
-exactly the seam Slice 13 needs to print `user_code`/`verification_uri` before the
-poll blocks, without this module doing any printing itself, and without Slice 13
-having to call `request_device_authorization`/`poll_for_token` separately. It
-returns the `TokenResponse` the poll produced.
+- `request_device_authorization()` -- `POST <device_authorization_endpoint>`; mints a
+  `DeviceAuthorization` (`device_code`, `user_code`, `verification_uri`, ...).
+- `poll_for_token()` -- a hand-rolled polling loop against `<token_endpoint>` that
+  honours `authorization_pending` and `slow_down` (RFC 8628 section 3.5) and raises an
+  actionable `PsCliError` on `expired_token`, `access_denied` or any unrecognized code.
+- `complete_device_login()` -- runs the two in order. It takes an
+  `on_device_authorization` callback that is invoked with the freshly minted
+  `DeviceAuthorization` before the blocking poll starts, so the caller can show the
+  user code and verification URI at the right moment; it returns the `TokenResponse`
+  the poll produced.
+- `ensure_valid_access_token()` -- turns the stored refresh token into a usable access
+  token for authenticated commands, caching it in memory for the invocation.
 """
 
 from __future__ import annotations
@@ -53,15 +42,14 @@ if TYPE_CHECKING:
     from ps_cli.oidc_discovery import ResolvedAuthParameters
     from ps_cli.targets import AuthOverrides
 
-# Matches `oidc_discovery.py`'s own `_DISCOVERY_TIMEOUT` convention -- both the
-# device-authorization request and each individual token-endpoint poll are small,
-# fast JSON round-trips with no reason to wait any longer than PS Service's own fast
-# endpoints (`http_client.py`'s own short, uniform connect/read/write/pool bound).
+# Same short, uniform bound as `oidc_discovery.py`'s discovery timeout: the
+# device-authorization request and each token-endpoint poll are small, fast JSON
+# round-trips with no reason to wait longer than PS Service's own fast endpoints.
 _DEVICE_FLOW_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
 
 _GRANT_TYPE_DEVICE_CODE = "urn:ietf:params:oauth:grant-type:device_code"
 
-# RFC 8628 SS3.5's own recommended backoff increment on `slow_down`.
+# RFC 8628 section 3.5's recommended backoff increment on `slow_down`.
 _SLOW_DOWN_INCREMENT_SECONDS = 5
 
 _UNEXPECTED_DEVICE_AUTHORIZATION_SHAPE_MSG = (
@@ -69,10 +57,8 @@ _UNEXPECTED_DEVICE_AUTHORIZATION_SHAPE_MSG = (
 )
 _UNEXPECTED_GRANT_RESPONSE_SHAPE_MSG = "the issuer returned an unexpected grant-response shape"
 
-# AC-BI-012's clock-skew/in-flight-request buffer (issue #57 Slice 16, D-57 group 3),
-# repurposed by issue #121 to gate the in-memory AccessTokenCache instead of a
-# persisted TokenBundle's expires_at -- same buffer, same rationale (a request in
-# flight must not race a token that expires mid-call), new target.
+# Clock-skew and in-flight-request buffer for the in-memory `AccessTokenCache`: a
+# request in flight must not race a token that expires mid-call.
 _EXPIRY_LEEWAY_SECONDS = 30
 
 _RELOGIN_HINT = "run `ps-cli auth login`"
@@ -81,7 +67,19 @@ _REFRESH_FAILED_MSG = "stored credentials could not be refreshed"
 
 @dataclass(frozen=True)
 class DeviceAuthorization:
-    """RFC 8628 SS3.2 device-authorization response: what Slice 13 prints for the user."""
+    """RFC 8628 section 3.2 device-authorization response: what the user must act on.
+
+    Immutable.
+
+    Attributes:
+        device_code: Opaque code the CLI polls the token endpoint with; never shown.
+        user_code: Short code the user types at the verification page.
+        verification_uri: Page where the user enters `user_code`.
+        verification_uri_complete: Verification URL with the code embedded, or `None`
+            when the IdP does not supply one.
+        expires_in: Seconds until `device_code` expires.
+        interval: Minimum seconds between token polls.
+    """
 
     device_code: str
     user_code: str
@@ -93,7 +91,15 @@ class DeviceAuthorization:
 
 @dataclass(frozen=True)
 class TokenResponse:
-    """The subset of RFC 8628 SS3.5's token-endpoint success response this issue needs."""
+    """The subset of the RFC 8628 section 3.5 token-endpoint success response ps-cli uses.
+
+    Immutable.
+
+    Attributes:
+        access_token: The bearer access token.
+        refresh_token: The refresh token, or `None` when the IdP issued none.
+        expires_in: Access-token lifetime in seconds.
+    """
 
     access_token: str
     refresh_token: str | None
@@ -102,18 +108,19 @@ class TokenResponse:
 
 @dataclass
 class AccessTokenCache:
-    """One CLI invocation's in-memory-only access token (AC-BI-004, issue #121).
+    """One CLI invocation's in-memory access token; never persisted.
 
-    Never persisted. Constructed once per `PsServiceClient` (`PsServiceClient.__init__`)
-    and reused for every authenticated request of that invocation (`http_client.py`
-    passes it into `ensure_valid_access_token` on each call) -- discarded at process exit
-    by simply going out of scope, no explicit "clear" step needed.
+    A `PsServiceClient` creates one and passes it to `ensure_valid_access_token` on
+    every authenticated request, so the token is reused within the invocation and
+    discarded when the process exits. Because `expires_at` is checked on each use, a run
+    that outlives the token's lifetime (a long ingest) refreshes again instead of
+    sending an expired token. A fresh cache is empty, so the first request refreshes
+    exactly once. Mutable.
 
-    `expires_at` is the token's own absolute Unix-epoch expiry, set alongside `token` on
-    every refresh. Never persisted, never read from any store, so a run that outlives the
-    token's TTL (a long ingest) refreshes once more instead of sending an expired token.
-    A fresh cache always misses (`token is None`), so the first call refreshes exactly
-    once (AC-BI-003).
+    Attributes:
+        token: The cached access token, or `None` before the first refresh.
+        expires_at: Absolute Unix-epoch expiry of `token`, set with it on every
+            refresh; `None` before the first refresh.
     """
 
     token: str | None = None
@@ -123,12 +130,9 @@ class AccessTokenCache:
 def _raise_connection_error(url: str, cause: BaseException) -> NoReturn:
     """Raise the actionable `PsCliError` for a connect failure to `url`.
 
-    Duplicated from `oidc_discovery.py::_raise_connection_error` rather than
-    imported -- this module talks to the IdP's device-authorization/token
-    endpoints, a distinct logical resource from either of `oidc_discovery.py`'s two
-    endpoints, so sharing one helper across modules would be the wrong layering
-    (same rationale `oidc_discovery.py`'s own docstring gives for not going through
-    `PsServiceClient`).
+    Kept separate from the discovery module's equivalent because this one targets the
+    IdP's device-authorization and token endpoints and raises a plain `PsCliError`;
+    a certificate-verification failure gets the trust hint.
     """
     if is_certificate_verification_error(cause):
         raise PsCliError(
@@ -159,9 +163,10 @@ def _post_form(client: httpx.Client, url: str, data: dict[str, str]) -> httpx.Re
 def _parse_device_authorization(payload: object) -> DeviceAuthorization:
     """Parse a `POST <device_authorization_endpoint>` 200 body.
 
-    Defensive `isinstance`-chain parse, same style as `oidc_discovery.py`'s own
-    parsers -- this document comes from a third-party IdP, never assumed to match
-    the documented shape.
+    The body comes from a third-party IdP, so it is validated with `isinstance` checks
+    rather than trusted. Raises `PsCliError` if it is not an object, a required field
+    (`device_code`, `user_code`, `verification_uri`, `expires_in`, `interval`) is
+    missing or mistyped, or `verification_uri_complete` is present but not a string.
     """
     if not isinstance(payload, dict):
         raise PsCliError(msg=_UNEXPECTED_DEVICE_AUTHORIZATION_SHAPE_MSG)
@@ -197,11 +202,26 @@ def _parse_device_authorization(payload: object) -> DeviceAuthorization:
 def request_device_authorization(
     params: ResolvedAuthParameters, *, transport: httpx.BaseTransport | None = None
 ) -> DeviceAuthorization:
-    """`POST params.device_authorization_endpoint` -- mint a fresh `DeviceAuthorization`.
+    """Start a device-authorization login at the IdP.
 
-    Sends `client_id` and `scope` (space-joined) always; sends `audience` only when
-    `params.audience is not None` -- never as an empty string (AC-BI-003). Does no
-    printing -- the caller (Slice 13) prints `user_code`/`verification_uri`.
+    Sends `client_id` and the space-joined `scope` always; sends `audience` only when
+    `params.audience` is set, never as an empty string. Prints nothing; the caller
+    shows the user code and verification URI.
+
+    Args:
+        params: Resolved OIDC parameters; `device_authorization_endpoint` is the target.
+        transport: Optional `httpx` transport that replaces the network (tests only).
+
+    Returns:
+        The `DeviceAuthorization` the IdP issued.
+
+    Raises:
+        PsCliError: The endpoint is unreachable, fails the TLS check or times out; it
+            answers a non-2xx status or a non-JSON body; or the body has an unexpected
+            shape.
+
+    Side Effects:
+        One HTTPS POST to `params.device_authorization_endpoint`.
     """
     data: dict[str, str] = {
         "client_id": params.client_id,
@@ -229,7 +249,11 @@ def request_device_authorization(
 
 
 def _parse_token_response(payload: object) -> TokenResponse:
-    """Parse a `POST <token_endpoint>` 200 body into a `TokenResponse`."""
+    """Parse a `POST <token_endpoint>` 200 body into a `TokenResponse`.
+
+    Raises `PsCliError` if the body is not an object, `access_token` is not a string,
+    `expires_in` is not an integer, or `refresh_token` is present but not a string.
+    """
     if not isinstance(payload, dict):
         raise PsCliError(msg=_UNEXPECTED_GRANT_RESPONSE_SHAPE_MSG)
     body = cast("dict[str, object]", payload)
@@ -250,11 +274,10 @@ def _parse_token_response(payload: object) -> TokenResponse:
 def _extract_error_code(response: httpx.Response) -> str:
     """Read `{"error": "..."}` off a non-2xx token-endpoint response.
 
-    Falls back to a synthetic `http-<status>` code (never raises/crashes here) when
-    the body is not JSON or does not carry a string `error` field -- D5-style "never
-    assume the server always returns the documented shape" (`http_client.py:502-511`).
-    The caller (`_raise_for_error_code`) treats any code it does not recognize as
-    generic, so this fallback still produces an actionable, non-crashing error.
+    Falls back to a synthetic `http-<status>` code (never raises) when the body is not
+    JSON or carries no string `error` field, because a server may not return the
+    documented shape. `_raise_for_error_code` treats any unrecognized code generically,
+    so the fallback still yields an actionable error.
     """
     try:
         payload = response.json()
@@ -270,11 +293,11 @@ def _extract_error_code(response: httpx.Response) -> str:
 
 
 def _raise_for_error_code(error_code: str) -> NoReturn:
-    """Raise the AC-BI-009 `PsCliError` for a token-endpoint error code.
+    """Raise the `PsCliError` that tells the user why the login failed.
 
-    `expired_token`/`access_denied` get the literal wording AC-BI-009 specifies;
-    any other/unrecognized code (including this module's own `http-<status>`
-    fallback) gets a generic `PsCliError` naming the raw code rather than crashing.
+    `expired_token` and `access_denied` get their own wording; any other code
+    (including the `http-<status>` fallback) gets a generic error naming the raw code.
+    Each carries a hint to run `ps-cli auth login` again.
     """
     if error_code == "expired_token":
         raise PsCliError(
@@ -299,13 +322,30 @@ def poll_for_token(
     transport: httpx.BaseTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> TokenResponse:
-    """Poll `params.token_endpoint` until the device-flow login completes or fails.
+    """Poll the token endpoint until the user finishes the device-flow login or it fails.
 
-    Hand-rolled loop (no new dependency) -- `interval` starts at `device_auth.interval`
-    and grows by `_SLOW_DOWN_INCREMENT_SECONDS` on every `slow_down` response (RFC 8628
-    SS3.5), resetting to no-longer-growing once the provider stops returning it.
-    `sleep` is a constructor-injection seam (mirrors `handlers.py`'s
-    `poll_interval_seconds` convention) so tests never wait on a real clock.
+    The wait starts at `device_auth.interval` seconds and grows by five seconds on
+    every `slow_down` response (RFC 8628 section 3.5); `authorization_pending` keeps
+    polling at the current interval.
+
+    Args:
+        params: Resolved OIDC parameters; `token_endpoint` and `client_id` are used.
+        device_auth: The authorization returned by `request_device_authorization`.
+        transport: Optional `httpx` transport that replaces the network (tests only).
+        sleep: Called with the number of seconds to wait between polls; injectable so
+            tests never wait on a real clock.
+
+    Returns:
+        The `TokenResponse` from the first successful poll.
+
+    Raises:
+        PsCliError: The endpoint is unreachable, fails the TLS check or times out; a
+            success body is not valid JSON or has an unexpected shape; or the IdP
+            answers `expired_token`, `access_denied` or any other unrecognized error.
+
+    Side Effects:
+        Repeated HTTPS POSTs to `params.token_endpoint`; blocks in `sleep` between
+        polls, potentially until the device code expires.
     """
     interval = device_auth.interval
     data = {
@@ -346,11 +386,23 @@ def complete_device_login(
 ) -> TokenResponse:
     """Run the full device-flow login: request authorization, then poll to completion.
 
-    `on_device_authorization`, when given, is called with the freshly-minted
-    `DeviceAuthorization` *before* the (blocking) poll begins -- the seam Slice 13
-    uses to print `user_code`/`verification_uri` at exactly the right moment, without
-    this module doing any printing itself. See this module's own docstring for why
-    this differs from PLAN.md's literal `-> DeviceAuthorization` return-type wording.
+    Args:
+        params: Resolved OIDC parameters for the login.
+        transport: Optional `httpx` transport that replaces the network (tests only).
+        sleep: Called with the seconds to wait between polls; injectable for tests.
+        on_device_authorization: Optional callback invoked with the new
+            `DeviceAuthorization` before the blocking poll begins, so the caller can
+            show the user code and verification URI at the right moment.
+
+    Returns:
+        The `TokenResponse` produced by the poll.
+
+    Raises:
+        PsCliError: Any failure of `request_device_authorization` or
+            `poll_for_token`, including an expired or denied login.
+
+    Side Effects:
+        HTTPS requests to the IdP, a blocking poll, and whatever the callback does.
     """
     device_auth = request_device_authorization(params, transport=transport)
     if on_device_authorization is not None:
@@ -359,22 +411,30 @@ def complete_device_login(
 
 
 def token_bundle_from_response(response: TokenResponse, issuer: str) -> TokenBundle:
-    """Convert a `TokenResponse` into the `TokenBundle` shape `CredentialStore` persists.
+    """Convert a login `TokenResponse` into the `TokenBundle` the credential store keeps.
 
-    Issue #121 (AC-BI-001): only `refresh_token`/`issuer` persist -- `response.
-    access_token`/`expires_in` are never written to the store; the in-memory access
-    token lives in `AccessTokenCache` instead, populated by `ensure_valid_access_token`,
-    never here (this function is only ever called from `handle_auth_login`'s initial
-    login path, which stores immediately after obtaining fresh tokens). Storing the
-    result (`credential_store.set_tokens(...)`) is the caller's job -- this module
-    never imports `credentials.py`'s concrete store classes, only the `TokenBundle`
-    shape itself.
+    Only the refresh token and issuer persist; the access token and its lifetime are
+    never written to the store (the access token lives in memory in `AccessTokenCache`).
+    Storing the result is the caller's job.
+
+    Args:
+        response: The token response from a completed login.
+        issuer: The issuer URL the tokens came from.
+
+    Returns:
+        A `TokenBundle` holding `response.refresh_token` (possibly `None`) and `issuer`.
+
+    Raises:
+        Nothing.
+
+    Side Effects:
+        None.
     """
     return TokenBundle(refresh_token=response.refresh_token, issuer=issuer)
 
 
 def _raise_no_stored_credentials(context: str) -> NoReturn:
-    """Raise the AC-BI-013 fail-closed `PsCliError` for a `context` with no stored bundle."""
+    """Raise the fail-closed `PsCliError` for a `context` with no stored credentials."""
     raise PsCliError(
         msg=f"no stored credentials for context '{context}'",
         hint=_RELOGIN_HINT,
@@ -382,12 +442,10 @@ def _raise_no_stored_credentials(context: str) -> NoReturn:
 
 
 def _raise_refresh_failed() -> NoReturn:
-    """Raise the AC-BI-013 fail-closed `PsCliError` for a refresh that could not complete.
+    """Raise the fail-closed `PsCliError` for a refresh that could not complete.
 
-    Shared by every "must re-login" outcome once a bundle is known to be expired:
-    no refresh token at all, a network error, a non-2xx response, or a malformed
-    response body -- AC-BI-013 treats all of these as one "you must re-login"
-    outcome, with the same wording.
+    Shared by every "must log in again" outcome: no refresh token at all, a rejected
+    refresh (non-2xx), or a malformed response body. All use the same wording.
     """
     raise PsCliError(msg=_REFRESH_FAILED_MSG, hint=_RELOGIN_HINT)
 
@@ -395,9 +453,9 @@ def _raise_refresh_failed() -> NoReturn:
 def _raise_refresh_unverifiable(detail: str) -> NoReturn:
     """Raise `CannotVerifyError` for a refresh that failed for reasons unrelated to the credential.
 
-    Same wording as `_raise_refresh_failed` (AC-BI-013 is unchanged for every command);
-    the exception type alone tells `auth status` the credential
-    was never judged. `detail` is a transport exception class name or an HTTP status.
+    Same wording as `_raise_refresh_failed`; only the exception type differs, which
+    tells `auth status` the credential was never judged. `detail` is a transport
+    exception class name or an HTTP status.
     """
     raise CannotVerifyError(msg=_REFRESH_FAILED_MSG, hint=_RELOGIN_HINT, detail=detail)
 
@@ -405,13 +463,8 @@ def _raise_refresh_unverifiable(detail: str) -> NoReturn:
 def _is_cache_stale(cache: AccessTokenCache) -> bool:
     """Return whether `cache`'s token is expired or expiring within `_EXPIRY_LEEWAY_SECONDS`.
 
-    Mirrors the old (pre-#121) `_is_expired(bundle: TokenBundle)` check bit-for-bit, but
-    reads the in-memory `AccessTokenCache` instead of a persisted `TokenBundle` -- there is
-    no persisted `expires_at` left to check (AC-BI-001), but the in-memory cache still
-    needs one so a run that outlives the token's TTL refreshes again (`http_client.py`
-    reuses one cache for every authenticated call).
-    `cache.expires_at is None` (nothing cached yet) counts as stale, so a fresh cache
-    always falls through to a real refresh.
+    An empty cache (`expires_at is None`) counts as stale, so a fresh cache always
+    falls through to a real refresh.
     """
     return cache.expires_at is None or cache.expires_at <= int(time.time()) + _EXPIRY_LEEWAY_SECONDS
 
@@ -422,35 +475,38 @@ def _refresh_tokens(
     *,
     transport: httpx.BaseTransport | None,
 ) -> TokenResponse:
-    """`POST params.token_endpoint` with `grant_type=refresh_token`; return the refreshed tokens.
+    """Exchange `refresh_token` for a new access token at the IdP's token endpoint.
 
-    Carries `refresh_token` forward unchanged if the response does not include a
-    new one (AC-BI-005: "not every IdP rotates on every refresh"), else adopts the
-    rotated one. Raises the AC-BI-009 fail-closed error (`_raise_refresh_failed`) on a
-    4xx response or malformed body, and `CannotVerifyError` (same wording) on a network
-    error or 5xx response (issue #179) -- never lets an
-    `httpx` exception or a raw `KeyError`/`TypeError` escape.
+    Sends `params.scopes` (which already include `offline_access`) on every refresh so
+    the IdP keeps issuing refresh tokens. The returned `refresh_token` is the one to
+    persist: the rotated one if the IdP sent a new one, else `refresh_token` unchanged;
+    it is not a verbatim echo of the IdP response.
 
-    Also sends `params.scopes` as `scope` (issue #119, AC-BI-003) -- `params` is
-    freshly re-resolved by every `ensure_valid_access_token` call, so this already
-    includes `offline_access`, keeping every refresh (not just the initial login)
-    eligible for a new refresh_token in the response.
+    Args:
+        params: Resolved OIDC parameters; `token_endpoint`, `client_id` and `scopes`.
+        refresh_token: The stored refresh token to exchange.
+        transport: Optional `httpx` transport that replaces the network (tests only).
 
-    Note: the `TokenResponse` this returns is not literally the IdP's token-endpoint
-    response -- `.refresh_token` is already carry-forward-resolved (the old stored value
-    when the endpoint didn't rotate it), narrower than `TokenResponse`'s own general
-    docstring contract ("the subset of RFC 8628 SS3.5's token-endpoint success response").
-    Callers should treat this specific return value as "the refresh_token to persist,"
-    not as a verbatim echo of what the IdP sent.
+    Returns:
+        A `TokenResponse` with the new access token, its lifetime, and the refresh token
+        to persist.
+
+    Raises:
+        CannotVerifyError: A network error or a 5xx response, so the credential was
+            never judged.
+        PsCliError: A 4xx response, an invalid JSON body or a malformed token response;
+            the message says the stored credentials could not be refreshed and hints at
+            `ps-cli auth login`. No `httpx` exception ever escapes.
+
+    Side Effects:
+        One HTTPS POST to `params.token_endpoint`.
     """
     data = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
         "client_id": params.client_id,
-        # Issue #119, AC-BI-003: carry `params.scopes` (which already includes
-        # `offline_access` -- see `oidc_discovery.resolve_auth_parameters`) forward on
-        # every refresh, not just the initial login, so a *second* refresh still has a
-        # refresh_token to work with.
+        # Send the scopes (which already include `offline_access`) on every refresh,
+        # not just the initial login, so a later refresh still gets a refresh token.
         "scope": " ".join(params.scopes),
     }
     with httpx.Client(
@@ -491,31 +547,40 @@ def ensure_valid_access_token(
     access_token_cache: AccessTokenCache,
     transport: httpx.BaseTransport | None = None,
 ) -> str:
-    """Return a valid access token for `context`, refreshing (or failing closed) as needed.
+    """Return a valid access token for `context`, refreshing it or failing closed.
 
-    Cache-hit (`access_token_cache.token is not None` AND not `_is_cache_stale(...)`):
-    returns immediately, no store read, no network call -- AC-BI-004's "reused by
-    further business-endpoint calls within the same invocation."
+    A cached token that is not about to expire is returned at once, with no store read
+    and no network call. Otherwise the stored refresh token is exchanged at the IdP
+    (parameters are re-resolved by discovery on every refresh), the possibly rotated
+    refresh token is written back to the credential store, and the new access token
+    and its expiry are put in `access_token_cache`. A long-running command therefore
+    refreshes again once the token nears expiry; the check happens before a request is
+    sent, never mid-request.
 
-    Cache-miss (nothing cached yet, OR the cached token is stale): reads the stored
-    bundle, fails closed if absent
-    (`_raise_no_stored_credentials`, AC-BI-002) or if `refresh_token is None`
-    (`_raise_refresh_failed`), otherwise always refreshes (AC-BI-003, AC-BI-005's
-    rotation preserved verbatim inside `_refresh_tokens`), persists
-    `TokenBundle(refresh_token=refreshed.refresh_token, issuer=params.issuer)`,
-    populates `access_token_cache.token`/`access_token_cache.expires_at`, and returns
-    the new access token.
+    Args:
+        context: Name of the context whose credential is used.
+        service_url: PS Service base URL, used for OIDC discovery.
+        auth_override: The context's `auth` overrides, or `None`.
+        credential_store: Where the refresh token is read from and rotated back to.
+        access_token_cache: The invocation's in-memory cache; updated in place on a
+            refresh.
+        transport: Optional `httpx` transport that replaces the network for discovery
+            and refresh (tests only).
 
-    The cache starts empty, so the first call always misses and refreshes exactly once;
-    later calls in the same invocation reuse the token (`http_client.py:449` passes the
-    one per-client cache on every authenticated call). A run that outlives a real Entra
-    ID access token's ~60-90 min TTL (a long ingest) re-refreshes once `_is_cache_stale`
-    trips -- checked before a request is sent, never mid-request.
+    Returns:
+        A non-empty access token valid for at least the expiry leeway.
 
-    `transport` is the constructor-injection seam tests use to substitute a
-    combined real-provider/fake-metadata transport for `resolve_auth_parameters`'s
-    own network calls and for the refresh POST itself -- production callers never
-    pass it, so both go over the real network.
+    Raises:
+        CredentialStoreError: The credential store cannot be read or written.
+        CannotVerifyError: Discovery or the refresh could not reach the IdP or PS
+            Service, or got a 5xx response.
+        PsCliError: There are no stored credentials for `context`, the stored bundle
+            has no refresh token, the refresh was rejected or malformed, or discovery
+            failed; the hint is usually `ps-cli auth login`.
+
+    Side Effects:
+        On a cache miss: HTTPS requests to PS Service and the IdP, a credential-store
+        write, and mutation of `access_token_cache`.
     """
     if access_token_cache.token is not None and not _is_cache_stale(access_token_cache):
         return access_token_cache.token

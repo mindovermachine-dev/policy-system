@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-r"""Seed graph content for the backup and restore verification (issue #216).
+r"""Seed graph content so a backup and restore round trip has data to verify.
 
 Run inside the ps-service pod (it uses the service's own configuration, gateway and
 curated-content source from the environment):
@@ -43,7 +43,18 @@ DEFAULT_INSTRUMENTS = ("ENGPRAC-1.0", "DORA-1.0")
 def seed_instruments(
     instrument_ids: Sequence[str], restore_one: Callable[[str], object]
 ) -> list[str]:
-    """Restore each instrument through `restore_one`; return the ids restored, in order."""
+    """Restore each instrument through the supplied restore function.
+
+    Args:
+        instrument_ids: Curated-catalog instrument ids, restored in the order given.
+        restore_one: Restores a single instrument id; its return value is ignored.
+
+    Returns:
+        The ids that were restored, in order.
+
+    Raises:
+        Exception: Whatever `restore_one` raises for an instrument; ids after it are not restored.
+    """
     restored: list[str] = []
     for instrument_id in instrument_ids:
         restore_one(instrument_id)
@@ -52,7 +63,24 @@ def seed_instruments(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Restore the named curated instruments into the live graphs; return the exit code."""
+    """Restore curated instruments into the live graphs through the service's own restore path.
+
+    Args:
+        argv: Command-line arguments without the program name; `None` reads `sys.argv`.
+            `--instrument` (repeatable) selects the instrument ids, defaulting to
+            `DEFAULT_INSTRUMENTS`.
+
+    Returns:
+        0 once every instrument is restored.
+
+    Raises:
+        Exception: Any configuration, gateway or restore failure propagates unchanged.
+
+    Side Effects:
+        Writes graph nodes through the Graph Write Gateway, records audit rows, appends
+        service logs to a file in the system temp directory and logs progress events to stderr.
+        The gateway is uninstalled and its reconciler stopped before returning.
+    """
     parser = argparse.ArgumentParser(description="Seed curated content through the restore path")
     parser.add_argument("--instrument", action="append", default=[])
     args = parser.parse_args(argv)

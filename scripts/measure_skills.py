@@ -1,4 +1,4 @@
-"""Per-skill token-cost measurement for the `ps-plugin` product skills (issue #200, AC-BI-001).
+"""Per-skill token-cost measurement for the `ps-plugin` product skills.
 
 For every skill under `ps-skills/ps-plugin/skills` this reports:
 
@@ -34,7 +34,16 @@ _FETCH_VERB = re.compile(r"\b(?:call|calls|calling|fetch|refetch)\b", re.IGNOREC
 
 @dataclass(frozen=True)
 class SkillMeasurement:
-    """One skill's measured sizes, named files and on-load tool calls."""
+    """One skill's measured sizes, named files and on-load tool calls.
+
+    Attributes:
+        name: Skill directory name.
+        skill_chars: Character count of `SKILL.md`.
+        references: Plugin-relative path of each resolved named file mapped to its character count.
+        unresolved_references: Sorted names of `*.md` files `SKILL.md` mentions that do not
+            resolve inside the plugin.
+        on_load_tool_calls: Tools the `## On Load` section tells the model to call or fetch.
+    """
 
     name: str
     skill_chars: int
@@ -83,7 +92,20 @@ def _resolve(reference: str, skill_dir: Path, plugin_dir: Path) -> Path | None:
 
 
 def measure_skill(skill_dir: Path, plugin_dir: Path) -> SkillMeasurement:
-    """Measure one skill directory."""
+    """Measure one skill directory.
+
+    Args:
+        skill_dir: Directory holding the skill's `SKILL.md`; the directory name is the skill name.
+        plugin_dir: Plugin root against which referenced files are resolved (also searched in its
+            `rubrics/` directory by file name).
+
+    Returns:
+        The skill's size, the sizes of the resolved files it names, the names it mentions that do
+        not resolve, and the tools its `## On Load` section tells the model to call or fetch.
+
+    Raises:
+        OSError: `SKILL.md` or a resolved referenced file cannot be read.
+    """
     text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     references: dict[str, int] = {}
     unresolved: set[str] = set()
@@ -108,7 +130,18 @@ def measure_skill(skill_dir: Path, plugin_dir: Path) -> SkillMeasurement:
 
 
 def measure_all(skills_root: Path) -> list[SkillMeasurement]:
-    """Measure every skill under `skills_root`, largest `SKILL.md` first."""
+    """Measure every skill directory that holds a `SKILL.md`.
+
+    Args:
+        skills_root: Directory whose immediate subdirectories are skills; its parent is the
+            plugin root.
+
+    Returns:
+        One measurement per skill, largest `SKILL.md` first with the skill name as tie-break.
+
+    Raises:
+        OSError: `skills_root` or a skill file cannot be read.
+    """
     plugin_dir = skills_root.parent
     measurements = [
         measure_skill(d, plugin_dir)
@@ -121,7 +154,16 @@ def measure_all(skills_root: Path) -> list[SkillMeasurement]:
 def coverage_set(
     measurements: list[SkillMeasurement], target: float = COVERAGE_TARGET
 ) -> list[str]:
-    """Smallest set of largest skills whose sizes sum to at least `target` of the total."""
+    """Pick the smallest set of largest skills that carries most of the total size.
+
+    Args:
+        measurements: Measurements already ordered largest first (as `measure_all` returns).
+        target: Fraction of the total `SKILL.md` size the set must reach, between 0 and 1.
+
+    Returns:
+        Skill names, largest first, taken until their sizes sum to at least `target` of the total;
+        empty when `measurements` is empty.
+    """
     total = sum(m.skill_chars for m in measurements)
     chosen: list[str] = []
     running = 0
@@ -134,7 +176,18 @@ def coverage_set(
 
 
 def render_report(measurements: list[SkillMeasurement]) -> str:
-    """Render the deterministic Markdown report."""
+    """Render the Markdown report for a set of measurements.
+
+    Args:
+        measurements: Non-empty list of skill measurements, in the order to print them.
+
+    Returns:
+        A Markdown document with a summary, a per-skill table, and the files each `SKILL.md`
+        names. The text depends only on `measurements`, so identical input renders identical text.
+
+    Raises:
+        ZeroDivisionError: `measurements` is empty (the total size is zero).
+    """
     total = sum(m.skill_chars for m in measurements)
     in_set = coverage_set(measurements)
     set_chars = sum(m.skill_chars for m in measurements if m.name in in_set)
@@ -182,7 +235,23 @@ def render_report(measurements: list[SkillMeasurement]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the measurement and print or write the report."""
+    """Measure all skills and print or write the report.
+
+    Args:
+        argv: Command-line arguments without the program name; `None` reads `sys.argv`.
+            `--skills-root` selects the skills directory and `--output` a file to write instead of
+            standard output.
+
+    Returns:
+        0 after the report is emitted.
+
+    Raises:
+        OSError: The skills tree cannot be read or the output file cannot be written.
+        ZeroDivisionError: The skills root holds no skill.
+
+    Side Effects:
+        Writes the report to `--output`, or to standard output when it is not given.
+    """
     parser = argparse.ArgumentParser(
         description="Measure per-skill token cost of ps-plugin skills."
     )

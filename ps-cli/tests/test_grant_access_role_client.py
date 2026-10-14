@@ -1,4 +1,4 @@
-"""Tests for `scripts/grant_access_role_client.py::resolve_bearer_token` (issue #174, S1a).
+"""Tests for `scripts/grant_access_role_client.py::resolve_bearer_token`.
 
 The helper serves `scripts/grant-access-role.sh`. It is loaded by file path, the same way
 `ps-service/tests/scripts/test_check_mock_boundaries.py` loads its script. The credential

@@ -1,70 +1,53 @@
 #!/usr/bin/env python3
-r"""Maintainer script: audit Domain Mapper's prompt-level extraction exclusions (issue #27).
+r"""Maintainer script: audit Domain Mapper's prompt-level extraction exclusions.
 
 Domain Mapper's extraction prompt (`ps_service.domain_mapper.prompts.EXTRACTION_SYSTEM_PROMPT`)
-deliberately instructs the model to emit no candidate at all for two categories of text —
+deliberately instructs the model to emit no candidate at all for two categories of text:
 scope/applicability clauses, and conditional-permissive ("may be X where <conditions>")
 constructions (see that prompt's own module docstring for the rationale). From outside the
-model this is indistinguishable from silent confidence-filtering, which AC-002 (every
-extraction carries a confidence score, never dropped) exists to prevent for content the
-model *does* extract — content never emitted gets no score at all. This audit tool exists
-to tell "genuinely not a duty" from "the model quietly filtered something it should have
-surfaced."
+model this is indistinguishable from silent confidence-filtering: every extracted candidate
+carries a confidence score and is never dropped, but content that is never emitted gets no
+score at all. This audit tells "genuinely not a duty" apart from "the model quietly filtered
+something it should have surfaced."
 
-**Audit only — no prompt or production code changes.** This module only ever imports and
-calls `ps_service.domain_mapper.extraction`/`prompts`/`models` — never edits them
-(AC-BI-002).
+The audit changes no prompt or production code: it only imports and calls
+`ps_service.domain_mapper.extraction`, `prompts` and `models`.
 
-**Slice 1** (`.orchestrator/tracker/issue-27-exclusion-audit/PLAN.md` §3, adjusted per
-CHANGES.md rows 2/4): the hermetic capture -> flag -> propose(AI-labeled) -> report-row
-chain, at tiny scope:
+Building blocks:
 
-- `capture_unit_record` (AC-BI-001/004/005) reuses the exact per-unit extraction call
-  `extract_roles_and_requirements` itself uses
-  (`ps_service.domain_mapper.extraction._extract_candidates_for_unit`, imported directly —
-  `ps-service/tests/domain_mapper/test_extraction.py` already establishes this exact
-  module-private-import precedent) — never a reimplementation of the extraction call, the
-  system prompt, or its response parsing.
-- `propose_classification` (AC-BI-006/007) reuses the real `route_completion` (LLM
-  Interface, no new client) with a new prompt string local to this module
-  (`_CLASSIFICATION_SYSTEM_PROMPT`), paraphrasing — never editing — the same two
-  exclusion-category definitions `prompts.py`'s own module docstring documents. Every
-  `ClassificationProposal` this run produces carries `source="ai_proposed"`
-  (CHANGES.md row 4) — no human-reviewed source exists yet
-  (`.orchestrator/tracker/issue-27-exclusion-audit/CONTEXT.md` user decision 2): a
-  sub-agent PROPOSES a classification per flagged unit; a human signs off separately.
-- `render_report_row` renders one Markdown table row per unit, tagging any classification
-  it carries `*(AI-proposed)*` in the row itself, not only a report's aggregate table
-  header (CHANGES.md row 4) — so a row can never be mistaken for a human-confirmed
-  classification even when read in isolation.
+- `capture_unit_record` runs the same per-unit extraction call
+  `extract_roles_and_requirements` uses
+  (`ps_service.domain_mapper.extraction._extract_candidates_for_unit`, imported directly, as
+  `ps-service/tests/domain_mapper/test_extraction.py` already does), against the unmodified
+  system prompt and response parsing, and records the outcome per unit.
+- `propose_classification` asks the real `route_completion` (LLM Interface, no new client),
+  with a prompt local to this module (`_CLASSIFICATION_SYSTEM_PROMPT`) that paraphrases the two
+  exclusion-category definitions, why a flagged unit produced no candidate. Every
+  `ClassificationProposal` carries `source="ai_proposed"`: no human-reviewed source exists, so
+  the model proposes a classification per flagged unit and a human signs off separately.
+- `render_report_row` renders one Markdown table row per unit and tags any classification it
+  carries `*(AI-proposed)*` in the row itself, so a row read in isolation is never mistaken for
+  a human-confirmed classification.
+- `select_sample_units` is the document-order sampler: Tier A is the first `_TIER_A_SIZE` units,
+  Tier B is up to `_TIER_B_SIZE` further units whose text matches the conditional-permissive
+  pattern.
+- `RegulationSummary`, `summarize_regulation`, `render_findings_report` and
+  `load_regulation_records` assemble the findings report
+  `docs/audits/domain-mapper-exclusion-audit-findings.md` from `{regulation}.json` records
+  without calling the LLM.
 
-**Slice 3** (PLAN.md §3 "Slice 3 — Widen sampling to the real Tier A + Tier B strategy,
-CRA only", adjusted per CHANGES.md row 1a): adds `select_sample_units` — the real,
-document-order Tier A (first `_TIER_A_SIZE` units) + regex-flagged Tier B (up to
-`_TIER_B_SIZE` further conditional-permissive units) sampler from PLAN.md §1, exercised
-hermetically via `ps-service/tests/domain_mapper/test_exclusion_audit_sampling.py` and
-live (additively over Slice 2's cached `records/cra.json`) via
-`test_live_exclusion_audit.py`.
-
-**Slice 4** (PLAN.md §3 "Slice 4 — All three regulations + the committed findings
-report"): adds `RegulationSummary`/`summarize_regulation`/`render_findings_report`/
-`load_regulation_records`, and a cached-mode-only `main()` that assembles the committed
-`docs/audits/domain-mapper-exclusion-audit-findings.md` from `records/{regulation}.json`
-without ever calling the LLM.
-
-**Slice 5** (PLAN.md §3 "Slice 5 — CLI polish + AC-BI-002 close-out"): no new capture/
-report logic — wraps Slice 4's `main()` in a real `argv`/`argparse` CLI surface
-(`--cache-dir`, `--report-path`, `--record-source`, all documented in `--help`).
-`--record-source` defaults to (and only accepts) `"cached"`, so running
+The command line (`main`) is cached mode only: it reads already-captured records from
+`--cache-dir` and writes the report to `--report-path`. `--record-source` defaults to, and only
+accepts, `"cached"`, so running
 
     python tools/domain-mapper/exclusion_audit.py
 
-with no flags at all can never trigger a live Azure OpenAI or FalkorDB call.
+with no flags can never trigger a live Azure OpenAI or FalkorDB call.
 
 Usage:
     python tools/domain-mapper/exclusion_audit.py [--help]
     python tools/domain-mapper/exclusion_audit.py \
-        --cache-dir .orchestrator/tracker/issue-27-exclusion-audit/records \
+        --cache-dir ./exclusion-audit-records \
         --report-path docs/audits/domain-mapper-exclusion-audit-findings.md
 
 This module is exercised hermetically via
@@ -85,7 +68,7 @@ from typing import TYPE_CHECKING, Literal, TypeIs, cast
 
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.domain_mapper.extraction import (
-    _extract_candidates_for_unit,  # pyright: ignore[reportPrivateUsage]  # audit tool reuses this module-internal per-unit extraction call directly, mirroring test_extraction.py's own established precedent (PLAN.md §0)
+    _extract_candidates_for_unit,  # pyright: ignore[reportPrivateUsage]  # reuses the per-unit extraction call of the extraction module
 )
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
@@ -123,12 +106,21 @@ _CLASSIFICATION_LABELS: tuple[ClassificationLabel, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class AuditUnitRecord:
-    """One `ExtractionUnit`'s captured real-extraction outcome (AC-BI-004/005).
+    """One `ExtractionUnit`'s captured real-extraction outcome.
 
     `is_flagged` is `True` exactly when `status == "ok"` AND `candidate_count == 0` — a
     genuine zero-candidate result, never a unit whose call itself failed (`status ==
     "error"` always carries `is_flagged=False`; there is no "why zero" question to ask
     about a unit whose response could not even be parsed).
+
+    Attributes:
+        regulation: Regulation short name the unit belongs to (for example `"CRA"`).
+        citation_ref: Citation of the unit, the key proposals are matched on.
+        article_number: Article number of the unit.
+        paragraph_number: Paragraph number of the unit.
+        candidate_count: Number of candidates extracted; 0 when `status` is `"error"`.
+        status: `"ok"` when extraction parsed, `"error"` when the response was malformed.
+        is_flagged: Whether the unit is a genuine zero-candidate result.
     """
 
     regulation: str
@@ -142,12 +134,17 @@ class AuditUnitRecord:
 
 @dataclass(frozen=True, slots=True)
 class ClassificationProposal:
-    """An AI-proposed classification for one flagged (zero-candidate) unit (AC-BI-006/007).
+    """An AI-proposed classification for one flagged (zero-candidate) unit.
 
-    `source` is fixed at `"ai_proposed"` — no human-reviewed source exists yet for this
-    run (CHANGES.md row 4, CONTEXT.md user decision 2). `render_report_row` renders it as
-    a per-row `*(AI-proposed)*` tag, so a reader can never mistake a proposal for a
-    human-confirmed classification, even reading one row in isolation.
+    `source` is fixed at `"ai_proposed"` — no human-reviewed source exists for this run.
+    `render_report_row` renders it as a per-row `*(AI-proposed)*` tag, so a reader can never
+    mistake a proposal for a human-confirmed classification, even reading one row in isolation.
+
+    Attributes:
+        citation_ref: Citation of the unit the proposal is about.
+        label: One of the two exclusion categories or `"miss"`.
+        rationale: One sentence, grounded in the unit's own text, explaining the label.
+        source: Always `"ai_proposed"`.
     """
 
     citation_ref: str
@@ -156,23 +153,23 @@ class ClassificationProposal:
     source: Literal["ai_proposed"] = "ai_proposed"
 
 
-# --- Sample selection (AC-BI-003, Slice 3: PLAN.md §1, adjusted per CHANGES.md row 6/7)
+# --- Sample selection --------------------------------------------------------
 #
 # Two tiers, both pure functions over the real adapter's real `tuple[ExtractionUnit, ...]`
 # (no LLM/IO here). `_TIER_A_SIZE`/`_TIER_B_SIZE` are module constants, not hardcoded
-# inline, so a follow-up widened run is a one-line change (PLAN.md §1).
+# inline, so a widened run is a one-line change.
 
 _TIER_A_SIZE = 30
 _TIER_B_SIZE = 10
 
 # Tier B: a deliberately bounded near-neighbourhood match for "may be X where/if/unless
 # <conditions>" (conditional-permissive), not a whole-article scan -- capped at 80 chars
-# of lookahead (PLAN.md §1, Open Question 4: a genuinely long clause beyond 80 chars
-# between "may" and its "where/if/unless" is an accepted false-negative risk for this
-# bounded audit, not a correctness bug). `re.DOTALL` lets the lookahead cross a
+# of lookahead (a genuinely long clause beyond 80 chars between "may" and its
+# "where/if/unless" is an accepted false-negative risk for this bounded audit, not a
+# correctness bug). `re.DOTALL` lets the lookahead cross a
 # paragraph-internal newline within that same 80-char budget.
 #
-# CHANGES.md row 7: this regex also has a known false-POSITIVE shape -- e.g. "may impose
+# This regex also has a known false-POSITIVE shape -- e.g. "may impose
 # fines where the infringement is severe" is an empowerment/duty-adjacent clause, not the
 # target passive "may be X where <conditions>" pattern. Any real occurrence of that shape
 # in a live run is noted in the audit's report/log as evidence against the regex's
@@ -188,7 +185,12 @@ class SampledUnit:
 
     Tier B additionally carries `tier_b_match_text` -- the exact regex match that
     triggered its inclusion -- so the report's Methodology section can show its work
-    (AC-BI-003) rather than just assert the strategy in prose. `None` for a Tier A unit.
+    rather than just assert the strategy in prose. `None` for a Tier A unit.
+
+    Attributes:
+        unit: The selected extraction unit.
+        selection_tier: `"A"` for the document-order prefix, `"B"` for a regex match.
+        tier_b_match_text: The regex match for a Tier B unit; `None` for Tier A.
     """
 
     unit: ExtractionUnit
@@ -211,6 +213,14 @@ def select_sample_units(
     also matches the conditional-permissive regex -- it is already tagged `"A"` by
     position), whose text matches `_CONDITIONAL_PERMISSIVE_PATTERN`. First match wins;
     scanning stops once `tier_b_size` units have been collected.
+
+    Args:
+        units: Extraction units in document order.
+        tier_a_size: Number of leading units taken as Tier A; non-negative.
+        tier_b_size: Maximum number of Tier B units; non-negative.
+
+    Returns:
+        The Tier A units followed by the Tier B units, each tagged with its tier.
     """
     tier_a = tuple(SampledUnit(unit=unit, selection_tier="A") for unit in units[:tier_a_size])
 
@@ -238,8 +248,8 @@ def capture_unit_record(
     """Run the real per-unit extraction call for `unit` and capture its outcome.
 
     Calls `extraction._extract_candidates_for_unit` — the same call
-    `extract_roles_and_requirements` itself uses (AC-BI-001), built against the REAL,
-    unmodified `EXTRACTION_SYSTEM_PROMPT`, never a reimplementation.
+    `extract_roles_and_requirements` itself uses, built against the REAL, unmodified
+    `EXTRACTION_SYSTEM_PROMPT`, never a reimplementation.
 
     A `DomainMapperExtractionError` (a malformed/unparseable LLM response for this one
     unit) is caught here into `status="error"` — mirroring
@@ -247,6 +257,20 @@ def capture_unit_record(
     `LlmProviderError` (an infra failure calling the LLM at all) is not caught here — it
     propagates and aborts the whole run, the same fail-fast boundary `extraction.py`
     follows throughout.
+
+    Args:
+        unit: The extraction unit to run.
+        regulation: Regulation short name recorded on the result.
+        model: Model name passed to the completion call.
+        call_completion: Optional completion caller; `None` uses the real client.
+        emitter: Optional log emitter forwarded to the extraction call.
+
+    Returns:
+        The unit's outcome: `status="ok"` with the candidate count, or `status="error"` with
+        zero candidates when the response could not be parsed.
+
+    Raises:
+        LlmProviderError: The LLM provider call itself failed.
     """
     try:
         candidates = _extract_candidates_for_unit(
@@ -274,7 +298,7 @@ def capture_unit_record(
     )
 
 
-# --- Classification proposal (AC-BI-006/007) --------------------------------
+# --- Classification proposal --------------------------------------------------
 #
 # `_CLASSIFICATION_SYSTEM_PROMPT` paraphrases -- never edits -- the same two
 # exclusion-category definitions `ps_service.domain_mapper.prompts.EXTRACTION_SYSTEM_PROMPT`'s
@@ -306,7 +330,11 @@ Return strict JSON: {"label": "correct_exclusion_scope_applicability" | \
 
 
 class ExclusionAuditError(Exception):
-    """A classification response could not be parsed into a `ClassificationProposal`."""
+    """A classification response or cached record could not be parsed.
+
+    Raised for a malformed classification response, and for a cached record or proposal with an
+    unrecognized status or label.
+    """
 
 
 def _build_classification_messages(citation_ref: str, record_text: str) -> list[ChatMessage]:
@@ -337,11 +365,23 @@ def propose_classification(
     Calls the REAL `route_completion` (LLM Interface reused, no new client or endpoint).
     Only ever called for a flagged (zero-candidate, `status="ok"`) unit — a unit that
     errored during capture has no text-based "why zero" question to answer. The returned
-    proposal always carries `source="ai_proposed"` (CHANGES.md row 4).
+    proposal always carries `source="ai_proposed"`.
 
-    Raises `ExclusionAuditError` (naming `citation_ref`) on a malformed/unparseable
-    response. An `LlmProviderError` from `route_completion` itself propagates unchanged —
-    the same fail-fast infra boundary `capture_unit_record` follows.
+    Args:
+        citation_ref: Citation of the flagged unit; named in any error.
+        record_text: The unit's own text, passed to the model as untrusted content.
+        model: Model name passed to the completion call.
+        call_completion: Optional completion caller; `None` uses the real client.
+        emitter: Optional log emitter forwarded to the completion call.
+
+    Returns:
+        The proposed label and one-sentence rationale for the unit.
+
+    Raises:
+        ExclusionAuditError: The response is malformed or unparseable (the message names
+            `citation_ref`).
+        LlmProviderError: The provider call failed; propagates unchanged, the same fail-fast
+            infra boundary `capture_unit_record` follows.
     """
     messages = _build_classification_messages(citation_ref, record_text)
     result = route_completion(
@@ -389,17 +429,23 @@ def _parse_classification_response(text: str, citation_ref: str) -> Classificati
     return ClassificationProposal(citation_ref=citation_ref, label=label, rationale=rationale)
 
 
-# --- Report row rendering (AC-BI-006/008, row-rendering only at Slice 1) ----
+# --- Report row rendering -----------------------------------------------------
 
 
 def render_report_row(record: AuditUnitRecord, proposal: ClassificationProposal | None) -> str:
     """Render one Markdown table row for `record`, with `proposal`'s label/rationale when given.
 
-    A row carrying a classification always suffixes its label with `*(AI-proposed)*`
-    (CHANGES.md row 4) — this per-row tag holds even for a row rendered standalone, never
-    only via a report's aggregate table header (`test_exclusion_audit_report.py`'s own
-    standalone-row test). Aggregate-table/methodology/recommendation rendering is Slice
-    4's job (PLAN.md §3 Slice 1) — this function renders exactly one row.
+    A row carrying a classification always suffixes its label with `*(AI-proposed)*` — this
+    per-row tag holds even for a row rendered standalone, never only via a report's aggregate
+    table header. Aggregate-table, methodology and recommendation rendering belong to
+    `render_findings_report`; this function renders exactly one row.
+
+    Args:
+        record: The captured unit outcome.
+        proposal: The unit's AI-proposed classification, or `None` when it has none.
+
+    Returns:
+        One Markdown table row; the label and rationale cells are `-` without a proposal.
     """
     if proposal is None:
         label_cell = "-"
@@ -415,14 +461,14 @@ def render_report_row(record: AuditUnitRecord, proposal: ClassificationProposal 
     )
 
 
-# --- Findings report assembly (Slice 4, AC-BI-008/009) ----------------------
+# --- Findings report assembly -------------------------------------------------
 #
 # `summarize_regulation`/`render_findings_report` are pure functions over already-captured
 # `AuditUnitRecord`/`ClassificationProposal` data -- no LLM/IO here, matching
 # `select_sample_units`'s own "pure function over real data" shape. `main()`'s cached mode
-# (CHANGES.md row 1b) is the only place in this module that touches the filesystem for
-# report assembly, and it never imports/calls `route_completion` on that path -- report
-# generation issues zero new extraction calls by construction, not just by convention.
+# is the only place in this module that touches the filesystem for report assembly, and it
+# never imports/calls `route_completion` on that path -- report generation issues zero new
+# extraction calls by construction, not just by convention.
 
 _UNCLASSIFIED_KEY = "unclassified"
 _ERROR_KEY = "error"
@@ -430,12 +476,19 @@ _ERROR_KEY = "error"
 
 @dataclass(frozen=True, slots=True)
 class RegulationSummary:
-    """One regulation's AC-BI-008 rollup.
+    """One regulation's rollup for the findings report.
 
     Total units processed, zero-candidate (flagged) count, and a classification
-    breakdown covering the 3 AC-BI-006 labels plus a flagged-but-unclassified count and
-    a capture-error count (PLAN.md §4's design note: an errored capture never folds into
-    the 3-way classification breakdown).
+    breakdown covering the 3 classification labels (`correct_exclusion_scope_applicability`,
+    `correct_exclusion_conditional_permissive`, `miss`) plus a flagged-but-unclassified count and
+    a capture-error count (an errored capture never folds into the 3-way classification
+    breakdown).
+
+    Attributes:
+        regulation: Regulation short name; empty when there were no records.
+        units_processed: Number of records rolled up.
+        zero_candidate_count: Number of flagged (genuine zero-candidate) units.
+        classification_breakdown: Count per label, plus `"unclassified"` and `"error"`.
     """
 
     regulation: str
@@ -451,7 +504,17 @@ def summarize_regulation(
 
     `proposals` need only cover flagged (zero-candidate, `status="ok"`) units -- a flagged
     unit with no matching proposal counts against `_UNCLASSIFIED_KEY`, and a `status=
-    "error"` record counts against `_ERROR_KEY`, never against the 3 AC-BI-006 labels.
+    "error"` record counts against `_ERROR_KEY`, never against the 3 classification labels.
+
+    Args:
+        records: One regulation's captured records.
+        proposals: AI-proposed classifications, matched to records by `citation_ref`.
+
+    Returns:
+        The rollup; its regulation name comes from the first record.
+
+    Raises:
+        KeyError: A proposal's label is not one of the classification labels.
     """
     regulation = records[0].regulation if records else ""
     proposals_by_ref = {proposal.citation_ref: proposal for proposal in proposals}
@@ -568,13 +631,22 @@ def render_findings_report(
     rows_by_regulation: Mapping[str, Sequence[str]],
     methodology_text: str,
 ) -> str:
-    """Assemble the full committed Markdown findings report (AC-BI-008/009).
+    """Assemble the full Markdown findings report.
 
     Every classification-carrying row is tagged `*(AI-proposed)*` by `render_report_row`
-    itself (CHANGES.md row 4); this function additionally labels the detail table
-    columns `*(AI-proposed, unreviewed)*` so a reader scanning only a table header still
-    sees the caveat, and the Recommendation section carries the provisional-pending-
-    human-review heading verbatim, never a bare conclusion (CONTEXT.md user decision 2).
+    itself; this function additionally labels the detail table columns
+    `*(AI-proposed, unreviewed)*` so a reader scanning only a table header still sees the
+    caveat, and the Recommendation section carries the provisional-pending-human-review
+    heading, never a bare conclusion.
+
+    Args:
+        summaries: One rollup per regulation, in report order.
+        rows_by_regulation: Pre-rendered detail rows per regulation name; a regulation without
+            rows gets an empty table.
+        methodology_text: Markdown body of the Methodology section.
+
+    Returns:
+        The complete report text.
     """
     sections = [
         "# Domain Mapper Exclusion Audit — Findings Report (Issue #27)",
@@ -645,11 +717,23 @@ def _proposal_from_dict(entry: Mapping[str, object]) -> ClassificationProposal:
 def load_regulation_records(
     records_path: Path,
 ) -> tuple[list[AuditUnitRecord], list[ClassificationProposal]]:
-    """Load one `records/{regulation}.json` cache file into `(records, proposals)`.
+    """Load one `{regulation}.json` cache file into `(records, proposals)`.
 
-    This is Slice 2-4's own working-artifact shape -- pure file IO + parsing, no LLM call
-    anywhere on this path (CHANGES.md row 1b: cached-mode report assembly issues zero new
-    extraction calls).
+    Pure file IO and parsing: no LLM call anywhere on this path, so cached-mode report
+    assembly issues zero new extraction calls.
+
+    Args:
+        records_path: Path of a cache file with a top-level `"records"` list; entries may carry
+            a `"classification"` object.
+
+    Returns:
+        The captured records and the classification proposals found on them, in file order.
+
+    Raises:
+        OSError: The file cannot be read.
+        json.JSONDecodeError: The file is not valid JSON.
+        KeyError: A required field is missing from the file or an entry.
+        ExclusionAuditError: An entry has an unrecognized status or classification label.
     """
     payload = json.loads(records_path.read_text(encoding="utf-8"))
     entries = payload["records"]
@@ -662,32 +746,28 @@ def load_regulation_records(
     return records, proposals
 
 
-# --- CLI (Slice 5, PLAN.md §3 "Slice 5 -- CLI polish + AC-BI-002 close-out") -------
+# --- CLI ----------------------------------------------------------------------
 #
-# No new capture/report logic here -- Slice 4 already wired cached-mode report assembly
-# into `main()`'s body (unchanged below). This slice only wraps it in a real argv/
-# argparse surface: `--cache-dir`/`--report-path`/`--record-source`, all documented in
-# `--help`, with `--record-source` defaulting to (and, for now, only accepting) `"cached"`
-# so simply running this script -- with no flags at all -- can never trigger a live Azure
-# OpenAI or FalkorDB call (CHANGES.md row 1b's guardrail, now visible at the CLI surface
-# too, not only in `main()`'s own keyword default).
+# No capture/report logic here: `main()`'s body assembles the report from cached records and
+# this section only wraps it in an argv/argparse surface: `--cache-dir`/`--report-path`/
+# `--record-source`, all documented in `--help`, with `--record-source` defaulting to (and,
+# for now, only accepting) `"cached"` so simply running this script -- with no flags at
+# all -- can never trigger a live Azure OpenAI or FalkorDB call.
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="exclusion_audit",
         description=(
-            "Assemble the Domain Mapper exclusion-audit findings report (issue #27) "
+            "Assemble the Domain Mapper exclusion-audit findings report "
             "from already-captured JSON records under --cache-dir. Cached mode ONLY: "
             "this CLI never makes a live Azure OpenAI or FalkorDB call -- the per-unit "
-            "records it reads were captured separately by "
-            "ps-service/tests/domain_mapper/test_live_exclusion_audit.py's live, "
-            "explicitly-invoked tests (see PLAN.md/CHANGES.md under "
-            ".orchestrator/tracker/issue-27-exclusion-audit/ for how)."
+            "records it reads were captured separately by the explicitly invoked live "
+            "tests in ps-service/tests/domain_mapper/test_live_exclusion_audit.py."
         ),
         epilog=(
             "Example: python tools/domain-mapper/exclusion_audit.py "
-            "--cache-dir .orchestrator/tracker/issue-27-exclusion-audit/records "
+            "--cache-dir ./exclusion-audit-records "
             "--report-path docs/audits/domain-mapper-exclusion-audit-findings.md"
         ),
     )
@@ -700,7 +780,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
             "Directory holding one {regulation}.json cache file per regulation "
             "(CRA/GDPR/NIS2), each a prior live capture run's captured "
             "AuditUnitRecord/ClassificationProposal data. "
-            f"(default: {_DEFAULT_RECORDS_DIR})"
+            "(default: the tool's built-in records directory)"
         ),
     )
     parser.add_argument(
@@ -732,26 +812,33 @@ def main(
     *,
     call_completion: CompletionCaller | None = None,
 ) -> int:
-    """Parse CLI args and assemble the committed findings report from cached JSON records.
+    """Parse CLI args and assemble the findings report from cached JSON records.
 
-    `argv` mirrors `tools/company-merge/company_merge_similarity_sweep.py`'s own CLI
-    shape (`main(argv=None, ...)`, `if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))` below) -- pass an explicit list (e.g. `[]` for all
-    defaults) when calling this from a test, exactly as that script's own CLI tests do;
-    leaving it `None` outside of the `__main__` guard is only meaningful for a caller
-    that wants real `sys.argv` parsing.
+    `--record-source` defaults to (and only supports) `"cached"`: the function reads the
+    `{regulation}.json` files for CRA/GDPR/NIS2 under `--cache-dir` and NEVER calls
+    `capture_unit_record`/`propose_classification`/`route_completion`. A live
+    `--record-source` is not implemented: `argparse` itself rejects any value other than
+    `"cached"` before this body runs, rather than silently falling back to a live sweep.
 
-    CHANGES.md row 1b: `--record-source` defaults to (and, in this slice, only
-    supports) `"cached"` -- it reads `--cache-dir`'s `{regulation}.json` files for
-    CRA/GDPR/NIS2 and NEVER calls `capture_unit_record`/`propose_classification`/
-    `route_completion`. `call_completion` is a keyword-only DI seam with deliberately no
-    CLI flag (PLAN.md §3 Slice 5) -- accepted only so a caller can pass a poisoned fake
-    (as `test_main_cached_mode_assembles_report_from_json_with_zero_extraction_calls`
-    and this slice's own CLI tests do) to prove this function never reaches for it on
-    the cached path; it is not read by cached-mode assembly itself. A live
-    `--record-source` is out of scope for this slice -- `argparse` itself rejects any
-    value other than `"cached"` (`choices=["cached"]`) before `main()`'s body ever
-    runs, rather than silently falling back to a live sweep.
+    Args:
+        argv: Command-line arguments without the program name. Pass an explicit list (for
+            example `[]` for all defaults) from tests; `None` parses the real `sys.argv`.
+        call_completion: Keyword-only injection seam with deliberately no CLI flag, accepted so
+            a test can pass a poisoned fake and prove the cached path never reaches for it.
+            It is not read.
+
+    Returns:
+        0 once the report is written.
+
+    Raises:
+        OSError: A cache file cannot be read or the report cannot be written.
+        json.JSONDecodeError: A cache file is not valid JSON.
+        KeyError: A cache file or entry lacks a required field.
+        ExclusionAuditError: A cached entry has an unrecognized status or label.
+
+    Side Effects:
+        Creates the parent directories of `--report-path` and writes the report there,
+        overwriting any existing file.
     """
     args = _parse_args(argv)
     records_dir = cast("Path", args.records_dir)

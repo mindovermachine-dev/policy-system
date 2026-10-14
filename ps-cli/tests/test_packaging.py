@@ -1,9 +1,9 @@
-"""Issue #55: `ps-cli` must declare a console-script entry point in its packaging metadata.
+"""`ps-cli` must declare a console-script entry point in its packaging metadata.
 
 A structural, no-subprocess proof that `ps-cli/pyproject.toml` declares `ps-cli`
 as a console script pointing at `ps_cli.cli:main` -- the entry point `uv tool
 install`/`pip install` rely on to place `ps-cli` on `PATH` as a distributed,
-installable command (AC-BI-001).
+installable command.
 """
 
 import re
@@ -24,7 +24,7 @@ def test_pyproject_declares_ps_cli_console_script_entry_point() -> None:
 
 
 def test_pyproject_pins_truststore_exactly() -> None:
-    """`truststore` is a declared dependency with an exact `==` pin (issue #175, AC-BI-008)."""
+    """`truststore` is a declared dependency with an exact `==` pin."""
     pyproject = tomllib.loads(_PYPROJECT_PATH.read_text(encoding="utf-8"))
 
     pins = [dep for dep in pyproject["project"]["dependencies"] if dep.startswith("truststore")]
@@ -47,7 +47,7 @@ _RETIRED_MCP_PLUMBING = re.compile(
 
 
 def test_ps_cli_sources_and_tests_carry_no_retired_proxy_plumbing() -> None:
-    """Issue #174: no code, test or comment in ps-cli names the retired stdio MCP proxy.
+    """No code, test or comment in ps-cli names the retired stdio MCP proxy.
 
     The proxy, its credential helper, its peek-only cache accessor and the "long-lived /
     self-heal" wording are all gone; this scan keeps them from creeping back. The pattern

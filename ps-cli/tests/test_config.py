@@ -1,14 +1,11 @@
 """Tests for ps_cli.config: CliConfig resolution (packaged default / override / env var).
 
-Increment 4: packaged default only. Increment 5: project-root override file merge.
-Increment 6: env var precedence + URL validation. See PLAN.md §1 D3 / §3.
+Covers the packaged default, the project-root override file merge, env var precedence
+and URL validation.
 
-Issue #57 Slice 1 (D-57-2) rewrites `targets.toml`'s `[contexts]` shape from flat
-`name = "url"` strings to nested `[contexts.<name>]` tables with a `url` key -- every
-test below that hand-writes a `targets.toml` fixture is updated to that shape.
-Issue #57 also adds `CliConfig.context_name` (D-57-5, CHANGES.md F1): populated from
-`context` (the `--context` param) or `targets.current_context`, whichever resolved the
-URL; `None` otherwise.
+`targets.toml` fixtures use nested `[contexts.<name>]` tables with a `url` key.
+`CliConfig.context_name` is populated from `context` (the `--context` param) or
+`targets.current_context`, whichever resolved the URL; `None` otherwise.
 """
 
 from __future__ import annotations
@@ -19,7 +16,7 @@ import pytest
 
 from ps_cli.config import (
     CliConfig,
-    _deep_merge,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Increment 5: _deep_merge is unit-tested directly per its own AC
+    _deep_merge,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly
     is_valid_service_url,
     load_config,
 )
@@ -120,7 +117,7 @@ def test_deep_merge_recursively_merges_nested_dicts_with_override_winning() -> N
 
     Exercised directly with a nested-dict fixture, even though today's real
     config schema (`service_url`) is flat — proves the "deep" part of the
-    merge per PLAN.md D3's wording ahead of the schema growing nested tables.
+    merge ahead of the schema growing nested tables.
     """
     base: dict[str, object] = {
         "service_url": "http://127.0.0.1:8000",
@@ -145,13 +142,12 @@ def test_deep_merge_recursively_merges_nested_dicts_with_override_winning() -> N
 def test_load_config_with_config_dir_but_no_targets_toml_falls_through_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A `config_dir` with no `targets.toml` in it falls through to today's resolver, unchanged.
+    """A `config_dir` with no `targets.toml` in it falls through to the default resolver.
 
-    AC-BI-004 regression proof (PLAN.md Slice 5, critical): `context`/`config_dir` are new
-    keyword-only parameters (PLAN.md D3) with a no-op-for-now body when no `targets.toml`
-    exists — `load_config()` resolves exactly as it does today. See CHANGES.md F2 for why
-    this holds hermetically (an autouse fixture in `ps-cli/tests/conftest.py` isolates
-    `PS_CLI_CONFIG_DIR` for every test).
+    Regression proof: `context`/`config_dir` are keyword-only parameters with a no-op
+    body when no `targets.toml` exists — `load_config()` resolves as it did before they
+    existed. This holds hermetically because an autouse fixture in
+    `ps-cli/tests/conftest.py` isolates `PS_CLI_CONFIG_DIR` for every test.
     """
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     empty_config_dir = tmp_path / "config"
@@ -162,13 +158,13 @@ def test_load_config_with_config_dir_but_no_targets_toml_falls_through_unchanged
 
 
 def test_is_valid_service_url_accepts_http_and_https_with_hostname() -> None:
-    """A valid http(s) URL with a non-empty hostname is accepted (PLAN.md D5)."""
+    """A valid http(s) URL with a non-empty hostname is accepted."""
     assert is_valid_service_url("http://127.0.0.1:8000") is True
     assert is_valid_service_url("https://ps.example.com") is True
 
 
 def test_is_valid_service_url_rejects_missing_scheme_or_hostname() -> None:
-    """A URL missing a valid scheme and/or a hostname is rejected (PLAN.md D5)."""
+    """A URL missing a valid scheme and/or a hostname is rejected."""
     assert is_valid_service_url("not-a-url") is False
     assert is_valid_service_url("http://") is False
     assert is_valid_service_url("ftp://example.com") is False
@@ -177,7 +173,7 @@ def test_is_valid_service_url_rejects_missing_scheme_or_hostname() -> None:
 def test_load_config_resolves_url_from_current_context_when_no_env_var_or_context_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`current_context` in `targets.toml` resolves the URL (AC-BI-001, PLAN.md Slice 6)."""
+    """`current_context` in `targets.toml` resolves the URL."""
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -193,7 +189,7 @@ def test_load_config_resolves_url_from_current_context_when_no_env_var_or_contex
 def test_load_config_env_var_overrides_context_param_and_current_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`PS_CLI_SERVICE_URL` outranks both `context` and `current_context` (AC-BI-002, Slice 7)."""
+    """`PS_CLI_SERVICE_URL` outranks both `context` and `current_context`."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "targets.toml").write_text(
@@ -213,8 +209,8 @@ def test_load_config_raises_on_invalid_context_param_even_when_env_var_would_win
 ) -> None:
     """An invalid `--context` name always errors, even though the env var would otherwise win.
 
-    CHANGES.md F5 (inserted Slice 7.5): AC-BI-009 is unconditional — the env var's
-    presence must not suppress validation of an explicitly-passed `context` param.
+    Validation of an explicitly-passed `context` param is unconditional — the env var's
+    presence must not suppress it.
     """
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -236,7 +232,7 @@ def test_load_config_raises_on_invalid_context_param_even_when_env_var_would_win
 def test_load_config_context_param_overrides_current_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`context` param overrides `current_context` (AC-BI-006 config-layer half, Slice 8)."""
+    """`context` param overrides `current_context`."""
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -254,7 +250,7 @@ def test_load_config_context_param_overrides_current_context(
 def test_load_config_raises_when_current_context_names_missing_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`current_context` naming a missing context raises `PsCliError` (AC-BI-008, Slice 9)."""
+    """`current_context` naming a missing context raises `PsCliError`."""
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -273,10 +269,7 @@ def test_load_config_raises_when_current_context_names_missing_context(
 def test_load_config_raises_when_context_param_names_missing_context_lists_valid_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`context` param naming a missing context raises, listing valid names.
-
-    AC-BI-009 (PLAN.md Slice 10).
-    """
+    """`context` param naming a missing context raises, listing valid names."""
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -299,7 +292,7 @@ def test_load_config_config_dir_param_selects_which_targets_toml_is_read(
 ) -> None:
     """`config_dir` (not a hardcoded default) drives which `targets.toml` is read.
 
-    AC-BI-003, targets half (PLAN.md Slice 11). Two separate `config_dir`s, each
+    Two separate `config_dir`s, each
     with its own `targets.toml` defining a different `current_context`, resolve to
     each dir's own value.
     """
@@ -327,7 +320,7 @@ def test_load_config_uses_ps_cli_config_dir_env_var_when_config_dir_omitted(
 ) -> None:
     """Omitting `config_dir` falls back to `resolve_config_dir()`, honoring `PS_CLI_CONFIG_DIR`.
 
-    AC-BI-003, targets half (PLAN.md Slice 11): proves the env-var plumbing, not just
+    Proves the env-var plumbing, not just
     the `config_dir=...` constructor-injection seam exercised by the sibling test above.
     """
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
@@ -346,7 +339,7 @@ def test_load_config_uses_ps_cli_config_dir_env_var_when_config_dir_omitted(
 def test_load_config_populates_context_name_from_current_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`context_name` is set to `current_context` when it resolves the URL (D-57-5)."""
+    """`context_name` is set to `current_context` when it resolves the URL."""
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -362,7 +355,7 @@ def test_load_config_populates_context_name_from_current_context(
 def test_load_config_populates_context_name_from_context_param(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`context_name` is set to the `--context` param when it resolves the URL (D-57-5)."""
+    """`context_name` is set to the `--context` param when it resolves the URL."""
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     config_dir = tmp_path / "config"
     config_dir.mkdir()

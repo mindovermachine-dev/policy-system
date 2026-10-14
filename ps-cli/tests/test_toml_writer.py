@@ -1,11 +1,9 @@
 """Tests for ps_cli.toml_writer: escape_basic_string(), format_flat_table(),
 format_string_array().
 
-New module introduced by issue #56, D16: a minimal hand-rolled TOML writer (no new
-runtime dependency — stdlib `tomllib` is read-only). `escape_basic_string()` is shared
-by every writer; `format_string_array()` (issue #57, D-57-2) is added for
-`targets.py::write_targets()`'s `auth.scopes` field. See PLAN.md (issue #56) §1 D16,
-§4 Slice 12; PLAN.md (issue #57) §2 Slice 1.
+The module is a minimal hand-rolled TOML writer (no runtime dependency — stdlib
+`tomllib` is read-only). `escape_basic_string()` is shared by every writer;
+`format_string_array()` serves `targets.py::write_targets()`'s `auth.scopes` field.
 """
 
 from __future__ import annotations
@@ -38,11 +36,10 @@ def test_escape_basic_string_escapes_control_characters() -> None:
 def test_escape_basic_string_escapes_non_map_control_characters() -> None:
     r"""C0 control bytes outside the 5-entry explicit map (e.g. ESC) are also escaped.
 
-    Regression test for the late-addition bug found during Slice 6/AC-BI-009: the
-    escape table previously only covered backslash/quote/tab/newline/CR, so any other
-    control byte (ESC `\\x1b`, BEL `\\x07`, NUL, ..., DEL `\\x7f`) was written through
-    unescaped, producing TOML that violates the spec and that `tomllib` then rejects
-    on the next read.
+    Regression test: an escape table covering only backslash/quote/tab/newline/CR
+    would write any other control byte (ESC `\\x1b`, BEL `\\x07`, NUL, ..., DEL `\\x7f`)
+    through unescaped, producing TOML that violates the spec and that `tomllib` then
+    rejects on the next read.
     """
     original = "a\x1bb"
 

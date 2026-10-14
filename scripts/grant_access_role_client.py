@@ -1,4 +1,4 @@
-"""Client helper for `scripts/grant-access-role.sh` (issue #174).
+"""Client helper for `scripts/grant-access-role.sh`.
 
 Calls PS Service's `grant-access-role` MCP tool over its Streamable HTTP endpoint
 (`initialize`, `notifications/initialized`, `tools/call`) with the bearer token that
@@ -59,11 +59,24 @@ def resolve_bearer_token(
     credential_store: CredentialStore,
     transport: httpx.BaseTransport | None = None,
 ) -> str | None:
-    """Return the bearer token to send, or `None` when the call goes out unauthenticated.
+    """Choose the bearer token for the grant call, or none for an unauthenticated call.
 
     Precedence: `GRANT_ACCESS_ROLE_TOKEN`; then no context -> `None`; then nothing stored ->
-    `None`; otherwise a valid access token from the stored refresh token (a failed refresh
-    raises `PsCliError`).
+    `None`; otherwise a valid access token from the stored refresh token.
+
+    Args:
+        context_name: Active ps-cli context name, or `None` when no context is configured.
+        service_url: PS Service base URL; the token refresh request goes there.
+        auth_override: Per-context authentication overrides, or `None` for the defaults.
+        credential_store: Store holding the context's tokens; read only when a context exists.
+        transport: Optional HTTP transport for the refresh request (tests inject one).
+
+    Returns:
+        The token to send as a bearer credential, or `None` to send no `Authorization` header.
+
+    Raises:
+        PsCliError: A stored credential exists but refreshing it fails; the call is never
+            downgraded to unauthenticated.
     """
     explicit = os.environ.get(TOKEN_ENV)
     if explicit:
@@ -105,7 +118,26 @@ def call_tool(
     role: str,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, object] | None:
-    """Run initialize -> notifications/initialized -> tools/call; return the tool-call reply."""
+    """Run the MCP handshake and call the `grant-access-role` tool once.
+
+    Sends `initialize`, `notifications/initialized` and `tools/call` in order over one HTTP
+    client, carrying the MCP session id from the first reply into later requests.
+
+    Args:
+        mcp_url: Full URL of PS Service's MCP endpoint.
+        token: Bearer token, or `None` to send no `Authorization` header.
+        principal: Subject of the principal receiving the role.
+        role: Name of the access role to grant.
+        transport: Optional HTTP transport (tests inject one).
+
+    Returns:
+        The decoded JSON-RPC reply to the tool call, or `None` when it carries no body.
+
+    Raises:
+        httpx.HTTPStatusError: Any of the three requests is answered with an error status.
+        httpx.HTTPError: The service cannot be reached or the TLS handshake fails.
+        json.JSONDecodeError: A reply body is not valid JSON.
+    """
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
@@ -180,7 +212,20 @@ def _describe_http_error(exc: httpx.HTTPError, mcp_url: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Grant `--role` to `--principal`; print the tool-call reply as one JSON line."""
+    """Grant `--role` to `--principal` and print the tool-call reply as one JSON line.
+
+    Args:
+        argv: Command-line arguments without the program name; `None` reads `sys.argv`.
+            Both `--principal` and `--role` are required.
+
+    Returns:
+        0 when the call completes (the reply, if any, is on stdout); 1 after writing one failure
+        line to stderr when ps-cli configuration, credentials or the HTTP call fail.
+
+    Side Effects:
+        Sends the grant request to PS Service, which records the role assignment; may refresh and
+        store the access token through ps-cli's credential store.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--principal", required=True)
     parser.add_argument("--role", required=True)

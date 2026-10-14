@@ -1,4 +1,4 @@
-"""Issue #175: ps-cli verifies TLS against the OS trust store via `truststore`.
+"""ps-cli verifies TLS against the OS trust store via `truststore`.
 
 Drives the real `oidc_discovery` request path against a local HTTPS server whose
 certificate is signed by a CA generated per test run. That CA is never added to the
@@ -6,7 +6,7 @@ OS trust store (a test must not mutate the developer's keychain), so on macOS an
 Windows the "trusted CA" case is not reachable here and only the "untrusted fails,
 loudly and without fallback" cases run. On Linux, `truststore` defers to OpenSSL's
 default paths, so `SSL_CERT_FILE` naming the generated CA demonstrates the trusted
-case (AC-BI-009).
+case.
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ def _clean_trust_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_untrusted_ca_fails_naming_the_certificate_without_fallback(
     good_server: _Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-003/005: an untrusted CA fails, and the message blames the certificate."""
+    """An untrusted CA fails, and the message blames the certificate."""
     _clean_trust_env(monkeypatch)
 
     with pytest.raises(PsCliError) as excinfo:
@@ -192,7 +192,7 @@ def test_untrusted_ca_fails_naming_the_certificate_without_fallback(
 def test_linux_ssl_cert_file_naming_the_ca_makes_it_trusted(
     good_server: _Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-009: on Linux `SSL_CERT_FILE` is honoured, so the generated CA is trusted."""
+    """On Linux `SSL_CERT_FILE` is honoured, so the generated CA is trusted."""
     _clean_trust_env(monkeypatch)
     monkeypatch.setenv("SSL_CERT_FILE", str(good_server.ca_path))
 
@@ -205,7 +205,7 @@ def test_linux_ssl_cert_file_naming_the_ca_makes_it_trusted(
 def test_off_linux_ssl_cert_file_has_no_effect(
     good_server: _Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-009: off Linux `SSL_CERT_FILE` is ignored; only the OS store is consulted."""
+    """Off Linux `SSL_CERT_FILE` is ignored; only the OS store is consulted."""
     _clean_trust_env(monkeypatch)
     monkeypatch.setenv("SSL_CERT_FILE", str(good_server.ca_path))
 
@@ -219,7 +219,7 @@ def test_off_linux_ssl_cert_file_has_no_effect(
 def test_trusted_ca_but_bad_certificate_still_fails(
     scenario: str, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-003: a wrong-hostname or expired certificate fails even if its CA is trusted."""
+    """A wrong-hostname or expired certificate fails even if its CA is trusted."""
     server: _Server = request.getfixturevalue(scenario)
     _clean_trust_env(monkeypatch)
     monkeypatch.setenv("SSL_CERT_FILE", str(server.ca_path))  # trusts the CA on Linux
@@ -231,7 +231,7 @@ def test_trusted_ca_but_bad_certificate_still_fails(
 
 
 def test_unreachable_host_keeps_the_could_not_reach_message() -> None:
-    """AC-BI-006: a refused connection is not reported as a certificate problem."""
+    """A refused connection is not reported as a certificate problem."""
     with pytest.raises(PsCliError) as excinfo:
         fetch_protected_resource_metadata("https://127.0.0.1:1")
 
@@ -240,7 +240,7 @@ def test_unreachable_host_keeps_the_could_not_reach_message() -> None:
 
 
 def test_certificate_error_message_carries_no_exception_detail() -> None:
-    """AC-BI-007: the reported text never echoes the underlying exception's own text."""
+    """The reported text never echoes the underlying exception's own text."""
     cause = ssl.SSLCertVerificationError("Bearer secret-token certificate verify failed")
     connect_error = httpx.ConnectError("boom")
     connect_error.__cause__ = cause
@@ -270,7 +270,7 @@ def test_is_certificate_verification_error_walks_the_cause_chain() -> None:
 
 
 def test_build_ssl_context_verifies_certificates_and_hostnames() -> None:
-    """AC-BI-003: the shared context never disables verification."""
+    """The shared context never disables verification."""
     context = build_ssl_context()
 
     assert context.verify_mode == ssl.CERT_REQUIRED

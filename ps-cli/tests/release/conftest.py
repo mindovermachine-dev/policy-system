@@ -1,36 +1,34 @@
-"""Shared fixtures for the `install.sh` release tests (GH issue #81, Slice 2).
+"""Shared fixtures for the `install.sh` release tests.
 
-Per `.orchestrator/tracker/issue-81-ps-cli-release-asset/CHANGES.md` X-01, this package does
-**not** build a `PLAN.md`-style `http.server`-based `MockGitHub` and does **not** add any
-env-var override (`PS_CLI_GITHUB_API_BASE`) to production `install.sh` -- a permanent,
+This package does **not** build an `http.server`-based mock GitHub and does **not** add
+any env-var override (`PS_CLI_GITHUB_API_BASE`) to production `install.sh` -- a permanent,
 silently-honoured override would let an attacker redirect the API base `install.sh` trusts,
-undermining the checksum story `install.sh` exists to provide. Instead, every later
-`install.sh` slice (3-9) shims `curl` itself on `PATH`, the same way
-`ps-service/tests/release/conftest.py:115-180` shims `gh` for the release-automation
+undermining the checksum story `install.sh` exists to provide. Instead, every `install.sh`
+test shims `curl` itself on `PATH`, the same way
+`ps-service/tests/release/conftest.py` shims `gh` for the release-automation
 tests: a fake executable, logging every invocation, placed in a fixture-owned directory
 prepended to `PATH` ahead of the real tool. `install.sh` never learns it is being faked --
 only `PATH` changes.
 
-Two pieces of infrastructure live here, both consumed by Slices 3-9 (this slice proves only
-that they work, via `test_conftest_mock_github.py`):
+Two pieces of infrastructure live here, consumed by the `install.sh` tests (and proven to
+work by `test_conftest_mock_github.py`):
 
 - `wheel_builder` (session-scoped): builds a **real** `ps-cli` wheel via `uv build`, for any
   version string a test asks for, from a scratch copy of `ps-cli/` with `pyproject.toml`'s
-  `version` field patched before the build (PLAN.md §3) -- hatchling reads the wheel version
+  `version` field patched before the build -- hatchling reads the wheel version
   from that field at build time, so this is the only way to get a wheel stamped `9.9.9`
   without actually tagging a release. Each version is built at most once per test session
   (`WheelBuilder` caches by version).
-- `fake_curl`: a `bin/curl` fake executable (CHANGES.md §1b) that answers exactly the three
+- `fake_curl`: a `bin/curl` fake executable that answers exactly the two
   call shapes `install.sh` makes -- a metadata fetch (`curl -fsSL <url>`, no `-o`) and a file
   download (`curl -fsSL -o <dest> <url>`) -- by inspecting `$@`, never a real HTTP server.
   `FakeCurl.set_latest`/`.set_tag` register a release's JSON body and downloadable files;
-  `FakeCurl.log` is the parsed invocation log, used by later slices to prove a code path was
+  `FakeCurl.log` is the parsed invocation log, used to prove a code path was
   (or was not) reached.
 
-Also provided: `fake_uv`, a no-op logging fake `uv` (same recipe) for Slice 6's negative-path
-test -- CHANGES.md §1a notes it may end up unneeded there (checksum failure blocks before any
-`uv` call under the CHANGES.md design), but is built here regardless so Slice 6's implementer
-has it as a belt-and-suspenders check without having to invent the plumbing.
+Also provided: `fake_uv`, a no-op logging fake `uv` (same recipe) for the negative-path
+test where a checksum failure blocks before any `uv` call; it doubles as a
+belt-and-suspenders check that `uv` was never invoked.
 
 Marker policy: unmarked (not `integration`), matching `ps-service/tests/release/conftest.py`'s
 own precedent for hermetic subprocess-based tests -- `uv`/`curl`/`sha256sum` are devcontainer
@@ -59,7 +57,7 @@ PS_CLI_DIR = REPO_ROOT / "ps-cli"
 # Real GitHub asset download URL shape: `.../releases/download/<version>/<asset name>`. The
 # version appears as its own path segment immediately before the filename -- used by both the
 # JSON bodies this fixture writes and the fake `curl` script's dispatch, so a test that
-# configures two different releases (e.g. Slice 4's `set_latest` + `set_tag`) never collides on
+# configures two different releases (e.g. `set_latest` + `set_tag`) never collides on
 # the shared `SHA256SUMS` asset name.
 DOWNLOAD_BASE_URL = "https://github.com/mindovermachine-dev/policy-system/releases/download"
 
@@ -79,7 +77,7 @@ def _require_tool(name: str) -> Path:
 
 
 # --------------------------------------------------------------------------------------
-# SHA-256: real `sha256sum`/`shasum -a 256` subprocess, never hand-computed (PLAN.md §1)
+# SHA-256: real `sha256sum`/`shasum -a 256` subprocess, never hand-computed
 # --------------------------------------------------------------------------------------
 
 
@@ -127,7 +125,7 @@ def _sha256sums_line(wheel_path: Path) -> bytes:
 
 
 # --------------------------------------------------------------------------------------
-# Real wheel builder (PLAN.md §3): scratch copy of ps-cli/, version patched, `uv build`
+# Real wheel builder: scratch copy of ps-cli/, version patched, `uv build`
 # --------------------------------------------------------------------------------------
 
 
@@ -213,23 +211,22 @@ class WheelBuilder:
 
 @pytest.fixture(scope="session")
 def wheel_builder(tmp_path_factory: pytest.TempPathFactory) -> WheelBuilder:
-    """Session-scoped factory for real `ps-cli` wheels, parameterizable by version (PLAN.md §3)."""
+    """Session-scoped factory for real `ps-cli` wheels, parameterizable by version."""
     return WheelBuilder(_build_root=tmp_path_factory.mktemp("ps-cli-wheel-builds"))
 
 
 # --------------------------------------------------------------------------------------
-# Fake `curl` (CHANGES.md §1, replacing PLAN.md's `MockGitHub`/`http.server` design)
+# Fake `curl` (a PATH shim, not an `http.server` mock)
 # --------------------------------------------------------------------------------------
 
-# Dispatch (CHANGES.md §1b): every invocation is logged first. Scan `$@` for `-o`:
+# Dispatch: every invocation is logged first. Scan `$@` for `-o`:
 #   * absent  -> a metadata fetch; the last argument is the URL. `/releases/latest` and
 #     `/releases/tags/<version>` each select a canned JSON body.
 #   * present -> a file download; the argument after `-o` is `<dest>`, the last argument is
 #     `<url>`. The URL's final two path segments are `<version>/<filename>`; `SHA256SUMS` or a
-#     `.whl` filename selects the canned bytes to copy to `<dest>`. (CHANGES.md §1b describes
-#     selecting only by the `.whl`/`SHA256SUMS` suffix; this also keys on the URL's version
-#     segment so two releases configured in the same test -- e.g. Slice 4's `set_latest` +
-#     `set_tag` -- never collide on the shared `SHA256SUMS` asset name.)
+#     `.whl` filename selects the canned bytes to copy to `<dest>`. Selection also keys on the
+#     URL's version segment so two releases configured in the same test -- e.g. `set_latest`
+#     plus `set_tag` -- never collide on the shared `SHA256SUMS` asset name.
 # No configured response -> a clear stderr message and a non-zero exit, never silent empty
 # output (a silently-empty response would mask a genuinely-broken `install.sh` invocation as a
 # passing test).
@@ -292,7 +289,7 @@ fi
 
 @dataclass
 class FakeCurl:
-    """A fake `curl` on `PATH` (CHANGES.md §1b) plus the response table it serves from."""
+    """A fake `curl` on `PATH` plus the response table it serves from."""
 
     bin_dir: Path
     responses_dir: Path
@@ -356,7 +353,7 @@ class FakeCurl:
 
 @pytest.fixture
 def fake_curl(tmp_path: Path) -> FakeCurl:
-    """A fresh fake `curl` (CHANGES.md §1b), unconfigured -- tests call `.set_latest`/`.set_tag`."""
+    """A fresh fake `curl`, unconfigured -- tests call `.set_latest`/`.set_tag`."""
     bin_dir = tmp_path / "fake-curl-bin"
     bin_dir.mkdir()
     script = bin_dir / "curl"
@@ -371,12 +368,12 @@ def fake_curl(tmp_path: Path) -> FakeCurl:
 
 
 # --------------------------------------------------------------------------------------
-# Fake `uv` (belt-and-suspenders helper for Slice 6's negative-path test)
+# Fake `uv` (belt-and-suspenders helper for the checksum-failure negative-path test)
 # --------------------------------------------------------------------------------------
 
-# A pure logger, not a functional `uv` replacement: Slice 6's checksum-mismatch test only
-# needs to prove `uv` was never invoked (CHANGES.md §1a: checksum verification blocks before
-# `install.sh` ever reaches the `uv tool install` line under this design), so there is nothing
+# A pure logger, not a functional `uv` replacement: the checksum-mismatch test only
+# needs to prove `uv` was never invoked (checksum verification blocks before
+# `install.sh` ever reaches the `uv tool install` line), so there is nothing
 # for a real invocation to do.
 FAKE_UV_SCRIPT = f"""#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${FAKE_UV_LOG_ENV}"

@@ -5,10 +5,9 @@ variable; the `context` param (`--context` flag), validated against
 `targets.toml`'s `[contexts]`; `targets.toml`'s `current_context` pointer,
 if set; otherwise a project-root override file (`./ps-cli.toml`, resolved
 relative to the current working directory) deep-merged over the packaged
-default config file shipped inside `ps_cli` (`default_config.toml`). See
-PLAN.md (issue #56) §1 D3 for the full rationale, including the "fail
-closed on an explicit but invalid value" convention this mirrors from
-`ps_service.config`.
+default config file shipped inside `ps_cli` (`default_config.toml`). An explicit
+but invalid value fails closed (raises `PsCliError`) rather than falling back,
+mirroring the convention in `ps_service.config`.
 """
 
 from __future__ import annotations
@@ -31,7 +30,12 @@ _VALID_URL_SCHEMES = frozenset({"http", "https"})
 
 @dataclass(frozen=True)
 class CliConfig:
-    """Fully-resolved ps-cli configuration."""
+    """Fully-resolved ps-cli configuration.
+
+    `service_url` is the validated http(s) PS Service base URL. `context_name` names
+    the `targets.toml` context that supplied it, or is `None` when the URL came from
+    the environment variable, the project override file or the packaged default.
+    """
 
     service_url: str
     context_name: str | None = None
@@ -44,7 +48,7 @@ def _read_packaged_default() -> dict[str, object]:
     `FileNotFoundError` from a corrupted package install) propagate
     unhandled rather than wrapping it in `PsCliError` — a missing packaged
     resource is a bug in the package build, not something an operator did
-    (L1 "let bugs crash"). See PLAN.md Increment 4.
+    (L1 "let bugs crash").
     """
     resource = resources.files("ps_cli").joinpath("default_config.toml")
     with resource.open("rb") as handle:
@@ -56,7 +60,7 @@ def _read_project_override(cwd: Path) -> dict[str, object]:
 
     A missing override file is not an error — it just means the operator
     has not opted into project-local config, and resolution falls through
-    to the packaged default. See PLAN.md Increment 5.
+    to the packaged default.
     """
     override_path = cwd / _OVERRIDE_FILE_NAME
     if not override_path.is_file():
@@ -69,8 +73,7 @@ def _deep_merge(base: dict[str, object], override: dict[str, object]) -> dict[st
 
     Generic on purpose — not special-cased to the single `service_url` key
     today — so the pattern already matches the "deep-merge, override wins"
-    config convention as the config surface grows nested tables later, per
-    PLAN.md D3.
+    config convention as the config surface grows nested tables later.
     """
     merged = dict(base)
     for key, override_value in override.items():
@@ -90,8 +93,14 @@ def is_valid_service_url(url: str) -> bool:
 
     A pure, shared format check, extracted out of `_validate_service_url` so it
     can be reused elsewhere (e.g. the `config set-context --url` argparse
-    `type=` callback) without duplicating the same `urlparse` logic. See
-    PLAN.md D5.
+    `type=` callback) without duplicating the same `urlparse` logic.
+
+    Parameters:
+        url: Candidate URL text; any string, including an empty or malformed one.
+
+    Returns:
+        `True` when the scheme is `http` or `https` and a hostname is present,
+        otherwise `False`. Never raises and has no side effects.
     """
     parsed = urlparse(url)
     return parsed.scheme in _VALID_URL_SCHEMES and bool(parsed.hostname)
@@ -102,7 +111,7 @@ def _validate_service_url(url: str, *, source: str) -> None:
 
     `source` names which config layer (env var / override file / packaged
     default) produced `url`, so the raised error points an operator at the
-    layer to fix rather than just the bad value. See PLAN.md D5.
+    layer to fix rather than just the bad value.
     """
     assert_contract(
         contract=is_valid_service_url(url),
@@ -117,36 +126,52 @@ def load_config(
     context: str | None = None,
     config_dir: Path | None = None,
 ) -> CliConfig:
-    """Resolve ps-cli configuration.
+    """Resolve ps-cli configuration into a validated `CliConfig`.
 
-    Precedence (highest wins): the `PS_CLI_SERVICE_URL` environment
-    variable, then a project-root override file (`<cwd>/ps-cli.toml`) deep-
-    merged over the packaged default. `cwd` defaults to the real current
-    working directory; overriding it is the constructor-injection seam
-    tests use to avoid touching the real filesystem's actual cwd.
+    Resolution precedence, highest wins:
 
-    `context` (the `--context` CLI flag's resolved value for this
-    invocation) and `config_dir` (defaulting to `resolve_config_dir()`) are
-    the seam for `targets.toml`-driven named-context resolution. Resolution
-    precedence, highest wins (PLAN.md D3):
-
-    1. `PS_CLI_SERVICE_URL` env var (AC-BI-002).
-    2. `context` param, if given — validated against `targets.contexts`
+    1. `PS_CLI_SERVICE_URL` env var.
+    2. `context` param, if given -- validated against `targets.contexts`
        *unconditionally* whenever given, even when the env var will end up
-       winning (AC-BI-009; CHANGES.md F5 closes a gap where an invalid
-       `--context` name would otherwise go silently unvalidated whenever
-       the env var was also set).
-    3. `targets.current_context`, if `targets.toml` exists and sets it
-       (AC-BI-001); raises if it names a context missing from `[contexts]`
-       (AC-BI-008).
-    4. Otherwise, falls through unchanged to today's project-override-file/
-       packaged-default chain (AC-BI-004) — no `targets.toml`, or one with
-       no `current_context` set and no `--context` given.
+       winning, so an invalid `--context` name never goes silently unvalidated.
+    3. `targets.current_context`, if `targets.toml` exists and sets it; raises
+       if it names a context missing from `[contexts]`.
+    4. Otherwise, the project-root override file (`<cwd>/ps-cli.toml`) deep-merged
+       over the packaged default -- used when there is no `targets.toml`, or one
+       with no `current_context` set and no `--context` given.
 
-    Fails closed (raises `PsCliError`) on an explicitly empty
-    `PS_CLI_SERVICE_URL`, an invalid/missing context name, or a resolved
-    URL that is not a valid http(s) URL, from whichever layer produced it —
-    never silently substitutes a different value. See PLAN.md D3.
+    Fails closed on an explicitly empty `PS_CLI_SERVICE_URL`, an invalid/missing
+    context name, or a resolved URL that is not a valid http(s) URL, from whichever
+    layer produced it -- never silently substitutes a different value.
+
+    Parameters:
+        cwd: Directory searched for `ps-cli.toml`; defaults to the real current
+            working directory. Overriding it is the seam tests use to avoid touching
+            the real working directory.
+        context: The `--context` flag's value for this invocation, or `None`.
+        config_dir: Directory holding `targets.toml`; defaults to
+            `resolve_config_dir()`.
+
+    Returns:
+        A `CliConfig` whose `service_url` is a valid http(s) URL and whose
+        `context_name` is the context that supplied it (cases 2 and 3 when the env
+        var does not win), else `None`.
+
+    Raises:
+        PsCliError: `PS_CLI_SERVICE_URL` is set but empty; `context` or
+            `current_context` names a context not defined in `targets.toml` (the
+            hint lists the valid names); `targets.toml` is invalid TOML or holds an
+            old-format context; the merged `service_url` is not a string; or the
+            resolved URL is not a valid http(s) URL (the hint names the layer).
+        OSError: `ps-cli.toml` exists but cannot be read (propagated unwrapped).
+        tomllib.TOMLDecodeError: `ps-cli.toml` is invalid TOML (propagated
+            unwrapped).
+        FileNotFoundError: The packaged `default_config.toml` is missing (a package
+            build bug; propagated unwrapped).
+
+    Side Effects:
+        Reads `targets.toml`, the env var and, in case 4, `ps-cli.toml` and the
+        packaged default. Writes nothing.
     """
     resolved_cwd = cwd if cwd is not None else Path.cwd()
     resolved_config_dir = config_dir if config_dir is not None else resolve_config_dir()
@@ -157,7 +182,7 @@ def load_config(
     # Case 2's validation happens unconditionally, ahead of the env-var check
     # below, so an invalid `--context` name always errors — even when
     # PS_CLI_SERVICE_URL is also set and would otherwise supply the
-    # resolved URL (CHANGES.md F5 / AC-BI-009's unconditional wording).
+    # resolved URL.
     if context is not None:
         assert_contract(
             contract=context in contexts,

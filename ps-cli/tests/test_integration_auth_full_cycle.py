@@ -1,9 +1,9 @@
-"""Capstone IdP-agnostic verification test (issue #57 Slice 23, AC-BI-019).
+"""Capstone IdP-agnostic verification test.
 
 Exercises the full `auth login` -> authenticated business call -> silent
 refresh -> `auth logout` cycle end to end against a real, generic
 `ps_test_support.mock_oidc_provider.MockOidcProvider` -- no mocking anywhere
-below the HTTP boundary this issue's own code actually reaches over the
+below the HTTP boundary this code actually reaches over the
 network.
 
 Two distinct fakes are needed, for two distinct reasons:
@@ -16,7 +16,7 @@ Two distinct fakes are needed, for two distinct reasons:
   adapter nor `handle_auth_login` itself ever thread one through), so this
   half of the flow has no injection point other than a real reachable address.
 - `PsServiceClient`'s own calls *do* accept a `transport` constructor argument
-  (issue #121's `PsServiceClient.__init__` threads it into
+  (`PsServiceClient.__init__` threads it into
   `ensure_valid_access_token` too, not just business calls -- see
   `_build_ps_service_transport`'s own docstring), so those are served by a
   genuine `httpx.MockTransport` that: enforces the bearer requirement on the
@@ -36,12 +36,10 @@ real clock waiting for `MockOidcProvider`'s device-flow poll interval.
 `config set-context`/`auth logout`/`auth status` have no such constraint, so
 those go through the real `run()` CLI entry point.
 
-Issue #121, Slice 4 (TASK.md Deliverables: "verify refresh-token rotation
-(#57 AC-BI-012) and fail-closed-on-refresh-failure (#57 AC-BI-013) still hold
-once persisted shape drops access_token/expires_at"): `TokenBundle` no longer
-has an `expires_at` to force expired, so "force a refresh" is now proven the
-way AC-BI-003 actually works post-#121 -- a brand new `PsServiceClient`
-(D-121-2's invocation boundary is one `PsServiceClient` instance) starts with
+Refresh-token rotation and fail-closed-on-refresh-failure are verified here:
+`TokenBundle` has no `expires_at` to force expired, so "force a refresh" is
+proven this way -- a brand new `PsServiceClient`
+(the invocation boundary is one `PsServiceClient` instance) starts with
 an empty `AccessTokenCache` and therefore always refreshes on its first
 authenticated call, `regardless of any prior token's expiry`. Two tests: the
 full cycle below, and a dedicated fail-closed proof
@@ -175,11 +173,11 @@ def _build_ps_service_transport(
 ) -> tuple[httpx.MockTransport, list[str]]:
     """A fake PS Service transport a `PsServiceClient` can be constructed with.
 
-    Answers three distinct logical endpoints, since issue #121's `PsServiceClient`
+    Answers three distinct logical endpoints, since `PsServiceClient`
     threads its one `transport` constructor argument into both
     `ensure_valid_access_token` (resource-metadata/openid-configuration/refresh) and
-    its own business calls (`http_client.py`'s `self._transport`, Slice 1's
-    deviation #1) -- a transport that only answered the business route would 404 the
+    its own business calls (`http_client.py`'s `self._transport`) -- a transport
+    that only answered the business route would 404 the
     auth-resolution step before ever reaching it:
 
     - `_RESOURCE_METADATA_PATH` -- PS Service's own resource metadata, naming
@@ -190,11 +188,10 @@ def _build_ps_service_transport(
       requests -- delegated to the real, bound `mock_oidc_provider.
       handle_token_request(...)`, so a refresh through this transport exercises the
       provider's genuine rotation/`invalid_grant` state machine, never a
-      hand-constructed fake response (Slice 4, TASK.md Deliverables).
-    - `_INGESTIONS_PATH` -- the one business route this suite calls (issue #126
-      retargeted this from the now-removed `near-misses list`/`GET /near-misses`
-      to `ingest document`/`POST /ingestions`, the closest surviving authenticated
-      business call -- no behavioral change to what this suite proves), genuinely
+      hand-constructed fake response.
+    - `_INGESTIONS_PATH` -- the one business route this suite calls
+      (`ingest document`/`POST /ingestions`, an authenticated
+      business call), genuinely
       enforcing the bearer requirement (200 with a stub ingestion result given a
       non-empty `Bearer` token, 401 without) so a later "succeeds with the token
       attached" assertion is meaningful, not trivially true.
@@ -316,21 +313,19 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-019: log in, make authenticated calls across several invocations, log out.
+    """Log in, make authenticated calls across several invocations, log out.
 
-    Issue #121, D-121-7: `portable_persistence` (`conftest.py`) replaces the old
-    "force no real credential-storage backend, then fall back to file" mechanism --
-    there is no file fallback left to fall back to (AC-BI-008); this fixture just gives
+    `portable_persistence` (`conftest.py`) stands in for the OS credential store --
+    there is no file fallback; this fixture just gives
     `build_credential_store()`'s real, zero-argument production wiring a portable,
     working in-memory backend so this test never depends on a real OS
     credential-storage backend being present. Requested for its monkeypatching side
     effect only -- never read directly.
 
-    Issue #121, Slice 4: AC-BI-003 ("exactly one refresh-token exchange... before its
-    first business-endpoint call") and AC-BI-004 ("reused... within the same
-    invocation") are proven at their real granularity -- one `PsServiceClient`
-    instance is D-121-2's invocation boundary, not a persisted bundle's expiry, which
-    no longer exists (AC-BI-001). `refresh_grant_tokens` (from
+    Exactly one refresh-token exchange before the first business-endpoint call, and
+    reuse within the same invocation, are proven at their real granularity -- one
+    `PsServiceClient` instance is the invocation boundary, not a persisted bundle's
+    expiry (none is stored). `refresh_grant_tokens` (from
     `_build_ps_service_transport`) is asserted after every step below, so a
     regression that refreshes zero, or more than once, per invocation boundary fails
     loudly rather than merely returning the right business-call result by accident.
@@ -342,7 +337,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     login_output = capsys.readouterr().out
     assert f"logged in to {_CONTEXT_NAME} ({mock_oidc_provider.issuer})" in login_output
     recorded_state = mock_oidc_provider.device_flow_state(device_code)
-    assert recorded_state.audience == "ps-service"  # AC-BI-003's audience passthrough
+    assert recorded_state.audience == "ps-service"  # audience passthrough
 
     transport, refresh_grant_tokens = _build_ps_service_transport(mock_oidc_provider)
 
@@ -358,7 +353,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     assert refresh_grant_tokens == []  # never even attempted a refresh
 
     # --- Invocation 1: a fresh `PsServiceClient` -> empty `AccessTokenCache` ->
-    # its first authenticated call always refreshes (AC-BI-003), regardless of how
+    # its first authenticated call always refreshes, regardless of how
     # long the stored refresh_token has existed -- there is no expiry left to check.
     first_invocation_client = PsServiceClient(
         fake_ps_service_metadata_server.base_url,
@@ -372,7 +367,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     assert len(refresh_grant_tokens) == 1
 
     # --- A second call on the *same* `PsServiceClient` instance (same invocation)
-    # reuses the in-memory `AccessTokenCache` -- zero further refreshes (AC-BI-004).
+    # reuses the in-memory `AccessTokenCache` -- zero further refreshes.
     result_again = first_invocation_client.ingest_internal({"nodes": [], "edges": []})
     assert result_again.regulatory_instrument_id == "ri-integration"
     assert len(refresh_grant_tokens) == 1
@@ -381,7 +376,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     assert stored_after_first_invocation is not None
     rotated_once = stored_after_first_invocation.refresh_token
     assert rotated_once is not None
-    assert rotated_once != refresh_grant_tokens[0]  # AC-BI-005: rotated, not reused
+    assert rotated_once != refresh_grant_tokens[0]  # rotated, not reused
 
     # --- Invocation 2: a brand new `PsServiceClient` (fresh `AccessTokenCache`) is
     # the realistic "next ps-cli invocation" boundary -- its first call refreshes
@@ -402,8 +397,8 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     assert stored_after_second_invocation is not None
     assert stored_after_second_invocation.refresh_token != rotated_once
 
-    # --- `auth logout` -- the next invocation's business call now fails closed
-    # (AC-BI-002), and `auth status` reports "not logged in".
+    # --- `auth logout` -- the next invocation's business call now fails closed,
+    # and `auth status` reports "not logged in".
     logout_exit_code = run(["auth", "logout", "--context", _CONTEXT_NAME])
     assert logout_exit_code == 0
 
@@ -426,7 +421,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
 
     status_exit_code = run(["auth", "status", "--context", _CONTEXT_NAME])
     status_error = capsys.readouterr().err
-    assert status_exit_code == 1  # issue #179: status verifies, so "not logged in" fails
+    assert status_exit_code == 1  # status verifies, so "not logged in" fails
     assert f"not logged in to '{_CONTEXT_NAME}'" in status_error
 
 
@@ -437,8 +432,7 @@ def test_refresh_token_rejected_by_mock_oidc_provider_surfaces_actionable_relogi
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Issue #121 Slice 4 dedicated fail-closed proof (TASK.md Deliverables item,
-    AC-BI-009 -- issue #57's former AC-BI-013 wording).
+    """Dedicated fail-closed proof.
 
     A refresh_token the real `MockOidcProvider` rejects (never issued -- the
     provider's own `_handle_refresh_token_grant` returns a genuine

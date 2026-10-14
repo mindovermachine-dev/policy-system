@@ -1,7 +1,5 @@
-"""Proves `MockOidcProvider`'s own device-authorization + token endpoint simulation (issue #57).
+"""Proves `MockOidcProvider`'s own device-authorization + token endpoint simulation.
 
-Red-before-green for Slice 4: none of this behavior exists before this
-slice (the endpoints 404, `discovery_document` lacks the two new fields).
 Drives the real local HTTP server the provider runs -- no monkeypatching --
 via plain `urllib.request` POSTs, mirroring how `ps-cli`'s real device-flow
 client will talk to it.
@@ -65,7 +63,7 @@ def test_discovery_document_advertises_device_and_token_endpoints(
     base_url = mock_oidc_provider.base_url
     assert document["device_authorization_endpoint"] == f"{base_url}/device_authorization"
     assert document["token_endpoint"] == f"{base_url}/token"
-    # additive only -- Slice 3's fields are untouched
+    # additive only -- the original fields are untouched
     assert document["issuer"] == mock_oidc_provider.issuer
     assert document["jwks_uri"] == mock_oidc_provider.jwks_uri
 
@@ -158,7 +156,7 @@ def test_audience_is_recorded_and_readable_back(mock_oidc_provider: MockOidcProv
 
 
 def test_scope_is_recorded_and_readable_back(mock_oidc_provider: MockOidcProvider) -> None:
-    """`ps-cli` issue #119 needs to assert what scope a device-flow request sent."""
+    """A test of `ps-cli` login needs to assert what scope a device-flow request sent."""
     body = _request_device_authorization(mock_oidc_provider, client_id="ps-cli")
     device_code = str(body["device_code"])
 
@@ -170,7 +168,7 @@ def test_scope_is_recorded_and_readable_back(mock_oidc_provider: MockOidcProvide
 def test_last_token_request_form_records_the_refresh_grant_scope(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """`ps-cli` issue #119 needs to assert the refresh-token POST's own `scope` field."""
+    """A test of `ps-cli` refresh needs to assert the refresh-token POST's own `scope` field."""
     body = _request_device_authorization(mock_oidc_provider, client_id="ps-cli")
     device_code = str(body["device_code"])
     mock_oidc_provider.complete_device_flow(device_code)

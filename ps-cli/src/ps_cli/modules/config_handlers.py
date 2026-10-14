@@ -1,20 +1,17 @@
-"""ps-cli `config` command handlers and `CONFIG_DISPATCH` (issue #56, PLAN.md §1 D7/D8/D13).
+"""ps-cli `config` command handlers and `CONFIG_DISPATCH`.
 
-Mirrors `ps_cli.modules.handlers`' shape (handler functions plus a dispatch dict), but is
-kept in its own module and dispatch table (`CONFIG_DISPATCH`, not `DISPATCH`) per PLAN.md
-D8's flagged, deliberate deviation: `config` subcommands manage `targets.toml`/
-`credentials.toml` only -- they must never construct a `PsServiceClient` or call
-`load_config()` (see D8's two concrete reasons: `get-contexts` must stay usable even when
-`load_config()` would raise, and `set-context`/`use-context` must never trigger
-`PsServiceClient.__init__`'s "insecure URL" side-effect warning for a command that never
-contacts PS Service). `ps_cli.cli.run()` branches on `command in CONFIG_DISPATCH` before
-ever calling `load_config()` -- the architectural boundary this module exists to satisfy.
+Same shape as `ps_cli.modules.handlers` (handler functions plus a dispatch dict),
+but kept in its own module and table (`CONFIG_DISPATCH`, not `DISPATCH`) on purpose:
+`config` subcommands manage `targets.toml` and the stored credentials only, and must
+never construct a `PsServiceClient` or call `load_config()`. `get-contexts` must stay
+usable even when `load_config()` would raise, and `set-context`/`use-context` must
+never trigger `PsServiceClient.__init__`'s insecure-URL warning for a command that
+never contacts PS Service. `ps_cli.cli.run()` branches on `command in CONFIG_DISPATCH`
+before ever calling `load_config()`.
 
-Slice 22 adds `handle_config_set_context()`'s `targets.toml` write (AC-BI-012: the file it
-writes never contains a credential -- structurally guaranteed, since `TargetsFile`/
-`write_targets()` have no field to put one in). Slice 23 adds the unconditional
-`credential_store.delete_tokens()` call (AC-BI-014, D13). Slice 24 wires this module's
-`CONFIG_DISPATCH` into `ps_cli.cli.run()`.
+`handle_config_set_context()` never writes a credential into `targets.toml`
+(`TargetsFile` has no field for one) and always deletes the context's stored tokens
+after writing.
 """
 
 from __future__ import annotations
@@ -49,16 +46,24 @@ def _merge_auth_overrides(
     auth_scopes: tuple[str, ...] | None,
     auth_audience: str | None,
 ) -> AuthOverrides | None:
-    """Merge the four `--auth-*` flags onto `existing`, per-field, flag-passed-wins.
+    """Merge the four `--auth-*` flags onto `existing`, per field, with a passed flag winning.
 
-    AC-BI-006: "the corresponding `auth.*` key is written" -- singular, per-flag, not
-    "the whole auth table is replaced". A flag's value is used only when that flag was
-    actually passed this call (non-`None`); an omitted flag preserves whatever
-    `existing` already had for that field (or stays `None` if `existing` is `None`
-    too). Returns `None` outright -- never an all-`None` `AuthOverrides` -- when
-    neither `existing` nor any of the four flags supplies a value, so a
-    brand-new context with no `--auth-*` flags never gets a gratuitous empty
+    A flag's value is used only when that flag was passed this call (non-`None`); an
+    omitted flag preserves whatever `existing` already had for that field, or stays
+    `None` if `existing` is `None` too. The result is never an all-`None`
+    `AuthOverrides`, so a new context with no `--auth-*` flags does not get an empty
     `[contexts.<name>.auth]` table written.
+
+    Args:
+        existing: The context's current auth overrides, or `None` if it has none.
+        auth_issuer: New OIDC issuer, or `None` to keep the existing value.
+        auth_client_id: New OIDC client id, or `None` to keep the existing value.
+        auth_scopes: New OIDC scopes, or `None` to keep the existing value.
+        auth_audience: New OIDC audience, or `None` to keep the existing value.
+
+    Returns:
+        The merged overrides, or `None` when neither `existing` nor any flag supplies
+        a value.
     """
     issuer = auth_issuer if auth_issuer is not None else (existing.issuer if existing else None)
     client_id = (
@@ -86,36 +91,48 @@ def handle_config_set_context(
 ) -> None:
     """Create or update named context `name`'s PS Service URL to `url` in `targets.toml`.
 
-    Loads any existing `targets.toml` (or starts from an empty context table if none
-    exists yet), sets/overwrites `contexts[name] = ContextEntry(url=url, auth=<merged>)`,
-    and writes it back -- `current_context` is read and preserved unchanged, never
-    touched by this handler (PLAN.md D1: switching the *selected* context is
-    `use-context`'s job, a later slice). The written file structurally cannot contain a
-    credential (AC-BI-012) -- `TargetsFile`/`ContextEntry` have no field for one.
+    Loads any existing `targets.toml` (or starts from an empty context table), sets
+    `contexts[name]` to the new URL with the merged auth overrides, and writes the
+    file back. `current_context` is preserved unchanged: switching the selected
+    context is `use-context`'s job. The auth flags are merged per field onto the
+    context's existing `auth` (only fields whose flag was passed are overwritten;
+    `auth` stays `None` when nothing supplies a value). An old-format context
+    elsewhere in the file does not block the write: it is dropped with a warning
+    rather than failing, and round-trips once its own `set-context` is run.
 
-    `auth_issuer`/`auth_client_id`/`auth_scopes`/`auth_audience` (issue #57 Slice 8,
-    AC-BI-006) are merged onto the context's existing `auth` (if any) per-field via
-    `_merge_auth_overrides()`: only the fields whose corresponding flag was actually
-    passed this call are overwritten, every other field is preserved unchanged, and
-    `auth` stays `None` when nothing passed and nothing pre-existing supplies a value.
+    After the write it always calls `credential_store.delete_tokens(name)`, including
+    for a brand-new context name, so a stale credential from a previous URL is never
+    reused against the new one.
 
-    After the write, unconditionally calls `credential_store.delete_tokens(name)` --
-    every call, including the very first `set-context` for a brand-new context name
-    (AC-BI-014, D13) -- so a stale credential from a previous URL is never silently reused
-    against the new one. `config_dir` defaults to `resolve_config_dir()` and
-    `credential_store` to `build_credential_store()` when omitted, exactly like a real
-    CLI invocation with no explicit overrides -- the same constructor-injection seam
-    `config.py`'s `load_config()` already establishes (PLAN.md D2). Issue #121:
-    `build_credential_store()` is zero-argument -- `resolved_config_dir` is used only
-    for `targets.toml`'s own read/write below, not for credential resolution any more.
+    Args:
+        name: The context name; its format is already validated by the parser.
+        url: The PS Service URL for the context; already validated as http(s).
+        config_dir: Directory holding `targets.toml`, or `None` for
+            `resolve_config_dir()`.
+        credential_store: Store whose tokens for `name` are deleted, or `None` for
+            `build_credential_store()`.
+        auth_issuer: OIDC issuer override, or `None` to leave it unchanged.
+        auth_client_id: OIDC client id override, or `None` to leave it unchanged.
+        auth_scopes: OIDC scopes override, or `None` to leave it unchanged.
+        auth_audience: OIDC audience override, or `None` to leave it unchanged.
+
+    Returns:
+        None.
+
+    Raises:
+        PsCliError: `targets.toml` holds invalid TOML, or the credential store
+            cannot be built or written.
+        OSError: The configuration directory or `targets.toml` cannot be written.
+
+    Side Effects:
+        Writes `targets.toml` and overwrites the stored token bundle for `name`.
     """
     resolved_config_dir = config_dir if config_dir is not None else resolve_config_dir()
     store = credential_store if credential_store is not None else build_credential_store()
 
     # strict=False: fixing (or adding) *this* context by name must not be blocked
-    # by some *other*, unrelated context still being in the pre-#57 old format --
-    # see `targets.load_targets`/`_parse_context_entry`'s own docstrings. An
-    # old-format sibling is dropped (with a warning) rather than blocking this
+    # by some *other*, unrelated context still being in the older flat format.
+    # An old-format sibling is dropped (with a warning) rather than blocking this
     # write; it round-trips back once its own `set-context` call is made.
     existing = load_targets(resolved_config_dir, strict=False)
     contexts = dict(existing.contexts) if existing is not None else {}
@@ -141,13 +158,24 @@ def handle_config_set_context(
 def handle_config_use_context(name: str, *, config_dir: Path | None = None) -> None:
     """Select `name` as the current context, persisting it into `targets.toml`.
 
-    Loads `targets.toml`, validating `name` is a member of `[contexts]` --
-    `assert_contract(name in targets.contexts, ...)`, raising `PsCliError` naming `name`
-    and listing every valid context name, sorted, otherwise (AC-BI-009's command half).
-    On success, writes `targets.toml` back with `current_context` set to `name` --
-    `[contexts]` itself is read and preserved unchanged, never touched by this handler.
-    `config_dir` defaults to `resolve_config_dir()` when omitted, the same
-    constructor-injection seam `handle_config_set_context()` already establishes.
+    `name` must already be defined in `[contexts]`; `[contexts]` itself is preserved
+    unchanged and only `current_context` is rewritten.
+
+    Args:
+        name: The context to select; its format is already validated by the parser.
+        config_dir: Directory holding `targets.toml`, or `None` for
+            `resolve_config_dir()`.
+
+    Returns:
+        None.
+
+    Raises:
+        PsCliError: `name` is not a defined context (the error names it and lists
+            every valid context, sorted), or `targets.toml` is invalid.
+        OSError: `targets.toml` cannot be written.
+
+    Side Effects:
+        Rewrites `targets.toml`.
     """
     resolved_config_dir = config_dir if config_dir is not None else resolve_config_dir()
     existing = load_targets(resolved_config_dir)
@@ -170,14 +198,18 @@ def handle_config_use_context(name: str, *, config_dir: Path | None = None) -> N
 
 
 def _auth_overrides_summary(auth: AuthOverrides | None) -> str:
-    """Render the "Auth Overrides" column value for one context: field *names* only.
+    """Render the "Auth Overrides" column value for one context: field names only.
 
-    `"-"` when `auth` is `None`; otherwise a comma-joined list of which `auth.*`
-    fields are set (e.g. `"issuer, audience"`) -- never the literal values (issue #57
-    Slice 8): this column's job is "what's overridden," not "what the values are,"
-    keeping the table's width bounded regardless of how long an issuer URL is. Fields
-    are listed in a fixed order (issuer, client_id, scopes, audience) for
-    deterministic, diff-friendly output.
+    The column answers "what is overridden", not "what are the values", which keeps
+    the table narrow however long an issuer URL is. Fields are listed in a fixed
+    order (issuer, client_id, scopes, audience) for deterministic output.
+
+    Args:
+        auth: The context's auth overrides, or `None` if it has none.
+
+    Returns:
+        `"-"` when `auth` is `None` or sets no field; otherwise the comma-joined
+        names of the fields that are set, e.g. `"issuer, audience"`.
     """
     if auth is None:
         return "-"
@@ -195,15 +227,25 @@ def _auth_overrides_summary(auth: AuthOverrides | None) -> str:
 
 
 def handle_config_get_contexts(*, config_dir: Path | None = None) -> None:
-    """Print every context as a bordered table, marking the currently-selected one.
+    """Print every context as a bordered table, marking the currently selected one.
 
-    Loads `targets.toml` (prints nothing if absent or empty -- nothing configured yet is
-    not a failure state, no AC requires otherwise). Rows are sorted alphabetically by
-    context name, with columns "Current" (``"*"`` for `current_context`, `" "`
-    otherwise), "Name", "URL", "Auth Overrides" (issue #57 Slice 8: which `auth.*`
-    field *names* are set, never their values -- see `_auth_overrides_summary()`),
-    rendered via `render.print_table()`. `config_dir` defaults to
-    `resolve_config_dir()` when omitted, the same seam every other handler here uses.
+    Prints nothing when `targets.toml` is absent or empty: nothing configured yet is
+    not a failure. Rows are sorted by context name, with columns "Current" (`"*"` for
+    `current_context`, a space otherwise), "Name", "URL" and "Auth Overrides" (the
+    names of the `auth.*` fields that are set, never their values).
+
+    Args:
+        config_dir: Directory holding `targets.toml`, or `None` for
+            `resolve_config_dir()`.
+
+    Returns:
+        None.
+
+    Raises:
+        PsCliError: `targets.toml` holds invalid TOML or an old-format context.
+
+    Side Effects:
+        Reads `targets.toml` and prints the table to stdout.
     """
     resolved_config_dir = config_dir if config_dir is not None else resolve_config_dir()
     targets = load_targets(resolved_config_dir)
@@ -222,7 +264,22 @@ def handle_config_get_contexts(*, config_dir: Path | None = None) -> None:
 
 
 def _dispatch_config_set_context(args: argparse.Namespace) -> None:
-    """Adapt `handle_config_set_context`'s signature to the `CONFIG_DISPATCH` shape."""
+    """Adapt `handle_config_set_context`'s signature to the `CONFIG_DISPATCH` shape.
+
+    Args:
+        args: Parsed arguments; `name`, `url` and the four `auth_*` values are read.
+
+    Returns:
+        None.
+
+    Raises:
+        PsCliError: Propagated from `handle_config_set_context`.
+        OSError: Propagated from `handle_config_set_context`.
+
+    Side Effects:
+        Those of `handle_config_set_context`: rewrites `targets.toml` and deletes the
+        context's stored tokens.
+    """
     handle_config_set_context(
         cast("str", args.name),
         cast("str", args.url),
@@ -234,12 +291,39 @@ def _dispatch_config_set_context(args: argparse.Namespace) -> None:
 
 
 def _dispatch_config_use_context(args: argparse.Namespace) -> None:
-    """Adapt `handle_config_use_context`'s signature to the `CONFIG_DISPATCH` shape."""
+    """Adapt `handle_config_use_context`'s signature to the `CONFIG_DISPATCH` shape.
+
+    Args:
+        args: Parsed arguments; `name` is read.
+
+    Returns:
+        None.
+
+    Raises:
+        PsCliError: Propagated from `handle_config_use_context`.
+        OSError: Propagated from `handle_config_use_context`.
+
+    Side Effects:
+        Rewrites `targets.toml`.
+    """
     handle_config_use_context(cast("str", args.name))
 
 
 def _dispatch_config_get_contexts(args: argparse.Namespace) -> None:
-    """Adapt `handle_config_get_contexts`'s signature to the `CONFIG_DISPATCH` shape."""
+    """Adapt `handle_config_get_contexts`'s signature to the `CONFIG_DISPATCH` shape.
+
+    Args:
+        args: Parsed arguments; unused, since `get-contexts` takes none.
+
+    Returns:
+        None.
+
+    Raises:
+        PsCliError: Propagated from `handle_config_get_contexts`.
+
+    Side Effects:
+        Reads `targets.toml` and prints to stdout.
+    """
     del args
     handle_config_get_contexts()
 

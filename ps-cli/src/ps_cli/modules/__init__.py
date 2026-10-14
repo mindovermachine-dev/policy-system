@@ -1,1 +1,1 @@
-"""Parser and handler modules for ps-cli, mirroring gh-tt's `modules/` split."""
+"""Parser and handler modules for ps-cli: argument parsing, command handlers and dispatch."""
