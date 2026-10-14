@@ -67,7 +67,7 @@ class _FetchResponse(Protocol):
         """
         ...
 
-    def __exit__(self, *exc_info: object) -> None:
+    def __exit__(self, *exc_info: object) -> None:  # noqa: V107 - fixed context-manager exit signature
         """Leave the response context and release the connection.
 
         Args:

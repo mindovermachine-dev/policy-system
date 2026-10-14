@@ -59,9 +59,43 @@ repos:
         language: system
         pass_filenames: false # compares fixed artifacts, not the staged file list
         files: ^(docs/artifacts/ps-domain-concepts\.md|docs/artifacts/schemas/.*\.json|ps-service/src/ps_service/(domain_schema/.*\.py|mcp_interface/ps-domain-concepts\.md|api/schemas/.*\.json)|ps-cli/src/ps_cli/schemas/.*\.json)$
+      - id: config-drift
+        name: config drift (env vars, Helm values and their reference documentation)
+        entry: uv run python scripts/check_config_drift.py
+        language: system
+        pass_filenames: false # compares the chart, the code and the docs as a whole
+        files: ^(charts/|scripts/|deploy/|\.github/|docs/|ps-skills/|\.env\.example$|README\.md$|(ps-service|ps-cli|ps-test-support)/src/)
+      - id: doc-links
+        name: doc links (relative links, anchors and repository paths in markdown)
+        entry: uv run python scripts/check_doc_links.py
+        language: system
+        pass_filenames: true
+        files: \.md$
+      - id: repo-hygiene
+        name: repo hygiene (backup files, executable bits, ignore rules, README layout rows)
+        entry: uv run python scripts/check_repo_hygiene.py
+        language: system
+        pass_filenames: false # inspects what git tracks as a whole
+        always_run: true # a deleted or renamed file must trip it too
       - id: pip-audit
         name: pip-audit (locked dependencies)
         entry: bash -c 'uv export --no-emit-workspace --format requirements-txt --no-hashes | uvx pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off'
         language: system
         files: ^(pyproject\.toml|uv\.lock)$
         pass_filenames: false # triggered by lockfile changes, but audits the whole resolved set
+      # Third-party guardrails: pre-commit builds a venv with the pinned version, so these
+      # hooks need network access only the first time a version is installed.
+      - id: unused-symbols
+        name: unused symbols (vulture, confidence 80)
+        entry: vulture # paths, confidence and excludes come from [tool.vulture] in pyproject.toml
+        language: python
+        additional_dependencies: [vulture==2.16]
+        pass_filenames: false # scans the configured source roots as a whole
+        files: ^((ps-service|ps-cli|ps-test-support)/src/.*\.py|scripts/.*\.py|pyproject\.toml)$
+      - id: import-layering
+        name: import layering (import-linter contracts)
+        entry: env PYTHONPATH=ps-service/src:ps-cli/src:ps-test-support/src PYTHONDONTWRITEBYTECODE=1 lint-imports --no-cache
+        language: python
+        additional_dependencies: [import-linter==2.3]
+        pass_filenames: false # contracts are evaluated over the whole import graph
+        files: ^((ps-service|ps-cli|ps-test-support)/src/.*\.py|pyproject\.toml)$

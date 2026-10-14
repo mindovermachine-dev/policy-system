@@ -129,7 +129,7 @@ class DriverGraph(Protocol):
 class DriverDatabase(Protocol):
     """The driver connection surface this module uses; a real `FalkorDB` satisfies it."""
 
-    def select_graph(self, graph_id: str, /) -> DriverGraph:
+    def select_graph(self, graph_id: str, /) -> DriverGraph:  # noqa: V107 - protocol parameter names the call contract
         """Select a driver graph.
 
         Args:

@@ -44,3 +44,6 @@ authentik
 itoken
 addopts
 xdist
+noqa
+shellcheck
+docstrings

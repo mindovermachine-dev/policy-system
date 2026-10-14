@@ -115,3 +115,17 @@ The three scripts live outside the repository (`.orchestrator/tracker/i253/tools
 - `callsites.py` walks `*.py` under the given roots and prints every call whose dotted name is `print`, a logger method, `emit_log_entry`, `traceback.print_exc`, `sys.stderr.write`, `sys.stdout.write` or `warnings.warn`.
 - `outcomes.py` resolves module-level string constants and counts `outcome=` values and `extra` dictionary keys of `emit_log_entry` calls.
 - `exc_sinks.py` lists log and print arguments that reference an exception variable bound by `except ... as`.
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| No `print` in service code | enforced | `ruff-check` (`T201`), with the allow-list pinned by `pytest` |
+| Secrets do not appear in log entries | enforced | `pytest` (log-leakage canary test) |
+| Logging code passes lint and strict typing | enforced | `ruff-check`, `basedpyright` |
+| One outcome vocabulary and expected conditions not logged as failures | review-only | tracked in #295; a closed-set check in #327 |
+| Exception text and user identifiers in log entries | review-only | tracked in #293 and #294 |
+| Server request logs in the structured format | review-only | tracked in #296 |
+| Audit records for security-relevant actions | review-only | tracked in #297 |

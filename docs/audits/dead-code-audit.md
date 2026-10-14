@@ -122,3 +122,19 @@ Reviewed against the outcomes above; issue numbers are the open sub-issues of th
 - `uv run basedpyright`: 0 errors, 0 warnings.
 - `ruff check` and `ruff format --check` clean on every touched file.
 - Targeted tests passed: `ps-cli/tests/test_toml_writer.py` (7), `ps-cli/tests/test_http_client.py` (49), `ps-cli/tests/test_targets.py` (13), `ps-service/tests/graph_gateway/test_digest_order.py` (6), `ps-service/tests/graph_gateway/test_gateway_indexes.py` (7), `ps-service/tests/api/test_models_export.py` (13), `ps-service/tests/company_merge/test_models.py`.
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Unused functions, arguments, variables and imports in production code (confidence 80) | enforced | `unused-symbols` |
+| Unused imports and local variables | enforced | `ruff-check` |
+| Helm values that no template reads | enforced | `config-drift` (`helm-value-unused`) |
+| Environment variables used in code but listed nowhere | enforced | `config-drift` (`env-var-unlisted`) |
+| Tracked backup and merge leftovers | enforced | `repo-hygiene` (`tracked-backup-file`) |
+| Symbols below confidence 80 and symbols reachable only from tests | review-only | each needs a per-symbol decision first; tracked in #263 and #324 |
+| Environment variables listed but no longer read by code | review-only | no tool compares in that direction |
+| Removal proof: a repository-wide search for a removed symbol returns nothing | review-only | a reviewer reruns the search; the recipe is in CONTRIBUTING.md |
+| Tests left behind by removed code | review-only | a failing import is caught by `pytest`, a test of a removed behaviour is not |

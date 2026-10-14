@@ -8,6 +8,7 @@ Thank you for considering contributing to this project!
 - [Development Setup](#development-setup)
 - [Coding Standards](#coding-standards)
 - [Testing](#testing)
+- [Automated guardrails](#automated-guardrails)
 - [Releasing](#releasing)
   - [How the bump is decided](#how-the-bump-is-decided)
   - [What gets synced](#what-gets-synced)
@@ -141,6 +142,81 @@ uv run ruff check . && uv run ruff format --check . && uv run basedpyright && \
 ```
 
 (or `uv run pre-commit run --all-files`).
+
+## Automated guardrails
+
+Mechanical rules from the audits in [`docs/audits/`](docs/audits/) are checked automatically so
+the cleanup does not regress. Each check runs as a pre-commit hook on the files it watches and
+again in CI (`trunk-worthy` wave) over the whole tree. A failure prints
+`RULE <rule-id>: <file>:<line>: <what>. How to fix: <one line>` for the scripts, and the tool's
+own message for the third-party checks.
+
+| Check (hook and CI id)     | Rules it enforces                                                                                                             | Run it locally                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `unused-symbols`           | unused functions, variables, arguments and imports in production code (vulture, confidence 80)                                | `uv run pre-commit run unused-symbols --all-files`                             |
+| `import-layering`          | package layering contracts in `[tool.importlinter]` (import-linter)                                                           | `uv run pre-commit run import-layering --all-files`                            |
+| `config-drift`             | `env-var-unlisted`, `helm-value-unused`, `helm-prod-orphan`, `helm-value-undocumented`                                        | `uv run python scripts/check_config_drift.py`                                  |
+| `doc-links`                | `doc-link-missing`, `doc-link-anchor`, `doc-path-missing`                                                                     | `uv run python scripts/check_doc_links.py --tracked`                           |
+| `repo-hygiene`             | `tracked-backup-file`, `exec-without-shebang`, `tracked-but-ignored`, `duplicate-gitignore-rule`, `readme-layout-missing-row` | `uv run python scripts/check_repo_hygiene.py`                                  |
+| `docstring-provenance`     | no issue, AC or plan references in Python docstrings and comments                                                             | `uv run python scripts/check_docstring_provenance.py --tracked`                |
+| `mock-boundary-guardrail`  | mocks only at the boundaries listed for the tests                                                                             | `uv run python scripts/check_mock_boundaries.py ps-service/tests ps-cli/tests` |
+| `ruff-check` (rule `T201`) | no `print` in service code                                                                                                    | `uv run ruff check`                                                            |
+
+Run the whole set the way CI does, against an export of your working tree, with:
+
+```bash
+UV_NO_SYNC=1 uv run python scripts/run_ci_guardrails.py
+```
+
+Use it before delivering. A hook sees only staged files, so deleting or renaming a file that
+others link to trips `doc-links` only in CI and in this command.
+
+### Fixing a failure and recording an exception
+
+- Fix the cause first. Add an exception only when the code is correct as written.
+- Unused symbol that is part of a fixed signature (a protocol, a context-manager method, a
+  type-only import): put `# noqa: V107` (argument) or `# noqa: V104` (import) on the line with the
+  reason after it. There is no global name ignore list.
+- Import layering: an entry in `ignore_imports` of the `entry-layer` contract needs a comment
+  naming the open issue that removes it. Do not add new ones for new code.
+- Config drift: document the value or variable where the rule points. The only baseline is
+  `PROD_ORPHAN_BASELINE` in `scripts/check_config_drift.py`, with a reason per entry.
+- OpenAPI and MCP surface: the structure test
+  `ps-service/tests/api/test_no_drift_surface.py` fails when either differs from the snapshot in
+  `ps-service/tests/fixtures/api-surface/`. After a deliberate change, regenerate the snapshot
+  and format it:
+
+  ```bash
+  UV_NO_SYNC=1 uv run python -c "import json, sys; sys.path.insert(0, 'ps-service/tests/api'); import test_no_drift_surface as t; t._SNAPSHOT.write_text(json.dumps(t._current_surface(), indent=2, sort_keys=True) + chr(10), encoding='utf-8')"
+  npx --no-install prettier --write ps-service/tests/fixtures/api-surface/service-surface-before-drift-detector.json
+  ```
+
+### Review-only rules
+
+No tool checks these yet; reviewers look for them. The `## Enforcement` table of each audit in
+`docs/audits/` says which rules are enforced and which are review-only.
+
+- Design judgement: component granularity, new cross-package dependencies, naming and
+  public-contract changes, and whether a new test adds value over existing ones.
+- Security: authorisation of new routes and tools, input bounds, and secrets handling.
+- Logging: no secret or personal data in log entries, and a single outcome vocabulary.
+- Persistence: migrations apply from the previous schema and backups cover every state table.
+- Deployment: chart workloads declare probes and resources; workflow actions and images are
+  pinned; shell scripts pass shellcheck.
+- Dependencies: direct imports are declared, licences are allowed, and advisories are triaged.
+- Documentation: component documents match the solution architecture, and removed symbols no
+  longer appear anywhere. To prove a removal, search the repository excluding `docs/audits/`,
+  for example `git grep -n <symbol> -- . ':!docs/audits'`.
+- Provenance text in config-file comments (YAML, TOML) and duplicated test bodies.
+
+Checks for part of this list are planned in the guardrail issues linked from the umbrella
+issue for the cleanup.
+
+### Cost of the checks
+
+All five new checks together take about 1 second warm on a development host, against a stated
+budget of 15 seconds for the added CI time and 5 seconds for a typical commit. The first run of
+a pre-commit hook builds its pinned tool environment once and needs network access.
 
 ## Releasing
 

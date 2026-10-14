@@ -278,3 +278,19 @@ Reviewed against the outcomes above: 61 issues, being every open sub-issue of #2
 - `uv run pre-commit run --files docs/audits/observability-audit.md`: prettier and cspell passed, the other hooks have no files to check.
 - Over the unchanged tree: `uv run --frozen ruff check .` passed, `ruff format --check` clean, `basedpyright` 0 errors, `scripts/check_docstring_provenance.py --tracked` exit 0, `scripts/check_mock_boundaries.py` exit 0.
 - Public hygiene: a grep of this document and of the eight issue bodies for credential words, hosts and addresses finds only option names, chart value names and the fake-value render flags; no secret, endpoint or exploit detail.
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Chart renders and its unit tests pass | enforced | `helm-lint`, `helm-unittest` |
+| Implemented behaviour (probes, shutdown, retries) is covered by the hermetic suite | enforced | `pytest`; behaviour that needs a live cluster is not checked in CI |
+| Chart workloads declare startup and readiness probes | review-only | tracked in #319; a structural test in #330 |
+| Chart workloads set resource requests and limits | review-only | tracked in #320; a structural test in #330 |
+| Outbound calls have bounded timeouts | review-only | tracked in #314 and #315 |
+| Shutdown sequence fits the termination grace window | review-only | tracked in #317 |
+| Readiness recovers after a dependency outage; interrupted runs are reconciled | review-only | tracked in #318 and #316 |
+| Operational metrics | review-only | tracked in #321 |
+| The operations guide matches the failure modes | review-only | judgement; links are covered by `doc-links` |

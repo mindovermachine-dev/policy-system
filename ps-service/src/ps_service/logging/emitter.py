@@ -32,7 +32,7 @@ class TextSink(Protocol):
     satisfy it without inheriting from it.
     """
 
-    def write(self, s: str, /) -> int:
+    def write(self, s: str, /) -> int:  # noqa: V107 - file-like write signature
         """Append text to the sink.
 
         Args:

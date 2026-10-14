@@ -45,7 +45,7 @@ from ps_service.persistence.errors import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
-    from typing import LiteralString
+    from typing import LiteralString  # noqa: V104 - named only inside a string cast
 
     from psycopg.rows import TupleRow
 

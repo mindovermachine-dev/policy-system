@@ -239,3 +239,20 @@ Reviewed against the outcomes above: 64 issues, being every sub-issue of #246 ex
 - Repository: the working tree differs from the base commit by this document and `.env.example` only; `uv run pre-commit run --files` passes on both.
 - Public hygiene: the document and the filed issues contain variable names only, no values, credentials or exploit detail; the supply-chain item is described generically.
 - Issues filed by this audit: #309 (`feat(chart)`), #310 (`fix(scripts)`), #311 (`refactor(scripts)`), #312 (`fix(scripts)`), #313 (`ci`); each is a native sub-issue of #246 and carries "Part of #246" and "Related: #257".
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Every environment variable used in code is listed in the chart, scripts, CI configuration, `.env.example` or documentation | enforced | `config-drift` (`env-var-unlisted`) |
+| Every Helm value is read by a template | enforced | `config-drift` (`helm-value-unused`) |
+| Every production values key exists in the default values | enforced | `config-drift` (`helm-prod-orphan`) |
+| Every Helm value is named in the values reference | enforced | `config-drift` (`helm-value-undocumented`) |
+| The chart lints and its unit tests pass | enforced | `helm-lint`, `helm-unittest` |
+| Workflow syntax and action references that resolve | enforced | `actionlint`, `action-refs` |
+| Shell scripts pass shellcheck | review-only | tracked in #310 |
+| Duplicated deploy shell functions and Azure defaults | review-only | tracked in #311 and #312 |
+| Pinning of workflow dependencies | review-only | tracked in #313 |
+| Service tunables exposed as chart values | review-only | tracked in #309 |

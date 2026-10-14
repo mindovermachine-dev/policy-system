@@ -44,7 +44,7 @@ from ps_service.persistence import StatePostgresConnectionError, connect_from_co
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from typing import Literal, LiteralString
+    from typing import Literal, LiteralString  # noqa: V104 - named only inside a string cast
 
     from psycopg.rows import TupleRow
 

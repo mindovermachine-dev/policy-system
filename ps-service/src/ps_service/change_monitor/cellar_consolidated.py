@@ -137,7 +137,7 @@ class SparqlResponse(Protocol):
         """Enter the response context, returning the response itself."""
         ...
 
-    def __exit__(self, *exc_info: object) -> None:
+    def __exit__(self, *exc_info: object) -> None:  # noqa: V107 - fixed context-manager exit signature
         """Exit the response context, releasing the underlying connection."""
         ...
 

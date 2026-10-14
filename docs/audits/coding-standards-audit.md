@@ -172,3 +172,19 @@ Method: the open sub-issues of #246 (`gh api repos/:owner/:repo/issues/246/sub_i
 - #300 `chore(lint)`: prune stale ignores, require suppression reasons.
 - #301 `refactor(ps-service)`: resolve the graph name once through configuration.
 - #302 `docs(coding-standards)`: settle ambiguous naming, exception and suppression rules.
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Lint and formatting rules of the coding standards | enforced | `ruff-check`, `ruff-format` |
+| Strict typing | enforced | `basedpyright` |
+| No provenance text in Python docstrings and comments | enforced | `docstring-provenance` |
+| Unused-symbol suppressions carry a reason and there is no global name ignore list | enforced | `pytest` (hook configuration test) |
+| Other suppression comments carry a reason; stale ignores are pruned | review-only | tracked in #300 |
+| Type-ignore comments | review-only | tracked in #298; a ban after it in #327 |
+| Provenance text in YAML and TOML comments | review-only | scope decision in #299; check in #328 |
+| Ambiguous naming, exception and suppression rules | review-only | tracked in #302 |
+| The graph name is resolved once through configuration | review-only | tracked in #301 |

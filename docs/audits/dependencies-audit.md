@@ -108,10 +108,10 @@ Nothing was removed or made obsolete, so there are no removed symbols to search 
 | ---- | ---------------------------- | ----------- |
 | runtime image holds no dev tools | yes, structurally (`Dockerfile:31,37` `--no-dev --frozen`) | |
 | lock in sync with manifests | yes, frozen installs fail on drift | |
-| Python advisories | partly: `pip-audit` pre-commit hook on `pyproject.toml`/`uv.lock` change (`.pre-commit-config.yaml:62-67`), no scheduled CI job | scheduled scan (#260) |
-| declared vs used (`deptry`) | no | review-only until #260 |
-| licence allowlist | no | review-only until #260 |
-| npm advisories | no | review-only until #260 |
+| Python advisories | partly: `pip-audit` pre-commit hook on `pyproject.toml`/`uv.lock` change (`.pre-commit-config.yaml:62-67`), no scheduled CI job | scheduled scan (#329) |
+| declared vs used (`deptry`) | no | review-only until #329 |
+| licence allowlist | no | review-only until #329 |
+| npm advisories | no | review-only until #329 |
 | base image and tag pinning | no | review-only (#277, #278) |
 
 ## Generic-wording gate (AC-BI-013)
@@ -161,3 +161,18 @@ Open sub-issues of the umbrella (#251 to #257, #259, #260) and every issue filed
 ## Acceptance-criteria map
 
 AC-BI-001: scope, method and findings above. AC-BI-002: D-S1-01 to D-S1-05 (#264). AC-BI-003: D-S2-01 to D-S2-04. AC-BI-004: D-S4-01 to D-S4-04. AC-BI-005: D-S5-01 to D-S5-03, D-S8-01. AC-BI-006: D-S6-01 to D-S6-03. AC-BI-007: D-S7-01 to D-S7-07. AC-BI-008 to AC-BI-010: disposition column and issues table. AC-BI-011/012: no fix, no removal. AC-BI-013: generic-wording gate. AC-BI-014: sibling-issue review.
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Runtime image holds no development tools | enforced | structurally, by the frozen `--no-dev` install in the `Dockerfile` |
+| Lock file in sync with the manifests | enforced | frozen installs fail on drift |
+| Known advisories in locked Python dependencies | enforced | `pip-audit` in the commit hook when `pyproject.toml` or `uv.lock` changes and in every CI run; a scheduled scan between pushes is tracked in #329 |
+| Declared dependencies match imports | review-only | tracked in #264 and #329 |
+| Licence allowlist | review-only | tracked in #275 and #329 |
+| Advisories in npm development dependencies | review-only | tracked in #276 and #329 |
+| Base image and image tag pinning | review-only | tracked in #277 and #278 |
+| Dependency update proposals | review-only | needs a decision on update automation; tracked in #329 |

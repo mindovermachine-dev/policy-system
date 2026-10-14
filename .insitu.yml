@@ -117,6 +117,26 @@ inventory:
     name: Check docstrings and comments carry no provenance
     command: uv run python scripts/check_docstring_provenance.py --tracked
 
+  - id: unused-symbols
+    name: Check production code for unused symbols
+    command: uv run pre-commit run unused-symbols --all-files
+
+  - id: import-layering
+    name: Check import layering contracts
+    command: uv run pre-commit run import-layering --all-files
+
+  - id: config-drift
+    name: Check env vars and Helm values against the chart and documentation
+    command: uv run python scripts/check_config_drift.py
+
+  - id: doc-links
+    name: Check markdown links, anchors and repository paths
+    command: uv run python scripts/check_doc_links.py --tracked
+
+  - id: repo-hygiene
+    name: Check tracked files for backup leftovers, executable bits and README layout rows
+    command: uv run python scripts/check_repo_hygiene.py
+
   - id: pip-audit
     name: Audit locked dependencies for known CVEs
     timeout: 10m
@@ -244,6 +264,11 @@ waves:
       - pytest
       - mock-boundary-guardrail
       - docstring-provenance
+      - unused-symbols
+      - import-layering
+      - config-drift
+      - doc-links
+      - repo-hygiene
       - pip-audit
       - helm-lint
       - helm-unittest

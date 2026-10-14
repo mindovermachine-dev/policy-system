@@ -18,7 +18,7 @@ from ps_service.passkey_signing.errors import MigrationApplyError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import LiteralString
+    from typing import LiteralString  # noqa: V104 - named only inside a string cast
 
     from psycopg.rows import TupleRow
 

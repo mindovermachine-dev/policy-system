@@ -202,3 +202,18 @@ Reviewed from the issue bodies (scope, in/out of scope, acceptance criteria, Dep
 | #125, #126, #127 (ps-cli sunset onto skills) | Noted: the one ps-cli test removed (`get health` against a closed port) duplicates the generic unreachable-service test that stays; tests of commands those issues may delete were not touched |
 | #268 | Extended: two same-directory capacity/quota pairs added to its table (now nine pairs) and its recommendation |
 | #269 | Created by this audit, native sub-issue of #246 |
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Mocks only at the boundaries listed for the tests | enforced | `mock-boundary-guardrail` |
+| Test code passes lint and strict typing | enforced | `ruff-check`, `basedpyright` |
+| No provenance text in test docstrings and comments | enforced | `docstring-provenance` |
+| The default test run is hermetic: environment-dependent tests carry markers and are deselected | enforced | `pytest` configuration |
+| Stale mock-boundary entries (the check only warns) | review-only | tracked in #328, ordered after #268 and #269 |
+| Tests with identical bodies that claim distinct requirements | review-only | tracked in #268 and #328 |
+| Mutation-testing gaps and low-value tests | review-only | judgement per test; tracked in #269 |
+| Flaky tests | review-only | no recurring flakiness run |

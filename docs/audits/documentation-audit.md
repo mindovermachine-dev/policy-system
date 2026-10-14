@@ -264,3 +264,18 @@ Enumerated with `gh api --paginate repos/:owner/:repo/issues/246/sub_issues` (14
 - `uv run ruff check .`, `uv run ruff format --check .` and `uv run basedpyright` clean; `scripts/check_docstring_provenance.py --tracked` and `scripts/check_mock_boundaries.py` pass.
 - `uv run pre-commit run --files <every file of git status --short>` passes (ruff, basedpyright, markdownlint, prettier, cspell, provenance, mock boundaries).
 - `git diff --stat -- charts ps-service/src ps-cli/src` is empty: no shipped file changed. The only code-tree edits are four test files.
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Relative links, anchors and repository paths in markdown resolve | enforced | `doc-links` |
+| Markdown style, formatting and spelling | enforced | `markdownlint`, `prettier`, `cspell` |
+| Every Helm value and environment variable is documented | enforced | `config-drift` |
+| Generated domain documents and the packaged copy match the canonical source | enforced | `verify-domain-schema-freshness`, `verify-domain-concepts-doc` |
+| Every top-level entry has a README layout row | enforced | `repo-hygiene` (`readme-layout-missing-row`) |
+| Container architecture components match the solution architecture (INV-005) | review-only | tracked in #325 |
+| Prose matches the code (flows, components, routes, tools) | review-only | judgement at review |
+| No history or issue-number wording in documents | review-only | tracked in #323; Python code text is covered by `docstring-provenance` |

@@ -165,3 +165,19 @@ Every other open sub-issue of #246 and every issue filed by earlier audits was r
 | #265 | remove local spike directories | No change needed: `spikes/` stays untouched and is documented in the README layout table |
 | #266 | placeholder in `.git-blame-ignore-revs` | Filed by this audit (F-H4-03) |
 | #267 | duplicated reasoning skill | Filed by this audit (F-H6-01) |
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| No tracked backup or merge leftover files | enforced | `repo-hygiene` (`tracked-backup-file`) |
+| Executable files start with a shebang | enforced | `repo-hygiene` (`exec-without-shebang`) |
+| No tracked file is matched by an ignore rule | enforced | `repo-hygiene` (`tracked-but-ignored`) |
+| No repeated rule in a `.gitignore` | enforced | `repo-hygiene` (`duplicate-gitignore-rule`) |
+| Every top-level entry has a row in the README layout table | enforced | `repo-hygiene` (`readme-layout-missing-row`) |
+| No secret values in tracked files | review-only | there is no recurring secret scan; tracked in #329 |
+| Placeholder revision in `.git-blame-ignore-revs` | review-only | a one-off decision, tracked in #266 |
+| Local spike directories of closed issues | review-only | untracked and ignored, so no repository check sees them; tracked in #265 |
+| Large or generated files committed by accident | review-only | no size or generated-file check |

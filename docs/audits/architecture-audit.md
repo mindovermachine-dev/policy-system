@@ -309,3 +309,16 @@ Commented issues: #231, #251, #254, #255, #256, #257, #259, #260, #263, #270.
 | #272  | `refactor(mcp_interface)`: split mcp_server.py by tool group                                                           |
 | #273  | `refactor(ps-service)`: split api/ingestion_orchestration, main and policy_lifecycle/service                           |
 | #274  | `refactor(ps-service)`: decide whether the per-component edge_identity and graph-name helper copies stay independent  |
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Package layering: the CLI does not import the service, the service does not import the CLI or test support, foundation packages import no feature package | enforced | `import-layering` |
+| Components do not import the entry layer | enforced | `import-layering` (`entry-layer`): the 15 existing module pairs are a baseline that #270 removes; new edges fail |
+| No import cycles between packages | review-only | no cycle contract passes without a baseline; tracked in #271 |
+| Component granularity and oversized modules | review-only | judgement; tracked in #272 and #273 |
+| Duplicated helpers across components | review-only | a decision per helper; tracked in #274 |
+| Container architecture components match the solution architecture | review-only | tracked in #325 |

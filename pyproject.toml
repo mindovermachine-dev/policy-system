@@ -73,6 +73,7 @@ extend-exclude = ["spikes"]  # nested git repo; no .py today; also keeps basedpy
 
 [tool.ruff.lint]
 select = ["ALL"]           # AC-BI-001 — maximalist, opt-out only
+external = ["V104", "V107"]  # vulture suppression codes used in `# noqa: V...` comments; ruff must not flag them as invalid
 ignore = [
     # --- formatter-owned / conflicts with `ruff format` (AC-BI-002 names these) ---
     "COM812",   # missing-trailing-comma — `ruff format` owns comma placement; ruff warns of the conflict if selected
@@ -93,6 +94,89 @@ ignore = [
     # where every file's live permission bits read as executable regardless of git's tracked mode; see
     # the pre-existing "tools/**" EXE001 per-file-ignore below for the same rationale.
     "EXE002",   # shebang-missing — chmod state not tracked reliably; a missing shebang isn't meaningful signal here
+]
+
+[tool.vulture]
+paths = ["ps-service/src", "ps-cli/src", "ps-test-support/src", "scripts"]
+min_confidence = 80   # 60 reports pydantic fields and framework entry points; a ratchet needs a separate decision
+exclude = ["__pycache__/", ".venv/", "spikes/"]
+
+[tool.importlinter]
+root_packages = ["ps_service", "ps_cli", "ps_test_support"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+id = "cli-not-service"
+name = "ps_cli must not import ps_service"
+type = "forbidden"
+source_modules = ["ps_cli"]
+forbidden_modules = ["ps_service"]
+
+[[tool.importlinter.contracts]]
+id = "service-not-cli"
+name = "ps_service must not import ps_cli or test support"
+type = "forbidden"
+source_modules = ["ps_service"]
+forbidden_modules = ["ps_cli", "ps_test_support"]
+
+[[tool.importlinter.contracts]]
+id = "leaf-foundations"
+name = "foundation packages import no feature package"
+type = "forbidden"
+source_modules = ["ps_service.logging", "ps_service.dependency_health", "ps_service.domain_schema"]
+forbidden_modules = ["ps_service.api", "ps_service.graph_gateway", "ps_service.ingestion"]
+
+[[tool.importlinter.contracts]]
+id = "entry-layer"
+name = "components do not import the api entry layer"
+type = "forbidden"
+source_modules = [
+    "ps_service.audit",
+    "ps_service.auth",
+    "ps_service.authz",
+    "ps_service.change_monitor",
+    "ps_service.company_merge",
+    "ps_service.config",
+    "ps_service.curated_source",
+    "ps_service.domain_mapper",
+    "ps_service.domain_schema",
+    "ps_service.export",
+    "ps_service.graph_cleanup",
+    "ps_service.graph_gateway",
+    "ps_service.ingestion",
+    "ps_service.ingestion_runs",
+    "ps_service.invitations",
+    "ps_service.llm_interface",
+    "ps_service.passkey_signing",
+    "ps_service.persistence",
+    "ps_service.policy_lifecycle",
+    "ps_service.query_engine",
+    "ps_service.restore",
+    "ps_service.runtime_config",
+    "ps_service.state_migrations",
+]
+forbidden_modules = ["ps_service.api"]
+ignore_imports = [
+    # existing edges from auth; removal is tracked in #270
+    "ps_service.auth.middleware -> ps_service.api.error_handlers",
+    "ps_service.auth.protected_resource -> ps_service.api.models",
+    # existing edges from authz; removal is tracked in #270
+    "ps_service.authz.service -> ps_service.api.errors",
+    # existing edges from curated_source; removal is tracked in #270
+    "ps_service.curated_source.catalog_client -> ps_service.api.catalog",
+    "ps_service.curated_source.instrument_lookup -> ps_service.api.catalog",
+    # existing edges from graph_cleanup; removal is tracked in #270
+    "ps_service.graph_cleanup.dependencies -> ps_service.api.graph_write_access",
+    "ps_service.graph_cleanup.executors -> ps_service.api.errors",
+    "ps_service.graph_cleanup.graph_submission -> ps_service.api.errors",
+    # existing edges from passkey_signing; removal is tracked in #270
+    "ps_service.passkey_signing.error_handlers -> ps_service.api.errors",
+    "ps_service.passkey_signing.router -> ps_service.api.dependencies",
+    "ps_service.passkey_signing.router -> ps_service.api.errors",
+    "ps_service.passkey_signing.router -> ps_service.api.graph_write_access",
+    "ps_service.passkey_signing.router -> ps_service.api.near_miss_review_orchestration",
+    "ps_service.passkey_signing.service -> ps_service.api.errors",
+    "ps_service.passkey_signing.service -> ps_service.api.near_miss_review_orchestration",
 ]
 
 [tool.ruff.lint.mccabe]

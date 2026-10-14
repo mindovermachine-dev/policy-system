@@ -236,3 +236,19 @@ Open #246 sub-issues and issues filed by earlier audits were reviewed on the aud
 ## Result
 
 Findings: 31 rows. Dispositions: 5 filed issues (#288, #289, #290, #291, #292), 2 existing issues (#277, #278), 2 private-channel placeholders, the rest no action with reasons. No code, test or chart file changed; no full suite run (documentation-only change).
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Security-related lint rules (the `S` rule family) in Python | enforced | `ruff-check` |
+| Known advisories in locked Python dependencies | enforced | `pip-audit` in the commit hook when `pyproject.toml` or `uv.lock` changes and in every CI run |
+| Workflow syntax and action references that resolve | enforced | `actionlint`, `action-refs` |
+| Pinning of actions and tools to immutable references | review-only | tracked in #313 |
+| Authentication and authorization of each new route and tool | review-only | tests cover the existing ones; a reviewer checks new ones |
+| Input bounds, size limits and throttling | review-only | tracked in #288, #289 and #291 |
+| Pod security context and network policy baseline | review-only | tracked in #292; a recurring chart scan in #329 |
+| Secrets in tracked files | review-only | no recurring secret scan; tracked in #329 |
+| Image tags and base images | review-only | tracked in #277 and #278 |

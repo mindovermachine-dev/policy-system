@@ -274,3 +274,17 @@ Open sub-issues of #246 were listed with `gh api repos/:owner/:repo/issues/246/s
 ## Appendix: dump_surface.py usage
 
 The surface dump script is kept with the audit tooling; reproduce its output by importing `create_app` (`ps-service/src/ps_service/main.py`) with the local-test bypass configuration as `ps-service/tests/api/test_openapi_provenance_free.py` does, reading `app.openapi()`, and listing tools with `server.list_tools()` as `ps-service/tests/api/test_no_drift_surface.py` does.
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| The OpenAPI document and the MCP tool list match the checked-in snapshot | enforced | `pytest` (`ps-service/tests/api/test_no_drift_surface.py`); the regeneration recipe is in CONTRIBUTING.md |
+| Domain schema artifacts match the code-defined schema | enforced | `verify-domain-schema-freshness` |
+| Declared responses match what handlers return | review-only | content fixed in #303; a test in #326 |
+| One JSON error body shape across REST, approval routes and MCP | review-only | tracked in #305 |
+| MCP tool naming convention and status models | review-only | tracked in #304 |
+| Pagination, bounds and request validation | review-only | tracked in #306 and #307 |
+| The CLI and the API agree on paths and shapes | review-only | no contract test across the two |

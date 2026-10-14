@@ -57,7 +57,7 @@ class _WatchablePipeline(Protocol):
         """
         ...
 
-    def rename(self, src: str, dst: str) -> object:
+    def rename(self, src: str, dst: str) -> object:  # noqa: V107 - protocol parameter names the call contract
         """Queue a `RENAME` (Redis's native rename that overwrites the destination).
 
         Args:
@@ -99,7 +99,7 @@ class _RawGraphConnection(Protocol):
     `falkordb.FalkorDB.connection` directly; `raw_connection` is the one conversion site.
     """
 
-    def rename(self, src: str, dst: str) -> bool:
+    def rename(self, src: str, dst: str) -> bool:  # noqa: V107 - protocol parameter names the call contract
         """Atomically rename a key, silently overwriting an existing destination.
 
         Args:
@@ -143,7 +143,7 @@ class _GraphCopyHandle(Protocol):
     `falkordb.Graph` directly for this purpose; `graph_copy_handle` is the one conversion site.
     """
 
-    def copy(self, clone: str) -> object:
+    def copy(self, clone: str) -> object:  # noqa: V107 - protocol parameter names the call contract
         """Clone this graph (schema included) under a new name (`GRAPH.COPY`).
 
         Args:

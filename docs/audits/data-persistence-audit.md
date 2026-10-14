@@ -210,3 +210,17 @@ Method: the list of sub-issues of #246 was read with `gh api repos/:owner/:repo/
 | AC-BI-011 | MET (vacuous) | Nothing removed; see Superseded and removed |
 | AC-BI-012 | MET | Leakage scan of this document and of the bodies of #282 to #287: no secrets, credentials, connection strings, hostnames, addresses or vulnerability details; the only hits in this document are statements that none were recorded |
 | AC-BI-013 | MET | Sibling-issue review section above |
+
+## Enforcement
+
+Enforced rules fail automatically, in the pre-commit hook on the files they watch and in the CI `trunk-worthy` wave over the whole tree. Review-only rules rely on review. Check ids are the hook and CI ids listed in [CONTRIBUTING.md](../../CONTRIBUTING.md#automated-guardrails).
+
+| Rule | Status | Check id or reason |
+| --- | --- | --- |
+| Generated domain documents and intake schema match the code-defined schema | enforced | `verify-domain-schema-freshness` |
+| Packaged domain-concepts document matches the canonical one | enforced | `verify-domain-concepts-doc` |
+| Database settings in the chart are documented | enforced | `config-drift` (`helm-value-undocumented`) |
+| Each component migration applies to an empty database and from the previous schema | review-only | tracked in #282 and #330 |
+| The backup verifier covers every state table | review-only | tracked in #284, #283 and #330 |
+| Index decisions for graph and signing database | review-only | decisions tracked in #285 and #286 |
+| Persistence descriptions match the current state | review-only | tracked in #287 |
