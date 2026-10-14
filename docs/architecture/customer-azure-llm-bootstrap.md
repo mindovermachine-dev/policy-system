@@ -15,7 +15,7 @@
    - [deploy-llm.sh](#deploy-llmsh)
      - [Configuration](#configuration)
    - [sync-llm-secrets-to-kind.sh](#sync-llm-secrets-to-kindsh)
-   - [Helm chart changes](#helm-chart-changes)
+   - [Helm chart behaviour](#helm-chart-behaviour)
 5. [Naming & Idempotency](#naming--idempotency)
 6. [Region Selection & Quota](#region-selection--quota)
 7. [Security & Permission Model](#security--permission-model)
@@ -137,15 +137,15 @@ Bash script wrapping `az keyvault secret show` and `kubectl`. Responsibilities:
 
 Uses `kubectl create secret generic ... --dry-run=client -o yaml | kubectl apply -f -` (or equivalent) so reruns update the Secret in place rather than failing on "already exists."
 
-### Helm chart changes
+### Helm chart behaviour
 
 `charts/policy-system`:
 
-- `values.yaml` — default `llm.provider` changes from `ollama` to `azure`. The `ollama` provider path is **kept**, not removed, to allow evaluating it later; only the default flips.
-- `templates/secret.yaml` — add a `fail()` guard: when `llm.provider == "azure"` and neither `llm.existingSecret` nor `llm.azure.apiKey`/`llm.azure.apiBase` are set, fail the template render with a clear message pointing at this doc / the two scripts, instead of silently rendering a Secret with empty credential values (today's behavior, which surfaces as an opaque LiteLLM auth failure at pod runtime instead of a clear error at `helm install` time).
-- Evaluators point the chart at the synced secret via the chart's existing (untouched) `existingSecret` mechanism: `helm install ... --set llm.provider=azure --set llm.existingSecret=policy-system-llm-credentials`.
+- `values.yaml` — the default `llm.provider` is `azure`. The `ollama` provider path remains available for evaluation.
+- `templates/secret.yaml` — a `fail()` guard fails the template render when `llm.provider == "azure"` and neither `llm.existingSecret` nor `llm.azure.apiKey`/`llm.azure.apiBase` are set, with a clear message pointing at this doc and the two scripts, so a missing credential surfaces at `helm install` time instead of as an opaque LiteLLM auth failure at pod runtime.
+- Evaluators point the chart at the synced secret via the chart's `existingSecret` mechanism: `helm install ... --set llm.provider=azure --set llm.existingSecret=policy-system-llm-credentials`.
 
-This is a breaking change to the chart's default behavior for anyone running a bare `helm install`/`upgrade` with no `--set` flags — they will move from the (untested) Ollama path to requiring a working Azure setup. The repo's release tooling (`scripts/release/`) computes version bumps and release notes automatically from conventional commit headers, so this needs no manual Chart.yaml edit or CHANGELOG entry — only that the implementing commit(s) carry the `!` breaking marker (as this issue's title already does), which drives an automatic major bump and generated GitHub Release notes.
+A bare `helm install`/`upgrade` with no `--set` flags therefore requires a working Azure setup. The repo's release tooling (`scripts/release/`) computes version bumps and release notes from conventional commit headers.
 
 ---
 
@@ -180,7 +180,7 @@ For each candidate region, the script queries `az cognitiveservices model list -
 - **No CI/CD identity, no stored long-lived credentials.** Everything runs under the evaluator's own interactive `az login` session in their own subscription. There is no service principal secret, no OIDC federation setup, and no pipeline — removing an entire class of credential-management problems that coordinating deployment via CI/CD into an arbitrary customer subscription would otherwise introduce.
 - **Key Vault uses access-policy authorization** (matching the reference vault), not RBAC — the deploying identity is granted `get/list/set` on secrets, scoped to that vault only.
 - **kind-context guard** in the sync script prevents accidentally writing Azure credentials into a non-kind (e.g. production) kubectl context.
-- **`AZURE_API_VERSION`'s value (`"preview"`) is not a secret** in the sensitive sense (it's an API version alias, not a credential) but is stored and synced alongside the two real secrets for consistency with the reference deployment and because LiteLLM's default behavior without it is unverified. This overrides #103's deferral of "`AZURE_API_VERSION` support/passthrough" (scoped there as app-level configurability, deferred until a customer hits an actual API version deprecation): this design doesn't add that configurability surface, it just captures the fixed literal the reference deployment already pins so evaluators get parity with a known-working setup, not a new tunable.
+- **`AZURE_API_VERSION`'s value (`"preview"`) is not a secret** in the sensitive sense (it's an API version alias, not a credential) but is stored and synced alongside the two real secrets for consistency with the reference deployment and because LiteLLM's default behavior without it is unverified. This design does not add app-level `AZURE_API_VERSION` configurability; it captures the fixed literal the reference deployment already pins so evaluators get parity with a known-working setup, not a new tunable.
 - **Key rotation is manual, not automatic.** `deploy-llm.sh --rotate-key` lets an evaluator rotate the static API key on demand (alternating `key1`/`key2`, see [deploy-llm.sh](#deploy-llmsh)); nothing rotates it on a schedule or expires it. This is a hygiene tool, not a rotation policy.
 - **The static API key over a public endpoint, and the subscription-scope Owner/Contributor preflight check, are accepted tradeoffs for the single-evaluator scope of this design, not gaps** — see [Threat Model & Scope](#threat-model--scope). They are not carried forward as-is into a production deployment design.
 
@@ -218,5 +218,5 @@ The Kubernetes Secret is consumed via `envFrom: secretRef` in `ps-service-deploy
 - **Ollama is kept in the chart but is effectively untested** — the default flip to Azure reflects that Policy System evaluation currently depends on a working Azure LLM; Ollama remains available for future testing but isn't a supported fallback today.
 - **Genuine quota exhaustion has no automated remedy** — before checking quota, the script detects its exact deterministic soft-deleted AIServices account and offers to purge it permanently, releasing retained model capacity. If no such account exists and subscription-wide quota is still insufficient, the evaluator must request an increase from Azure or select another configured region.
 - **A generic evaluator's subscription might genuinely lack access to any of the four candidate regions** (e.g. an unusual Azure Policy restricting allowed regions) — not yet handled; the script would report "no candidate region has both models available" without a specific remedy beyond checking Azure Policy.
-- **The default-provider change is a breaking change** for any existing chart consumer relying on the implicit Ollama default; handled by the repo's automated, commit-header-driven version bump (tracked as part of implementation, not this doc — see [Helm chart changes](#helm-chart-changes)).
-- **Depends on #103** (`psService.llmModel`/`llmEmbedModel` chart override keys). `scripts/llm-defaults.conf` here is evaluator-tunable, including chat/embedding model names — but `ps-service-deployment.yaml` today hardcodes `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` per provider. Without #103's override keys, an evaluator who edits `llm-defaults.conf`'s model name gets a deployment `deploy-llm.sh` happily creates under Azure but that `ps-service` never calls, since the chart still passes the old hardcoded name — the same class of opaque runtime failure this design exists to eliminate, just for model name instead of credentials. #103 should land before or alongside this work.
+- **The Azure default provider** affects any chart consumer relying on an implicit Ollama default; see [Helm chart behaviour](#helm-chart-behaviour).
+- **Model names flow through chart keys.** `scripts/llm-defaults.conf` is evaluator-tunable, including chat/embedding model names, and the chart takes the matching `llm.model`/`llm.embedModel` override keys (rendered into `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL`). An evaluator who edits `llm-defaults.conf`'s model name must pass the same name through those keys; otherwise `deploy-llm.sh` creates a deployment under Azure that `ps-service` never calls, the same class of opaque runtime failure this design exists to eliminate, just for model name instead of credentials.

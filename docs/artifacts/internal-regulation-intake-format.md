@@ -1,13 +1,11 @@
 # Internal-Regulation Intake Format
 
-> **Status: Draft.** This specifies the input format for `ps-cli ingest document`, a
-> deliverable of [#54](https://github.com/mindovermachine-dev/policy-system/issues/54).
+> **Status: Draft.** This specifies the input format for `ps-cli ingest document`.
 > `ps-cli` and `ps-service` validate submitted files against this format directly.
-> Content-transport has shipped: `ps-cli ingest document <local-file-path>` reads the
+> `ps-cli ingest document <local-file-path>` reads the
 > file from your own machine, validates it locally, and sends its content in the
 > request body — PS Service performs no server-side path resolution and never touches
-> its own filesystem to locate the document. The node/edge schema below remains
-> unchanged by that transport work.
+> its own filesystem to locate the document.
 
 ## Who this is for
 
@@ -300,11 +298,11 @@ silently-dropped field.
 - A `RiskPath` can `VERIFIED_BY` more than one `Control`, and the same `Control` can be
   `VERIFIED_BY`d by more than one `RiskPath` — no artificial cap either side.
 - A `PracticeArea` can `OWNS` more than one `Policy`, and the same `Policy` can be `OWNS`d by
-  more than one `PracticeArea` — no artificial one-owner cap either side (see AC-BI-011).
+  more than one `PracticeArea` — no artificial one-owner cap either side.
 - A `Capability` may be `COVERS`ed by more than one `PracticeArea`; there is no one-parent
-  limit, unlike `GOVERNED_BY` (see AC-BI-011).
+  limit, unlike `GOVERNED_BY`.
 - A `Capability` may be `MITIGATED_BY` more than one `RiskPath`; there is no one-parent
-  limit, unlike `GOVERNED_BY` (see AC-BI-011).
+  limit, unlike `GOVERNED_BY`.
 
 ## Worked example
 
@@ -391,9 +389,10 @@ Every rejection is fail-closed: no partial graph is ever written from an invalid
 
 ## Versioning
 
-This document and its eventual companion JSON Schema are versioned together. A breaking
-change to the node/edge shape above will be called out with a new version number once #54
-ships and the schema file exists; this document will link to it directly at that point.
+This document and its companion JSON Schema
+([`schemas/internal-regulation-intake.v1.schema.json`](./schemas/internal-regulation-intake.v1.schema.json))
+are versioned together. A breaking change to the node/edge shape above is called out with a
+new version number.
 
 ## See also
 
@@ -401,5 +400,3 @@ ships and the schema file exists; this document will link to it directly at that
   is a customer-facing subset of, for anyone who wants the underlying rationale.
 - [`user-guide.md`](./user-guide.md) — end-to-end `ps-cli` usage, including how to point
   `ps-cli` at the right environment before running `ingest document`.
-- [Issue #54](https://github.com/mindovermachine-dev/policy-system/issues/54) — tracks the
-  implementation this format specifies.

@@ -242,7 +242,7 @@ rubric, name contradictions). The native client gives that model the UI it wants
 | D-12 | **Client surfaces and naming** — see the table below. The User Pane aggregates the user's personal surfaces: an **Inbox** of assigned work, a **Library** of conversations and documents (D-9's two entry points), and identity/logout. An Inbox item is a third entry point that converges like the other two: opening an assignment lands in a conversation anchored to the relevant artifact, and an approval assignment ends in the D-2 passkey ceremony. |
 | D-13 | **Notifications versus Inbox.** Notifications say "something you were watching finished"; the Inbox says "something needs your decision." A completed pipeline run is a notification on its conversation in the Library; a near-miss surfaced by that run is an Inbox item. Assignments therefore have two sources: human-assigned (a CO assigns authoring) and system-generated (a run mints near-miss work) — both feed Q-12. |
 | D-14 | **Review/resolve flows reuse the D-8 pattern.** Near-miss review and graph cleanup render as a comparison artifact — the candidate pair side by side with the merge effect previewed explicitly — with the decision controls on the artifact and a signing summary bound to the exact pair and state, matching Graph Cleanup's existing server-side challenge binding. |
-| D-15 | **ps-client is the complete product surface** — every role, admin included. Aspiration: retire ps-cli's operator-facing commands, which requires the client to absorb local-file intake (internal intake JSON today, PDF when that pipeline exists). The plugin reaches PS Service through a remote connector with the `ps-cli` client (#173); #174 removed ps-cli's MCP plumbing. |
+| D-15 | **ps-client is the complete product surface** — every role, admin included. Aspiration: retire ps-cli's operator-facing commands, which requires the client to absorb local-file intake (internal intake JSON today, PDF when that pipeline exists). The plugin reaches PS Service through a remote connector with the `ps-cli` client; ps-cli carries no MCP plumbing. |
 | D-16 | **v1 scope is the evaluator's journey** (section 11): Login Screen, invite, role assignment and Library from day one, then ingest/restore with run artifacts and completion notifications, near-miss review and graph cleanup (minimal Inbox included), gap Q&A, and authoring through propose. |
 
 ### Client surfaces (naming)
@@ -310,7 +310,7 @@ What the repo actually provides against the pane contract (C-2, D-3, D-7), from
   with per-anchor guidance text — one aggregation formula (0–100) and a per-type
   `pass_threshold` (80 everywhere today). Criterion ids are governed as stable; template
   sections map 1:1 to criterion ids. Conceptually this *is* the D-7 contract.
-- **A typed domain-schema registry** (#199, `ps_service.domain_schema`): per-node `Property`
+- **A typed domain-schema registry** (`ps_service.domain_schema`): per-node `Property`
   with type/presence/write-ownership flags. The draft tools' patchable-field allowlists are
   *derived* from it (`patchable_fields("Policy")`), and the rubric-paired content fields
   (`scope_in`, `normative_commitments`, …) are real schema properties. The `domain_concepts`

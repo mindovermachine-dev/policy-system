@@ -10,6 +10,12 @@ One of the client types users use to access Policy System is Agent Skills. The f
 - ps-get-catalog-listing. This skill lists every curated instrument (external and internal) available from the Policy System's configured curated-content source.
 - ps-restore-instrument. This skill fetches one curated instrument's artifact from the Policy System's configured curated-content source and restores it into the Company Policy Knowledge Graph, given its instrument_id.
 - ps-list-ingested. This skill lists every RegulatoryInstrument already ingested into the Company Policy Knowledge Graph, read from the live graph (unlike ps-get-catalog-listing, which lists the curated source before ingestion), so you can check what is there before deciding to ingest, restore, or author policy.
+- ps-assess-instrument-applicability. This skill interviews a Compliance Officer about the company's markets, geographies, products and services, confirms the captured input, and produces a tiered (likely, possible, excluded) candidate list of EU regulatory instruments from general regulatory knowledge, each with its CELEX id when known.
+- ps-author-policy. This skill guides a user through authoring a new or amended Policy, Standard and Control tree, detecting whether a governing Policy already exists for the named Capabilities and then walking Policy, Standards and Controls one rubric criterion at a time until each document's own rubric-weighted score clears its pass threshold.
+- ps-policy-lifecycle. This skill creates a draft Policy, reads a Policy's full Standard and Control tree, and moves a Policy through its governance lifecycle (propose, approve, reject, revert to draft).
+- ps-manage-access-roles. This skill lists, grants and revokes access roles (SystemOwner, SystemAdmin, PolicyManager) for a principal, and surfaces the SystemOwner floor warning.
+- ps-list-audit-events. This skill reads the shared audit trail (who did what, to what, and when), filtered by actor, resource, action or time range and paginated newest first. It is restricted to SystemOwner and SystemAdmin and is read-only.
+- ps-invite-user. This skill invites a new user by creating a single-use Authentik enrollment invite. It is restricted to SystemAdmin and above.
 
 ## Development of Policy System Skills
 

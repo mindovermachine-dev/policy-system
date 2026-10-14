@@ -104,7 +104,6 @@ def test_operations_guide_restore_carries_the_roles_and_states_the_residuals() -
     # Residual: ps_state owns the database, so "cannot DROP" must not be over-claimed.
     upgrade = _section(ops, "### Upgrading to the graph mutation log")
     assert "DROP DATABASE" in upgrade
-    assert "#151" in upgrade
     assert "graph_log" in _section(ops, "### PS Postgres (`ps_state` and `ps_signing`)")
 
 
@@ -356,13 +355,8 @@ def test_architecture_actions_table_lists_every_gateway_action() -> None:
 def test_architecture_gateway_intro_says_what_is_built_and_what_is_not() -> None:
     gateway = _section(_read(_CA), "### Graph Write Gateway")
     intro = gateway.split("#### Domain Concepts")[0]
-
-    assert "#205" in intro
-    assert "#206" in intro
     assert "no writer" not in intro.lower()
     assert "ingestion is its first writer" in intro.lower()
-    assert "#207" in intro
-    assert "#208" in intro
     assert "the contracts below describe the intended behavior" not in intro
 
 
@@ -425,7 +419,6 @@ def test_architecture_guidance_states_lock_order_and_the_single_replica_precondi
     for needle in (
         "strategy: Recreate",
         "session advisory lock",
-        "#208",
         "replicas",
         "committed_apply_pending",
         "reconciler",
@@ -452,13 +445,9 @@ def test_architecture_container_diagram_shows_startup_recovery_of_the_gateway() 
 
 def test_architecture_component_row_and_sequence_state_the_implemented_behaviour() -> None:
     ca = _read(_CA)
-    row = next(line for line in ca.splitlines() if line.startswith("| Graph Write Gateway | `ps."))
     sequence = _section(
         ca, "### Graph Write Gateway: SubmitGroup, commit-then-apply, apply pending (C-0)"
     )
-
-    assert "#206" in row
-    assert "#206" in sequence
     for needle in ("stale", "blocked"):
         assert needle in sequence, needle
 
@@ -487,7 +476,6 @@ def test_architecture_registers_replay_and_digest_as_implemented() -> None:
     ):
         assert "Target design" not in row, row[:60]
         assert "target design" not in row.split(":", 1)[0].lower(), row[:60]
-    assert "#207" in _ca_row("| Graph Write Gateway | `ps.")
     assert "contracts for those stay target design" not in intro
     assert "registered when #207 lands" not in registration
     for module in (
@@ -539,7 +527,6 @@ def test_architecture_describes_deterministic_replay_verification_and_the_equiva
         "verified_position",
         "unverified_entries",
         "equivalence_harness.py",
-        "AC-RD-009",
     ):
         assert needle in gateway, needle
     assert "digest" in kind and "checkpoint" in kind.lower()
@@ -585,7 +572,6 @@ def test_architecture_ingestion_section_says_its_writes_go_through_the_gateway()
 
     assert "Target design (not yet implemented" not in guidance
     for needle in (
-        "Implemented (#208)",
         "ONE native group",
         "test_no_graph_write_path.py",
         "graph_submission.py",
@@ -594,9 +580,6 @@ def test_architecture_ingestion_section_says_its_writes_go_through_the_gateway()
         "503",
         "never falls back to a direct FalkorDB write",
         "StampEdgeIdentity",
-        "modulo that property",
-        "AC-BI-002",
-        "AC-BI-004",
     ):
         assert needle in ingestion, needle
     assert "persist_native_structural_graph" not in ingestion
@@ -605,10 +588,9 @@ def test_architecture_ingestion_section_says_its_writes_go_through_the_gateway()
 def test_architecture_diagram_and_rows_show_ingestion_as_a_gateway_writer() -> None:
     ca = _read(_CA)
 
-    assert "Ingestion edge is implemented (#208)" in ca
+    assert "edges of Ingestion, the Domain Mapper" in ca
     assert "Ingestion->>Gateway: SubmitGroup" in ca
     assert "Ingestion->>DB: PersistNativeStructuralGraph" not in ca
-    assert "#208" in _ca_row("| Graph Write Gateway | `ps.")
     assert "with no writer wired yet" not in ca
     assert "no writer is wired" not in ca
 
@@ -670,7 +652,6 @@ def test_architecture_company_merge_section_says_its_writes_go_through_the_gatew
 
     assert "Target design (not yet implemented" not in guidance
     for needle in (
-        "Implemented (#210)",
         "test_no_graph_write_path.py",
         "create-only",
         "set-if-null",
@@ -678,17 +659,15 @@ def test_architecture_company_merge_section_says_its_writes_go_through_the_gatew
         "StalePendingReviewError",
         "record_opening_row_with_event_id",
         "CompanyMergePersistenceError",
-        "AC-BI-002",
     ):
         assert needle in guidance, needle
     assert "Company Merge target design" not in ca
-    assert "Company Merge (#210)" in ca or "Company Merge since #210" in ca
-    assert "#210" in _ca_row("| Graph Write Gateway | `ps.")
+    assert "Company Merge is its third" in ca
 
 
 def test_architecture_company_merge_lists_the_observable_differences() -> None:
     guidance = _company_merge_guidance()
-    differences = guidance.split("Observable differences from the direct writes (#210)")[1]
+    differences = guidance.split("Write behaviour:")[1]
 
     for needle in (
         "`None`",  # a classification row with a None required property now raises
@@ -698,7 +677,7 @@ def test_architecture_company_merge_lists_the_observable_differences() -> None:
         "`ingestion_run.submit`",
         "BEFORE the approval is consumed",  # sign-route and resolve pre-check
         "stays `pending`",
-        "marks it only when a transient fault outlasts its retries",  # health recording
+        "marks FalkorDB unhealthy only when a transient fault outlasts its retries",
         "UNIDENTIFIED_EDGE_SCAN",
         "PS state database",
     ):
@@ -713,20 +692,9 @@ def test_architecture_restore_registration_lists_no_deleted_interim_module() -> 
         assert f"restore/{module}.py" not in registration, module
     for module in ("leg_primitives", "merge_primitives", "baseline_reader", "graph_submission"):
         assert f"restore/{module}.py" in registration, module
-    assert "test_no_graph_write_path.py" in restore
     assert "retired by #214" not in restore
     assert "Interim snapshot writer (#210)" not in restore
     assert "WATCH`/`MULTI`/`EXEC` optimistic-concurrency retry loop" not in restore
-
-
-def test_architecture_restore_d6_states_the_status_at_delivery() -> None:
-    decisions = _restore_decisions()
-
-    assert "Status at delivery." in decisions
-    assert "live comparison" in decisions
-    assert (
-        _MECHANISM_WORDS.findall(decisions.split("Status at delivery.")[1].split("\n\n")[0]) == []
-    )
 
 
 def test_no_target_design_marker_of_issue_214_is_left_in_the_architecture_documents() -> None:
@@ -756,7 +724,7 @@ def test_company_merge_registration_lists_the_gateway_modules_and_a_read_only_cl
         "generated_values.py",
         "pending_review.py",
     }
-    assert "read-only client since #210" in registration
+    assert "read-only client" in registration
 
 
 def test_domain_concepts_and_operations_guide_name_company_merge_as_a_gateway_writer() -> None:
@@ -764,7 +732,6 @@ def test_domain_concepts_and_operations_guide_name_company_merge_as_a_gateway_wr
     ops = _section(_read(_OPS), "## Troubleshooting / FAQ")
 
     assert "Company Merge (the merge stage and the near-miss resolution) since #210" in section
-    assert "#210-#214" not in section
     assert "Company Merge" in ops
     assert "the approval stays pending" in ops
 
@@ -781,24 +748,16 @@ def _policy_lifecycle_guidance() -> str:
 
 
 def test_architecture_policy_lifecycle_says_its_writes_go_through_the_gateway() -> None:
-    ca = _read(_CA)
     guidance = _policy_lifecycle_guidance()
 
     assert "Target design (not yet implemented" not in guidance
     for needle in (
-        "Implemented (#211)",
         "test_no_graph_write_path.py",
         "record_standalone_with_event_id",
         "one gateway group",
         "PolicyLifecycleGraphUnavailableError",
-        "AC-BI-002",
     ):
         assert needle in guidance, needle
-    assert "#211" in _ca_row("| Graph Write Gateway | `ps.")
-    assert "#211-#214" not in ca
-    assert "#212-#214" not in ca
-    assert "#213-#214" not in ca
-    assert "#214" in ca
 
 
 def test_architecture_policy_lifecycle_cascade_is_one_gateway_group_not_one_cypher_statement() -> (
@@ -819,12 +778,11 @@ def test_architecture_policy_lifecycle_keeps_both_halves_of_the_persistence_erro
 
 def test_architecture_policy_lifecycle_lists_the_observable_differences() -> None:
     guidance = _policy_lifecycle_guidance()
-    differences = guidance.split("Observable differences from the direct writes (#211)")[1]
+    differences = guidance.split("Write behaviour:")[1]
     differences = differences.split("\n- ")[0]
 
     for needle in (
         "`identity` property",
-        "AC-BI-002",
         "fails closed",
         "`get-policy`",
         "`FalkorDB write failed: `",
@@ -833,7 +791,7 @@ def test_architecture_policy_lifecycle_lists_the_observable_differences() -> Non
         "full governed set",  # the repoint guard compares the prior's complete governed set
         "no audit link",
         "one atomic group",  # create is one group: no partial draft
-        "no longer creates a second node",
+        "does not create a second node",
         "full-edge scan",
         "`MutationGroup.audit_event_id` is optional",
     ):
@@ -884,18 +842,13 @@ def test_solution_architecture_and_domain_concepts_name_policy_lifecycle_as_a_ga
     sa = _read(_SA)
     section = _section(_read(_DOMAIN_CONCEPTS), "## Graph Write Gateway and Mutation Log")
 
-    assert "Policy Lifecycle (#211)" in sa
-    assert "#211-#214" not in sa
-    assert "#212-#214" not in sa
+    writer_edge = sa.split("Cypher: read knowledge graph")[1].split("\n")[0]
+    assert "Policy Lifecycle" in writer_edge
     assert "(target)" not in sa.split("Cypher: read knowledge graph")[1].split("\n")[0]
     assert (
         "Policy Lifecycle (creation, edits, transitions and governance backfills) since #211"
         in section
     )
-    assert "#211-#214" not in section
-    assert "#212-#214" not in section
-    assert "#213-#214" not in section
-    assert "#214" in section
 
 
 def test_both_copies_of_the_domain_concepts_are_identical() -> None:
@@ -939,30 +892,23 @@ def test_architecture_graph_cleanup_says_its_writes_go_through_the_gateway() -> 
 
     assert "Target design (not yet implemented" not in guidance
     for needle in (
-        "Implemented (#212)",
         "test_no_graph_write_path.py",
         "record_standalone_with_event_id",
         "one gateway group",
         "committed_apply_pending",
         "is_caught_up",
-        "AC-BI-002",
     ):
         assert needle in guidance, needle
-    assert "#212" in _ca_row("| Graph Write Gateway | `ps.")
     assert "Graph Cleanup is its fifth" in ca
-    assert "#212-#214" not in ca
-    assert "#213-#214" not in ca
-    assert "#214" in ca
 
 
 def test_architecture_graph_cleanup_lists_the_observable_differences() -> None:
     guidance = _graph_cleanup_guidance()
-    differences = guidance.split("Observable differences from the direct writes (#212)")[1]
+    differences = guidance.split("Write behaviour:")[1]
     differences = differences.split("\n- ")[0]
 
     for needle in (
         "`identity` property",
-        "AC-BI-002",
         "unrelated write",
         "stale",
         "committed but not yet applied",
@@ -1019,14 +965,8 @@ def test_solution_architecture_and_domain_concepts_name_graph_cleanup_as_a_gatew
     sa = _read(_SA)
     section = _section(_read(_DOMAIN_CONCEPTS), "## Graph Write Gateway and Mutation Log")
 
-    assert "Graph Cleanup (#212)" in sa
-    assert "#212-#214" not in sa
-    assert "#213-#214" not in sa
-    assert "#214" in sa
+    assert "Graph Cleanup" in sa.split("Cypher: read knowledge graph")[1].split("\n")[0]
     assert "Graph Cleanup (merge, release and unmerge) since #212" in section
-    assert "#212-#214" not in section
-    assert "#213-#214" not in section
-    assert "#214" in section
     assert "since #212" in _read(
         _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "ps-domain-concepts.md"
     )
@@ -1106,7 +1046,6 @@ def test_architecture_export_says_its_backfill_goes_through_the_gateway() -> Non
 
     assert "Target design (not yet implemented" not in guidance
     for needle in (
-        "Implemented (#213)",
         "test_no_graph_write_path.py",
         "before any is submitted",
         "one gateway group",
@@ -1114,10 +1053,8 @@ def test_architecture_export_says_its_backfill_goes_through_the_gateway() -> Non
         "SystemAuditRecorder",
         "ExportGraphWriteError",
         "GraphWriteUnavailableError",
-        "AC-BI-004",
     ):
         assert needle in guidance, needle
-    assert "#213" in _ca_row("| Graph Write Gateway | `ps.")
 
 
 def test_architecture_change_monitor_says_its_succession_goes_through_the_gateway() -> None:
@@ -1125,21 +1062,19 @@ def test_architecture_change_monitor_says_its_succession_goes_through_the_gatewa
 
     assert "Target design (not yet implemented" not in guidance
     for needle in (
-        "Implemented (#213)",
         "test_no_graph_write_path.py",
         "GraphWriteUnavailableError",
         "audit_event_id",
         "ingestion_run.submit",
         "SuccessionPersistenceError",
         "`linked`",
-        "AC-BI-002",
     ):
         assert needle in guidance, needle
 
 
 def test_architecture_change_monitor_lists_the_observable_differences() -> None:
     guidance = _change_monitor_guidance()
-    differences = guidance.split("Observable differences from the direct writes (#213)")[1]
+    differences = guidance.split("Write behaviour:")[1]
     differences = differences.split("\n- ")[0]
 
     for needle in (
@@ -1228,10 +1163,9 @@ def test_architecture_names_change_monitor_and_export_as_gateway_writers() -> No
     assert "Export (embedding backfill) is its seventh" in gateway
     assert "Graph Cleanup is its fifth" in gateway
     assert "Restore" in gateway.split("seventh")[1].split("A test-side harness")[0]
-    assert "#213-#214" not in ca
-    assert "Change Monitor (#213)" in sa
-    assert "Export (#213)" in sa
-    assert "#213-#214" not in sa
+    writer_edge = sa.split("Cypher: read knowledge graph")[1].split("\n")[0]
+    assert "Regulatory Change Monitor" in writer_edge
+    assert "Export" in writer_edge
     assert "(#213-#214)" not in _section(
         ca, "### Graph Write Gateway: SubmitGroup, commit-then-apply, apply pending (C-0)"
     )
@@ -1244,7 +1178,6 @@ def test_domain_concepts_name_restore_as_a_gateway_writer_since_214() -> None:
         section
     )
     assert "since #213" in section
-    assert "#213-#214" not in section
     assert "Restore" in section.split("since #213")[1].split("\n")[0]
     assert "since #214" in section
     assert "until then its direct writes are not in the log" not in section
@@ -1257,7 +1190,7 @@ def test_operations_guide_503_row_names_the_amendment_check_and_exports() -> Non
 
     for needle in (
         "Regulatory Change Monitor",
-        "`check regulations`",
+        "`check_regulations`",
         "`POST /change-checks`",
         "`finalize`",
         "link-only",
@@ -1279,63 +1212,27 @@ def test_curated_content_readme_says_the_export_cli_needs_the_ps_state_database(
 
 # --- Restore commits each restore as one gateway group (design record) -------------------
 
-_RESTORE_DECISIONS = "#### Design decisions (#214)"
-_RESTORE_C0 = "#### C-0 exceptions (#214)"
-_GROUP_R_TESTS = (
-    "test_restore_has_its_own_snapshot_writer.py",
-    "test_snapshot_merge_writer.py",
-    "test_staging_stage_graph_live.py",
-    "test_staging_finalize_live.py",
-    "test_staging_discard_live.py",
-    "test_staging_snapshot_live.py",
-    "test_staging_policy_system_leg_live.py",
-    "test_restore_instrument_concurrency_live.py",
-    "test_restore_instrument_interruption_live.py",
-    "test_restore_instrument_all_or_nothing_live.py",
-)
-_GROUP_S_TESTS = (
-    "test_restore_instrument_obligation_redirect.py",
-    "test_restore_instrument_merged_redirect.py",
-    "test_restore_instrument_classification_passthrough.py",
-    "test_restore_instrument_draft_governance.py",
-    "test_restore_merge_governance_parity.py",
-    "test_restore_instrument_audit_log.py",
-    "test_durability_e2e.py",
-    "test_restore_instrument_tool.py",
-    "test_restore_orchestration",
-    "test_live_restorations_engprac.py",
-    "test_live_ingest_internal_engprac.py",
-    "test_restore_instrument_baseline_merge_live.py",
-    "test_restore_instrument_native_live.py",
-    "test_export_restore_roundtrip_live.py",
-    "test_restore_instrument_draft_governance_live.py",
-)
+_RESTORE_DECISIONS = "#### Guarantees"
+_RESTORE_C0 = "#### Observable behaviour"
 
 
 def _restore_decisions() -> str:
     return _section(_section(_read(_CA), "### Restore"), _RESTORE_DECISIONS)
 
 
-def test_architecture_restore_records_the_six_design_decisions() -> None:
+def test_architecture_restore_states_the_gateway_group_guarantees() -> None:
     decisions = _restore_decisions()
 
-    for decision in ("D-1", "D-2", "D-3", "D-4", "D-5", "D-6"):
-        assert f"**{decision}" in decisions, decision
-    assert "Option A" in decisions
-    assert "Option B" in decisions
-
-
-def test_architecture_restore_d1_cites_a_fourteen_step_read_classification() -> None:
-    decisions = _restore_decisions()
-    rows = re.findall(r"^\| (\d+) \|.*$", decisions, flags=re.MULTILINE)
-
-    assert [int(step) for step in rows] == list(range(1, 15))
-    assert "own write" in decisions.lower()
-    assert "pre-existing" in decisions.lower()
-    assert (
-        "overlay sufficiency shown with test-local builders; production builders re-proved "
-        "with digest equality in slice 7 (AC-BI-007)"
-    ) in decisions
+    for guarantee in (
+        "**Baseline merge as primitives.**",
+        "**A group may span graphs.**",
+        "**Swap apply.**",
+        "**Replace.**",
+        "**Audit linkage.**",
+    ):
+        assert guarantee in decisions, guarantee
+    assert "one log position" in decisions
+    assert "Restore holds no write path to the graph store" in decisions
 
 
 def test_architecture_restore_d5_maps_every_outcome_to_a_terminal_audit_row() -> None:
@@ -1352,16 +1249,6 @@ def test_architecture_restore_d5_maps_every_outcome_to_a_terminal_audit_row() ->
         assert needle in decisions, needle
 
 
-def test_architecture_restore_d6_lists_retired_and_rewritten_tests_including_group_s() -> None:
-    decisions = _restore_decisions()
-
-    for name in (*_GROUP_R_TESTS, *_GROUP_S_TESTS):
-        assert name in decisions, name
-    assert "Group S" in decisions
-    assert "rewritten from Cypher text to primitives" in decisions
-    assert "AC-BI-008" in decisions
-
-
 def test_architecture_restore_decisions_state_contracts_without_mechanism_words() -> None:
     decisions = _restore_decisions()
     prose = "\n".join(line for line in decisions.splitlines() if not line.startswith("| "))
@@ -1372,7 +1259,7 @@ def test_architecture_restore_decisions_state_contracts_without_mechanism_words(
     assert "NOT done" not in decisions
 
 
-def test_architecture_restore_c0_exceptions_state_the_seven_differences() -> None:
+def test_architecture_restore_states_the_seven_observable_behaviours() -> None:
     restore = _section(_read(_CA), "### Restore")
     exceptions = _section(restore, _RESTORE_C0)
 
@@ -1382,7 +1269,7 @@ def test_architecture_restore_c0_exceptions_state_the_seven_differences() -> Non
         "scales with the total size of the single-tenant graph",
         "mutation log",
         "carry an identity",
-        "no graph is created",
+        "creates no graph",
         "ArtifactContentRejectedError",
         "503",
     ):
@@ -1587,15 +1474,15 @@ def test_architecture_states_gateway_only_graph_access_and_read_only_reads() -> 
     assert "test_gateway_only_graph_access.py" in gateway
     assert "no allow-list" in gateway
     assert "tools/curated-export/export_instrument.py" in gateway
-    assert "Since #215 every writer requests a digest checkpoint" in gateway
+    assert "Every writer requests a digest checkpoint" in gateway
 
 
-def test_architecture_restore_status_records_the_deletion_of_the_interim_modules() -> None:
+def test_architecture_restore_describes_no_deleted_interim_module() -> None:
     restore = _section(_read(_CA), "### Restore")
 
     assert "unreferenced by Restore" not in restore
     assert "allows them by name" not in restore
-    assert "deleted by #215" in restore
+    assert "deleted by #215" not in restore
 
 
 def test_architecture_diagram_comment_names_the_gateway_only_rule() -> None:
@@ -1632,7 +1519,6 @@ def test_operations_guide_backup_excludes_authentik_and_links_the_follow_up() ->
 
     assert "Authentik" in backup
     assert "not covered" in backup
-    assert "#235" in backup
     assert _AUTHENTIK_BACKUP_DOCS in backup
 
 
@@ -1704,7 +1590,6 @@ def test_operations_guide_restore_has_no_retired_text_or_change_history() -> Non
         "pg_dump",
         "pg_restore",
         "each is independent",
-        "#216",
     ):
         assert retired not in restore, retired
     for phrase in ("replaces", "no longer", "previously", "used to"):
@@ -1746,14 +1631,12 @@ def test_no_old_backup_statements() -> None:
         "encrypted",
         "existingSecret",
         "--wait-for-jobs",
-        "#235",
         _AUTHENTIK_BACKUP_DOCS,
     ):
         assert present in backup_restore, present
 
     ops_all = _collapse(ops)
     for absent in (
-        "#216",
         "survives a pod restart",
         "persists to a `PersistentVolumeClaim` (see [Backup]",
     ):
@@ -1778,7 +1661,6 @@ def test_no_old_backup_statements() -> None:
     assert len(readme_rows) == 1
     row = readme_rows[0]
     assert "PS Postgres Backup & Restore" in row
-    assert "#234" in row
     for absent in ("Azure Blob", "Scheduled backups of the compliance graph", "FalkorDB Backup"):
         assert absent not in row, absent
 

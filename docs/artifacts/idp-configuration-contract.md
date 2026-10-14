@@ -1,6 +1,6 @@
 # IdP Configuration Contract
 
-PS Service is a generic OIDC resource server (issue #58): it validates bearer
+PS Service is a generic OIDC resource server: it validates bearer
 tokens against **any** OIDC-compliant identity provider via standard OIDC
 discovery — there is no provider-specific code. A deployment supplies up to
 four configuration values (as `PS_AUTH_*` environment variables, or as the
@@ -8,8 +8,8 @@ corresponding `psService.auth.*` Helm values — see the
 [Helm Chart Values Reference](./helm-chart-values-reference.md)). This page
 documents what each value is, what IdP-side artifact it corresponds to, and a
 worked example for the bundled [Authentik](https://goauthentik.io) instance —
-PS Service's default, fixed IdP as of issue #129 (`scripts/deploy-ps-prod.sh`'s
-production profile and, since issue #165, `scripts/deploy-ps-eval.sh`'s evaluator profile
+PS Service's default, fixed IdP (`scripts/deploy-ps-prod.sh`'s
+production profile and `scripts/deploy-ps-eval.sh`'s evaluator profile
 both bundle Authentik and point PS Service at it always). A customer wanting their own upstream IdP's identities to log in can
 additionally federate the bundled Authentik to it — see [Optional: federate to
 an upstream IdP](#optional-federate-to-an-upstream-idp) — without changing any
@@ -27,8 +27,8 @@ it runs the same real OIDC login as production.
 | --- | --- | --- | --- |
 | Issuer | `PS_AUTH_ISSUER` | `psService.auth.issuer` | The OIDC authorization server's base URL. PS Service fetches `<issuer>/.well-known/openid-configuration` from it at startup to discover the JWKS endpoint and the signing algorithms it trusts, and every presented token's `iss` claim must match this value exactly (character for character). |
 | Audience | `PS_AUTH_AUDIENCE` | `psService.auth.audience` | The identifier of PS Service itself as an OIDC *resource server* — for the bundled Authentik, the fixed OAuth2 Provider's own `client_id`; Every presented token's `aud` claim must match this value exactly. |
-| CLI client id | `PS_AUTH_CLI_CLIENT_ID` | `psService.auth.cliClientId` | The **public client** Provider that PS-Cli authenticates as (device-authorization flow, issue #57; for Claude, the authorization-code flow, see [Grants and redirect URIs of the `ps-cli` provider](#grants-and-redirect-uris-of-the-ps-cli-provider)). Optional: only needed so PS Service can advertise it in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`, letting a client discover which client id to use without being told out of band. |
-| Scopes | `PS_AUTH_SCOPES` | `psService.auth.scopes` | The OAuth scope(s) (space- or comma-separated) that a client should request when logging in — e.g. Authentik's own `openid profile email offline_access` scope mappings. **Not used for token validation** (PS Service checks `aud`, not `scope`), but **required in practice**: PS-Cli's device-authorization login (issue #57) sources its OAuth `scope` request parameter directly from this value, via `/.well-known/oauth-protected-resource`'s `scopes_supported`. Leaving it unset makes PS Service advertise an empty scope list, which most IdPs reject outright, so `ps-cli auth login` fails against any deployment that omits it. |
+| CLI client id | `PS_AUTH_CLI_CLIENT_ID` | `psService.auth.cliClientId` | The **public client** Provider that PS-Cli authenticates as (device-authorization flow; for Claude, the authorization-code flow, see [Grants and redirect URIs of the `ps-cli` provider](#grants-and-redirect-uris-of-the-ps-cli-provider)). Optional: only needed so PS Service can advertise it in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`, letting a client discover which client id to use without being told out of band. |
+| Scopes | `PS_AUTH_SCOPES` | `psService.auth.scopes` | The OAuth scope(s) (space- or comma-separated) that a client should request when logging in — e.g. Authentik's own `openid profile email offline_access` scope mappings. **Not used for token validation** (PS Service checks `aud`, not `scope`), but **required in practice**: PS-Cli's device-authorization login sources its OAuth `scope` request parameter directly from this value, via `/.well-known/oauth-protected-resource`'s `scopes_supported`. Leaving it unset makes PS Service advertise an empty scope list, which most IdPs reject outright, so `ps-cli auth login` fails against any deployment that omits it. |
 
 Only `issuer` and `audience` are required for PS Service to validate tokens at
 all; `cliClientId` is a convenience for client discovery. `scopes` is likewise
@@ -38,12 +38,11 @@ Claude Desktop client will actually log into.
 
 ## Worked example: the bundled Authentik instance (default)
 
-As of issue #129, `scripts/deploy-ps-prod.sh`'s production profile bundles
+`scripts/deploy-ps-prod.sh`'s production profile bundles
 Authentik as PS Service's fixed IdP and computes all four
-`psService.auth.*` values itself; since issue #165 `scripts/deploy-ps-eval.sh` does
+`psService.auth.*` values itself; `scripts/deploy-ps-eval.sh` does
 the same for the evaluator profile — **an operator running either default flow
-performs none of the manual app-registration steps this section used to
-require.** This section documents what those four values resolve to and why,
+performs no manual app-registration steps.** This section documents what those four values resolve to and why,
 both so a reader understands what the deploy scripts are doing on their behalf and
 so someone pointing PS Service at an independently-run Authentik instance
 (outside the scripts) knows what to configure.
@@ -54,7 +53,7 @@ Authentik's blueprint (`charts/policy-system/files/authentik-blueprint.yaml`)
 defines exactly **one** OAuth2 Provider and one Application, both with the
 fixed literal name `ps-cli` — there is no separate API-app/CLI-app
 split, because Authentik's `aud` claim is always the bare OAuth2 Provider
-`client_id` (confirmed live, #128's spike, AC-BI-002 row):
+`client_id` (confirmed live):
 
 | Value | Resolves to | Where it comes from |
 | --- | --- | --- |
@@ -90,14 +89,14 @@ Both URIs carry no hostname, so changing `--hostname` needs no blueprint edit
 
 Claude connects with `client_id` `ps-cli` alone. Dynamic client registration stays disabled, and
 the blueprint has no setting for it. It could not serve Claude anyway: Claude registers without
-credentials, and an anonymous registration request to Authentik is answered with 401 (#167).
+credentials, and an anonymous registration request to Authentik is answered with 401.
 Authentik advertises a `registration_endpoint` only while registration is on, so keeping it off
 also keeps the discovery metadata free of an endpoint Claude cannot use.
 
 The connector must use this existing `ps-cli` client, not a new one. The access token's `aud` is
 the client id, and PS Service accepts a token only when `PS_AUTH_AUDIENCE` equals it (the
 Audience row of [The four values](#the-four-values)). Claude shows the consent screen only when it sends
-`prompt=consent`; the provider's authorization flow is implicit consent (#168 spike). The token
+`prompt=consent`; the provider's authorization flow is implicit consent. The token
 `sub` is the username, as described in the next section.
 
 ### The `sub` claim and the bootstrap owner
@@ -176,7 +175,7 @@ which PS Service trusts.
 
 ### Inviting a new user
 
-As of issue #140, inviting a new user no longer requires an admin to
+Inviting a new user does not require an admin to
 hand-craft the curl call in step 1 of the [Verify](#verify) example below.
 Call the `invite-user` MCP tool directly, or use the `ps-invite-user` skill
 from Claude Desktop, with the target email — PS Service calls Authentik's
@@ -207,27 +206,27 @@ against Authentik's API, outside of PS Service.
 ### Verify
 
 The following is a representative excerpt of a real, live end-to-end run made
-under issue #129 (the prompt then still had a password field; it no longer does, see
+against the bundled instance (the enrolment prompt has no password field, see
 [Passkey-only enrolment and recovery](#passkey-only-enrolment-and-recovery)) —
 generate an invite, redeem it with a passkey enrollment, log in via device
 flow, and present the resulting token to a protected route:
 
 ```bash
-# 1. Generate a single-use invite code (admin-only -- AC-BI-007)
+# 1. Generate a single-use invite code (admin-only)
 $ curl -X POST http://localhost:9080/api/v3/stages/invitation/invitations/ \
     -H "Authorization: Bearer <admin token>" -H "Content-Type: application/json" \
     -d '{"name":"example-invite","single_use":true}'
 201 {"pk":"266f9e11-...", "single_use":true, ...}
 
 # 2. Redeem it at /if/flow/ps-invite-enrollment/?itoken=<pk> -- Prompt (username/
-#    name/email; no password field since #165) -> User Write -> WebAuthn passkey
+#    name/email; no password field) -> User Write -> WebAuthn passkey
 #    enrollment -> logged in.
 #    (server-side confirmation a real credential was persisted:)
 $ ak shell -c "WebAuthnDevice.objects.filter(user__username='combined-user-1')"
 device 'WebAuthn Device' created 2026-09-26 12:08:...
 
 # 3. ps-cli auth login (device flow) -- passkey satisfies login with NO password
-#    entered in this session at all (AC-BI-004: replaces password, not just MFA).
+#    entered in this session at all (the passkey replaces the password, not just MFA).
 $ uv run ps-cli auth login
 http://localhost:9080/device?code=097724529
 logged in to s11 (http://localhost:9080/application/o/ps-cli/)
@@ -241,7 +240,7 @@ $ curl -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer <real token>" 
 200
 ```
 
-PS Service's existing, unmodified OIDC validator (issue #58) accepted a
+PS Service's existing, unmodified OIDC validator accepted a
 real, passkey-login-derived Authentik token — no PS Service code or
 configuration beyond the four values above was involved.
 
@@ -256,7 +255,7 @@ defined as follows. It has not been verified against a non-Authentik provider.
   URIs as listed under [Grants and redirect URIs of the `ps-cli` provider](#grants-and-redirect-uris-of-the-ps-cli-provider).
   Dynamic client registration is not part of this and is not used.
 - **No direct path; federate.** A provider that enforces the RFC 8707 `resource` parameter in
-  conflict with the MCP authorization spec (Entra, #65), or that cannot offer such a client, has no
+  conflict with the MCP authorization spec (Entra), or that cannot offer such a client, has no
   direct Claude path: Claude cannot connect to PS Service with it. The supported route is to
   federate that upstream provider into Authentik, which keeps the Authentik rule; see
   [Optional: federate to an upstream IdP](#optional-federate-to-an-upstream-idp).
@@ -266,7 +265,7 @@ defined as follows. It has not been verified against a non-Authentik provider.
 - **`ps-cli auth login` device-flow page 404s**: almost always means
   Authentik's Brand has no `flow_device_code` configured — the bundled
   blueprint sets this, but a hand-run/standalone Authentik instance built
-  without it will 404 silently (the exact gap #128's spike found).
+  without it will 404 silently (a silent 404).
 - **Every login redirects to a password prompt, passkey never offered
   standalone**: means the shipped `default-authentication-identification`
   stage's `webauthn_stage` FK is unset — by default, a fresh Authentik

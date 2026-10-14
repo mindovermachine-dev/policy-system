@@ -600,7 +600,7 @@ Add the marketplace first. Then install the plugin from it.
    - If `PS_MCP_URL` is not set, `/mcp` shows `ps-mcp` as failed with
      `Missing environment variables: PS_MCP_URL`. Set it, then start a new Claude Code session.
    - The plugin does not use `userConfig` for the URL. A `${user_config.*}` value never reached
-     Claude Desktop - Code sessions (#171), and an unset one drops the server silently.
+     Claude Desktop - Code sessions, and an unset one drops the server silently.
 
 4. Quit Claude Desktop fully (⌘Q). Start it again. Open a **new** chat.
 
@@ -636,7 +636,7 @@ the local network on purpose. This table shows what is reachable and by whom:
 
 | Listener | Address | Reachable by | What it serves |
 | --- | --- | --- | --- |
-| Authentik over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`). `deploy/kind/cluster.yaml` maps it to the HTTPS NodePort of the Authentik server. | Anyone who can reach port `30443` of this machine. On a shared LAN, this is everyone on the LAN. | **All of Authentik**: the login, enrolment, and device-code pages, the whole API, and the **admin UI** (`https://<hostname>:30443/if/admin/`). Only the Authentik login (a passkey) protects it. This is on purpose: it lets a colleague on the LAN log in ([issue #160](https://github.com/mindovermachine-dev/policy-system/issues/160)). |
+| Authentik over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`). `deploy/kind/cluster.yaml` maps it to the HTTPS NodePort of the Authentik server. | Anyone who can reach port `30443` of this machine. On a shared LAN, this is everyone on the LAN. | **All of Authentik**: the login, enrolment, and device-code pages, the whole API, and the **admin UI** (`https://<hostname>:30443/if/admin/`). Only the Authentik login (a passkey) protects it. This is on purpose: it lets a colleague on the LAN log in. |
 | Authentik over plain HTTP | NodePort `30080` inside the kind node only | Nobody outside the node. It is not mapped to the host and not reachable from the LAN. | The deploy script uses it through a loopback `kubectl port-forward` while it sets up the certificate. |
 | PS Service | `127.0.0.1:8000` | This machine only | The REST API and the MCP endpoint. Every call needs an Authentik-issued bearer token. |
 | FalkorDB Browser | `127.0.0.1:3001` | This machine only | The graph explorer UI. Authentik does not protect it. |
@@ -730,8 +730,8 @@ The file `scripts/ps-defaults.conf` holds the defaults that you can tune:
 - `AUTHZ_OWNER_EMAIL`. This is the owner's email: the first `SystemOwner` and Authentik
   administrator. Leave it blank to be prompted, or pass `--owner-email`.
 
-The script no longer reads `AUTHZ_BOOTSTRAP_OWNER_SUBJECT` and `AUTHZ_BOOTSTRAP_OWNER_ISSUER`.
-It derives the owner's identity from the email and the public hostname. There is no
+The script does not read `AUTHZ_BOOTSTRAP_OWNER_SUBJECT` and `AUTHZ_BOOTSTRAP_OWNER_ISSUER`;
+it derives the owner's identity from the email and the public hostname. There is no
 placeholder identity and no second deployment. See [SystemOwner
 bootstrap](#systemowner-bootstrap).
 
@@ -973,10 +973,10 @@ deployment has a public hostname (see [What is exposed (production)](#what-is-ex
 
 | Surface | Public deployment | Non-public deployment | Status |
 | --- | --- | --- | --- |
-| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (#168, Claude Code 2.1.236). Non-public: Expected (inferred from #167, not run); evaluator on `authentik.test`: verification pending (#239). |
-| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (#171, Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (#172 descoped it). Login in the Desktop Code tab: Expected, not yet verified; evaluator on `authentik.test`: verification pending (#239). |
-| Claude Desktop Chat and Cowork | Works as a manually added custom connector (URL plus Client ID `ps-cli`): GO (#172), needs #237 | Does not work (needs public PS Service and Authentik) | Expected for everything beyond the #172 login result. |
-| claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested by #167 or #168). |
+| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (Claude Code 2.1.236). Non-public: Expected (inferred, not run); evaluator on `authentik.test`: verification pending. |
+| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (not tested). Login in the Desktop Code tab: Expected, not yet verified; evaluator on `authentik.test`: verification pending. |
+| Claude Desktop Chat and Cowork | Works as a manually added custom connector (URL plus Client ID `ps-cli`): GO | Does not work (needs public PS Service and Authentik) | Expected for everything beyond the login result. |
+| claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested). |
 
 This describes the direct connector: a remote connector that logs in against Authentik. The
 plugin declares it as a remote HTTP server with no local process. What is verified is listed per
@@ -985,13 +985,13 @@ plugin, because the skills accept only the tool names of `plugin:ps-plugin:ps-mc
 declaration in Claude Desktop (`oauth.clientId`) is untested, and claude.ai is not tested.
 
 **The connector must use the existing `ps-cli` client**, not a new one. The token's `aud` is the
-client ID, and PS Service accepts it only when `PS_AUTH_AUDIENCE` equals that client ID (#167).
-The chart provisions the client (#169); the grants and redirect URIs are in the
+client ID, and PS Service accepts it only when `PS_AUTH_AUDIENCE` equals that client ID.
+The chart provisions the client; the grants and redirect URIs are in the
 [IdP configuration contract](./idp-configuration-contract.md#grants-and-redirect-uris-of-the-ps-cli-provider).
 For an identity provider other than Authentik, see
 [Other identity providers](./idp-configuration-contract.md#other-identity-providers).
 
-Two behaviours of Claude Code 2.1.236 (CLI), Verified (#168). They are also expected in the
+Two behaviours of Claude Code 2.1.236 (CLI), Verified. They are also expected in the
 Desktop Code tab, but not separately verified there. They are not claimed for Chat, Cowork or
 claude.ai:
 
@@ -1000,7 +1000,7 @@ claude.ai:
 - **Same URL hides the plugin server.** If a plugin server has the same URL as a server you added
   by hand, Claude Code does not load the plugin server, and `/mcp` shows no error. Remove one of
   the two. An unresolved `${user_config.*}` value also drops the server silently. `userConfig` does
-  not reach Desktop Code sessions (#171), so the plugin uses `PS_MCP_URL`.
+  not reach Desktop Code sessions, so the plugin uses `PS_MCP_URL`.
 
 ---
 
@@ -1185,9 +1185,7 @@ issuer and the WebAuthn relying-party ID, so moving an install changes all three
 8. Everyone using `ps-cli` runs `ps-cli auth login` again. The stored tokens belong to the old
    issuer.
 
-Verification of this procedure on a live cluster is tracked in
-[#239](https://github.com/mindovermachine-dev/policy-system/issues/239). Until it is recorded
-there, treat the steps as unverified.
+This procedure has not been verified on a live cluster; treat the steps as unverified.
 
 ### Recording verification evidence
 
@@ -1206,11 +1204,10 @@ Nothing in this guide may claim a verified result for this change until that is 
    [Moving an existing evaluator off a .local hostname](#moving-an-existing-evaluator-off-a-local-hostname),
    and record whether the owner got an enrolment link, registered a new passkey, and still holds
    `SystemOwner`. Prove `SystemOwner` with an owner-only call and record the command and result.
-6. Fill in the template below and post it as a comment on
-   [#239](https://github.com/mindovermachine-dev/policy-system/issues/239).
+6. Fill in the template below and keep it with your deployment records.
 
 ```text
-GH #239 verification evidence (post as a comment)
+Evaluator verification evidence
 Date / operator:
 Evaluator hostname:               authentik.test
 1. Claude Code CLI version (claude --version):
@@ -1222,12 +1219,7 @@ Evaluator hostname:               authentik.test
    SystemOwner confirmed by an owner-only call (command and result):
 ```
 
-**Manual follow-up after the evidence is posted.** A maintainer then edits the
-[surface table](#which-claude-surfaces-reach-your-deployment). In each of the CLI row and the
-Desktop row, replace the pending sentence with the verified result and cite the issue and the
-recorded versions (Claude Code version for the CLI row; Desktop app version and bundled Claude
-Code version for the Desktop row). Also change the Desktop non-public status from "Expected" to
-"Verified". Do not make these edits without the posted evidence.
+**After evidence is recorded.** Update the [surface table](#which-claude-surfaces-reach-your-deployment): in each of the CLI row and the Desktop row, replace the pending sentence with the verified result and the recorded versions (Claude Code version for the CLI row; Desktop app version and bundled Claude Code version for the Desktop row), and change the Desktop non-public status from "Expected" to "Verified" only with recorded evidence.
 
 **Graph mutation log.** Upgrading to a version with the graph mutation log also runs a
 provisioning Job that applies the ordinary `ps_state` migrations and creates the owner-protected
@@ -1249,8 +1241,7 @@ before you rely on a claim for a real deployment.
   - A second user invited and enrolled.
   - Owner re-run recovery.
   - Certificate refresh without a manual restart.
-  - This run used an earlier hostname. Re-verification on `authentik.test` is tracked in
-    [#239](https://github.com/mindovermachine-dev/policy-system/issues/239).
+  - This run used an earlier hostname; the evaluator on `authentik.test` is untested.
 - **A second machine on the LAN: simulated, not tried on physical hardware.**
   - A separate container with the CA in its trust store reached Authentik over HTTPS through
     the `0.0.0.0:30443` mapping of the host.
@@ -1271,18 +1262,16 @@ before you rely on a claim for a real deployment.
     - The AKS managed NGINX add-on.
     - Real Let's Encrypt issuance through this flow.
     - Real Azure resources.
-- **Direct Claude connector: partly verified.** The Claude Code CLI (2.1.236) logged in as the `ps-cli` client and refreshed across sessions against a standalone Authentik, using the plugin-declared server (#168). The Desktop Code tab read the `PS_MCP_URL` setting from `settings.json` against a stub with no authentication (#171, Desktop app 2.31226.1). A manually added custom connector in Claude Desktop Chat and Cowork logged in against a public deployment (GO, #172; needs #237). None of this was run through these scripts. Not verified: the plugin-declared `oauth.clientId` in Desktop, claude.ai, and the plugin on a live deployment until a result is recorded. See [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
-- **The invitation link on production needs an unreleased PS Service image.**
-  - `invite_user` calls Authentik in-cluster. It must build the invitee's link on the public
-    address.
-  - Issue #165 added the `PS_AUTHENTIK_PUBLIC_URL` support for this. It is in the repository
-    but in no published release. The latest release, 3.11.0, does not contain it.
-  - Until a release with it is published and deployed, production `invite_user` returns a link
-    that starts with the in-cluster address `http://policy-system-authentik-server/auth`.
-    Before you give the link to the invitee, replace that start with
-    `https://<label>.<region>.cloudapp.azure.com/auth` by hand.
+- **Direct Claude connector: partly verified.** The Claude Code CLI (2.1.236) logged in as the `ps-cli` client and refreshed across sessions against a standalone Authentik, using the plugin-declared server. The Desktop Code tab read the `PS_MCP_URL` setting from `settings.json` against a stub with no authentication (Desktop app 2.31226.1). A manually added custom connector in Claude Desktop Chat and Cowork logged in against a public deployment (GO). None of this was run through these scripts. Not verified: the plugin-declared `oauth.clientId` in Desktop, claude.ai, and the plugin on a live deployment until a result is recorded. See [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
+- **The invitation link on production is built on the public address.**
+  - `invite_user` calls Authentik in-cluster, so it builds the invitee's link from
+    `PS_AUTHENTIK_PUBLIC_URL`, which `deploy-ps-prod.sh` sets through `psService.authentik.publicUrl`.
+  - Without that variable the link starts with the in-cluster address
+    `http://policy-system-authentik-server/auth`. Replace that start with
+    `https://<label>.<region>.cloudapp.azure.com/auth` by hand before you give the link to the
+    invitee.
   - The evaluator is not affected. Users can already reach its Authentik address.
   - `invite_user` through PS Service on production was **not** exercised end to end.
-- **The published Helm chart has the same limit.** Until a chart that contains this flow is
-  published, run the scripts with `PS_CHART_REF=./charts/policy-system` from a checkout.
-  `deploy-ps-eval.sh` and `deploy-ps-prod.sh` both honour it.
+- **A checkout chart.** To run the scripts against the chart in a checkout instead of the
+  published chart, set `PS_CHART_REF=./charts/policy-system`. `deploy-ps-eval.sh` and
+  `deploy-ps-prod.sh` both honour it.

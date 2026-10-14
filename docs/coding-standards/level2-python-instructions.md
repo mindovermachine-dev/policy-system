@@ -213,17 +213,12 @@ These patterns are adapted from the proven shape of the `gh-tt` CLI (a separate,
 
 - **Shape**: `ps-cli <verb> <resource> [name] [flags]`, modeled on kubectl (`kubectl get pods`, `kubectl delete deployment web`). Each verb is a top-level `add_subparsers()` group; each resource is a leaf subparser under it — even when a verb currently has only one resource (e.g. `check regulations`) — so a later sibling resource needs no reshuffle of the group structure.
 - **Current verb vocabulary**:
-  - `get` — read-only lookup/listing (e.g. `get health`, `get catalog`).
-  - `ingest` — bring new content into PS Service (e.g. `ingest regulation`, `ingest document`).
-  - `restore` — restore a curated instrument's artifact into PS Service (e.g. `restore instrument`).
-  - `check` — sweep for state changes (e.g. `check regulations`).
+  - `get` — read-only lookup/listing (e.g. `get health`).
+  - `ingest` — bring new content into PS Service (e.g. `ingest document`).
+  - `export` — write an instrument's artifact out of PS Service (e.g. `export instrument`).
+  - `auth` — manage the signed-in session (`login`, `status`, `logout`).
   - `config` — manage named contexts. The one exception group: it does not nest `config <verb> <resource>`, instead mirroring kubectl's own `kubectl config` subcommands, whose leaves are verb-noun compounds (`set-context`/`use-context`/`get-contexts`).
-- **This vocabulary is expected to grow.** When implementing a new command, prefer a `<verb> <resource>` shape consistent with the existing groups above over inventing a new top-level group or a bespoke spelling:
-  - When implementing an export command, prefer `ps-cli export instrument <instrument_id>`.
-  - When implementing catalog add/remove, prefer `ps-cli add catalog-entry <path>` / `ps-cli remove catalog-entry <instrument_id>`.
-  - When implementing a knowledge-graph instrument listing, prefer `ps-cli get instruments` — a distinct resource from `get catalog`: `catalog` reads the local curated-content repo, `instruments` would read live FalkorDB state via PS Service.
-  - When implementing near-miss list/resolve, prefer `ps-cli get near-misses` / `ps-cli resolve near-miss <id> --decision=merge|keep-separate`.
-  - None of these commands exist today — this is guidance for whoever implements them, not a claim of current behavior.
+- **A new command** takes a `<verb> <resource>` shape consistent with the existing groups rather than a new top-level group or a bespoke spelling.
 
 ### Error Handling
 

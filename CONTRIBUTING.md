@@ -191,7 +191,7 @@ retried, force-pushed, or fixed by hand.
 
 ## Reporting Issues
 
-Please use the `.github/issue_template/standard-mom.md` issue template and make sure to provide high quality acceptance criteria.
+Please use the `.github/ISSUE_TEMPLATE/standard-mom.md` issue template and make sure to provide high quality acceptance criteria.
 
 ## Discussions
 

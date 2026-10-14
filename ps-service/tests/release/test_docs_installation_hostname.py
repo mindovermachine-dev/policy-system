@@ -53,20 +53,21 @@ def test_hostname_option_row_names_the_new_default_and_the_rejection() -> None:
 
 
 @pytest.mark.parametrize("surface", ["| Claude Code (CLI) |", "| Claude Desktop - Code tab |"])
-def test_surface_table_rows_point_at_issue_239_as_pending(surface: str) -> None:
+def test_surface_table_rows_mark_the_evaluator_hostname_as_pending(surface: str) -> None:
     rows = [line for line in _text().splitlines() if line.startswith(surface)]
 
     assert len(rows) == 1
-    assert "#239" in rows[0]
+    assert "authentik.test" in rows[0]
     assert "pending" in rows[0]
 
 
-def test_nothing_claims_239_verified_without_a_version() -> None:
+def test_nothing_claims_the_evaluator_hostname_verified_without_a_version() -> None:
     claims = [
         line
         for line in _text().splitlines()
-        if "#239" in line
+        if "evaluator on `authentik.test`" in line
         and re.search(r"\bverified\b", line, re.IGNORECASE)
+        and "pending" not in line
         and not _VERSION.search(line)
     ]
 

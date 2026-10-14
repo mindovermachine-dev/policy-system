@@ -1,13 +1,13 @@
 # curated-content
 
 Curated, pre-ingested Policy System instruments — restorable into a deployed PS
-Service without an LLM provider or a live extraction run (issue #66).
+Service without an LLM provider or a live extraction run.
 
 ## Layout
 
 ```text
 curated-content/
-  catalog.json                  # aggregate listing consumed by `ps-cli get catalog`
+  catalog.json                  # aggregate listing consumed by the `get-catalog-listing` tool and the `ps-get-catalog-listing` skill
   {INSTRUMENT_ID}/
     manifest.json                # schema_version, checksums, and identity fields
     baseline.json                 # the instrument's baseline graph, serialized
@@ -20,7 +20,7 @@ see
 [`ps-service-container-architecture.md`'s Export section](../docs/architecture/ps-service-container-architecture.md#export)
 for the mechanism, and
 [`ps-service-container-architecture.md`'s Restore section](../docs/architecture/ps-service-container-architecture.md#restore)
-for how `ps-cli restore instrument <instrument_id>` loads one back into a target
+for how the `restore_instrument` tool (the `ps-restore-instrument` skill) loads one back into a target
 deployment. The export CLI needs more than FalkorDB and an LLM provider: it writes the
 embedding backfill through the Graph Write Gateway, so the PS state Postgres (the graph
 mutation log and the audit trail) must be configured and reachable, and each run records one
@@ -33,9 +33,9 @@ content curated here is compatible with public redistribution, covering both ext
 
 **Current state:** nine external EU instruments are curated here — CRA, GDPR, NIS2,
 RRF, the Data Act, the Web Accessibility Directive, DSA, DORA, and the AI Act (see
-`catalog.json` for the full list with CELEX ids). The internal Engineering Practices
-baseline is not yet curated. Populating a new instrument is a one-time maintainer
-action, tracked separately from restoring an already-curated instrument (see the
+`catalog.json` for the full list with CELEX ids) — and the internal Engineering
+Practices baseline (`ENGPRAC-1.0`). Populating a new instrument is a one-time maintainer
+action, separate from restoring an already-curated instrument (see the
 user guide's
 [Load curated content](../docs/artifacts/user-guide.md#load-curated-content)
 for what an operator sees once it is populated).

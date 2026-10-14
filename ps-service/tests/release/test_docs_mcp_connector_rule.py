@@ -298,7 +298,7 @@ def test_user_guide_keeps_the_desktop_code_heading_and_matrix_link() -> None:
     assert "](./installation-guide.md#which-claude-surfaces-reach-your-deployment)" in _text(_USER)
 
 
-def test_reach_matrix_rows_carry_the_168_171_172_evidence() -> None:
+def test_reach_matrix_rows_carry_the_recorded_evidence() -> None:
     body = _matrix_body()
     rows = {r[0]: " ".join(r) for r in _matrix_data_rows(body)}
     cli = next(v for k, v in rows.items() if "CLI" in k)
@@ -306,13 +306,12 @@ def test_reach_matrix_rows_carry_the_168_171_172_evidence() -> None:
     chat = next(v for k, v in rows.items() if re.search(r"(?i)chat", k))
     claude_ai = next(v for k, v in rows.items() if "claude.ai" in k)
     assert "2.1.236" in cli
-    assert "#168" in cli
-    assert "#171" in desktop_code
+    assert "Verified" in cli
+    assert "PS_MCP_URL" in desktop_code
     assert "2.31226.1" in desktop_code
-    for needle in ("GO (#172)", "#237", "custom connector", "ps-cli", "expected"):
+    for needle in ("GO", "custom connector", "ps-cli", "expected"):
         assert needle in chat.lower() or needle in chat, f"Chat/Cowork row lacks {needle!r}"
     assert "expected" in claude_ai.lower()
     assert "untested" in _squash(body)
     assert "oauth.clientId" in body
     assert _BRIDGE not in body
-    assert "#173 and #174" not in body

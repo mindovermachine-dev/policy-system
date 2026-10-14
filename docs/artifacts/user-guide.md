@@ -13,6 +13,9 @@
   - [Invite a new user](#invite-a-new-user)
   - [Review the audit trail](#review-the-audit-trail)
   - [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)
+  - [List what is already ingested](#list-what-is-already-ingested)
+  - [Review near-miss merge candidates](#review-near-miss-merge-candidates)
+  - [Author a policy](#author-a-policy)
   - [Assess EU-instrument applicability](#assess-eu-instrument-applicability)
 - [Role System](#role-system)
 - [Glossary](#glossary)
@@ -44,6 +47,9 @@ upgrade, rotate credentials, back up, or tear down an instance, see the
 | Invite a new user | [Invite a new user](#invite-a-new-user) |
 | Review who did what, to what, and when | [Review the audit trail](#review-the-audit-trail) |
 | Merge duplicate capabilities or obligations, release a capability from a draft policy, or reverse a merge | [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes) |
+| See which instruments are already in the graph | [List what is already ingested](#list-what-is-already-ingested) |
+| Decide whether two near-identical entities are the same | [Review near-miss merge candidates](#review-near-miss-merge-candidates) |
+| Draft a Policy, Standards and Controls | [Author a policy](#author-a-policy) |
 | Find out which EU regulations might apply to a company | [Assess EU-instrument applicability](#assess-eu-instrument-applicability) |
 
 ---
@@ -397,6 +403,30 @@ The packaged domain concepts describe the `merged` status and the `MERGED_INTO` 
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-graph-cleanup skill."_
 
+### List what is already ingested
+
+```text
+Use the ps-list-ingested skill to show what is in the graph.
+```
+
+The `ps-list-ingested` skill lists every regulatory instrument currently in the compliance graph, read from the live graph rather than from the curated catalog. Use it before you ingest, restore or author policy to see what is already there.
+
+### Review near-miss merge candidates
+
+```text
+Use the ps-near-miss-review skill to show the pending near-miss reviews.
+```
+
+When ingestion finds two entities that are close but not identical, it records a near-miss pending review instead of merging them. The `ps-near-miss-review` skill lists the pending reviews and resolves one by keeping the two entities separate or merging them. A merge cannot be undone through this skill, so it does not run at the call: the skill returns an approval link, and the merge runs when you complete a passkey signing in the browser. The skill can then report whether the approval was signed.
+
+### Author a policy
+
+```text
+Use the ps-author-policy skill to draft a policy for the capability "Vulnerability Remediation".
+```
+
+The `ps-author-policy` skill checks whether a governing Policy already exists for the Capabilities you name. It then walks you through the Policy, its Standards and their Controls one rubric criterion at a time, until each document's rubric-weighted score clears its pass threshold. The `ps-policy-lifecycle` skill moves a finished draft through propose, approve, reject and revert to draft.
+
 ### Assess EU-instrument applicability
 
 ```text
@@ -473,7 +503,7 @@ Global flags, usable before or after any subcommand:
 
 | Command | Arguments | Description |
 | --- | --- | --- |
-| `ps-cli get health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness reflects FalkorDB only — an unhealthy LLM Interface/Cellar-ELI is still named when present, but does not by itself make the target unready. |
+| `ps-cli get health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness depends on FalkorDB, PS state Postgres and the startup graph replay — an unhealthy LLM Interface or Cellar/ELI is still named when present, but does not by itself make the target unready. |
 | `ps-cli ingest document <document_path>` | `document_path` — a local `.json` file path; `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. |
 | `ps-cli export instrument <instrument_id> [destination]` | `instrument_id` — the already-ingested instrument's id (e.g. `CRA-1.0`); `destination` — optional local directory, defaults to the current directory | Export an already-ingested instrument's baseline/native/manifest files to a local destination. |
 | `ps-cli auth login` | — | Log in to the current context via OIDC device-flow (see [Credential storage](#credential-storage)). |
@@ -564,7 +594,7 @@ reason, `ps-cli` raises an actionable error naming the context and the failure t
 
 Log in with `ps-cli auth login` (requires a named context — `config
 set-context`/`use-context` first, since a stored credential is keyed per context
-name). This runs an OIDC device-authorization flow ([#57](https://github.com/mindovermachine-dev/policy-system/issues/57)):
+name). This runs an OIDC device-authorization flow:
 `ps-cli` prints a verification URL and code, you complete sign-in in a browser, and
 the resulting token is stored under the current context. `ps-cli auth status` verifies
 the stored credential by refreshing it with the identity provider, so "logged in" means
@@ -573,8 +603,7 @@ credential.
 
 Whether login is required depends on the target PS Service instance:
 generic OIDC bearer-token validation against any OIDC-compliant provider (no
-single vendor's IdP is assumed) is implemented server-side
-([#58](https://github.com/mindovermachine-dev/policy-system/issues/58)), and a
+single vendor's IdP is assumed) is implemented server-side, and a
 given deployment enforces it once configured with an issuer/audience. The
 evaluator deployment (see [Installation Guide: Evaluator
 installation](./installation-guide.md#evaluator-installation)) and production both
@@ -664,8 +693,8 @@ Beyond that, PS Service's own health is what to check next — see the [Operatio
 Guide: Troubleshooting / FAQ](./operations-guide.md#troubleshooting--faq) for
 `/health` vs `/ready`.
 
-Note that `ready: ready` no longer implies the LLM Interface or Cellar/ELI are healthy —
-readiness reflects FalkorDB only. An LLM Interface outage instead surfaces to
+Note that `ready: ready` does not imply the LLM Interface or Cellar/ELI are healthy —
+readiness depends on FalkorDB, PS state Postgres and the startup graph replay only. An LLM Interface outage instead surfaces to
 `ps-cli ingest document` (and to the `ps-ingest-regulation`/
 `ps-check-regulations` skills) via that command's own pre-flight failure message
 (`❌ LLM Interface is unavailable.` for `ps-cli`, `error: LLM Interface is unavailable.`
@@ -734,7 +763,7 @@ This table covers `ps-cli` only. The plugin has its own settings, below.
 - **Not set:** `/mcp` shows `ps-mcp` as failed with `Missing environment variables: PS_MCP_URL`.
   Set it in the `env` block of `~/.claude/settings.json`, then start a new session.
 - **`userConfig` is not used.** A `${user_config.*}` value never reached Claude Desktop - Code
-  sessions (#171), and an unset one drops the server silently.
+  sessions, and an unset one drops the server silently.
 - **Sign-in:** `/mcp`, then Authenticate. Authentik shows its consent screen, because Claude Code
   sends `prompt=consent`. Approve it.
 - **Same URL:** if a server you added by hand has the same URL as the plugin server, Claude Code

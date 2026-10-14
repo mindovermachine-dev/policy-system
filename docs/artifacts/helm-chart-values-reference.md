@@ -28,25 +28,30 @@ keys below for you; you only set them by hand when deploying the chart without a
 | `psService.image.tag` | `""` (falls back to `Chart.appVersion`) | PS Service image tag. Empty by default — the chart's own `appVersion` (kept in lockstep with the image by the release job) is used unless you pin an explicit tag with `--set`/`-f`. |
 | `psService.service.type` | `NodePort` (`ClusterIP` in prod) | PS Service Service type. `NodePort` is what `deploy/kind/cluster.yaml`'s `extraPortMappings` targets locally; prod has no kind-specific reachability mechanism, so it's `ClusterIP`-only there. |
 | `psService.service.nodePort` | `30800` | Fixed NodePort behind host port `8000` (via `extraPortMappings`). Not set in prod (no `nodePort` field when `type: ClusterIP`). |
-| `psService.companyMerge.similarityThreshold` | `0.59` | `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` — fuzzy-match threshold for company entity merging. Empirically recommended by issue #29's labeled precision/recall/F1 sweep, not an undocumented judgment call. |
+| `psService.companyMerge.similarityThreshold` | `0.59` | `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` — fuzzy-match threshold for company entity merging. Empirically recommended by a labeled precision/recall/F1 sweep, not an undocumented judgment call. |
 | `psService.graphGateway.driftCheckIntervalSeconds` | `3600` | `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS` — seconds between two passes of the Graph Write Gateway's drift check, which compares each graph with the digest checkpointed after its last gateway write and logs an alert (`drift_check`, outcome `failed`, `error_class` `GraphDriftDetected`) if they differ. Internal only: no endpoint, no `/ready` field. `0` turns the check off. |
+| `psService.resources.requests.cpu` / `.memory` / `psService.resources.limits.cpu` / `.memory` | `500m` / `512Mi` / `2` / `2Gi` | CPU and memory requests and limits of the `ps-service` container. A container that exceeds its memory limit is `OOMKilled` and restarts. |
+| `psService.probes.readiness.timeoutSeconds` / `.periodSeconds` / `.failureThreshold` | `5` / `15` / `5` | Readiness probe of the `ps-service` container (`GET /ready`). A pod that fails it `failureThreshold` times in a row leaves the Service rotation. |
+| `psService.probes.liveness.timeoutSeconds` / `.periodSeconds` / `.failureThreshold` | `5` / `15` / `5` | Liveness probe of the `ps-service` container (`GET /health`). A pod that fails it `failureThreshold` times in a row is restarted. |
 | `psService.localTestBypass.enabled` | `false` | `PS_SERVICE_LOCAL_TEST_BYPASS` — opt-in auth bypass. Off by default and **not used by the evaluator install**: the bypass refuses to bind a non-loopback host and every container image binds `0.0.0.0`, so it cannot start in a container. The evaluator profile runs real OIDC login against the bundled Authentik instead. |
 | `psService.auth.issuer` | `""` | `PS_AUTH_ISSUER` — the OIDC authorization-server URL (for the bundled Authentik: production `https://<hostname>/auth/application/o/ps-cli/`; evaluator `https://<hostname>:30443/application/o/ps-cli/`). Required unless `psService.localTestBypass.enabled=true`; see the [IdP configuration contract](./idp-configuration-contract.md). |
 | `psService.auth.audience` | `""` | `PS_AUTH_AUDIENCE` — the resource-server audience (for the bundled Authentik, the fixed OAuth2 Provider's `client_id`, `ps-cli`). Required unless `psService.localTestBypass.enabled=true`. |
 | `psService.auth.cliClientId` | `""` | `PS_AUTH_CLI_CLIENT_ID` — the public CLI client's id (for the bundled Authentik, `ps-cli`). Optional; when set it is advertised in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`. |
 | `psService.auth.scopes` | `""` | `PS_AUTH_SCOPES` — space/comma-separated OAuth scope(s) a client should request at login (for the bundled Authentik, `openid profile email offline_access`). Not used for token validation, but required in practice: PS-Cli's device-flow login sources its OAuth `scope` request directly from this value via `scopes_supported`, and most IdPs reject an empty scope. See the [IdP configuration contract](./idp-configuration-contract.md). |
 
+PS Service reads some settings that the chart does not expose as values. `PS_SERVICE_MAX_REQUEST_BODY_BYTES` is the largest accepted request body: a positive integer number of bytes, default `104857600` (100 MiB). A request whose `Content-Length` is larger is answered `413` before its body is read. The default applies to every deployment; to change it, add the variable to the `ps-service` container's environment yourself.
+
 When `psService.localTestBypass.enabled=false` (the chart's default) and either `psService.auth.issuer` or `psService.auth.audience` is unset, `helm template`/`helm lint` fail with a message naming both values and the bypass alternative — this is the chart's fail-closed render guard, not a bug. See the [IdP configuration contract](./idp-configuration-contract.md) for what each value means and a worked Authentik example.
-| **`llm.provider`** | `azure` (`ollama` still available via `--set llm.provider=ollama`) | **(AC-BI-003)** Selects the LLM backend: `ollama` or `azure`. Drives `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` and whether a Secret renders. |
+| **`llm.provider`** | `azure` (`ollama` still available via `--set llm.provider=ollama`) | **** Selects the LLM backend: `ollama` or `azure`. Drives `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` and whether a Secret renders. |
 | **`llm.model`** | `""` → `gpt-5.4-mini` (`azure`) / `phi3:mini` (`ollama`) | Chat model as a **bare name** — an Azure deployment name or an Ollama model tag — with **no `<provider>/` prefix**; the chart prepends `llm.provider/` itself to build `PS_LLMINTERFACE_MODEL`. Leave empty for the provider default shown. A name YAML would type as a number or boolean (e.g. `0`, `false`) must be quoted in a values file or passed with `--set-string`, or the chart treats it as unset. |
 | **`llm.embedModel`** | `""` → `text-embedding-3-large` (`azure`) / `nomic-embed-text` (`ollama`) | Embedding model, same bare-name / no-prefix rule as `llm.model`; becomes `PS_LLMINTERFACE_EMBED_MODEL`. |
-| **`llm.existingSecret`** | `""` | **(AC-BI-003)** Set to reuse an operator-managed Secret name instead of `llm.azure.*` below. |
-| **`llm.azure.apiKey`** | `""` | **(AC-BI-003)** Azure API key. Never set a real value here in a committed file — pass via `--set` or use `llm.existingSecret`. Rendered into a Kubernetes `Secret` (`templates/secret.yaml`), never a ConfigMap or plaintext env var. |
-| **`llm.azure.apiBase`** | `""` | **(AC-BI-003)** Azure API base URL. Same secret-backed handling as `apiKey`. |
+| **`llm.existingSecret`** | `""` | **** Set to reuse an operator-managed Secret name instead of `llm.azure.*` below. |
+| **`llm.azure.apiKey`** | `""` | **** Azure API key. Never set a real value here in a committed file — pass via `--set` or use `llm.existingSecret`. Rendered into a Kubernetes `Secret` (`templates/secret.yaml`), never a ConfigMap or plaintext env var. |
+| **`llm.azure.apiBase`** | `""` | **** Azure API base URL. Same secret-backed handling as `apiKey`. |
 | `llm.azure.apiVersion` | `"preview"` | `AZURE_API_VERSION` — fixed literal matching the reference deployment (see [Customer-Managed Azure LLM Bootstrap](../architecture/customer-azure-llm-bootstrap.md)); not derived from the deployment, not treated as a secret. |
-| **`falkordb.persistence.enabled`** | `true` (both profiles) | **(AC-BI-008)** Toggles FalkorDB storage between a `PersistentVolumeClaim` (default) and an `emptyDir` (ephemeral). Either way the graph content is rebuilt from the mutation log in PS Postgres; the volume only avoids a replay at startup. No manual manifest edits needed — flip via `--set`/`-f` and `helm upgrade`. |
+| **`falkordb.persistence.enabled`** | `true` (both profiles) | **** Toggles FalkorDB storage between a `PersistentVolumeClaim` (default) and an `emptyDir` (ephemeral). Either way the graph content is rebuilt from the mutation log in PS Postgres; the volume only avoids a replay at startup. No manual manifest edits needed — flip via `--set`/`-f` and `helm upgrade`. |
 | `falkordb.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Never hardcoded to kind's default StorageClass name (both profiles) — override explicitly for a real cluster if needed. |
-| `falkordb.browser.enabled` | `true` (`false` in prod) | **(AC-BI-009)** FalkorDB Browser UI Service. On by default for local-test convenience, off in prod. |
+| `falkordb.browser.enabled` | `true` (`false` in prod) | **** FalkorDB Browser UI Service. On by default for local-test convenience, off in prod. |
 | `falkordb.browser.nodePort` | `30300` | Fixed NodePort behind host port `3001` (via `extraPortMappings`). Only applies when `falkordb.browser.enabled=true`. |
 | `falkordb.image.repository` / `falkordb.image.tag` | `falkordb/falkordb` / `latest` | FalkorDB image. |
 
@@ -96,9 +101,10 @@ helm install policy-system ./charts/policy-system \
 ```
 
 Without `psService.ollamaHostGatewayIP` set, PS Service cannot reach Ollama. `/ready` still
-reports `"status": "ready"` — readiness reflects FalkorDB only since issue #75 — but lists
-`llm_interface` under `unhealthy_dependencies`, and `ps-cli ingest …` / `check regulations`
-stop at their pre-flight check with `LLM Interface is unavailable.`. See
+reports `"status": "ready"` — readiness depends on FalkorDB, PS state Postgres and the startup graph replay, not on the LLM provider — but lists
+`llm_interface` under `unhealthy_dependencies`, and `ps-cli ingest document` and the
+`ingest_regulation`, `start_ingestion` and `check_regulations` tools stop at their pre-flight check with
+`LLM Interface is unavailable.`. See
 [Azure values](#azure-values) for the same verification step.
 
 | Key | Default (local-test) | Purpose |
@@ -114,8 +120,7 @@ run the same kind cluster against Azure — for example to use the provider and 
 production runs on — supply credentials, and (optionally) name your own deployments with
 the bare-name keys from [Core values](#core-values). Azure is also the only provider
 compatible with the curated content shipped in the repo (its embeddings were produced
-with `text-embedding-3-large`; re-embedding for another provider is out of scope for
-issue #103).
+with `text-embedding-3-large`; re-embedding for another provider is out of scope).
 
 **Recommended: provision real credentials with the bootstrap scripts.** Rather than
 hand-copying keys from the Azure Portal, run `scripts/deploy-llm.sh` against your own
@@ -169,8 +174,8 @@ helm install policy-system ./charts/policy-system \
 `psService.ollamaHostGatewayIP` is not needed under Azure — no `hostAliases` entry is
 rendered.
 
-Verify what reached the pod, then check readiness. `/ready`'s `status` reflects FalkorDB
-only (issue #75), so `helm install --wait` succeeding and `"status": "ready"` do **not**
+Verify what reached the pod, then check readiness. `/ready`'s `status` reflects FalkorDB,
+PS state Postgres and the startup graph replay only, so `helm install --wait` succeeding and `"status": "ready"` do **not**
 prove the Azure credentials or deployment names work. The LLM signal is the
 `unhealthy_dependencies` list in the same response: at startup PS Service makes one real
 completion call with `PS_LLMINTERFACE_MODEL` and one real embedding call with
@@ -187,17 +192,17 @@ curl -s http://127.0.0.1:8000/ready
 # values and `helm upgrade`; the restarted pod re-probes at startup.
 ```
 
-`ps-cli ingest regulation` / `ingest document` / `check regulations` run the same check
-as a pre-flight and stop with `LLM Interface is unavailable.` while `llm_interface` is
-listed.
+`ps-cli ingest document` and the `ingest_regulation`, `start_ingestion` and `check_regulations`
+MCP tools run the same check as a pre-flight and stop with `LLM Interface is unavailable.`
+while `llm_interface` is listed.
 
 ## PS Postgres values
 
-PS Service keeps its durable state in one PostgreSQL server (issue #130) holding two
+PS Service keeps its durable state in one PostgreSQL server holding two
 databases, each with its own least-privilege role: `ps_state` (audit events, authz,
 runtime configuration, ingestion run status) and `ps_signing` (Passkey Signing: pending merge approvals and
 enrolled WebAuthn credentials). It is **distinct from FalkorDB and from Authentik's own
-bundled Postgres** (AC-BI-006): its own Deployment/Service/PVC/NetworkPolicy/Secrets,
+bundled Postgres**: its own Deployment/Service/PVC/NetworkPolicy/Secrets,
 never a shared PVC, NetworkPolicy selector, or credential Secret with either. Unlike
 `authentik.*` (opt-in via `authentik.enabled`), it is always deployed, the same
 "always-on" posture as `falkordb.*`.
@@ -214,12 +219,12 @@ does not change an existing role's password (run `ALTER ROLE` by hand).
 | `psPostgres.admin.user` | `postgres_admin` | Superuser that runs the init script. Its Secret is consumed only by the Postgres container; the `ps-service` pod never references it. |
 | `psPostgres.state.database` / `psPostgres.state.user` | `ps_state` / `ps_state` | `PS_STATE_POSTGRES_DATABASE` / `PS_STATE_POSTGRES_USER` — plain (non-secret) env vars on `ps-service`, and the names the init script creates. |
 | `psPostgres.signing.database` / `psPostgres.signing.user` | `ps_signing` / `ps_signing` | `PS_PASSKEYSIGNING_POSTGRES_DATABASE` / `PS_PASSKEYSIGNING_POSTGRES_USER` — same wiring for Passkey Signing. |
-| `psPostgres.state.graphOwnerRole` | `ps_state_graph_owner` | Name of the non-login role that owns the insert-only `graph_log` tables (issue #205). Created by the init script on first start and by the provisioning Job on an existing cluster; `ps_state` is never a member of it. Passed to the Job as `PS_STATE_GRAPH_OWNER_ROLE`. Never reuse the state role's name. |
+| `psPostgres.state.graphOwnerRole` | `ps_state_graph_owner` | Name of the non-login role that owns the insert-only `graph_log` tables. Created by the init script on first start and by the provisioning Job on an existing cluster; `ps_state` is never a member of it. Passed to the Job as `PS_STATE_GRAPH_OWNER_ROLE`. Never reuse the state role's name. |
 | `psPostgres.provisioning.enabled` | `true` | Renders the `ps-state-provision` Job that applies the ordinary `ps_state` migrations (as `ps_state`, through `SET ROLE`) and then creates and migrates the `graph_log` tables with the admin credential, on fresh installs and on every `helm upgrade`, and admits it through the Postgres NetworkPolicy. It succeeds from an empty database in one pass. Set `false` only if you run `python -m ps_service.graph_gateway.provision` yourself: PS Service fails closed at startup until the tables exist. Upgrades must pass `--wait --wait-for-jobs` so a failed Job fails the upgrade. |
 | `psPostgres.provisioning.backoffLimit` / `psPostgres.provisioning.connectTimeoutSeconds` / `psPostgres.provisioning.activeDeadlineSeconds` | `3` / `120` / `900` | Retry budget, how long one attempt waits for a starting Postgres server (passed as `PS_STATE_PROVISION_CONNECT_TIMEOUT_SECONDS`), and the overall deadline of that Job. A failure is a real error, not an expected ordering wait, so retries are few. The chart refuses to render when `(backoffLimit + 1) * connectTimeoutSeconds` exceeds `activeDeadlineSeconds`. |
-| `psService.waitForPostgres.timeoutSeconds` | `300` | **(issue #223)** How long the `wait-for-postgres` init container of the `ps-service` Pod waits for `<release>-ps-postgres:5432` to accept TCP connections before exiting non-zero. Helm creates `ps-service` and `ps-postgres` together, and `ps-service` exits on its first failed state-database connection; the init container removes the resulting crash restarts on a fresh PVC (first-start initdb). It uses the `ps-service` image and no credentials, and runs after `build-ca-bundle` when `localTls.secretName` is set. |
-| `psPostgres.probes.readiness.timeoutSeconds` / `psPostgres.probes.readiness.periodSeconds` / `psPostgres.probes.readiness.failureThreshold` | `5` / `5` / `6` | **(issue #223)** Readiness probe of the `ps-postgres` container: `pg_isready` over TCP (`-h 127.0.0.1`) against `psPostgres.state.database`, so the pod is Ready only once the final server accepts connections, not during first-start initdb (when `ps-service` would otherwise crash-restart once). No credentials are used. There is deliberately no liveness probe, so a slow initdb can never cause a restart loop. |
-| **`psPostgres.admin.existingSecret`** / **`psPostgres.state.existingSecret`** / **`psPostgres.signing.existingSecret`** | `""` | **(AC-BI-002/AC-BI-007, issue #159)** When a value is unset (the default in both profiles), the chart generates and persists that credential itself via a `lookup`+`randAlphaNum` idiom (`templates/ps-postgres-secret.yaml`; Secrets `<fullname>-ps-postgres-{admin,state,signing}-credentials`, e.g. `policy-system-ps-postgres-{admin,state,signing}-credentials` for release `policy-system`; `<fullname>` is the release name when it already contains `policy-system`, else `<release>-policy-system`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead; each value suppresses only its own Secret. Required keys: `POSTGRES_PASSWORD` (admin), `PS_STATE_POSTGRES_PASSWORD` (state), `PS_PASSKEYSIGNING_POSTGRES_PASSWORD` (signing). **Restore:** the role password hashes inside a PS Postgres backup match these three passwords, so retain all three Secrets outside the cluster and the backup file, and set all three values before a restore (the restore procedure and `scripts/verify-backup-restore.sh restore` refuse otherwise). Give each Secret a different name from the chart-generated one: once the value is set the chart does not render the generated Secret and Helm removes it. See [Restore](./operations-guide.md#restore). |
+| `psService.waitForPostgres.timeoutSeconds` | `300` | **** How long the `wait-for-postgres` init container of the `ps-service` Pod waits for `<release>-ps-postgres:5432` to accept TCP connections before exiting non-zero. Helm creates `ps-service` and `ps-postgres` together, and `ps-service` exits on its first failed state-database connection; the init container removes the resulting crash restarts on a fresh PVC (first-start initdb). It uses the `ps-service` image and no credentials, and runs after `build-ca-bundle` when `localTls.secretName` is set. |
+| `psPostgres.probes.readiness.timeoutSeconds` / `psPostgres.probes.readiness.periodSeconds` / `psPostgres.probes.readiness.failureThreshold` | `5` / `5` / `6` | **** Readiness probe of the `ps-postgres` container: `pg_isready` over TCP (`-h 127.0.0.1`) against `psPostgres.state.database`, so the pod is Ready only once the final server accepts connections, not during first-start initdb (when `ps-service` would otherwise crash-restart once). No credentials are used. There is deliberately no liveness probe, so a slow initdb can never cause a restart loop. |
+| **`psPostgres.admin.existingSecret`** / **`psPostgres.state.existingSecret`** / **`psPostgres.signing.existingSecret`** | `""` | When a value is unset (the default in both profiles), the chart generates and persists that credential itself via a `lookup`+`randAlphaNum` idiom (`templates/ps-postgres-secret.yaml`; Secrets `<fullname>-ps-postgres-{admin,state,signing}-credentials`, e.g. `policy-system-ps-postgres-{admin,state,signing}-credentials` for release `policy-system`; `<fullname>` is the release name when it already contains `policy-system`, else `<release>-policy-system`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead; each value suppresses only its own Secret. Required keys: `POSTGRES_PASSWORD` (admin), `PS_STATE_POSTGRES_PASSWORD` (state), `PS_PASSKEYSIGNING_POSTGRES_PASSWORD` (signing). **Restore:** the role password hashes inside a PS Postgres backup match these three passwords, so retain all three Secrets outside the cluster and the backup file, and set all three values before a restore (the restore procedure and `scripts/verify-backup-restore.sh restore` refuse otherwise). Give each Secret a different name from the chart-generated one: once the value is set the chart does not render the generated Secret and Helm removes it. See [Restore](./operations-guide.md#restore). |
 | `psPostgres.persistence.size` | `10Gi` | PVC storage request for the data volume. |
 | `psPostgres.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Only consulted when `durableStorageClass.enabled` below is `false`. |
 | `psPostgres.persistence.durableStorageClass.enabled` | `false` (`true` in prod) | Toggles a dedicated Premium SSD, Retain-reclaim StorageClass for this PVC (mirrors `falkordb.persistence.durableStorageClass` / `authentik.postgres.persistence.durableStorageClass` exactly). |
@@ -258,7 +263,7 @@ helm upgrade policy-system ./charts/policy-system \
 
 | Key | Default (local-test) | Purpose |
 | --- | --- | --- |
-| **`authentik.credentialsExistingSecret`** | `""` | **(AC-BI-001/AC-BI-005/AC-BI-007, issue #159)** When unset (the default in both profiles), the chart generates and persists Authentik's `AUTHENTIK_SECRET_KEY`/`AUTHENTIK_POSTGRESQL__PASSWORD` itself via a `lookup`+`randAlphaNum` idiom (`templates/authentik-credentials-secret.yaml`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead. This is a **separate** value from `authentik.authentik.existingSecret.secretName` below — the upstream `authentik` sub-chart's own routing switch — and when set, it must be given the **same** Secret name as that value, or the render fails with a `fail()` guard naming both values. |
+| **`authentik.credentialsExistingSecret`** | `""` | When unset (the default in both profiles), the chart generates and persists Authentik's `AUTHENTIK_SECRET_KEY`/`AUTHENTIK_POSTGRESQL__PASSWORD` itself via a `lookup`+`randAlphaNum` idiom (`templates/authentik-credentials-secret.yaml`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead. This is a **separate** value from `authentik.authentik.existingSecret.secretName` below — the upstream `authentik` sub-chart's own routing switch — and when set, it must be given the **same** Secret name as that value, or the render fails with a `fail()` guard naming both values. |
 | `authentik.authentik.existingSecret.secretName` | `"policy-system-authentik-credentials"` (never empty) | The upstream `authentik` dependency's own switch for which Secret its server/worker Deployments consume via `envFrom`. Always carries this deterministic literal (`policy-system.authentikCredentialsSecretName`, `templates/_helpers.tpl`) unless overridden together with `authentik.credentialsExistingSecret` above — an empty value here makes the upstream chart fall back to a *different*, sub-chart-owned Secret name this chart never populates. |
 
 ```bash
@@ -281,7 +286,7 @@ helm upgrade policy-system ./charts/policy-system \
 ## Authentik and local TLS values
 
 Keys that wire PS Service to the bundled Authentik and, in the evaluator profile, give it a
-locally trusted HTTPS certificate (issue #165). Both deploy scripts set the ones marked
+locally trusted HTTPS certificate. Both deploy scripts set the ones marked
 "script" in one Helm release; see the [IdP configuration
 contract](./idp-configuration-contract.md) for what they mean.
 
@@ -295,6 +300,12 @@ contract](./idp-configuration-contract.md) for what they mean.
 | `localTls.secretName` | `""` | Name of a Secret with keys `tls.crt`, `tls.key` and `ca.crt` (created by `scripts/deploy-ps-eval.sh`, never by the chart). Empty = off and nothing below renders. When set, the chart adds a blueprint registering the certificate as Authentik's web certificate and gives PS Service a trust bundle (system CAs plus `ca.crt`) through an init container and `SSL_CERT_FILE`. The init container uses the PS Service image itself. The Authentik pods' own mount of the Secret at `/ps-tls` is supplied by the installer through `authentik.global.volumes` / `authentik.global.volumeMounts` (a values file cannot be conditional). |
 | `authentik.server.service.nodePortHttp` | `30080` | Authentik's plain-HTTP NodePort. **Not** mapped to the host by `deploy/kind/cluster.yaml`; reachable only inside the kind node. Unused in production (`ClusterIP`). |
 | `authentik.server.service.nodePortHttps` | `30443` | Authentik's HTTPS NodePort, and the one Authentik port `deploy/kind/cluster.yaml` maps to the host (`0.0.0.0:30443`, so it is reachable from the LAN by design). Changing the port on an existing kind cluster needs a cluster recreate (port mappings are fixed at creation). |
+| `authentik.server.service.type` | `NodePort` | Service type of the Authentik server. |
+| `authentik.postgres.image.repository` / `authentik.postgres.image.tag` | `postgres` / `16-alpine` | Image of the chart-owned Postgres that backs Authentik. |
+| `authentik.postgres.database` / `authentik.postgres.user` | `authentik` / `authentik` | Database and role names in that Postgres. The password is held in the Authentik credentials Secret (see [Authentik credentials values](#authentik-credentials-values)). |
+| `authentik.postgres.persistence.size` / `authentik.postgres.persistence.storageClassName` | `10Gi` / `""` | Data volume size and StorageClass of that Postgres; an empty class selects the cluster default. |
+| `authentik.postgresql.enabled` | `false` | Keeps the upstream Authentik chart's bundled Postgres off; the chart-owned Postgres above is used. |
+| `authentik.authentik.postgresql.host` / `.port` / `.name` / `.user` | `""` / `5432` / `""` / `""` | Non-secret connection values that the upstream Authentik chart expects; the connection is supplied through the credentials Secret, so these stay empty in the default profiles. |
 | `authentik.server.env` / `authentik.worker.env` | `AUTHENTIK_BOOTSTRAP_TOKEN` from Secret `policy-system-authentik-api-token`, key `PS_AUTHENTIK_API_TOKEN` | Makes Authentik create an API token equal to PS Service's on first start. Authentik applies it **once per tenant** and never rotates it. The Secret name is a literal because Helm never templates values files (the release name is fixed to `policy-system`). Production sets `authentik.global.env` (a list, which Helm replaces rather than merges) for `AUTHENTIK_WEB__PATH=/auth/` only, so these are not overridden there. |
 | `authentik.blueprints.configMaps` | the chart's blueprint ConfigMap | Set in `values.yaml`, so **every** profile, evaluator included, gets the bundled blueprint (the `ps-cli` OIDC provider, passkey-only enrolment and recovery flows, `sub_mode: user_username`). |
 
