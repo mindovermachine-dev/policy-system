@@ -1,4 +1,4 @@
-"""The seam between the gateway and the graph store's key space, for swap sets (issue #214 S4).
+"""The seam between the gateway and the graph store's key space, for swap sets.
 
 A swap set is built on staged copies of the live graphs and the copies are renamed over the live
 keys together. Copying and renaming are not graph queries, so they cannot go through the
@@ -23,8 +23,14 @@ class KeySwapper(Protocol):
     def swap_in(self, pairs: Sequence[tuple[str, str]]) -> None:
         """Rename each `(staged, live)` pair in one atomic step, overwriting the live key.
 
+        Args:
+            pairs: `(staged key, live key)` pairs; every live key was named to `watching`.
+
         Raises:
             SwapConflictError: a watched live key changed since the watch began; nothing renamed.
+
+        Side Effects:
+            Overwrites each live key with its staged key on the server.
         """
         ...
 
@@ -37,11 +43,25 @@ class GraphKeyPort(Protocol):
 
         An absent `source` copies as an empty graph, so a leg whose live graph was never created
         swaps in as a new one.
+
+        Args:
+            source: Key of the graph to copy.
+            destination: Key to create.
+
+        Side Effects:
+            Creates the `destination` key on the server.
         """
         ...
 
     def discard(self, *names: str) -> None:
-        """Delete every key in `names` that exists; a missing one is skipped, never an error."""
+        """Delete every key in `names` that exists; a missing one is skipped, never an error.
+
+        Args:
+            names: Keys to delete; none deletes nothing.
+
+        Side Effects:
+            Deletes the keys on the server.
+        """
         ...
 
     def watching(self, names: Sequence[str]) -> AbstractContextManager[KeySwapper]:
@@ -50,5 +70,14 @@ class GraphKeyPort(Protocol):
         The watch must begin before the copies are taken: a change to a watched key between the
         watch and the swap makes `swap_in` raise `SwapConflictError`. The block releases the
         watch however it ends.
+
+        Args:
+            names: Live graph keys to watch.
+
+        Returns:
+            A context manager yielding the `KeySwapper` for the block.
+
+        Side Effects:
+            Holds a watch on the keys for the length of the block.
         """
         ...

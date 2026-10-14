@@ -1,13 +1,11 @@
-"""Shared http(s)/TLS validation for the curated-content source URL (D-VALIDATION).
+"""Shared http(s) and TLS validation for the curated-content source URL.
 
-One function, :func:`validate_source_url`, called from both
-`ps_service.config.load_config()` (startup, AC-BI-001/008/010) and the
-runtime `set-catalog-source` MCP tool (Slice 3, AC-BI-012) -- never two
-independent validators, so both surfaces reject exactly the same inputs.
+One function, :func:`validate_source_url`, is called from both `ps_service.config.load_config()`
+(startup) and the runtime `set-catalog-source` MCP tool, never two independent validators, so
+both surfaces reject exactly the same inputs.
 
-Pattern mirrors `ps_service.ingestion.adapters.cellar_eli.fetch`'s existing
-`https://`-only guard (`fetch.py`'s `_fetch`), widened to accept `http://`
-only when `allow_insecure_http` is explicitly `True`.
+It follows the `https://`-only guard in `ps_service.ingestion.adapters.cellar_eli.fetch`
+(`_fetch`), widened to accept `http://` only when `allow_insecure_http` is explicitly `True`.
 """
 
 from __future__ import annotations
@@ -25,15 +23,15 @@ def validate_source_url(url: str, *, allow_insecure_http: bool) -> str:
         url: The candidate base URL (e.g. a repo raw-content root such as
             ``https://raw.githubusercontent.com/<org>/<repo>/main/curated-content``).
         allow_insecure_http: Whether a plain ``http://`` URL is accepted.
-            TLS is required unless this is explicitly `True` (AC-BI-010).
+            TLS is required unless this is explicitly `True`.
 
     Returns:
         `url` unchanged, once validated.
 
     Raises:
         CuratedSourceConfigurationError: `url` is empty/whitespace-only, uses
-            any scheme other than `https://` (e.g. `file:///etc/passwd`,
-            AC-BI-008), or uses `http://` without `allow_insecure_http=True`.
+            any scheme other than `https://` or `http://` (for example `file:///etc/passwd`), or
+            uses `http://` without `allow_insecure_http=True`.
     """
     if not url.strip():
         message = "curated-content source URL must not be empty or whitespace-only"

@@ -1,4 +1,4 @@
-"""Give the edges of a graph written before the gateway their identity (issue #208, F1).
+"""Give the edges of a graph written before the gateway their identity.
 
 The gateway merges an edge on its `identity`; an edge a pre-gateway writer left has none, so a
 re-ingest would add a second, parallel edge beside it. `backfill_edge_identity` finds those
@@ -8,7 +8,7 @@ the formula the ingestion writers use, so the stamped edge is the one a later up
 
 Idempotent: a second run finds no identity-less edge, submits nothing and logs nothing. Limit:
 identity-less duplicates (same type and endpoints) all receive the same identity and stay
-duplicates (the cardinality is preserved, not collapsed); the legacy writer merged on its
+duplicates (the cardinality is preserved, not collapsed); the pre-gateway writer merged on its
 endpoints, so a graph it wrote should hold none. An edge whose type or end-point labels the
 gateway may not name is left alone and counted in `skipped`.
 """
@@ -45,7 +45,14 @@ class _GroupSubmitting(Protocol):
     """The one call of the gateway the backfill needs."""
 
     def submit_group(self, group: MutationGroup) -> GroupOutcome:
-        """Log and apply `group`."""
+        """Log and apply `group`.
+
+        Args:
+            group: The mutation group to submit.
+
+        Returns:
+            The outcome of the submission.
+        """
         ...
 
 
@@ -54,7 +61,14 @@ type UnidentifiedEdge = tuple[str, NodeRef, NodeRef]
 
 
 class EdgeIdentityBackfillOutcome(BaseModel):
-    """What one backfill run did."""
+    """What one backfill run did.
+
+    Attributes:
+        status: `applied` if a group was submitted, `unchanged` if there was nothing to stamp.
+        stamped: Number of identity-less (type, source, target) triples the group stamps; at
+            least 0.
+        skipped: Number of identity-less edges the gateway may not name; at least 0.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -77,9 +91,25 @@ def backfill_edge_identity(
 ) -> EdgeIdentityBackfillOutcome:
     """Stamp every identity-less edge of `graph_name` through `gateway`; `reader` only reads.
 
+    Args:
+        gateway: Submits the stamp group.
+        graph_name: Name of the graph to backfill.
+        audit_event_id: Audit event the stamp group is logged under; `None` for none.
+        reader: A handle used for the read-only scan.
+        emitter: Destination of the log entry; `None` disables logging.
+        chunk_rows: Most edges one scan statement returns; at least 1.
+
+    Returns:
+        `applied` with the counts when a group was submitted; `unchanged` when no identity-less
+        edge could be named (nothing is logged to the graph log).
+
     Raises:
         UnexpectedGraphReplyError: the scan reply has a shape the gateway does not recognise.
         GraphWriteRejectedError: the gateway refused the group (its subclasses say why).
+
+    Side Effects:
+        Runs read queries on `reader`, submits one `StampEdgeIdentity` group through `gateway`
+        and emits an `edge_identity_backfill` log entry.
     """
     found, skipped = scan_unidentified_edges(reader, chunk_rows)
     if not found:
@@ -106,6 +136,7 @@ def _emit(
     audit_event_id: str | None,
     emitter: LogEmitter | None,
 ) -> None:
+    """Emit the backfill log entry for `outcome`."""
     fields: dict[str, str | int | float] = {"graph": graph_name, "entry_count": count}
     if audit_event_id is not None:
         fields["audit_event_id"] = audit_event_id
@@ -113,7 +144,16 @@ def _emit(
 
 
 def legacy_edge_stamp(edge_type: str, source: NodeRef, target: NodeRef) -> StampEdgeIdentity:
-    """Return the stamp giving the identity-less edge the identity `{type}:{source}->{target}`."""
+    """Return the stamp giving the identity-less edge the identity `{type}:{source}->{target}`.
+
+    Args:
+        edge_type: Relationship type of the edge.
+        source: Source node of the edge.
+        target: Target node of the edge.
+
+    Returns:
+        A `StampEdgeIdentity` with identity `{edge_type}:{source.id}->{target.id}`.
+    """
     return StampEdgeIdentity(
         type=edge_type,
         identity=f"{edge_type}:{source.id}->{target.id}",
@@ -129,6 +169,17 @@ def scan_unidentified_edges(
 
     Read-only. An edge whose type or end-point label the gateway may not name is counted, not
     returned.
+
+    Args:
+        reader: A handle used for the read-only scan.
+        chunk_rows: Most edges one scan statement returns; at least 1.
+
+    Returns:
+        The `(type, source, target)` triples and the number of unnameable edges; both empty/zero
+        when every edge carries an identity.
+
+    Raises:
+        UnexpectedGraphReplyError: the scan reply has a shape the gateway does not recognise.
     """
     found: dict[UnidentifiedEdge, None] = {}
     skipped = 0

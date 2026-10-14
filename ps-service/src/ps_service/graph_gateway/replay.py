@@ -1,4 +1,4 @@
-"""Rebuild a graph from the mutation log and verify it against a checkpoint (issue #207).
+"""Rebuild a graph from the mutation log and verify it against a checkpoint.
 
 The replay reads the log in pages, in sequence order, and applies it through the same applier the
 live path uses, so a replayed log and a live apply cannot disagree. A page is cut at the
@@ -49,7 +49,12 @@ type _Decoded = list[tuple[int, Primitive]]
 
 
 class GraphReplayer:
-    """Replays one graph's log into FalkorDB. The caller holds the graph's lock."""
+    """Replays one graph's log into FalkorDB. The caller holds the graph's lock.
+
+    Side Effects:
+        Writes graph content and a progress record into the graph being rebuilt, and advances the
+        graph's applied marker in the log store.
+    """
 
     def __init__(
         self,
@@ -60,9 +65,14 @@ class GraphReplayer:
         page_size: int,
         should_stop: Callable[[], bool],
     ) -> None:
-        """Take the log, a graph opener, the rows per `UNWIND` query and the entries per read.
+        """Create a replayer over a log store and a graph opener.
 
-        `should_stop` is asked before every page; once it says True the replay ends there.
+        Args:
+            log_store: The mutation log to read and whose applied marker is advanced.
+            graph_opener: Opens the writable FalkorDB graph of a given name.
+            batch_size: Rows per `UNWIND` query when applying entries; positive.
+            page_size: Log entries read per page; positive.
+            should_stop: Asked before every page; once it returns True the replay ends there.
         """
         self._log_store = log_store
         self._graph_opener = graph_opener
@@ -71,12 +81,24 @@ class GraphReplayer:
         self._should_stop = should_stop
 
     def replay(self, graph: str) -> ReplayReport:
-        """Apply the whole log of `graph` in position order and verify what a checkpoint covers.
+        """Apply the whole log of a graph in position order and verify what a checkpoint covers.
 
         The log is applied up to the highest checkpoint at or below its head, the rebuilt graph
         is compared with that checkpoint, and only then does the rest follow, so a mismatch
         stops the replay with nothing applied past the sequence it names. Progress is recorded
         in the graph after every page (`replay_state`), so an interrupted replay resumes there.
+        A replay that fails with a `GraphReplayError` records itself as failed in the graph.
+
+        Args:
+            graph: Name of the graph to rebuild; the caller holds its lock.
+
+        Returns:
+            A `ReplayReport`; for a graph with an empty log, a report with head 0 and nothing
+            applied.
+
+        Side Effects:
+            Reads the log; writes graph content and the progress record; advances the applied
+            marker to the head and deletes the progress record on success.
 
         Raises:
             GraphDigestMismatchError: the rebuilt graph differs from the checkpoint.
@@ -136,13 +158,24 @@ class GraphReplayer:
         )
 
     def classify(self, graph: str) -> StartupAction:
-        """Decide, by probing FalkorDB, what startup must do for `graph` (it has log entries).
+        """Decide, by probing FalkorDB, what startup must do for a graph that has log entries.
 
         The applied marker cannot say: it only moves forward, so a wiped or half rebuilt graph
         still reads "applied". A progress record means a replay to resume (or one recorded as
         failed). Without one, a graph that holds nodes is only caught up if it is behind its
         log; an empty graph is rebuilt, unless its log nets to empty and a checkpoint at the
         head says so.
+
+        Args:
+            graph: Name of the graph to classify; its log has at least one entry.
+
+        Returns:
+            `resume` when a progress record exists, `catch_up` when the graph holds nodes and is
+            behind its log, `replay` when it is empty and its log does not net to empty, and
+            `untouched` otherwise.
+
+        Side Effects:
+            Read-only queries against the graph and the log store.
         """
         handle = self._graph_opener(graph)
         if read_replay_state(handle) is not None:
@@ -165,8 +198,14 @@ class GraphReplayer:
     ) -> _Progress:
         """Open the progress record of a fresh replay, or pick up the one an earlier run left.
 
-        A resumed run first settles the verification its predecessor may have left open (see the
-        rule table in the CHANGES of issue #207, A2).
+        A resumed run first settles the verification its predecessor may have left open: it
+        verifies a checkpoint it stands exactly on, and refuses to go on when the earlier run
+        passed the checkpoint without verifying it.
+
+        Raises:
+            GraphReplayGatedError: the earlier run is recorded as failed.
+            GraphReplayUnverifiableError: the earlier run is past the checkpoint unverified.
+            GraphDigestMismatchError: the graph differs from the checkpoint it stands on.
         """
         recorded = read_replay_state(handle)
         if recorded is None:
@@ -272,13 +311,15 @@ class _Progress:
     resumed_from: int
 
     def moved_to(self, applied: int) -> _Progress:
+        """Return the progress with `applied` as the last position applied."""
         return replace(self, applied=applied)
 
     def verified_at(self, position: int) -> _Progress:
+        """Return the progress with the checkpoint at `position` marked verified."""
         return replace(self, verified=position)
 
     def record(self, *, state: ReplayStateName = "in_progress", kind: str = "") -> ReplayState:
-        """The sentinel that says this."""
+        """Return the progress record to persist in the graph, in the given state."""
         return ReplayState(position=self.applied, state=state, kind=kind, verified=self.verified)
 
 

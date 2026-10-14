@@ -1,7 +1,9 @@
 """The code-defined PS domain schema: the only place schema facts are typed in.
 
-Facts are transcribed from `docs/artifacts/ps-domain-concepts.md`; notes are one-line
-summaries (the long prose stays in the document).
+`DOMAIN_SCHEMA` lists every node label (with properties, types and presence) and every edge type
+(with endpoints and cardinality) of the compliance graph. Facts are transcribed from
+`docs/artifacts/ps-domain-concepts.md`; notes are one-line summaries (the long prose stays in
+the document).
 """
 
 from __future__ import annotations
@@ -590,3 +592,4 @@ DOMAIN_SCHEMA = Schema(
     ),
     edges=_EDGES,
 )
+"""The PS compliance-graph schema; immutable, validated on construction (see `Schema`)."""

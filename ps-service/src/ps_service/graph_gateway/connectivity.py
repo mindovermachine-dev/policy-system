@@ -1,5 +1,5 @@
 # © 2026 Cartman ApS. All rights reserved.
-"""The FalkorDB connectivity probe, free of the driver (issue #215).
+"""The FalkorDB connectivity probe, free of the driver.
 
 `check_connectivity` asks a connection to list its graphs (the cheapest real round-trip) and
 records the outcome in `dependency_health`. It lives apart from `connection.py` (the one module
@@ -34,11 +34,16 @@ class ConnectivityProbe(Protocol):
     """The one call a connectivity check needs; a real client satisfies it structurally."""
 
     def list_graphs(self) -> list[str]:
-        """Names of the graphs on the server."""
+        """List the names of the graphs on the server.
+
+        Returns:
+            The graph names; empty when the server holds none.
+        """
         ...
 
 
 def _unreachable(host: str, port: int, cause: Exception) -> GraphConnectivityError:
+    """Build the error that names the unreachable host and port and the cause."""
     return GraphConnectivityError(
         f"FalkorDB connection failed at {host}:{port}. Is FalkorDB running? Error: {cause}"
     )
@@ -50,8 +55,16 @@ def check_connectivity(db: ConnectivityProbe, host: str, port: int) -> None:
     Records the outcome in `dependency_health` either way, so the `/ready` probe and the write
     paths' own exception handling feed one signal.
 
+    Args:
+        db: The connection to probe.
+        host: Server host, used only in the error message.
+        port: Server port, used only in the error message.
+
     Raises:
         GraphConnectivityError: `db` could not list its graphs (the cause is chained).
+
+    Side Effects:
+        Lists the server's graphs and marks the `FALKORDB` dependency healthy or unhealthy.
     """
     try:
         db.list_graphs()
@@ -69,8 +82,16 @@ def check_connectivity_via(
     A failure from either step is recorded in `dependency_health`; connecting performs a real
     round-trip, so it can fail before the probe runs.
 
+    Args:
+        config: Service configuration naming the FalkorDB host and port.
+        open_connection: Opens the connection from `config`.
+
     Raises:
         GraphConnectivityError: the connection or the probe failed (the cause is chained).
+
+    Side Effects:
+        Opens a connection, lists the server's graphs and marks the `FALKORDB` dependency healthy
+        or unhealthy.
     """
     try:
         db = open_connection(config)

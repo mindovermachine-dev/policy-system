@@ -1,14 +1,11 @@
-"""Runtime, on-demand fetch of one curated instrument's artifact (AC-BI-004).
+"""Runtime, on-demand fetch of one curated instrument's artifact over HTTP.
 
 `fetch_artifact` GETs `{base_url}/{instrument_id}/manifest.json`,
-`{base_url}/{instrument_id}/baseline.json`, and
-`{base_url}/{instrument_id}/native.json` (D-DEFAULT-URL's layout) and parses
-the manifest via `manifest_parser.parse_manifest_json` -- mirrors
-`ps_cli.catalog_repo.read_artifact`'s shape (PLAN.md §2) over HTTP instead of
-local disk. Blobs are returned as raw, unparsed bytes -- exactly like
-`read_artifact`'s own contract -- so verification (checksum, D9;
-schema_version, D10) happens later, inside `ps_service.restore.
-restore_instrument`, never here.
+`{base_url}/{instrument_id}/baseline.json` and `{base_url}/{instrument_id}/native.json`, and
+parses the manifest with `manifest_parser.parse_manifest_json`. It reads over HTTP what
+`ps_cli.catalog_repo.read_artifact` reads from local disk. The graph blobs are returned as
+raw, unparsed bytes; verification (checksum and schema version) happens later, inside
+`ps_service.restore.restore_instrument`, never here.
 """
 
 from __future__ import annotations
@@ -36,12 +33,15 @@ _ACTION = "fetch_artifact"
 class FetchedArtifact:
     """One curated instrument's artifact, fetched from the configured curated-content source.
 
-    Field-for-field mirror of `ps_service.restore.models.RestoreArtifact` --
-    a distinct type (not a reuse of that one), since this component's own
-    responsibility ends at "fetched, unverified bytes" (Single
-    Responsibility). The API-boundary orchestration converts this into a
-    `RestoreArtifact` immediately before handing it to `restore_instrument`,
-    which owns all verification (D9/D10).
+    Mirrors `ps_service.restore.models.RestoreArtifact` field for field but is a distinct type,
+    because this component's responsibility ends at fetched, unverified bytes. The API boundary
+    converts it into a `RestoreArtifact` immediately before calling `restore_instrument`, which
+    owns all verification.
+
+    Attributes:
+        manifest: The parsed `manifest.json` of the instrument.
+        baseline_blob: Raw bytes of `baseline.json`; not parsed or checksum-verified here.
+        native_blob: Raw bytes of `native.json`; not parsed or checksum-verified here.
     """
 
     manifest: InstrumentManifest
@@ -61,36 +61,29 @@ def fetch_artifact(
     transport: CuratedSourceTransport | None = None,
     emitter: LogEmitter | None = None,
 ) -> FetchedArtifact:
-    """Fetch one curated instrument's manifest and both blobs (AC-BI-004).
+    """Fetch one curated instrument's manifest and both graph blobs.
 
-    Emits one structured log entry on completion -- `outcome="success"` or
-    `outcome="failed"` -- mirroring `catalog_client.fetch_catalog`'s own
-    `emit_log_entry` usage (matched here by the `curated_source`/
-    `fetch_artifact` component/action pair), with `instrument_id` as the
-    log entry's `entity_id`.
+    The manifest is fetched and parsed first, then the baseline and native blobs; the first
+    failure stops the fetch. There is never a silent fallback to stale data.
 
     Args:
-        base_url: The configured curated-content source's base URL
-            (D-DEFAULT-URL layout: `{base_url}/{instrument_id}/...`).
-        instrument_id: The curated instrument id, naming the
-            `{base_url}/{instrument_id}/` subdirectory to fetch from.
-        transport: The HTTP transport to use -- `None` (the default) keeps
-            `http_fetch.fetch_bytes`'s own default (the real
-            `urllib.request.urlopen`); call-site injectable so tests never
-            reach real network.
-        emitter: The `LogEmitter` to emit through -- `None` (the default)
-            falls back to the process-wide default emitter, mirroring every
-            other `emitter: LogEmitter | None = None` call site in this
-            codebase.
+        base_url: Base URL of the configured curated-content source; the instrument lives under
+            `{base_url}/{instrument_id}/`. Normally has no trailing slash.
+        instrument_id: Id of the curated instrument; names the subdirectory to fetch from.
+        transport: HTTP transport; `None` uses the default of `http_fetch.fetch_bytes` (real
+            network access). Injectable so tests never reach the network.
+        emitter: Log emitter; `None` uses the process-wide default emitter.
 
     Returns:
-        A `FetchedArtifact` carrying the parsed manifest and both raw,
-        unverified blob bytes.
+        A `FetchedArtifact` with the parsed manifest and both raw, unverified blobs.
 
     Raises:
-        CuratedSourceFetchError: The source is unreachable, or any of the
-            three fetched files is missing/malformed (AC-BI-006) -- never a
-            silent fallback to stale data.
+        CuratedSourceFetchError: The source is unreachable, or any of the three files is missing
+            or malformed.
+
+    Side Effects:
+        Up to three HTTP GETs and one structured log entry (component `curated_source`, action
+        `fetch_artifact`, entity id `instrument_id`) with outcome `success` or `failed`.
     """
     manifest_url = f"{base_url}/{instrument_id}/{_MANIFEST_FILENAME}"
     baseline_url = f"{base_url}/{instrument_id}/{_BASELINE_FILENAME}"
@@ -124,10 +117,18 @@ def fetch_artifact(
 class FetchArtifactCall(Protocol):
     """Call shape of :func:`fetch_artifact`.
 
-    The DI seam `run_restoration_from_catalog_source`
-    (`api.restore_orchestration`) calls through.
+    The dependency-injection seam that `run_restoration_from_catalog_source`
+    (`api.restore_orchestration`) calls through, so tests can substitute a fake fetcher.
     """
 
     def __call__(self, base_url: str, instrument_id: str) -> FetchedArtifact:
-        """Fetch one curated instrument's manifest and both blobs."""
+        """Fetch one curated instrument's manifest and both blobs.
+
+        Args:
+            base_url: Base URL of the curated-content source.
+            instrument_id: Id of the curated instrument.
+
+        Returns:
+            The fetched artifact; failures raise `CuratedSourceFetchError`.
+        """
         ...

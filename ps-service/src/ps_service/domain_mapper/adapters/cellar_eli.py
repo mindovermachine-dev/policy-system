@@ -1,38 +1,26 @@
-r"""Cellar/ELI Domain Mapping Adapter, paired 1:1 with #14's Cellar/ELI Ingestion Adapter.
+r"""Cellar/ELI Domain Mapping Adapter, paired 1:1 with the Cellar/ELI Ingestion Adapter.
 
-Paired with `ps_service.ingestion.adapters.cellar_eli.structure`, reading
-the exact native-graph shape that component writes.
+Reads the native-graph shape written by `ps_service.ingestion.adapters.cellar_eli.structure`.
 
-PLAN_REVIEWED.md §4.2: one `ExtractionUnit` per `PARAGRAPH` when an
-`ARTICLE` has them, one per whole `ARTICLE` when it doesn't. Query pattern
-(per the plan, anchored on the requested instrument version because
-`{short}_native` holds every version): `MATCH (:RegulatoryInstrument {id:
-$rid})-[:HAS*1..]->(a:ARTICLE) RETURN a.id, a.citation_ref,
-a.text, a.heading ORDER BY a.id`, then per-article `MATCH (:ARTICLE {id:
-$id})-[:HAS]->(p:PARAGRAPH) RETURN p.citation_ref, p.text ORDER BY p.order`.
+Units: one `ExtractionUnit` per `PARAGRAPH` when an `ARTICLE` has them, one per whole
+`ARTICLE` when it has none, and one per `ANNEX`. The read is anchored on the requested
+instrument version (`MATCH (:RegulatoryInstrument {id: $rid})-[:HAS*1..]->(a:ARTICLE)`)
+because `{short}_native` holds every ingested version side by side.
 
-`citation_ref` shape confirmed directly against `ps_service.ingestion.
-adapters.cellar_eli.structure`'s own writes (`_walk_article`/
-`_mint_paragraph`): `f"Art. {number}"` for an Article's own `citation_ref`,
-`f"Art. {article_number}({para_number})"` for a Paragraph's — the plan's
-regexes (`^Art\\.\\s*(\\d+)$`, `^Art\\.\\s*(\\d+)\\((\\d+)\\)$`) match this
-exactly, no adjustment needed.
+Citation shapes: an Article's `citation_ref` is `Art. {number}` and a Paragraph's is
+`Art. {article_number}({para_number})`; the regexes `^Art\.\s*(\d+)$` and
+`^Art\.\s*(\d+)\((\d+)\)$` match exactly these. An Annex's is `Annex {label}`.
 
-Scope decision (Open Question 4, revised by GH #25): `ARTICLE`/`PARAGRAPH`
-AND `ANNEX` are queried — `RECITAL`/`CHAPTER`/`SECTION` nodes remain
-structurally unreachable from this adapter's Cypher (it never matches those
-labels), so they can never contribute an `ExtractionUnit` even when present
-in the same native graph. An `ANNEX` node has no `PARAGRAPH`-shaped child
-and no `heading` property (unlike `ARTICLE`) — it always becomes exactly one
-whole-node `ExtractionUnit`, with `article_heading=""` (never invented) and
-`paragraph_number="1"` (the same sentinel the paragraph-less-Article
-fallback already uses). `ANNEX` units are always ordered after every
-ARTICLE/PARAGRAPH unit, sorted by the native `order` property server-side
+Scope: `ARTICLE`, `PARAGRAPH` and `ANNEX` nodes are queried. `RECITAL`, `CHAPTER` and
+`SECTION` nodes are never matched, so they never contribute a unit even when present in the
+same native graph. An `ANNEX` has no `PARAGRAPH` child and no `heading` property, so it always
+becomes exactly one whole-node unit with `article_heading=""` (never invented) and
+`paragraph_number="1"` (the same sentinel a paragraph-less Article uses). Annex units come
+after every Article and Paragraph unit, ordered by the native `order` property
 (`ORDER BY a.order`), never re-derived from the citation label.
 
-Document order is `(article_number, paragraph_number)` as integers, not the
-raw query order (`ORDER BY a.id` sorts lexicographically — `"art_10"` sorts
-before `"art_2"` as a string, which is not document order) — the adapter
+Document order is `(article_number, paragraph_number)` as integers, not the raw query order:
+`ORDER BY a.id` sorts lexicographically (`"art_10"` before `"art_2"`), so the adapter
 re-sorts numerically before returning.
 """
 
@@ -49,18 +37,18 @@ if TYPE_CHECKING:
 
 _ARTICLE_CITATION_RE = re.compile(r"^Art\.\s*(\d+)$")
 _PARAGRAPH_CITATION_RE = re.compile(r"^Art\.\s*(\d+)\((\d+)\)$")
-# Negative lookahead rejects a bare-digit annex label (e.g. "Annex 1") while still
-# accepting Roman numerals ("I", "II") or any other non-digit-only alphanumeric label —
-# a digit-only label would otherwise produce an `article_number` indistinguishable from
-# a real numeric-Article-derived one (GH #25 CHANGES.md Row #1).
+# The negative lookahead rejects a bare-digit annex label (e.g. "Annex 1") while accepting
+# Roman numerals ("I", "II") and any other non-digit-only label: a digit-only label would
+# produce an `article_number` indistinguishable from a numeric-Article-derived one.
 _ANNEX_CITATION_RE = re.compile(r"^Annex\s+(?!\d+$)(\S+)$")
 
 
 class CellarEliDomainMappingAdapter:
     """Cellar/ELI implementation of `DomainMappingAdapter` (structural, Protocol).
 
-    Reads `ARTICLE`/`PARAGRAPH` nodes from a Cellar/ELI-ingested native
-    structural graph and returns the ordered sequence of extraction units.
+    Reads `ARTICLE`, `PARAGRAPH` and `ANNEX` nodes from a Cellar/ELI-ingested native graph and
+    returns the ordered sequence of extraction units. Holds no state; it issues read-only
+    queries only.
     """
 
     def read_native_units(
@@ -71,6 +59,18 @@ class CellarEliDomainMappingAdapter:
         Articles and annexes are reached by traversing `HAS` from the
         `RegulatoryInstrument` node named by `regulatory_instrument_id`, so a prior version
         sharing the same `{short}_native` graph contributes nothing.
+
+        Args:
+            graph: Read handle on the regulation's native graph (`{short}_native`).
+            regulatory_instrument_id: Id of the `RegulatoryInstrument` node to read under.
+
+        Returns:
+            Article and Paragraph units sorted numerically by article then paragraph number,
+            followed by Annex units in native `order`; empty when the instrument has none.
+
+        Raises:
+            DomainMapperExtractionError: If an Article, Paragraph or Annex `citation_ref` does
+                not match its expected shape.
         """
         article_rows = cast(
             "list[list[object]]",
@@ -100,6 +100,7 @@ class CellarEliDomainMappingAdapter:
         return (*units, *annex_units)
 
     def _units_for_article(self, graph: GraphHandle, row: list[object]) -> list[ExtractionUnit]:
+        """Expand one Article row into one unit per Paragraph, or one whole-Article unit."""
         article_id = cast("str", row[0])
         citation_ref = cast("str", row[1])
         text = cast("str", row[2])
@@ -127,6 +128,7 @@ class CellarEliDomainMappingAdapter:
         return [self._paragraph_unit(paragraph_row, heading) for paragraph_row in paragraph_rows]
 
     def _paragraph_unit(self, paragraph_row: list[object], heading: str) -> ExtractionUnit:
+        """Build a Paragraph unit that inherits its Article's `heading`."""
         para_citation_ref = cast("str", paragraph_row[0])
         para_text = cast("str", paragraph_row[1])
 
@@ -144,6 +146,7 @@ class CellarEliDomainMappingAdapter:
         )
 
     def _annex_unit(self, row: list[object]) -> ExtractionUnit:
+        """Build the single whole-node unit for an Annex row, with an empty heading."""
         citation_ref = cast("str", row[0])
         text = cast("str", row[1])
 

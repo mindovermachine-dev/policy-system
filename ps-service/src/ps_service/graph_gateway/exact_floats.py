@@ -1,4 +1,4 @@
-"""Exact reads of 64-bit floats from FalkorDB (issue #207, AC-RD-007).
+"""Exact reads of 64-bit floats from FalkorDB.
 
 FalkorDB stores a double exactly (a parameter travels as shortest round-trip text and compares
 equal), but every reply prints a double with 15 significant digits: `0.30000000000000004` comes
@@ -22,7 +22,7 @@ lossy copy next to an exact one doubled the cost of every digest.
   negative zero, `0` otherwise. This is the only copy of such a list, so the cost is two flat
   lists of integers (about 3 ms per embedding) instead of a nested pair per item (14 ms);
 * `mixed lists`: the same shape for the other lists that hold a non-zero float (the gateway
-  refuses mixed lists, but graphs written before it may hold them): the lossy list stays in
+  refuses mixed lists, but a graph written outside it may hold them): the lossy list stays in
   `pairs` and the non-zero floats are patched in, `0` marking the positions to keep.
 
 The list fragments iterate the items (`x IN p[k]`). Indexing a list held in a map (`p[k][i]`)
@@ -116,6 +116,16 @@ def restore_properties(
     pairs: object, scalars: object, float_lists: object, mixed_lists: object
 ) -> dict[str, object]:
     """Return the exact property map the four columns of `PROPERTY_COLUMNS` describe.
+
+    Args:
+        pairs: The `PROPERTY_PAIRS` column: `[[key, value], ...]`.
+        scalars: The `EXACT_SCALAR_FLOATS` column: `[[key, [s, text]], ...]`.
+        float_lists: The `FLOAT_LISTS` column: `[[key, scales, integers], ...]`.
+        mixed_lists: The `MIXED_LISTS` column: `[[key, scales, integers], ...]`.
+
+    Returns:
+        A new dict of property names to values, with every float exact; empty for a node with no
+        properties.
 
     Raises:
         UnexpectedGraphReplyError: a column does not have the promised shape, or names a property

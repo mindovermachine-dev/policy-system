@@ -1,4 +1,4 @@
-"""Retry of the startup replay through an infrastructure outage (issue #207, D21).
+"""Retry of the startup replay through an infrastructure outage.
 
 A startup replay that meets Postgres or FalkorDB down cannot finish, and the service must not
 take traffic until it has. Giving up would leave the pod at `not_ready` for good, so the replay is
@@ -30,8 +30,21 @@ def retry_through_outage[T](
 ) -> T:
     """Call `operation` until it returns, retrying `TRANSIENT_ERRORS` with a capped growing wait.
 
-    `wait(delay)` returns True when a stop was requested; then the last error is raised.
-    `on_retry(attempt, delay, error)` runs before each wait.
+    Args:
+        operation: The step to run; called again after each outage failure.
+        settings: Supplies the backoff schedule and `startup_replay_max_backoff_seconds`.
+        wait: `wait(delay)` sleeps `delay` seconds and returns True when a stop was requested.
+        on_retry: Called as `on_retry(attempt, delay, error)` before each wait.
+
+    Returns:
+        The result of the first successful call to `operation`.
+
+    Raises:
+        Exception: The last outage error once `wait` reports a stop, and any other error from
+            `operation` at once.
+
+    Side Effects:
+        Calls `wait` and `on_retry` between tries; the number of tries is unbounded.
     """
     attempt = 1
     while True:

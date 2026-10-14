@@ -1,23 +1,15 @@
-"""`CellarEliAdapter` — the `IngestionAdapter` implementation for Cellar/ELI.
+"""`CellarEliAdapter`, the `IngestionAdapter` implementation for Cellar/ELI.
 
-Composes `fetch.py::fetch_xhtml`/`fetch_rdf` (Increment 2; `fetch_rdf` added
-by issue #62), `metadata.py::extract_metadata` (Increment 3), and
-`structure.py::parse_structure` (Increment 4) into one
-`fetch_regulatory_instrument_structure(identifier) -> FetchedRegulatoryInstrumentStructure`
-call — the CA doc's single `FetchRegulatoryInstrumentStructure` action.
+Composes `fetch.fetch_xhtml`/`fetch.fetch_rdf`, `metadata.extract_metadata` and
+`structure.parse_structure` into one `fetch_regulatory_instrument_structure(identifier)` call
+returning a `FetchedRegulatoryInstrumentStructure`.
 
-`identifier` is a CELEX number (CELEX-only per the user's decision, see
-PLAN_REVIEWED.md §1.2/§9 Open Question 2) and is used, unmodified, both as
-the fetch key and as `parse_structure`'s `regulatory_instrument_id` prefix for
-structural node ids — the adapter never computes or sees the final
-`{SHORT}-{VERSION}` RegulatoryInstrument id, which is `pipeline.py`'s responsibility
-(PLAN_REVIEWED.md §3), not the adapter's.
+`identifier` is a CELEX number. It is used unmodified as the fetch key and as `parse_structure`'s
+prefix for structural node ids. The adapter never computes the final `{SHORT}-{VERSION}`
+RegulatoryInstrument id; that is the pipeline's responsibility.
 
-This is the concrete proof-of-pluggability point for AC-001/AC-006 at the
-adapter level: this module's own source contains no conditional or
-comparison on `identifier`'s value, and no regulation-name literal
-anywhere — every regulation this adapter ever ingests goes through the
-exact same three calls below.
+The module has no conditional on `identifier`'s value and no regulation-name literal, so every
+regulation goes through the same three calls.
 """
 
 from __future__ import annotations
@@ -34,16 +26,12 @@ from ps_service.ingestion.models import (
 
 
 class _FetchCallable(Protocol):
-    """The DI seam for the HTTP fetch step.
+    """The injection seam for the HTTP fetch step: take an identifier, return the raw bytes.
 
-    L2: business logic must not construct its own infrastructure clients
-    inline. Matches `fetch_xhtml`'s (and `fetch_rdf`'s — identical call
-    shape) call shape exactly, so the real `fetch_xhtml`/`fetch_rdf` are the
-    defaults while a test can substitute a fake without touching HTTP.
-    Positional-only parameter (mirrors `fetch.py::CellarTransport`'s same
-    fix): `fetch_xhtml`/`fetch_rdf`'s own parameter is named `celex`, not
-    `identifier`, and every call site here calls positionally, so a name
-    mismatch must not break structural assignability.
+    Matches the call shape of `fetch_xhtml` and `fetch_rdf`, which are the defaults, so a
+    different callable can be substituted without touching HTTP. The parameter is positional-only
+    because those functions name theirs `celex`, not `identifier`, and every call here is
+    positional.
     """
 
     def __call__(self, identifier: str, /) -> bytes: ...
@@ -52,15 +40,19 @@ class _FetchCallable(Protocol):
 class CellarEliAdapter:
     """`IngestionAdapter` implementation for the Cellar/ELI source.
 
-    `fetch`/`fetch_rdf` are independently injectable (defaults: the real
-    `fetch_xhtml`/`fetch_rdf`) so tests can substitute fakes per L2 DI,
-    without monkeypatching HTTP transport.
+    `fetch` (XHTML) and `fetch_rdf` (RDF notice) are independently injectable; the defaults are
+    the real `fetch_xhtml` and `fetch_rdf`. Holds no other state.
     """
 
     def __init__(
         self, *, fetch: _FetchCallable = fetch_xhtml, fetch_rdf: _FetchCallable = fetch_rdf
     ) -> None:
-        """Store the injected `fetch`/`fetch_rdf` callables (defaults: the real ones)."""
+        """Store the fetch callables.
+
+        Args:
+            fetch: Returns the XHTML bytes for a CELEX number (default `fetch_xhtml`).
+            fetch_rdf: Returns the RDF bytes for a CELEX number (default `fetch_rdf`).
+        """
         self._fetch = fetch
         self._fetch_rdf = fetch_rdf
 
@@ -69,11 +61,20 @@ class CellarEliAdapter:
     ) -> FetchedRegulatoryInstrumentStructure:
         """Fetch and parse one regulation by CELEX `identifier`.
 
-        Lets `CellarFetchError` (from `fetch`/`fetch_rdf`) and
-        `CellarParseError` (from `extract_metadata`/`parse_structure`)
-        propagate unchanged — both are already the correct adapter-level
-        exception type for their failure, so this method never catches or
-        re-wraps them.
+        Args:
+            identifier: CELEX number of the regulation, passed unmodified to the fetch
+                callables and the parsers.
+
+        Returns:
+            The metadata plus the structural nodes and edges, as a
+            `FetchedRegulatoryInstrumentStructure`.
+
+        Raises:
+            CellarFetchError: The XHTML or RDF fetch failed (`CellarNotFoundError` for a 404).
+            CellarParseError: The metadata or structure could not be extracted.
+
+        Side Effects:
+            Two HTTP fetches through the injected callables.
         """
         xhtml = self._fetch(identifier)
         rdf = self._fetch_rdf(identifier)
@@ -84,10 +85,21 @@ class CellarEliAdapter:
     def fetch_regulatory_instrument_metadata(self, identifier: str) -> RegulatoryInstrumentMetadata:
         """Fetch one regulation's metadata by CELEX `identifier`, without parsing its structure.
 
-        Same `fetch`/`fetch_rdf`/`extract_metadata` calls as
-        `fetch_regulatory_instrument_structure`, but never calls
-        `parse_structure`. `CellarFetchError` and `CellarParseError`
-        propagate unchanged.
+        Makes the same fetch and `extract_metadata` calls as
+        `fetch_regulatory_instrument_structure` but never calls `parse_structure`.
+
+        Args:
+            identifier: CELEX number of the regulation.
+
+        Returns:
+            The regulation's `RegulatoryInstrumentMetadata`.
+
+        Raises:
+            CellarFetchError: The XHTML or RDF fetch failed (`CellarNotFoundError` for a 404).
+            CellarParseError: The metadata could not be extracted.
+
+        Side Effects:
+            Two HTTP fetches through the injected callables.
         """
         xhtml = self._fetch(identifier)
         rdf = self._fetch_rdf(identifier)

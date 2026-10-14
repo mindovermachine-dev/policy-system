@@ -1,4 +1,12 @@
-"""Code-defined PS domain schema and its renderers (pure, import-safe, no I/O)."""
+"""Code-defined PS domain schema and its renderers.
+
+`DOMAIN_SCHEMA` is the single definition of the compliance graph's node labels, properties, edge
+types and cardinalities. Documents, the intake JSON Schema and the slim schema served to LLM
+clients are rendered from it, and hand-written vocabularies elsewhere are pinned to it by tests.
+
+Importing this package is side-effect free and performs no I/O; the model, derivation helpers,
+profile application and slim renderer re-exported here are pure functions of their arguments.
+"""
 
 from __future__ import annotations
 

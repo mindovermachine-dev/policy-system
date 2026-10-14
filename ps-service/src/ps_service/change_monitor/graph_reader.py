@@ -1,4 +1,4 @@
-"""Enumerate the tracked regulatory-instrument set from `policy_system` (AC-002).
+"""Enumerate the tracked regulatory-instrument set from `policy_system`.
 
 `poll_for_amendments` polls one instrument at a time; this module is the one
 place that reads *which* instruments to poll. It runs a single fixed,
@@ -8,7 +8,7 @@ maps each row to a `TrackedInstrumentNode`.
 
 The query filters to `status = 'active'`, `source_type = 'external'`, and
 `instrument_type IN ['regulation', 'directive']` -- so a
-`national_transposition` node (AC-003 first limb), an internal node, or a
+`national_transposition` node, an internal node, or a
 superseded node is never enumerated and therefore never polled. Every
 literal in the query is a fixed part of this module's query constant, never
 an interpolated value (L2 "parameterize Cypher"; the label / property names
@@ -39,12 +39,22 @@ RETURN n.id AS id, n.celex AS celex, n.instrument_type AS instrument_type,
 def read_tracked_instruments(graph: GraphHandle) -> tuple[TrackedInstrumentNode, ...]:
     """Enumerate every active, external `regulation` / `directive` instrument.
 
-    Runs the fixed enumeration Cypher against `graph` (expected to be a
-    handle onto the merged `policy_system` graph) and returns one
-    `TrackedInstrumentNode` per row, in the graph's result order. `celex`
-    is `None` for a node ingested before the optional `celex` property
-    existed; `effective_date` is the empty string when the node has none.
-    Issues no write.
+    Provides the set of instruments `poll_for_amendments` checks for newer
+    versions; superseded, internal and `national_transposition` nodes are
+    excluded so they are never polled.
+
+    Args:
+        graph: Handle onto the merged `policy_system` graph. Must expose
+            `query(cypher)` returning a result with `result_set`.
+
+    Returns:
+        One `TrackedInstrumentNode` per matching node, in the graph's result
+        order; an empty tuple when no instrument is tracked. `celex` is `None`
+        for a node without the optional `celex` property; `effective_date` is
+        the empty string when the node has none.
+
+    Side Effects:
+        Runs one read-only Cypher query; issues no write.
     """
     result = graph.query(_TRACKED_INSTRUMENTS_QUERY)
     rows = cast("list[list[object]]", result.result_set)

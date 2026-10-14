@@ -1,8 +1,7 @@
 """Domain-specific exception types for `ps_service.domain_mapper`.
 
-Mirrors `ps_service.ingestion.errors`'s shape (PLAN_REVIEWED.md §1): one
-exception type per distinct failure boundary this component owns, never a
-generic `Exception`/`ValueError` (L1 Error Handling, L2 Error Handling).
+Mirrors `ps_service.ingestion.errors`'s shape: one exception type per distinct failure
+boundary this component owns, never a generic `Exception` or `ValueError`.
 """
 
 from __future__ import annotations
@@ -25,28 +24,25 @@ type ErrorKind = Literal[
 class DomainMapperExtractionError(Exception):
     """A unit's LLM-driven extraction call did not yield valid `RequirementCandidate`s.
 
-    Malformed/unparseable JSON, or a response missing required structure.
-    Raised by `extraction.py`'s per-unit response parsing. Per
-    PLAN_REVIEWED.md §5.2, this is caught and logged per-unit by
-    `extract_roles_and_requirements`'s own loop, not left to propagate and
-    abort the whole call — failure isolation, not a fail-fast infra
-    boundary.
+    Raised for malformed or unparseable JSON, or a response missing required structure, and
+    for a native-graph row with an unexpected citation shape. The extraction loop in
+    `extract_roles_and_requirements` catches and logs it per unit instead of letting it abort
+    the whole call, so one bad unit does not stop the others.
 
-    `error_kind` is set (one of `ErrorKind`'s 9 values) on the 9 per-unit
-    response-parsing raise sites in `domain_mapper/prompts.py`; `None` on
-    every other raise site (a precondition/structural failure, not a
-    per-unit LLM-response parse failure).
+    Attributes:
+        error_kind: One of the `ErrorKind` values when the failure is a classified per-unit
+            response-parsing failure (raised in `domain_mapper/prompts.py`); `None` for every
+            other raise site (a precondition or structural failure).
     """
 
     def __init__(self, message: str, *, error_kind: ErrorKind | None = None) -> None:
         """Record the message and, when known, the classified failure kind.
 
         Args:
-            message: The human-readable failure description (may embed the
-                raw payload/item that failed to parse).
-            error_kind: One of `ErrorKind`'s 9 values, set only at the 9
-                per-unit response-parsing raise sites in `prompts.py`;
-                `None` on every other raise site.
+            message: Human-readable failure description; may embed the raw payload or item
+                that failed to parse.
+            error_kind: One of the `ErrorKind` values for a classified response-parsing
+                failure; `None` (the default) for any other failure.
         """
         super().__init__(message)
         self.error_kind = error_kind
@@ -55,10 +51,10 @@ class DomainMapperExtractionError(Exception):
 class DomainMapperDerivationError(Exception):
     """An Obligation/Capability derivation step could not proceed.
 
-    Malformed/unparseable LLM response for a mint-or-match decision, or a
-    Requirement whose `role_id` bookkeeping property does not resolve to
-    any Role node in the baseline graph (PLAN_REVIEWED.md §7.2's B3 fix
-    (b)). Raised by `derivation.py`.
+    Raised for a malformed or unparseable LLM response to a mint-or-match decision, or for a
+    Requirement whose `role_id` bookkeeping property does not resolve to any Role node in the
+    baseline graph. Raised by `derivation.py` and `prompts.py`; the caller should treat the
+    derivation as failed.
     """
 
 
@@ -66,19 +62,19 @@ class DomainMapperPersistenceError(Exception):
     """A baseline-graph write could not be completed safely.
 
     Raised by `graph_writer.py`, before anything is submitted to the Graph Write Gateway, if a
-    Requirement node about to be persisted references a Role node not present in the same call
-    (PLAN_REVIEWED.md §5.4's B3 fix (a)) or a node or edge carries a property the gateway cannot
-    store (a reserved key, a non-finite number). Also raised, with the message
-    `FalkorDB write failed: <sanitized text>` and the gateway error chained, when the gateway
-    refuses a group or cannot reach its stores, when a group is committed but not yet applied,
-    or when the baseline graph could not be read (issue #209).
+    Requirement node about to be persisted references a Role node not present in the same call,
+    or a node or edge carries a property the gateway cannot store (a reserved key, a
+    non-finite number). Also raised, with the message `FalkorDB write failed: <sanitized text>`
+    and the gateway error chained, when the gateway refuses a group or cannot reach its stores,
+    when a group is committed but not yet applied, or when the baseline graph could not be
+    read.
     """
 
 
 class DomainMapperConfigurationError(Exception):
     """Domain Mapper's FalkorDB connection could not be established.
 
-    From the resolved `ServiceConfig` — unreachable host/port, or the
-    connection could not be validated. Raised by
-    `falkordb_client.connect`/`connect_from_config`.
+    Raised by `falkordb_client.check_connectivity` when the host and port taken from the
+    resolved `ServiceConfig` are unreachable or the connection cannot list its graphs. The
+    underlying cause is chained.
     """

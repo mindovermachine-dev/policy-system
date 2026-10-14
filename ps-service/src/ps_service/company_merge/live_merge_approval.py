@@ -1,19 +1,12 @@
 """Approval-gate mechanism for a live write into the real `policy_system` graph.
 
-AC-BI-001 (issue #28): a live merge into the real, shared `policy_system`
-graph must not proceed without explicit, recorded human approval. This
-module never writes an approval file -- it only ever reads and validates
+A live merge into the real, shared `policy_system` graph must not proceed without explicit,
+recorded human approval. This module never writes an approval file; it only reads and validates
 one a human authored by hand elsewhere.
 
-Per issue #28's tracker CHANGES.md row #3: the two confirmation phrases are
-hardcoded module constants (`_CONFIRMATION_PHRASE_BY_RUN_KIND`), selected by
-`run_kind`, never supplied by a caller as a string. A caller-supplied
-"expected phrase" argument would let whoever runs the tool pass their own
-phrase via argv and have it match whatever they themselves wrote into the
-approval file -- a self-approval loophole. The mechanism instead forces a
-human to know and correctly type an out-of-band phrase (documented in this
-issue's own CONTEXT.md/PLAN.md, never printed by this module) into a file
-this module's own code never writes.
+The two confirmation phrases are hardcoded module constants (`_CONFIRMATION_PHRASE_BY_RUN_KIND`),
+selected by `run_kind`, never supplied by a caller. The mechanism forces a human to know and
+correctly type an out-of-band phrase into a file this module's code never writes.
 """
 
 from __future__ import annotations
@@ -42,17 +35,27 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
 class LiveMergeApprovalError(Exception):
     """An approval record is missing, malformed, or does not authorize this run.
 
-    Raised by `load_and_validate_approval`, naming exactly what is wrong --
-    a missing file, a missing/blank required field, a `scope` or
-    `target_graph` mismatch, or a `confirmation_phrase` that does not
-    exactly match the phrase hardcoded for the given `run_kind` -- before
-    any live write is attempted.
+    Raised by `load_and_validate_approval`, naming exactly what is wrong -- a missing file, a
+    missing or blank required field, a `scope` or `target_graph` mismatch, or a
+    `confirmation_phrase` that does not exactly match the phrase hardcoded for the given
+    `run_kind` -- before any live write is attempted. The caller must not proceed with the live
+    write; a human has to correct the approval file.
     """
 
 
 @dataclass(frozen=True, slots=True)
 class LiveMergeApproval:
-    """A parsed, validated human approval record for one live-merge invocation."""
+    """A parsed, validated human approval record for one live-merge invocation.
+
+    Attributes:
+        approved_by: Name of the human who approved; non-blank.
+        approved_at: Approval timestamp as written in the file; non-blank.
+        scope: The instruments the approval covers, in file order; equals the expected scope as a
+            set.
+        target_graph: The graph the approval authorizes writing to; equals the expected graph.
+        precondition_check_result: The pasted precondition-check output; non-blank.
+        confirmation_phrase: The exact phrase for the run kind.
+    """
 
     approved_by: str
     approved_at: str
@@ -63,12 +66,11 @@ class LiveMergeApproval:
 
 
 def _parse_fields(path: Path) -> dict[str, str]:
-    """Parse the file's plain `key: value` lines -- no YAML dependency needed.
+    """Parse the file's plain `key: value` lines, without a YAML dependency.
 
-    Only lines whose key matches one of `_REQUIRED_FIELDS` are kept; every
-    other line (blank lines, headings, commentary) is ignored. A value may
-    itself contain colons (e.g. an ISO timestamp, or pasted precondition
-    output) since only the *first* colon on a line separates key from value.
+    Only lines whose key is one of `_REQUIRED_FIELDS` are kept; every other line (blank lines,
+    headings, commentary) is ignored. A value may itself contain colons (an ISO timestamp, pasted
+    precondition output) since only the first colon on a line separates key from value.
     """
     fields: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -88,16 +90,31 @@ def load_and_validate_approval(
     expected_target_graph: str,
     run_kind: Literal["initial", "rerun"],
 ) -> LiveMergeApproval:
-    """Parse and validate an approval record. Never writes anything.
+    """Parse and validate a hand-written approval record for a live merge. Never writes anything.
 
-    Raises `LiveMergeApprovalError`, naming exactly what is wrong, when:
-    the file at `path` does not exist; a required field is missing or
-    blank; `scope` does not equal `expected_scope` as a set; `target_graph`
-    does not equal `expected_target_graph`; or `confirmation_phrase` does
-    not exactly match the phrase hardcoded for `run_kind` in
-    `_CONFIRMATION_PHRASE_BY_RUN_KIND` (an exact match, never fuzzy -- a
-    human must have typed or copied the literal phrase deliberately; a
-    near-miss, e.g. a single changed character, fails closed).
+    The confirmation phrase is a hardcoded constant selected by `run_kind`, never supplied by the
+    caller. A caller-supplied phrase would let whoever runs the tool pass their own phrase and
+    match whatever they wrote into the approval file, a self-approval loophole.
+
+    Args:
+        path: The approval file, plain `key: value` lines.
+        expected_scope: The instrument ids the run covers; the file's comma-separated `scope`
+            must equal them as a set.
+        expected_target_graph: The graph the run writes to; the file's `target_graph` must equal
+            it exactly.
+        run_kind: `"initial"` or `"rerun"`; selects the phrase the file must contain.
+
+    Returns:
+        The parsed `LiveMergeApproval`.
+
+    Raises:
+        LiveMergeApprovalError: The file at `path` does not exist; a required field is missing or
+            blank; `scope` or `target_graph` does not match; or `confirmation_phrase` does not
+            exactly match the phrase for `run_kind` (an exact match, never fuzzy: a near-miss,
+            such as a single changed character, fails closed).
+
+    Side Effects:
+        Reads the file at `path`.
     """
     if not path.is_file():
         missing_file_msg = f"Approval file not found: {path}"

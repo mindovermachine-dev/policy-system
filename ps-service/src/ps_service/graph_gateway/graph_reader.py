@@ -1,4 +1,4 @@
-"""Batched reads of the current state of the nodes and edges a group names (issue #206).
+"""Batched reads of the current state of the nodes and edges a group names.
 
 Reads are read-only, parameterized and chunked at the batch size, one query per label (nodes) or
 per relationship type and endpoint labels (edges). The reply shape is checked: anything else is
@@ -65,10 +65,16 @@ type LegacyEdgeKey = tuple[str, str, str, str, str]
 
 @dataclass(frozen=True, slots=True)
 class PersistedElements:
-    """What one graph holds, by key only: no property is kept (issue #99).
+    """What one graph holds, by key only: no property is kept.
 
     The replay sentinel is not an element. An edge is in `edges` when it carries an identity and
-    in `legacy_edges` when a pre-gateway writer left it without one.
+    in `legacy_edges` when it has none.
+
+    Attributes:
+        nodes: `(label, id)` of every node.
+        edges: Key of every edge that has an identity.
+        legacy_edges: Key of every edge without an identity.
+        log_position: The graph log's last position when the read started (0: nothing logged).
     """
 
     nodes: frozenset[NodeKey]
@@ -81,7 +87,18 @@ class PersistedElements:
 def read_persisted_elements(
     graph: WritableGraph, *, log_position: int, settings: DigestSettings | None = None
 ) -> PersistedElements:
-    """Enumerate the node keys and edge keys of `graph` with two chunked read-only scans.
+    """Enumerate the node keys and edge keys of a graph with two chunked read-only scans.
+
+    Args:
+        graph: The graph to scan.
+        log_position: The graph log's last position at the start of the read; recorded as is.
+        settings: Chunk sizes; the defaults of `DigestSettings` when None.
+
+    Returns:
+        The keys held by the graph; empty sets for an empty graph.
+
+    Side Effects:
+        Read-only queries against the graph.
 
     Raises:
         UnexpectedGraphReplyError: a row has an unexpected shape, or names a node that carries
@@ -106,6 +123,10 @@ class GraphShape:
     something the new content lacks, without keeping a 3,072-double embedding per node in memory.
     A node's names exclude `id`; an edge's exclude `identity`, and an edge with no identity sits
     under the `UNIDENTIFIED` slot of its key.
+
+    Attributes:
+        nodes: Property names of each node, by `(label, id)`.
+        edges: Property names of each edge, by edge key.
     """
 
     nodes: dict[NodeKey, frozenset[str]]
@@ -113,7 +134,17 @@ class GraphShape:
 
 
 def read_graph_shape(graph: WritableGraph, *, settings: DigestSettings | None = None) -> GraphShape:
-    """Read the key and property names of every node and edge of `graph` (read-only, chunked).
+    """Read the key and property names of every node and edge of a graph.
+
+    Args:
+        graph: The graph to scan.
+        settings: Chunk sizes; the defaults of `DigestSettings` when None.
+
+    Returns:
+        The graph shape; empty mappings for an empty graph.
+
+    Side Effects:
+        Read-only, chunked queries against the graph.
 
     Raises:
         UnexpectedGraphReplyError: a row has an unexpected shape, or names a node that carries
@@ -195,10 +226,24 @@ def _single_label(labels: object) -> str:
 def read_nodes(
     graph: WritableGraph, nodes: Iterable[NodeKey], batch_size: int
 ) -> dict[NodeKey, dict[str, object]]:
-    """Return the properties (minus `id`) of each of `nodes` that the graph holds.
+    """Read the stored properties of the named nodes.
 
     A statement asks for at most `STATE_READ_CHUNK_ROWS` rows (and `batch_size`), because the
     reply carries every property, embeddings included.
+
+    Args:
+        graph: The graph to read.
+        nodes: `(label, id)` keys; duplicates are collapsed.
+        batch_size: Most rows per statement; positive.
+
+    Returns:
+        The properties (minus `id`) of each node the graph holds; absent nodes are not keys.
+
+    Side Effects:
+        Read-only queries, one per label and chunk.
+
+    Raises:
+        UnexpectedGraphReplyError: a reply row has an unexpected shape.
     """
     found: dict[NodeKey, dict[str, object]] = {}
     for label, ids in _ids_by_label(nodes).items():
@@ -213,7 +258,22 @@ def read_nodes(
 def read_existing_nodes(
     graph: WritableGraph, nodes: Iterable[NodeKey], batch_size: int
 ) -> set[NodeKey]:
-    """Return which of `nodes` the graph holds, without reading any of their properties."""
+    """Report which of the named nodes the graph holds, without reading their properties.
+
+    Args:
+        graph: The graph to read.
+        nodes: `(label, id)` keys; duplicates are collapsed.
+        batch_size: Most rows per statement; positive.
+
+    Returns:
+        The subset of `nodes` that exists in the graph.
+
+    Side Effects:
+        Read-only queries, one per label and chunk.
+
+    Raises:
+        UnexpectedGraphReplyError: a reply row has an unexpected shape.
+    """
     found: set[NodeKey] = set()
     for label, ids in _ids_by_label(nodes).items():
         query = node_exists_query(label)
@@ -235,7 +295,22 @@ def _ids_by_label(nodes: Iterable[NodeKey]) -> dict[str, list[str]]:
 def read_edges(
     graph: WritableGraph, edges: Iterable[EdgeKey], batch_size: int
 ) -> dict[EdgeKey, dict[str, object]]:
-    """Return the properties (minus `identity`) of each of `edges` that the graph holds."""
+    """Read the stored properties of the named edges.
+
+    Args:
+        graph: The graph to read.
+        edges: Edge keys including identity; duplicates are collapsed.
+        batch_size: Most rows per statement; positive.
+
+    Returns:
+        The properties (minus `identity`) of each edge the graph holds; absent edges are not keys.
+
+    Side Effects:
+        Read-only queries, one per relationship type, endpoint labels and chunk.
+
+    Raises:
+        UnexpectedGraphReplyError: a reply row has an unexpected shape.
+    """
     by_shape: dict[tuple[str, str, str], list[tuple[str, str, str]]] = {}
     for relationship_type, source_label, source_id, target_label, target_id, identity in sorted(
         set(edges)
@@ -263,10 +338,25 @@ def read_edges(
 def read_unidentified_edges(
     graph: WritableGraph, edges: Iterable[EdgeKey], batch_size: int
 ) -> dict[EdgeKey, dict[str, object]]:
-    """Return the properties of each of `edges` (identity ignored) that the graph holds without one.
+    """Read the properties of the identity-less edges that match the named edges.
 
     Keys come back with an empty identity. Several identity-less edges between the same two nodes
     read as one (the last), which is all a stamp needs: it gives every one of them the identity.
+
+    Args:
+        edges: Edge keys; their identity slot is ignored. Duplicates are collapsed.
+        graph: The graph to read.
+        batch_size: Most rows per statement; positive.
+
+    Returns:
+        The properties (minus `identity`) of each matching edge that has no identity, keyed with
+        `UNIDENTIFIED` in the identity slot.
+
+    Side Effects:
+        Read-only queries, one per relationship type, endpoint labels and chunk.
+
+    Raises:
+        UnexpectedGraphReplyError: a reply row has an unexpected shape.
     """
     by_shape: dict[tuple[str, str, str], list[tuple[str, str]]] = {}
     for relationship_type, source_label, source_id, target_label, target_id, _ in sorted(

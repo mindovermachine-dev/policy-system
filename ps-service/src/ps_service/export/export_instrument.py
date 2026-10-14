@@ -1,18 +1,14 @@
-"""ps_service.export.export_instrument -- the D4 curation-export orchestrator.
+"""Curation export: turn an ingested baseline/native graph pair into a curated instrument.
 
-`export_instrument` is the one function the maintainer-only
-`tools/curated-export/` scripts call to turn an already-ingested
-`{short}_baseline`/`{short}_native` FalkorDB graph pair into one curated
-instrument directory (`curated-content/{instrument_id}/`) plus a
-regenerated `catalog.json` (D1). Fixed orchestration order (D7,
-CHANGES2.md §3.9): embeddings are backfilled onto the live baseline graph
-first, then both graphs are serialized to JSON, then the serialized baseline
-is checked against `descriptor.instrument_id` (a caller-supplied id that
-doesn't match the source graph's own `RegulatoryInstrument.id` would export
-an artifact restore can never load -- caught here instead), then the
-manifest is written, then `catalog.json` is regenerated from every manifest
-now on disk (never just this one instrument's) -- so a re-export never drops
-another instrument's catalog entry.
+`export_instrument` is the one function the maintainer-only `tools/curated-export/` scripts call
+to turn an already-ingested `{short}_baseline`/`{short}_native` FalkorDB graph pair into one
+curated instrument directory (`curated-content/{instrument_id}/`) plus a regenerated
+`catalog.json`. The order is fixed: embeddings are backfilled onto the live baseline graph first,
+then both graphs are serialized to JSON, then the serialized baseline is checked against
+`descriptor.instrument_id` (an id that differs from the source graph's own
+`RegulatoryInstrument.id` would produce an artifact restore can never load), then the manifest
+is written, then `catalog.json` is regenerated from every manifest on disk, not only this
+instrument's, so a re-export never drops another instrument's catalog entry.
 """
 
 from __future__ import annotations
@@ -50,12 +46,20 @@ _NATIVE_FILENAME = "native.json"
 class InstrumentDescriptor:
     """The manifest-describing identity fields for one curated instrument.
 
-    Groups `export_instrument`'s seven manifest-identity parameters into one
-    argument -- this repo's `max-args = 8` rule (root `pyproject.toml`)
-    would otherwise be tripped by `export_instrument`'s full parameter list
-    (descriptor fields plus `baseline_graph`/`native_graph`/`embed_model`/
-    `repo_root`/`packaged_copy_path`/`call_embedding`/`emitter`). A grouping dataclass, not a
-    `# noqa` suppression.
+    Groups the identity fields that `export_instrument` copies into the manifest, keeping its
+    parameter list within the repository's argument-count limit.
+
+    Attributes:
+        short_name: Short slug of the instrument; names the `{short}_baseline` and
+            `{short}_native` source graphs by convention.
+        instrument_id: Id of the curated instrument and name of its directory. Must equal the
+            baseline graph's `RegulatoryInstrument.id`.
+        version: Version label of the curated content.
+        celex: CELEX identifier of an `external` instrument; `None` for `internal` sources.
+        title: Human-readable instrument title.
+        source_type: `"external"` (ingested regulation) or `"internal"` (internal policy
+            content); selects which node labels get embeddings.
+        jurisdiction: Jurisdiction label; `None` for `internal` sources.
     """
 
     short_name: str
@@ -68,10 +72,10 @@ class InstrumentDescriptor:
 
 
 def _read_all_manifests(curated_content_dir: Path) -> list[InstrumentManifest]:
-    """Read every already-written `manifest.json` under `curated_content_dir`.
+    """Read every `manifest.json` directly under `curated_content_dir`, sorted by directory name.
 
-    Used to regenerate `catalog.json` from the complete, current set of
-    curated instruments -- never just the one this call just exported.
+    The catalog is regenerated from the complete set of curated instruments, not only the one
+    just exported. A missing directory yields an empty list.
     """
     if not curated_content_dir.is_dir():
         return []
@@ -85,15 +89,11 @@ def _read_all_manifests(curated_content_dir: Path) -> list[InstrumentManifest]:
 def _validate_instrument_id(
     descriptor: InstrumentDescriptor, baseline_graph: SerializedGraph
 ) -> None:
-    """Raise if `descriptor.instrument_id` doesn't match the baseline graph's own id.
+    """Raise `ExportInstrumentIdMismatchError` unless the id names a baseline RegulatoryInstrument.
 
-    Restore (`ps_service.restore.restore_instrument`) resolves a manifest's
-    `instrument_id` against the artifact's own `RegulatoryInstrument.id` and
-    rejects a mismatch as `content_validation` failed -- checked here, at
-    export time, so a caller-supplied `--instrument-id` that doesn't match
-    the source graph (e.g. a CELEX passed where the graph's real id is
-    `{short_name}-{version}`) is caught before anything is written to disk,
-    not discovered later at restore time.
+    Restore rejects a manifest whose `instrument_id` differs from the artifact's own
+    `RegulatoryInstrument.id`, so the mismatch (for example a CELEX passed where the graph's id
+    is `{short_name}-{version}`) is caught before anything is written to disk.
     """
     regulatory_instrument_ids = [
         node.properties.get("id")
@@ -122,21 +122,47 @@ def export_instrument(  # noqa: PLR0913 -- the two graphs, the gateway seam and 
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> InstrumentManifest:
-    """Curate one instrument end to end: embed, serialize, write, catalog.
+    """Curate one instrument end to end: embed, serialize, write files, regenerate the catalog.
 
-    Caller has already selected `baseline_graph`/`native_graph` (the live
-    `{short}_baseline`/`{short}_native` graphs on an already-ingested source
-    FalkorDB instance) -- this function does no graph selection of its own. The
-    embedding backfill is written through `submitter` (the Graph Write Gateway) as one group on
-    `baseline_graph_name`, anchored to `audit_event_id` (the system audit row the caller
-    recorded first); the name is passed in, not derived from `descriptor.short_name`, because the
-    CLI names its source graph from `--short-name`.
-    Writes `curated-content/{descriptor.instrument_id}/{manifest.json,
-    baseline.json,native.json}` under `repo_root`, and regenerates
-    `catalog.json` at both `repo_root / "curated-content" / "catalog.json"`
-    and `packaged_copy_path` (CHANGES.md MA3).
+    Business Rules:
+        `descriptor.instrument_id` must equal the `id` of a `RegulatoryInstrument` node in the
+        baseline graph, so the exported artifact can always be restored. The manifest records
+        the current `DOMAIN_SCHEMA_VERSION` and the SHA-256 of both serialized graphs.
 
-    Returns the written `InstrumentManifest`.
+    Args:
+        descriptor: Identity fields of the instrument, copied into the manifest.
+        baseline_graph: Read handle on the already-selected live baseline graph; this function
+            selects no graph itself.
+        native_graph: Read handle on the already-selected live native graph.
+        embed_model: Embedding model name used for the backfill.
+        repo_root: Repository root; output goes under `repo_root / "curated-content"`.
+        packaged_copy_path: Full file path of the second `catalog.json` copy packaged into the
+            container image.
+        submitter: Graph Write Gateway submitter used for the embedding backfill.
+        audit_event_id: Id of the system audit row the caller recorded first; the backfill group
+            is anchored to it.
+        baseline_graph_name: Name of the baseline graph, passed in rather than derived from
+            `descriptor.short_name` because the CLI names its source graph from `--short-name`.
+        call_embedding: Embedding provider callable; `None` uses the default provider caller.
+        emitter: Log emitter; `None` uses the default emitter.
+
+    Returns:
+        The `InstrumentManifest` that was written to `manifest.json`.
+
+    Raises:
+        ExportInstrumentIdMismatchError: `descriptor.instrument_id` does not match the baseline
+            graph's `RegulatoryInstrument.id`. Raised after the embedding backfill but before any
+            file is written.
+        ExportGraphWriteError: The embedding backfill did not take effect.
+        ExportSourceGraphError: A node or edge endpoint in either graph does not carry exactly
+            one label.
+        LlmProviderError: An embedding call failed.
+
+    Side Effects:
+        Submits an embedding group to the baseline graph through the gateway. Writes
+        `curated-content/{instrument_id}/{manifest.json,baseline.json,native.json}` under
+        `repo_root` and regenerates `catalog.json` at `repo_root / "curated-content"` and at
+        `packaged_copy_path`.
     """
     backfill_capability_embeddings(
         baseline_graph,

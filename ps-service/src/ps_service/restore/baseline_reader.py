@@ -1,15 +1,13 @@
-"""A read-only `GraphHandle` over a parsed artifact's baseline leg (issue #214, D-1 Option A).
+"""A read-only `GraphHandle` over a parsed artifact's baseline leg.
 
-Restore used to stage the baseline graph under a temporary key and run
-`company_merge.graph_reader.read_baseline_graph` against it. That function is the single source of
-the baseline projections and stays unmodified; this handle answers its fixed queries
-(`graph_reader.BASELINE_QUERIES`) from the parsed `SerializedGraph`, so Restore reads its own
-input without holding a FalkorDB handle at all.
+`company_merge.graph_reader.read_baseline_graph` is the single source of the baseline
+projections; this handle answers its fixed queries (`graph_reader.BASELINE_QUERIES`) from the
+parsed `SerializedGraph`, so Restore reads its own input without holding a FalkorDB handle.
 
-The answers follow what the staged graph held: the artifact folded as `populate_graph` folded it
-(`leg_primitives.fold_serialized_graph`), an absent property read as `NULL`, a query filtered by
-the instrument id it is parameterised with, and an edge read only between nodes of the labels the
-query names. Any other statement is refused.
+The answers are those a graph written from the artifact would give: the artifact folded as a
+written graph would hold it (`leg_primitives.fold_serialized_graph`), an absent property read as
+`NULL`, a query filtered by the instrument id it is parameterised with, and an edge read only
+between nodes of the labels the query names. Any other statement is refused.
 """
 
 from __future__ import annotations
@@ -59,7 +57,11 @@ _NAME_BY_QUERY = {query: name for name, query in BASELINE_QUERIES.items()}
 
 
 class UnansweredBaselineQueryError(Exception):
-    """The reader was asked a statement that is not one of the baseline reader's fixed queries."""
+    """The reader was asked a statement that is not one of the baseline reader's fixed queries.
+
+    Raised by `SerializedGraphReader.query`; a caller bug (it passed a statement the baseline
+    reader never issues), not a data condition, so there is nothing to retry.
+    """
 
 
 @dataclass(frozen=True)
@@ -75,10 +77,20 @@ class _NodeView:
 
 
 class SerializedGraphReader:
-    """Answers `graph_reader.BASELINE_QUERIES` from a parsed artifact; never writes."""
+    """Answers `graph_reader.BASELINE_QUERIES` from a parsed artifact; never writes.
+
+    Stands in for a FalkorDB `GraphHandle` so `read_baseline_graph` can read an artifact's
+    baseline leg without the graph being staged anywhere. Holds only in-memory indexes of the
+    artifact; no I/O.
+    """
 
     def __init__(self, graph: SerializedGraph) -> None:
-        """Index the artifact's folded nodes by label and edges by (type, labels)."""
+        """Index the artifact's folded nodes by label and edges by (type, labels).
+
+        Args:
+            graph: The parsed baseline leg; folded the way `leg_primitives.fold_serialized_graph`
+                folds it for writing, so reads see what a written graph would hold.
+        """
         folded = fold_serialized_graph(graph)
         self._nodes: dict[str, list[dict[str, object]]] = {}
         for node in folded.nodes:
@@ -91,7 +103,20 @@ class SerializedGraphReader:
             )
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _Rows:
-        """Answer one of the reader's fixed queries.
+        """Answer one of the reader's fixed queries from the artifact.
+
+        An absent property reads as `None`. The regulatory-instrument node and the provenance
+        edges are filtered by the `regulatory_instrument_id` parameter; every other query
+        returns all rows of its labels.
+
+        Args:
+            q: Exact text of one of `graph_reader.BASELINE_QUERIES`.
+            params: Query parameters; only `regulatory_instrument_id` is read, and an absent
+                key matches no instrument.
+
+        Returns:
+            The result rows in the shape the real graph returns for that query; empty when the
+            artifact holds no matching nodes or edges.
 
         Raises:
             UnansweredBaselineQueryError: `q` is not a registered baseline query.

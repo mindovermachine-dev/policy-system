@@ -1,4 +1,4 @@
-"""`poll_for_amendments` -- detect newer consolidated versions (AC-002, AC-003, AC-009).
+"""`poll_for_amendments` -- detect newer consolidated versions of tracked instruments.
 
 Enumerates the tracked instrument set from `policy_system` (via
 `graph_reader.read_tracked_instruments`) and, one instrument at a time, asks
@@ -10,15 +10,15 @@ instrument's ingested baseline. The CELLAR lookup is injected
 Read-only: this function issues no graph write. It returns a complete
 `PollReport` even when some instruments fail -- a per-instrument
 `CellarConsolidationQueryError` is isolated (`outcome="poll_failed"`,
-recorded in `failed_ids`) and the poll continues (AC-003); a node with no
+recorded in `failed_ids`) and the poll continues; a node with no
 `celex` is `outcome="not_configured"` (recorded in `unconfigured_ids`), a
-seed gap rather than a transient failure. No other exception is swallowed.
+data gap rather than a transient failure. No other exception is swallowed.
 
 `regulation` and `directive` take the identical path -- nothing in this
-module branches on `TrackedInstrumentNode.instrument_type`'s value (AC-010,
-AC-011). The value is carried into the finding untouched.
+module branches on `TrackedInstrumentNode.instrument_type`'s value. The value
+is carried into the finding untouched.
 
-Baseline resolution (PLAN_REVIEWED.md §1.2 Resolution B), in priority order:
+Baseline resolution, in priority order:
 
 1. A caller-supplied override CELEX for this instrument id -- compared
    lexically against the latest consolidated CELEX.
@@ -28,12 +28,11 @@ Baseline resolution (PLAN_REVIEWED.md §1.2 Resolution B), in priority order:
    with `reason="baseline_unknown"` -- conservative, never a silent
    `current`.
 
-Known non-informativeness within #19's scope (PLAN_REVIEWED.md §1.2):
-nothing in #19 writes a `policy_system` baseline, so after a successful
-`trigger_reingestion` the poll keeps reporting the same instrument as
-`amendment_detected` until the caller passes an updated
-`baseline_overrides` entry (or future merge-chaining propagates the new
-version). This is inherent to the deliberate scope cut, not a defect.
+Limitation: the poll never writes a baseline, so after a successful
+`trigger_reingestion` it keeps reporting the same instrument as
+`amendment_detected` until the caller passes an updated `baseline_overrides`
+entry or the instrument's `effective_date` moves past the detected
+consolidation.
 """
 
 from __future__ import annotations
@@ -62,15 +61,27 @@ _Outcome = Literal["current", "amendment_detected", "poll_failed", "not_configur
 
 
 class ConsolidatedVersionLookup(Protocol):
-    """DI seam: given a base-act CELEX, return CELLAR's consolidated-version state.
+    """Injection seam: given a base-act CELEX, return CELLAR's consolidated-version state.
 
     The default implementation is
     `cellar_consolidated.fetch_consolidated_versions`; a test substitutes a
-    fake without touching the network.
+    fake without touching the network. An implementation signals a per-instrument
+    query failure by raising `CellarConsolidationQueryError`, which the poll isolates.
     """
 
     def __call__(self, base_celex: str) -> ConsolidatedVersionInfo:
-        """Return CELLAR's consolidated-expression state for `base_celex`."""
+        """Return CELLAR's consolidated-expression state for `base_celex`.
+
+        Args:
+            base_celex: Base-act CELEX in the legislation sector (e.g. `32016R0679`).
+
+        Returns:
+            The `ConsolidatedVersionInfo`; its `consolidated_celexes` is empty when CELLAR
+            has no consolidated version.
+
+        Raises:
+            CellarConsolidationQueryError: The query could not be completed.
+        """
         ...
 
 
@@ -83,16 +94,38 @@ def poll_for_amendments(
 ) -> PollReport:
     """Poll every tracked instrument for a newer consolidated version.
 
-    `graph` is a handle onto the merged `policy_system` graph.
-    `baseline_overrides` maps a `regulatory_instrument_id` to the
-    consolidated CELEX the caller last ingested, taking priority over the
-    node's `effective_date` as the comparison baseline.
-    `consolidated_versions` is the CELLAR lookup (injectable; defaults to the
-    real SPARQL client). Binds a fresh run id for the whole call and emits
-    exactly one log entry per enumerated instrument
-    (`component="change_monitor"`, `action="poll_for_amendments"`,
-    `entity_id=<id>`, `outcome`). Issues no graph write; always returns a
-    complete `PollReport`.
+    Tells an operator which tracked instruments have a newer consolidated
+    version in CELLAR than the one ingested, so they can trigger re-ingestion.
+    A per-instrument CELLAR failure never aborts the poll.
+
+    Args:
+        graph: Handle onto the merged `policy_system` graph, used for one
+            read-only enumeration of tracked instruments.
+        baseline_overrides: Maps a `regulatory_instrument_id` to the
+            consolidated CELEX the caller last ingested; takes priority over
+            the node's `effective_date` as the comparison baseline. `None`
+            or empty means no overrides.
+        consolidated_versions: CELLAR lookup; defaults to the real SPARQL
+            client, injectable for tests.
+        emitter: Log emitter for the per-instrument entries; `None` uses the
+            default emitter.
+
+    Returns:
+        A complete `PollReport`: `findings` holds only instruments with an
+        amendment detected, `polled_count` the number enumerated,
+        `failed_ids` those whose CELLAR query failed and `unconfigured_ids`
+        those with no `celex` and no override. All empty when nothing is
+        tracked.
+
+    Raises:
+        Exception: Any error other than `CellarConsolidationQueryError`
+            raised by the graph read or the lookup propagates.
+
+    Side Effects:
+        Binds a fresh run id for the whole call and emits exactly one log
+        entry per enumerated instrument (`component="change_monitor"`,
+        `action="poll_for_amendments"`, `entity_id=<id>`, `outcome`).
+        Issues no graph write.
     """
     overrides: Mapping[str, str] = baseline_overrides or {}
     findings: list[AmendmentFinding] = []

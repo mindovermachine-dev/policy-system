@@ -1,4 +1,4 @@
-"""`id` index management for the labels the gateway writes (issue #206, AC-BI-008).
+"""`id` index management for the labels the gateway writes.
 
 Every `MATCH`/`MERGE` the gateway issues looks a node up by `id`, so each label needs an index on
 it before its first load. Nothing is remembered between apply passes: each pass lists the graph's
@@ -36,7 +36,11 @@ class IdIndexes:
     """
 
     def __init__(self, graph: WritableGraph) -> None:
-        """Start without a listing; nothing is queried until the first `ensure`."""
+        """Start without a listing; nothing is queried until the first `ensure`.
+
+        Args:
+            graph: The writable graph whose indexes are managed.
+        """
         self._graph = graph
         self._indexed: set[str] | None = None
 
@@ -45,6 +49,17 @@ class IdIndexes:
 
         Does nothing (not even a listing) when `labels` is empty or all are already known. An
         index another writer created in the meantime counts as success.
+
+        Args:
+            labels: Node labels that need an index on `id`; may repeat.
+
+        Raises:
+            UnexpectedGraphReplyError: The index listing has an unexpected shape.
+            redis.exceptions.ResponseError: Creating an index failed for a reason other than
+                "already indexed".
+
+        Side Effects:
+            Lists the graph's indexes once and creates the missing ones.
         """
         wanted = sorted(set(labels) - (self._indexed or set()))
         if not wanted:
@@ -58,7 +73,20 @@ class IdIndexes:
 
 
 def ensure_id_indexes(graph: WritableGraph, labels: Iterable[str]) -> None:
-    """Create an index on `id` for each of `labels` that does not have one yet (one pass)."""
+    """Create an index on `id` for each of `labels` that does not have one yet (one pass).
+
+    Args:
+        graph: The writable graph to index.
+        labels: Node labels that need an index on `id`; may repeat or be empty.
+
+    Raises:
+        UnexpectedGraphReplyError: The index listing has an unexpected shape.
+        redis.exceptions.ResponseError: Creating an index failed for a reason other than
+            "already indexed".
+
+    Side Effects:
+        Lists the graph's indexes and creates the missing ones.
+    """
     IdIndexes(graph).ensure(labels)
 
 

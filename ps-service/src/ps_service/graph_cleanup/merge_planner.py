@@ -1,4 +1,4 @@
-"""Pure planning and validation for `merge-capabilities` (issue #190, AC-BI-005/010/016/021).
+"""Pure planning and validation for `merge-capabilities`.
 
 No I/O: takes the `MergeState` the reader produced and returns the preview, the
 guard counts the writer pins, the before/after snapshots and a state
@@ -7,7 +7,7 @@ digest. The digest binds a passkey approval to the exact state that was previewe
 Merge case 1 (neither governed), case 2 (exactly one governed: the `GOVERNED_BY` edge moves
 with an absorbed governed capability, stays with a governed survivor) and case 3 (both governed
 by the SAME policy: the absorbed edge is deleted, no acknowledgment) are planned. Both governed
-by DIFFERENT policies is rejected before any approval (AC-BI-011) and points at
+by DIFFERENT policies is rejected before any approval and points at
 `release-capability-governance`.
 """
 
@@ -45,6 +45,7 @@ _RELEASE_TOOL = "release-capability-governance"
 
 
 def _require_active(node: CapabilityNodeState, role: str) -> None:
+    """Raise unless the Capability is `active`; `role` names the side in the message."""
     if node.status == "merged":
         message = f"the {role} capability {node.id!r} is a merged tombstone and cannot be merged"
         raise GraphCleanupValidationError(message)
@@ -59,7 +60,10 @@ def _different_policies_message(
     survivor_policy: GoverningPolicy,
     absorbed_policy: GoverningPolicy,
 ) -> str:
-    """The AC-BI-011 rejection: both policies, the release step, and what is actually possible."""
+    """Build the rejection for two differing governing policies.
+
+    Names both policies, the release step when one is a draft, and what is possible otherwise.
+    """
     intro = (
         f"cannot merge: capability {survivor.id!r} is governed by policy {survivor_policy.title!r} "
         f"({survivor_policy.id}, {survivor_policy.status}) and capability {absorbed.id!r} by "
@@ -89,10 +93,19 @@ def _different_policies_message(
 def validate_capability_merge(state: MergeState) -> tuple[CapabilityNodeState, CapabilityNodeState]:
     """Reject a merge that must never get an approval; return the (survivor, absorbed) nodes.
 
+    Both sides governed by the same policy is allowed; by different policies it is rejected.
+
+    Args:
+        state: What the reader found: both Capabilities (each `None` when absent) and the
+            Policies governing each.
+
+    Returns:
+        The survivor and absorbed Capability nodes, both `active`.
+
     Raises:
         GraphCleanupValidationError: self-merge, a nonexistent side, a `merged`
             tombstone or other non-active side, a side with more than one governing
-            policy (a data fault), or both sides governed (case 3, not supported yet).
+            policy (a data fault), or both sides governed by different policies.
     """
     survivor, absorbed = state.survivor, state.absorbed
     if survivor is not None and absorbed is not None and survivor.id == absorbed.id:
@@ -121,11 +134,13 @@ def validate_capability_merge(state: MergeState) -> tuple[CapabilityNodeState, C
 
 
 def _snapshot_node(node: CapabilityNodeState, *, status: str) -> NodeRecord:
+    """Return the snapshot record of a Capability node with `status` overriding its own."""
     properties = {**node.properties, "name": node.name, "status": status}
     return NodeRecord(label="Capability", id=node.id, properties=properties)
 
 
 def _sorted_edges(edges: list[EdgeRecord]) -> tuple[EdgeRecord, ...]:
+    """Order edges deterministically so equal states produce equal snapshots and digests."""
     return tuple(
         sorted(
             edges,
@@ -135,11 +150,13 @@ def _sorted_edges(edges: list[EdgeRecord]) -> tuple[EdgeRecord, ...]:
 
 
 def _digest(before: GraphSnapshot) -> str:
+    """Return the SHA-256 hex digest of the canonical JSON of the before snapshot."""
     canonical = json.dumps(before.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _acknowledgment_text(policy: GoverningPolicy, governed_side: str) -> str:
+    """Return the text the approver must acknowledge when exactly one side is governed."""
     moved = (
         "the absorbed capability's governing edge moves to the survivor"
         if governed_side == "absorbed"
@@ -203,6 +220,7 @@ def _governance(state: MergeState, survivor_id: str, absorbed_id: str) -> Govern
 
 
 def _same_policy_text(policy: GoverningPolicy) -> str:
+    """Return the informational text for a merge whose two sides share one policy."""
     return (
         f"Both capabilities are already governed by policy {policy.title!r} ({policy.id}, "
         f"`{policy.status}`): the absorbed capability leaves its governed set and the "
@@ -211,6 +229,7 @@ def _same_policy_text(policy: GoverningPolicy) -> str:
 
 
 def _governed_by_edge(capability_id: str, policy_id: str) -> EdgeRecord:
+    """Return the `GOVERNED_BY` edge from the Capability to the Policy."""
     return EdgeRecord(
         rel_type="GOVERNED_BY",
         source_label="Capability",
@@ -223,6 +242,7 @@ def _governed_by_edge(capability_id: str, policy_id: str) -> EdgeRecord:
 def _expected(
     state: MergeState, moved_requires: int, moved_covers: int, moved_mitigated: int
 ) -> ExpectedCounts:
+    """Build the guard counts the writer pins, from the moved-edge counts and the policies."""
     absorbed_policy = state.absorbed_policies[0] if state.absorbed_policies else None
     survivor_policy = state.survivor_policies[0] if state.survivor_policies else None
     return ExpectedCounts(
@@ -239,6 +259,7 @@ def _expected(
 
 
 def _policy_case(state: MergeState) -> Literal[1, 2, 3]:
+    """Return the merge case: 1 none governed, 2 exactly one side governed, 3 both."""
     governed = bool(state.survivor_policies) + bool(state.absorbed_policies)
     return 1 if governed == 0 else 2 if governed == 1 else 3
 
@@ -250,10 +271,23 @@ def plan_capability_merge(state: MergeState) -> CapabilityMergePlan:
     onto the survivor; an endpoint already linked to the survivor collapses into the
     existing edge (no duplicate). The absorbed node is kept as a `merged` tombstone with
     a `MERGED_INTO` edge to the survivor. In case 2 the governing `GOVERNED_BY` edge of an
-    absorbed governed capability moves to the survivor; a governed survivor keeps its own.
+    absorbed governed capability moves to the survivor; a governed survivor keeps its own. In
+    case 3 the absorbed edge is dropped. The state digest hashes the before snapshot, so an
+    approval only applies to the state previewed.
+
+    Args:
+        state: What the reader found for both Capabilities; validated by
+            `validate_capability_merge`.
+
+    Returns:
+        A `CapabilityMergePlan`: the preview (edges to move, collapsed duplicates, governance
+        change or `None` for case 1), the expected counts the writer pins, the before/after
+        snapshots and the state digest.
 
     Raises:
-        GraphCleanupValidationError: see `validate_capability_merge`.
+        GraphCleanupValidationError: self-merge, a nonexistent side, a `merged` tombstone or other
+            non-active side, a side with more than one governing policy (a data fault), or both
+            sides governed by different policies.
     """
     survivor, absorbed = validate_capability_merge(state)
     incident = [e for e in state.edges if e.target_id in {survivor.id, absorbed.id}]

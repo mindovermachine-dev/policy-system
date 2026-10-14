@@ -1,8 +1,8 @@
-"""Cypher the Graph Write Gateway sends to FalkorDB (issue #206).
+"""Cypher the Graph Write Gateway sends to FalkorDB.
 
 Every value travels as a parameter (`$rows`). The only interpolated text is a node label or a
 relationship type, and it is checked here at the point of use (allow-list, then identifier shape)
-even though validation already ran (L1 second validation layer for query construction).
+even though validation already ran (a second validation layer for query construction).
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ UNIDENTIFIED_EDGE_SCAN = (
 """One chunk of the edges that carry no identity (read-only); `$after` is the internal-id cursor."""
 
 REPLAY_STATE_LABEL = "GraphReplayState"
-"""Label of the replay-progress sentinel node (#207): bookkeeping, never part of a digest."""
+"""Label of the replay-progress sentinel node: bookkeeping, never part of a digest."""
 
 REPLAY_STATE_READ = f"MATCH (p:{REPLAY_STATE_LABEL}) RETURN p.position, p.state, p.kind, p.verified"
 """Read the replay-progress sentinel (at most one exists); no row means no replay is in progress."""
@@ -152,7 +152,17 @@ _IDENTIFIER = re.compile(IDENTIFIER_PATTERN)
 
 
 def require_safe_identifier(name: str) -> str:
-    """Return `name` if it is safe to interpolate into Cypher, else raise `ValueError`."""
+    """Check that `name` is safe to interpolate into Cypher.
+
+    Args:
+        name: Candidate label, relationship type or property key.
+
+    Returns:
+        `name`, unchanged, when it matches the identifier pattern in full.
+
+    Raises:
+        ValueError: `name` is not a safe Cypher identifier.
+    """
     if _IDENTIFIER.fullmatch(name) is None:
         message = "not a safe Cypher identifier"
         raise ValueError(message)
@@ -170,22 +180,66 @@ def _relationship_type(relationship_type: str) -> str:
 
 
 def upsert_node_query(label: str) -> str:
-    """Build the upsert-node query for `label`."""
+    """Build the upsert-node query for `label`.
+
+    Args:
+        label: Node label; must be allow-listed and identifier-safe.
+
+    Returns:
+        The query text with `label` interpolated; values travel as the `$rows` parameter.
+
+    Raises:
+        UnlistedNameError: `label` is not allow-listed.
+        ValueError: `label` is not identifier-safe.
+    """
     return UPSERT_NODE_TEMPLATE.replace("{L}", _node_label(label))
 
 
 def create_index_query(label: str) -> str:
-    """Build the query that indexes `id` on nodes of `label`."""
+    """Build the query that indexes `id` on nodes of `label`.
+
+    Args:
+        label: Node label; must be allow-listed and identifier-safe.
+
+    Returns:
+        The query text with `label` interpolated; values travel as the `$rows` parameter.
+
+    Raises:
+        UnlistedNameError: `label` is not allow-listed.
+        ValueError: `label` is not identifier-safe.
+    """
     return CREATE_INDEX_TEMPLATE.replace("{L}", _node_label(label))
 
 
 def merge_property_query(label: str) -> str:
-    """Build the merge-property query for `label`."""
+    """Build the merge-property query for `label`.
+
+    Args:
+        label: Node label; must be allow-listed and identifier-safe.
+
+    Returns:
+        The query text with `label` interpolated; values travel as the `$rows` parameter.
+
+    Raises:
+        UnlistedNameError: `label` is not allow-listed.
+        ValueError: `label` is not identifier-safe.
+    """
     return MERGE_PROPERTY_TEMPLATE.replace("{L}", _node_label(label))
 
 
 def delete_node_query(label: str) -> str:
-    """Build the delete-node query for `label`."""
+    """Build the delete-node query for `label`.
+
+    Args:
+        label: Node label; must be allow-listed and identifier-safe.
+
+    Returns:
+        The query text with `label` interpolated; values travel as the `$rows` parameter.
+
+    Raises:
+        UnlistedNameError: `label` is not allow-listed.
+        ValueError: `label` is not identifier-safe.
+    """
     return DELETE_NODE_TEMPLATE.replace("{L}", _node_label(label))
 
 
@@ -193,7 +247,18 @@ def remove_property_query(label: str, keys: Sequence[str]) -> str:
     """Build the remove-property query for `label` and the property `keys`.
 
     Keys are the one non-label text interpolated into Cypher, so each is checked here at the
-    point of use: identifier shape, and not a key the gateway owns (F5).
+    point of use: identifier shape, and not a key the gateway owns.
+
+    Args:
+        label: Node label; must be allow-listed and identifier-safe.
+        keys: Property keys to remove; each must be identifier-safe and not reserved.
+
+    Returns:
+        The query text with the label and the `n.key, ...` clause interpolated.
+
+    Raises:
+        UnlistedNameError: `label` is not allow-listed.
+        ValueError: `label` or a key is not identifier-safe, or a key is reserved.
     """
     clause = ", ".join(f"n.{_removable_key(key)}" for key in keys)
     return REMOVE_PROPERTY_TEMPLATE.replace("{L}", _node_label(label)).replace("{KEYS}", clause)
@@ -208,45 +273,130 @@ def _removable_key(key: str) -> str:
 
 
 def node_state_query(label: str) -> str:
-    """Build the read that returns the state of nodes of `label`."""
+    """Build the read that returns the state of nodes of `label`.
+
+    Args:
+        label: Node label; must be allow-listed and identifier-safe.
+
+    Returns:
+        The query text with `label` interpolated; values travel as the `$rows` parameter.
+
+    Raises:
+        UnlistedNameError: `label` is not allow-listed.
+        ValueError: `label` is not identifier-safe.
+    """
     return NODE_STATE_TEMPLATE.replace("{L}", _node_label(label))
 
 
 def node_exists_query(label: str) -> str:
-    """Build the read that returns which of the given ids exist as nodes of `label`."""
+    """Build the read that returns which of the given ids exist as nodes of `label`.
+
+    Args:
+        label: Node label; must be allow-listed and identifier-safe.
+
+    Returns:
+        The query text with `label` interpolated; values travel as the `$rows` parameter.
+
+    Raises:
+        UnlistedNameError: `label` is not allow-listed.
+        ValueError: `label` is not identifier-safe.
+    """
     return NODE_EXISTS_TEMPLATE.replace("{L}", _node_label(label))
 
 
 def edge_state_query(relationship_type: str, source_label: str, target_label: str) -> str:
-    """Build the read that returns the state of edges of one type between two labels."""
+    """Build the read that returns the state of edges of one type between two labels.
+
+    Args:
+        relationship_type: Relationship type; must be allow-listed and identifier-safe.
+        source_label: Label of the source node; must be allow-listed and identifier-safe.
+        target_label: Label of the target node; must be allow-listed and identifier-safe.
+
+    Returns:
+        The query text with the type and labels interpolated; values travel as `$rows`.
+
+    Raises:
+        UnlistedNameError: A label or the type is not allow-listed.
+        ValueError: A label or the type is not identifier-safe.
+    """
     return _edge_text(EDGE_STATE_TEMPLATE, relationship_type, source_label, target_label)
 
 
 def unidentified_edge_state_query(
     relationship_type: str, source_label: str, target_label: str
 ) -> str:
-    """Build the read that returns the identity-less edges of one type between two labels."""
+    """Build the read that returns the identity-less edges of one type between two labels.
+
+    Args:
+        relationship_type: Relationship type; must be allow-listed and identifier-safe.
+        source_label: Label of the source node; must be allow-listed and identifier-safe.
+        target_label: Label of the target node; must be allow-listed and identifier-safe.
+
+    Returns:
+        The query text with the type and labels interpolated; values travel as `$rows`.
+
+    Raises:
+        UnlistedNameError: A label or the type is not allow-listed.
+        ValueError: A label or the type is not identifier-safe.
+    """
     return _edge_text(
         UNIDENTIFIED_EDGE_STATE_TEMPLATE, relationship_type, source_label, target_label
     )
 
 
 def stamp_edge_identity_query(stamp: StampEdgeIdentity) -> str:
-    """Build the stamp-identity query for the type and endpoint labels of `stamp`."""
+    """Build the stamp-identity query for the type and endpoint labels of `stamp`.
+
+    Args:
+        stamp: The identity stamp to apply; its type and endpoint labels must be allow-listed and
+            identifier-safe.
+
+    Returns:
+        The query text with the type and endpoint labels interpolated; values travel as `$rows`.
+
+    Raises:
+        UnlistedNameError: A label or the type is not allow-listed.
+        ValueError: A label or the type is not identifier-safe.
+    """
     return _edge_query(STAMP_EDGE_IDENTITY_TEMPLATE, stamp)
 
 
 def upsert_edge_query(edge: UpsertEdge | DeleteEdge) -> str:
-    """Build the upsert-edge query for the type and endpoint labels of `edge`."""
+    """Build the upsert-edge query for the type and endpoint labels of `edge`.
+
+    Args:
+        edge: The edge to upsert; its type and endpoint labels must be allow-listed and
+            identifier-safe.
+
+    Returns:
+        The query text with the type and endpoint labels interpolated; values travel as `$rows`.
+
+    Raises:
+        UnlistedNameError: A label or the type is not allow-listed.
+        ValueError: A label or the type is not identifier-safe.
+    """
     return _edge_query(UPSERT_EDGE_TEMPLATE, edge)
 
 
 def delete_edge_query(edge: UpsertEdge | DeleteEdge) -> str:
-    """Build the delete-edge query for the type and endpoint labels of `edge`."""
+    """Build the delete-edge query for the type and endpoint labels of `edge`.
+
+    Args:
+        edge: The edge to delete; its type and endpoint labels must be allow-listed and
+            identifier-safe.
+
+    Returns:
+        The query text with the type and endpoint labels interpolated; values travel as `$rows`.
+
+    Raises:
+        UnlistedNameError: A label or the type is not allow-listed.
+        ValueError: A label or the type is not identifier-safe.
+    """
     return _edge_query(DELETE_EDGE_TEMPLATE, edge)
 
 
 def _edge_query(template: str, edge: UpsertEdge | DeleteEdge | StampEdgeIdentity) -> str:
+    """Fill an edge template from the type and endpoint labels of `edge`."""
     return _edge_text(template, edge.type, edge.source.label, edge.target.label)
 
 
@@ -260,7 +410,14 @@ def _edge_text(template: str, relationship_type: str, source_label: str, target_
 
 
 def upsert_node_rows(nodes: Sequence[UpsertNode]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter for `nodes`; an absent embedding is `None`."""
+    """Build the `$rows` parameter for upserting `nodes`.
+
+    Args:
+        nodes: Node upserts of one label; empty yields no rows.
+
+    Returns:
+        One row per node with `id`, `properties` and `embedding`; an absent embedding is `None`.
+    """
     return [
         {
             "id": node.id,
@@ -272,7 +429,14 @@ def upsert_node_rows(nodes: Sequence[UpsertNode]) -> list[dict[str, object]]:
 
 
 def upsert_edge_rows(edges: Sequence[UpsertEdge]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter for `edges`."""
+    """Build the `$rows` parameter for upserting `edges`.
+
+    Args:
+        edges: Edge upserts of one type and endpoint label pair; empty yields no rows.
+
+    Returns:
+        One row per edge with `source_id`, `target_id`, `identity` and `properties`.
+    """
     return [
         {
             "source_id": edge.source.id,
@@ -285,7 +449,15 @@ def upsert_edge_rows(edges: Sequence[UpsertEdge]) -> list[dict[str, object]]:
 
 
 def delete_edge_rows(edges: Sequence[DeleteEdge | StampEdgeIdentity]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter for deleting, or stamping the identity of, `edges`."""
+    """Build the `$rows` parameter for deleting, or stamping the identity of, `edges`.
+
+    Args:
+        edges: Edge deletes or identity stamps of one type and endpoint label pair; empty yields
+            no rows.
+
+    Returns:
+        One row per edge with `source_id`, `target_id` and `identity`.
+    """
     return [
         {"source_id": edge.source.id, "target_id": edge.target.id, "identity": edge.identity}
         for edge in edges
@@ -293,27 +465,62 @@ def delete_edge_rows(edges: Sequence[DeleteEdge | StampEdgeIdentity]) -> list[di
 
 
 def merge_property_rows(merges: Sequence[MergeProperty]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter for merging properties."""
+    """Build the `$rows` parameter for merging properties.
+
+    Args:
+        merges: Property merges of one label; empty yields no rows.
+
+    Returns:
+        One row per merge with the node `id` and the `properties` to merge.
+    """
     return [{"id": merge.id, "properties": dict(merge.properties)} for merge in merges]
 
 
 def node_id_rows(nodes: Sequence[RemoveProperty | DeleteNode]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter for removing properties from, or deleting, `nodes`."""
+    """Build the `$rows` parameter for removing properties from, or deleting, `nodes`.
+
+    Args:
+        nodes: Property removals or node deletes of one label; empty yields no rows.
+
+    Returns:
+        One row per node with its `id`.
+    """
     return [{"id": node.id} for node in nodes]
 
 
 def node_state_rows(ids: Sequence[str]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter of a node state read."""
+    """Build the `$rows` parameter of a node state read.
+
+    Args:
+        ids: Node ids to read; empty yields no rows.
+
+    Returns:
+        One row with the node `id` per id.
+    """
     return [{"id": node_id} for node_id in ids]
 
 
 def unidentified_edge_state_rows(edges: Sequence[tuple[str, str]]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter of an identity-less edge read from `(source id, target id)`."""
+    """Build the `$rows` parameter of an identity-less edge read.
+
+    Args:
+        edges: `(source id, target id)` pairs; empty yields no rows.
+
+    Returns:
+        One row with `source_id` and `target_id` per pair.
+    """
     return [{"source_id": source_id, "target_id": target_id} for source_id, target_id in edges]
 
 
 def edge_state_rows(edges: Sequence[tuple[str, str, str]]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter of an edge state read from `(source id, target id, identity)`."""
+    """Build the `$rows` parameter of an edge state read.
+
+    Args:
+        edges: `(source id, target id, identity)` triples; empty yields no rows.
+
+    Returns:
+        One row with `source_id`, `target_id` and `identity` per triple.
+    """
     return [
         {"source_id": source_id, "target_id": target_id, "identity": identity}
         for source_id, target_id, identity in edges

@@ -1,4 +1,4 @@
-"""The system audit row for writers that have no principal (issue #208).
+"""The system audit row for writers that have no principal.
 
 Every `MutationGroup` carries the id of the `audit_events` row of the command that caused it.
 Most commands already record such a row for their caller; an ungated one (the internal-seed
@@ -7,9 +7,8 @@ with a fixed system actor on its own connection and returns its id.
 
 It is fail-closed: if the row cannot be written there is no id to attach, so nothing may be
 written to the graph, and the caller sees `AuditTrailUnavailableError` (503). The row's `details`
-are the caller's: this module adds no content of its own. The shared `audit` component is left
-untouched (its Protocols, `record_standalone` and `record_opening_row`), as this module only
-inserts through its own SQL.
+are the caller's: this module adds no content of its own. It does not use the shared `audit`
+component's recorders (`record_standalone`, `record_opening_row`); it inserts through its own SQL.
 """
 
 from __future__ import annotations
@@ -59,7 +58,20 @@ class SystemAuditRecorder(Protocol):
         resource_id: str,
         details: Mapping[str, object],
     ) -> str:
-        """Insert the row; return its `audit_events.id`."""
+        """Insert the row; return its `audit_events.id`.
+
+        Args:
+            action: Audit action name recorded on the row.
+            resource_type: Type of the resource the action concerned.
+            resource_id: Identifier of that resource.
+            details: Caller-supplied JSON-serializable details stored on the row.
+
+        Returns:
+            The new row's id as a UUID string.
+
+        Raises:
+            AuditTrailUnavailableError: The row could not be written.
+        """
         ...
 
 
@@ -74,9 +86,24 @@ def record_system_audit(
 ) -> str:
     """Insert one `applied` audit row for the system actor and return its id (a UUID string).
 
+    Args:
+        connection_factory: Opens a new Postgres connection to the PS state database; the row
+            is committed on it and it is closed afterwards.
+        action: Audit action name recorded on the row.
+        resource_type: Type of the resource the action concerned.
+        resource_id: Identifier of that resource.
+        details: Caller-supplied JSON-serializable details stored on the row.
+        emitter: Destination of the `system_audit` log entry; `None` uses the process-wide one.
+
+    Returns:
+        The new row's `audit_events.id` as a UUID string.
+
     Raises:
         AuditTrailUnavailableError: the connection could not be opened or the insert failed.
             The message is fixed (no host, SQL or driver text); the cause is chained.
+
+    Side Effects:
+        Inserts and commits one `audit_events` row and emits a `system_audit` log entry.
     """
     try:
         with connection_factory() as connection, connection.cursor() as cursor:
@@ -109,11 +136,19 @@ def record_system_audit(
 
 
 def build_system_audit_recorder(config: ServiceConfig) -> SystemAuditRecorder:
-    """Bind `record_system_audit` to the PS state Postgres of `config` (opened on each call)."""
+    """Bind `record_system_audit` to the PS state Postgres of `config` (opened on each call).
+
+    Args:
+        config: Service configuration naming the PS state Postgres.
+
+    Returns:
+        A recorder that opens a new connection for every row it records.
+    """
 
     def record(
         *, action: str, resource_type: str, resource_id: str, details: Mapping[str, object]
     ) -> str:
+        """Record one system audit row on a fresh connection and return its id."""
         return record_system_audit(
             lambda: connect_from_config(config),
             action=action,

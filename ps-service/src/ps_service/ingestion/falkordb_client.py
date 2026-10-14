@@ -2,15 +2,12 @@
 """FalkorDB connection helper for `ps_service.ingestion`.
 
 Ingestion reads the graph (existence reads, reachability and pre-flight counts) and writes only
-through the Graph Write Gateway. Since issue #215 this module imports no driver: `connect` hands
-back the gateway's read-only database (`graph_gateway.read_only`), so every query is sent as
-`GRAPH.RO_QUERY`, and the connectivity probe comes from `graph_gateway.connectivity`. It keeps its
-public names (`connect`, `connect_from_config`, `select_graph`, `GraphHandle`, `GraphQueryResult`,
-`FalkorDBConnectionError`, `check_connectivity*`, `native_graph_name`) so callers and their test
-patch sites are unchanged.
+through the Graph Write Gateway. This module imports no driver: `connect` returns the gateway's
+read-only database (`graph_gateway.read_only`), so every query is sent as `GRAPH.RO_QUERY`, and
+the connectivity probe comes from `graph_gateway.connectivity`.
 
-`FalkorDBConnectionError` subclasses `IngestionConfigurationError` (`ps_service.ingestion.errors`),
-whose docstring documents it as the type raised when Ingestion's FalkorDB connection cannot be
+`FalkorDBConnectionError` subclasses `IngestionConfigurationError`
+(`ps_service.ingestion.errors`), the type raised when Ingestion's FalkorDB connection cannot be
 established.
 """
 
@@ -62,32 +59,55 @@ class GraphHandle(Protocol):
 
 
 class FalkorDBConnectionError(IngestionConfigurationError):
-    """FalkorDB is unreachable at `check_connectivity` time.
+    """FalkorDB is unreachable when `check_connectivity` probes it.
 
-    Subclasses `IngestionConfigurationError`, catchable by any caller relying on that family.
+    Subclasses `IngestionConfigurationError`, so a caller catching that family also catches this.
+    The original probe failure is chained as `__cause__`.
     """
 
 
 def connect(host: str, port: int) -> ReadOnlyDatabase:
     """Open a read-only FalkorDB connection (see `graph_gateway.read_only`).
 
-    Do not call this outside a `dependency_health`-recording boundary
-    (`check_connectivity_from_config`): the driver connects eagerly.
+    The driver connects eagerly, so call this only inside a boundary that records dependency
+    health, such as `check_connectivity_from_config`.
+
+    Args:
+        host: FalkorDB host name or address.
+        port: FalkorDB TCP port.
+
+    Returns:
+        A `ReadOnlyDatabase` whose graphs accept only read queries.
+
+    Side Effects:
+        Opens a network connection to FalkorDB.
     """
     return open_read_only_database(host, port)
 
 
 def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
-    """Open the read-only connection from a resolved `ServiceConfig`.
+    """Open the read-only connection to the host and port held by a resolved `ServiceConfig`.
 
-    Callers build `config` via `ps_service.config.load_config()`, which is what makes
-    `PS_FALKORDB_HOST` / `PS_FALKORDB_PORT` load-bearing.
+    Args:
+        config: Configuration from `ps_service.config.load_config()`; its `falkordb_host` and
+            `falkordb_port` (from `PS_FALKORDB_HOST` / `PS_FALKORDB_PORT`) select the target.
+
+    Returns:
+        A `ReadOnlyDatabase` as returned by `connect`.
+
+    Side Effects:
+        Opens a network connection to FalkorDB.
     """
     return connect(host=config.falkordb_host, port=config.falkordb_port)
 
 
 def check_connectivity(db: ConnectivityProbe, host: str, port: int) -> None:
-    """Fail loud, with a friendly message, before doing any real work.
+    """Verify that FalkorDB is reachable, failing with a clear message before real work starts.
+
+    Args:
+        db: An open connection able to list its graphs.
+        host: Host name used only in the failure message.
+        port: Port used only in the failure message.
 
     Raises:
         FalkorDBConnectionError: `db` cannot list its graphs (the cause is chained).
@@ -101,6 +121,12 @@ def check_connectivity(db: ConnectivityProbe, host: str, port: int) -> None:
 def check_connectivity_from_config(config: ServiceConfig) -> None:
     """Connect via this module's `connect_from_config` and verify connectivity, as one guarded step.
 
+    Args:
+        config: Resolved configuration naming the FalkorDB host and port.
+
+    Side Effects:
+        Opens a network connection to FalkorDB and lists its graphs.
+
     Raises:
         FalkorDBConnectionError: the connection or the probe failed (the cause is chained).
     """
@@ -111,10 +137,25 @@ def check_connectivity_from_config(config: ServiceConfig) -> None:
 
 
 def select_graph(db: ReadOnlyDatabase, name: str) -> GraphHandle:
-    """Select graph `name` on `db`; `name` is already the final graph name."""
+    """Select graph `name` on `db`.
+
+    Args:
+        db: An open read-only connection.
+        name: Final graph name, used as given (see `native_graph_name`).
+
+    Returns:
+        A read-only handle exposing `query()` for that graph.
+    """
     return db.select_graph(name)
 
 
 def native_graph_name(short_name: str) -> str:
-    """One FalkorDB graph name per regulation, `{short_name.lower()}_native`."""
+    """Return the name of the native structural graph for a regulation.
+
+    Args:
+        short_name: The instrument's short name, in any case.
+
+    Returns:
+        `{short_name.lower()}_native`; there is one such graph per regulation.
+    """
     return f"{short_name.lower()}{_NATIVE_GRAPH_SUFFIX}"

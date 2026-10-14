@@ -1,18 +1,16 @@
 """Pure identity functions for `ps_service.domain_mapper`.
 
-The identity formulas from `docs/artifacts/ps-domain-concepts.md`.
+Implements the identity formulas from `docs/artifacts/ps-domain-concepts.md`. Every function is
+deterministic and side-effect free: the same inputs always yield the same node id, which is
+what lets re-runs `MERGE` onto existing nodes instead of duplicating them.
 
-`obligation_id(role_node_id, text)` is **Role-scoped**: the hash folds in
-the bearing Role, exactly as `role_id` folds in its defining RegulatoryInstrument.
-This is the resolution of issue #42 — an Obligation is a weak entity of
-exactly one Role, so `Role -[:HAS]-> Obligation` `1 : 0..*` holds
-structurally (two sources' duties can never collide onto one Obligation
-node, because their Roles are always distinct nodes). Cross-source
-convergence on the regulatory spine happens only at `Capability`, whose id
-(`capability_id`) is deliberately name-only. An earlier revision of this
-module made `obligation_id` duty-text-only to make Obligation canonical
-across regulations; #42 retired that — see the issue and
-`ps-domain-concepts.md`'s Obligation section for why.
+`obligation_id(role_node_id, text)` is Role-scoped: the hash folds in the bearing Role, exactly
+as `role_id` folds in its defining RegulatoryInstrument. An Obligation is a weak entity of
+exactly one Role, so `Role -[:HAS]-> Obligation` is `1 : 0..*` structurally: two sources' duties
+can never collide onto one Obligation node, because their Roles are always distinct nodes.
+Cross-source convergence on the regulatory spine happens only at `Capability`, whose id
+(`capability_id`) is deliberately name-only. See the Obligation section of
+`ps-domain-concepts.md`.
 """
 
 from __future__ import annotations
@@ -36,10 +34,17 @@ def _hash(text: str) -> str:
 
 
 def role_id(name: str, regulatory_instrument_id: str) -> str:
-    """`role_{slug}_{hash}` — content-derived from `name` + the defining RegulatoryInstrument.
+    """Return the Role id `role_{slug}_{hash}`, scoped to its defining RegulatoryInstrument.
 
-    Regulation-scoped (Role is NOT canonical across regulations, per
-    `ps-domain-concepts.md`).
+    Role is not canonical across regulations (see `ps-domain-concepts.md`): the instrument id
+    enters only the opaque `{hash}`, so the same name under two instruments gives two ids.
+
+    Args:
+        name: The Role's name; case-insensitive for the hash, slugified for the readable part.
+        regulatory_instrument_id: Id of the RegulatoryInstrument that defines the Role.
+
+    Returns:
+        The content-derived Role id.
     """
     return f"role_{_slug(name)}_{_hash(f'{regulatory_instrument_id}:{name.lower()}')}"
 
@@ -47,54 +52,75 @@ def role_id(name: str, regulatory_instrument_id: str) -> str:
 def requirement_id(
     regulatory_instrument_id: str, article: str, paragraph: str, letter: str | None
 ) -> str:
-    """`{REG}_req_art_{ARTICLE}.{PARAGRAPH}[LETTER]` — structurally fixed, non-opaque.
+    """Return the Requirement id `{REG}_req_art_{ARTICLE}.{PARAGRAPH}[LETTER]`.
 
-    Generated from the source location alone.
+    The id is structurally fixed and non-opaque, generated from the source location alone.
+
+    Args:
+        regulatory_instrument_id: Id of the RegulatoryInstrument the Requirement belongs to.
+        article: Article number of the source unit.
+        paragraph: Paragraph number of the source unit (`"1"` for a paragraph-less Article).
+        letter: Sub-paragraph letter, or `None` (or empty) when the unit holds one duty.
+
+    Returns:
+        The location-derived Requirement id.
     """
     suffix = letter or ""
     return f"{regulatory_instrument_id}_req_art_{article}.{paragraph}{suffix}"
 
 
 def obligation_id(role_node_id: str, text: str) -> str:
-    """`obl_{slug}_{hash}` — content-derived from the duty statement AND the bearing Role's id.
+    """Return the Obligation id `obl_{slug}_{hash}`, scoped to the Role that bears the duty.
 
-    The Role it links to via `HAS`. Role-scoped (Obligation is a weak
-    entity of exactly one Role, per `ps-domain-concepts.md` / issue #42).
-    The `{slug}` is still the duty text alone, for human readability; the
-    Role only enters the opaque `{hash}`, never the id string, mirroring
-    `role_id`'s own shape.
+    The `{slug}` is the duty text alone, for readability; the Role enters only the opaque
+    `{hash}`, never the id string, mirroring `role_id`'s shape. An Obligation is a weak entity of
+    exactly one Role (see `ps-domain-concepts.md`).
+
+    Args:
+        role_node_id: Id of the Role the Obligation links to via `HAS`.
+        text: The duty statement; case-insensitive for the hash.
+
+    Returns:
+        The content-derived Obligation id.
     """
     return f"obl_{_slug(text)}_{_hash(f'{role_node_id}:{text.lower()}')}"
 
 
 def capability_id(name: str) -> str:
-    """`cap_{slug}_{hash}` — content-derived from `name` alone.
+    """Return the Capability id `cap_{slug}_{hash}`, derived from `name` alone.
 
-    Deliberately excludes any specific requiring Obligation, so identical
-    capability names converge onto one node across Obligations/regulations.
+    The id excludes any requiring Obligation, so identical capability names converge onto one
+    node across Obligations and regulations.
+
+    Args:
+        name: The Capability name; case-insensitive for the hash.
+
+    Returns:
+        The name-derived Capability id.
     """
     return f"cap_{_slug(name)}_{_hash(name.lower())}"
 
 
 def policy_id(title: str, prior_policy_id: str | None = None) -> str:
-    """`pol_{slug}_{hash}` — content-derived from the Policy's own `title`.
+    """Return the Policy id `pol_{slug}_{hash}`, derived from the Policy's own `title`.
 
-    Deliberately NOT derived from any governing Capability (`ps-domain-
-    concepts.md`'s Policy identity note: a single Policy commonly governs
-    several Capabilities at once, so deriving from any one of them would be
-    incoherent). Mirrors `capability_id`'s own "identity comes from what the
-    node itself is" shape when `prior_policy_id` is `None` (v1 of a Policy) —
-    `prior_policy_id=None` reproduces the pre-#134 formula byte-for-byte.
+    The id is not derived from any governing Capability: one Policy commonly governs several
+    Capabilities at once, so deriving from any one of them would be incoherent (see the Policy
+    identity note in `ps-domain-concepts.md`). With no `prior_policy_id` (the first version of a
+    Policy) identity is canonical and title-only.
 
-    `prior_policy_id` (issue #134 D-4) is the fork/version successor case: a
-    given prior folds into the opaque `{hash}` only, never the visible
-    `{slug}`, mirroring `standard_id`/`control_id`'s existing "parent enters
-    the hash, never the slug" weak-entity pattern. This makes a Policy's
-    identity formula conditionally weak-entity-shaped for a version N+1
-    while staying canonical/name-only for v1 — a deliberate, documented
-    exception, not a wholesale identity-model change. `#136`'s fork tool
-    (out of this issue's scope) is the intended caller of the
-    `prior_policy_id`-set branch.
+    A given `prior_policy_id` marks a successor version: it enters the opaque `{hash}` only,
+    never the visible `{slug}`, following the "parent enters the hash, never the slug" pattern
+    of `standard_id` and `control_id`. Identity is therefore weak-entity-shaped for a successor
+    version and canonical for the first.
+
+    Args:
+        title: The Policy title; case-insensitive for the hash.
+        prior_policy_id: Id of the Policy version this one succeeds, or `None` for a first
+            version.
+
+    Returns:
+        The content-derived Policy id.
     """
     if prior_policy_id is None:
         return f"pol_{_slug(title)}_{_hash(title.lower())}"
@@ -102,74 +128,67 @@ def policy_id(title: str, prior_policy_id: str | None = None) -> str:
 
 
 def practice_area_id(name: str) -> str:
-    """`pa_{slug}_{hash}` — content-derived from `name` alone.
+    """Return the PracticeArea id `pa_{slug}_{hash}`, derived from `name` alone.
 
-    Mirrors `capability_id`/`policy_id`'s canonical, name-only identity shape
-    (`ps-domain-concepts.md`'s PracticeArea section) — deliberately never
-    derived from a covered Capability or owned Policy, so identical
-    PracticeArea names converge onto one node regardless of what they end
-    up connected to (AC-BI-009/010).
+    Canonical and name-only, like `capability_id` and `policy_id` (see the PracticeArea section
+    of `ps-domain-concepts.md`): never derived from a covered Capability or owned Policy, so
+    identical PracticeArea names converge onto one node regardless of what they connect to.
+
+    Args:
+        name: The PracticeArea name; case-insensitive for the hash.
+
+    Returns:
+        The name-derived PracticeArea id.
     """
     return f"pa_{_slug(name)}_{_hash(name.lower())}"
 
 
 def standard_id(policy_node_id: str, title: str) -> str:
-    """`std_{slug}_{hash}` — content-derived from the Standard's `title` and Policy.
+    """Return the Standard id `std_{slug}_{hash}`, from the Standard's `title` and its Policy.
 
-    Derived from the Standard's own `title` AND the Policy it supports (the
-    Policy it links to via `SUPPORTED_BY`).
+    `SUPPORTED_BY` is `1 : 1..*`, so a Policy may have several Standards. Keying identity on the
+    Standard's own `title` keeps two Standards under one Policy distinct: the `{slug}` is the
+    child's title for readability, and the parent `policy_node_id` enters only the opaque
+    `{hash}`. `version` is an ordinary node property, not an identity input.
 
-    GH #76 (AC-BI-002) fixed this from the earlier `std_{POLICY}_v{VERSION}`
-    formula, which keyed identity on `version` — a property that is
-    constant (`"1"`) at mint time and, more fundamentally, is not what
-    distinguishes Standards under one Policy. `SUPPORTED_BY` is `1 : 1..*`
-    (a Policy may have several Standards, e.g. one covering logging, one
-    covering access control), so two distinct Standards under the same
-    Policy that happened to share a `version` collided onto one node via
-    `MERGE`. Keying on the Standard's own `title` instead — mirroring
-    `obligation_id(role_node_id, text)`'s existing shape exactly — fixes
-    this structurally: the `{slug}` is the child's own title, for human
-    readability (two different titles under the same Policy are guaranteed
-    two different ids by construction, since `_slug` differs whenever
-    `title.lower()` differs); the parent `policy_node_id` enters only the
-    opaque `{hash}`, never printed literally in the id string. `version`
-    remains an ordinary node *property* — it simply stops being an identity
-    input.
+    Args:
+        policy_node_id: Id of the Policy the Standard links to via `SUPPORTED_BY`.
+        title: The Standard title; case-insensitive for the hash.
+
+    Returns:
+        The content-derived Standard id.
     """
     return f"std_{_slug(title)}_{_hash(f'{policy_node_id}:{title.lower()}')}"
 
 
 def control_id(standard_node_id: str, title: str) -> str:
-    """`ctrl_{slug}_{hash}` — content-derived from the Control's `title` and Standard.
+    """Return the Control id `ctrl_{slug}_{hash}`, from the Control's `title` and its Standard.
 
-    Derived from the Control's own `title` AND the Standard it verifies (the
-    Standard it links to via `IMPLEMENTED_BY`).
+    `IMPLEMENTED_BY` is `1 : 0..*`, so a Standard may have several Controls, even of the same
+    `type`. Keying identity on the Control's own `title` keeps them distinct: the `{slug}` is the
+    child's title for readability, and the parent `standard_node_id` enters only the opaque
+    `{hash}`. `type` is an ordinary node property, not an identity input.
 
-    GH #76 (AC-BI-003) fixed this from the earlier `ctrl_{STANDARD}_{TYPE}`
-    formula, which keyed identity on `type` — a 2-valued enum (`automated`/
-    `manual`), not what distinguishes Controls under one Standard.
-    `IMPLEMENTED_BY` is `1 : 0..*` (a Standard may have several Controls,
-    e.g. two automated checks verifying different aspects of the same
-    Standard), so two distinct Controls under the same Standard that
-    happened to share a `type` collided onto one node via `MERGE` — this is
-    AC-BI-003's literal "even of the same `type`" wording. Keying on the
-    Control's own `title` instead — mirroring `standard_id(policy_node_id,
-    title)`'s existing shape exactly, itself mirroring `obligation_id
-    (role_node_id, text)` — fixes this structurally: the `{slug}` is the
-    child's own title, for human readability (two different titles under
-    the same Standard are guaranteed two different ids by construction,
-    since `_slug` differs whenever `title.lower()` differs); the parent
-    `standard_node_id` enters only the opaque `{hash}`, never printed
-    literally in the id string. `type` remains an ordinary node *property*
-    — it simply stops being an identity input.
+    Args:
+        standard_node_id: Id of the Standard the Control links to via `IMPLEMENTED_BY`.
+        title: The Control title; case-insensitive for the hash.
+
+    Returns:
+        The content-derived Control id.
     """
     return f"ctrl_{_slug(title)}_{_hash(f'{standard_node_id}:{title.lower()}')}"
 
 
 def risk_path_id(name: str) -> str:
-    """`rp_{slug}_{hash}` — content-derived from `name` alone.
+    """Return the RiskPath id `rp_{slug}_{hash}`, derived from `name` alone.
 
-    Mirrors `capability_id`/`policy_id`/`practice_area_id`'s canonical,
-    name-only identity shape (`ps-domain-concepts.md`'s RiskPath section).
+    Canonical and name-only, like `capability_id`, `policy_id` and `practice_area_id` (see the
+    RiskPath section of `ps-domain-concepts.md`).
+
+    Args:
+        name: The RiskPath name; case-insensitive for the hash.
+
+    Returns:
+        The name-derived RiskPath id.
     """
     return f"rp_{_slug(name)}_{_hash(name.lower())}"

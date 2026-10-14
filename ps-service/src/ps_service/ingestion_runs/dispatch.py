@@ -1,4 +1,4 @@
-"""In-process registry and launcher for background ingestion runs (issue #194).
+"""In-process registry and launcher for background ingestion runs.
 
 Same shape as `ps_service.api.run_status`: one module-level lock and one dict. A run's slot is
 reserved before its row is written, held while its worker thread runs, and released when the
@@ -46,12 +46,21 @@ _threads: dict[str, threading.Thread] = {}  # kept after release so tests can jo
 def reserve_run_slot(run_id: str, *, short_name: str, max_in_flight_runs: int) -> None:
     """Atomically admit `run_id` and reserve its in-flight slot.
 
-    A second in-flight run for the same `short_name` is rejected first, so a duplicate gets the
-    more specific message even when the cap is also reached.
+    Bounds concurrent ingestions and prevents two runs of the same instrument. A second
+    in-flight run for the same `short_name` is rejected first, so a duplicate gets the more
+    specific message even when the cap is also reached.
+
+    Args:
+        run_id: Identifier of the run; the registry key.
+        short_name: Instrument short name; at most one in-flight run may hold it.
+        max_in_flight_runs: Configured cap on simultaneously held slots.
 
     Raises:
         IngestionRunAlreadyInProgressError: a run for `short_name` already holds a slot.
         IngestionRunCapacityExceededError: `max_in_flight_runs` runs already hold slots.
+
+    Side Effects:
+        Adds `run_id` to the process-local in-flight registry.
     """
     with _lock:
         if any(run.short_name == short_name for run in _in_flight.values()):
@@ -62,7 +71,14 @@ def reserve_run_slot(run_id: str, *, short_name: str, max_in_flight_runs: int) -
 
 
 def release_run_slot(run_id: str) -> None:
-    """Free `run_id`'s slot; a no-op when it holds none."""
+    """Free `run_id`'s slot; a no-op when it holds none.
+
+    Args:
+        run_id: Identifier of the run whose slot is released.
+
+    Side Effects:
+        Removes `run_id` from the process-local in-flight registry.
+    """
     with _lock:
         _in_flight.pop(run_id, None)
 
@@ -77,8 +93,19 @@ def _log(action: str, outcome: str, run_id: str) -> None:
 def start_background_run(run_id: str, work: Callable[[], None]) -> None:
     """Run `work` on a new daemon thread, releasing `run_id`'s slot when it ends.
 
+    The slot must already be reserved with `reserve_run_slot`. It is released however `work`
+    ends, after `work` has written its terminal row.
+
+    Args:
+        run_id: Identifier of the run; names the thread and keys the slot.
+        work: Callable that performs the run and records its terminal outcome.
+
     Raises:
         RuntimeError: the thread could not be started; the slot is released first.
+
+    Side Effects:
+        Starts a daemon thread, records it for test joins and emits
+        `background_run_started` / `background_run_finished` log entries.
     """
 
     def _run_then_release() -> None:
@@ -100,19 +127,42 @@ def start_background_run(run_id: str, work: Callable[[], None]) -> None:
 
 
 def is_run_in_flight(run_id: str) -> bool:
-    """Whether `run_id` currently holds a slot."""
+    """Return whether `run_id` currently holds a slot.
+
+    Args:
+        run_id: Identifier of the run to look up.
+
+    Returns:
+        True while the run's slot is reserved, false otherwise.
+    """
     with _lock:
         return run_id in _in_flight
 
 
 def in_flight_run_count() -> int:
-    """How many runs currently hold a slot."""
+    """Return how many runs currently hold a slot.
+
+    Returns:
+        The number of reserved in-flight slots; zero when idle.
+    """
     with _lock:
         return len(_in_flight)
 
 
 def wait_for_tests(run_id: str, *, timeout_seconds: float) -> None:
-    """Join `run_id`'s worker (test-only); fail if it is still alive afterwards."""
+    """Join `run_id`'s worker (test-only); fail if it is still alive afterwards.
+
+    Args:
+        run_id: Identifier of the run whose worker thread is joined.
+        timeout_seconds: Maximum time to wait for the worker, in seconds.
+
+    Raises:
+        AssertionError: the worker is still alive after `timeout_seconds`.
+
+    Side Effects:
+        Blocks the caller until the worker ends or the timeout passes. Returns immediately
+        when no worker was started for `run_id`.
+    """
     with _lock:
         thread = _threads.get(run_id)
     if thread is None:
@@ -124,7 +174,12 @@ def wait_for_tests(run_id: str, *, timeout_seconds: float) -> None:
 
 
 def reset_for_tests() -> None:
-    """Join every recorded worker (bounded), then forget all slots (test-only)."""
+    """Join every recorded worker (bounded), then forget all slots (test-only).
+
+    Side Effects:
+        Blocks up to 30 seconds per recorded worker, then clears the in-flight and thread
+        registries.
+    """
     with _lock:
         threads = list(_threads.values())
     for thread in threads:

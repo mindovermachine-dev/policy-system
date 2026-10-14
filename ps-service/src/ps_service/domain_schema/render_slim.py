@@ -1,7 +1,7 @@
 """Render the schema as the slim plain-text form served by the `domain_concepts` tool.
 
-No notes and no prose: only labels, properties (type and presence) and,
-edges.
+No notes and no prose: only labels, properties (type and presence) and edges (with
+cardinality), so the text stays small enough for an LLM client's context.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ _PRESENCE_MARK = {
 
 
 def _render_type(property_type: PropertyType) -> str:
+    """Return the compact type text, for example `enum(a|b)` or `float[0.0..1.0]`."""
     match property_type:
         case StringType():
             return "string"
@@ -59,29 +60,43 @@ def _render_type(property_type: PropertyType) -> str:
 
 
 def _render_field(name: str, field_type: PropertyType, presence: Presence) -> str:
+    """Return `name: type` followed by the presence mark."""
     return f"{name}: {_render_type(field_type)}{_PRESENCE_MARK[presence]}"
 
 
 def _render_property(prop: Property) -> str:
+    """Return an indented property line."""
     return f"  {_render_field(prop.name, prop.type, prop.presence)}"
 
 
 def _render_edge_property(prop: EdgeProperty) -> str:
+    """Return an edge property as it appears inside the edge's braces."""
     return _render_field(prop.name, prop.type, prop.presence)
 
 
 def _render_edge(edge: Edge) -> str:
+    """Return the edge as a Cypher-style pattern followed by its cardinality."""
     properties = ", ".join(_render_edge_property(prop) for prop in edge.properties)
     body = f" {{{properties}}}" if properties else ""
     return f"(:{edge.source})-[:{edge.type}{body}]->(:{edge.target})  {edge.cardinality}"
 
 
 def _render_node(node: Node) -> list[str]:
+    """Return the node's label line followed by its property lines."""
     return [node.label, *(_render_property(prop) for prop in node.properties)]
 
 
 def render_slim_schema(schema: Schema) -> str:
-    """Render `schema` as deterministic, newline-terminated plain text."""
+    """Render `schema` as deterministic, newline-terminated plain text.
+
+    Args:
+        schema: The schema to render; typically `DOMAIN_SCHEMA`.
+
+    Returns:
+        A legend header, a `NODES` section (label then properties, marks `!` required and `?`
+        conditional) and, when the schema has edges, an `EDGES` section. Declaration order is kept
+        and no notes are included.
+    """
     lines = ["NODES"]
     for node in schema.nodes:
         lines.extend(_render_node(node))

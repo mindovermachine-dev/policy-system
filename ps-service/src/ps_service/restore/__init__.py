@@ -1,8 +1,8 @@
-"""ps_service.restore -- package front door.
+"""Restore of a curated instrument's artifact into the compliance graphs.
 
-Re-exports `RestoreArtifact`/`RestoreOutcome` (`ps_service.restore.models`),
-matching the `ps_service.export`/`ps_service.domain_mapper` package front
-doors' own re-export convention.
+Front door of the package: re-exports `RestoreArtifact` (the verified-on-use input of a
+restore) and `RestoreOutcome` (the result of a completed restore) from
+`ps_service.restore.models`. The restore itself is `ps_service.restore.restore_instrument`.
 """
 
 from __future__ import annotations

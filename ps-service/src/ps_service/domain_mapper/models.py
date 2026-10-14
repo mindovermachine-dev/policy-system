@@ -1,16 +1,14 @@
 """ps_service.domain_mapper core types.
 
-The shapes `extraction.py`/`derivation.py` build and consume internally,
-plus the two actions' return values.
+The shapes `extraction.py` and `derivation.py` build and consume, plus the two actions' return
+values.
 
-Per PLAN_REVIEWED.md §2: `ExtractionUnit`/`ExtractionResult`/
-`DerivationResult` are plain frozen dataclasses — internal pipeline
-plumbing, not PS Conceptual Model types crossing to an external caller.
-`RequirementCandidate`/`ObligationAssignment`/`CapabilityDecision` are
-Pydantic frozen models per L2 Data Modeling's instruction to use Pydantic
-for LLM-structured-extraction outputs — each is validated straight from a
-parsed LLM JSON response, so `Field` constraints double as the runtime
-validation boundary (L1 Fail Fast at Boundaries), not just static typing.
+`ExtractionUnit`, `ExtractionResult` and `DerivationResult` are plain frozen dataclasses:
+internal pipeline plumbing, not conceptual-model types crossing to an external caller.
+`RequirementCandidate`, `DefinedTermCandidate`, `ObligationAssignment`, `CapabilityDecision` and
+`CapabilityReuseVerdict` are frozen Pydantic models, each validated straight from a parsed LLM
+JSON response, so their `Field` constraints are the runtime validation boundary and not only
+static typing.
 """
 
 from __future__ import annotations
@@ -23,11 +21,16 @@ from pydantic import BaseModel, ConfigDict, Field
 
 @dataclass(frozen=True, slots=True)
 class ExtractionUnit:
-    """One native ARTICLE or PARAGRAPH element to extract from.
+    """One native ARTICLE, PARAGRAPH or ANNEX element the LLM extracts from.
 
-    `citation_ref` is the exact string that becomes the `DEFINES`/
-    `EXPRESSES` edges' `source_ref` (AC-001) — read verbatim from the
-    native structural graph, never reconstructed.
+    Attributes:
+        citation_ref: Citation label read verbatim from the native structural graph, never
+            reconstructed; it becomes the `source_ref` of the `DEFINES` and `EXPRESSES` edges.
+        text: The element's text.
+        article_number: Article number as a digit string (an Annex label for Annex units).
+        paragraph_number: Paragraph number as a digit string; `"1"` for a paragraph-less
+            Article or an Annex.
+        article_heading: The Article's heading; empty for an Annex.
     """
 
     citation_ref: str
@@ -38,11 +41,20 @@ class ExtractionUnit:
 
 
 class RequirementCandidate(BaseModel):
-    """Stage-1 LLM output, one per independent duty found in a unit.
+    """Stage-1 LLM output: one independent duty found in an extraction unit.
 
-    Not yet a graph node — `role_name` is a raw string pending
-    canonicalization (`extraction.py::_canonicalize_roles`) into a real
-    Role node id.
+    Not yet a graph node: `role_name` is a raw string pending canonicalization
+    (`extraction.py::_canonicalize_roles`) into a Role node id.
+
+    Attributes:
+        unit_citation_ref: `citation_ref` of the unit the duty came from.
+        unit_article_number: Article number of that unit.
+        unit_paragraph_number: Paragraph number of that unit.
+        role_name: Name of the Role bearing the duty; non-empty.
+        text: The duty statement; non-empty.
+        type: Whether the duty is a requirement, a prohibition or a recommendation.
+        letter_suffix: Sub-paragraph letter when the unit holds several duties, else `None`.
+        confidence: LLM confidence in `[0.0, 1.0]`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -58,16 +70,15 @@ class RequirementCandidate(BaseModel):
 
 
 class DefinedTermCandidate(BaseModel):
-    """Stage-1b LLM output, one per formally-defined term found in a definitions unit.
+    """Stage-1b LLM output: one formally defined term found in a definitions unit.
 
-    Mirrors `RequirementCandidate`'s validation contract: `citation_ref` is
-    the SOURCE unit's own `citation_ref` (from `ExtractionUnit`, read
-    verbatim, never invented by the LLM — the same never-reconstructed-
-    provenance invariant `ExtractionUnit.citation_ref`'s own docstring
-    states), populated at the parsing boundary
-    (`prompts.py::parse_definitions_response`) exactly like
-    `RequirementCandidate.unit_citation_ref`; `term` alone is the LLM's own
-    JSON output.
+    Mirrors `RequirementCandidate`'s validation contract. Only `term` comes from the LLM's JSON;
+    `citation_ref` is filled at the parsing boundary (`prompts.py::parse_definitions_response`)
+    from the source unit, never invented by the LLM.
+
+    Attributes:
+        term: The defined term; non-empty.
+        citation_ref: The source unit's `citation_ref`, verbatim; non-empty.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -80,11 +91,12 @@ class DefinedTermCandidate(BaseModel):
 class RoleNode:
     """A canonicalized Role, submitted as a gateway node primitive by the graph writer.
 
-    `id` is `identity.role_id()`'s output; `properties` carries
-    `name`/`confidence` (CA doc §0.1's Role attributes) — a plain
-    properties dict, not a per-field Pydantic model, mirroring
-    `ps_service.ingestion.models.StructuralNode`'s established shape for
-    graph-write payloads in this codebase (PLAN_REVIEWED.md §5.4).
+    The plain properties dict mirrors `ps_service.ingestion.models.StructuralNode`'s shape for
+    graph-write payloads.
+
+    Attributes:
+        id: The Role id, as produced by `identity.role_id()`.
+        properties: Node properties `name` and `confidence`.
     """
 
     id: str
@@ -95,13 +107,12 @@ class RoleNode:
 class RoleDefinesEdge:
     """RegulatoryInstrument -[:DEFINES {source_ref}]-> Role.
 
-    `role_node_id` is the target Role's `id`. `source_ref` is set by
-    `extraction.py::_canonicalize_roles` (PLAN_REVIEWED.md §5.2 step 4) to
-    one of two outcomes: when the Role's name matches a formally-defined
-    term found by the dedicated definitions pass, `source_ref` is that
-    term's own `citation_ref` — the actual defining text's location; when
-    no such match exists, `source_ref` falls back to the first duty-bearing
-    candidate's `unit_citation_ref`, as before this issue (#26).
+    Attributes:
+        role_node_id: The target Role's `id`.
+        source_ref: Set by `extraction.py::_canonicalize_roles`. When the Role's name matches a
+            formally defined term found by the definitions pass, the term's own `citation_ref`
+            (the location of the defining text); otherwise the first duty-bearing candidate's
+            `unit_citation_ref`.
     """
 
     role_node_id: str
@@ -112,12 +123,12 @@ class RoleDefinesEdge:
 class RequirementNode:
     """A Requirement, submitted as a gateway node primitive by the graph writer.
 
-    `id` is `identity.requirement_id()`'s output, possibly disambiguated
-    with a `#2`/`#3` suffix (PLAN_REVIEWED.md §5.2 step 5). `properties`
-    carries `text`/`type`/`confidence` (CA doc §0.1's Requirement
-    attributes) plus `role_id` — a plain bookkeeping property (NOT an Edge
-    Catalog relationship) pointing at the owning Role node's `id`, written
-    here and read back by `derivation.py` per §7.2.
+    Attributes:
+        id: The Requirement id from `identity.requirement_id()`, disambiguated with a
+            `#<n>` counter suffix when two candidates share a base id but differ in text.
+        properties: Node properties `text`, `type` and `confidence`, plus `role_id`: a plain
+            bookkeeping property (not an Edge Catalog relationship) holding the owning Role's
+            `id`, written here and read back by `derivation.py`.
     """
 
     id: str
@@ -128,7 +139,9 @@ class RequirementNode:
 class RequirementExpressesEdge:
     """RegulatoryInstrument -[:EXPRESSES {source_ref}]-> Requirement.
 
-    `source_ref` is the candidate's own `unit_citation_ref` (AC-001).
+    Attributes:
+        requirement_node_id: The Requirement's `id`.
+        source_ref: The candidate's own `unit_citation_ref`.
     """
 
     requirement_node_id: str
@@ -137,9 +150,17 @@ class RequirementExpressesEdge:
 
 @dataclass(frozen=True, slots=True)
 class ExtractionResult:
-    """`extract_roles_and_requirements()`'s return value.
+    """The outcome of one `extract_roles_and_requirements()` call.
 
-    The outcome of one `ExtractRolesAndRequirements` call.
+    Attributes:
+        regulatory_instrument_id: The instrument the call extracted from.
+        role_node_ids: Mapping of Role name to Role node id, for derivation's use.
+        requirement_ids: Ids of the Requirements written, in document order; empty when none.
+        candidate_count: Number of Requirement candidates the LLM returned across all units.
+        skipped_unit_count: Units whose LLM response was malformed; they are logged, not raised.
+        requirement_id_collisions: Disambiguated ids minted when two candidates produced the
+            same base id with different text. Surfaced here and as an `outcome="collision"` log
+            entry, never raised.
     """
 
     regulatory_instrument_id: str
@@ -148,27 +169,20 @@ class ExtractionResult:
     candidate_count: int
     skipped_unit_count: int  # units whose LLM response was malformed — logged, not raised
     requirement_id_collisions: tuple[str, ...]
-    # Disambiguated ids (base_id + "#2", "#3", ...) minted when two candidates
-    # produced the same base requirement_id with DIFFERENT text
-    # (PLAN_REVIEWED.md §5.2 step 5, B2 fix). Never raised as an exception —
-    # surfaced here and via a corresponding outcome="collision" log entry.
 
 
 @dataclass(frozen=True, slots=True)
 class RoleRequirements:
     """One Role's ordered Requirements, as read back from the baseline graph.
 
-    Via `Requirement.properties["role_id"]` (PLAN_REVIEWED.md §7.2).
+    Requirements are grouped by their `role_id` property. `derivation.py::_derive_obligations`
+    consumes this shape without reading the graph itself, and expects Roles in document order
+    and, within each Role, Requirements in document order.
 
-    `derivation.py::_derive_obligations` (Increment 12) consumes this shape
-    but does not itself read the graph — building it from a live baseline
-    graph (a `_read_requirements_by_role` helper) is Increment 16's job
-    (derivation orchestration; PLAN_REVIEWED.md §11 explicitly lists that
-    helper under Increment 16, "Wires Increments 11-15 + §7.2's
-    `_read_requirements_by_role`"). Increment 12's own tests construct this
-    directly, in the document order the whole-run algorithm requires
-    (§7.3: "iterating Roles in document order, and within each Role its
-    Requirements in document order").
+    Attributes:
+        role_node_id: The Role's `id`.
+        role_name: The Role's name.
+        requirements: `(requirement_id, requirement_text)` pairs in document order.
     """
 
     role_node_id: str
@@ -177,28 +191,29 @@ class RoleRequirements:
 
 
 class ObligationAssignment(BaseModel):
-    """Stage-2 LLM output — one mint-or-match-or-unmatchable decision per Requirement.
+    """Stage-2 LLM output: a mint, match or unmatchable decision for one Requirement.
 
-    Made by `derivation.py::_derive_obligations` (PLAN_REVIEWED.md
-    §7.3/§7.5).
+    Produced by `prompts.py::parse_obligation_response` for
+    `derivation.py::_derive_obligations`. The `obligation_*` fields are a proposal only:
+    `derivation.py`'s whole-run registry resolves the final id (a mint, or a same-Role reuse),
+    so `obligation_node_id` is not necessarily the persisted id. For a match,
+    `obligation_text` is the matched registry entry's text and `obligation_node_id` is
+    `identity.obligation_id(role_node_id, text)` recomputed from it. For a mint, both are
+    derived from the new text.
 
-    `obligation_node_id`/`obligation_text` are `prompts.py::
-    parse_obligation_response`'s own PROPOSED identity/text — for a match,
-    `obligation_text` is the matched registry entry's text and
-    `obligation_node_id` is `identity.obligation_id(role_node_id, text)`
-    recomputed from it (always equal to the matched id, by construction,
-    since the registry's own keys are themselves `obligation_id()` outputs
-    for this Role); for a mint, both are freshly derived from `new_text`.
-    This is a PROPOSAL only — `derivation.py`'s whole-run registry resolves
-    the final id (a mint, or a same-Role reuse); `obligation_node_id` here
-    is not assumed to be the final persisted id.
+    Attributes:
+        requirement_id: The Requirement being decided.
+        role_node_id: Id of the Role that bears the Requirement.
+        obligation_node_id: Proposed Obligation id; `None` when the Requirement is unmatchable.
+        obligation_text: Proposed Obligation text; `None` when unmatchable.
+        confidence: LLM confidence in `[0.0, 1.0]`.
     """
 
     model_config = ConfigDict(frozen=True)
 
     requirement_id: str
     role_node_id: str
-    obligation_node_id: str | None  # None when unmatchable — AC-004
+    obligation_node_id: str | None
     obligation_text: str | None
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -207,12 +222,13 @@ class ObligationAssignment(BaseModel):
 class ObligationNode:
     """One Obligation, submitted as a gateway node primitive by the graph writer.
 
-    `id` is
-    `identity.obligation_id(role_node_id, text)`'s output — Role-scoped
-    (#42), so this Obligation belongs to exactly one Role. `properties`
-    carries `text`/`confidence` (CA doc's Obligation attributes; the Edge
-    Catalog states Obligation carries no `source_ref` of its own —
-    provenance is transitive via `SATISFIED_BY` -> `EXPRESSES`).
+    An Obligation carries no `source_ref` of its own; provenance is transitive via
+    `SATISFIED_BY` then `EXPRESSES`.
+
+    Attributes:
+        id: The Obligation id from `identity.obligation_id(role_node_id, text)`; Role-scoped, so
+            the Obligation belongs to exactly one Role.
+        properties: Node properties `text` and `confidence`.
     """
 
     id: str
@@ -223,10 +239,12 @@ class ObligationNode:
 class ObligationHasEdge:
     """Role -[:HAS]-> Obligation.
 
-    No properties (Edge Catalog, §0.2) — exactly one per Obligation node,
-    structurally: the Obligation id is Role-scoped (#42), and this edge is
-    created only at the moment an Obligation id is first minted, never
-    again for the same id.
+    The edge has no properties. There is exactly one per Obligation node: the Obligation id is
+    Role-scoped, and the edge is created only when the id is first minted.
+
+    Attributes:
+        role_node_id: The bearing Role's `id`.
+        obligation_node_id: The Obligation's `id`.
     """
 
     role_node_id: str
@@ -237,7 +255,11 @@ class ObligationHasEdge:
 class RequirementSatisfiedByEdge:
     """Requirement -[:SATISFIED_BY]-> Obligation.
 
-    No properties (Edge Catalog, §0.2).
+    The edge has no properties.
+
+    Attributes:
+        requirement_id: The Requirement's `id`.
+        obligation_node_id: The satisfying Obligation's `id`.
     """
 
     requirement_id: str
@@ -245,12 +267,17 @@ class RequirementSatisfiedByEdge:
 
 
 class CapabilityDecision(BaseModel):
-    """Stage-3 LLM output — one per Capability a distinct Obligation requires.
+    """Stage-3 LLM output: one Capability that a distinct Obligation requires.
 
-    PLAN_REVIEWED.md §7.4. `is_reuse` (#187) marks a decision that attaches
-    the Obligation to a Capability already in the whole-run registry -- a
-    matched-existing item, or a mint whose `capability_id` is already
-    registered -- so it is verified before it is applied.
+    Attributes:
+        obligation_node_id: The Obligation that requires the Capability.
+        capability_node_id: Id of the Capability to attach.
+        name: The Capability name.
+        description: The Capability description, or `None` when absent.
+        confidence: LLM confidence in `[0.0, 1.0]`.
+        is_reuse: True when the decision attaches the Obligation to a Capability already in the
+            whole-run registry (a matched existing item, or a mint whose `capability_node_id` is
+            already registered), so it is verified before it is applied.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -264,12 +291,16 @@ class CapabilityDecision(BaseModel):
 
 
 class CapabilityReuseVerdict(BaseModel):
-    """Reuse-verification LLM output -- one per reuse proposal (#187).
+    """Reuse-verification LLM output: one verdict per Capability reuse proposal.
 
-    `accept` keeps the proposed existing Capability. `reject` carries the
-    more specific Capability (`new_name`/`new_description`) to mint instead,
-    plus its `confidence`. `parse_capability_reuse_verdict` enforces the
-    reject-only requirements.
+    `parse_capability_reuse_verdict` enforces that a `reject` carries the replacement fields.
+
+    Attributes:
+        verdict: `accept` keeps the proposed existing Capability; `reject` mints a more
+            specific one instead.
+        new_name: Name of the Capability to mint; set on `reject`.
+        new_description: Description of the Capability to mint; set on `reject`.
+        confidence: Confidence in `[0.0, 1.0]` for the Capability to mint; set on `reject`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -284,13 +315,13 @@ class CapabilityReuseVerdict(BaseModel):
 class CapabilityNode:
     """One Capability, submitted as a gateway node primitive by the graph writer.
 
-    `id` is
-    `identity.capability_id()`'s output — content-derived from `name`
-    alone (deliberately Obligation- and Role-independent, PLAN_REVIEWED.md
-    §7.4), so identical names across distinct Obligations converge onto one
-    shared node. `properties` carries `name`/`confidence` and, when set,
-    `description` (CA doc's Capability attributes; the Edge Catalog states
-    Capability carries no `source_ref` of its own).
+    A Capability carries no `source_ref` of its own.
+
+    Attributes:
+        id: The Capability id from `identity.capability_id()`, derived from `name` alone and
+            independent of Obligation and Role, so identical names across distinct Obligations
+            converge onto one shared node.
+        properties: Node properties `name` and `confidence`, plus `description` when set.
     """
 
     id: str
@@ -301,10 +332,13 @@ class CapabilityNode:
 class CapabilityRequiresEdge:
     """Obligation -[:REQUIRES]-> Capability.
 
-    No properties (Edge Catalog, §0.2). More than one such edge may share
-    the same `capability_node_id` (Capability convergence across distinct
-    Obligations, §7.4) or the same `obligation_node_id`
-    (multi-capability-per-Obligation, also §7.4).
+    The edge has no properties. More than one edge may share a `capability_node_id` (Capability
+    convergence across Obligations) or an `obligation_node_id` (several Capabilities per
+    Obligation).
+
+    Attributes:
+        obligation_node_id: The requiring Obligation's `id`.
+        capability_node_id: The required Capability's `id`.
     """
 
     obligation_node_id: str
@@ -313,15 +347,20 @@ class CapabilityRequiresEdge:
 
 @dataclass(frozen=True, slots=True)
 class DerivationResult:
-    """`derive_obligations_and_capabilities()`'s return value.
+    """The outcome of one `derive_obligations_and_capabilities()` call.
 
-    The outcome of one `DeriveObligationsAndCapabilities` call.
+    Attributes:
+        regulatory_instrument_id: The instrument the call derived for.
+        obligation_node_ids: Ids of the Obligations written.
+        capability_node_ids: Ids of the Capabilities written.
+        unmatched_requirement_ids: Requirements the LLM judged unmatchable; surfaced, never
+            silently absent.
+        unmatched_obligation_ids: Obligations whose Capability derivation response was
+            malformed; surfaced, never silently dropped.
     """
 
     regulatory_instrument_id: str
     obligation_node_ids: tuple[str, ...]
     capability_node_ids: tuple[str, ...]
-    unmatched_requirement_ids: tuple[str, ...]  # AC-004 — surfaced, never silently absent
-    # AC-BI-002 (issue #64) — an Obligation whose Capability derivation response was malformed,
-    # surfaced, never silently dropped
+    unmatched_requirement_ids: tuple[str, ...]
     unmatched_obligation_ids: tuple[str, ...]

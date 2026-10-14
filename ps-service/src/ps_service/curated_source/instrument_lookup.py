@@ -1,12 +1,10 @@
-"""Resolve a requested ``instrument_id`` against the catalog case-insensitively (issue #184).
+"""Resolve a requested `instrument_id` against the catalog case-insensitively.
 
-GitHub raw paths are case-sensitive, so the fetch itself cannot be made
-case-insensitive -- resolution has to happen against the already-fetched
-catalog first (`ps_service.curated_source.catalog_client.fetch_catalog`),
-then the canonical (catalog-cased) id is used for the artifact fetch. A
-pure function, zero I/O, Single Responsibility (L1): one function that
-resolves a requested id against an already-fetched catalog tuple, nothing
-else.
+GitHub raw paths are case-sensitive, so the fetch itself cannot be made case-insensitive.
+Resolution therefore happens against the already-fetched catalog
+(`ps_service.curated_source.catalog_client.fetch_catalog`) first, and the canonical
+(catalog-cased) id is then used for the artifact fetch. The module is a single pure function
+with no I/O.
 """
 
 from __future__ import annotations
@@ -29,27 +27,25 @@ _CLOSEST_MATCH_CUTOFF = 0.0
 def resolve_canonical_instrument_id(
     catalog: tuple[CuratedInstrumentEntry, ...], requested_id: str
 ) -> str:
-    """Resolve `requested_id` against `catalog`'s `instrument_id`s case-insensitively.
+    """Resolve `requested_id` to the catalog's canonical spelling, ignoring case.
 
     Args:
         catalog: Every curated instrument entry, as returned by
-            `ps_service.curated_source.catalog_client.fetch_catalog`.
-        requested_id: The caller's own spelling of the instrument id (e.g.
-            `"cra-1.0"`).
+            `ps_service.curated_source.catalog_client.fetch_catalog`. May be empty, which makes
+            every lookup fail.
+        requested_id: The caller's own spelling of the instrument id, for example `"cra-1.0"`.
 
     Returns:
-        The matching entry's own canonical-cased `instrument_id` (e.g.
-        `"CRA-1.0"`).
+        The matching entry's own canonical-cased `instrument_id`, for example `"CRA-1.0"`.
 
     Raises:
-        CuratedSourceAmbiguousInstrumentIdError: More than one catalog entry
-            matches `requested_id` case-insensitively (AC-BI-003) -- names
-            `requested_id` and every colliding canonical id.
-        CuratedSourceUnknownInstrumentIdError: No catalog entry matches
-            `requested_id` in any case (AC-BI-004) -- names `requested_id`
-            and up to 3 closest candidate ids, ranked by similarity
-            (`difflib.get_close_matches`, `cutoff=0.0` so a candidate is
-            always named even when no match is close).
+        CuratedSourceAmbiguousInstrumentIdError: More than one catalog entry matches
+            `requested_id` case-insensitively. The message names `requested_id` and every
+            colliding canonical id.
+        CuratedSourceUnknownInstrumentIdError: No catalog entry matches in any case. The message
+            names `requested_id` and up to 3 closest candidate ids ranked by similarity
+            (`difflib.get_close_matches` with `cutoff=0.0`, so candidates are named even when
+            none is close); an empty catalog is reported as such.
     """
     requested_lower = requested_id.lower()
     matches = [entry for entry in catalog if entry.instrument_id.lower() == requested_lower]

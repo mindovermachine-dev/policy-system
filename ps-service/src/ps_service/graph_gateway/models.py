@@ -1,7 +1,7 @@
-"""Typed models of the graph mutation log (issue #205).
+"""Typed models of the graph mutation log and of the mutation groups the gateway accepts.
 
-Input drafts are the boundary validation (L2 Data Modeling): a malformed group never reaches
-SQL. Models are frozen (L1 Immutability) and reject undeclared fields.
+Input drafts and primitives are the boundary validation: a malformed group never reaches SQL or
+the graph. Models are frozen and reject undeclared fields.
 """
 
 from __future__ import annotations
@@ -32,7 +32,14 @@ _INT64_MAX = 2**63 - 1
 
 
 class GraphLogEntryDraft(BaseModel):
-    """One resolved graph mutation, as submitted for appending (position is assigned on commit)."""
+    """One resolved graph mutation, as submitted for appending (position is assigned on commit).
+
+    Attributes:
+        name: Node label or relationship type written; non-blank.
+        identity: Identity of the node or relationship written; non-blank.
+        content: The properties written.
+        embedding: Embedding of the entry, or None; at least one value when given.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -47,7 +54,12 @@ class GraphLogEntryDraft(BaseModel):
 
 
 class GraphLogGroupDraft(BaseModel):
-    """A transaction group: the ordered entries of one graph that commit together or not at all."""
+    """A transaction group: the ordered entries of one graph that commit together or not at all.
+
+    Attributes:
+        graph: Name of the graph the entries apply to; non-blank.
+        entries: The entries in submission order; at least one.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -58,7 +70,15 @@ class GraphLogGroupDraft(BaseModel):
 
 
 class AppendedGroup(BaseModel):
-    """The outcome of appending one group: its id and the positions its entries took."""
+    """The outcome of appending one group: its id and the positions its entries took.
+
+    Attributes:
+        group_id: Id assigned to the group.
+        graph: Graph the group was appended to.
+        first_position: Log position of the first entry; at least 1.
+        last_position: Log position of the last entry; at least 1.
+        swap_set_id: Swap set the group is a leg of, or None.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -71,7 +91,17 @@ class AppendedGroup(BaseModel):
 
 
 class GraphLogEntry(BaseModel):
-    """One recorded log entry, as read back."""
+    """One recorded log entry, as read back.
+
+    Attributes:
+        graph: Graph the entry belongs to.
+        position: Log position; at least 1.
+        group_id: Group the entry was committed in.
+        name: Node label or relationship type written.
+        identity: Identity of the node or relationship written.
+        content: The properties written.
+        embedding: The embedding, or None.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -85,7 +115,17 @@ class GraphLogEntry(BaseModel):
 
 
 class GraphLogGroup(BaseModel):
-    """One recorded group with its entries in position order, as read back by audit event id."""
+    """One recorded group with its entries in position order, as read back by audit event id.
+
+    Attributes:
+        group_id: Id of the group.
+        graph: Graph the group applies to.
+        first_position: Log position of the first entry; at least 1.
+        last_position: Log position of the last entry; at least 1.
+        audit_event_id: Audit event of the command that caused the group.
+        entries: The entries in position order.
+        swap_set_id: Swap set the group belongs to, or None.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -104,7 +144,15 @@ type SwapSetId = uuid.UUID
 
 
 class SwapGroupRef(BaseModel):
-    """A logged group that belongs to a swap set: where it sits in its graph's log."""
+    """A logged group that belongs to a swap set: where it sits in its graph's log.
+
+    Attributes:
+        group_id: Id of the group.
+        graph: Graph the group applies to.
+        first_position: Log position of the first entry; at least 1.
+        last_position: Log position of the last entry; at least 1.
+        swap_set_id: The swap set the group belongs to.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -116,7 +164,12 @@ class SwapGroupRef(BaseModel):
 
 
 class AppliedMarker(BaseModel):
-    """The position up to which one graph reflects the log (never ahead of the last entry)."""
+    """The position up to which one graph reflects the log (never ahead of the last entry).
+
+    Attributes:
+        graph: Graph name; non-blank.
+        applied_position: Highest log position applied to the graph; 0 when none.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -125,7 +178,13 @@ class AppliedMarker(BaseModel):
 
 
 class DigestCheckpoint(BaseModel):
-    """A canonical digest of one graph recorded at a log position; opaque to the store."""
+    """A canonical digest of one graph recorded at a log position; opaque to the store.
+
+    Attributes:
+        graph: Graph name; non-blank.
+        position: Log position the digest belongs to; 0 or more.
+        canonical_digest: The digest text; non-blank.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -158,10 +217,22 @@ def _is_valid_property_value(value: object) -> bool:
 def validate_property_map(
     properties: dict[str, object], reserved: frozenset[str]
 ) -> dict[str, object]:
-    """Return `properties` with tuples turned into lists, or raise `ValueError` on a bad entry.
+    """Validate a property map and normalise its sequences to lists.
 
     Values must be scalars or flat homogeneous lists (no nested maps, no None) so the log entry
-    and the graph hold exactly what the caller meant; `reserved` keys are owned by the gateway.
+    and the graph hold exactly what the caller meant.
+
+    Args:
+        properties: Property name to value. A scalar is str, bool, int64 or a finite float; a
+            list or tuple must be non-empty and hold one scalar type.
+        reserved: Keys owned by the gateway; a caller may not set them.
+
+    Returns:
+        A new map in which every tuple is a list.
+
+    Raises:
+        ValueError: a key is blank or reserved, or a value is not a scalar or a flat homogeneous
+            list.
     """
     for key, value in properties.items():
         if not key.strip() or key in reserved:
@@ -177,7 +248,15 @@ def validate_property_map(
 
 
 class UpsertNode(BaseModel):
-    """Create the node `(label, id)` or merge `properties` (and `embedding`) into it."""
+    """Create the node `(label, id)` or merge `properties` (and `embedding`) into it.
+
+    Attributes:
+        op: Tag `upsert_node`.
+        label: Node label; matches `IDENTIFIER_PATTERN`.
+        id: Caller-supplied node id; non-blank.
+        properties: Properties to set; keys `id` and `embedding` are reserved.
+        embedding: Embedding to store, or None to keep the node's own; at least one value.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -196,7 +275,12 @@ class UpsertNode(BaseModel):
 
 
 class NodeRef(BaseModel):
-    """The caller-supplied identity of a node: its label and id."""
+    """The caller-supplied identity of a node: its label and id.
+
+    Attributes:
+        label: Node label; matches `IDENTIFIER_PATTERN`.
+        id: Node id; non-blank.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -218,7 +302,14 @@ class _EdgeBase(BaseModel):
 
 
 class UpsertEdge(_EdgeBase):
-    """Create the edge `(source)-[type {identity}]->(target)` or merge `properties` into it."""
+    """Create the edge `(source)-[type {identity}]->(target)` or merge `properties` into it.
+
+    Both endpoints must exist in the graph or be created earlier in the same group.
+
+    Attributes:
+        op: Tag `upsert_edge`.
+        properties: Properties to set; keys `id`, `embedding` and `identity` are reserved.
+    """
 
     op: Literal["upsert_edge"] = "upsert_edge"
     properties: dict[str, object] = Field(default_factory=dict)
@@ -238,17 +329,24 @@ class DeleteEdge(_EdgeBase):
 class StampEdgeIdentity(_EdgeBase):
     """Give the identity-less edge `(source)-[type]->(target)` the `identity`, in place.
 
-    For a graph written before the gateway, whose edges carry no `identity`: the stamped edge
-    keeps its properties and its place, so a later `UpsertEdge` with this identity merges into it
-    instead of creating a parallel edge. A missing or already identified edge is a no-op. Every
-    identity-less edge of the type between the two nodes receives the identity.
+    For a graph holding edges that carry no `identity`: the stamped edge keeps its properties and
+    its place, so a later `UpsertEdge` with this identity merges into it instead of creating a
+    parallel edge. A missing or already identified edge is a no-op. Every identity-less edge of
+    the type between the two nodes receives the identity.
     """
 
     op: Literal["stamp_edge_identity"] = "stamp_edge_identity"
 
 
 class MergeProperty(BaseModel):
-    """Merge `properties` into the existing node `(label, id)`; the node must exist."""
+    """Merge `properties` into the existing node `(label, id)`; the node must exist.
+
+    Attributes:
+        op: Tag `merge_property`.
+        label: Node label; matches `IDENTIFIER_PATTERN`.
+        id: Node id; non-blank.
+        properties: Properties to merge; at least one, keys `id` and `embedding` reserved.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -267,7 +365,14 @@ class RemoveProperty(BaseModel):
     """Remove the property `keys` from the node `(label, id)`; a missing node or key is a no-op.
 
     Keys are interpolated into Cypher (they cannot be parameterized), so each must match the
-    identifier pattern here and again in the Cypher builder (F5).
+    identifier pattern here and again in the Cypher builder.
+
+    Attributes:
+        op: Tag `remove_property`.
+        label: Node label; matches `IDENTIFIER_PATTERN`.
+        id: Node id; non-blank.
+        keys: Distinct property keys to remove; at least one, each matching `IDENTIFIER_PATTERN`,
+            none of them `id` or `embedding`.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -287,7 +392,13 @@ class RemoveProperty(BaseModel):
 
 
 class DeleteNode(BaseModel):
-    """Delete the node `(label, id)` with its relationships; a missing node is a no-op."""
+    """Delete the node `(label, id)` with its relationships; a missing node is a no-op.
+
+    Attributes:
+        op: Tag `delete_node`.
+        label: Node label; matches `IDENTIFIER_PATTERN`.
+        id: Node id; non-blank.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -310,7 +421,11 @@ Primitive = Annotated[
 
 
 class ExpectedPosition(BaseModel):
-    """Precondition: the graph's log is at exactly `position` (0 means no entries yet)."""
+    """Precondition: the graph's log is at exactly `position` (0 means no entries yet).
+
+    Attributes:
+        position: The log position the caller prepared the group against; 0 or more.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -322,7 +437,15 @@ Precondition = ExpectedPosition
 
 
 class MutationGroup(BaseModel):
-    """A transaction group for one graph: caller-supplied primitives plus the causing command."""
+    """A transaction group for one graph: caller-supplied primitives plus the causing command.
+
+    Attributes:
+        graph: Name of the graph the group applies to; non-blank.
+        audit_event_id: Audit event of the causing command, or None.
+        primitives: The mutations in submission order; at least one.
+        preconditions: Conditions that must hold when the group is logged.
+        checkpoint_requested: Whether to record a digest after the group is applied.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -331,8 +454,8 @@ class MutationGroup(BaseModel):
     """The id of the audit event of the command that caused the group (a UUID string).
 
     `None` for a group no audit event caused (Policy Lifecycle's draft edits and status/version
-    backfills, and the legacy-edge stamp ahead of them, write no `audit_events` row today): the
-    group is logged with a null link.
+    backfills, and the edge-identity stamp ahead of them, write no `audit_events` row): the group
+    is logged with a null link.
     """
     primitives: tuple[Primitive, ...] = Field(min_length=1)
     """The mutations, in submission order."""
@@ -342,7 +465,7 @@ class MutationGroup(BaseModel):
     """Record the graph's canonical digest at this group's last position once it is applied.
 
     Off unless the caller asks: computing a digest reads the whole live graph, so no group takes
-    one implicitly (issue #207, AC-RD-003).
+    one implicitly.
     """
 
     @field_validator("audit_event_id")
@@ -354,7 +477,15 @@ class MutationGroup(BaseModel):
 
 
 class GraphLeg(BaseModel):
-    """One graph's share of a `MultiGraphGroup`: primitives, preconditions, checkpoint request."""
+    """One graph's share of a `MultiGraphGroup`: primitives, preconditions, checkpoint request.
+
+    Attributes:
+        graph: Name of the graph; non-blank.
+        primitives: The mutations of this graph in submission order; at least one.
+        preconditions: Conditions that must hold on this graph when the set is logged.
+        replace: Whether the leg replaces the graph's content; only upserts are then allowed.
+        checkpoint_requested: Whether to record a digest of this graph once the leg is applied.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -375,7 +506,7 @@ class GraphLeg(BaseModel):
 
     @model_validator(mode="after")
     def _replace_holds_only_upserts(self) -> GraphLeg:
-        """A replacing leg is the content itself, so it can carry nothing but upserts."""
+        """Reject a replacing leg that holds anything but upserts: it is the content itself."""
         if self.replace and not all(
             isinstance(p, UpsertNode | UpsertEdge) for p in self.primitives
         ):
@@ -384,7 +515,18 @@ class GraphLeg(BaseModel):
         return self
 
     def as_group(self, audit_event_id: str) -> MutationGroup:
-        """Return this leg as the single-graph group it is checked and logged as."""
+        """Express the leg as the single-graph group it is checked and logged as.
+
+        Args:
+            audit_event_id: Audit event of the causing command (a UUID string).
+
+        Returns:
+            A `MutationGroup` with the leg's graph, primitives, preconditions and checkpoint
+            request.
+
+        Raises:
+            ValueError: `audit_event_id` is not a UUID string.
+        """
         return MutationGroup(
             graph=self.graph,
             audit_event_id=audit_event_id,
@@ -399,6 +541,11 @@ class MultiGraphGroup(BaseModel):
 
     Every leg is checked before anything is logged and all legs are logged together or none is.
     The causing command's audit event id is required: a set is always one command's effect.
+
+    Attributes:
+        audit_event_id: Audit event of the causing command (a UUID string).
+        legs: One leg per distinct graph; at least two.
+        apply: `in_place` or `swap`; see the field.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -432,7 +579,16 @@ class MultiGraphGroup(BaseModel):
 
 
 class GroupOutcome(BaseModel):
-    """What the caller learns about a submitted group."""
+    """What the caller learns about a submitted group.
+
+    Attributes:
+        graph: Graph the group applied to.
+        first_position: First log position the group took; None when nothing was logged.
+        last_position: Last log position the group took; None when nothing was logged.
+        status: Whether the group was applied, is pending apply, or changed nothing.
+        checkpoint: Whether a digest was not requested, recorded, or requested but not recorded.
+        checkpoint_position: Position of the recorded digest; set exactly when recorded.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -455,7 +611,7 @@ class GroupOutcome(BaseModel):
 
     @model_validator(mode="after")
     def _positions_follow_status(self) -> GroupOutcome:
-        """Positions exist exactly when something was logged."""
+        """Require positions exactly when something was logged."""
         logged = self.first_position is not None and self.last_position is not None
         unlogged = self.first_position is None and self.last_position is None
         if (self.status == "unchanged") != unlogged or not (logged or unlogged):
@@ -465,7 +621,7 @@ class GroupOutcome(BaseModel):
 
     @model_validator(mode="after")
     def _checkpoint_position_follows_checkpoint(self) -> GroupOutcome:
-        """A checkpoint position exists exactly when a checkpoint was recorded."""
+        """Require a checkpoint position exactly when a checkpoint was recorded."""
         if (self.checkpoint == "recorded") != (self.checkpoint_position is not None):
             message = "a checkpoint position is set exactly when a checkpoint was recorded"
             raise ValueError(message)
@@ -473,7 +629,13 @@ class GroupOutcome(BaseModel):
 
 
 class MultiGraphOutcome(BaseModel):
-    """What the caller learns about a submitted `MultiGraphGroup`: one outcome per graph."""
+    """What the caller learns about a submitted `MultiGraphGroup`: one outcome per graph.
+
+    Attributes:
+        audit_event_id: Audit event of the causing command.
+        legs: Per-graph outcomes; see the field.
+        status: Overall status; see the field.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -487,7 +649,14 @@ class MultiGraphOutcome(BaseModel):
 
 
 class CatchUpResult(BaseModel):
-    """Where a graph stands after `catch_up`."""
+    """Where a graph stands after `catch_up`.
+
+    Attributes:
+        graph: Graph name.
+        applied_position: Highest log position applied to the graph.
+        last_position: Last position in the graph's log; 0 when empty.
+        caught_up: Whether every logged entry is applied.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -499,7 +668,12 @@ class CatchUpResult(BaseModel):
 
 
 class RecoveryResult(BaseModel):
-    """What startup recovery did: the graphs it caught up and the ones still gated."""
+    """What startup recovery did: the graphs it caught up and the ones still gated.
+
+    Attributes:
+        recovered: Graphs caught up, in name order.
+        gated: Graphs still behind their log, which refuse writes.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -510,7 +684,16 @@ class RecoveryResult(BaseModel):
 
 
 class ReplayReport(BaseModel):
-    """What a replay of one graph did and how much of it a checkpoint vouches for (issue #207)."""
+    """What a replay of one graph did and how much of it a checkpoint vouches for.
+
+    Attributes:
+        graph: Graph name.
+        head: The log's last position when the replay started.
+        verified_position: Position of the checkpoint compared with, or None.
+        unverified_entries: Entries applied that no checkpoint vouches for.
+        pages: Number of log reads the replay made.
+        resumed_from: First position applied by a resumed run; 0 for a fresh replay.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -528,7 +711,15 @@ class ReplayReport(BaseModel):
 
 
 class StartupReplayReport(BaseModel):
-    """How startup replay dealt with each logged graph (issue #207); every graph is in one list."""
+    """How startup replay dealt with each logged graph; every graph is in exactly one list.
+
+    Attributes:
+        replayed: Graphs found empty and rebuilt from the log.
+        resumed: Graphs whose interrupted replay was finished.
+        caught_up: Non-empty graphs that got the entries they were missing.
+        untouched: Graphs that needed nothing.
+        gated: Graphs that stay closed to writes.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

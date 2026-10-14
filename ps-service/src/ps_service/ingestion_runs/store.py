@@ -1,4 +1,4 @@
-"""PostgreSQL persistence for `ingestion_runs` (issue #194).
+"""PostgreSQL persistence for `ingestion_runs`: the run store and its Protocol.
 
 `IngestionRunStore` is the `Protocol` the MCP tools depend on; `PsycopgIngestionRunStore` is
 the real implementation, modeled on `passkey_signing`'s pending-approval store (a `Protocol`,
@@ -67,21 +67,43 @@ RETURNING actor_subject, actor_issuer, celex
 
 
 class IngestionRunStore(Protocol):
-    """Persistence seam for ingestion runs, constructor-injected wherever needed."""
+    """Persistence seam for ingestion runs, constructor-injected wherever needed.
+
+    Lets the MCP tools create, read and complete run rows without depending on Postgres, and
+    lets tests substitute a fake.
+    """
 
     def create_run(
         self, *, run_id: str, celex: str, short_name: str, actor: tuple[str, str]
     ) -> IngestionRunRow:
         """Insert one row with status `running` and return it.
 
+        Args:
+            run_id: UUID string identifying the run.
+            celex: CELEX identifier submitted for ingestion.
+            short_name: Short name the instrument is ingested under.
+            actor: `(subject, issuer)` of the submitting principal.
+
+        Returns:
+            The inserted `IngestionRunRow`.
+
         Raises:
             IngestionRunStoreUnavailableError: the store could not be reached.
             IngestionRunPersistenceError: the insert failed; nothing was written.
+
+        Side Effects:
+            Inserts the row and its `ingestion_run.submit` audit row in one transaction.
         """
         ...
 
     def get_run(self, run_id: str) -> IngestionRunRow | None:
         """Return the row, or `None` for an unknown id and for any text that is not a UUID.
+
+        Args:
+            run_id: Run identifier as supplied by the caller; need not be a valid UUID.
+
+        Returns:
+            The `IngestionRunRow`, or `None` when no such run exists or `run_id` is not a UUID.
 
         Raises:
             IngestionRunStoreUnavailableError: the store could not be reached or read.
@@ -106,11 +128,29 @@ class IngestionRunStore(Protocol):
         `error` is the sanitized text kept on the run row for `get_ingestion_status`; the audit
         row never carries it, only the enumerated `reason_code` (required when `status='failed'`).
 
+        Args:
+            run_id: UUID string of the run to complete.
+            status: Terminal status, `succeeded` or `failed`.
+            result: Success dict stored on the row; `None` for a failure.
+            error: Sanitized error text stored on the row; `None` for a success.
+            reason_code: Enumerated failure cause for the audit row; required exactly when
+                `status` is `failed`.
+            audit_actor: `(subject, issuer)` to audit the completion under; `None` uses the
+                row's submitter.
+
+        Returns:
+            `True` when this call flipped the row; `False` when the run was already terminal
+            or unknown (another call won the race).
+
         Raises:
             IngestionRunInvalidCompletionError: `reason_code` is missing on a failure or present
                 on a success; nothing was read or written.
             IngestionRunStoreUnavailableError: the store could not be reached.
             IngestionRunPersistenceError: the update failed; nothing was written.
+
+        Side Effects:
+            Updates the row and, for the winning call, inserts the `ingestion_run.complete`
+            audit row in the same transaction.
         """
         ...
 
@@ -118,8 +158,8 @@ class IngestionRunStore(Protocol):
 def _row_from_record(record: Sequence[object]) -> IngestionRunRow:
     """Map one raw result row (fixed column order, see `_COLUMNS`) to an `IngestionRunRow`.
 
-    `cast()` is unavoidable at exactly this one boundary (L2's cast() policy): `psycopg`'s
-    tuple-row result carries no per-column static type. Every column's Python type is fixed
+    `cast()` is unavoidable at exactly this one boundary: `psycopg`'s tuple-row result carries
+    no per-column static type. Every column's Python type is fixed
     by `migrations/0001_ingestion_runs.sql`.
     """
     (
@@ -163,7 +203,13 @@ class PsycopgIngestionRunStore:
         audit_store: AuditStore,
         emitter: LogEmitter | None = None,
     ) -> None:
-        """Store `config`, the audit store and an optional emitter; connect nothing."""
+        """Store `config`, the audit store and an optional emitter; connect nothing.
+
+        Args:
+            config: Service configuration used to open each connection.
+            audit_store: Store that records the submit and complete audit rows.
+            emitter: Log emitter for store entries; `None` uses the default emitter.
+        """
         self._config = config
         self._audit_store = audit_store
         self._emitter = emitter
@@ -171,7 +217,25 @@ class PsycopgIngestionRunStore:
     def create_run(
         self, *, run_id: str, celex: str, short_name: str, actor: tuple[str, str]
     ) -> IngestionRunRow:
-        """Insert one `running` row; see `IngestionRunStore.create_run`."""
+        """Insert one `running` row and its submit audit row; see `IngestionRunStore.create_run`.
+
+        Args:
+            run_id: UUID string identifying the run.
+            celex: CELEX identifier submitted for ingestion.
+            short_name: Short name the instrument is ingested under.
+            actor: `(subject, issuer)` of the submitting principal.
+
+        Returns:
+            The inserted `IngestionRunRow`.
+
+        Raises:
+            IngestionRunStoreUnavailableError: the connection could not be opened.
+            IngestionRunPersistenceError: the insert or audit write failed; nothing was written.
+
+        Side Effects:
+            Writes the row and the audit row in one committed transaction, updates Postgres
+            health in `ps_service.dependency_health` and emits a `create_run` log entry.
+        """
         params = {
             "run_id": run_id,
             "celex": celex,
@@ -212,7 +276,21 @@ class PsycopgIngestionRunStore:
         return _row_from_record(record)
 
     def get_run(self, run_id: str) -> IngestionRunRow | None:
-        """Read one row by primary key; see `IngestionRunStore.get_run`."""
+        """Read one row by primary key; see `IngestionRunStore.get_run`.
+
+        Args:
+            run_id: Run identifier; text that is not a UUID yields `None` without a query.
+
+        Returns:
+            The `IngestionRunRow`, or `None` when the id is unknown or not a UUID.
+
+        Raises:
+            IngestionRunStoreUnavailableError: the store could not be reached or read.
+
+        Side Effects:
+            Updates Postgres health in `ps_service.dependency_health` and emits a `get_run`
+            log entry on failure.
+        """
         try:
             uuid.UUID(run_id)
         except ValueError:
@@ -242,7 +320,29 @@ class PsycopgIngestionRunStore:
         reason_code: IngestionReasonCode | None = None,
         audit_actor: tuple[str, str] | None = None,
     ) -> bool:
-        """Compare-and-swap a `running` row to a terminal status; see the Protocol."""
+        """Compare-and-swap a `running` row to a terminal status; see the Protocol.
+
+        Args:
+            run_id: UUID string of the run to complete.
+            status: Terminal status, `succeeded` or `failed`.
+            result: Success dict stored on the row; `None` for a failure.
+            error: Sanitized error text stored on the row; `None` for a success.
+            reason_code: Enumerated failure cause; required exactly when `status` is `failed`.
+            audit_actor: `(subject, issuer)` to audit under; `None` uses the row's submitter.
+
+        Returns:
+            `True` when this call flipped the row; `False` when the run was not `running`.
+
+        Raises:
+            IngestionRunInvalidCompletionError: `reason_code` disagrees with `status`; nothing
+                is read or written.
+            IngestionRunStoreUnavailableError: the connection could not be opened.
+            IngestionRunPersistenceError: the update or audit write failed; nothing was written.
+
+        Side Effects:
+            Updates the row and, for the winner, writes the completion audit row in one
+            committed transaction; updates Postgres health and emits a `complete_run` log entry.
+        """
         require_reason_code_iff_failed(status=status, reason_code=reason_code)
         params = {
             "run_id": run_id,

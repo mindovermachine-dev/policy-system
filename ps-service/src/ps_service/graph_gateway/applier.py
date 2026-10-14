@@ -1,8 +1,8 @@
-"""Apply decoded log entries to FalkorDB in batched, order-preserving runs (issue #206).
+"""Apply decoded log entries to FalkorDB in batched, order-preserving runs.
 
 Before the first load of a pass, the `id` indexes of the labels it writes are ensured (see
 `index_manager`). Entries then apply in position order. A run is a maximal stretch of consecutive
-entries of the same operation (App-E: `_runs`); each run becomes `ceil(n / batch_size)`
+entries of the same operation (see `_runs`); each run becomes `ceil(n / batch_size)`
 parameterized queries per label and the caller is told after each completed run, so the applied
 marker can follow.
 """
@@ -57,7 +57,22 @@ def apply_entries(
     batch_size: int,
     on_run_applied: Callable[[int], None],
 ) -> None:
-    """Apply `entries` to `graph`, calling `on_run_applied(last_position)` after each run."""
+    """Decode log entries and apply them to the graph in position order, in batched runs.
+
+    Args:
+        graph: The writable graph the queries run against.
+        entries: Log entries in ascending position order. An empty sequence does nothing.
+        batch_size: Maximum rows per query; must be positive.
+        on_run_applied: Called with the position of the last entry of each run once that run's
+            queries have all completed.
+
+    Raises:
+        Exception: Whatever `decode_entry` raises for an undecodable entry, and whatever the graph
+            query raises; runs completed before the failure have already been reported.
+
+    Side Effects:
+        Writes to `graph` (and creates missing `id` indexes) and invokes `on_run_applied`.
+    """
     apply_decoded(
         graph,
         [(entry.position, decode_entry(entry)) for entry in entries],
@@ -74,10 +89,27 @@ def apply_decoded(
     on_run_applied: Callable[[int], None],
     indexes: IdIndexes | None = None,
 ) -> None:
-    """Apply already decoded `(position, primitive)` pairs, in order (see `apply_entries`).
+    """Apply already decoded `(position, primitive)` pairs to the graph in order.
 
-    `indexes` carries what is known of the graph's `id` indexes across calls (a replay passes one
-    for all its pages); without it this call lists the indexes itself.
+    Ensures the `id` indexes of every label the pairs write, then applies each run as batched
+    parameterized queries (see `apply_entries`).
+
+    Args:
+        graph: The writable graph the queries run against.
+        decoded: `(position, primitive)` pairs in ascending position order. An empty sequence
+            does nothing.
+        batch_size: Maximum rows per query; must be positive.
+        on_run_applied: Called with the position of the last pair of each run once that run's
+            queries have all completed.
+        indexes: What is known of the graph's `id` indexes, shared across calls (a replay passes
+            one for all its pages). When omitted, this call lists the indexes itself.
+
+    Raises:
+        Exception: Whatever the graph query raises; runs completed before the failure have
+            already been reported through `on_run_applied`.
+
+    Side Effects:
+        Writes to `graph` (and creates missing `id` indexes) and invokes `on_run_applied`.
     """
     (indexes if indexes is not None else IdIndexes(graph)).ensure(
         label for _, p in decoded for label in node_labels(p)
@@ -89,7 +121,7 @@ def apply_decoded(
 
 
 def _runs(decoded: Sequence[_Positioned]) -> Iterator[list[_Positioned]]:
-    """Cut `decoded` into runs: consecutive entries of the same operation (App-E).
+    """Cut `decoded` into runs: consecutive entries of the same operation .
 
     A run of node upserts is cut again where a node repeats, so that a later row for a node
     always lands in a later run.

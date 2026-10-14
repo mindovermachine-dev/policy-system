@@ -1,9 +1,9 @@
-"""ps_service.domain_mapper.extraction — the ExtractRolesAndRequirements action.
+"""ps_service.domain_mapper.extraction: the extract-roles-and-requirements action.
 
-Holds the public orchestrating function (`extract_roles_and_requirements`,
-PLAN_REVIEWED.md §11 Increment 10, wiring Increments 4-9), the per-unit LLM
-extraction call (Increment 7), and role canonicalization / Requirement-graph
-building with collision handling (Increment 8).
+Holds the public orchestrating function (`extract_roles_and_requirements`), the per-unit LLM
+extraction call, the definitions pass that finds where each Role is formally defined, and the
+Role canonicalization and Requirement-graph building (with id-collision handling) that turn
+LLM candidates into the nodes and edges of one gateway group.
 """
 
 from __future__ import annotations
@@ -49,10 +49,8 @@ _DEFINITIONS_HEADING_PATTERN = re.compile(r"\bdefinitions\b", re.IGNORECASE)
 class _RegulatoryInstrumentNode(Protocol):
     """Structural stand-in for the `falkordb.Node` from this module's RegulatoryInstrument read.
 
-    Only `.properties` is ever read, mirroring
-    `falkordb_client.GraphQueryResult`'s own minimal structural-Protocol
-    style. A hand-written test fake needs only this one attribute to
-    satisfy it.
+    Only `.properties` is read, in the minimal style of `falkordb_client.GraphQueryResult`, so
+    a hand-written fake needs only that one attribute.
     """
 
     @property
@@ -71,39 +69,61 @@ def extract_roles_and_requirements(  # noqa: PLR0913 -- one stage seam: the nati
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> ExtractionResult:
-    """ExtractRolesAndRequirements — PLAN_REVIEWED.md §5.2's 8-step flow.
+    """Extract Roles and Requirements from one instrument's native graph into its baseline graph.
 
-    1. Reads the RegulatoryInstrument node's own properties from `native_graph`; it is
-       written first in the extraction group (step 6 below) — the
-       `DEFINES`/`EXPRESSES` edges originate from it.
-    2. `adapter.read_native_units(native_graph, regulatory_instrument_id)`. An empty result is
-       not an error (Q2 fix) — the RegulatoryInstrument node is still submitted to the gateway and a
-       well-formed, all-zero `ExtractionResult` is returned.
-    3. Calls `_extract_candidates_for_unit` per unit, with per-unit failure
-       isolation: a `DomainMapperExtractionError` for one unit is caught,
-       logged (`outcome="error"`, `entity_id=unit.citation_ref`), and that
-       unit contributes zero candidates — the loop continues. An
-       `LlmProviderError` (infra failure) is not caught here; it propagates
-       and aborts the whole call.
-    4. `_canonicalize_roles` — deterministic Role dedup. Also resolves each
-       Role's `DEFINES.source_ref` (issue #26) via the `defined_terms` map
-       built by `_build_defined_terms_map` (a dedicated LLM pass over just
-       the definitions-headed units, run before this step), falling back to
-       the first duty occurrence's `unit_citation_ref` when no matching
-       defined term exists (AC-BI-004/008/009).
-    5. `_build_requirement_graph` — Requirement nodes + collision
-       disambiguation (B2 fix), never raising for a collision.
-    6. `persist_role_and_requirement_graph` — validate, build, then submit the instrument, Roles,
-       `DEFINES`, Requirements and `EXPRESSES` as ONE Graph Write Gateway group on
-       `baseline_graph_name` under `audit_event_id` (issue #209). Every edge endpoint is in the
-       group, so extraction reads nothing from the baseline graph and takes no handle to it.
-    7. Emits one `outcome="collision"` entry per disambiguated id, one
-       `outcome="definitions_fallback"` entry per Role whose `DEFINES.source_ref`
-       fell back to the first duty occurrence (AC-BI-010), then one
-       `outcome="succeeded"` entry for the whole call. No `bind_run_context()`
-       call here (PLAN_REVIEWED.md §6) — `run_id` is whatever the caller
-       already bound, or `None`.
-    8. Returns the `ExtractionResult`.
+    Steps:
+
+    1. Read the RegulatoryInstrument node's own properties from `native_graph`; the node is
+       written first in the extraction group because the `DEFINES` and `EXPRESSES` edges
+       originate from it.
+    2. Read the extraction units with `adapter.read_native_units`. An empty result is not an
+       error: the instrument node is still submitted and a well-formed, all-zero
+       `ExtractionResult` is returned.
+    3. Call the LLM per unit (`_extract_candidates_for_unit`) with per-unit failure isolation:
+       a `DomainMapperExtractionError` for one unit is caught and logged
+       (`outcome="error"`, `entity_id=unit.citation_ref`), and that unit contributes no
+       candidates.
+    4. Run the definitions pass (`_build_defined_terms_map`) over the definitions-headed units,
+       then deduplicate Roles deterministically (`_canonicalize_roles`). Each Role's
+       `DEFINES.source_ref` is the citation of its formal definition, falling back to the first
+       duty occurrence's `unit_citation_ref` when no matching defined term exists.
+    5. Build Requirement nodes and edges (`_build_requirement_graph`), disambiguating id
+       collisions without raising.
+    6. Validate, build and submit the instrument, Roles, `DEFINES`, Requirements and `EXPRESSES`
+       as ONE Graph Write Gateway group on `baseline_graph_name` under `audit_event_id`. Every
+       edge endpoint is in the group, so extraction reads nothing from the baseline graph.
+    7. Emit one `outcome="collision"` log entry per disambiguated id, one
+       `outcome="definitions_fallback"` entry per Role whose `DEFINES.source_ref` fell back, and
+       one `outcome="succeeded"` entry for the whole call. `run_id` is whatever the caller
+       already bound, or `None`; no run context is bound here.
+
+    Args:
+        regulatory_instrument_id: Id of the RegulatoryInstrument node in `native_graph` to
+            extract from.
+        adapter: Domain Mapping Adapter paired with the instrument's ingestion source.
+        native_graph: Read handle on the `{short}_native` graph.
+        submitter: Gateway submitter for the baseline group.
+        baseline_graph_name: Target `{short}_baseline` graph.
+        audit_event_id: Audit event the group is recorded under.
+        model: Model identifier passed to the LLM interface.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        The `ExtractionResult` with the Role ids, Requirement ids, candidate and skipped-unit
+        counts and any collision ids; all counts are zero when the instrument has no units.
+
+    Raises:
+        DomainMapperExtractionError: The RegulatoryInstrument node is absent from
+            `native_graph`, or the adapter finds a malformed citation.
+        DomainMapperPersistenceError: A Requirement references an unknown Role, a property
+            cannot be stored, or the gateway does not take the group.
+        LlmProviderError: The LLM provider fails; this is an infrastructure failure and aborts
+            the whole call.
+
+    Side Effects:
+        Calls the LLM per unit and for the definitions pass, submits one gateway group to the
+        baseline graph, and emits structured log entries.
     """
     regulatory_instrument_properties = _read_regulatory_instrument_properties(
         native_graph, regulatory_instrument_id
@@ -175,16 +195,15 @@ def extract_roles_and_requirements(  # noqa: PLR0913 -- one stage seam: the nati
 def _read_regulatory_instrument_properties(
     native_graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, object]:
-    """PLAN_REVIEWED.md §5.2 step 1: read the RegulatoryInstrument node's properties.
+    """Return the properties of the RegulatoryInstrument node `regulatory_instrument_id`.
 
-    `MATCH (r:RegulatoryInstrument {id: $rid}) RETURN r` (the native graph holds every
-    ingested version of a regulation), read back as a plain properties dict for
-    `persist_role_and_requirement_graph` to submit as the instrument node.
+    The native graph holds every ingested version of a regulation, so the node is matched by id
+    (`MATCH (r:RegulatoryInstrument {id: $rid}) RETURN r`). The properties are returned as a
+    plain dict for `persist_role_and_requirement_graph` to submit as the instrument node.
 
-    Raises `DomainMapperExtractionError` if no RegulatoryInstrument node is found —
-    `ExtractRolesAndRequirements`'s own pre-condition
-    (`PersistNativeStructuralGraph` completed for this regulation) was not
-    met.
+    Raises:
+        DomainMapperExtractionError: No such node exists, meaning native-graph persistence has
+            not completed for this regulation.
     """
     result = native_graph.query(
         "MATCH (r:RegulatoryInstrument {id: $rid}) RETURN r",
@@ -207,18 +226,24 @@ def _extract_all_candidates(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> tuple[list[RequirementCandidate], int]:
-    """PLAN_REVIEWED.md §5.2 step 3: per-unit failure isolation.
+    """Extract candidates from every unit, isolating each unit's parse failures.
 
-    A `DomainMapperExtractionError` from one unit's malformed/unparseable
-    LLM response is caught here, logged (`outcome="error"`,
-    `entity_id=unit.citation_ref`, `extra={"error_kind": exc.error_kind}`),
-    and that unit contributes zero candidates — the loop continues to the
-    next unit. Only `exc.error_kind` (one of `ErrorKind`'s 5
-    duty-extraction-related values, or `None`) is ever passed to the
-    logger — never `str(exc)`/`exc.args`, which embed the raw LLM response
-    payload/item that failed to parse. An
-    `LlmProviderError` (a genuine infra failure) is never caught here — it
-    propagates and aborts the whole call.
+    A `DomainMapperExtractionError` from one unit's malformed or unparseable LLM response is
+    caught and logged (`outcome="error"`, `entity_id=unit.citation_ref`,
+    `extra={"error_kind": exc.error_kind}`); that unit contributes no candidates and the loop
+    continues. Only `exc.error_kind` is logged, never `str(exc)` or `exc.args`, which embed the
+    raw LLM payload that failed to parse. An `LlmProviderError` is not caught: it propagates and
+    aborts the whole call.
+
+    Args:
+        units: Extraction units in document order.
+        model: Model identifier for the LLM call.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        `(candidates, skipped_unit_count)`: candidates in unit-then-response order, and the
+        number of units skipped because their response could not be parsed.
     """
     candidates: list[RequirementCandidate] = []
     skipped_unit_count = 0
@@ -249,28 +274,26 @@ def _extract_candidates_for_unit(
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> list[RequirementCandidate]:
-    """Call the LLM once for one `ExtractionUnit`, returning its `RequirementCandidate`s.
+    """Call the LLM once for one `ExtractionUnit` and return its `RequirementCandidate`s.
 
-    Builds a system + user `ChatMessage` pair (the unit's own text is
-    delimited from the system prompt per L2's untrusted-content rule — this
-    is regulatory text, technically untrusted per the CA doc's own posture,
-    even though no mitigation beyond delimiting is designed here), calls
-    `route_completion`, then delegates response parsing to
-    `parse_extraction_response`. `emitter` is forwarded to `route_completion`
-    unchanged — `route_completion` logs its own `llm_interface`-component
-    entry regardless of this component's own logging (PLAN_REVIEWED.md §9);
-    this is plain pass-through DI (L2: "must not construct its own
-    infrastructure clients inline"), not a new logging concern of this
-    function's own.
+    Builds a system and user `ChatMessage` pair, with the unit's own text delimited from the
+    system prompt because regulatory text is untrusted input, calls `route_completion`, and
+    delegates response parsing to `parse_extraction_response`. `emitter` is forwarded to
+    `route_completion` unchanged; that call logs its own `llm_interface` entry.
 
-    A `DomainMapperExtractionError` from a malformed/unparseable LLM
-    *response* propagates unchanged — this function does not catch it;
-    per-unit failure isolation is the orchestrating
-    `extract_roles_and_requirements`'s job (PLAN_REVIEWED.md §5.2 step 3),
-    not this one's. An `LlmProviderError` from `route_completion` itself (a
-    genuine infra failure calling the LLM at all) is likewise never caught
-    here — it propagates and aborts the whole call, the fail-fast infra
-    boundary this component follows throughout.
+    Args:
+        unit: The extraction unit to extract from.
+        model: Model identifier for the LLM call.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        The candidates found in the unit; empty when the response lists none.
+
+    Raises:
+        DomainMapperExtractionError: The LLM response is malformed or unparseable. Not caught
+            here; per-unit isolation is `_extract_all_candidates`'s job.
+        LlmProviderError: The LLM call itself fails; this aborts the whole call.
     """
     messages = _build_extraction_messages(unit)
     result = route_completion(
@@ -280,12 +303,10 @@ def _extract_candidates_for_unit(
 
 
 def _build_extraction_messages(unit: ExtractionUnit) -> list[ChatMessage]:
-    """System prompt + one user message carrying the unit's own text.
+    """Build the system prompt and one user message carrying the unit's own text.
 
-    The unit text is clearly delimited from the system prompt's
-    instructions (L2 LLM Interface Patterns: "never interpolate [untrusted
-    content] directly into a system/instruction prompt... delimit it
-    clearly").
+    The unit text is delimited by `<regulation_text>` tags and never interpolated into the
+    system prompt, because it is untrusted input.
     """
     user_content = (
         f"Article heading: {unit.article_heading}\n"
@@ -301,39 +322,33 @@ def _build_extraction_messages(unit: ExtractionUnit) -> list[ChatMessage]:
 
 
 def _is_definitions_unit(unit: ExtractionUnit) -> bool:
-    r"""AC-BI-002: a pure, case-insensitive, word-boundary filter on `article_heading`.
+    r"""Return whether `unit.article_heading` marks a definitions article.
 
-    Matches "Definitions", "Article 2 — Definitions", "Scope and
-    definitions", etc., via a compiled word-boundary regex
-    (`_DEFINITIONS_HEADING_PATTERN`) rather than a plain substring/casefold
-    check — a substring check would also match "Redefinitions of Scope",
-    where "definitions" is not its own word (no `\b` boundary between "re"
-    and "definitions", both `\w` characters). No new heading-inference
-    logic — reuses the existing `article_heading` field verbatim. Does not
-    touch/reorder `units` itself; callers filter a copy,
-    `_extract_all_candidates`'s own traversal of the full `units` tuple is
-    untouched (AC-BI-002's "without reordering the existing
-    duty-extraction unit traversal").
+    A pure, case-insensitive, word-boundary match (`_DEFINITIONS_HEADING_PATTERN`) on the
+    heading verbatim. It matches "Definitions", "Article 2 - Definitions" and "Scope and
+    definitions". A plain substring check would also match "Redefinitions of Scope", where
+    "definitions" is not its own word (no `\b` boundary between "re" and "definitions"), so a
+    word-boundary regex is used. Callers filter a copy of the units; the full unit traversal
+    used for duty extraction is unaffected.
     """
     return bool(_DEFINITIONS_HEADING_PATTERN.search(unit.article_heading))
 
 
 def _normalize_term(text: str) -> str:
-    """Case-insensitive + internal-whitespace-collapsed key (AC-BI-005).
+    """Return `text` casefolded with internal whitespace collapsed, as a matching key.
 
-    Used identically on both sides of the match: pooled defined-term keys
-    (`_pool_defined_terms`) and a candidate's `role_name` at lookup time
-    inside `_canonicalize_roles`. Pure string ops only.
+    Used identically on both sides of the match: the pooled defined-term keys
+    (`_pool_defined_terms`) and a candidate's `role_name` at lookup time in
+    `_canonicalize_roles`.
     """
     return " ".join(text.casefold().split())
 
 
 def _build_definitions_extraction_messages(unit: ExtractionUnit) -> list[ChatMessage]:
-    """System prompt + one user message carrying the unit's own text.
+    """Build the definitions-pass system prompt and one user message carrying the unit's text.
 
-    Identical delimiting shape to `_build_extraction_messages` — the unit
-    text is never interpolated into the system prompt (L2 untrusted-content
-    rule).
+    Same delimiting as `_build_extraction_messages`: the unit text never enters the system
+    prompt.
     """
     user_content = (
         f"Article heading: {unit.article_heading}\n"
@@ -355,13 +370,14 @@ def _extract_defined_terms_for_unit(
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> list[DefinedTermCandidate]:
-    """Call the LLM once for one definitions `ExtractionUnit`.
+    """Call the LLM once for one definitions `ExtractionUnit` and return its defined terms.
 
-    Exact DI/parsing-delegation shape as `_extract_candidates_for_unit`: a
-    `DomainMapperExtractionError` from a malformed response propagates
-    unchanged (isolation is `_extract_all_defined_terms`'s job); an
-    `LlmProviderError` from `route_completion` propagates and aborts the
-    whole call.
+    Same shape as `_extract_candidates_for_unit`.
+
+    Raises:
+        DomainMapperExtractionError: The response is malformed. Not caught here; isolation is
+            `_extract_all_defined_terms`'s job.
+        LlmProviderError: The LLM call fails; this aborts the whole call.
     """
     messages = _build_definitions_extraction_messages(unit)
     result = route_completion(
@@ -377,15 +393,13 @@ def _extract_all_defined_terms(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> list[DefinedTermCandidate]:
-    """AC-BI-003/AC-BI-007: run the definitions pass over exactly `definitions_units`.
+    """Run the definitions pass over exactly `definitions_units` and return every term found.
 
-    Zero LLM calls when `definitions_units` is empty (AC-BI-007) — the loop
-    body never executes. Per-unit failure isolation mirrors
-    `_extract_all_candidates` exactly (design decision 4): a
-    `DomainMapperExtractionError` from one unit is caught, logged
-    (`outcome="error"`, `entity_id=unit.citation_ref`,
-    `extra={"error_kind": exc.error_kind}`), and that unit contributes zero
-    terms — the loop continues. An `LlmProviderError` is never caught here.
+    Makes no LLM call when `definitions_units` is empty. Per-unit failure isolation mirrors
+    `_extract_all_candidates`: a `DomainMapperExtractionError` from one unit is caught and
+    logged (`outcome="error"`, `entity_id=unit.citation_ref`,
+    `extra={"error_kind": exc.error_kind}`), and that unit contributes no terms. An
+    `LlmProviderError` is not caught.
     """
     term_candidates: list[DefinedTermCandidate] = []
     for unit in definitions_units:
@@ -408,12 +422,11 @@ def _extract_all_defined_terms(
 
 
 def _pool_defined_terms(term_candidates: list[DefinedTermCandidate]) -> dict[str, str]:
-    """AC-BI-005/AC-BI-006: pool defined terms into one normalized-term -> citation_ref map.
+    """Pool defined terms into one map from normalized term to the defining `citation_ref`.
 
-    Keys are normalized via `_normalize_term` so `_canonicalize_roles`'s
-    later lookup is a single dict lookup under the same normalization.
-    First occurrence (this list's own order — units traversal order) wins on
-    a duplicate normalized term (design decision 5). Pure, no LLM/IO.
+    Keys are normalized with `_normalize_term`, so `_canonicalize_roles` looks a Role up with a
+    single dict access. The first occurrence in `term_candidates` order (unit traversal order)
+    wins on a duplicate normalized term. Pure: no LLM call or I/O.
     """
     pooled: dict[str, str] = {}
     for candidate in term_candidates:
@@ -430,15 +443,15 @@ def _build_defined_terms_map(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> dict[str, str]:
-    """Detect qualifying definitions units, run the dedicated LLM pass, pool the results.
+    """Detect definitions units, run the dedicated LLM pass over them, and pool the results.
 
-    Composes `_is_definitions_unit` (AC-BI-002) + `_extract_all_defined_terms`
-    (AC-BI-003/007) + `_pool_defined_terms` (AC-BI-005/006) into the one call
-    `extract_roles_and_requirements` makes before `_canonicalize_roles`.
-    Not itself pure (issues LLM calls via `_extract_all_defined_terms`) —
-    this is the orchestration-level helper AC-BI-011 explicitly allows
-    ("orchestrated in `extract_roles_and_requirements` (or a new pure helper
-    it calls) BEFORE `_canonicalize_roles`").
+    Composes `_is_definitions_unit`, `_extract_all_defined_terms` and `_pool_defined_terms` into
+    the one call `extract_roles_and_requirements` makes before `_canonicalize_roles`, which
+    stays free of LLM calls and I/O. This helper is not pure: it issues LLM calls.
+
+    Returns:
+        Map from normalized defined term to its defining `citation_ref`; empty when no unit
+        qualifies or no term is found.
     """
     definitions_units = tuple(unit for unit in units if _is_definitions_unit(unit))
     term_candidates = _extract_all_defined_terms(
@@ -457,45 +470,33 @@ def _canonicalize_roles(
     dict[str, str],
     tuple[tuple[str, str], ...],
 ]:
-    """PLAN_REVIEWED.md §5.2 step 4 — deterministic Role dedup via `identity.role_id()`, no LLM.
+    """Deduplicate Role candidates into Role nodes and `DEFINES` edges, deterministically.
 
-    Candidates sharing the same `role_name` collapse onto one Role node
-    (`role_id()` is a pure function of `role_name` + `regulatory_instrument_id`, so
-    every candidate naming the same role deterministically computes the
-    same id). The FIRST candidate (in document order, i.e. this list's own
-    order — the caller is responsible for supplying candidates already in
-    unit-then-response order) whose `role_name` produces a given `role_id`
-    determines that Role's `confidence` and its `DEFINES` edge's
-    `source_ref` — mirrors how `_build_requirement_graph` below treats first
-    occurrence for Requirement-id collisions.
+    Candidates sharing a `role_name` collapse onto one Role node, because `role_id()` is a pure
+    function of `role_name` and `regulatory_instrument_id`. The first candidate, in the order of
+    `candidates` (unit-then-response order, which the caller must supply), whose `role_name`
+    produces a given id fixes that Role's `confidence` and its `DEFINES` edge's `source_ref`,
+    as `_build_requirement_graph` does for Requirement-id collisions.
 
-    `defined_terms` is the precomputed, already-normalized (via
-    `_normalize_term`) term -> citation_ref mapping from
-    `_build_defined_terms_map` (AC-BI-011: no LLM/IO call occurs in THIS
-    function — `defined_terms` arrives fully computed). For that FIRST
-    candidate at each new `role_id()`, its `role_name` is normalized via
-    `_normalize_term` and looked up in `defined_terms` (AC-BI-005): a hit
-    sets `RoleDefinesEdge.source_ref` to that term's `citation_ref`
-    (AC-BI-004); a miss falls back to `candidate.unit_citation_ref`,
-    unchanged from prior behaviour (AC-BI-008/AC-BI-009), and records
-    `(node_id, candidate.role_name)` in the returned `fallback_roles` tuple
-    for the orchestrator to log `outcome="definitions_fallback"` against
-    (AC-BI-010) — mirrors `_build_requirement_graph`'s `collided_ids` return
-    exactly: the pure function surfaces WHAT happened, the orchestrator does
-    the logging.
+    For that first candidate, `role_name` is normalized with `_normalize_term` and looked up in
+    `defined_terms`. A hit sets `source_ref` to the defining `citation_ref`; a miss falls back to
+    `candidate.unit_citation_ref` and records `(node_id, role_name)` in the returned
+    `fallback_roles`, so the orchestrator can log `outcome="definitions_fallback"`. The function
+    reports what happened and the orchestrator logs it.
 
-    Returns `(role_nodes, role_edges, role_node_ids, fallback_roles)` where
-    `role_node_ids` maps every distinct `role_name` string actually seen to
-    its Role node's id — including a `role_name` spelling that happens to
-    collapse onto an id another spelling already produced — so
-    `_build_requirement_graph` can look up any candidate's `role_name`
-    unconditionally.
+    Pure: no LLM call, logging or I/O, so it can be tested with hand-written fakes.
 
-    Still pure, no logging/IO (AC-BI-011) — no `route_completion`/
-    `emit_log_entry`/`call_completion`/`emitter` identifier appears in this
-    body, and the signature itself carries no such parameter — stays
-    cheaply testable with hand-written structural fakes, no emitter
-    involved.
+    Args:
+        candidates: Requirement candidates in document order.
+        regulatory_instrument_id: Id of the defining RegulatoryInstrument, folded into Role ids.
+        defined_terms: Normalized term to defining `citation_ref`, from
+            `_build_defined_terms_map`; empty when there are no definitions.
+
+    Returns:
+        `(role_nodes, role_edges, role_node_ids, fallback_roles)`. `role_node_ids` maps every
+        distinct `role_name` spelling seen to its Role node id, including spellings that collapse
+        onto an id another spelling already produced, so `_build_requirement_graph` can look up
+        any candidate's `role_name`.
     """
     role_nodes: list[RoleNode] = []
     role_edges: list[RoleDefinesEdge] = []
@@ -531,35 +532,36 @@ def _build_requirement_graph(
     regulatory_instrument_id: str,
     role_node_ids: dict[str, str],
 ) -> tuple[tuple[RequirementNode, ...], tuple[RequirementExpressesEdge, ...], tuple[str, ...]]:
-    """PLAN_REVIEWED.md §5.2 step 5 — B2 fix: deterministic Requirement-id collision handling.
+    """Build Requirement nodes and `EXPRESSES` edges, disambiguating base-id collisions.
 
-    Walks `candidates` in document order (the caller's own list order —
-    unit order, then within-unit response order), computing
-    `identity.requirement_id()` per candidate and tracking every distinct
-    `text` already seen at each base id:
+    Walks `candidates` in document order (unit order, then within-unit response order),
+    computing `identity.requirement_id()` per candidate and tracking each distinct `text` seen
+    at each base id:
 
-    - Same base id, same text as an already-seen occurrence at that id ->
-      true duplicate, silently collapsed to one node (a trivial same-input
-      sanity check, not a cross-call idempotency proof).
-    - Same base id, a NEW distinct text -> deterministically disambiguated:
-      persisted under `f"{base_id}#{n}"` (`n` = 2 for the second distinct
-      text seen at that base id, 3 for a third, ...). Every disambiguated id
-      is collected into `collided_ids`. No exception is ever raised for
-      this case.
+    - Same base id and same text as an earlier occurrence: a true duplicate, collapsed to one
+      node.
+    - Same base id and a new distinct text: persisted under `f"{base_id}#{n}"`, where `n` is 2
+      for the second distinct text at that base id, 3 for the third, and so on. Every
+      disambiguated id is collected into the returned `collided_ids`. No exception is raised.
 
-    Each Requirement node's `properties` carries `role_id` — a plain
-    bookkeeping property (not an Edge Catalog relationship), the owning
-    Role node's id from `role_node_ids[candidate.role_name]`
-    (`_canonicalize_roles`'s output) — consumed later by `derivation.py`
-    (PLAN_REVIEWED.md §7.2) — and `status="active"` (issue #109: every
-    newly-minted Requirement is active by definition at creation;
-    deprecation happens later via the supersede mechanism noted in
-    `ps-domain-concepts.md:268`, never at ingest). Each `EXPRESSES` edge
-    carries `source_ref = candidate.unit_citation_ref` (AC-001).
+    Each node's `properties` carry `text`, `type`, `confidence`, `status="active"` (a new
+    Requirement is active at creation; deprecation happens later through supersession, never at
+    ingest) and `role_id`, a plain bookkeeping property holding the owning Role's id, which
+    `derivation.py` reads back. Each `EXPRESSES` edge carries
+    `source_ref = candidate.unit_citation_ref`.
 
-    Pure, no logging/IO — the orchestrating `extract_roles_and_requirements`
-    (a later increment) is responsible for emitting one `outcome="collision"`
-    log entry per id in the returned `collided_ids`.
+    Pure: no logging or I/O. The orchestrator logs one `outcome="collision"` entry per id in
+    `collided_ids`.
+
+    Args:
+        candidates: Requirement candidates in document order.
+        regulatory_instrument_id: Id of the RegulatoryInstrument the Requirements belong to.
+        role_node_ids: Map from `role_name` to Role node id, from `_canonicalize_roles`; must
+            contain every candidate's `role_name`.
+
+    Returns:
+        `(requirement_nodes, requirement_edges, collided_ids)`; all empty when there are no
+        candidates.
     """
     requirement_nodes: list[RequirementNode] = []
     requirement_edges: list[RequirementExpressesEdge] = []

@@ -1,15 +1,12 @@
-"""ps_service.export.catalog_writer -- `manifest.json`/`catalog.json` I/O (D1).
+"""Read and write the curated catalog's `manifest.json` and `catalog.json` files.
 
-`write_manifest` writes one curated instrument's `manifest.json`;
-`read_manifest` is its inverse (used by `export_instrument` to rebuild the
-full catalog listing after every curation run). `write_catalog_json` writes
-the repo-root, aggregate `catalog.json` listing -- and, per CHANGES.md's MA3
-fix, an identical second copy at a caller-supplied `packaged_copy_path` so
-`ps_service.api.curated_content`'s `importlib.resources`-packaged copy never
-drifts from the git-tracked, `ps-cli`-facing one (both are written from the
-same computed JSON string, in the same call). Both files are always
-regenerated wholesale -- never hand-edited, never merged with stale content
-(D1).
+`write_manifest` writes one curated instrument's `manifest.json`; `read_manifest` is its
+inverse, used to rebuild the full catalog listing after every curation run.
+`write_catalog_json` writes the aggregate `catalog.json` listing to the repository root and an
+identical copy to a caller-supplied packaged path, so the copy shipped inside the container
+image (read through `importlib.resources` by `ps_service.api.curated_content`) cannot drift from
+the git-tracked copy that clients read. Both files are always regenerated wholesale, never
+hand-edited and never merged with earlier content.
 """
 
 from __future__ import annotations
@@ -31,7 +28,7 @@ _CATALOG_FILENAME = "catalog.json"
 
 
 class _CatalogEntry(TypedDict):
-    """One `catalog.json` row -- AC-BI-011/012's data source (D1)."""
+    """One `catalog.json` row: the manifest fields a catalog listing exposes per instrument."""
 
     instrument_id: str
     celex: str | None
@@ -43,11 +40,23 @@ class _CatalogEntry(TypedDict):
 
 
 def write_manifest(instrument_dir: Path, manifest: InstrumentManifest) -> None:
-    """Write `manifest.json` into `instrument_dir` (D1).
+    """Write one instrument's `manifest.json` into its directory.
 
-    Creates `instrument_dir` if missing. Overwrites any existing
-    `manifest.json` wholesale -- a curation run always writes a complete,
-    fresh manifest, never a partial update.
+    A curation run always writes a complete manifest, never a partial update, so an existing
+    file is replaced wholesale. The JSON uses sorted keys, two-space indent, UTF-8 and a
+    trailing newline so repeated runs produce identical bytes.
+
+    Args:
+        instrument_dir: Directory that holds the instrument's artifact files. Created, with
+            parents, when missing.
+        manifest: The complete manifest to serialize; every dataclass field is written.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Creates `instrument_dir` if needed and creates or overwrites
+        `instrument_dir / "manifest.json"`.
     """
     instrument_dir.mkdir(parents=True, exist_ok=True)
     text = json.dumps(asdict(manifest), sort_keys=True, ensure_ascii=False, indent=2) + "\n"
@@ -55,10 +64,21 @@ def write_manifest(instrument_dir: Path, manifest: InstrumentManifest) -> None:
 
 
 def read_manifest(instrument_dir: Path) -> InstrumentManifest:
-    """Read `instrument_dir / manifest.json` back into an `InstrumentManifest`.
+    """Read an instrument's `manifest.json` back into an `InstrumentManifest`.
 
-    The exact inverse of `write_manifest` -- every field `write_manifest`
-    serializes is read back unchanged, field-for-field.
+    The exact inverse of `write_manifest`: every field it serializes is read back unchanged.
+    The file is trusted to be this module's own output and is not schema-validated.
+
+    Args:
+        instrument_dir: Directory that holds `manifest.json`.
+
+    Returns:
+        The manifest, field for field as written.
+
+    Raises:
+        FileNotFoundError: `instrument_dir` has no `manifest.json`.
+        json.JSONDecodeError: The file is not valid JSON.
+        TypeError: The JSON keys do not match the `InstrumentManifest` fields.
     """
     document = cast(
         "dict[str, object]", json.loads((instrument_dir / _MANIFEST_FILENAME).read_text("utf-8"))
@@ -83,16 +103,26 @@ def write_catalog_json(
     packaged_copy_path: Path,
     manifests: Iterable[InstrumentManifest],
 ) -> None:
-    """Write the aggregate `catalog.json` listing to both its destinations.
+    """Write the aggregate `catalog.json` listing to both of its destinations.
 
-    One JSON array, one entry per manifest, sorted by `instrument_id`
-    (deterministic diff for future curation PRs) -- computed once as a
-    single string and written unchanged to both `repo_root / "catalog.json"`
-    (the canonical, git-tracked, `ps-cli`-facing copy, D1/D3) and
-    `packaged_copy_path` (CHANGES.md MA3's `importlib.resources`-packaged
-    copy `api/catalog.py` reads inside the built container image), so
-    both stay in sync by construction. Replaces each destination file
-    wholesale every call -- never merges with whatever was there before.
+    The listing is one JSON array with one entry per manifest, sorted by `instrument_id` so
+    diffs between curation runs stay small. It is computed once as a single string and written
+    unchanged to `repo_root / "catalog.json"` (the git-tracked copy clients read) and to
+    `packaged_copy_path` (the copy packaged into the container image), so the two cannot
+    differ. Each destination is replaced wholesale on every call.
+
+    Args:
+        repo_root: Directory that receives `catalog.json` (git-tracked copy);
+            `export_instrument` passes the `curated-content` directory.
+        packaged_copy_path: Full file path of the second copy. Its parent directories are
+            created when missing.
+        manifests: The manifests to list, in any order. An empty iterable writes `[]`.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Creates or overwrites both destination files and any missing parent directories.
     """
     entries = sorted(
         (_catalog_entry(manifest) for manifest in manifests),

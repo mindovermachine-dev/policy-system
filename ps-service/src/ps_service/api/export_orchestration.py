@@ -223,7 +223,7 @@ def _to_descriptor(
     server-side, D2) is read straight off ``RegulatoryInstrument``'s own
     properties -- never supplied by the client.
     """
-    from ps_service.export.export_instrument import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.export.export_instrument import (  # noqa: PLC0415 -- function-local
         InstrumentDescriptor,
     )
 
@@ -362,7 +362,7 @@ def run_export(
 
     db = dependencies.open_db(config)
 
-    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- function-local
         baseline_graph_name,
     )
 
@@ -453,7 +453,7 @@ def run_export(
 
 def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
     """Open the real FalkorDB connection for ``config``."""
-    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- function-local
         connect_from_config,
     )
 
@@ -462,10 +462,10 @@ def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
 
 def _default_open_baseline_graph(db: ReadOnlyDatabase, short_name: str) -> _GraphQueryHandle:
     """Open the real ``{short}_baseline`` graph on ``db``."""
-    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- function-local
         baseline_graph_name,
     )
-    from ps_service.export.falkordb_connection import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.export.falkordb_connection import (  # noqa: PLC0415 -- function-local
         graph_query_handle,
     )
 
@@ -474,10 +474,10 @@ def _default_open_baseline_graph(db: ReadOnlyDatabase, short_name: str) -> _Grap
 
 def _default_open_native_graph(db: ReadOnlyDatabase, short_name: str) -> _GraphQueryHandle:
     """Open the real ``{short}_native`` graph on ``db``."""
-    from ps_service.export.falkordb_connection import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.export.falkordb_connection import (  # noqa: PLC0415 -- function-local
         graph_query_handle,
     )
-    from ps_service.ingestion.falkordb_client import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.ingestion.falkordb_client import (  # noqa: PLC0415 -- function-local
         native_graph_name,
     )
 
@@ -499,10 +499,10 @@ def build_default_export_dependencies() -> ExportDependencies:
         orchestration, the real FalkorDB connection/graph-opener helpers,
         and the real LiteLLM embedding transport.
     """
-    from ps_service.export.export_instrument import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.export.export_instrument import (  # noqa: PLC0415 -- function-local
         export_instrument,
     )
-    from ps_service.llm_interface.client import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.llm_interface.client import (  # noqa: PLC0415 -- function-local
         default_embedding_caller,
     )
 

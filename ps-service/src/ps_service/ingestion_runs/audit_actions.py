@@ -4,11 +4,10 @@ Mirrors `ps_service.runtime_config.audit_actions`: each model is registered with
 `ps_service.audit` at import time through its public registry only (the package `__init__`
 imports this module for that side effect).
 
-`audit_events.outcome` is constrained to `applied|rejected|failed`, so AC-BI-016's
-"outcome=started" is stored as `outcome="applied"` (the *submission* was applied) plus
-`details.status="started"`. A completion is `applied` for a succeeded run and `failed` for a
-failed one. The builders are pure and shared by the real store and the test fake, so the two
-can never drift.
+`audit_events.outcome` is constrained to `applied|rejected|failed`, so a submission is stored
+as `outcome="applied"` (the *submission* was applied) plus `details.status="started"`. A
+completion is `applied` for a succeeded run and `failed` for a failed one. The builders are
+pure and shared by the real store and the test fake, so the two can never drift.
 """
 
 from __future__ import annotations
@@ -38,11 +37,18 @@ type IngestionReasonCode = Literal[
     "interrupted",
     "unexpected_error",
 ]
-"""Closed set of failure causes (issue #195, AC-BI-010), derived from the exception TYPE only."""
+"""Closed set of failure causes, derived from the exception TYPE only."""
 
 
 class IngestionRunSubmitDetails(AuditDetails):
-    """`ingestion_run.submit` -- always `outcome='applied'`, `status='started'`."""
+    """`ingestion_run.submit` -- always `outcome='applied'`, `status='started'`.
+
+    Attributes:
+        celex: CELEX identifier submitted for ingestion.
+        short_name: Short name the instrument is ingested under.
+        status: Always `started`.
+        trigger: Entry point that started the run.
+    """
 
     celex: str
     short_name: str
@@ -53,8 +59,20 @@ class IngestionRunSubmitDetails(AuditDetails):
 class IngestionRunCompleteDetails(AuditDetails):
     """`ingestion_run.complete` -- `applied` when succeeded, `failed` when failed.
 
-    Carries no free-text error (AC-BI-010): a failure is an enumerated `reason_code`. The three
-    counts are facts the Company Merge stage computed (zero when the run produced none).
+    Carries no free-text error: a failure is an enumerated `reason_code`. The three counts are
+    facts the Company Merge stage computed (zero when the run produced none).
+
+    Attributes:
+        status: `succeeded` or `failed`.
+        celex: CELEX identifier of the run.
+        trigger: Entry point that started the run.
+        regulatory_instrument_id: Id of the ingested instrument, when known.
+        outcome: `fresh` or `already_ingested` for a success, `None` otherwise.
+        new_obligations: Net-new Obligations; zero when none.
+        new_capabilities: Net-new Capabilities; zero when none.
+        matched_capabilities: Capabilities matched to existing ones; zero when none.
+        reason_code: Enumerated failure cause; present exactly when `status` is `failed`
+            (enforced by validation, which raises `ValueError` otherwise).
     """
 
     status: Literal["succeeded", "failed"]
@@ -79,7 +97,7 @@ INGESTION_RUN_SUBMIT_ACTION = "ingestion_run.submit"
 INGESTION_RUN_COMPLETE_ACTION = "ingestion_run.complete"
 INGESTION_RUN_RESOURCE_TYPE = "ingestion_run"
 INGESTION_RUN_RECONCILER_ACTOR = "system:ingestion-run-reconciler"
-"""Subject and issuer of the audit actor for a run reconciled by a status poll (OQ-7)."""
+"""Subject and issuer of the audit actor for a run reconciled by a status poll."""
 
 register_audit_action(INGESTION_RUN_SUBMIT_ACTION, IngestionRunSubmitDetails)
 register_audit_action(INGESTION_RUN_COMPLETE_ACTION, IngestionRunCompleteDetails)
@@ -88,7 +106,13 @@ register_audit_resource_type(INGESTION_RUN_RESOURCE_TYPE)
 
 @dataclass(frozen=True, slots=True)
 class IngestionRunAuditEntry:
-    """One audit row's `action`, `outcome` and `details`, before the actor and run id are bound."""
+    """One audit row's `action`, `outcome` and `details`, before the actor and run id are bound.
+
+    Attributes:
+        action: Registered audit action name.
+        outcome: `applied` or `failed` (the audit outcomes a run can have).
+        details: Action-specific details dict, matching the registered details model.
+    """
 
     action: str
     outcome: Literal["applied", "failed"]
@@ -97,7 +121,13 @@ class IngestionRunAuditEntry:
 
 @dataclass(frozen=True, slots=True)
 class IngestionCounts:
-    """Net-new Obligations / Capabilities and matched Capabilities of one run (AC-BI-005)."""
+    """Net-new Obligations / Capabilities and matched Capabilities of one run.
+
+    Attributes:
+        new_obligations: Net-new Obligations; never negative.
+        new_capabilities: Net-new Capabilities; never negative.
+        matched_capabilities: Capabilities matched to existing ones; never negative.
+    """
 
     new_obligations: int
     new_capabilities: int
@@ -107,14 +137,25 @@ class IngestionCounts:
     def from_result(cls, result: dict[str, object] | None) -> IngestionCounts:
         """Read the counts from the `merge` stage summary of an accepted-response dict.
 
-        Zero when there is no result, no merge stage (an already-ingested catalog request) or a
-        non-integer value.
+        Args:
+            result: The accepted-response dict with a `stages` list, or `None`.
+
+        Returns:
+            The counts; each is zero when there is no result, no merge stage (an
+            already-ingested catalog request) or a non-integer value.
         """
         return cls.from_merge_summary(_merge_summary_of(result))
 
     @classmethod
     def from_merge_summary(cls, summary: Mapping[str, object]) -> IngestionCounts:
-        """Read the counts from one merge stage `summary` mapping (zero for anything missing)."""
+        """Read the counts from one merge stage `summary` mapping.
+
+        Args:
+            summary: Mapping of counter name to value.
+
+        Returns:
+            The counts; a missing, negative, boolean or non-integer value counts as zero.
+        """
         return cls(
             new_obligations=_count(summary, "new_obligations"),
             new_capabilities=_count(summary, "new_capabilities"),
@@ -141,7 +182,16 @@ def _count(summary: Mapping[str, object], key: str) -> int:
 def submission_audit_entry(
     *, celex: str, short_name: str, trigger: IngestionTrigger
 ) -> IngestionRunAuditEntry:
-    """The entry recording that a run was accepted and started (AC-BI-004)."""
+    """Build the entry recording that a run was accepted and started.
+
+    Args:
+        celex: CELEX identifier submitted for ingestion.
+        short_name: Short name the instrument is ingested under.
+        trigger: Entry point that started the run.
+
+    Returns:
+        An `applied` entry for `ingestion_run.submit` with `status="started"` details.
+    """
     return IngestionRunAuditEntry(
         action=INGESTION_RUN_SUBMIT_ACTION,
         outcome="applied",
@@ -157,10 +207,14 @@ def submission_audit_entry(
 def require_reason_code_iff_failed(
     *, status: Literal["succeeded", "failed"], reason_code: IngestionReasonCode | None
 ) -> None:
-    """Fail fast when a completion's `reason_code` disagrees with its status (AC-BI-010).
+    """Fail fast when a completion's `reason_code` disagrees with its status.
 
     The same rule `IngestionRunCompleteDetails` enforces at audit time, checked at the store
     boundary so a bad call is rejected before any write rather than deep inside a transaction.
+
+    Args:
+        status: Terminal status of the run.
+        reason_code: Enumerated failure cause, or `None`.
 
     Raises:
         IngestionRunInvalidCompletionError: `reason_code` is missing on a failure, or present
@@ -178,9 +232,20 @@ def completion_audit_entry(
     result: dict[str, object] | None,
     reason_code: IngestionReasonCode | None,
 ) -> IngestionRunAuditEntry:
-    """The entry recording a run's real terminal outcome (AC-BI-005, AC-BI-010).
+    """Build the entry recording a run's real terminal outcome.
 
     Never carries error text: a failed run is described by `reason_code` alone.
+
+    Args:
+        status: `succeeded` or `failed`.
+        celex: CELEX identifier of the run.
+        trigger: Entry point that started the run.
+        result: Accepted-response dict the counts are read from, or `None`.
+        reason_code: Enumerated failure cause; recorded only when `status` is `failed`.
+
+    Returns:
+        An `ingestion_run.complete` entry: `failed` with the reason code, or `applied` with the
+        instrument id and outcome when `result` carries them as strings.
     """
     counts = IngestionCounts.from_result(result)
     details: dict[str, object] = {

@@ -1,63 +1,34 @@
-"""ps_service.company_merge.pending_review -- `PendingReview` node persistence.
+"""`PendingReview` node persistence and the near-miss review workflow.
 
-Issue #35 (near-miss review workflow), Slice 1 (AC-BI-001, AC-BI-002):
-`persist_pending_reviews` writes one `PendingReview` node per `NearMissPair`
-surfaced during a Company Merge dedup pass (Capability or Policy), preserving
-the pair's incoming/existing ids and text plus the similarity score that was
-actually computed -- so a later `near-misses list`/`resolve` workflow
-(Slices 2-4, not yet implemented) never needs to re-query embeddings to
-render or act on it (PLAN.md §2.1/§4.1).
+A `PendingReview` node records a `NearMissPair` surfaced during a Company Merge dedup pass
+(Capability or Policy): the incoming and existing ids and text plus the similarity score that
+was computed, so listing and resolving a review never re-queries embeddings.
 
-Slice 2 (AC-BI-003) adds `list_pending_reviews`: every `PendingReview` node
-IS unresolved by construction (a resolved one is deleted outright, never
-soft-status-changed, PLAN.md §2.1/§4.2) -- so no `WHERE status = 'pending'`
-filter is needed. It does filter on *resolvability* since issue #196
-(Cause 8): see that function's own docstring.
-This is a read, so -- mirroring `graph_reader.py`'s own
-"every query here is read-only, no dependency-health wrapper" convention --
-it calls `single_tenant_graph.query(...)` directly. Since issue #210 this module issues no
-write Cypher at all: its writes are gateway groups (`submit_group`).
+Public functions:
+    `persist_pending_reviews`: write one node per near miss as one gateway group.
+    `list_pending_reviews`: read the reviews a Compliance Officer can still act on.
+    `get_pending_review`: read one review by id, resolvable or not.
+    `resolve_review`: decide a review, either `keep-separate` or `merge`.
 
-Slice 3 (AC-BI-004, the not-found half of AC-BI-008, the `keep-separate`
-half of AC-BI-009) adds `resolve_review`: reads the review first (a plain
-read, like `list_pending_reviews`) and returns `None` immediately -- before
-any write -- when `review_id` doesn't exist or was already resolved (§2.1:
-a resolved review's node is deleted outright, so the two conditions
-collapse to one). `None` is this module's own not-found signal, translated
-to the API-boundary `PendingReviewNotFoundError` by
-`api.near_miss_review_orchestration.run_resolve_near_miss`, not raised
-here: `ps_service.company_merge` never imports from `ps_service.api` (M6
-layering is one-directional -- `api` imports `company_merge`
-function-locally, never the reverse), mirroring `RestoreArtifactRejectedError`'s
-own "API-boundary translation of a lower-layer condition" pattern
-(`ps_service/api/errors.py`).
+Every `PendingReview` node is unresolved by construction: a resolved review is deleted, never
+marked with a status, so a missing node means "not found or already resolved". Reads call
+`single_tenant_graph.query(...)` directly, like `graph_reader.py`; this module issues no write
+Cypher. Its writes are Graph Write Gateway groups submitted with `submit_group`.
 
-Slice 4 (AC-BI-005/006/007, AC-BI-008/009 completed) widens `resolve_review`
-to add `decision="merge"`. Per CHANGES.md H2, the merge branch runs one more
-read after the shared "does the review exist" check -- a combined
-existence-check (`_MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE`) confirming BOTH
-`incoming_id` and `nearest_existing_id` still resolve to real nodes -- before
-the atomic merge group (issue #210; CHANGES.md Appendix C1 before it) is
-ever submitted. A stale reference (either id no longer resolves -- e.g. a prior,
-unrelated merge already deleted it) raises `StalePendingReviewError`
-(`company_merge/errors.py`), this module's own not-found-adjacent signal for
-that specific case, translated to `PendingReviewNotFoundError` with a
-dedicated message at the API boundary exactly like the plain `None` case
-above. Both query templates are `{kind}`-templated (`"Capability"` or
-`"Policy"`, read from the `PendingReview` node itself, never
-adapter/user-sourced) since Cypher labels are static/compile-time --
-`{kind}` cannot be a runtime property reference, unlike the ids themselves
-(mirrors `dedup.py:101-103`'s own "fixed literal, no allow-list needed"
-precedent).
+`resolve_review` returns `None` for a missing review. That is this module's not-found signal;
+the API layer translates it to `PendingReviewNotFoundError`, because `ps_service.company_merge`
+never imports `ps_service.api`. A review whose incoming or existing node has disappeared raises
+`StalePendingReviewError` instead, which the API layer translates with a dedicated message. The
+merge branch checks both nodes in one existence read before it submits anything. Both query
+templates are `{kind}`-templated (`"Capability"` or `"Policy"`, read from the `PendingReview`
+node itself, never from user input) because Cypher labels are static and cannot be a runtime
+property reference.
 
-The merge is a read-resolve-write sequence (issue #210): the winner is decided in Python (older
-`created_at` wins, a missing one wins, a tie goes to the incoming node), the loser's edges are read
-with `RETURN DISTINCT`, and one group rewires them onto the winner and deletes the loser and the
-review. Several `Obligation`s `REQUIRES`-ing the same loser `Capability` is the domain's primary
-scenario (`docs/artifacts/ps-domain-concepts.md`): a repeated edge is one primitive and the loser
-is deleted once. The pre-#210 single-statement implementation is kept, frozen, in
-`tests/company_merge/_legacy_resolve_reference.py` as the equivalence reference; the
-`falkordb_live` test in `test_pending_review_resolve.py` is the live anchor.
+A merge is a read-resolve-write sequence. The winner is decided in Python (earlier `created_at`
+wins, a missing one wins, a tie goes to the incoming node). The loser's edges are read with
+`RETURN DISTINCT`, and one group rewires them onto the winner and deletes the loser and the
+review. Several `Obligation`s may `REQUIRE` the same loser `Capability`; a repeated edge is one
+primitive and the loser is deleted once.
 """
 
 from __future__ import annotations
@@ -87,21 +58,15 @@ __all__ = [
     "resolve_review",
 ]
 
-# Issue #196 (Cause 8): the two `MATCH`es apply the same predicate
-# `_MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE` below enforces -- both referenced
-# nodes still exist, under the review's own `kind`, and neither is a `merged`
-# tombstone. Without them this query reported every `PendingReview` node
-# unconditionally, so a review the merge path would refuse was still offered:
-# it consumed a passkey approval, raised `StalePendingReviewError` at sign
-# time and -- since that path deliberately makes no graph changes (H2) -- was
-# never retired, staying listed forever while every retry failed identically.
+# The two plain `MATCH`es apply the predicate `_MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE` enforces:
+# both referenced nodes still exist under the review's own `kind`, and neither is a `merged`
+# tombstone. Listing a review the merge path would refuse would let it consume a passkey
+# approval and fail as stale at sign time. That failure makes no graph change, so the review
+# would stay listed and every retry would fail the same way.
 #
-# Plain (not OPTIONAL) `MATCH` is what performs the filtering: a review whose
-# node is gone simply produces no row. The label cannot be a static `:{kind}`
-# here the way it can in the merge check, because one query spans both kinds,
-# so the label is tested with `r.kind IN labels(a)` instead -- verified
-# against a real FalkorDB, along with the `coalesce(status, 'active')` default
-# for a node carrying no `status` property at all.
+# A plain (not OPTIONAL) `MATCH` does the filtering: a review whose node is gone yields no row.
+# The label cannot be a static `:{kind}` because one query spans both kinds, so it is tested
+# with `r.kind IN labels(a)`. `coalesce(status, 'active')` covers a node with no `status`.
 _LIST_PENDING_REVIEWS_QUERY = (
     "MATCH (r:PendingReview) "
     "MATCH (a) WHERE a.id = r.incoming_id AND r.kind IN labels(a) "
@@ -113,7 +78,7 @@ _LIST_PENDING_REVIEWS_QUERY = (
     "ORDER BY r.created_at ASC"
 )
 
-# Issue #195: one review by id for audit emission. Unlike `_LIST_PENDING_REVIEWS_QUERY` it has NO
+# One review by id for audit emission. Unlike `_LIST_PENDING_REVIEWS_QUERY` it has NO
 # both-nodes-exist predicate, so a stale review still yields its entity ids and the attempted
 # resolution can be audited (and fail as stale) rather than being invisible.
 _GET_REVIEW_QUERY = (
@@ -124,19 +89,16 @@ _GET_REVIEW_QUERY = (
 
 _FIND_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind"
 
-# Issue #190 -- a `merged` Capability tombstone is never a near-miss merge
-# side: the existence check treats it as gone (so a stale review naming one
-# is `StalePendingReviewError` before any write) and the merge write
-# re-points every inbound `MERGED_INTO` edge from the deleted loser onto the
-# winner, so no tombstone is left redirecting at a deleted node. For kind
-# Policy neither predicate nor pattern can match (no Policy is `merged`).
+# A `merged` Capability tombstone is never a near-miss merge side: the existence check treats it
+# as gone (so a stale review naming one raises `StalePendingReviewError` before any write) and
+# the merge write re-points every inbound `MERGED_INTO` edge from the deleted loser onto the
+# winner, so no tombstone is left redirecting at a deleted node. For kind Policy neither
+# predicate nor pattern can match, since no Policy is `merged`.
 #
-# CHANGES.md H2 -- one combined existence-check read, issued only for
-# decision="merge", after the shared _FIND_REVIEW_QUERY above already
-# confirmed the review itself exists. `{kind}` is templated (labels are
-# static/compile-time in Cypher); `r.incoming_id`/`r.nearest_existing_id`
-# are runtime property references off the freshly re-matched `r` (cheap,
-# id-indexed), not params -- so this stays a single query per call, not two.
+# One combined existence-check read, issued only for decision="merge" after `_FIND_REVIEW_QUERY`
+# confirmed the review exists. `{kind}` is templated because Cypher labels are static;
+# `r.incoming_id` and `r.nearest_existing_id` are property references off the re-matched `r`
+# (id-indexed), not params, so it stays a single query.
 _MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE = (
     "MATCH (r:PendingReview {{id: $review_id}}) "
     "OPTIONAL MATCH (a:{kind} {{id: r.incoming_id}}) "
@@ -148,13 +110,12 @@ _MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE = (
     "a.created_at AS incoming_created_at, b.created_at AS existing_created_at"
 )
 
-# Issue #210: the loser's edges are READ, then rewired by gateway primitives. One fixed read per
-# edge family, in the order the old single statement rewired them (inbound REQUIRES, outbound
-# GOVERNED_BY, inbound GOVERNED_BY, outbound SUPPORTED_BY, inbound MERGED_INTO); `{kind}` is the
-# loser's label (labels are static in Cypher) and the loser's id is a param. Every family is read
-# whatever the kind, as the old statement matched every family: a pattern that cannot exist for
-# the kind returns no rows. `DISTINCT` is the row-multiplication guard the old `WITH DISTINCT
-# winner, loser` was (several Obligations can require one loser; a parallel edge is one edge).
+# The loser's edges are READ, then rewired by gateway primitives. One fixed read per edge family
+# (inbound REQUIRES, outbound GOVERNED_BY, inbound GOVERNED_BY, outbound SUPPORTED_BY, inbound
+# MERGED_INTO); `{kind}` is the loser's label (labels are static in Cypher) and the loser's id is
+# a param. Every family is read whatever the kind: a pattern that cannot exist for the kind
+# returns no rows. `DISTINCT` guards against row multiplication (several Obligations can require
+# one loser; a parallel edge is one edge).
 #
 # (edge type, other end's label, loser is the target, read template)
 _LOSER_EDGE_READS: tuple[tuple[str, str, bool, str], ...] = (
@@ -202,18 +163,25 @@ def build_pending_review_primitives(
     kind: Literal["Capability", "Policy"],
     values: ValueSource,
 ) -> tuple[UpsertNode, ...]:
-    """One `PendingReview` node primitive per `NearMissPair`, its uuid and `created_at` fixed.
+    """Build one `PendingReview` node primitive per `NearMissPair`, ids and times fixed.
 
     Pure apart from `values`: nothing is read or submitted. For each pair, in order, the id is
     drawn first (`review_<values.new_id()>`) and then the instant (`values.now()` as ISO-8601
-    text), the order the Cypher writer drew them (`uuid4`, then `datetime.now`). They are drawn
-    HERE, while the group is built, so the group carries literals: submitting it twice leaves one
-    node per review (an `UpsertNode` merges into the node it created) and a replay of the log
-    reproduces the same ids and timestamps (AC-BI-007).
+    text). Both are drawn here, while the group is built, so the group carries literals:
+    submitting it twice leaves one node per review (an `UpsertNode` merges into the node it
+    created) and replaying the mutation log reproduces the same ids and timestamps.
+
+    Args:
+        near_misses: Near-miss pairs to record; an empty tuple yields an empty result.
+        kind: Label of the entities the pairs refer to, stored on each review.
+        values: Source of new ids and the current instant.
+
+    Returns:
+        One `UpsertNode` per pair, in input order, each with label `PendingReview`.
 
     Raises:
-        CompanyMergePersistenceError: a review carries a property the gateway cannot store (a
-            non-finite similarity); nothing has been submitted by then.
+        CompanyMergePersistenceError: A review carries a property the gateway cannot store, such
+            as a non-finite similarity. Nothing has been submitted by then.
     """
     primitives: list[UpsertNode] = []
     for pair in near_misses:
@@ -250,44 +218,50 @@ def persist_pending_reviews(
     kind: Literal["Capability", "Policy"],
     values: ValueSource = SYSTEM_VALUES,
 ) -> None:
-    """Persist one `PendingReview` node per `NearMissPair`, as ONE gateway group (AC-BI-001/002).
+    """Persist one `PendingReview` node per `NearMissPair` as one gateway group.
 
-    Always a create: every `NearMissPair` this function receives is, by construction, a genuinely
-    new occurrence surfaced during THIS merge run -- there is no dedup-of-near-misses concept in
-    this schema (`dedup.py` never re-surfaces a pair it already recorded in a prior run). A repeat
-    `merge_baseline_graph` run over unchanged input could in principle re-surface the same
-    `incoming_id`/`nearest_existing_id` pair and create a duplicate `PendingReview` -- an accepted,
-    pre-existing-pattern-consistent gap (PLAN.md §4.1): deduplicating review records themselves is
-    out of this issue's AC scope (no bulk/batch resolve). Nothing is read first, for that reason.
+    Always a create: every pair received is a new occurrence surfaced during this merge run, and
+    nothing is read first. A repeat `merge_baseline_graph` run over unchanged input can
+    re-surface the same `incoming_id` and `nearest_existing_id` pair and create a duplicate
+    review; deduplicating review records is not done here.
 
-    `id` is `review_` plus a uuid, prefixed for operator readability -- a `PendingReview` is an
-    operational/review record, not a regulatory/canonical entity, so it has no stable content to
-    hash (PLAN.md §2.4). Since issue #210 the uuid and `created_at` come from `values` and are
-    fixed before submission (`build_pending_review_primitives`). No near-miss submits nothing.
+    A review `id` is `review_` plus a uuid. A `PendingReview` is an operational record, not a
+    canonical regulatory entity, so it has no stable content to hash. The uuid and `created_at`
+    come from `values` and are fixed before submission (see `build_pending_review_primitives`).
+
+    Args:
+        target: Gateway target (submitter, graph and audit event) the group goes to.
+        near_misses: Near-miss pairs to record; an empty tuple submits nothing.
+        kind: `"Capability"` or `"Policy"`, the label of the entities the pairs refer to.
+        values: Source of new ids and the current instant; defaults to the system clock and
+            uuid generator.
+
+    Side Effects:
+        Submits one mutation group through the Graph Write Gateway, creating the nodes.
 
     Raises:
-        CompanyMergePersistenceError: a review carries a property the gateway cannot store, or the
-            gateway did not take the group (`FalkorDB write failed:`).
+        CompanyMergePersistenceError: A review carries a property the gateway cannot store, or
+            the gateway did not take the group (`FalkorDB write failed:`).
     """
     submit_group(target, build_pending_review_primitives(near_misses, kind=kind, values=values))
 
 
 def list_pending_reviews(single_tenant_graph: GraphHandle) -> tuple[PendingReviewRecord, ...]:
-    """Every *resolvable* unresolved `PendingReview`, in `created_at` order (AC-BI-003).
+    """List every resolvable `PendingReview`, oldest first.
 
-    Every `PendingReview` node IS unresolved by construction (§2.1: a
-    resolved one is deleted outright, never soft-status-changed) -- no
-    `WHERE status = 'pending'` filter is needed, though the `status`
-    property is still written at persist time (forward-compatibility /
-    observability for an operator inspecting the graph directly).
+    Every `PendingReview` node is unresolved by construction, so no status filter is applied,
+    although `status` is still written at persist time for anyone inspecting the graph. Unresolved
+    is not the same as resolvable: only reviews whose incoming and existing nodes both still
+    exist, under the review's kind and not as `merged` tombstones, are returned. This matches
+    what the merge path enforces, so a Compliance Officer is never offered a review that would
+    fail as stale. An excluded review is not deleted; the next similarity sweep recreates the
+    candidate if it still applies.
 
-    Unresolved is not the same as resolvable, though: issue #196 (Cause 8)
-    added the same both-nodes-exist/neither-is-a-`merged`-tombstone predicate
-    the merge path enforces, because a review only this read accepted was
-    offered to a Compliance Officer, consumed a passkey approval, then failed
-    as stale at sign time without ever being retired -- listed forever, with
-    every retry failing identically. A review excluded here is not deleted;
-    the next similarity sweep recreates the candidate if it still applies.
+    Args:
+        single_tenant_graph: Read handle on the single-tenant `policy_system` graph.
+
+    Returns:
+        The resolvable reviews ordered by `created_at` ascending; empty when there are none.
     """
     result = single_tenant_graph.query(_LIST_PENDING_REVIEWS_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -297,11 +271,19 @@ def list_pending_reviews(single_tenant_graph: GraphHandle) -> tuple[PendingRevie
 def get_pending_review(
     single_tenant_graph: GraphHandle, review_id: str
 ) -> PendingReviewRecord | None:
-    """The `PendingReview` with `review_id`, or `None` when it does not exist (issue #195).
+    """Read one `PendingReview` by id, whether or not it is still resolvable.
 
-    A plain read like `list_pending_reviews`, but without its resolvable predicate: a review whose
-    referenced nodes are gone is still returned, so the resolution attempt can be audited with the
-    entity ids the review names.
+    Unlike `list_pending_reviews` it applies no resolvable predicate: a review whose referenced
+    nodes are gone is still returned, so an attempted resolution can be audited with the entity
+    ids the review names.
+
+    Args:
+        single_tenant_graph: Read handle on the single-tenant `policy_system` graph.
+        review_id: Id of the review, as stored (`review_<uuid>`).
+
+    Returns:
+        The review record, or `None` when no review has that id (never existed or already
+        resolved).
     """
     result = single_tenant_graph.query(_GET_REVIEW_QUERY, params={"review_id": review_id})
     rows = cast("list[list[object]]", result.result_set)
@@ -309,7 +291,7 @@ def get_pending_review(
 
 
 def _record_from_row(row: list[object]) -> PendingReviewRecord:
-    """Map one result row (column order of the list/get queries) to a `PendingReviewRecord`."""
+    """Map one result row, in the column order of the list and get queries, to a record."""
     (
         review_id,
         kind,
@@ -340,41 +322,48 @@ def resolve_review(
     *,
     emitter: LogEmitter | None = None,
 ) -> ResolveOutcome | None:
-    """Resolve one `PendingReview` by id (issue #35: `keep-separate` (Slice 3), `merge` (Slice 4)).
+    """Resolve one `PendingReview`, either keeping the pair separate or merging it.
 
-    Step 1 (both decisions): `MATCH (r:PendingReview {id: $review_id})
-    RETURN r.kind` -- a plain read, like `list_pending_reviews`. Zero rows
-    means `review_id` doesn't exist or was already resolved (§2.1: a
-    resolved review's node is deleted outright, never soft-status-changed,
-    so the two conditions are indistinguishable and collapse to one) --
-    returns `None` immediately, before any write query is issued, so
-    AC-BI-008's "no graph changes" half holds by construction on this path
-    (nothing has been written yet). See the module docstring for why `None`,
-    not a raised exception, is this module's own not-found signal.
+    Reads the review first. No row means the id never existed or the review was already resolved
+    (a resolved review is deleted, so the two cannot be told apart), and the function returns
+    `None` before any write.
 
-    Step 2 (`decision="keep-separate"`, AC-BI-004): one gateway group on `target` whose only
-    primitive deletes the `PendingReview` node -- nothing else touched (no other graph node or
-    edge changes, issue #210). The review is read first and deleted after, with no lock between:
-    a review that vanished in between makes the delete a no-op (the gateway drops it), as the old
-    `MATCH ... DELETE` matched nothing. `target` names the `policy_system` graph and the audit
-    event of the resolution's opening row; the merge decision does not use it yet (slice 10b).
+    `decision="keep-separate"` submits one gateway group on `target` whose only primitive
+    deletes the `PendingReview` node; no other node or edge changes. The review is read first
+    and deleted after, with no lock between: a review that vanished in between makes the delete
+    a no-op because the gateway drops it.
 
-    Step 2 (`decision="merge"`, AC-BI-005/006/007): delegates to
-    `_resolve_merge` -- CHANGES.md H2's combined existence-check read, then
-    (only if both referenced nodes still exist) CHANGES.md Appendix C1's
-    atomic merge write, all before any log entry is emitted. Raises
-    `StalePendingReviewError` if either referenced node is gone (see module
-    docstring); returns `None` if the review itself vanished between Step 1
-    and the existence-check (a benign, narrow race -- treated the same as a
-    genuine not-found, not as "stale").
+    `decision="merge"` delegates to `_resolve_merge`: one existence read of both referenced
+    nodes, then, only if both still exist, one atomic group that rewires the loser's edges onto
+    the winner and deletes the loser and the review. All of it happens before the log entry is
+    emitted.
 
-    On success (either decision), emits one structured log entry
-    (AC-BI-009): `component="company_merge"`, `action="resolve_near_miss_review"`,
-    `entity_id=review_id`, `outcome=decision` -- `timestamp` is automatic
-    (`LogEntry`'s own `default_factory=time`, `ps_service/logging/models.py`),
-    matching `merge.py::_log_dedup_decisions`'s own established call shape.
-    `decision="merge"` additionally carries `winner_id`/`loser_id` in `extra`
-    so the log entry alone identifies which node won (AC-BI-009, full).
+    Args:
+        single_tenant_graph: Read handle on the single-tenant `policy_system` graph.
+        review_id: Id of the review, as returned by `list_pending_reviews`.
+        decision: `"keep-separate"` to delete only the review, or `"merge"` to merge the pair.
+        target: Gateway target (submitter, graph and audit event) the write group goes to.
+        emitter: Log sink for the resolution entry; None uses the default emitter.
+
+    Returns:
+        A `ResolveOutcome`. For `"merge"` it carries `winner_id` and `loser_id`; for
+        `"keep-separate"` both are None. None when the review does not exist, was already
+        resolved, or vanished between the first read and the existence check.
+
+    Raises:
+        StalePendingReviewError: `decision="merge"` and the incoming or existing node no longer
+            exists or is a `merged` tombstone. Nothing has been written.
+        CompanyMergePersistenceError: The gateway did not take the group.
+
+    Side Effects:
+        Submits one mutation group through the Graph Write Gateway, and on success emits one
+        structured log entry: `component="company_merge"`, `action="resolve_near_miss_review"`,
+        `entity_id=review_id`, `outcome=decision`. A merge also carries `winner_id` and
+        `loser_id` in `extra`.
+
+    Business Rules:
+        The winner of a merge is the node with the earlier `created_at`; a missing `created_at`
+        counts as earliest, and a tie goes to the incoming node.
     """
     result = single_tenant_graph.query(_FIND_REVIEW_QUERY, params={"review_id": review_id})
     rows = cast("list[list[object]]", result.result_set)
@@ -416,25 +405,32 @@ def _resolve_merge(
     kind: Literal["Capability", "Policy"],
     target: GraphWriteTarget,
 ) -> tuple[str, str] | None:
-    """The `decision="merge"` half of `resolve_review`'s Step 2 (AC-BI-005/006/007).
+    """Run the `decision="merge"` half of `resolve_review`: read, pick a winner, write.
 
-    Issue #210: read, resolve, then write ONE gateway group.
+    Reads both referenced nodes in one existence check that also returns their `created_at`.
+    Zero rows (the review vanished after `resolve_review` read it, a narrow race) returns `None`,
+    which the caller treats as not found. A row with either node missing raises
+    `StalePendingReviewError` before anything is submitted.
 
-    Read: CHANGES.md H2's combined existence-check, widened to return both nodes' `created_at`.
-    Zero rows (the review vanished between `resolve_review`'s own Step 1 and this call -- a benign,
-    narrow race) returns `None`, propagated by the caller as a plain not-found. A row with either
-    `incoming_exists`/`existing_exists` false raises `StalePendingReviewError` -- before anything
-    is submitted, so "no graph changes" holds on this path too.
+    The winner is decided in Python by `_incoming_wins`, then the loser's five edge families are
+    read (`_LOSER_EDGE_READS`) and submitted as one group on `target`, all or nothing: an
+    `UpsertEdge` putting each loser edge on the winner, `DeleteNode(loser)` (which removes any
+    remaining edges), then `DeleteNode(PendingReview)`. No lock spans the reads and the write: a
+    node deleted in between makes the gateway refuse the group on a missing endpoint, and a
+    review deleted in between makes its delete a no-op.
 
-    Resolve: the winner is decided here, in Python (`_incoming_wins`): earlier `created_at` wins, a
-    missing one counts as the earliest, a tie goes to the incoming node (§M2). Then the loser's
-    five edge families are read (`_LOSER_EDGE_READS`).
+    Args:
+        single_tenant_graph: Read handle on the single-tenant graph.
+        review_id: Id of the review being resolved.
+        kind: `"Capability"` or `"Policy"`, read from the review.
+        target: Gateway target the write group goes to.
 
-    Write: `UpsertEdge`s putting each of the loser's edges on the winner, then `DeleteNode(loser)`
-    (which removes whatever edges remain), then `DeleteNode(PendingReview)`, as one group on
-    `target`: all or nothing. No lock spans the reads and the write (C-0, as before): a node
-    deleted in between makes the gateway refuse the group on a missing endpoint, and a review
-    deleted in between makes its delete a no-op.
+    Returns:
+        `(winner_id, loser_id)`, or None when the review no longer exists.
+
+    Raises:
+        StalePendingReviewError: The incoming or existing node no longer exists.
+        CompanyMergePersistenceError: The gateway did not take the group.
     """
     existence_query = _MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE.format(kind=kind)
     existence_result = single_tenant_graph.query(existence_query, params={"review_id": review_id})
@@ -468,11 +464,11 @@ def _resolve_merge(
 
 
 def _incoming_wins(incoming_created_at: object, existing_created_at: object) -> bool:
-    """`coalesce(a.created_at, '') <= coalesce(b.created_at, '')`: the old statement's CASE.
+    """Decide whether the incoming node wins, as `coalesce(a, '') <= coalesce(b, '')`.
 
-    ISO-8601 text compares as text; a missing `created_at` is `''`, which sorts first, so it wins
-    over any present one; equal (or both missing) goes to the incoming node. A stored value that is
-    not text cannot be compared with text (null in Cypher), so the existing node wins.
+    ISO-8601 text compares as text. A missing `created_at` counts as `''`, which sorts first, so
+    it wins over any present one; equal or both missing goes to the incoming node. A stored value
+    that is not text cannot be compared with text, so the existing node wins.
     """
     incoming = "" if incoming_created_at is None else incoming_created_at
     existing = "" if existing_created_at is None else existing_created_at
@@ -487,11 +483,11 @@ def _rewire_primitives(
     winner_id: str,
     loser_id: str,
 ) -> tuple[UpsertEdge, ...]:
-    """One `UpsertEdge` per edge of the loser's five families, moved onto the winner.
+    """Read the loser's edges and build one `UpsertEdge` per edge, pointed at the winner.
 
-    The other end of each edge was just read from the graph, so it exists; the winner exists (the
-    existence check). A repeated identity (a family read twice cannot repeat, but the same edge may
-    arise from two families on a self-loop) folds to one. The edge keeps no properties.
+    The other end of each edge was just read from the graph, and the winner exists (the
+    existence check), so both endpoints exist. An edge with the same identity from two families
+    (a self-loop) folds to one. Edges carry no properties.
     """
     edges: dict[str, UpsertEdge] = {}
     for edge_type, other_label, loser_is_target, template in _LOSER_EDGE_READS:

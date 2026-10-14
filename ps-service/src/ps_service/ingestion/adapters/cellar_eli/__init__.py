@@ -1,7 +1,7 @@
 """The Cellar/ELI Ingestion Adapter package.
 
-`CellarEliAdapter` (composing `fetch.py`/`metadata.py`/`structure.py`) is
-the package's public entry point.
+`CellarEliAdapter`, which composes the fetch, metadata and structure modules, is the package's
+public entry point.
 """
 
 from __future__ import annotations

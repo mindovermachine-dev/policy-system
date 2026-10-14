@@ -1,8 +1,8 @@
-"""ps_service.ingestion — package front door.
+"""Ingestion package front door.
 
-Re-exports `ingest_regulatory_instrument`, the primary-use-case entry point
-(`ps_service.ingestion.pipeline`), per PLAN_REVIEWED.md §2.1's file-layout
-intent.
+Re-exports `ingest_regulatory_instrument` (defined in `ps_service.ingestion.pipeline`), the
+entry point that fetches one regulatory instrument through an adapter and persists its native
+structural graph. Callers import it from here instead of reaching into the pipeline module.
 """
 
 from __future__ import annotations

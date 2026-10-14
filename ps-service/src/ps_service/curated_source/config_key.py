@@ -1,16 +1,16 @@
-"""The catalog-source override's runtime-config key (issue #130).
+"""The catalog-source override's runtime-config key.
 
 Registers `CATALOG_SOURCE_KEY` with `ps_service.runtime_config` at import time. Registration
 lives here, in the component that owns the value: `runtime_config` depends on `audit` only,
 `curated_source` depends on `runtime_config`, and nothing else depends on `curated_source`'s
-persistence. `ps_service.curated_source`'s package front door imports this module, so the key
+persistence. The `ps_service.curated_source` package front door imports this module, so the key
 is registered whenever any part of this component is used.
 
-The validator is the shared `validate_source_url` itself (AC-BI-006): the runtime-config store
-rejects exactly what startup configuration rejects, with the same message, before any write.
-`audit_value` is the credential-free, query-free projection of the URL (D-REDACT):
-`validate_source_url` only checks the scheme, so an operator could put `user:pass@` or a token
-query string into the URL, and audit `details` (and the log) must never carry either.
+The validator is the shared `validate_source_url`, so the runtime-config store rejects exactly
+what startup configuration rejects, with the same message, before any write. `audit_value` is
+the credential-free, query-free projection of the URL: `validate_source_url` only checks the
+scheme, so an operator could put `user:pass@` or a token query string into the URL, and audit
+`details` (and the log) must never carry either.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ CATALOG_SOURCE_KEY = "curated_source.base_url"
 
 
 def _validate(url: str, config: ServiceConfig) -> str:
+    """Validate `url` with the startup rules, honouring the config's insecure-HTTP switch."""
     return validate_source_url(url, allow_insecure_http=config.curated_source_allow_insecure_http)
 
 

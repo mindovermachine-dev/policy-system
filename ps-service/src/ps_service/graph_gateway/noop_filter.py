@@ -1,10 +1,10 @@
-"""Drop the mutations of a group that would not change the graph (issue #206, AC-BI-004).
+"""Drop the mutations of a group that would not change the graph.
 
 The graph state a group names is read once (batched, see `graph_reader`); the group is then
 walked over an overlay of that state, so every primitive sees the effect of the ones before it.
 A primitive is dropped when applying it would leave the overlay as it is. The same walk decides
-the rejections: an edge endpoint or a merge target that exists nowhere is a `MissingTargetError`
-(F6), whereas removing from or deleting something absent is a plain no-op.
+the rejections: an edge endpoint or a merge target that exists nowhere is a `MissingTargetError`,
+whereas removing from or deleting something absent is a plain no-op.
 
 Values compare by type and value: `1` differs from `1.0`, `True` from `1`, `-0.0` from `0.0`,
 and list order matters, so only a mutation that really changes the stored value is dropped.
@@ -47,7 +47,22 @@ _EMBEDDING = "embedding"
 def select_effective_primitives(
     open_graph: Callable[[], WritableGraph], group: MutationGroup, *, batch_size: int
 ) -> tuple[Primitive, ...]:
-    """Return the primitives of `group` that change the graph, in order.
+    """Select the primitives of a group that would change the graph, so the rest are not logged.
+
+    Reads the current state of every node and edge the group names once, then walks the group
+    over an overlay of that state so each primitive sees the effect of the earlier ones.
+
+    Args:
+        open_graph: Opens the writable graph the group targets; called once.
+        group: The mutation group to filter.
+        batch_size: Rows per state read; positive.
+
+    Returns:
+        The primitives that change the stored state, in group order; empty when the whole group
+        is a no-op.
+
+    Side Effects:
+        Read-only queries against the graph; nothing is written.
 
     Raises:
         MissingTargetError: an upserted edge's endpoint or a merge target exists nowhere.
@@ -146,7 +161,11 @@ def _already_holds(current: Mapping[str, object], wanted: Mapping[str, object]) 
 
 
 class _Overlay:
-    """The graph state a group sees: what was read, changed by the primitives walked so far."""
+    """The graph state a group sees: what was read, changed by the primitives walked so far.
+
+    Mutates only its own copy of the state; `apply` reports per primitive whether it would change
+    the stored value.
+    """
 
     def __init__(
         self,
@@ -157,7 +176,19 @@ class _Overlay:
         self._edges = dict(edges)
 
     def apply(self, index: int, primitive: Primitive) -> bool:
-        """Apply `primitive` to the overlay and return whether it changed anything."""
+        """Apply `primitive` to the overlay.
+
+        Args:
+            index: Position of the primitive in its group, used in the rejection message.
+            primitive: The primitive to apply.
+
+        Returns:
+            True when the primitive changed the overlay (it must be applied); False when it is a
+            no-op.
+
+        Raises:
+            MissingTargetError: an edge endpoint or a merge target exists nowhere.
+        """
         match primitive:
             case UpsertNode():
                 return self._upsert_node(primitive)

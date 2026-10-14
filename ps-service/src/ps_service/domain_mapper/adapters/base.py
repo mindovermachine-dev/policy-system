@@ -1,8 +1,8 @@
 """The pluggable Domain Mapping Adapter interface.
 
-CA doc Implementation Guidance: "Reads the native structural graph...
-through a Domain Mapping Adapter... one per regulatory source, paired 1:1
-with that source's Ingestion Adapter.".
+A Domain Mapping Adapter reads a regulatory source's native structural graph and yields the
+extraction units the Domain Mapper sends to the LLM. There is one adapter per regulatory
+source, paired 1:1 with that source's Ingestion Adapter.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class DomainMappingAdapter(Protocol):
-    """The one-method Domain Mapping Adapter contract (PLAN_REVIEWED.md §4.1).
+    """The one-method contract every Domain Mapping Adapter implements.
 
     Reads a regulation's native structural graph (already selected via
     `graph` — the caller resolves `{short}_native`, this Protocol imposes
@@ -32,5 +32,17 @@ class DomainMappingAdapter(Protocol):
 
         `{short}_native` holds every ingested version of a regulation side by side, so the
         read is anchored on `regulatory_instrument_id` and reaches only that node's subtree.
+
+        Args:
+            graph: Read handle on the regulation's native graph (`{short}_native`).
+            regulatory_instrument_id: Id of the `RegulatoryInstrument` node whose subtree is read.
+
+        Returns:
+            The extraction units in document order; empty when the subtree holds no readable
+            content.
+
+        Raises:
+            DomainMapperExtractionError: If a node in the subtree has a citation label the
+                adapter cannot parse.
         """
         ...

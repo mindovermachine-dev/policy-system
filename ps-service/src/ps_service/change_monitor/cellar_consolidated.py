@@ -1,35 +1,32 @@
-"""CELLAR SPARQL client: detect the consolidated expressions of a base act (AC-001).
+"""CELLAR SPARQL client: list the consolidated expressions of a base act.
 
 `poll_for_amendments` holds a base-act CELEX (e.g. `32016R0679`) and needs to
 know every *consolidated* expression CELLAR has published for it, newest last.
 This module is the one place that talks to the CELLAR SPARQL endpoint. The
 HTTP transport is injected (`SparqlTransport`), mirroring
-`ps_service.ingestion.adapters.cellar_eli.fetch.CellarTransport` -- business
-logic never constructs its own client inline (L2 DI), and a unit test
-substitutes a fake without monkeypatching `urllib`.
+`ps_service.ingestion.adapters.cellar_eli.fetch.CellarTransport`, so business
+logic never constructs its own client inline and a unit test substitutes a
+fake without monkeypatching `urllib`.
 
-Design (PLAN_REVIEWED.md §1.1, verified live):
+Behaviour:
 
 - Predicate `cdm:act_consolidated_consolidates_resource_legal`; endpoint
   `https://publications.europa.eu/webapi/rdf/sparql`; HTTP `GET` with
   `query=<SPARQL>` + `format=application/sparql-results+json`; no auth; 30 s
-  timeout; **https-only guard** on the constructed URL.
-- The query runs **without `LIMIT`** -- the poll needs the full set for its
+  timeout; the constructed URL must be https.
+- The query runs without `LIMIT` because the poll needs the full set for its
   date comparison. `ConsolidatedVersionInfo` sorts ascending and exposes
   `latest_celex` / `latest_consolidation_date`.
 - The `-YYYYMMDD` consolidation suffix ("amendments incorporated up to") is
   zero-padded, so the CELEX strings sort lexically. The date is derived in
-  Python (`date(int(s[11:15]), int(s[15:17]), int(s[17:19]))`) -- a SPARQL
+  Python (`date(int(s[11:15]), int(s[15:17]), int(s[17:19]))`) because a SPARQL
   `xsd:date` BIND is not portable on this engine.
-- `_consolidated_celex_prefix` validates the base CELEX and asserts it is in
-  the legislation sector (`3`) before building the `0<base>-` FILTER prefix
-  (PLAN_REVIEWED.md flaw 15) -- not a blind character replace. A
-  consolidated-form CELEX (leading `0`, `-date` suffix) is rejected; the poll
-  always holds a base-act CELEX.
+- `_consolidated_celex_prefix` validates the base CELEX and requires the
+  legislation sector (`3`) before building the `0<base>-` FILTER prefix, rather
+  than a blind character replace. A consolidated-form CELEX (leading `0`,
+  `-date` suffix) is rejected; the poll always holds a base-act CELEX.
 
-## AC-001 traceability -- exact live query + one captured response
-
-The SPARQL sent for base CELEX `32016R0679` (GDPR), verbatim:
+Example. The SPARQL sent for base CELEX `32016R0679` (GDPR), verbatim:
 
     PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
     PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -41,8 +38,7 @@ The SPARQL sent for base CELEX `32016R0679` (GDPR), verbatim:
     }
     ORDER BY DESC(?consolidatedCelex)
 
-The live endpoint's response (HTTP 200,
-`Content-Type: application/sparql-results+json`), captured 2026-08-29:
+An HTTP 200 response of `Content-Type: application/sparql-results+json` looks like:
 
     { "head": { "link": [], "vars": ["consolidatedCelex"] },
       "results": { "distinct": false, "ordered": true, "bindings": [
@@ -50,11 +46,10 @@ The live endpoint's response (HTTP 200,
           "datatype": "http://www.w3.org/2001/XMLSchema#string",
           "value": "02016R0679-20160504" }} ] } }
 
-`fetch_consolidated_versions("32016R0679")` therefore yields
+`fetch_consolidated_versions("32016R0679")` then yields
 `ConsolidatedVersionInfo(base_celex="32016R0679",
 consolidated_celexes=("02016R0679-20160504",))`, whose `latest_consolidation_date`
-is `date(2016, 5, 4)`. The live assertion lives in
-`tests/change_monitor/test_cellar_consolidated.py::test_ac001_live_consolidated_detection`.
+is `date(2016, 5, 4)`.
 """
 
 from __future__ import annotations
@@ -97,8 +92,12 @@ ORDER BY DESC(?consolidatedCelex)"""
 class ConsolidatedVersionInfo:
     """CELLAR's consolidated-expression state for one base act.
 
-    `consolidated_celexes` is ascending (lexical == chronological, the suffix
-    is zero-padded) and empty when CELLAR publishes no consolidated version.
+    Attributes:
+        base_celex: The base-act CELEX that was queried (e.g. `32016R0679`).
+        consolidated_celexes: Consolidated-form CELEXes (`0...-YYYYMMDD`) in
+            ascending order (lexical equals chronological because the suffix
+            is zero-padded); empty when CELLAR publishes no consolidated
+            version.
     """
 
     base_celex: str
@@ -106,12 +105,12 @@ class ConsolidatedVersionInfo:
 
     @property
     def latest_celex(self) -> str | None:
-        """The most recent consolidated CELEX, or `None` when there is none."""
+        """Return the most recent consolidated CELEX, or `None` when there is none."""
         return self.consolidated_celexes[-1] if self.consolidated_celexes else None
 
     @property
     def latest_consolidation_date(self) -> date | None:
-        """The `-YYYYMMDD` suffix of `latest_celex` as a `date`, or `None`."""
+        """Return the `-YYYYMMDD` suffix of `latest_celex` as a `date`, or `None`."""
         latest = self.latest_celex
         if latest is None:
             return None
@@ -164,14 +163,30 @@ def fetch_consolidated_versions(
 ) -> ConsolidatedVersionInfo:
     """Query CELLAR SPARQL for every consolidated expression of `base_celex`.
 
-    `base_celex` is a base-act CELEX in the legislation sector (e.g.
-    `32016R0679`); `transport` defaults to the real `urllib.request.urlopen`
-    but is call-site injectable (L2 DI). The same call serves a `regulation`
-    and a `directive` -- one code path, no per-instrument branching.
+    Lets the poll compare CELLAR's newest consolidation against an
+    instrument's baseline. The same call serves a `regulation` and a
+    `directive`; there is no per-instrument branching.
 
-    Raises `CellarConsolidationQueryError` on a malformed / non-legislation
-    `base_celex`, a transport failure, a non-200 response, or a body that is
-    not the expected SPARQL-results JSON shape.
+    Args:
+        base_celex: Base-act CELEX in the legislation sector, matching
+            `NNNNN<type-letters><number>` with sector digit `3`
+            (e.g. `32016R0679`). A consolidated-form CELEX is rejected.
+        transport: Callable matching `urllib.request.urlopen`'s call shape;
+            defaults to the real `urlopen`. Inject a fake in tests.
+
+    Returns:
+        `ConsolidatedVersionInfo` with the consolidated CELEXes sorted
+        ascending; `consolidated_celexes` is empty when CELLAR has none.
+
+    Raises:
+        CellarConsolidationQueryError: `base_celex` is malformed or outside
+            the legislation sector, the URL is not https, the transport
+            fails, the status is not 200, or the body is not the expected
+            SPARQL-results JSON shape.
+
+    Side Effects:
+        One outbound HTTPS GET to the CELLAR SPARQL endpoint; records the
+        outcome in `ps_service.dependency_health` under `CELLAR_ELI`.
     """
     consolidated_prefix = _consolidated_celex_prefix(base_celex)
     query = _QUERY_TEMPLATE.format(base_celex=base_celex, prefix=consolidated_prefix)
@@ -195,10 +210,9 @@ def _read_body(
 ) -> bytes:
     """Run `request` through `transport`, returning the body on a clean HTTP 200.
 
-    Records the outcome in `ps_service.dependency_health` under the shared
-    `CELLAR_ELI` key (same host as `cellar_eli.fetch`), mirroring that
-    module. Raises `CellarConsolidationQueryError` on a transport failure or
-    any non-200 status.
+    Marks `CELLAR_ELI` (shared with `cellar_eli.fetch`, same host) healthy or
+    unhealthy in `ps_service.dependency_health`. Raises
+    `CellarConsolidationQueryError` on a transport failure or any non-200 status.
     """
     try:
         with transport(request, timeout=_TIMEOUT_SECONDS) as response:
@@ -227,7 +241,7 @@ def _consolidated_celex_prefix(base_celex: str) -> str:
     Validates `base_celex` against `^\d{5}[A-Z]{1,2}\d+$` **and** asserts
     its sector digit is `3` (legislation) -- a consolidated-form CELEX
     (leading `0`, `-date` suffix) or a non-legislation sector is rejected
-    with `CellarConsolidationQueryError` (PLAN_REVIEWED.md flaw 15). Returns
+    with `CellarConsolidationQueryError`. Returns
     `"0" + base_celex[1:] + "-"` -- never a blind character replace.
     """
     if _BASE_CELEX_PATTERN.match(base_celex) is None:

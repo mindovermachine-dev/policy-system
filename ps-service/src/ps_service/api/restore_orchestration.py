@@ -678,7 +678,7 @@ def run_restoration_from_catalog_source(
 
 def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
     """Open the real FalkorDB connection for ``config``."""
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         connect_from_config,
     )
 
@@ -687,7 +687,7 @@ def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
 
 def _default_single_tenant_graph_name(config: ServiceConfig) -> str:
     """Return the single-tenant (``policy_system``) graph name."""
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         single_tenant_graph_name,
     )
 
@@ -708,7 +708,7 @@ def build_default_restore_dependencies() -> RestoreDependencies:
         A :class:`RestoreDependencies` bound to the production restore
         orchestration and the real FalkorDB connection/graph-name helpers.
     """
-    from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- function-local
         restore_instrument,
     )
 
@@ -799,7 +799,7 @@ def build_default_restore_from_catalog_dependencies(
         A :class:`CatalogRestoreDependencies` bound to the production restore entry point,
         the production graph-name helper, and the given (or real) infra bundle.
     """
-    from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- function-local
         restore_instrument,
     )
 

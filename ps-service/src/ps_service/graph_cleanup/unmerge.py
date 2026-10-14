@@ -1,7 +1,8 @@
-"""Assemble an `unmerge` plan: locate the merge in the audit trail, read the graph, plan (#190).
+"""Assemble an `unmerge` plan: locate the merge in the audit trail, read the graph, plan.
 
-The one place that joins the audit locator, the reader and the pure planner, shared by the
-preview/approval service and the post-signature executor so both judge the same state.
+The one place that joins the audit locator, the graph reader and the pure planner. The
+preview/approval service and the post-signature executor both call it, so both judge the
+same state. Read-only: it never writes to the graph or the audit trail.
 """
 
 from __future__ import annotations
@@ -34,10 +35,23 @@ type UnmergePlan = CapabilityUnmergePlan | ObligationUnmergePlan
 def plan_unmerge(graph: GraphHandle, audit_store: AuditStore, *, merged_id: str) -> UnmergePlan:
     """Plan reversing the newest effective merge of `merged_id`, with no writes.
 
+    Locates the merge in the audit trail, reads the live graph state it touched, and plans the
+    reversal against that state, so a plan exists only when the merge can still be undone.
+
+    Args:
+        graph: Handle used to read the live graph; only read queries are issued.
+        audit_store: Audit trail searched for the merge row to reverse.
+        merged_id: Id of the merged (tombstoned) Capability or Obligation to restore; must
+            match the `resource_id` of a recorded merge.
+
+    Returns:
+        A `CapabilityUnmergePlan` when the located merge was a capability merge, otherwise an
+        `ObligationUnmergePlan`. Each carries the preview, the before/after snapshots and the
+        state digest. A plan is never empty: a merge that cannot be reversed raises instead.
+
     Raises:
         GraphCleanupValidationError: no merge to reverse, an unreadable audit record, or a
-            conflict between the merge snapshot and the live graph (AC-BI-020), each with an
-            explanation.
+            conflict between the merge snapshot and the live graph, each with an explanation.
         GraphCleanupPersistenceError: the graph database could not be read.
         AuditPostgresUnavailableError: the audit trail could not be read.
     """

@@ -1,39 +1,27 @@
-"""ps_service.company_merge.dedup -- exact-key identity reuse (PLAN_REVIEWED.md §3).
+"""Canonical-node identity resolution for Company Merge: exact-key, semantic and redirect.
 
-Also the existing-canonical-index reader, exact-match resolution,
-semantic-match resolution, and the combined whole-collection resolution
-algorithm (PLAN_REVIEWED.md §5.1/§5.2/§5.3/§5.4, Increments 6-9) --
-`dedupe_canonical_nodes`, the LIVE path (calls `route_embedding` for any
-embedding it lacks). `resolve_capability_convergence_offline` (PLAN.md D6,
-Slices 5.3/5.4) is the OFFLINE counterpart a restore's baseline merge uses
-instead: structurally the same working-index-growth mechanism, but every
-embedding is either artifact-supplied or already cached -- never fetched
-via `route_embedding`/`EmbeddingCaller` (enforced by an AST scan,
-`tests/company_merge/test_dedup_offline_no_route_embedding_import.py`). On
-both paths, that growth mechanism admits same-run EXACT convergence only
-(via `resolve_exact_match`'s unrestricted pool) -- same-run SEMANTIC
-convergence is deliberately excluded (issue #30): the semantic-match
-candidate pool is always restricted to nodes that already existed before
-the run started, so a same-run near-duplicate is recorded as a
-`NearMissPair`, never merged.
+Decides, for every incoming baseline Capability or Policy node, which canonical node of the
+single-tenant graph it resolves to, and which similar pairs are recorded as near misses.
 
-Since issue #42, Company Merge dedupes **Capability only** on the regulatory
-spine (Obligation is Role-scoped and passed through). Company Merge's
-exact-key match is only correct if it computes *the same hash* Domain Mapper
-already used to write the baseline graph's node ids -- so `capability_id` is
-imported directly here, never reimplemented. See
-`tests/company_merge/test_identity_reuse.py` for the enforcement proof: an
-AST scan confirms no function named `capability_id`/`_hash`/`_slug` is ever
-defined anywhere in this package, plus a direct byte-for-byte comparison
-against `ps_service.domain_mapper.identity`'s own function.
+Two entry points run the same algorithm. `dedupe_canonical_nodes` is the live path and calls
+`route_embedding` for any embedding it lacks. `resolve_capability_convergence_offline` is the
+offline counterpart a restore's baseline merge uses: every embedding is artifact-supplied or
+already cached, and it never fetches one through `route_embedding` or an `EmbeddingCaller`.
+Both paths grow a working index as nodes are minted, so same-run EXACT convergence works. Same-run
+SEMANTIC convergence is deliberately excluded: the semantic-match candidate pool is restricted to
+nodes that existed before the run, so a same-run near-duplicate is recorded as a `NearMissPair`
+and never merged.
 
-Issue #190: a Capability a Compliance Officer cleanup merge absorbed stays in
-the graph as a `merged` tombstone with a `MERGED_INTO` edge to its survivor.
-On both paths a tombstone is dropped from the active index (never an
-exact-match or semantic-match candidate), and an incoming Capability id that
-equals a tombstone id resolves through `MERGED_INTO` (chains followed to the
-terminal) to the survivor with `match_kind="redirected"`, so the absorbed
-duplicate is never minted again.
+Company Merge dedupes Capability and Policy; Obligation is Role-scoped and passed through. The
+exact-key match is only correct if it computes the same hash Domain Mapper used to write the
+baseline graph's node ids, so `capability_id` and `policy_id` are imported from Domain Mapper,
+never reimplemented here.
+
+A Capability that a Compliance Officer cleanup merge absorbed stays in the graph as a `merged`
+tombstone with a `MERGED_INTO` edge to its survivor. On both paths a tombstone is dropped from
+the active index (never an exact-match or semantic-match candidate), and an incoming Capability id
+that equals a tombstone id resolves through `MERGED_INTO` (chains followed to the terminal) to the
+survivor with `match_kind="redirected"`, so the absorbed duplicate is never minted again.
 """
 
 from __future__ import annotations
@@ -76,11 +64,9 @@ __all__ = [
     "resolve_exact_match",
 ]
 
-# label -> the property holding this canonical kind's own text (issue #54,
-# S4): Capability's own text property is `name`, Policy's is `title` (per
-# `ps-domain-concepts.md`'s attribute list for each). Never adapter/
-# LLM-sourced -- a fixed lookup table keyed by this module's own Literal
-# values.
+# label -> the property holding this canonical kind's own text: Capability's is `name`,
+# Policy's is `title`. A fixed lookup keyed by this module's own Literal values, never
+# adapter- or LLM-sourced.
 _TEXT_PROPERTY_BY_LABEL: dict[Literal["Capability", "Policy"], str] = {
     "Capability": "name",
     "Policy": "title",
@@ -90,24 +76,20 @@ _TEXT_PROPERTY_BY_LABEL: dict[Literal["Capability", "Policy"], str] = {
 def read_existing_canonical_index(
     single_tenant_graph: GraphHandle, label: Literal["Capability", "Policy"]
 ) -> tuple[ExistingCanonicalNode, ...]:
-    """Read every existing `label` node in the single-tenant graph (PLAN_REVIEWED.md §5.2).
+    """Read every existing `label` node in the single-tenant graph as a canonical index.
 
-    Returned as an `ExistingCanonicalNode` tuple. `label` is this module's
-    own fixed literal (`"Capability"` or, since issue #54's S4, `"Policy"`),
-    passed only by `dedupe_canonical_nodes` -- never sourced from an
-    adapter/LLM/external input -- so it is interpolated directly into the
-    query string, mirroring `graph_reader.py`'s own "fixed literal, no
-    allow-list needed" precedent for its own per-relationship-type queries.
-    The text property read back onto `ExistingCanonicalNode.text` is
-    `label`-dependent (`_TEXT_PROPERTY_BY_LABEL`): `n.name` for Capability,
-    `n.title` for Policy.
+    `label` is this module's own fixed literal, passed only by the dedup entry points and never
+    from an adapter, LLM or external input, so it is interpolated into the query directly. The
+    text property read onto `ExistingCanonicalNode.text` depends on `label`
+    (`_TEXT_PROPERTY_BY_LABEL`): `n.name` for Capability, `n.title` for Policy. Read-only.
 
-    `n.embedding` is a cached `list[float]` property once computed
-    (PLAN_REVIEWED.md §5.5) -- `None`/absent for a canonical node whose
-    embedding has never been computed, which this function preserves as
-    `None` (never `()` or a crash) on `ExistingCanonicalNode.embedding`. An
-    empty graph (no nodes of this label) returns an empty tuple, no
-    exception.
+    Args:
+        single_tenant_graph: Read handle on the single-tenant graph.
+        label: `"Capability"` or `"Policy"`.
+
+    Returns:
+        One `ExistingCanonicalNode` per node, in query order; empty when the graph has none.
+        `embedding` is the cached vector, or `None` when it has never been computed.
     """
     text_property = _TEXT_PROPERTY_BY_LABEL[label]
     result = single_tenant_graph.query(
@@ -130,13 +112,13 @@ def read_existing_canonical_index(
 
 @dataclass(frozen=True, slots=True)
 class MergeRedirects:
-    """Capability tombstones read from the single-tenant graph (issue #190).
+    """Capability tombstones read from the single-tenant graph.
 
-    `redirects` maps each `merged` tombstone id to the id its `MERGED_INTO`
-    edge points at (one hop; chains are followed by `follow_redirect`).
-    `tombstone_ids` is every `status = 'merged'` Capability id, including a
-    tombstone with no `MERGED_INTO` edge (an integrity fault that
-    `follow_redirect` reports rather than hides).
+    Attributes:
+        redirects: Maps each `merged` tombstone id to the id its `MERGED_INTO` edge points at
+            (one hop; `follow_redirect` follows chains).
+        tombstone_ids: Every `status = 'merged'` Capability id, including a tombstone with no
+            `MERGED_INTO` edge, an integrity fault that `follow_redirect` reports.
     """
 
     redirects: dict[str, str]
@@ -147,11 +129,17 @@ _EMPTY_REDIRECTS = MergeRedirects(redirects={}, tombstone_ids=frozenset())
 
 
 def read_merge_redirects(single_tenant_graph: GraphHandle) -> MergeRedirects:
-    """Read every `merged` Capability tombstone and its `MERGED_INTO` target (issue #190).
+    """Read every `merged` Capability tombstone and its `MERGED_INTO` target.
 
-    A tombstone is an absorbed duplicate kept in the graph by a Compliance
-    Officer cleanup merge. Read-only. A tombstone with no outbound
-    `MERGED_INTO` edge appears in `tombstone_ids` but not in `redirects`.
+    A tombstone is an absorbed duplicate kept in the graph by a Compliance Officer cleanup merge.
+    Read-only.
+
+    Args:
+        single_tenant_graph: Read handle on the single-tenant graph.
+
+    Returns:
+        The tombstones. A tombstone with no outbound `MERGED_INTO` edge appears in
+        `tombstone_ids` but not in `redirects`; both are empty when there are no tombstones.
     """
     result = single_tenant_graph.query(
         "MATCH (a:Capability {status: 'merged'}) "
@@ -173,9 +161,17 @@ def follow_redirect(
 ) -> str:
     """Follow `incoming_id`'s `MERGED_INTO` chain to its terminal active Capability.
 
-    Raises `CompanyMergeValidationError` (before any write) on a cycle, on a
-    tombstone with no `MERGED_INTO` edge, or on a terminal that is not an
-    active Capability in the graph.
+    Args:
+        incoming_id: Id to resolve; an id that is not a tombstone is returned as is if active.
+        merge_redirects: Tombstones and their redirects, from `read_merge_redirects`.
+        active_ids: Ids of the active Capabilities that may be a terminal.
+
+    Returns:
+        The id of the terminal active Capability.
+
+    Raises:
+        CompanyMergeValidationError: The chain has a cycle, a tombstone has no `MERGED_INTO`
+            edge, or the terminal is not in `active_ids`. Nothing has been written.
     """
     seen: set[str] = set()
     current = incoming_id
@@ -200,12 +196,11 @@ def follow_redirect(
 def _read_dedup_index(
     single_tenant_graph: GraphHandle, kind: Literal["Capability", "Policy"]
 ) -> tuple[tuple[ExistingCanonicalNode, ...], MergeRedirects]:
-    """The active canonical index plus the tombstone redirects (issue #190).
+    """Read the active canonical index plus the tombstone redirects.
 
-    Calls `read_existing_canonical_index` unchanged, then, for Capability
-    only, reads the `merged` tombstones and drops them from the index so a
-    tombstone is never an exact-match or semantic-match candidate. Policy
-    never has tombstones and issues no redirect read.
+    Reads the index with `read_existing_canonical_index`, then, for Capability only, reads the
+    `merged` tombstones and drops them from the index so a tombstone is never an exact-match or
+    semantic-match candidate. Policy has no tombstones and issues no redirect read.
     """
     index = read_existing_canonical_index(single_tenant_graph, kind)
     if kind != "Capability":
@@ -230,12 +225,17 @@ def _redirected_resolution(
 
 
 def resolve_exact_match(incoming_id: str, existing_ids: frozenset[str]) -> bool:
-    """Exact-key match (PLAN_REVIEWED.md §5.1): is `incoming_id` already a canonical node id?
+    """Report whether `incoming_id` is already a canonical node id.
 
-    Domain Mapper already computed every baseline Capability node's id via
-    `capability_id`, so the incoming node's own `id` field already equals its
-    canonical id -- this is nothing more than a membership check against the
-    single-tenant graph's existing ids.
+    Domain Mapper computed every baseline node's id with the canonical hash, so the incoming
+    node's own `id` already equals its canonical id; this is a plain membership check.
+
+    Args:
+        incoming_id: Id of the incoming baseline node.
+        existing_ids: Ids of the canonical nodes already present.
+
+    Returns:
+        True when `incoming_id` is in `existing_ids`.
     """
     return incoming_id in existing_ids
 
@@ -250,54 +250,39 @@ def find_best_semantic_match(
     eligible_ids: frozenset[str] | None = None,
     incoming_embedding: tuple[float, ...] | None = None,
 ) -> SemanticMatchResult | None:
-    """Semantic match (PLAN_REVIEWED.md §5.3, B2's fix, Increment 8).
+    """Score an incoming text against every canonical entry and return the best matches.
 
-    Returns `None` when `existing_index` is empty -- nothing to compare
-    against, so this incoming node is a first-time mint by construction, and
-    ZERO `route_embedding` calls are made (not even for `incoming_text`) --
-    regardless of whether a cached `incoming_embedding` was passed in.
+    Each entry's embedding is its cached `embedding` when present, otherwise computed with one
+    `route_embedding` call for `entry.text`. The incoming embedding is `incoming_embedding` when
+    supplied (no call is made for it), otherwise computed once with `route_embedding`.
+    `similarity.cosine_similarity` scores every entry against it. No similarity threshold is
+    applied here; the caller decides merge versus surface.
 
-    Otherwise, `incoming_text`'s embedding is either the caller-supplied
-    `incoming_embedding` (issue #31 -- e.g. a Capability's own cached
-    `BaselineNode.embedding`, reused as-is with NO `route_embedding` call for
-    it) or, when `incoming_embedding` is `None`, computed once via
-    `route_embedding`, exactly as before #31. For every `existing_index`
-    entry whose `embedding` is `None`, its embedding is computed too via a
-    further `route_embedding` call for `entry.text`; every entry that
-    already carries a non-`None` `embedding` is reused as-is, with NO call
-    made for it.
-    `similarity.cosine_similarity` scores every entry (using either its
-    cached or freshly-computed embedding) against the incoming embedding.
+    Two maxima come from the single scan at no extra embedding cost: the overall best
+    (`best_existing_id`, `best_similarity`, used only to cite a near miss) and the best restricted
+    to `eligible_ids` (`best_eligible_id`, `best_eligible_similarity`, used only for the merge
+    decision). Every entry that needed a fresh embedding is returned in
+    `newly_computed_existing_embeddings`, so a caller can reuse it in memory and persist it with
+    `graph_writer.backfill_canonical_embeddings`.
 
-    Two maximum-scoring entries are returned, computed from that single
-    scan at zero extra `route_embedding` cost (issue #30): the overall
-    maximum across every entry scanned
-    (`SemanticMatchResult.best_existing_id`/`best_similarity`, always
-    populated, used only for near-miss citation), and the maximum restricted
-    to `eligible_ids` (`SemanticMatchResult.best_eligible_id`/
-    `best_eligible_similarity`, used only for the merge decision).
-    `eligible_ids=None` (the default) treats every scanned entry as
-    eligible, making `best_eligible_id`/`best_eligible_similarity` identical
-    to the overall best -- fully backward compatible with every pre-issue-#30
-    call site. `eligible_ids=frozenset()` (or a set matching none of the
-    scanned entries) yields `best_eligible_id=None`,
-    `best_eligible_similarity=None`. Neither pair applies a similarity
-    threshold: the caller (`dedupe_canonical_nodes`) decides merge-vs-surface
-    by comparing `best_eligible_similarity` against a threshold, not this
-    function.
+    Args:
+        incoming_text: Text of the incoming node, embedded unless `incoming_embedding` is given.
+        existing_index: Canonical entries to compare against.
+        model: Embedding model name passed to `route_embedding`.
+        call_embedding: Embedding caller override; None uses the default provider routing.
+        emitter: Log sink passed to `route_embedding`; None uses the default emitter.
+        eligible_ids: Ids allowed as the merge target. None treats every entry as eligible, so
+            the eligible best equals the overall best; an empty set (or one matching no scanned
+            entry) leaves both eligible fields None.
+        incoming_embedding: Cached embedding of the incoming node, reused as is.
 
-    Every existing entry that needed a fresh embedding this call -- not just
-    the eventual best match -- is returned via
-    `SemanticMatchResult.newly_computed_existing_embeddings` (`existing_id ->
-    embedding`), so a caller can both reuse it in-memory for the rest of a
-    dedup run AND eventually persist it via
-    `graph_writer.backfill_canonical_embeddings`. This return-value plumbing
-    is the entire point of B2's fix: the prior design only ever returned the
-    incoming node's own embedding, discarding everything computed for an
-    existing candidate during the scan.
+    Returns:
+        A `SemanticMatchResult`, or None when `existing_index` is empty. None means the incoming
+        node is a first-time mint, and no `route_embedding` call was made, not even for
+        `incoming_text`.
 
-    A `LlmProviderError` from any `route_embedding` call propagates
-    unchanged -- no try/except in this function.
+    Raises:
+        LlmProviderError: Propagated unchanged from any `route_embedding` call.
     """
     if not existing_index:
         return None
@@ -341,13 +326,11 @@ def find_best_semantic_match(
 
 
 def _merge_target_id(result: SemanticMatchResult | None, threshold: float) -> str | None:
-    """The eligible canonical id to merge onto, or `None` to mint instead (issue #30).
+    """Return the eligible canonical id to merge onto, or `None` to mint instead.
 
-    `None` when there is no semantic-match result at all, no scanned entry
-    belonged to `eligible_ids` (`result.best_eligible_id`/
-    `best_eligible_similarity` both `None`), or the eligible candidate's
-    score does not clear `threshold` -- the caller mints a new canonical
-    node in every such case. Otherwise, the eligible candidate's id.
+    `None` when there is no semantic-match result, no scanned entry was eligible (both
+    `best_eligible_*` fields are `None`), or the eligible candidate's score is below `threshold`.
+    The caller mints a new canonical node in each of those cases.
     """
     if (
         result is None
@@ -367,21 +350,15 @@ def _record_excluded_same_run_mint_near_miss(
     threshold: float,
     near_misses: list[NearMissPair],
 ) -> None:
-    """AC-BI-004 (merge-branch case, CHANGES.md row 1).
+    """Record the near miss hidden behind a merge onto a lower-scoring eligible candidate.
 
-    Called only from the merge branch, where `result.best_eligible_id` just
-    clearing `threshold` produced a merge. If the overall best-scoring
-    candidate across the FULL working index (`result.best_existing_id`)
-    differs from the eligible candidate just merged onto, and itself clears
-    `threshold`, it can only be a same-run mint: an eligible entry achieving
-    the global max score is necessarily the max over the eligible-filtered
-    subset too, so if the two ids differ, the overall best is NOT in
-    `eligible_ids`, i.e. it was minted this run. Appends a `NearMissPair`
-    citing it onto `near_misses` in that case; a no-op otherwise. This is
-    recorded even though a merge also happened -- the mint branch's own
-    near-miss construction never runs on this path, so this is the only
-    place this case can be recorded, and the two can never double up
-    (mint/merge are mutually exclusive per node).
+    Called only from the merge branch, where `result.best_eligible_id` cleared `threshold`. If the
+    overall best candidate (`result.best_existing_id`) differs from the eligible one and also
+    clears `threshold`, it must be a same-run mint: an eligible entry holding the global maximum
+    is also the maximum of the eligible subset, so a different overall best is not in
+    `eligible_ids`. Appends a `NearMissPair` citing it to `near_misses`; otherwise does nothing.
+    The mint branch builds its own near miss, and mint and merge are exclusive per node, so the
+    two never double up.
     """
     if result.best_existing_id != result.best_eligible_id and result.best_similarity >= threshold:
         near_misses.append(
@@ -406,20 +383,14 @@ def _fold_semantic_match_result(
 ) -> None:
     """Fold one `find_best_semantic_match` result into the running dedup state.
 
-    Existing side (B2's within-run reuse fix): every freshly-computed
-    existing embedding (`result.newly_computed_existing_embeddings`) is
-    folded into `working_index` immediately, so a later incoming node
-    comparing against the same entry makes zero further embedding calls for
-    it, and, if the entry was present in the ORIGINAL pre-run index (i.e.
-    genuinely pre-existing, not minted this run), recorded into
-    `embedding_backfills` for `graph_writer.backfill_canonical_embeddings`
-    to persist later.
+    Every freshly computed existing embedding is folded into `working_index` at once, so a later
+    incoming node comparing against the same entry makes no further embedding call. If the entry
+    was in the original pre-run index (genuinely pre-existing, not minted this run) it is also
+    recorded in `embedding_backfills`, for `graph_writer.backfill_canonical_embeddings` to persist.
 
-    Incoming side (issue #31): `node`'s own embedding is recorded into
-    `incoming_embedding_backfills` only when it came in uncached
-    (`node.embedding is None`) -- when it was already cached going in,
-    `result.incoming_embedding` is that same cached value, reused, not
-    freshly computed, so there is nothing new to backfill.
+    The incoming node's own embedding is recorded in `incoming_embedding_backfills` only when it
+    came in uncached (`node.embedding is None`); a cached one is reused, so there is nothing new
+    to persist.
     """
     for existing_id, embedding in result.newly_computed_existing_embeddings.items():
         working_index[existing_id] = ExistingCanonicalNode(
@@ -434,14 +405,11 @@ def _fold_semantic_match_result(
 
 
 def _incoming_text(node: BaselineNode, kind: Literal["Capability", "Policy"]) -> str:
-    """Return an incoming node's own text, dispatched on `kind` (issue #54, S4).
+    """Return an incoming node's own text: `name` for Capability, `title` for Policy.
 
-    `properties["name"]` for Capability, `properties["title"]` for Policy --
-    mirrors `graph_reader.read_baseline_graph`'s own property-key convention
-    (see `test_graph_reader.py`'s fixtures) and
-    `read_existing_canonical_index`'s own `_TEXT_PROPERTY_BY_LABEL`
-    dispatch, kept as two separate lookup tables since one reads a
-    `BaselineNode.properties` dict and the other a query's property name.
+    Uses the same property keys as `graph_reader.read_baseline_graph`. It is a separate lookup from
+    `read_existing_canonical_index`, which reads a query column rather than a
+    `BaselineNode.properties` entry, although both draw on `_TEXT_PROPERTY_BY_LABEL`.
     """
     key = _TEXT_PROPERTY_BY_LABEL[kind]
     return cast("str", node.properties[key])
@@ -457,66 +425,49 @@ def dedupe_canonical_nodes(
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> DedupResult:
-    """Combined resolution over the whole incoming collection, before any write.
+    """Resolve every incoming node to a canonical id, before anything is written.
 
-    PLAN_REVIEWED.md §5.4, Increment 9 -- run for the WHOLE incoming
-    collection before `merge.py` writes anything. `kind` is `"Capability"`
-    since #42 (Obligation is passed through, not deduped) or, since issue
-    #54's S4, `"Policy"` (Standard/Control are weak entities, passed
-    through, never deduped); it is passed straight to
-    `read_existing_canonical_index` as its `label`.
+    Runs over the whole incoming collection first so `merge.py` writes nothing until every
+    resolution is known. It makes one index read plus, for Capability, one tombstone read, and
+    never writes, so an `LlmProviderError` aborts with no partial write.
 
-    Makes one read call (`read_existing_canonical_index`) plus, for
-    Capability only, one tombstone read (`read_merge_redirects`, issue #190),
-    and never a single write call -- "abort with no partial write" on a
-    `LlmProviderError` from `find_best_semantic_match` is therefore
-    automatically satisfied by construction, not by any try/except here.
+    For each incoming node, in order: first a redirect (the id is a tombstone), then an exact-key
+    match against the working index (which grows as nodes are minted in this run), then a semantic
+    match. Only nodes in the original pre-run index are eligible merge targets, so a same-run
+    near-duplicate is never merged, only recorded as a `NearMissPair`. Existing embeddings computed
+    during a scan are folded into the working index at once and, for pre-existing entries, recorded
+    in `embedding_backfills`. No result, no eligible candidate, or an eligible best score below
+    `threshold` mints a new canonical node, recording a near miss whenever any score was computed.
+    An eligible best at or above `threshold` resolves onto that canonical id and may also record a
+    second near miss when an ineligible same-run mint scored higher.
 
-    For each incoming node, in order: exact-key match first (against the
-    working index, which grows as nodes are minted/matched onto within this
-    same run -- same-run EXACT convergence is unaffected by issue #30);
-    else a semantic match is attempted, but only nodes present in the
-    ORIGINAL, pre-run existing index (`original_existing_ids`) are eligible
-    merge targets. This resolves the question issue #16 left open
-    (`.orchestrator/tracker/issue-16-company-merge/PLAN_REVIEWED.md` §13
-    item 6, "whether the in-run convergence property is desired") as NO: a
-    same-run near-duplicate is never itself a merge target, it is only ever
-    recorded as a `NearMissPair` (see `_merge_target_id` and
-    `_record_excluded_same_run_mint_near_miss`). Any existing entry whose
-    embedding had to be freshly computed during that call is folded into
-    the working index immediately (B2's within-run reuse fix) and, if it
-    was present in the ORIGINAL existing index (i.e. genuinely
-    pre-existing, not minted this run), recorded into `embedding_backfills`
-    for `graph_writer.backfill_canonical_embeddings` to persist later. A
-    `None` result, no eligible candidate, or a below-threshold eligible
-    best score mints a new canonical node (recording a `NearMissPair`
-    whenever any score was computed at all, eligible or not); an
-    at-or-above-threshold eligible best score resolves onto that existing
-    canonical id, and may itself still record a second `NearMissPair` when
-    an ineligible same-run mint scored even higher
-    (`_record_excluded_same_run_mint_near_miss`).
+    An incoming node whose `embedding` is cached is passed to `find_best_semantic_match` and costs
+    no `route_embedding` call. A freshly computed incoming embedding is recorded in
+    `DedupResult.incoming_embedding_backfills`, whether the node then mints or merges, so
+    `merge.py` can persist it on the baseline graph. Nothing is recorded when no scan ran (empty
+    index) or the embedding was already cached.
 
-    Issue #31 -- the INCOMING side of the same cost problem: when an
-    incoming node's own `BaselineNode.embedding` is already cached (only
-    ever true for Capability, per `graph_reader._read_capability_nodes`),
-    it is passed straight to `find_best_semantic_match` as
-    `incoming_embedding`, costing zero `route_embedding` calls for it
-    (AC-BI-003). When it is `None` and a semantic-match scan actually ran
-    (`result is not None`), the freshly-computed incoming embedding is
-    recorded into `DedupResult.incoming_embedding_backfills` (AC-BI-004) for
-    `merge.py` to eventually persist onto this node's own `{short}_baseline`
-    entry via `graph_writer.backfill_incoming_capability_embeddings` --
-    regardless of whether this node goes on to mint or merge, since either
-    way a future re-run reading this same incoming node back will find the
-    cached value. Nothing is recorded when `result is None` (an empty
-    `existing_index` -- nothing was computed at all, see
-    `find_best_semantic_match`'s own docstring) or when the embedding was
-    already cached going in.
+    Args:
+        incoming_nodes: Baseline nodes of one kind, in processing order.
+        kind: `"Capability"` or `"Policy"`; Standard, Control and Obligation are not deduped.
+        single_tenant_graph: Read handle on the single-tenant graph holding the canonical nodes.
+        model: Embedding model name for any `route_embedding` call.
+        threshold: Minimum cosine similarity for an eligible candidate to be merged onto.
+        call_embedding: Embedding caller override; None uses the default provider routing.
+        emitter: Log sink passed to `route_embedding`; None uses the default emitter.
+
+    Returns:
+        A `DedupResult` with one resolution per incoming node in input order, the near misses, and
+        the embedding backfills for existing and incoming nodes.
+
+    Raises:
+        LlmProviderError: Propagated unchanged from an embedding call.
+        CompanyMergeValidationError: A merge-redirect chain has a cycle, a tombstone has no
+            `MERGED_INTO` edge, or the chain ends at a node that is not active.
     """
     existing_index, merge_redirects = _read_dedup_index(single_tenant_graph, kind)
-    # Fixed at the start, never mutated -- distinguishes a genuinely
-    # pre-existing canonical node (a backfill candidate) from one minted
-    # later in this same run.
+    # Never mutated: distinguishes a genuinely pre-existing canonical node (a backfill
+    # candidate, an eligible merge target) from one minted later in this run.
     original_existing_ids = frozenset(n.id for n in existing_index)
     working_index: dict[str, ExistingCanonicalNode] = {n.id: n for n in existing_index}
     embedding_backfills: dict[str, tuple[float, ...]] = {}
@@ -576,15 +527,12 @@ def dedupe_canonical_nodes(
                     embedding=own_embedding,
                 )
             )
-            # Same-run EXACT convergence remains (via resolve_exact_match's
-            # unrestricted pool, unchanged above); same-run SEMANTIC
-            # convergence is deliberately excluded as of issue #30 -- the
-            # semantic-match candidate pool passed to find_best_semantic_match
-            # above is restricted to ORIGINAL, pre-run existing nodes only
-            # (eligible_ids=original_existing_ids), so a same-run mint can
-            # never itself be an eligible merge target. This newly-minted
-            # node is still reflected in the working index immediately so a
-            # later incoming node's EXACT-match check can still find it.
+            # Same-run EXACT convergence works through resolve_exact_match's unrestricted pool.
+            # Same-run SEMANTIC convergence is excluded: the candidate pool passed to
+            # find_best_semantic_match is restricted to original pre-run nodes
+            # (eligible_ids=original_existing_ids), so a same-run mint is never an eligible merge
+            # target. The new node still enters the working index so a later incoming node's
+            # EXACT match can find it.
             working_index[node.id] = ExistingCanonicalNode(
                 id=node.id, text=node_text, embedding=own_embedding
             )
@@ -607,9 +555,8 @@ def dedupe_canonical_nodes(
                     embedding=None,
                 )
             )
-            # `_merge_target_id` only ever returns non-None when `result` is
-            # not None (see its docstring) -- `result` is narrowed here via
-            # cast rather than a redundant `is not None` check.
+            # `_merge_target_id` returns non-None only when `result` is not None, so `result`
+            # is narrowed with a cast rather than a redundant check.
             _record_excluded_same_run_mint_near_miss(
                 node,
                 node_text,
@@ -629,15 +576,17 @@ def dedupe_canonical_nodes(
 
 @dataclass(frozen=True, slots=True)
 class _OfflineMatchResult:
-    """`_best_offline_match`'s return value -- offline twin of `SemanticMatchResult` (issue #30).
+    """Result of `_best_offline_match`, the offline twin of `SemanticMatchResult`.
 
-    `best_eligible`/`best_eligible_score`: the best-scoring scorable
-    candidate restricted to `eligible_ids`, used only for the merge decision
-    (AC-BI-003) -- both `None`/`0.0` when no scorable candidate belongs to
-    `eligible_ids`. `best_overall`/`best_overall_score`: the best-scoring
-    scorable candidate across EVERY entry scanned, regardless of
-    eligibility, used only for near-miss citation. Both pairs are computed
-    from the one `scorable` scan, at zero extra cost.
+    Attributes:
+        best_eligible: Best-scoring scorable candidate restricted to `eligible_ids`, used only for
+            the merge decision; None when no scorable candidate is eligible.
+        best_eligible_score: Its score, or 0.0 when `best_eligible` is None.
+        best_overall: Best-scoring scorable candidate across every entry scanned, used only to
+            cite a near miss; None when nothing was scorable.
+        best_overall_score: Its score, or 0.0 when `best_overall` is None.
+
+    Both pairs come from the one scan of scorable candidates, at no extra cost.
     """
 
     best_eligible: ExistingCanonicalNode | None
@@ -651,18 +600,13 @@ def _best_offline_match(
     working_index: dict[str, ExistingCanonicalNode],
     eligible_ids: frozenset[str],
 ) -> _OfflineMatchResult:
-    """Score `node`'s own (artifact-supplied) embedding against every scorable candidate.
+    """Score an artifact-supplied embedding against every scorable candidate.
 
-    A candidate is scorable only if it already carries a cached embedding
-    (D6's "skip, don't fetch" -- a candidate with no cached embedding is
-    excluded, never fetched). Returns both the overall best-scoring scorable
-    candidate and the best-scoring candidate restricted to `eligible_ids`
-    (issue #30, AC-BI-003) -- see `_OfflineMatchResult`. Every field is
-    `None`/`0.0` when `own_embedding` is `None` or no candidate is scorable;
-    `best_eligible`/`best_eligible_score` alone are `None`/`0.0` when no
-    scorable candidate belongs to `eligible_ids`. The caller mints a new
-    canonical node whenever `best_eligible` is `None`, exactly as an empty
-    `working_index` would.
+    A candidate is scorable only if it already carries a cached embedding; one without is skipped,
+    never fetched. Returns both the overall best scorable candidate and the best restricted to
+    `eligible_ids` (see `_OfflineMatchResult`). Every field is `None`/`0.0` when `own_embedding`
+    is `None` or no candidate is scorable; the eligible pair alone is `None`/`0.0` when no
+    scorable candidate is eligible. The caller mints whenever `best_eligible` is `None`.
     """
     scorable: list[tuple[ExistingCanonicalNode, tuple[float, ...]]] = [
         (candidate, candidate.embedding)
@@ -699,20 +643,12 @@ def _record_excluded_same_run_mint_near_miss_offline(
     threshold: float,
     near_misses: list[NearMissPair],
 ) -> None:
-    """AC-BI-004, offline twin of `_record_excluded_same_run_mint_near_miss` (CHANGES.md row 1).
+    """Offline twin of `_record_excluded_same_run_mint_near_miss`.
 
-    Called only from the merge branch, where `best_eligible` (the candidate
-    just merged onto) already cleared `threshold`. If the overall
-    best-scoring scorable candidate (`match.best_overall`) differs from
-    `best_eligible`, and itself clears `threshold`, it can only be a
-    same-run mint: an eligible entry achieving the global max score is
-    necessarily the max over the eligible-filtered subset too, so if the two
-    differ, `match.best_overall` was not in `eligible_ids`, i.e. it was
-    minted this run (identical reasoning to the live path's twin -- see its
-    docstring for the full proof). Appends a `NearMissPair` citing it onto
-    `near_misses` in that case; a no-op otherwise -- mint/merge are mutually
-    exclusive per node, so this can never double up with the mint branch's
-    own near-miss construction.
+    Called only from the merge branch, where `best_eligible` already cleared `threshold`. If the
+    overall best scorable candidate (`match.best_overall`) differs from `best_eligible` and also
+    clears `threshold`, it must be a same-run mint, by the same argument as the live twin. Appends
+    a `NearMissPair` citing it to `near_misses`; otherwise does nothing.
     """
     if (
         match.best_overall is not None
@@ -739,40 +675,43 @@ def resolve_capability_convergence_offline(
     kind: Literal["Capability", "Policy"] = "Capability",
     emitter: LogEmitter | None = None,
 ) -> DedupResult:
-    """D6's offline counterpart to `dedupe_canonical_nodes`, for a restore's baseline merge.
+    """Resolve incoming nodes to canonical ids without any embedding fetch, for a restore.
 
-    Structurally mirrors `dedupe_canonical_nodes`'s own working-index growth
-    (CHANGES.md MA1): processes the WHOLE `incoming_nodes` batch in one
-    call, exact-match first (via `resolve_exact_match`, reused verbatim),
-    then a semantic match scored via `cosine_similarity` alone against
-    `incoming_embeddings`'s artifact-supplied vectors and the existing
-    index's own cached embeddings -- never `route_embedding`, never an
-    `EmbeddingCaller` (a restore has no live LLM provider to call; every
-    embedding it can ever use was already computed at export time). An
-    existing candidate with no cached embedding is excluded from scoring
-    entirely, not fetched; a newly-minted node is folded into the working
-    index immediately, so a later incoming node in this same batch
-    converges onto it instead of minting a separate node -- the same in-run
-    EXACT-convergence mechanism `dedupe_canonical_nodes` already has (its
-    own working-index fold-in inside the mint branch, `dedup.py:394-396`,
-    feeding its own exact-match check, `dedup.py:337-339`; same-run
-    SEMANTIC convergence is excluded on both paths, issue #30). When one or
-    more existing candidates were skipped for lacking a cached embedding,
-    one aggregate `outcome="warning"` log entry records the total count
-    (OQ4).
+    Mirrors `dedupe_canonical_nodes` over the whole `incoming_nodes` batch in one call: redirect
+    first, then exact match (`resolve_exact_match`), then a semantic match scored with
+    `cosine_similarity` alone against `incoming_embeddings` and the existing index's cached
+    embeddings. A restore has no live LLM provider, so it never calls `route_embedding` or an
+    `EmbeddingCaller`. An existing candidate with no cached embedding is skipped, not fetched. A
+    newly minted node is folded into the working index at once, so a later node in the batch
+    converges onto it by exact match; same-run SEMANTIC convergence is excluded, as on the live
+    path.
 
-    `kind` defaults to `"Capability"` (its original, pre-#54 scope) and
-    widens to `"Policy"` (issue #54, S6/B6) -- dispatched into
-    `read_existing_canonical_index`/`_incoming_text` exactly as
-    `dedupe_canonical_nodes` already dispatches its own `kind` parameter for
-    the live path (`_TEXT_PROPERTY_BY_LABEL`), so a restore's offline Policy
-    convergence uses the identical text-property/read-query mapping.
+    Args:
+        incoming_nodes: Baseline nodes of one kind, in processing order.
+        incoming_embeddings: Artifact-supplied embedding per incoming node id. A node with no entry
+            has no embedding and is minted without a semantic comparison.
+        single_tenant_graph: Read handle on the single-tenant graph holding the canonical nodes.
+        threshold: Minimum cosine similarity for an eligible candidate to be merged onto.
+        kind: `"Capability"` (default) or `"Policy"`; selects the text property and read query
+            exactly as `dedupe_canonical_nodes` does.
+        emitter: Log sink for the warning entry; None uses the default emitter.
+
+    Returns:
+        A `DedupResult` with one resolution per incoming node and the near misses.
+        `embedding_backfills` and `incoming_embedding_backfills` are empty because nothing is
+        computed.
+
+    Raises:
+        CompanyMergeValidationError: A merge-redirect chain has a cycle, a tombstone has no
+            `MERGED_INTO` edge, or the chain ends at a node that is not active.
+
+    Side Effects:
+        When any existing candidate was skipped for lacking a cached embedding, emits one
+        aggregate log entry with `outcome="warning"` carrying the skipped count.
     """
     existing_index, merge_redirects = _read_dedup_index(single_tenant_graph, kind)
-    # Fixed at the start, never mutated -- mirrors dedupe_canonical_nodes's
-    # own original_existing_ids snapshot (issue #30, AC-BI-003): distinguishes
-    # a genuinely pre-existing canonical node from one minted later in this
-    # same restore run.
+    # Never mutated: distinguishes a genuinely pre-existing canonical node from one minted later
+    # in this restore run.
     original_existing_ids = frozenset(n.id for n in existing_index)
     working_index: dict[str, ExistingCanonicalNode] = {node.id: node for node in existing_index}
     resolutions: list[CanonicalResolution] = []
@@ -819,15 +758,11 @@ def resolve_capability_convergence_offline(
                         similarity=match.best_overall_score,
                     )
                 )
-            # Same-run EXACT convergence remains (resolve_exact_match's
-            # unrestricted pool, unchanged above); same-run SEMANTIC
-            # convergence is deliberately excluded as of issue #30
-            # (AC-BI-003) -- the eligible-candidate pool passed to
-            # _best_offline_match above is restricted to ORIGINAL, pre-run
-            # existing nodes only, so a same-run mint can never itself be an
-            # eligible merge target. This newly-minted node is still
-            # reflected in the working index immediately so a LATER node in
-            # this SAME artifact can still find it via EXACT match.
+            # Same-run EXACT convergence works through resolve_exact_match's unrestricted pool.
+            # Same-run SEMANTIC convergence is excluded: the eligible pool passed to
+            # _best_offline_match is restricted to original pre-run nodes, so a same-run mint is
+            # never an eligible merge target. The new node still enters the working index so a
+            # later node in this artifact can find it by EXACT match.
             working_index[node.id] = ExistingCanonicalNode(
                 id=node.id, text=node_text, embedding=own_embedding
             )

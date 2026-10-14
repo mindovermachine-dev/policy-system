@@ -1,5 +1,5 @@
 # © 2026 Cartman ApS. All rights reserved.
-"""`ReadOnlyGraph`: the handle every reader outside the gateway uses (issue #215).
+"""`ReadOnlyGraph`: the handle every reader outside the gateway uses.
 
 A `ReadOnlyGraph` sends each query as `GRAPH.RO_QUERY`, which the FalkorDB server refuses to run if
 it would write. That makes the server, not a textual guard, the boundary for reads. Its `query`
@@ -44,12 +44,20 @@ class ReadOnlyQueryResult(Protocol):
 
     @property
     def header(self) -> list[list[object]]:
-        """`[type, name]` pairs, one per result column."""
+        """The result column header.
+
+        Returns:
+            `[type, name]` pairs, one per result column; empty when there are no columns.
+        """
         ...
 
     @property
     def result_set(self) -> list[object]:
-        """The rows exactly as the driver returned them."""
+        """The result rows.
+
+        Returns:
+            The rows exactly as the driver returned them; empty when the query matched nothing.
+        """
         ...
 
 
@@ -60,6 +68,14 @@ class ReadOnlyGraph(Protocol):
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
     ) -> ReadOnlyQueryResult:
         """Run Cypher `q` with optional `params` and `timeout` (ms); return the raw result.
+
+        Args:
+            q: Cypher text; it must not write.
+            params: Query parameters, or `None` for none.
+            timeout: Server-side query timeout in milliseconds, or `None` for the server default.
+
+        Returns:
+            The result; empty (no header, no rows) when the graph key does not exist.
 
         Raises:
             redis.exceptions.ResponseError: the server rejected the query (a write, a timeout,
@@ -72,11 +88,22 @@ class ReadOnlyDatabase(Protocol):
     """A FalkorDB connection that hands out read-only graphs."""
 
     def select_graph(self, name: str, /) -> ReadOnlyGraph:
-        """Select graph `name` for reading (positional, so a real `FalkorDB` satisfies this)."""
+        """Select graph `name` for reading (positional, so a real `FalkorDB` satisfies this).
+
+        Args:
+            name: Name of the graph.
+
+        Returns:
+            A handle that can only run read queries.
+        """
         ...
 
     def list_graphs(self) -> list[str]:
-        """Names of the graphs on the server."""
+        """List the names of the graphs on the server.
+
+        Returns:
+            The graph names; empty when the server holds none.
+        """
         ...
 
 
@@ -86,7 +113,16 @@ class DriverGraph(Protocol):
     def ro_query(
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
     ) -> ReadOnlyQueryResult:
-        """Run `q` through `GRAPH.RO_QUERY`."""
+        """Run `q` through `GRAPH.RO_QUERY`.
+
+        Args:
+            q: Cypher text.
+            params: Query parameters, or `None` for none.
+            timeout: Server-side query timeout in milliseconds, or `None` for the server default.
+
+        Returns:
+            The driver's result.
+        """
         ...
 
 
@@ -94,11 +130,22 @@ class DriverDatabase(Protocol):
     """The driver connection surface this module uses; a real `FalkorDB` satisfies it."""
 
     def select_graph(self, graph_id: str, /) -> DriverGraph:
-        """Select a driver graph."""
+        """Select a driver graph.
+
+        Args:
+            graph_id: Name of the graph.
+
+        Returns:
+            The driver graph handle.
+        """
         ...
 
     def list_graphs(self) -> list[str]:
-        """Names of the graphs on the server."""
+        """List the names of the graphs on the server.
+
+        Returns:
+            The graph names; empty when the server holds none.
+        """
         ...
 
 
@@ -107,10 +154,12 @@ class _EmptyResult:
 
     @property
     def header(self) -> list[list[object]]:
+        """No columns."""
         return []
 
     @property
     def result_set(self) -> list[object]:
+        """No rows."""
         return []
 
 
@@ -118,11 +167,13 @@ class _RoQueryGraph:
     """`ReadOnlyGraph` over a driver graph: `query` is always `ro_query`."""
 
     def __init__(self, graph: DriverGraph) -> None:
+        """Wrap the driver graph."""
         self._graph = graph
 
     def query(
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
     ) -> ReadOnlyQueryResult:
+        """Run the query read-only; a graph key that does not exist reads as an empty result."""
         try:
             return self._graph.ro_query(q, params, timeout)
         except ResponseError as exc:
@@ -135,12 +186,15 @@ class _RoDatabase:
     """`ReadOnlyDatabase` over a driver connection."""
 
     def __init__(self, database: DriverDatabase) -> None:
+        """Wrap the driver connection."""
         self._database = database
 
     def select_graph(self, name: str) -> ReadOnlyGraph:
+        """Select graph `name` as a read-only handle."""
         return _RoQueryGraph(self._database.select_graph(name))
 
     def list_graphs(self) -> list[str]:
+        """List the graphs on the server."""
         return self._database.list_graphs()
 
 
@@ -154,6 +208,17 @@ def open_read_only_database(
 
     `connect` is the driver seam (tests inject a fake driver connection); by default the
     gateway's `connection.connect`, looked up at call time.
+
+    Args:
+        host: FalkorDB server host name or address.
+        port: FalkorDB server TCP port.
+        connect: Driver constructor taking `(host, port)`; `None` uses the gateway's own.
+
+    Returns:
+        A connection whose selected graphs run only read queries.
+
+    Side Effects:
+        Opens a network connection to the server.
     """
     opener = connect if connect is not None else driver_connection.connect
     return _RoDatabase(opener(host, port))
@@ -164,5 +229,16 @@ def open_read_only_database_from_config(
     *,
     connect: Callable[[str, int], DriverDatabase] | None = None,
 ) -> ReadOnlyDatabase:
-    """Connect using `config.falkordb_host` / `config.falkordb_port`; graphs are read-only."""
+    """Connect using `config.falkordb_host` / `config.falkordb_port`; graphs are read-only.
+
+    Args:
+        config: Service configuration naming the FalkorDB host and port.
+        connect: Driver constructor taking `(host, port)`; `None` uses the gateway's own.
+
+    Returns:
+        A connection whose selected graphs run only read queries.
+
+    Side Effects:
+        Opens a network connection to the server.
+    """
     return open_read_only_database(config.falkordb_host, config.falkordb_port, connect=connect)

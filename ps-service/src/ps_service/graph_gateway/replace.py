@@ -1,9 +1,9 @@
-"""Expand a leg of a multi-graph group into the logged primitives that make it exact (issue #214).
+"""Expand a leg of a multi-graph group into the logged primitives that make it exact.
 
 A leg that merges into its graph needs only one thing ahead of its own primitives: a graph written
-before the gateway holds edges with no `identity`, and the gateway merges edges on it, so a write
-onto such a graph would add parallel edges. Those edges are stamped inside the same set (never in
-a group of their own: a rejected set must leave no entry behind).
+outside the gateway may hold edges with no `identity`, and the gateway merges edges on it, so a
+write onto such a graph would add parallel edges. Those edges are stamped inside the same set
+(never in a group of their own: a rejected set must leave no entry behind).
 
 A leg that REPLACES its graph also has to remove whatever the leg does not contain, and an upsert
 can only add or overwrite. The replacement is therefore expressed with the primitives that already
@@ -55,6 +55,22 @@ def expand_leg(graph: WritableGraph, group: MutationGroup, *, replace: bool) -> 
 
     Reads `graph` (read-only); the caller holds the graph's lock, so what is read is what the
     group is logged against. The group is returned as it is when nothing is to be added.
+
+    Args:
+        graph: The leg's live graph; it is only read.
+        group: The leg's own primitives.
+        replace: True if the leg replaces the whole graph, so whatever the leg does not contain
+            is deleted; False if it merges, so only identity-less edges are stamped.
+
+    Returns:
+        `group` itself when nothing is added; otherwise a group with the added primitives ahead
+        of the leg's own and every other field unchanged.
+
+    Raises:
+        UnexpectedGraphReplyError: A read of `graph` answered an unexpected shape.
+
+    Side Effects:
+        Runs read queries on `graph`; it writes nothing.
     """
     added = (
         _replacement(read_graph_shape(graph), group)
@@ -73,7 +89,15 @@ def expand_leg(graph: WritableGraph, group: MutationGroup, *, replace: bool) -> 
 
 
 def added_count(original: MutationGroup, expanded: MutationGroup) -> int:
-    """Return how many primitives the expansion put ahead of the caller's."""
+    """Return how many primitives the expansion put ahead of the caller's.
+
+    Args:
+        original: The group as the caller built it.
+        expanded: The group returned by `expand_leg` for `original`.
+
+    Returns:
+        The number of added primitives; 0 when the group was returned as it was.
+    """
     return len(expanded.primitives) - len(original.primitives)
 
 

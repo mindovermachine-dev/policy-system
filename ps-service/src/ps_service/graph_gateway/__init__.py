@@ -1,19 +1,18 @@
-"""ps_service.graph_gateway -- the Graph Write Gateway and its mutation log (issues #205-#208).
+"""ps_service.graph_gateway -- the Graph Write Gateway and its mutation log.
 
 Domain path: `ps.service.graphgateway`
 (`docs/architecture/ps-solution-architecture.md`). Two halves live here:
 
-- The store (#205): the owner-protected, insert-only `graph_log` tables in the PS state Postgres
-  and the privileged provisioning path that creates them
+- The store: the owner-protected, insert-only `graph_log` tables in the PS state Postgres and
+  the privileged provisioning path that creates them
   (`python -m ps_service.graph_gateway.provision`).
-- The gateway (#206): `GraphWriteGateway` takes a `MutationGroup` of resolved primitives,
-  validates it (label allow-list, preconditions, no-op filter), appends it to the log (the
-  commit point, log-first), applies the logged entries to FalkorDB with a last-applied marker,
-  and reports a `GroupOutcome`. It also catches a graph up (`catch_up`, `is_caught_up`), recovers
-  every lagging graph at startup (`recover`) and runs a background reconciler.
-  `build_default_graph_write_gateway` composes it for the service. Replay and digest verification
-  are #207; the ingestion pipelines (external and internal-seed) write only through it since
-  #208, and the other writers move onto it in #209-#214.
+- The gateway: `GraphWriteGateway` takes a `MutationGroup` of resolved primitives, validates it
+  (label allow-list, preconditions, no-op filter), appends it to the log (the commit point,
+  log-first), applies the logged entries to FalkorDB with a last-applied marker, and reports a
+  `GroupOutcome`. It also catches a graph up (`catch_up`, `is_caught_up`), recovers every
+  lagging graph at startup (`recover`), runs a background reconciler, and rebuilds a graph from
+  the log with digest verification (replay). `build_default_graph_write_gateway` composes it for
+  the service.
 
 Owns its migration directory (`MIGRATIONS_DIR`). Unlike every other component's migrations,
 these are NOT applied by the ordinary startup runner (that would make the `ps_state` role their

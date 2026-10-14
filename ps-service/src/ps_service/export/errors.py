@@ -1,11 +1,7 @@
 """Domain-specific exception types for `ps_service.export`.
 
-One exception type per distinct failure boundary this component owns, never
-a generic `Exception`/`ValueError` (L1 Error Handling, L2 Error Handling).
-`ExportConfigurationError` (PLAN.md's module table) is not built here --
-confirmed unreferenced by any real (non-planning-doc) code as of CHANGES2.md's
-redesign, so it is not speculatively added; a future dispatch adds it if/when
-something actually needs it.
+One exception type per distinct failure boundary this component owns, so callers never have
+to catch a generic `Exception` or `ValueError`.
 """
 
 from __future__ import annotations
@@ -14,31 +10,31 @@ from __future__ import annotations
 class ExportSourceGraphError(Exception):
     """A source graph's shape is not exportable by `serialize.serialize_graph`.
 
-    Raised when any node, or any edge endpoint, carries zero or more than
-    one label -- every writer in this codebase mints single-labeled nodes
-    (`MERGE (n:{label} {id: ...})`), so this signals a genuinely
-    out-of-contract graph, never silently coerced to "pick one label".
+    Raised when any node, or any edge endpoint, carries zero or more than one label. Every
+    writer in this codebase creates single-labeled nodes, so this signals a graph that breaks
+    the contract; it is never coerced by picking one label. The caller should treat the source
+    graph as corrupt and stop the export; retrying does not help.
     """
 
 
 class ExportInstrumentIdMismatchError(Exception):
-    """Raised when instrument_id does not match the baseline graph's own RegulatoryInstrument.id.
+    """The requested `instrument_id` differs from the baseline graph's `RegulatoryInstrument.id`.
 
-    Restore (`ps_service.restore.restore_instrument`) requires a manifest's
-    `instrument_id` to equal the artifact's own `RegulatoryInstrument.id` --
-    a mismatch here would export an artifact `catalog restore` can never
-    load (`content_validation` failure). Caught here, at export time,
-    instead of silently writing a broken artifact to disk.
+    Restore (`ps_service.restore.restore_instrument`) requires a manifest's `instrument_id` to
+    equal the artifact's own `RegulatoryInstrument.id`, so a mismatch would produce an artifact
+    that restore rejects with a `content_validation` failure. Export raises this before writing
+    anything to disk. The caller should pass the id the baseline graph actually holds.
     """
 
 
 class ExportGraphWriteError(Exception):
-    """The embedding backfill's gateway group did not take effect (issue #213).
+    """The embedding backfill's gateway group did not take effect.
 
     Raised when the baseline graph is behind its log, the Graph Write Gateway refused the group
     or could not reach Postgres or FalkorDB, the group was committed but could not be applied yet,
     or an embedding holds a value the graph cannot store. The message is the gateway's sanitized
     text (`FalkorDB write failed: ...`) and the gateway error, if any, is the `__cause__`. Nothing
     is lost on a pending apply: the group is in the log, the gateway applies it on recovery and a
-    re-run is idempotent (a node that now has an embedding is not embedded again).
+    re-run is idempotent (a node that now has an embedding is not embedded again). The caller
+    should re-run the export once the gateway stores are reachable.
     """

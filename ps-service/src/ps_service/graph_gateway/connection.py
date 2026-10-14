@@ -1,5 +1,5 @@
 # © 2026 Cartman ApS. All rights reserved.
-"""The one place a FalkorDB client is built and its connectivity probed (issue #215).
+"""The one place a FalkorDB client is built and its connectivity probed.
 
 Only the `graph_gateway` package may import `falkordb`: this module is that boundary, and the
 architecture guard (`tests/graph_gateway/test_gateway_only_graph_access.py`) fails for any other
@@ -69,16 +69,43 @@ def connect(
 ) -> FalkorDB:
     """Construct a FalkorDB client for `host`/`port`.
 
-    The installed driver issues a real round-trip on construction (sentinel detection), so an
-    unreachable server raises `redis.exceptions.ConnectionError` here, before any probe runs. Do
-    not call this outside a `dependency_health`-recording boundary
-    (`check_connectivity_from_config`). `client_factory` is the driver seam for tests.
+    Do not call this outside a `dependency_health`-recording boundary
+    (`check_connectivity_from_config`).
+
+    Args:
+        host: FalkorDB server host name or address.
+        port: FalkorDB server TCP port.
+        client_factory: Constructor of the client; the driver seam for tests.
+
+    Returns:
+        A connected client. It is never `None`.
+
+    Raises:
+        redis.exceptions.ConnectionError: The server is unreachable. The installed driver issues a
+            real round-trip on construction (sentinel detection), so this surfaces here, before
+            any probe runs.
+
+    Side Effects:
+        Opens a network connection to the server.
     """
     return client_factory(host=host, port=port)
 
 
 def connect_from_config(config: ServiceConfig) -> FalkorDB:
-    """Build the FalkorDB connection from `config.falkordb_host` / `config.falkordb_port`."""
+    """Build the FalkorDB connection from `config.falkordb_host` / `config.falkordb_port`.
+
+    Args:
+        config: Service configuration naming the FalkorDB host and port.
+
+    Returns:
+        A connected client (see `connect`).
+
+    Raises:
+        redis.exceptions.ConnectionError: The server is unreachable.
+
+    Side Effects:
+        Opens a network connection to the server.
+    """
     return connect(host=config.falkordb_host, port=config.falkordb_port)
 
 
@@ -89,12 +116,30 @@ def check_connectivity_from_config(
 ) -> None:
     """Connect and verify connectivity as one guarded step (`check_connectivity_via`).
 
-    `open_connection` is the seam the per-package delegates use to keep their own patchable
-    connect name.
+    Args:
+        config: Service configuration naming the FalkorDB host and port.
+        open_connection: Opens the connection from `config`; the seam the per-package delegates
+            use to keep their own patchable connect name.
+
+    Raises:
+        GraphConnectivityError: The connection or the probe failed (the cause is chained).
+
+    Side Effects:
+        Opens a connection, lists the server's graphs, and records the outcome in
+        `dependency_health`.
     """
     check_connectivity_via(config, open_connection)
 
 
 def select_graph(db: FalkorDB, name: str) -> WritableGraph:
-    """Select graph `name` on `db`; the single conversion from the driver's graph type."""
+    """Select graph `name` on `db`; the single conversion from the driver's graph type.
+
+    Args:
+        db: A connected FalkorDB client.
+        name: Name of the graph to select. The graph is created lazily by the server on first
+            write if it does not exist.
+
+    Returns:
+        A write-capable handle on the graph.
+    """
     return db.select_graph(name)

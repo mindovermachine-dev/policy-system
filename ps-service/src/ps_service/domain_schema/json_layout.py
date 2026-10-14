@@ -26,18 +26,22 @@ type Json = Mapping[str, Json] | Sequence[Json] | str | int | float | bool | Non
 
 
 def _scalar(value: Json) -> str:
+    """Return the JSON text of a scalar value (non-ASCII kept as is)."""
     return json.dumps(value, ensure_ascii=False)
 
 
 def _is_list(value: Json) -> TypeIs[Sequence[Json]]:
+    """Whether `value` is a list-like sequence (a `str` is a scalar, not a list)."""
     return isinstance(value, Sequence) and not isinstance(value, str)
 
 
 def _is_container(value: Json) -> bool:
+    """Whether `value` is a mapping or a list."""
     return isinstance(value, Mapping) or _is_list(value)
 
 
 def _inline(value: Json) -> str:
+    """Return `value` as single-line JSON text with the committed file's spacing."""
     if isinstance(value, Mapping):
         if not value:
             return "{}"
@@ -83,10 +87,12 @@ def _forced_expanded_key(value: Mapping[str, Json]) -> str | None:
 
 
 def _fits(text: str, level: int, prefix: str, trailer: str) -> bool:
+    """Whether the indented line `prefix + text + trailer` stays within the line width."""
     return len(_INDENT * level + prefix + text + trailer) <= _WIDTH
 
 
 def _should_inline(value: Json, level: int, prefix: str, trailer: str) -> bool:
+    """Whether `value` is written on one line: scalars, flat small lists, flat fitting objects."""
     if _is_list(value):
         if any(_is_container(item) for item in value):
             return False
@@ -99,6 +105,7 @@ def _should_inline(value: Json, level: int, prefix: str, trailer: str) -> bool:
 
 
 def _children(value: Mapping[str, Json] | Sequence[Json]) -> list[tuple[str, Json, bool]]:
+    """Return `(key prefix, child, force-expand)` for each child of a container."""
     if _is_list(value):
         return [("", item, False) for item in value]
     forced = _forced_expanded_key(value)
@@ -106,6 +113,7 @@ def _children(value: Mapping[str, Json] | Sequence[Json]) -> list[tuple[str, Jso
 
 
 def _lines(value: Json, level: int, prefix: str, trailer: str, *, force_expand: bool) -> list[str]:
+    """Return the output lines for `value` at indent `level`, expanding it when it cannot inline."""
     pad = _INDENT * level
     if not force_expand and _should_inline(value, level, prefix, trailer):
         return [f"{pad}{prefix}{_inline(value)}{trailer}"]
@@ -122,5 +130,14 @@ def _lines(value: Json, level: int, prefix: str, trailer: str, *, force_expand: 
 
 
 def dumps_hand_layout(value: Json) -> str:
-    """Render `value` in the committed hand layout, newline-terminated."""
+    """Render `value` in the committed hand layout, newline-terminated.
+
+    Args:
+        value: Any JSON-compatible value (nested mappings, sequences and scalars). The top level
+            is always expanded.
+
+    Returns:
+        The JSON text; short scalar lists and small flat objects stay on one line, everything
+        else is expanded with a two-space indent and a 120-column width. Key order is kept.
+    """
     return "\n".join(_lines(value, 0, "", "", force_expand=True)) + "\n"

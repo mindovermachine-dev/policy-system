@@ -1,21 +1,18 @@
 """Read-only FalkorDB connection surface for `ps_service.domain_mapper`.
 
-Since #209 the Domain Mapper writes nothing through this surface: its baseline-graph writes are
-Graph Write Gateway groups (`graph_writer`), and the handles built here only READ (the native
-graph, the baseline graph's Requirements and existing-node reads).
+The Domain Mapper writes nothing through this surface: its baseline-graph writes are Graph
+Write Gateway groups (`graph_writer`), and the handles built here only READ (the native graph,
+and the baseline graph's Requirements and existing nodes).
 
-Own copy of `ps_service.ingestion.falkordb_client`'s shape (PLAN_REVIEWED.md
-§1's "components stay independently readable/testable" design note — a
-deliberate near-duplicate, not a shared import): `GraphHandle`/
-`GraphQueryResult` Protocols, `connect`/`connect_from_config`/
-`select_graph`, and this component's own graph-naming helpers.
+This module keeps its own copy of the shape in `ps_service.ingestion.falkordb_client` so the
+components stay independently readable and testable (a deliberate near-duplicate, not a shared
+import): the `GraphHandle` and `GraphQueryResult` Protocols, `connect`, `connect_from_config`,
+`select_graph`, and this component's graph-naming helpers.
 
-Naming (PLAN_REVIEWED.md §8): `native_graph_name` matches Ingestion's own
-`{short_name.lower()}_native` convention exactly — Domain Mapper reads the
-same native graph Ingestion wrote, so the naming formula must be identical,
-not just similarly-shaped. `baseline_graph_name` is this component's own
-per-regulation graph (`{short_name.lower()}_baseline`, AC-005; written through the gateway,
-read through a handle from here) — never the company's merged single-tenant graph.
+Naming: `native_graph_name` matches Ingestion's `{short_name.lower()}_native` convention
+exactly, because the Domain Mapper reads the native graph Ingestion wrote. `baseline_graph_name`
+is this component's own per-regulation graph (`{short_name.lower()}_baseline`), written through
+the gateway and read through a handle from here, never the company's merged single-tenant graph.
 """
 
 from __future__ import annotations
@@ -36,13 +33,12 @@ _BASELINE_GRAPH_SUFFIX = "_baseline"
 class GraphQueryResult(Protocol):
     """Structural stand-in for `falkordb.QueryResult`.
 
-    The one field any caller of `GraphHandle.query` needs to read off a
-    response.
+    Exposes the one field any caller of `GraphHandle.query` reads from a response.
     """
 
     @property
     def result_set(self) -> list[object]:
-        """The rows returned by the query."""
+        """Return the rows of the query; empty when nothing matched."""
         ...
 
 
@@ -55,17 +51,23 @@ class GraphHandle(Protocol):
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
-        """Run Cypher `q` (optionally parameterized via `params`) and return the result."""
+        """Run read-only Cypher `q`, bound to `params` when given, and return the result.
+
+        Args:
+            q: Cypher text; must not write.
+            params: Query parameters referenced as `$name` in `q`; `None` for none.
+
+        Returns:
+            The query result, whose `result_set` holds the matched rows.
+        """
         ...
 
 
 class _ConnectivityProbe(Protocol):
     """Structural requirement for `check_connectivity`'s `db` parameter.
 
-    Only the one call surface needed to verify connectivity. A real
-    `connect()`-returned `FalkorDB` instance satisfies this structurally
-    with no change; tests can substitute a lightweight fake instead of
-    mocking the real client type.
+    The one call needed to verify connectivity. A real `connect()` result satisfies it
+    structurally, and a lightweight fake can stand in for it.
     """
 
     def list_graphs(self) -> list[str]: ...
@@ -76,17 +78,28 @@ def connect(host: str, port: int) -> ReadOnlyDatabase:
 
     Does not itself verify connectivity; call `check_connectivity()` against the result to
     fail loud early.
+
+    Args:
+        host: FalkorDB host name or address.
+        port: FalkorDB TCP port.
+
+    Returns:
+        The read-only database handle.
     """
     return open_read_only_database(host, port)
 
 
 def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
-    """Build the real FalkorDB connection from `config`'s host/port.
+    """Build the read-only FalkorDB connection from `config`'s host and port.
 
-    Mirrors `ps_service.ingestion.falkordb_client.connect_from_config`
-    exactly. Callers build `config` via `ps_service.config.load_config()`,
-    never by constructing a `ServiceConfig` with hardcoded host/port
-    values.
+    Mirrors `ps_service.ingestion.falkordb_client.connect_from_config`. Callers obtain `config`
+    from `ps_service.config.load_config()` rather than hardcoding host and port.
+
+    Args:
+        config: The resolved service configuration.
+
+    Returns:
+        The read-only database handle; connectivity is not verified.
     """
     return connect(host=config.falkordb_host, port=config.falkordb_port)
 
@@ -94,11 +107,20 @@ def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
 def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:
     """Fail loud, with a friendly message, before doing any real work.
 
-    Raises `DomainMapperConfigurationError` (wrapping the underlying cause)
-    if `db` cannot list its graphs — the cheapest real round-trip available
-    to confirm the connection is actually usable. Records the outcome in
-    `ps_service.dependency_health` either way, so a caller using this as a
-    startup probe also feeds the live readiness signal.
+    Listing the graphs is the cheapest real round-trip that confirms the connection is usable.
+
+    Args:
+        db: Connection to probe.
+        host: Host name used only in the failure message.
+        port: Port used only in the failure message.
+
+    Raises:
+        DomainMapperConfigurationError: If `db` cannot list its graphs; the cause is chained.
+
+    Side Effects:
+        Records the FalkorDB outcome (healthy or unhealthy) in `ps_service.dependency_health`
+        either way, so a caller using this as a startup probe also feeds the live readiness
+        signal.
     """
     try:
         db.list_graphs()
@@ -113,27 +135,45 @@ def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:
 def select_graph(db: ReadOnlyDatabase, name: str) -> GraphHandle:
     """Select graph `name` on `db` as this module's local, read-only `GraphHandle`.
 
-    This is the single conversion site -- callers elsewhere in `ps_service.domain_mapper` never see
-    the driver's graph type. `name` is expected to already be the final graph name -- this
-    function does no naming/namespacing of its own.
+    This is the single conversion site: callers elsewhere in `ps_service.domain_mapper` never see
+    the driver's graph type.
+
+    Args:
+        db: Read-only database returned by `connect`.
+        name: Final graph name; no naming or namespacing is applied here.
+
+    Returns:
+        A read-only handle on graph `name`.
     """
     return db.select_graph(name)
 
 
 def native_graph_name(short_name: str) -> str:
-    """The same regulation-scoped native graph Ingestion wrote to.
+    """Return the name of the regulation's native graph, which Ingestion wrote.
 
-    (`{short_name.lower()}_native`, e.g. `"CRA"` -> `"cra_native"`) —
-    Domain Mapper reads this, never writes it.
+    The name is `{short_name.lower()}_native` (e.g. `"CRA"` -> `"cra_native"`). The Domain
+    Mapper only reads this graph.
+
+    Args:
+        short_name: The regulation's short name, in any case.
+
+    Returns:
+        The lower-cased native graph name.
     """
     return f"{short_name.lower()}{_NATIVE_GRAPH_SUFFIX}"
 
 
 def baseline_graph_name(short_name: str) -> str:
-    """PLAN_REVIEWED.md §8: one FalkorDB graph per regulation for this component's own output.
+    """Return the name of the per-regulation graph holding this component's own output.
 
-    (`{short_name.lower()}_baseline`, e.g. `"CRA"` -> `"cra_baseline"`) —
-    distinct from `{short_name}_native` and from the company's merged
-    single-tenant graph. AC-005's isolation requirement.
+    The name is `{short_name.lower()}_baseline` (e.g. `"CRA"` -> `"cra_baseline"`), distinct
+    from the native graph and from the company's merged single-tenant graph, so one
+    regulation's baseline stays isolated from every other.
+
+    Args:
+        short_name: The regulation's short name, in any case.
+
+    Returns:
+        The lower-cased baseline graph name.
     """
     return f"{short_name.lower()}{_BASELINE_GRAPH_SUFFIX}"

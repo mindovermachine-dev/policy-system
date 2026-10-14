@@ -1709,7 +1709,7 @@ def _record_internal_run_audit(
 
 def _native_graph_name(short_name: str) -> str:
     """The ``{short}_native`` graph name, the target of the seed's native graph group."""
-    from ps_service.ingestion.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off the pipeline at import
+    from ps_service.ingestion.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off the pipeline at import
         native_graph_name,
     )
 
@@ -1718,7 +1718,7 @@ def _native_graph_name(short_name: str) -> str:
 
 def _baseline_graph_name(short_name: str) -> str:
     """The ``{short}_baseline`` graph name, the target of the seed's baseline graph group."""
-    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         baseline_graph_name,
     )
 
@@ -1727,7 +1727,7 @@ def _baseline_graph_name(short_name: str) -> str:
 
 def _single_tenant_graph_name() -> str:
     """The single-tenant (``policy_system``) graph name, the target of the merge's groups."""
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         single_tenant_graph_name,
     )
 
@@ -1898,7 +1898,7 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
 
 def _open_native_graph(config: ServiceConfig, short_name: str) -> GraphHandle:
     """Open the ``{short}_native`` graph for ``short_name``."""
-    from ps_service.ingestion.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off the pipeline at import
+    from ps_service.ingestion.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off the pipeline at import
         connect_from_config,
         native_graph_name,
         select_graph,
@@ -1909,7 +1909,7 @@ def _open_native_graph(config: ServiceConfig, short_name: str) -> GraphHandle:
 
 def _open_baseline_graph(config: ServiceConfig, short_name: str) -> GraphHandle:
     """Open the ``{short}_baseline`` graph for ``short_name``."""
-    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         baseline_graph_name,
         connect_from_config,
         select_graph,
@@ -1920,7 +1920,7 @@ def _open_baseline_graph(config: ServiceConfig, short_name: str) -> GraphHandle:
 
 def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
     """Open the single-tenant (``policy_system``) graph."""
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         connect_from_config,
         select_graph,
         single_tenant_graph_name,
@@ -1931,7 +1931,7 @@ def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
 
 def _default_ingestion_adapter() -> MetadataFetchingAdapter:
     """Build the default (Cellar/ELI) Ingestion Adapter."""
-    from ps_service.ingestion.adapters.cellar_eli.adapter import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.ingestion.adapters.cellar_eli.adapter import (  # noqa: PLC0415 -- function-local
         CellarEliAdapter,
     )
 
@@ -1940,7 +1940,7 @@ def _default_ingestion_adapter() -> MetadataFetchingAdapter:
 
 def _default_mapping_adapter() -> DomainMappingAdapter:
     """Build the default (Cellar/ELI) Domain Mapping Adapter."""
-    from ps_service.domain_mapper.adapters.cellar_eli import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.domain_mapper.adapters.cellar_eli import (  # noqa: PLC0415 -- function-local
         CellarEliDomainMappingAdapter,
     )
 
@@ -2022,12 +2022,12 @@ def build_default_pipeline_dependencies(
         A :class:`PipelineDependencies` bound to the production stage functions,
         graph openers, and adapter factories.
     """
-    from ps_service.company_merge import merge_baseline_graph  # noqa: PLC0415 -- M6: function-local
-    from ps_service.domain_mapper import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.company_merge import merge_baseline_graph  # noqa: PLC0415 -- function-local
+    from ps_service.domain_mapper import (  # noqa: PLC0415 -- function-local
         derive_obligations_and_capabilities,
         extract_roles_and_requirements,
     )
-    from ps_service.ingestion import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.ingestion import (  # noqa: PLC0415 -- function-local
         ingest_regulatory_instrument,
     )
     from ps_service.ingestion.adapters.internal_seed.persist import (  # noqa: PLC0415 -- mirrors the other stage imports' local-import style

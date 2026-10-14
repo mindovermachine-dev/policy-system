@@ -44,11 +44,11 @@ def test_national_transposition_error_default_message_names_issues_41_and_46() -
     assert "#46" in str(error)
 
 
-def test_national_transposition_error_docstring_names_issues_41_and_46() -> None:
-    doc = NationalTranspositionNotSupportedError.__doc__ or ""
+def test_national_transposition_error_docstring_states_the_guard_raises_before_any_write() -> None:
+    doc = " ".join((NationalTranspositionNotSupportedError.__doc__ or "").split())
 
-    assert "#41" in doc
-    assert "#46" in doc
+    assert "national_transposition" in doc
+    assert "before any graph write" in doc
 
 
 def test_national_transposition_error_accepts_a_custom_message() -> None:

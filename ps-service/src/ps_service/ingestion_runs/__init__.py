@@ -1,4 +1,4 @@
-"""ps_service.ingestion_runs -- status/result of asynchronously submitted ingestion runs (#194).
+"""ps_service.ingestion_runs -- status/result of asynchronously submitted ingestion runs.
 
 Domain path: `ps.service.ingestionruns`
 (`docs/architecture/ps-solution-architecture.md`). Persists one `ingestion_runs` row per

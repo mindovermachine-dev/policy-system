@@ -1,4 +1,4 @@
-"""Background reconciler: applies committed-but-pending entries once FalkorDB recovers (S12).
+"""Background reconciler: applies committed-but-pending entries once FalkorDB recovers.
 
 A graph is registered when a group is reported `committed_apply_pending` (or a write finds the
 graph lagging while FalkorDB is down). The thread starts lazily on the first registration, is a
@@ -29,7 +29,12 @@ DEFAULT_STOP_TIMEOUT_SECONDS = 5.0
 
 
 class GraphReconciler:
-    """Retries `catch_up` for registered graphs until each is caught up or refused."""
+    """Retries `catch_up` for registered graphs until each is caught up or refused.
+
+    Business Rules:
+        A graph leaves the pending set when it is caught up or the gateway refuses it; a
+        transient failure keeps it pending for the next pass.
+    """
 
     def __init__(
         self,
@@ -41,8 +46,12 @@ class GraphReconciler:
     ) -> None:
         """Take the catch-up step and the schedule.
 
-        `wait(seconds)` sleeps between passes and returns True if the reconciler must stop;
-        by default it is `Event.wait` on the stop event, so `stop()` interrupts it.
+        Args:
+            catch_up: Applies a graph's pending log entries and reports whether it is caught up.
+            settings: Gateway settings supplying the backoff schedule and its cap.
+            emitter: Destination of the reconciler log entries; `None` disables logging.
+            wait: `wait(seconds)` sleeps between passes and returns True if the reconciler must
+                stop. Defaults to `Event.wait` on the stop event, so `stop()` interrupts it.
         """
         self._catch_up = catch_up
         self._settings = settings
@@ -55,12 +64,23 @@ class GraphReconciler:
 
     @property
     def is_running(self) -> bool:
-        """Whether the reconciler thread is alive."""
+        """Whether the reconciler thread is alive.
+
+        Returns:
+            True while the thread is running.
+        """
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
 
     def register(self, graph: str) -> None:
-        """Add `graph` to the pending set, starting the thread if it is not running."""
+        """Add `graph` to the pending set, starting the thread if it is not running.
+
+        Args:
+            graph: Name of the graph with committed log entries that are not applied yet.
+
+        Side Effects:
+            Starts a daemon thread unless one runs or `stop` was called.
+        """
         with self._lock:
             self._pending.add(graph)
             if self._thread is None and not self._stop_event.is_set():
@@ -70,9 +90,18 @@ class GraphReconciler:
                 self._thread.start()
 
     def stop(self, timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS) -> bool:
-        """Ask the thread to stop and wait up to `timeout` seconds; True if it ended.
+        """Ask the thread to stop and wait up to `timeout` seconds.
 
         A thread that does not end is abandoned (it is a daemon) and the fact is logged.
+
+        Args:
+            timeout: Seconds to wait for the thread to end.
+
+        Returns:
+            True if the thread ended or was never started; False if it was abandoned.
+
+        Side Effects:
+            Sets the stop event and emits a `reconciler_stop` entry when the thread is abandoned.
         """
         self._stop_event.set()
         with self._lock:
@@ -99,6 +128,7 @@ class GraphReconciler:
             attempt = attempt + 1 if self._has_pending() else 1
 
     def _delay(self, attempt: int) -> float:
+        """Return the backoff before pass number `attempt`."""
         return backoff_seconds(self._settings, attempt)
 
     def _has_pending(self) -> bool:
@@ -110,10 +140,12 @@ class GraphReconciler:
             return False
 
     def _snapshot(self) -> list[str]:
+        """Return the pending graph names, sorted."""
         with self._lock:
             return sorted(self._pending)
 
     def _discard(self, graph: str) -> None:
+        """Remove `graph` from the pending set."""
         with self._lock:
             self._pending.discard(graph)
 
@@ -134,6 +166,7 @@ class GraphReconciler:
         return result.caught_up
 
     def _log(self, graph: str, outcome: str, error: BaseException | None) -> None:
+        """Emit a `reconciler_pass` entry carrying the graph and the error class, if any."""
         fields: dict[str, str | int | float] = {"graph": graph}
         if error is not None:
             fields["error_class"] = type(error).__name__

@@ -1,8 +1,8 @@
-"""The Restore side of the Graph Write Gateway seam (issue #214).
+"""The Restore side of the Graph Write Gateway seam.
 
-Restore issues no write Cypher. It hands the gateway ONE multi-graph group for the whole
-instrument (native, baseline and `policy_system`) and learns how it ended. This module is the
-one place a gateway failure becomes a Restore error:
+Restore issues no write Cypher. It hands the gateway one group for the whole instrument
+(native, baseline and `policy_system`) and learns how it ended. This module is the one place
+a gateway failure becomes a Restore error:
 
 - `StaleGraphStateError` is not translated: the `policy_system` leg carries `ExpectedPosition`
   and a refusal means another writer moved the graph since Restore read it, which the caller's
@@ -57,7 +57,7 @@ __all__ = [
 ]
 
 MAX_POLICY_SYSTEM_ATTEMPTS = 3
-"""How many times a restore reads `policy_system` and submits before it gives up (the old limit)."""
+"""How many times a restore reads `policy_system` and submits before it gives up."""
 
 _COMPONENT = "restore"
 _CATCH_UP_ACTION = "catch_up_policy_system"
@@ -78,31 +78,77 @@ _GATEWAY_FAILURES = (
 
 @runtime_checkable
 class RestoreGateway(Protocol):
-    """What Restore needs of the Graph Write Gateway: read a position, submit a set or a group."""
+    """What Restore needs of the Graph Write Gateway: read a position, submit a group.
+
+    Structural protocol, so any gateway that offers these calls can take a restore. Each call
+    may raise the gateway's own errors; `submit_restore`, `ensure_caught_up` and
+    `read_log_position` translate them.
+    """
 
     def submit_multi_graph_group(self, group: MultiGraphGroup) -> MultiGraphOutcome:
-        """Log and apply `group` (several graphs, one transaction)."""
+        """Log and apply `group` (several graphs, one transaction).
+
+        Args:
+            group: The group to log and apply.
+
+        Returns:
+            The outcome, whose `status` says whether the group was applied.
+        """
         ...
 
     def submit_group(self, group: MutationGroup) -> GroupOutcome:
-        """Log and apply `group` (one graph)."""
+        """Log and apply `group` (one graph).
+
+        Args:
+            group: The group to log and apply.
+
+        Returns:
+            The outcome, whose `status` says whether the group was applied.
+        """
         ...
 
     def read_log_position(self, graph: str) -> int:
-        """Read the last log position of `graph` (what an `ExpectedPosition` is made from)."""
+        """Read the last log position of `graph` (what an `ExpectedPosition` is made from).
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            The position of the graph's last logged entry.
+        """
         ...
 
     def is_caught_up(self, graph: str) -> bool:
-        """Answer True only if every committed entry of `graph` is applied to it."""
+        """Answer True only if every committed entry of `graph` is applied to it.
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            Whether the graph holds everything committed to its log.
+        """
         ...
 
     def catch_up(self, graph: str) -> CatchUpResult:
-        """Apply every logged entry of `graph` that its applied marker does not cover."""
+        """Apply every logged entry of `graph` that its applied marker does not cover.
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            Whether the graph is now caught up with its log.
+        """
         ...
 
 
 def as_restore_gateway(gateway: object) -> RestoreGateway:
-    """Return `gateway` as a `RestoreGateway`.
+    """Narrow the installed gateway to a `RestoreGateway`.
+
+    Args:
+        gateway: The object the process installed as its Graph Write Gateway.
+
+    Returns:
+        `gateway` itself, typed as a `RestoreGateway`.
 
     Raises:
         TypeError: the installed gateway lacks a call Restore needs (a wiring error, not a
@@ -122,6 +168,18 @@ def ensure_caught_up(
     An earlier group that was committed but not applied (FalkorDB went away) would otherwise
     leave Restore reading a graph that does not yet hold it. Applies the pending entries first
     (idempotent) and writes nothing new.
+
+    Args:
+        gateway: The gateway to ask and, if behind, to catch up.
+        graph: Name of the graph about to be read.
+        emitter: Log emitter for the catch-up log entry; `None` uses the default emitter.
+
+    Returns:
+        None; returns normally only when the graph holds everything committed to its log.
+
+    Side Effects:
+        When the graph is behind, applies its pending log entries to it and emits one
+        `catch_up_policy_system` log entry (`caught_up` or `behind`).
 
     Raises:
         RestoreGraphWriteFailedError: the log could not be read, FalkorDB is unreachable or
@@ -148,6 +206,13 @@ def ensure_caught_up(
 def read_log_position(gateway: RestoreGateway, graph: str) -> int:
     """Read the last log position of `graph`, the position a guarded leg is built against.
 
+    Args:
+        gateway: The gateway to read the log from.
+        graph: Name of the graph.
+
+    Returns:
+        The position of the graph's last logged entry.
+
     Raises:
         RestoreGraphWriteFailedError: the log could not be read. The cause is chained.
     """
@@ -162,6 +227,17 @@ def submit_restore(
     group: MultiGraphGroup | MutationGroup,
 ) -> None:
     """Submit the restore's group; return when it took effect (applied, or nothing to change).
+
+    Args:
+        gateway: The gateway to submit to.
+        group: The restore's group: a multi-graph group, or a plain group when only one leg has
+            content.
+
+    Returns:
+        None; returns normally only when the group is applied.
+
+    Side Effects:
+        Logs the group to the graph log and applies it to the target graph(s).
 
     Raises:
         StaleGraphStateError: a guarded leg's graph moved since it was read; nothing was logged

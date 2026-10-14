@@ -1,4 +1,4 @@
-"""The Graph Write Gateway's label allow-list (issue #206, AC-BI-001).
+"""The Graph Write Gateway's allow-list of node labels and relationship types.
 
 Derived, never hand-written: the labels and relationship types of `DOMAIN_SCHEMA` plus the three
 named, closed exception sets of the domain schema's vocabulary exceptions (system-minted edges,
@@ -6,7 +6,7 @@ operational labels, native structural labels). Native graphs have no exemption a
 runtime registration: a new name is a change to the schema or to those named sets. When this
 derivation and the named sets ever disagree, the named sets win (container architecture).
 
-The restore allow-lists are independent hand-written lists and are not touched here.
+The restore allow-lists are independent hand-written lists and are not derived from this one.
 """
 
 from __future__ import annotations
@@ -36,14 +36,34 @@ _UNLISTED_TYPE_MESSAGE = "a relationship type is outside the gateway's allow-lis
 
 
 def require_allowed_node_label(label: str) -> str:
-    """Return `label` if it is allow-listed, else raise `UnlistedNameError` (label not echoed)."""
+    """Check that a write may name `label` as a node label.
+
+    Args:
+        label: Node label requested by a write.
+
+    Returns:
+        `label`, unchanged, when it is in `ALLOWED_NODE_LABELS`.
+
+    Raises:
+        UnlistedNameError: `label` is not allow-listed; the message does not echo the label.
+    """
     if label not in ALLOWED_NODE_LABELS:
         raise UnlistedNameError(_UNLISTED_LABEL_MESSAGE)
     return label
 
 
 def require_allowed_relationship_type(relationship_type: str) -> str:
-    """Return `relationship_type` if allow-listed, else raise `UnlistedNameError`."""
+    """Check that a write may name `relationship_type` as a relationship type.
+
+    Args:
+        relationship_type: Relationship type requested by a write.
+
+    Returns:
+        `relationship_type`, unchanged, when it is in `ALLOWED_RELATIONSHIP_TYPES`.
+
+    Raises:
+        UnlistedNameError: `relationship_type` is not allow-listed; the message does not echo it.
+    """
     if relationship_type not in ALLOWED_RELATIONSHIP_TYPES:
         raise UnlistedNameError(_UNLISTED_TYPE_MESSAGE)
     return relationship_type

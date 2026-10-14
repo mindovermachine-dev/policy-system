@@ -1,4 +1,4 @@
-"""Executors run when a signed passkey approval is verified (issue #190).
+"""Executors run when a signed passkey approval is verified.
 
 `execute_capability_merge` and `execute_obligation_merge` are the post-signature steps of
 `merge-capabilities` and `merge-obligations` (audit-first and fail-closed). Order:
@@ -7,8 +7,8 @@
 2. re-read the graph, re-validate, and compare the state digest bound into the signed args
    (drift means the previewed state is gone: nothing is written, no audit row);
 3. record the `applied` audit row, then write -- if the audit row cannot be recorded, no
-   graph edit is made (AC-BI-022);
-4. one gateway group, guarded by the graph's log position (all-or-nothing, AC-BI-018); a guard
+   graph edit is made;
+4. one gateway group, guarded by the graph's log position (all-or-nothing); a guard
    miss or failure records a `failed` row with the same `approval_id` (best effort) and returns a
    generic error.
 
@@ -353,7 +353,7 @@ def _replan_capability_merge(
         and governance.acknowledgment_required
         and row.normalized_args.get("acknowledge_governance_change") is not True
     ):
-        # Defence in depth (D5): the approval flow never creates such a row.
+        # Defence in depth: the approval flow never creates such a row.
         _log(row, "failed", "acknowledgment_missing")
         return _error(_ACK_REQUIRED)
     if plan.state_digest != digest:
@@ -367,9 +367,27 @@ def execute_capability_merge(
 ) -> dict[str, object]:
     """Execute one signed `merge-capabilities` approval; return its outcome dict.
 
-    Success: `{"survivor_id", "absorbed_id", "merged": True}`. Every failure is
-    `{"error": <message without internal detail>}`. A case-2 merge (exactly one capability
-    governed) is refused unless the signed arguments carry the acknowledgment.
+    Applies the previewed merge only if the approver still holds `ComplianceOfficer`, the graph
+    still matches the state digest in the signed arguments, and the audit row was recorded first.
+    A merge where exactly one Capability is governed is refused unless the signed arguments
+    carry `acknowledge_governance_change`.
+
+    Args:
+        row: The verified approval; its `normalized_args` carry the signed arguments and its
+            actor identifies who approved.
+        config: Service configuration used to open the graph and the stores.
+        dependencies: Factories for the graph, audit store, access-role store and gateway.
+
+    Returns:
+        On success `{"survivor_id", "absorbed_id", "merged": True}`. On any expected failure
+        `{"error": <short message without internal detail>}`; this function does not raise for
+        them (malformed arguments, lost authority, drift, unavailable graph or audit, failed
+        write).
+
+    Side Effects:
+        Writes an `applied` `capability.merge` audit row, then one gateway group that tombstones
+        the absorbed Capability. When the guard or the write fails, records a `failed` row
+        with the same `approval_id` (best effort). Emits a structured log entry.
     """
     survivor_id = _string_arg(row, "survivor_id")
     absorbed_id = _string_arg(row, "absorbed_id")
@@ -403,7 +421,18 @@ def execute_capability_merge(
 
 
 def verify_capability_merge_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
-    """Whether the approved merge is present in the graph (tombstone with `MERGED_INTO`)."""
+    """Report whether the approved Capability merge is present in the graph.
+
+    Used to settle an approval whose outcome is unknown.
+
+    Args:
+        row: The approval; needs string `survivor_id` and `absorbed_id` in `normalized_args`.
+        graph: Handle on the single-tenant graph, read only.
+
+    Returns:
+        True when the absorbed Capability is a tombstone with a `MERGED_INTO` edge to the
+        survivor; False when it is not, or when either id is missing from the arguments.
+    """
     survivor_id = _string_arg(row, "survivor_id")
     absorbed_id = _string_arg(row, "absorbed_id")
     if survivor_id is None or absorbed_id is None:
@@ -524,9 +553,24 @@ def execute_obligation_merge(
 ) -> dict[str, object]:
     """Execute one signed `merge-obligations` approval; return its outcome dict.
 
-    Same fail-closed order as `execute_capability_merge`. Success:
-    `{"survivor_id", "absorbed_id", "merged": True}`. Every failure is
-    `{"error": <message without internal detail>}`.
+    Follows the same fail-closed order as `execute_capability_merge`: authority re-check,
+    re-read and digest comparison, `applied` audit row, then one guarded gateway group.
+
+    Args:
+        row: The verified approval; its `normalized_args` carry the signed arguments and its
+            actor identifies who approved.
+        config: Service configuration used to open the graph and the stores.
+        dependencies: Factories for the graph, audit store, access-role store and gateway.
+
+    Returns:
+        On success `{"survivor_id", "absorbed_id", "merged": True}`. On any expected failure
+        `{"error": <short message without internal detail>}`; this function does not raise for
+        them.
+
+    Side Effects:
+        Writes an `applied` `obligation.merge` audit row, then one gateway group that deletes
+        the absorbed Obligation and leaves a marker. When the guard or the write fails, records a
+        `failed` row with the same `approval_id` (best effort). Emits a structured log entry.
     """
     survivor_id = _string_arg(row, "survivor_id")
     absorbed_id = _string_arg(row, "absorbed_id")
@@ -562,7 +606,16 @@ def execute_obligation_merge(
 
 
 def verify_obligation_merge_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
-    """Whether the approved merge is present: the absorbed node is gone and its marker exists."""
+    """Report whether the approved Obligation merge is present in the graph.
+
+    Args:
+        row: The approval; needs string `survivor_id` and `absorbed_id` in `normalized_args`.
+        graph: Handle on the single-tenant graph, read only.
+
+    Returns:
+        True when the absorbed Obligation no longer exists and its merge marker is present; False
+        otherwise, or when either id is missing from the arguments.
+    """
     survivor_id = _string_arg(row, "survivor_id")
     absorbed_id = _string_arg(row, "absorbed_id")
     if survivor_id is None or absorbed_id is None:
@@ -673,9 +726,25 @@ def execute_release_governance(
 ) -> dict[str, object]:
     """Execute one signed `release-capability-governance` approval; return its outcome dict.
 
-    Same fail-closed order as the merges. Success:
-    `{"capability_id", "policy_id", "released": True}`. Every failure is
-    `{"error": <message without internal detail>}`.
+    Removes the `GOVERNED_BY` edge between a Capability and its draft policy, following the same
+    fail-closed order as the merges. The approval is refused as stale when the state digest or
+    the policy id no longer matches the graph.
+
+    Args:
+        row: The verified approval; its `normalized_args` carry the signed arguments and its
+            actor identifies who approved.
+        config: Service configuration used to open the graph and the stores.
+        dependencies: Factories for the graph, audit store, access-role store and gateway.
+
+    Returns:
+        On success `{"capability_id", "policy_id", "released": True}`. On any expected failure
+        `{"error": <short message without internal detail>}`; this function does not raise for
+        them.
+
+    Side Effects:
+        Writes an `applied` `capability.release_governance` audit row, then one gateway group
+        that deletes the edge. When the guard or the write fails, records a `failed` row with
+        the same `approval_id` (best effort). Emits a structured log entry.
     """
     capability_id = _string_arg(row, "capability_id")
     policy_id = _string_arg(row, "policy_id")
@@ -702,7 +771,16 @@ def execute_release_governance(
 
 
 def verify_release_governance_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
-    """Whether the approved release is present: the `GOVERNED_BY` edge is gone."""
+    """Report whether the approved governance release is present in the graph.
+
+    Args:
+        row: The approval; needs string `capability_id` and `policy_id` in `normalized_args`.
+        graph: Handle on the single-tenant graph, read only.
+
+    Returns:
+        True when no `GOVERNED_BY` edge links the Capability to the policy; False when it still
+        exists, or when either id is missing from the arguments.
+    """
     capability_id = _string_arg(row, "capability_id")
     policy_id = _string_arg(row, "policy_id")
     if capability_id is None or policy_id is None:
@@ -907,10 +985,26 @@ def execute_unmerge(
 ) -> dict[str, object]:
     """Execute one signed `unmerge` approval; return its outcome dict.
 
-    Same fail-closed order as the merges, plus: the merge is re-located in the audit trail and
-    must still be the one the approval was created for. Success:
-    `{"merged_id", "survivor_id", "unmerged": True, "survivor_added_edges"}`. Every failure is
-    `{"error": <message without internal detail>}`.
+    Reverses an earlier Capability or Obligation merge. Follows the same fail-closed order as the
+    merges, and also re-locates the merge in the audit trail: it must still be the one the
+    approval was created for.
+
+    Args:
+        row: The verified approval; its `normalized_args` carry the signed arguments and its
+            actor identifies who approved.
+        config: Service configuration used to open the graph and the stores.
+        dependencies: Factories for the graph, audit store, access-role store and gateway.
+
+    Returns:
+        On success `{"merged_id", "survivor_id", "unmerged": True, "survivor_added_edges"}`. On
+        any expected failure `{"error": <short message without internal detail>}`; this
+        function does not raise for them. A `kind` other than `capability` or `obligation` is
+        a malformed approval.
+
+    Side Effects:
+        Writes an `applied` unmerge audit row, then one gateway group that restores the absorbed
+        node and its edges. When the guard or the write fails, records a `failed` row with the
+        same `approval_id` (best effort). Emits a structured log entry.
     """
     merged_id = _string_arg(row, "merged_id")
     merge_approval_id = _string_arg(row, "merge_approval_id")
@@ -943,10 +1037,17 @@ def execute_unmerge(
 
 
 def verify_unmerge_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
-    """Whether the approved unmerge is present.
+    """Report whether the approved unmerge is present in the graph.
 
-    A capability is active again with no redirect; an obligation exists again and its
-    `MergedObligation` marker is gone.
+    Args:
+        row: The approval; needs a string `merged_id` and a `kind` of `capability` or
+            `obligation` in `normalized_args`.
+        graph: Handle on the single-tenant graph, read only.
+
+    Returns:
+        For a Capability, True when it is active again with no redirect. For an Obligation, True
+        when it exists again and its `MergedObligation` marker is gone. False otherwise, or when
+        `merged_id` is missing.
     """
     merged_id = _string_arg(row, "merged_id")
     if merged_id is None:

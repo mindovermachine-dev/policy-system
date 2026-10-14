@@ -1,12 +1,14 @@
-"""Pure planning and conflict detection for capability `unmerge` (issue #190, AC-BI-019/020/021).
+"""Pure planning and conflict detection for `unmerge` of a capability or obligation merge.
 
-No I/O. `derive_capability_unmerge_inputs` reads what a `capability.merge` audit snapshot says
-to reverse; `plan_capability_unmerge` compares it with the live graph, rejects every conflict
-with an explanation (D9), and returns the preview, the exact parameters the guarded writer
-pins, the before/after snapshots and a state digest binding the approval.
+No I/O. `derive_capability_unmerge_inputs` and `derive_obligation_unmerge_inputs` read what a
+merge's audit snapshot says to reverse; `plan_capability_unmerge` and `plan_obligation_unmerge`
+compare it with the live graph, reject every conflict with an explanation, and return the
+preview, the exact parameters the guarded writer pins, the before/after snapshots and a state
+digest binding the approval.
 
-Only the edges the merge moved come back, and only those the merge moved leave the survivor;
-anything the survivor gained since stays in place and is listed (`survivor_added_edges`).
+For a capability, only the edges the merge moved come back, and only those the merge moved
+leave the survivor; anything the survivor gained since stays in place and is listed
+(`survivor_added_edges`). For an obligation, the survivor's edges are never removed.
 """
 
 from __future__ import annotations
@@ -55,6 +57,18 @@ _SOURCE_LABELS = dict(EDGE_CLASSES)
 
 def derive_capability_unmerge_inputs(details: CapabilityMergeDetails) -> CapabilityUnmergeInputs:
     """Derive what to restore and remove from a merge's `before`/`after` snapshots.
+
+    Edges to remove from the survivor are those the absorbed Capability held that the survivor
+    did not already hold before the merge. The absorbed Capability's governing Policy is
+    restored, and removed from the survivor only when the survivor was not governed before.
+
+    Args:
+        details: The capability-merge audit details; `before` and `after` snapshots must be
+            present.
+
+    Returns:
+        The ids and edges to restore, the survivor edges to remove, the Policy to restore
+        (or `None`) and the survivor's incoming edges at merge time.
 
     Raises:
         GraphCleanupValidationError: the audit record carries no snapshot.
@@ -112,6 +126,7 @@ def derive_capability_unmerge_inputs(details: CapabilityMergeDetails) -> Capabil
 
 
 def _restore_ids(inputs: CapabilityUnmergeInputs) -> dict[str, tuple[str, ...]]:
+    """Map each edge class to the source ids whose edge to the absorbed Capability is restored."""
     return {
         "REQUIRES": inputs.restore_requires,
         "COVERS": inputs.restore_covers,
@@ -120,6 +135,7 @@ def _restore_ids(inputs: CapabilityUnmergeInputs) -> dict[str, tuple[str, ...]]:
 
 
 def _remove_candidates(inputs: CapabilityUnmergeInputs) -> dict[str, tuple[str, ...]]:
+    """Map each edge class to the source ids that may be removed from the survivor."""
     return {
         "REQUIRES": inputs.remove_requires,
         "COVERS": inputs.remove_covers,
@@ -128,6 +144,7 @@ def _remove_candidates(inputs: CapabilityUnmergeInputs) -> dict[str, tuple[str, 
 
 
 def _check_tombstone(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeState) -> None:
+    """Raise unless the absorbed Capability is a `merged` tombstone redirecting to the survivor."""
     absorbed, survivor_id = state.absorbed, inputs.survivor_id
     if absorbed is None:
         message = f"capability {inputs.absorbed_id!r} no longer exists, so it cannot be unmerged"
@@ -156,6 +173,7 @@ def _check_tombstone(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeSt
 
 
 def _check_survivor(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeState) -> None:
+    """Raise unless the survivor Capability still exists and is active."""
     survivor = state.survivor
     if survivor is None:
         message = (
@@ -176,6 +194,7 @@ def _check_survivor(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeSta
 
 
 def _check_endpoints(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeState) -> None:
+    """Raise when any endpoint of an edge to restore no longer exists."""
     missing = sorted(
         {
             endpoint
@@ -193,6 +212,7 @@ def _check_endpoints(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeSt
 
 
 def _check_governance(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeState) -> None:
+    """Raise when the Policy to restore is gone or the survivor's governance has changed."""
     policy_id = inputs.restore_policy_id
     if policy_id is None:
         return
@@ -210,6 +230,7 @@ def _check_governance(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeS
 
 
 def _edge(rel: str, source_id: str, target_id: str) -> EdgeRecord:
+    """Return the incoming edge of class `rel` from `source_id` to the Capability `target_id`."""
     return EdgeRecord(
         rel_type=rel,
         source_label=_SOURCE_LABELS[rel],
@@ -220,6 +241,7 @@ def _edge(rel: str, source_id: str, target_id: str) -> EdgeRecord:
 
 
 def _governed(capability_id: str, policy_id: str) -> EdgeRecord:
+    """Return the `GOVERNED_BY` edge from the Capability to the Policy."""
     return EdgeRecord(
         rel_type="GOVERNED_BY",
         source_label="Capability",
@@ -230,6 +252,7 @@ def _governed(capability_id: str, policy_id: str) -> EdgeRecord:
 
 
 def _sorted_edges(edges: list[EdgeRecord]) -> tuple[EdgeRecord, ...]:
+    """Order edges deterministically so equal states produce equal snapshots and digests."""
     return tuple(
         sorted(
             edges,
@@ -239,6 +262,7 @@ def _sorted_edges(edges: list[EdgeRecord]) -> tuple[EdgeRecord, ...]:
 
 
 def _snapshot_node(node: CapabilityNodeState, *, status: str) -> NodeRecord:
+    """Return the snapshot record of a Capability node with `status` overriding its own."""
     return NodeRecord(
         label="Capability",
         id=node.id,
@@ -249,6 +273,7 @@ def _snapshot_node(node: CapabilityNodeState, *, status: str) -> NodeRecord:
 def _digest(
     before: GraphSnapshot, inputs: CapabilityUnmergeInputs, write: CapabilityUnmergeWrite
 ) -> str:
+    """Return the SHA-256 hex digest binding the before snapshot, merge approval and write."""
     canonical = json.dumps(
         {
             "before": before.model_dump(mode="json"),
@@ -262,6 +287,7 @@ def _digest(
 
 
 def _edge_set(by_rel: dict[str, tuple[str, ...]], policy_id: str | None) -> UnmergeEdgeSet:
+    """Wrap per-class source ids and an optional governing Policy id into an edge set."""
     return UnmergeEdgeSet(
         requires=by_rel["REQUIRES"],
         covers=by_rel["COVERS"],
@@ -275,10 +301,23 @@ def plan_capability_unmerge(
 ) -> CapabilityUnmergePlan:
     """Plan reversing one capability merge against the live graph `state` (no I/O).
 
+    The write restores the edges to the absorbed Capability and removes from the survivor only
+    those still present. The state digest binds the before snapshot, the merge approval id and
+    the write parameters, so an approval only applies to the state previewed.
+
+    Args:
+        inputs: What the merge's audit snapshot says to reverse, from
+            `derive_capability_unmerge_inputs`.
+        state: The live graph around the tombstone and survivor, from the graph reader.
+
+    Returns:
+        A `CapabilityUnmergePlan`: the preview, the guarded write parameters, the restored
+        edges, the before/after snapshots, the state digest and the inputs.
+
     Raises:
         GraphCleanupValidationError: the tombstone is missing, not merged or re-pointed, the
             survivor is gone or no longer active, a snapshot endpoint is gone, or the survivor's
-            governance changed in a way that makes the restore contradictory (AC-BI-020).
+            governance changed in a way that makes the restore contradictory.
     """
     _check_tombstone(inputs, state)
     _check_survivor(inputs, state)
@@ -398,6 +437,14 @@ _OBLIGATION_NOTE = (
 def derive_obligation_unmerge_inputs(details: ObligationMergeDetails) -> ObligationUnmergeInputs:
     """Derive the node and edges to recreate from an obligation merge's snapshots.
 
+    Args:
+        details: The obligation-merge audit details; `before` and `after` snapshots must be
+            present and `before` must hold the deleted Obligation node.
+
+    Returns:
+        The absorbed Obligation's properties, its Role, the Requirement and Capability ids to
+        reattach, and the survivor's edges before and after the merge.
+
     Raises:
         GraphCleanupValidationError: the audit record carries no snapshot or no absorbed node.
     """
@@ -416,6 +463,7 @@ def derive_obligation_unmerge_inputs(details: ObligationMergeDetails) -> Obligat
         raise GraphCleanupValidationError(message)
 
     def _survivor_edges(edges: tuple[EdgeRecord, ...]) -> tuple[EdgeRecord, ...]:
+        """Keep the survivor's `SATISFIED_BY` and `REQUIRES` edges, sorted."""
         return _sorted_edges(
             [
                 e
@@ -455,6 +503,7 @@ def derive_obligation_unmerge_inputs(details: ObligationMergeDetails) -> Obligat
 
 
 def _check_obligation_state(inputs: ObligationUnmergeInputs, state: ObligationUnmergeState) -> None:
+    """Raise unless the Obligation can be recreated: marker intact, endpoints still existing."""
     absorbed_id, survivor_id = inputs.absorbed_id, inputs.survivor_id
     if state.absorbed_exists:
         message = f"obligation {absorbed_id!r} already exists again; there is nothing to unmerge"
@@ -500,6 +549,7 @@ def _check_obligation_state(inputs: ObligationUnmergeInputs, state: ObligationUn
 def _obligation_edges(
     obligation_id: str, ids: tuple[str, ...], *, requires: bool
 ) -> list[EdgeRecord]:
+    """Build `REQUIRES` edges to Capabilities, or `SATISFIED_BY` edges from Requirements."""
     if requires:
         return [
             EdgeRecord(
@@ -526,6 +576,7 @@ def _obligation_edges(
 def _obligation_digest(
     before: GraphSnapshot, inputs: ObligationUnmergeInputs, write: ObligationUnmergeWrite
 ) -> str:
+    """Return the SHA-256 hex digest binding the before snapshot, merge approval and write."""
     canonical = json.dumps(
         {
             "before": before.model_dump(mode="json"),
@@ -544,12 +595,22 @@ def plan_obligation_unmerge(
     """Plan recreating a deleted Obligation under its original id against the live `state`.
 
     The survivor's edges are never removed (a union cannot be attributed); those that could
-    originate from the merge are listed beside those added since.
+    originate from the merge are listed beside those added since. The state digest binds the
+    before snapshot, the merge approval id and the write parameters.
+
+    Args:
+        inputs: What the merge's audit snapshot says to reverse, from
+            `derive_obligation_unmerge_inputs`.
+        state: The live graph around the deleted Obligation, from the graph reader.
+
+    Returns:
+        An `ObligationUnmergePlan`: the preview, the guarded write parameters, the restored
+        edges, the before/after snapshots, the state digest and the inputs.
 
     Raises:
         GraphCleanupValidationError: the Obligation exists again, its marker is missing or
             re-pointed, the survivor, the Role, a Requirement or a Capability endpoint is gone
-            (or a Capability is now a tombstone) -- each explained (AC-BI-020).
+            (or a Capability is now a tombstone), each with an explanation.
     """
     _check_obligation_state(inputs, state)
     absorbed_id, survivor_id = inputs.absorbed_id, inputs.survivor_id

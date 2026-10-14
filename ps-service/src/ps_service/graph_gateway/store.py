@@ -1,4 +1,4 @@
-"""PostgreSQL store of the insert-only graph mutation log (issue #205).
+"""PostgreSQL store of the insert-only graph mutation log.
 
 `GraphLogStore` is the `Protocol` the Graph Write Gateway depends on; `PsycopgGraphLogStore` is
 the real implementation, in the idiom of `ps_service.audit.store`: a cursor-scoped write that
@@ -188,11 +188,23 @@ class GraphLogStore(Protocol):
         last writes and keep the transaction short. A failure inside rolls back to a savepoint:
         no partial group remains and the caller's earlier writes in the transaction survive.
 
+        Args:
+            cur: Cursor of the caller's open READ COMMITTED transaction.
+            group: The group to append; its entries take the next positions of `group.graph`.
+            audit_event_id: UUID string of the audit row the group is linked to, or `None`.
+
+        Returns:
+            The appended group with its assigned positions.
+
         Raises:
             GraphLogPersistenceError: the insert or lock failed (including an `audit_event_id`
                 that names no audit row), or the caller's transaction is not READ COMMITTED or
                 not open.
             ValueError: `audit_event_id` is not a UUID string.
+
+        Side Effects:
+            Inserts the group and entry rows (and payload rows) on the caller's transaction and
+            takes the graph's advisory lock until it ends.
         """
         ...
 
@@ -201,9 +213,20 @@ class GraphLogStore(Protocol):
     ) -> AppendedGroup:
         """Open a connection, append `group` (linked to `audit_event_id`, if given) and commit.
 
+        Args:
+            group: The group to append.
+            audit_event_id: UUID string of the audit row the group is linked to, or `None`.
+
+        Returns:
+            The appended group with its assigned positions.
+
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached (sanitized message).
             GraphLogPersistenceError: the append or the commit failed; nothing was committed.
+            ValueError: `audit_event_id` is not a UUID string.
+
+        Side Effects:
+            Opens a connection and commits the group, entry and payload rows.
         """
         ...
 
@@ -224,10 +247,21 @@ class GraphLogStore(Protocol):
         which is what keeps two overlapping sets from deadlocking. The appended groups come back
         in that order.
 
+        Args:
+            groups: One group per graph, distinct graphs in ascending name order.
+            audit_event_id: UUID string of the audit row all groups are linked to, or `None`.
+            as_swap_set: True to record one new `swap_set_id` on every group.
+
+        Returns:
+            The appended groups, in the order of `groups`.
+
         Raises:
             ValueError: `groups` is empty, names a graph twice or is not in ascending order.
             GraphLogUnavailableError: `ps_state` could not be reached (sanitized message).
             GraphLogPersistenceError: an append or the commit failed; nothing was committed.
+
+        Side Effects:
+            Opens a connection and commits every group, entry and payload row in one transaction.
         """
         ...
 
@@ -239,6 +273,14 @@ class GraphLogStore(Protocol):
         `limit` caps the number of entries (None: all of them), so replay can read a long log
         in pages.
 
+        Args:
+            graph: Name of the graph.
+            after_position: Only entries with a position above this are returned; 0 for all.
+            limit: Maximum number of entries, or `None` for no cap; must be positive if given.
+
+        Returns:
+            The entries in ascending position order; empty when there are none.
+
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
         """
@@ -246,6 +288,12 @@ class GraphLogStore(Protocol):
 
     def last_position(self, graph: str) -> int:
         """Return the highest recorded position of `graph`, or 0 when it has no entries.
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            The highest position, or 0.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -258,6 +306,9 @@ class GraphLogStore(Protocol):
         A graph with no marker counts as applied through position 0. Read-only: it is what
         startup recovery asks to find the graphs it must catch up.
 
+        Returns:
+            Graph names in ascending order; empty when every graph is applied.
+
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
         """
@@ -267,6 +318,9 @@ class GraphLogStore(Protocol):
         """Return, in name order, every graph whose log holds at least one entry.
 
         Read-only: it is what startup replay asks to find the graphs it must look at.
+
+        Returns:
+            Graph names in ascending order; empty when nothing is logged.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -278,6 +332,12 @@ class GraphLogStore(Protocol):
 
         One domain command may write several graphs, so an audit event can anchor one group
         per graph; the result is empty when the id anchors nothing.
+
+        Args:
+            audit_event_id: UUID string of the audit event.
+
+        Returns:
+            The anchored groups ordered by graph; empty when the id anchors nothing.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -291,6 +351,12 @@ class GraphLogStore(Protocol):
         Empty when no group carries the id. Read-only: it is what recovery asks to learn which
         graphs a pending swap group belongs with.
 
+        Args:
+            swap_set_id: Id of the swap set.
+
+        Returns:
+            One reference per leg, ordered by graph; empty when no group carries the id.
+
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
         """
@@ -301,6 +367,13 @@ class GraphLogStore(Protocol):
 
         `None` when every swap group of the graph is applied (or it has none). Read-only.
 
+        Args:
+            graph: Name of the graph.
+            applied_position: The graph's applied position.
+
+        Returns:
+            The first unapplied swap group, or `None`.
+
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
         """
@@ -308,6 +381,12 @@ class GraphLogStore(Protocol):
 
     def read_applied_position(self, graph: str) -> int:
         """Return the graph's applied position, or 0 when no marker exists for it.
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            The applied position, or 0.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -320,11 +399,21 @@ class GraphLogStore(Protocol):
         The marker only moves forward: a `position` at or below the stored one changes nothing
         and the stored marker is returned. It never passes the last logged position.
 
+        Args:
+            graph: Name of the graph; not blank.
+            position: The position to advance to; not negative.
+
+        Returns:
+            The marker now stored.
+
         Raises:
             pydantic.ValidationError: `graph` is blank or `position` is negative.
             GraphLogUnavailableError: `ps_state` could not be reached.
             GraphLogPersistenceError: `position` is beyond the last logged position of `graph`,
                 or the write failed; the stored marker is unchanged.
+
+        Side Effects:
+            Updates the graph's applied-marker row.
         """
         ...
 
@@ -335,17 +424,35 @@ class GraphLogStore(Protocol):
 
         The digest is opaque here: computing it belongs to the replay component.
 
+        Args:
+            graph: Name of the graph; not blank.
+            position: Log position the digest describes; not negative.
+            canonical_digest: The graph's canonical digest at that position; not blank.
+
+        Returns:
+            The stored checkpoint.
+
         Raises:
             pydantic.ValidationError: `graph` or `canonical_digest` is blank or `position` is
                 negative.
             GraphLogUnavailableError: `ps_state` could not be reached.
             GraphLogPersistenceError: a checkpoint already exists at `(graph, position)`, or the
                 write failed; the stored checkpoint is unchanged.
+
+        Side Effects:
+            Inserts one checkpoint row.
         """
         ...
 
     def read_digest_checkpoint(self, graph: str, position: int) -> DigestCheckpoint | None:
         """Return the checkpoint recorded for `graph` at `position`, or None when there is none.
+
+        Args:
+            graph: Name of the graph.
+            position: The exact log position.
+
+        Returns:
+            The checkpoint, or `None`.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -358,6 +465,13 @@ class GraphLogStore(Protocol):
         """Return the checkpoint of `graph` with the highest position <= `position`, or None.
 
         What replay verifies a rebuilt graph against: the last position the log vouches for.
+
+        Args:
+            graph: Name of the graph.
+            position: Upper bound, inclusive.
+
+        Returns:
+            The highest checkpoint at or below `position`, or `None` when there is none.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -456,10 +570,21 @@ def _error_class_name(exc: Exception) -> str:
 
 
 class PsycopgGraphLogStore:
-    """Real `GraphLogStore` backed by the PS state Postgres via `psycopg[binary]`."""
+    """Real `GraphLogStore` backed by the PS state Postgres via `psycopg[binary]`.
+
+    Each method implements the `GraphLogStore` method of the same name and documents its own
+    contract. Every database call updates the `STATE_POSTGRES` dependency health,
+    and a failed or successful append emits an `append_group` log entry that carries counts,
+    positions and ids, never entry content.
+    """
 
     def __init__(self, config: ServiceConfig, *, emitter: LogEmitter | None = None) -> None:
-        """Store `config` (and an optional log emitter); no connection is opened."""
+        """Store `config` (and an optional log emitter); no connection is opened.
+
+        Args:
+            config: Service configuration naming the PS state Postgres.
+            emitter: Destination of the log entries; `None` uses the process-wide one.
+        """
         self._config = config
         self._emitter = emitter
 
@@ -470,7 +595,32 @@ class PsycopgGraphLogStore:
         *,
         audit_event_id: str | None = None,
     ) -> AppendedGroup:
-        """Append `group` on the caller's transaction (see `GraphLogStore.append_group`)."""
+        """Append `group` on the caller's open transaction; all of it or none of it.
+
+        The group's entries take the graph's next contiguous positions. The insert runs under a
+        savepoint, so a failure leaves no partial group and keeps the caller's earlier writes.
+        Large content and embeddings are stored once, by content hash, in a payload table.
+
+        Args:
+            cur: Cursor of the caller's open READ COMMITTED transaction.
+            group: The group to append; its entries take the next positions of `group.graph`.
+            audit_event_id: UUID string of the audit row the group is linked to, or `None`.
+
+        Returns:
+            The appended group with its assigned positions.
+
+        Raises:
+            GraphLogPayloadError: an entry's content or embedding cannot be stored as a payload;
+                nothing was written.
+            GraphLogPersistenceError: the insert or lock failed (including an `audit_event_id`
+                that names no audit row), or the caller's transaction is not READ COMMITTED or
+                not open.
+            ValueError: `audit_event_id` is not a UUID string.
+
+        Side Effects:
+            Takes the graph's advisory lock until the caller's transaction ends, inserts the
+            group, entry and payload rows on it, and emits one `append_group` log entry.
+        """
         linked_event = _parse_audit_event_id(audit_event_id)
         try:
             appended, writes = self._append_in_transaction(cur, group, linked_event)
@@ -483,7 +633,27 @@ class PsycopgGraphLogStore:
     def append_group_standalone(
         self, group: GraphLogGroupDraft, *, audit_event_id: str | None = None
     ) -> AppendedGroup:
-        """Append `group` in its own transaction (see `GraphLogStore.append_group_standalone`)."""
+        """Open a connection, append `group` (linked to `audit_event_id`, if given) and commit.
+
+        Args:
+            group: The group to append.
+            audit_event_id: UUID string of the audit row the group is linked to, or `None`.
+
+        Returns:
+            The appended group with its assigned positions.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached (sanitized message).
+            GraphLogPayloadError: an entry's content or embedding cannot be stored as a payload;
+                nothing was committed.
+            GraphLogPersistenceError: the append or the commit failed; nothing was committed.
+            ValueError: `audit_event_id` is not a UUID string.
+
+        Side Effects:
+            Opens a connection, holds the graph's advisory lock for the transaction, commits the
+            group, entry and payload rows, updates the dependency health and emits one
+            `append_group` log entry.
+        """
         linked_event = _parse_audit_event_id(audit_event_id)
         conn = self._connect()
         try:
@@ -508,7 +678,34 @@ class PsycopgGraphLogStore:
         audit_event_id: str | None = None,
         as_swap_set: bool = False,
     ) -> tuple[AppendedGroup, ...]:
-        """Append one group per graph in one transaction (see `GraphLogStore`)."""
+        """Open a connection, append one group per graph in ONE transaction and commit.
+
+        The groups commit together or not at all. With `as_swap_set`, one new `swap_set_id` is
+        recorded on every group, so recovery can find the legs of the set again. The per-graph
+        advisory locks are taken in ascending graph-name order, which keeps two overlapping sets
+        from deadlocking.
+
+        Args:
+            groups: One group per graph; non-empty, distinct graphs in ascending name order.
+            audit_event_id: UUID string of the audit row all groups are linked to, or `None`.
+            as_swap_set: True to record one new `swap_set_id` on every group.
+
+        Returns:
+            The appended groups, in the order of `groups`.
+
+        Raises:
+            ValueError: `groups` is empty, names a graph twice or is not in ascending order, or
+                `audit_event_id` is not a UUID string.
+            GraphLogUnavailableError: `ps_state` could not be reached (sanitized message).
+            GraphLogPayloadError: an entry's content or embedding cannot be stored as a payload;
+                nothing was committed.
+            GraphLogPersistenceError: an append or the commit failed; nothing was committed.
+
+        Side Effects:
+            Opens a connection, holds each graph's advisory lock until the transaction ends,
+            commits every group, entry and payload row, updates the dependency health and emits
+            one `append_group` log entry per group on success (one on failure).
+        """
         graphs = [group.graph for group in groups]
         if not groups or graphs != sorted(set(graphs)):
             message = "groups must name distinct graphs in ascending name order"
@@ -541,7 +738,24 @@ class PsycopgGraphLogStore:
     def read_entries(
         self, graph: str, *, after_position: int = 0, limit: int | None = None
     ) -> tuple[GraphLogEntry, ...]:
-        """Read the graph's entries after `after_position` (see `GraphLogStore.read_entries`)."""
+        """Return the graph's entries with position above `after_position`, in position order.
+
+        Reads from the log tables on a fresh connection; `limit` lets replay page a long log.
+
+        Args:
+            graph: Name of the graph.
+            after_position: Only entries with a position above this are returned; 0 for all.
+            limit: Maximum number of entries, or `None` for no cap.
+
+        Returns:
+            The entries in ascending position order; empty when there are none.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_entries(cur: psycopg.Cursor[TupleRow]) -> tuple[GraphLogEntry, ...]:
             cur.execute(_SELECT_ENTRIES, (graph, after_position, limit))
@@ -550,7 +764,20 @@ class PsycopgGraphLogStore:
         return self._read(select_entries)
 
     def last_position(self, graph: str) -> int:
-        """Read the graph's highest position (see `GraphLogStore.last_position`)."""
+        """Return the highest recorded position of `graph`, or 0 when it has no entries.
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            The highest position, or 0.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_last_position(cur: psycopg.Cursor[TupleRow]) -> int:
             cur.execute(_LAST_POSITION, (graph,))
@@ -559,7 +786,20 @@ class PsycopgGraphLogStore:
         return self._read(select_last_position)
 
     def graphs_with_pending_entries(self) -> tuple[str, ...]:
-        """Read the graphs behind their log (see `GraphLogStore.graphs_with_pending_entries`)."""
+        """Return, in name order, every graph whose log holds entries beyond its applied marker.
+
+        A graph with no marker counts as applied through position 0. Startup recovery uses it to
+        find the graphs it must catch up.
+
+        Returns:
+            Graph names in ascending order; empty when every graph is applied.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_graphs(cur: psycopg.Cursor[TupleRow]) -> tuple[str, ...]:
             cur.execute(_SELECT_GRAPHS_WITH_PENDING_ENTRIES)
@@ -568,7 +808,19 @@ class PsycopgGraphLogStore:
         return self._read(select_graphs)
 
     def logged_graphs(self) -> tuple[str, ...]:
-        """Read the graphs that have log entries (see `GraphLogStore.logged_graphs`)."""
+        """Return, in name order, every graph whose log holds at least one entry.
+
+        Startup replay uses it to find the graphs it must look at.
+
+        Returns:
+            Graph names in ascending order; empty when nothing is logged.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_graphs(cur: psycopg.Cursor[TupleRow]) -> tuple[str, ...]:
             cur.execute(_SELECT_LOGGED_GRAPHS)
@@ -577,7 +829,24 @@ class PsycopgGraphLogStore:
         return self._read(select_graphs)
 
     def read_groups_by_audit_event(self, audit_event_id: str) -> tuple[GraphLogGroup, ...]:
-        """Read the groups an audit event anchors (see the `GraphLogStore` method)."""
+        """Return the groups an audit event anchors, each with its entries, ordered by graph.
+
+        One domain command may write several graphs, so one audit event can anchor one group per
+        graph.
+
+        Args:
+            audit_event_id: UUID string of the audit event.
+
+        Returns:
+            The anchored groups ordered by graph; empty when the id anchors nothing.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+            ValueError: `audit_event_id` is not a UUID string.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
         linked_event = uuid.UUID(audit_event_id)
 
         def select_groups(cur: psycopg.Cursor[TupleRow]) -> tuple[GraphLogGroup, ...]:
@@ -605,7 +874,22 @@ class PsycopgGraphLogStore:
         return self._read(select_groups)
 
     def read_swap_set(self, swap_set_id: uuid.UUID) -> tuple[SwapGroupRef, ...]:
-        """Read the legs of one swap set (see `GraphLogStore.read_swap_set`)."""
+        """Return the groups appended as legs of one swap set, ordered by graph.
+
+        Recovery uses it to learn which graphs a pending swap group belongs with.
+
+        Args:
+            swap_set_id: Id of the swap set.
+
+        Returns:
+            One reference per leg, ordered by graph; empty when no group carries the id.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_legs(cur: psycopg.Cursor[TupleRow]) -> tuple[SwapGroupRef, ...]:
             cur.execute(_SELECT_SWAP_SET, (swap_set_id,))
@@ -614,7 +898,22 @@ class PsycopgGraphLogStore:
         return self._read(select_legs)
 
     def read_pending_swap_group(self, graph: str, applied_position: int) -> SwapGroupRef | None:
-        """Read the first unapplied swap group of `graph` (see `GraphLogStore`)."""
+        """Return the first swap-set group of `graph` not applied through `applied_position`.
+
+        Args:
+            graph: Name of the graph.
+            applied_position: The graph's applied position.
+
+        Returns:
+            The first unapplied swap group, or `None` when every swap group of the graph is
+            applied or it has none.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_group(cur: psycopg.Cursor[TupleRow]) -> SwapGroupRef | None:
             cur.execute(_SELECT_PENDING_SWAP_GROUP, (graph, applied_position))
@@ -624,7 +923,20 @@ class PsycopgGraphLogStore:
         return self._read(select_group)
 
     def read_applied_position(self, graph: str) -> int:
-        """Read the graph's applied position (see `GraphLogStore.read_applied_position`)."""
+        """Return the graph's applied position, or 0 when no marker exists for it.
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            The applied position, or 0.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_applied_position(cur: psycopg.Cursor[TupleRow]) -> int:
             return _stored_applied_position(cur, graph)
@@ -632,7 +944,28 @@ class PsycopgGraphLogStore:
         return self._read(select_applied_position)
 
     def advance_applied_position(self, graph: str, position: int) -> AppliedMarker:
-        """Advance the applied marker, never backwards (see `GraphLogStore`)."""
+        """Advance the graph's applied marker to `position` and return the marker now stored.
+
+        The marker only moves forward: a `position` at or below the stored one changes nothing
+        and the stored marker is returned. It never passes the last logged position.
+
+        Args:
+            graph: Name of the graph; not blank.
+            position: The position to advance to; not negative.
+
+        Returns:
+            The marker now stored.
+
+        Raises:
+            pydantic.ValidationError: `graph` is blank or `position` is negative.
+            GraphLogUnavailableError: `ps_state` could not be reached.
+            GraphLogPersistenceError: `position` is beyond the last logged position of `graph`,
+                or the write failed; the stored marker is unchanged.
+
+        Side Effects:
+            Upserts the graph's applied-marker row in its own transaction, updates the dependency
+            health and emits one `advance_applied_position` log entry.
+        """
         target = AppliedMarker(graph=graph, applied_position=position)
 
         def advance(cur: psycopg.Cursor[TupleRow]) -> AppliedMarker:
@@ -652,7 +985,29 @@ class PsycopgGraphLogStore:
     def record_digest_checkpoint(
         self, graph: str, position: int, canonical_digest: str
     ) -> DigestCheckpoint:
-        """Record a digest checkpoint, never replacing one (see `GraphLogStore`)."""
+        """Record `canonical_digest` for `graph` at `position`; a checkpoint is never replaced.
+
+        The digest is opaque here: computing it belongs to the replay component.
+
+        Args:
+            graph: Name of the graph; not blank.
+            position: Log position the digest describes; not negative.
+            canonical_digest: The graph's canonical digest at that position; not blank.
+
+        Returns:
+            The stored checkpoint.
+
+        Raises:
+            pydantic.ValidationError: `graph` or `canonical_digest` is blank or `position` is
+                negative.
+            GraphLogUnavailableError: `ps_state` could not be reached.
+            GraphLogPersistenceError: a checkpoint already exists at `(graph, position)`, or the
+                write failed; the stored checkpoint is unchanged.
+
+        Side Effects:
+            Inserts one checkpoint row in its own transaction, updates the dependency health and
+            emits one `record_digest_checkpoint` log entry.
+        """
         checkpoint = DigestCheckpoint(
             graph=graph, position=position, canonical_digest=canonical_digest
         )
@@ -669,7 +1024,21 @@ class PsycopgGraphLogStore:
         )
 
     def read_digest_checkpoint(self, graph: str, position: int) -> DigestCheckpoint | None:
-        """Read the checkpoint at `(graph, position)` (see `GraphLogStore`)."""
+        """Return the checkpoint recorded for `graph` at exactly `position`, or None.
+
+        Args:
+            graph: Name of the graph.
+            position: The exact log position.
+
+        Returns:
+            The checkpoint, or `None`.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_checkpoint(cur: psycopg.Cursor[TupleRow]) -> DigestCheckpoint | None:
             cur.execute(_SELECT_CHECKPOINT, (graph, position))
@@ -685,7 +1054,23 @@ class PsycopgGraphLogStore:
     def read_highest_checkpoint_at_or_below(
         self, graph: str, position: int
     ) -> DigestCheckpoint | None:
-        """Read the highest checkpoint at or below `position` (see `GraphLogStore`)."""
+        """Return the checkpoint of `graph` with the highest position <= `position`, or None.
+
+        What replay verifies a rebuilt graph against: the last position the log vouches for.
+
+        Args:
+            graph: Name of the graph.
+            position: Upper bound, inclusive.
+
+        Returns:
+            The highest checkpoint at or below `position`, or `None` when there is none.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+
+        Side Effects:
+            Opens a connection and runs one read-only query; updates the dependency health.
+        """
 
         def select_checkpoint(cur: psycopg.Cursor[TupleRow]) -> DigestCheckpoint | None:
             cur.execute(_SELECT_HIGHEST_CHECKPOINT_AT_OR_BELOW, (graph, position))

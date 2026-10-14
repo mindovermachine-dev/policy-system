@@ -1,4 +1,4 @@
-"""The Regulatory Change Monitor side of the Graph Write Gateway seam (issue #213).
+"""The Regulatory Change Monitor side of the Graph Write Gateway seam.
 
 The re-ingest succession issues no write Cypher. A writer in `succession.py` turns one step of the
 succession into gateway primitives and `submit_succession_group` submits them as ONE group on one
@@ -82,13 +82,36 @@ class CatchUpSubmitter(GroupSubmitter, Protocol):
     """
 
     def catch_up(self, graph: str) -> CatchUpResult:
-        """Apply every logged entry of `graph` that its applied marker does not cover."""
+        """Apply every logged entry of `graph` that its applied marker does not cover.
+
+        Args:
+            graph: Name of the graph to catch up.
+
+        Returns:
+            A `CatchUpResult`; `caught_up` is false when the graph is still behind.
+
+        Raises:
+            GraphLogUnavailableError: the graph log could not be read.
+            GraphApplyError: the graph database refuses an entry; the graph stays blocked.
+
+        Side Effects:
+            Applies the pending entries to the graph database and advances the graph's applied
+            marker.
+        """
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class SuccessionTarget:
-    """Where the succession's groups go: a submitter, the two graphs and the audit anchor."""
+    """Where the succession's groups go: a submitter, the two graphs and the audit anchor.
+
+    Attributes:
+        submitter: Gateway submitter that commits and applies each group.
+        native_graph: Name of the instrument's native graph.
+        single_tenant_graph: Name of the merged single-tenant graph.
+        audit_anchor: Callable returning the audit event id every group is anchored to.
+        emitter: Log emitter for the submit entries; `None` uses the default emitter.
+    """
 
     submitter: GroupSubmitter
     native_graph: str
@@ -105,13 +128,22 @@ def ensure_caught_up(
 
     A succession group that was committed but could not be applied (FalkorDB went away) leaves the
     stage marker or the `linked` marker in the log only. The classification of the next sweep
-    reads the graph, so it applies the pending entries first (idempotent; no concurrency guard is
-    added, the sweep keeps its one-sweep-per-caller model). Writes nothing new.
+    reads the graph, so it applies the pending entries first. The catch-up is idempotent and has
+    no concurrency guard: the sweep assumes one sweep per caller.
+
+    Args:
+        submitter: Gateway submitter; must be a `CatchUpSubmitter`.
+        graph: Name of the graph to bring up to date.
+        emitter: Log emitter for the catch-up entry; `None` uses the default emitter.
 
     Raises:
         SuccessionPersistenceError: the log could not be read, FalkorDB is still unreachable or
             refuses an entry, so the graph is behind its log. The cause is chained.
         TypeError: `submitter` cannot catch up (a wiring error, not a runtime condition).
+
+    Side Effects:
+        When the graph is behind, applies its pending logged entries and emits one
+        `catch_up_native_graph` log entry. Nothing is written when it is already caught up.
     """
     if not isinstance(submitter, CatchUpSubmitter):
         message = "the installed graph write gateway cannot catch a graph up"
@@ -132,11 +164,19 @@ def ensure_caught_up(
 
 
 def edge_identity(edge_type: str, source_id: str, target_id: str) -> str:
-    """`{type}:{source}->{target}`: the gateway identity of an edge, one per (type, endpoints).
+    """Return `{type}:{source}->{target}`, the gateway identity of an edge.
 
     The scheme of every other gateway writer and of the edge-identity backfill, so one edge has the
     same identity whichever path wrote it. A deliberate near-duplicate (pinned equal to Graph
     Cleanup's by a test), not a cross-component import.
+
+    Args:
+        edge_type: Edge type name.
+        source_id: Id of the edge's source node.
+        target_id: Id of the edge's target node.
+
+    Returns:
+        The identity string, one per (type, endpoints).
     """
     return f"{edge_type}:{source_id}->{target_id}"
 
@@ -153,18 +193,33 @@ def submit_succession_group(
 ) -> GroupOutcome:
     """Submit one succession step as one group on `graph`; return the gateway's outcome.
 
-    `checkpoint_requested` asks the gateway to record the graph's digest once the group is
-    applied; only a re-ingest's terminal step on a graph sets it (#215).
+    This is the one place a succession write reaches the gateway and a gateway failure becomes
+    a Change Monitor error.
 
-    `build` makes the primitives; one the graph cannot store (a reserved key, a non-finite number)
-    is refused here as a persistence error, before anything is logged. `missing` is the message of
-    the `ChangeMonitorStateError` raised when the group names a node `graph` does not hold.
+    Args:
+        target: Submitter, graph names and audit anchor for the succession.
+        graph: Name of the graph the group is submitted on.
+        step: Short label of the succession step, used in the log entry.
+        new_id: Id of the new instrument, used as the log entry's `entity_id`.
+        build: Makes the primitives of the group. One the graph cannot store (a reserved key, a
+            non-finite number) is refused here as a persistence error, before anything is logged.
+        missing: Message of the `ChangeMonitorStateError` raised when the group names a node
+            `graph` does not hold.
+        checkpoint_requested: Asks the gateway to record the graph's digest once the group is
+            applied; only a re-ingest's terminal step on a graph sets it.
+
+    Returns:
+        The gateway's `GroupOutcome` for the committed and applied group.
 
     Raises:
         ChangeMonitorStateError: a node the group names is missing; nothing was written.
         SuccessionPersistenceError: the group was refused, the stores were unreachable, the group
             was committed but not applied, or the graph is behind its log.
         AuditTrailUnavailableError: the audit anchor could not be recorded; nothing was written.
+
+    Side Effects:
+        Commits one mutation group to the gateway log and applies it to `graph`; calls
+        `target.audit_anchor`; emits one `submit_succession_group` log entry.
     """
     try:
         primitives = build()

@@ -1,11 +1,15 @@
-"""Regulatory Change Monitor: package front door (PLAN_REVIEWED.md §2).
+"""Regulatory Change Monitor: keeps tracked regulatory instruments current with CELLAR.
 
-Re-exports the two manually-invoked entry points: `poll_for_amendments`
-(detect newer consolidated versions in CELLAR, AC-002/003/009) and
-`trigger_reingestion` (the UC-4 re-entry point that runs the full re-ingestion
-cycle for an amended instrument -- Ingestion, Domain Mapper, Company Merge --
-and records its `SUPERSEDED_BY` succession last, once the new version is mapped
-and merged, AC-004..009).
+Re-exports the two manually invoked entry points. Importing anything else from
+the submodules is for tests and internal wiring only.
+
+Entry points:
+    poll_for_amendments: Detect, for each tracked instrument, whether CELLAR
+        publishes a newer consolidated version. Read-only against the graph.
+    trigger_reingestion: Re-enter the full re-ingestion cycle for an amended
+        instrument (Ingestion, Domain Mapper, Company Merge) and record the
+        `SUPERSEDED_BY` succession last, once the new version is mapped and
+        merged, so a failed run leaves the prior version active.
 """
 
 from __future__ import annotations

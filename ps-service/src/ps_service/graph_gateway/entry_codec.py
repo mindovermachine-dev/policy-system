@@ -1,4 +1,4 @@
-"""Pure encoding of graph primitives into log entries and back (issue #206).
+"""Pure encoding of graph primitives into log entries and back.
 
 The log store has no operation column, so each entry's `content` is an envelope whose reserved
 `op` key names the primitive. The entry's `name` is the label (or relationship type), its
@@ -29,7 +29,16 @@ if TYPE_CHECKING:
 
 
 def encode_primitive(primitive: Primitive) -> GraphLogEntryDraft:
-    """Encode `primitive` as the log entry draft that records it."""
+    """Encode `primitive` as the log entry draft that records it.
+
+    Args:
+        primitive: Any graph primitive.
+
+    Returns:
+        A draft whose `name` is the label (or relationship type), `identity` the node id (or edge
+        identity), `content` the envelope with the reserved `op` key, and `embedding` the node
+        embedding for an upsert (otherwise `None`).
+    """
     match primitive:
         case UpsertNode():
             return GraphLogEntryDraft(
@@ -79,6 +88,12 @@ def encode_primitive(primitive: Primitive) -> GraphLogEntryDraft:
 
 def decode_entry(entry: GraphLogEntry) -> Primitive:
     """Decode a recorded `entry` back into the primitive it records.
+
+    Args:
+        entry: A log entry as recorded by `encode_primitive`.
+
+    Returns:
+        The primitive named by the entry's `op`.
 
     Raises:
         GraphLogEntryDecodeError: the entry's operation is unknown or its content is malformed.

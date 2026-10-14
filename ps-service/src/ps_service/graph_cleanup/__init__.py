@@ -1,13 +1,14 @@
-"""ps_service.graph_cleanup -- Compliance Officer graph cleanup (issue #190).
+"""Compliance Officer graph cleanup of the single-tenant compliance graph.
 
-Privileged, human-decided cleanup of duplicates the ingestion pipeline left in
-the single-tenant compliance graph: candidate discovery, and (later slices)
-merge / release-governance / unmerge. Domain path: `ps.service.graphcleanup`.
+Cleans up duplicates the ingestion pipeline leaves in the graph. Every change is decided by a
+human: the component discovers near-duplicate Capabilities and duplicate Obligations, previews
+a merge, then (after an approval) merges Capabilities, merges Obligations, releases a
+Capability from a draft governing policy, or reverses an earlier merge. Domain path:
+`ps.service.graphcleanup`.
 
-Deliberately separate from Company Merge, which stays add/merge-only
-(`docs/architecture/ps-service-container-architecture.md`, Company Merge);
-Company Merge only gains redirect-following for the `merged` tombstones this
-component writes.
+The component is separate from Company Merge, which only adds and merges during the pipeline
+(`docs/architecture/ps-service-container-architecture.md`, Company Merge). Company Merge
+follows the `merged` tombstones this component writes but never creates them.
 """
 
 from __future__ import annotations

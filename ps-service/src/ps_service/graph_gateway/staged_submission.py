@@ -1,4 +1,4 @@
-"""A group staged on the caller's transaction, waiting for the caller's commit (issue #206).
+"""A group staged on the caller's transaction, waiting for the caller's commit.
 
 `GraphWriteGateway.submit_group_in_transaction` returns one of these after the group was appended
 on the caller's cursor. It holds the graph's in-process lock (lock order: see `graph_locks`)
@@ -34,7 +34,14 @@ class StagedSubmission:
         finish: Callable[[], GroupOutcome],
         release: Callable[[], None],
     ) -> None:
-        """Take the step that finishes the submission and the step that releases its lock."""
+        """Take the step that finishes the submission and the step that releases its lock.
+
+        Args:
+            status: `staged` if a group was appended on the caller's transaction, `unchanged` if
+                nothing was appended.
+            finish: Applies the committed entries and returns the outcome.
+            release: Releases the graph's in-process lock.
+        """
         self._status: Literal["staged", "unchanged"] = status
         self._finish = finish
         self._release = release
@@ -42,7 +49,11 @@ class StagedSubmission:
 
     @property
     def status(self) -> Literal["staged", "unchanged"]:
-        """`staged`: a group was appended on the caller's transaction. `unchanged`: it was not."""
+        """Whether the group was appended.
+
+        Returns:
+            `staged` if a group was appended on the caller's transaction, `unchanged` if not.
+        """
         return self._status
 
     def complete(self) -> GroupOutcome:
@@ -51,9 +62,15 @@ class StagedSubmission:
         Call after the caller's transaction committed. The submission is closed afterwards, also
         when this raises.
 
+        Returns:
+            The outcome of applying the group.
+
         Raises:
             StagedSubmissionClosedError: already completed or aborted.
             StagedGroupNotCommittedError: the group is not in the log yet.
+
+        Side Effects:
+            Applies the entries to the graph, advances the applied marker and releases the lock.
         """
         if not self._open:
             message = "the staged submission is already closed"
@@ -64,13 +81,21 @@ class StagedSubmission:
             self.abort()
 
     def abort(self) -> None:
-        """Release the graph lock without applying anything (the caller rolled back); idempotent."""
+        """Release the graph lock without applying anything (the caller rolled back); idempotent.
+
+        Side Effects:
+            Releases the graph's in-process lock on the first call; later calls do nothing.
+        """
         if self._open:
             self._open = False
             self._release()
 
     def __enter__(self) -> Self:
-        """Enter the block that spans the caller's commit."""
+        """Enter the block that spans the caller's commit.
+
+        Returns:
+            This submission.
+        """
         return self
 
     def __exit__(
@@ -79,5 +104,11 @@ class StagedSubmission:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Release the lock if the submission is still open; never applies."""
+        """Release the lock if the submission is still open; never applies.
+
+        Args:
+            exc_type: Type of the exception that ended the block, if any.
+            exc: The exception that ended the block, if any; it is not suppressed.
+            traceback: Traceback of that exception, if any.
+        """
         self.abort()

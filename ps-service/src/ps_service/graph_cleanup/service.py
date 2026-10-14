@@ -1,8 +1,10 @@
-"""Orchestration for `ps_service.graph_cleanup` (issue #190).
+"""Orchestration for `ps_service.graph_cleanup`.
 
 Read-only candidate discovery (Capabilities by name and cached-embedding similarity,
-duplicate Obligations within one Role), the `merge-capabilities` preview and pair-bound
-passkey approval, and `check-cleanup-approval` with its lazy reconciler.
+duplicate Obligations within one Role), the previews of every cleanup action (Capability
+merge, Obligation merge, governance release, unmerge), the passkey approvals bound to a
+previewed state, and `check-cleanup-approval` with its lazy reconciler. Nothing here writes
+to the graph; the writes run in `ps_service.graph_cleanup.executors` after a signed approval.
 """
 
 from __future__ import annotations
@@ -108,13 +110,23 @@ def find_capability_merge_candidates(
 ) -> FindCapabilityCandidatesResult:
     """Return groups of active Capabilities that look like the same duty.
 
-    Linked by equal normalised names or by cached-embedding cosine similarity at or
-    above `min_similarity`; no embedding is ever fetched or computed.
+    Capabilities are linked by equal normalised names or by cached-embedding cosine similarity
+    at or above `min_similarity`; no embedding is ever fetched or computed.
 
-    Read-only: nothing is written and no approval is created.
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        min_similarity: Cosine similarity threshold in [0, 1] above which two cached embeddings
+            link their Capabilities.
+        emitter: Optional log emitter; None uses the default.
+
+    Returns:
+        The candidate groups. An empty `groups` means no active Capabilities look alike.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
+
+    Side Effects:
+        Emits one structured log entry. Writes nothing and creates no approval.
     """
     capabilities = read_active_capabilities(graph)
     groups = group_capabilities(capabilities, min_similarity=min_similarity)
@@ -140,11 +152,22 @@ def find_duplicate_obligations(
 ) -> FindDuplicateObligationsResult:
     """Return groups of Obligations under ONE Role with identical or near-identical text.
 
-    `role_id` limits the sweep to one Role. Each member lists its Requirements'
-    `source_ref`s. Read-only: nothing is written and no approval is created.
+    Obligations under different Roles are never grouped. Each member lists its Requirements'
+    `source_ref`s.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        role_id: Limits the sweep to this Role; None sweeps every Role.
+        emitter: Optional log emitter; None uses the default.
+
+    Returns:
+        The duplicate groups. An empty `groups` means no duplicates were found.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
+
+    Side Effects:
+        Emits one structured log entry. Writes nothing and creates no approval.
     """
     obligations = read_obligations_by_role(graph, role_id=role_id)
     groups = group_duplicate_obligations(obligations)
@@ -170,11 +193,20 @@ def _plan(graph: GraphHandle, *, survivor_id: str, absorbed_id: str) -> Capabili
 def preview_capability_merge(
     graph: GraphHandle, *, survivor_id: str, absorbed_id: str
 ) -> CapabilityMergePreview:
-    """Preview merging `absorbed_id` into `survivor_id` with no writes (AC-BI-005).
+    """Preview merging Capability `absorbed_id` into `survivor_id` with no writes.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        survivor_id: Id of the Capability that remains; must differ from `absorbed_id`.
+        absorbed_id: Id of the Capability that becomes a `merged` tombstone.
+
+    Returns:
+        The merge preview: what moves, the policy case and, when a policy is involved, the
+        governance effect and acknowledgment text.
 
     Raises:
         GraphCleanupValidationError: self-merge, a nonexistent or `merged` side, or two
-            capabilities governed by different policies (AC-BI-011).
+            Capabilities governed by different policies.
         GraphCleanupPersistenceError: the graph database could not be read.
     """
     return _plan(graph, survivor_id=survivor_id, absorbed_id=absorbed_id).preview
@@ -182,7 +214,14 @@ def preview_capability_merge(
 
 @dataclass(frozen=True, slots=True)
 class CapabilityMergeApproval:
-    """A previewed merge and the pending passkey approval bound to it."""
+    """A previewed Capability merge and the pending passkey approval bound to it.
+
+    Attributes:
+        preview: The merge preview the officer saw.
+        pending_approval_id: Id of the pending approval row.
+        approval_url: Link where the officer signs with a passkey; includes the one-time code.
+        expires_at: ISO 8601 time after which the approval can no longer be signed.
+    """
 
     preview: CapabilityMergePreview
     pending_approval_id: str
@@ -205,18 +244,39 @@ def create_capability_merge_approval(
 
     The signed `normalized_args` carry both ids, the acknowledgment flag and the sha256
     `state_digest` of the previewed state, so the signature covers the pair and the state
-    the officer actually saw. Writes nothing to the graph; a rejected merge creates no row.
+    the officer actually saw.
 
-    A case-2 pair (exactly one capability governed) needs the officer's explicit
-    acknowledgment of the governance change in addition to the passkey: without
-    `acknowledge_governance_change` no approval is created (D5). A case-3 pair (both governed
-    by the SAME policy) needs none (AC-BI-012); different policies are rejected up front.
+    Business Rules:
+        A case-2 pair (exactly one Capability governed) needs the officer's explicit
+        acknowledgment of the governance change in addition to the passkey: without
+        `acknowledge_governance_change` no approval is created. A case-3 pair (both governed by
+        the SAME policy) needs none. Pairs governed by different policies are rejected.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        survivor_id: Id of the Capability that remains; must differ from `absorbed_id`.
+        absorbed_id: Id of the Capability that becomes a `merged` tombstone.
+        acknowledge_governance_change: True when the officer accepts the governance change a
+            case-2 merge makes.
+        actor: `(subject, issuer)` of the requesting officer; the approval is bound to them.
+        base_url: Origin used to build the approval link, without a trailing slash.
+        store: Pending-approval store that holds the approval row.
+        emitter: Optional log emitter; None uses the default.
+
+    Returns:
+        The preview with the approval id, signing URL and expiry.
 
     Raises:
-        GraphCleanupValidationError: see `preview_capability_merge`; no approval is created.
+        GraphCleanupValidationError: self-merge, a nonexistent side, a `merged` tombstone or other
+            non-active side, a side with more than one governing policy, or both sides governed
+            by different policies; no approval is created.
         GraphCleanupAcknowledgmentRequiredError: case 2 without the acknowledgment; carries the
             preview, no approval is created.
         GraphCleanupPersistenceError: the graph database could not be read.
+
+    Side Effects:
+        Creates one pending approval row and emits a structured log entry. Writes nothing to the
+        graph; a rejected merge creates no row.
     """
     plan = _plan(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
     governance = plan.preview.governance
@@ -274,11 +334,19 @@ def _plan_obligations(
 def preview_obligation_merge(
     graph: GraphHandle, *, survivor_id: str, absorbed_id: str
 ) -> ObligationMergePreview:
-    """Preview merging obligation `absorbed_id` into `survivor_id` with no writes (AC-BI-005).
+    """Preview merging Obligation `absorbed_id` into `survivor_id` with no writes.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        survivor_id: Id of the Obligation that remains; must differ from `absorbed_id`.
+        absorbed_id: Id of the Obligation that is deleted after its edges move to the survivor.
+
+    Returns:
+        The merge preview for the pair, including the shared Role.
 
     Raises:
         GraphCleanupValidationError: self-merge, a nonexistent side, or two Obligations under
-            different Roles (AC-BI-015/016).
+            different Roles.
         GraphCleanupPersistenceError: the graph database could not be read.
     """
     return _plan_obligations(graph, survivor_id=survivor_id, absorbed_id=absorbed_id).preview
@@ -286,7 +354,14 @@ def preview_obligation_merge(
 
 @dataclass(frozen=True, slots=True)
 class ObligationMergeApproval:
-    """A previewed obligation merge and the pending passkey approval bound to it."""
+    """A previewed Obligation merge and the pending passkey approval bound to it.
+
+    Attributes:
+        preview: The merge preview the officer saw.
+        pending_approval_id: Id of the pending approval row.
+        approval_url: Link where the officer signs with a passkey; includes the one-time code.
+        expires_at: ISO 8601 time after which the approval can no longer be signed.
+    """
 
     preview: ObligationMergePreview
     pending_approval_id: str
@@ -307,11 +382,28 @@ def create_obligation_merge_approval(
     """Preview the obligation merge and create a passkey approval bound to the pair and state.
 
     The signed `normalized_args` carry both ids and the sha256 `state_digest` of the previewed
-    state. Writes nothing to the graph; a rejected merge creates no row.
+    state.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        survivor_id: Id of the Obligation that remains; must differ from `absorbed_id`.
+        absorbed_id: Id of the Obligation that is deleted after the merge.
+        actor: `(subject, issuer)` of the requesting officer; the approval is bound to them.
+        base_url: Origin used to build the approval link, without a trailing slash.
+        store: Pending-approval store that holds the approval row.
+        emitter: Optional log emitter; None uses the default.
+
+    Returns:
+        The preview with the approval id, signing URL and expiry.
 
     Raises:
-        GraphCleanupValidationError: see `preview_obligation_merge`; no approval is created.
+        GraphCleanupValidationError: self-merge, a nonexistent side, a side not borne by exactly
+            one Role, or two Obligations under different Roles; no approval is created.
         GraphCleanupPersistenceError: the graph database could not be read.
+
+    Side Effects:
+        Creates one pending approval row and emits a structured log entry. Writes nothing to the
+        graph; a rejected merge creates no row.
     """
     plan = _plan_obligations(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
     row, code = store.create_pending_approval(
@@ -347,9 +439,16 @@ def _plan_release(graph: GraphHandle, *, capability_id: str) -> ReleasePlan:
 def preview_release_governance(graph: GraphHandle, *, capability_id: str) -> ReleasePreview:
     """Preview releasing `capability_id` from its draft governing policy, with no writes.
 
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        capability_id: Id of the governed Capability to release.
+
+    Returns:
+        The release preview: the governing policy and the Capabilities it governs.
+
     Raises:
-        GraphCleanupValidationError: the capability does not exist, is a tombstone, is not
-            governed, or its governing policy is not a draft (AC-BI-014, D12).
+        GraphCleanupValidationError: the Capability does not exist, is a tombstone, is not
+            governed, or its governing policy is not a draft.
         GraphCleanupPersistenceError: the graph database could not be read.
     """
     return _plan_release(graph, capability_id=capability_id).preview
@@ -357,7 +456,14 @@ def preview_release_governance(graph: GraphHandle, *, capability_id: str) -> Rel
 
 @dataclass(frozen=True, slots=True)
 class ReleaseGovernanceApproval:
-    """A previewed governance release and the pending passkey approval bound to it."""
+    """A previewed governance release and the pending passkey approval bound to it.
+
+    Attributes:
+        preview: The release preview the officer saw.
+        pending_approval_id: Id of the pending approval row.
+        approval_url: Link where the officer signs with a passkey; includes the one-time code.
+        expires_at: ISO 8601 time after which the approval can no longer be signed.
+    """
 
     preview: ReleasePreview
     pending_approval_id: str
@@ -377,12 +483,27 @@ def create_release_governance_approval(
     """Preview the release and create a passkey approval bound to the capability and policy.
 
     The signed `normalized_args` carry the capability id, the governing policy id and the sha256
-    `state_digest` of the previewed state. Writes nothing to the graph; a rejected release
-    (any non-draft policy included) creates no row.
+    `state_digest` of the previewed state.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        capability_id: Id of the governed Capability to release.
+        actor: `(subject, issuer)` of the requesting officer; the approval is bound to them.
+        base_url: Origin used to build the approval link, without a trailing slash.
+        store: Pending-approval store that holds the approval row.
+        emitter: Optional log emitter; None uses the default.
+
+    Returns:
+        The preview with the approval id, signing URL and expiry.
 
     Raises:
-        GraphCleanupValidationError: see `preview_release_governance`; no approval is created.
+        GraphCleanupValidationError: the Capability does not exist, is a tombstone, is not
+            governed, or its governing policy is not a draft; no approval is created.
         GraphCleanupPersistenceError: the graph database could not be read.
+
+    Side Effects:
+        Creates one pending approval row and emits a structured log entry. Writes nothing to the
+        graph; a rejected release (any non-draft policy included) creates no row.
     """
     plan = _plan_release(graph, capability_id=capability_id)
     row, code = store.create_pending_approval(
@@ -414,10 +535,19 @@ def create_release_governance_approval(
 def preview_unmerge(
     graph: GraphHandle, audit_store: AuditStore, *, merged_id: str
 ) -> CapabilityUnmergePreview | ObligationUnmergePreview:
-    """Preview reversing the newest effective merge of `merged_id`, with no writes (AC-BI-019).
+    """Preview reversing the newest effective merge of `merged_id`, with no writes.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        audit_store: Audit trail used to locate the merge to reverse.
+        merged_id: Id of the absorbed Capability or Obligation to restore.
+
+    Returns:
+        A Capability or Obligation unmerge preview, matching the kind of node that was merged.
 
     Raises:
-        GraphCleanupValidationError: no merge to reverse, or a conflict (AC-BI-020) explained.
+        GraphCleanupValidationError: there is no merge to reverse, or reversing it conflicts with
+            the current graph; the message explains which.
         GraphCleanupPersistenceError: the graph database could not be read.
         AuditPostgresUnavailableError: the audit trail could not be read.
     """
@@ -426,7 +556,14 @@ def preview_unmerge(
 
 @dataclass(frozen=True, slots=True)
 class UnmergeApproval:
-    """A previewed unmerge and the pending passkey approval bound to it."""
+    """A previewed unmerge and the pending passkey approval bound to it.
+
+    Attributes:
+        preview: The Capability or Obligation unmerge preview the officer saw.
+        pending_approval_id: Id of the pending approval row.
+        approval_url: Link where the officer signs with a passkey; includes the one-time code.
+        expires_at: ISO 8601 time after which the approval can no longer be signed.
+    """
 
     preview: CapabilityUnmergePreview | ObligationUnmergePreview
     pending_approval_id: str
@@ -447,13 +584,29 @@ def create_unmerge_approval(
     """Preview the unmerge and create a passkey approval bound to the merge and the state.
 
     The signed `normalized_args` carry the merged id, the approval id of the merge being
-    reversed, the kind and the sha256 `state_digest` of the previewed state. Writes nothing to
-    the graph; a rejected or conflicting unmerge creates no row.
+    reversed, the kind and the sha256 `state_digest` of the previewed state.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        audit_store: Audit trail used to locate the merge to reverse.
+        merged_id: Id of the absorbed Capability or Obligation to restore.
+        actor: `(subject, issuer)` of the requesting officer; the approval is bound to them.
+        base_url: Origin used to build the approval link, without a trailing slash.
+        store: Pending-approval store that holds the approval row.
+        emitter: Optional log emitter; None uses the default.
+
+    Returns:
+        The preview with the approval id, signing URL and expiry.
 
     Raises:
-        GraphCleanupValidationError: see `preview_unmerge`; no approval is created.
+        GraphCleanupValidationError: there is no merge to reverse, or reversing it conflicts with
+            the current graph; no approval is created.
         GraphCleanupPersistenceError: the graph database could not be read.
         AuditPostgresUnavailableError: the audit trail could not be read.
+
+    Side Effects:
+        Creates one pending approval row and emits a structured log entry. Writes nothing to the
+        graph; a rejected or conflicting unmerge creates no row.
     """
     plan: UnmergePlan = plan_unmerge(graph, audit_store, merged_id=merged_id)
     row, code = store.create_pending_approval(
@@ -486,6 +639,7 @@ def create_unmerge_approval(
 # A signed row whose outcome was never recorded is only judged once this long past its
 # expiry: long enough that the executor which signed it cannot still be running. The
 # FalkorDB client sets no socket timeout; the server-side query timeout is far shorter.
+# Public: exported so callers and tests can reason about when reconciliation starts.
 RECONCILE_GRACE = timedelta(seconds=300)
 
 _CLEANUP_TOOL_NAMES = frozenset(
@@ -499,7 +653,14 @@ _INTERRUPTED_MESSAGE = (
 
 @dataclass(frozen=True, slots=True)
 class CleanupApprovalStatus:
-    """The caller's own cleanup approval: live status plus the stored outcome, if any."""
+    """The caller's own cleanup approval: live status plus the stored outcome, if any.
+
+    Attributes:
+        pending_approval_id: Id of the approval row.
+        tool_name: The cleanup tool the approval was created for.
+        status: `signed` once signed; otherwise `expired` after `expires_at`, else `pending`.
+        outcome: The executor's outcome dict (or the reconciler's), or None while none is recorded.
+    """
 
     pending_approval_id: str
     tool_name: str
@@ -598,13 +759,13 @@ def _reconcile_orphan(
     config: ServiceConfig,
     dependencies: GraphCleanupDependencies,
 ) -> dict[str, object] | None:
-    """Settle a signed row that has no outcome, past the grace window (CHANGES.md A9).
+    """Settle a signed row that has no outcome, past the grace window.
 
     Effect present -> outcome `{"reconciled": "applied"}`. Effect absent -> a `failed`
     audit row (`interrupted_no_effect`, same approval id) first, then a failed outcome.
     Anything that raises leaves the row untouched so a later check retries.
 
-    The verifier reads the live graph, and a write is logged first (#202): a committed group may
+    The verifier reads the live graph, and a write is logged first: a committed group may
     not be applied to the graph yet, and "effect absent" read from a lagging graph would record a
     false `failed` row for an action that is committed. So the verifier runs only once the graph
     has caught up to its log. A graph behind its log, a gateway that is not installed, and a log
@@ -649,18 +810,33 @@ def check_cleanup_approval(
     config: ServiceConfig,
     dependencies: GraphCleanupDependencies,
 ) -> CleanupApprovalStatus | None:
-    """Return the caller's own cleanup approval, reconciling an orphaned signed row (A9).
+    """Return the caller's own cleanup approval, reconciling an orphaned signed row.
 
-    `None` for every case that must look like "not found": no resolvable actor, an unknown
-    id, another actor's approval, or an approval that is not a cleanup approval. A signed
-    row with no outcome that is past `expires_at + RECONCILE_GRACE` is verified against the
-    graph first, once the graph has caught up to its log; until then the row is returned with no
-    outcome and a later check retries. See `_reconcile_orphan`.
+    A signed row with no outcome that is past `expires_at + RECONCILE_GRACE` is verified against
+    the graph first, once the graph has caught up to its log; until then the row is returned
+    with no outcome and a later check retries. See `_reconcile_orphan`.
+
+    Args:
+        pending_approval_id: Id of the approval to look up.
+        actor: `(subject, issuer)` of the caller, or None when no actor could be resolved.
+        store: Pending-approval store that holds the row and receives a reconciled outcome.
+        config: Service configuration used to open the graph and the audit store.
+        dependencies: Factories for the graph, audit store and gateway.
+
+    Returns:
+        The approval status. None for every case that must look like "not found": no resolvable
+        actor, an unknown id, another actor's approval, or an approval that is not a cleanup
+        approval.
 
     Raises:
         GraphCleanupPersistenceError: reconciliation could not read the graph.
-        AuditPostgresUnavailableError / AuditPersistenceError: reconciliation could not
-            record its `failed` row (the approval is left unreconciled).
+        AuditPostgresUnavailableError: reconciliation could not record its `failed` row (the
+            approval is left unreconciled).
+        AuditPersistenceError: as above, for any other audit write failure.
+
+    Side Effects:
+        When reconciling, stores the outcome on the approval row and, if the approved effect is
+        absent, records an `interrupted_no_effect` `failed` audit row. Emits log entries.
     """
     if actor is None:
         return None

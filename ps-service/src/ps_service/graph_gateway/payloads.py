@@ -1,4 +1,4 @@
-"""Content-addressed payloads of the graph mutation log (issue #205).
+"""Content-addressed payloads of the graph mutation log.
 
 Two kinds of value are too large or too exact for an inline column and live in
 `graph_log.payloads`, addressed by the SHA-256 of their exact stored bytes:
@@ -9,7 +9,7 @@ Two kinds of value are too large or too exact for an inline column and live in
 - JSON content whose canonical encoding exceeds `INLINE_CONTENT_LIMIT_BYTES`, and any content
   that holds a float anywhere: stored as canonical UTF-8 bytes, not `jsonb`, because `jsonb`
   reorders keys and normalises numbers (it is a `numeric`: no negative zero, `1.0` comes back as
-  `1`, `1e22` as a 23-digit integer), which would change what a replay rebuilds (#207 S14L).
+  `1`, `1e22` as a 23-digit integer), which would change what a replay rebuilds.
 
 Everything here is pure: the store decides when to write.
 """
@@ -39,7 +39,13 @@ _VALUE_FORMAT = "<d"
 
 @dataclass(frozen=True)
 class StoredPayload:
-    """One payload row to store: its content address, kind and exact body."""
+    """One payload row to store: its content address, kind and exact body.
+
+    Attributes:
+        payload_hash: Content address, `sha256:` plus 64 lowercase hex characters of `body`.
+        kind: `PAYLOAD_KIND_EMBEDDING` or `PAYLOAD_KIND_JSON`.
+        body: The exact stored bytes; never re-encoded.
+    """
 
     payload_hash: str
     kind: str
@@ -47,12 +53,25 @@ class StoredPayload:
 
 
 def payload_hash(body: bytes) -> str:
-    """Return the content address of `body`: `sha256:` plus 64 lowercase hex characters."""
+    """Compute the content address under which a payload body is stored.
+
+    Args:
+        body: The exact bytes to be stored.
+
+    Returns:
+        `sha256:` plus the 64 lowercase hex characters of the SHA-256 of `body`.
+    """
     return _HASH_PREFIX + hashlib.sha256(body).hexdigest()
 
 
 def encode_embedding(values: Sequence[float]) -> bytes:
-    """Encode `values` as little-endian binary64, whatever the host byte order.
+    """Encode an embedding as little-endian binary64, whatever the host byte order.
+
+    Args:
+        values: The embedding components; at least one.
+
+    Returns:
+        Eight bytes per value, one value after another; bit-identical on decode.
 
     Raises:
         ValueError: `values` is empty.
@@ -66,6 +85,12 @@ def encode_embedding(values: Sequence[float]) -> bytes:
 def decode_embedding(body: bytes) -> tuple[float, ...]:
     """Decode a body written by `encode_embedding` back into the identical values.
 
+    Args:
+        body: Little-endian binary64 bytes.
+
+    Returns:
+        The embedding components, bit-identical to those encoded.
+
     Raises:
         ValueError: `body` is not a whole, non-zero number of 8-byte values.
     """
@@ -76,7 +101,15 @@ def decode_embedding(body: bytes) -> tuple[float, ...]:
 
 
 def canonical_json_bytes(content: dict[str, object]) -> bytes:
-    """Encode `content` as canonical UTF-8 JSON: sorted keys, no whitespace, no ASCII escaping.
+    """Encode content as canonical UTF-8 JSON: sorted keys, no whitespace, no ASCII escaping.
+
+    The encoding is deterministic, so equal content always yields equal bytes and equal hashes.
+
+    Args:
+        content: A JSON-representable mapping.
+
+    Returns:
+        The canonical UTF-8 bytes.
 
     Raises:
         ValueError: `content` holds a value JSON cannot carry (NaN, infinity, a non-JSON type).
@@ -91,16 +124,36 @@ def canonical_json_bytes(content: dict[str, object]) -> bytes:
 
 
 def embedding_payload(values: Sequence[float]) -> StoredPayload:
-    """Build the payload row for an embedding."""
+    """Build the payload row for an embedding.
+
+    Args:
+        values: The embedding components; at least one.
+
+    Returns:
+        A `StoredPayload` of kind `PAYLOAD_KIND_EMBEDDING` addressed by the hash of its bytes.
+
+    Raises:
+        ValueError: `values` is empty.
+    """
     body = encode_embedding(values)
     return StoredPayload(payload_hash(body), PAYLOAD_KIND_EMBEDDING, body)
 
 
 def json_payload_if_large(content: dict[str, object]) -> StoredPayload | None:
-    """Build the payload row for `content`, or None when it may stay inline in `jsonb`.
+    """Build the payload row for content too large or too exact for an inline column.
 
     Content stays inline only when it is small and holds no float: the `jsonb` column does not
     keep a float exactly (see the module docstring).
+
+    Args:
+        content: A JSON-representable mapping.
+
+    Returns:
+        A `StoredPayload` of kind `PAYLOAD_KIND_JSON`, or None when the content stays inline in
+        `jsonb`.
+
+    Raises:
+        ValueError: `content` is not representable as canonical JSON.
     """
     body = canonical_json_bytes(content)
     if len(body) <= INLINE_CONTENT_LIMIT_BYTES and not _holds_a_float(content):
@@ -120,6 +173,17 @@ def _holds_a_float(value: object) -> bool:
 
 
 def decode_json_content(body: bytes) -> dict[str, object]:
-    """Decode a `json` payload body back into the content it was written from."""
+    """Decode a `json` payload body back into the content it was written from.
+
+    Args:
+        body: Canonical UTF-8 JSON bytes of a payload of kind `PAYLOAD_KIND_JSON`.
+
+    Returns:
+        The decoded mapping.
+
+    Raises:
+        ValueError: `body` is not valid UTF-8 JSON (including `json.JSONDecodeError` and
+            `UnicodeDecodeError`, both `ValueError` subclasses).
+    """
     decoded: dict[str, object] = json.loads(body.decode("utf-8"))
     return decoded

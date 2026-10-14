@@ -1,4 +1,4 @@
-"""Domain-specific exception types for the graph mutation log store (issue #205).
+"""Domain-specific exception types of the Graph Write Gateway and its mutation log store.
 
 One type per failure boundary, never a generic `Exception` (L1/L2 Error Handling). Messages are
 fixed strings that carry no host, port, user, SQL or driver text; the driver error is chained as
@@ -10,23 +10,23 @@ from __future__ import annotations
 from ps_service.persistence import StatePostgresConnectionError
 
 GRAPH_LOG_UNAVAILABLE_MESSAGE = "The graph mutation log is temporarily unavailable."
-"""The only text a `GraphLogUnavailableError` ever carries (AC-BI-009)."""
+"""The only text a `GraphLogUnavailableError` ever carries."""
 
 
 class GraphLogUnavailableError(StatePostgresConnectionError):
     """The PS state Postgres holding the graph log could not be reached or is unconfigured.
 
     A `StatePostgresConnectionError`, so every handler of the existing persistence error also
-    catches it (AC-BI-009). The message is the fixed `GRAPH_LOG_UNAVAILABLE_MESSAGE`.
+    catches it. The message is the fixed `GRAPH_LOG_UNAVAILABLE_MESSAGE`.
     """
 
     def __init__(self) -> None:
-        """Carry the fixed, sanitized message."""
+        """Create the error with `GRAPH_LOG_UNAVAILABLE_MESSAGE` and no other text."""
         super().__init__(GRAPH_LOG_UNAVAILABLE_MESSAGE)
 
 
 GRAPH_UNAVAILABLE_MESSAGE = "The graph store is temporarily unavailable."
-"""The only text a `GraphUnavailableError` ever carries (AC-BI-009)."""
+"""The only text a `GraphUnavailableError` ever carries."""
 
 
 class GraphUnavailableError(Exception):
@@ -34,12 +34,12 @@ class GraphUnavailableError(Exception):
 
     A fixed message with no host, port or driver text (the redis error is chained as
     `__cause__`). Deliberately not a `StatePostgresConnectionError`: it is about the graph store,
-    not the PS state Postgres (CHANGES D6). Raised only where nothing was committed, or from a
+    not the PS state Postgres. Raised only where nothing was committed, or from a
     catch-up that could not finish; after a commit the caller sees `committed_apply_pending`.
     """
 
     def __init__(self) -> None:
-        """Carry the fixed, sanitized message."""
+        """Create the error with `GRAPH_UNAVAILABLE_MESSAGE` and no other text."""
         super().__init__(GRAPH_UNAVAILABLE_MESSAGE)
 
 
@@ -52,7 +52,13 @@ class GraphApplyError(Exception):
     """
 
     def __init__(self, graph: str, position: int | None = None) -> None:
-        """Record the graph and the first unapplied position (None before anything was logged)."""
+        """Record the graph and the first unapplied position.
+
+        Args:
+            graph: Name of the graph the write targeted.
+            position: Log position of the first entry not applied; None when the failure
+                happened before anything was logged.
+        """
         where = "" if position is None else f" at log position {position}"
         super().__init__(f"graph {graph} rejected a gateway write{where}")
         self.graph = graph
@@ -67,13 +73,17 @@ class GraphApplyBlockedError(GraphApplyError):
     """
 
     def __init__(self, graph: str) -> None:
-        """Record the blocked graph."""
+        """Record the blocked graph.
+
+        Args:
+            graph: Name of the graph that holds the unappliable entry.
+        """
         super().__init__(graph)
         self.args = (f"graph {graph} is blocked by a logged entry that could not be applied",)
 
 
 class GraphReplayGatedError(GraphApplyError):
-    """A write was refused because the graph's replay has not completed or has failed (issue #207).
+    """A write was refused because the graph's replay has not completed or has failed.
 
     Deliberately a `GraphApplyError` but not a `GraphApplyBlockedError`: callers that treat a
     refused graph as gated (`recover()`, the reconciler) already handle it, and the message does
@@ -82,7 +92,13 @@ class GraphReplayGatedError(GraphApplyError):
     """
 
     def __init__(self, graph: str, position: int | None = None, *, failed: bool = False) -> None:
-        """Record the graph; `failed` and `position` say the replay stopped at that position."""
+        """Record the graph and why it is gated.
+
+        Args:
+            graph: Name of the gated graph.
+            position: Log position the replay stopped at; None while it is still running.
+            failed: True when the replay failed at `position`, False when it has not completed.
+        """
         super().__init__(graph, position)
         reason = (
             f"replay failed at log position {position}" if failed else "replay has not completed"
@@ -136,7 +152,13 @@ class StaleGraphStateError(GraphWriteRejectedError):
     """
 
     def __init__(self, graph: str, expected_position: int, actual_position: int) -> None:
-        """Record the graph, the position the caller expected and the position the log is at."""
+        """Record the graph and the two log positions.
+
+        Args:
+            graph: Name of the graph the group targeted.
+            expected_position: Log position the caller prepared the group against.
+            actual_position: Log position the log is at.
+        """
         super().__init__(
             f"graph {graph} is at log position {actual_position}, "
             f"the group expected {expected_position}"
@@ -170,7 +192,7 @@ class UnexpectedGraphReplyError(Exception):
 
 
 class GraphDigestError(Exception):
-    """A graph cannot be reduced to a canonical digest (issue #207).
+    """A graph cannot be reduced to a canonical digest.
 
     Raised when a read answers an unexpected shape, or a node, edge or property holds something
     the gateway cannot have written. The message is fixed and names nothing the graph returned.
@@ -178,14 +200,20 @@ class GraphDigestError(Exception):
 
 
 class GraphReplayError(Exception):
-    """A replay of one graph from the log failed (issue #207).
+    """A replay of one graph from the log failed.
 
     Carries the graph and the log position the failure is about. Messages name the two and
     nothing else: never content, never a digest.
     """
 
     def __init__(self, graph: str, position: int, reason: str) -> None:
-        """Record the graph and position; `reason` is a fixed phrase that names neither content."""
+        """Record the graph and position.
+
+        Args:
+            graph: Name of the graph being replayed.
+            position: Log position the failure is about.
+            reason: A fixed phrase that names neither content nor a digest.
+        """
         super().__init__(f"replay of graph {graph} failed at log position {position}: {reason}")
         self.graph = graph
         self.position = position
@@ -198,7 +226,14 @@ class GraphDigestMismatchError(GraphReplayError):
     """
 
     def __init__(self, graph: str, position: int, *, expected: str, actual: str) -> None:
-        """Record the graph, the checkpoint's position and both digests."""
+        """Record the graph, the checkpoint position and both digests.
+
+        Args:
+            graph: Name of the replayed graph.
+            position: Log position of the checkpoint.
+            expected: Digest the checkpoint holds.
+            actual: Digest of the rebuilt graph.
+        """
         super().__init__(graph, position, "the rebuilt graph does not match its checkpoint")
         self.expected = expected
         self.actual = actual
@@ -211,7 +246,12 @@ class GraphLogGapError(GraphReplayError):
     """
 
     def __init__(self, graph: str, position: int) -> None:
-        """Record the graph and the position that is missing."""
+        """Record the graph and the missing position.
+
+        Args:
+            graph: Name of the replayed graph.
+            position: The log position that has no entry.
+        """
         super().__init__(graph, position, "the log has no entry at this position")
 
 
@@ -219,7 +259,12 @@ class GraphLogCorruptEntryError(GraphReplayError):
     """A logged entry does not decode to a graph mutation. The decode error is the `__cause__`."""
 
     def __init__(self, graph: str, position: int) -> None:
-        """Record the graph and the position of the entry that does not decode."""
+        """Record the graph and the undecodable entry.
+
+        Args:
+            graph: Name of the replayed graph.
+            position: Log position of the entry that does not decode.
+        """
         super().__init__(graph, position, "the log entry does not decode")
 
 
@@ -232,7 +277,12 @@ class GraphReplayUnverifiableError(GraphReplayError):
     """
 
     def __init__(self, graph: str, position: int) -> None:
-        """Record the graph and the checkpoint position that was never verified."""
+        """Record the graph and the unverified checkpoint.
+
+        Args:
+            graph: Name of the replayed graph.
+            position: Log position of the checkpoint the replay never compared against.
+        """
         super().__init__(graph, position, "the progress passed this checkpoint unverified")
 
 
@@ -244,14 +294,19 @@ class GraphReplayStoppedError(Exception):
     """
 
     def __init__(self, graph: str, position: int) -> None:
-        """Record the graph and the last position applied before the stop."""
+        """Record the graph and where the replay stopped.
+
+        Args:
+            graph: Name of the replayed graph.
+            position: Last log position applied before the stop.
+        """
         super().__init__(f"replay of graph {graph} stopped after log position {position}")
         self.graph = graph
         self.position = position
 
 
 class StagedSubmissionClosedError(Exception):
-    """A staged in-transaction submission was completed after it was completed or aborted."""
+    """A staged in-transaction submission was used again after it had been completed or aborted."""
 
 
 class StagedGroupNotCommittedError(Exception):

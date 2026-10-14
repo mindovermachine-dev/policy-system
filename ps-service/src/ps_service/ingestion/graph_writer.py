@@ -1,59 +1,46 @@
 """The native structural graph of one external ingestion: what is written, and how it is checked.
 
-Since issue #208 nothing here writes to FalkorDB. The module builds the primitives the Graph Write
-Gateway applies (`pipeline.py` submits them) and reads the graph to check the result:
+Nothing here writes to FalkorDB. The module builds the primitives the Graph Write Gateway applies
+(`pipeline.ingest_regulatory_instrument` submits them) and reads the graph to check the result:
 
-- `build_native_writes` — validates and builds the RegulatoryInstrument node, the structural nodes
-  and the `HAS` edges. `_validate_element_types` is THE B1 FIX: it validates every node's/edge's
-  `element_type` against `_KNOWN_ELEMENT_TYPES` in a whole-collection first pass, raising
-  `IngestionPersistenceError` on the first violation found, before a single primitive exists
-  (PLAN_REVIEWED.md §4.2), so the CA doc's `PersistNativeStructuralGraph` post-condition
-  ("Abort with no partial write if structure can't be fully persisted") holds for a real
-  200-800+ node regulation: the whole graph is one group, which the gateway commits or rejects
-  as a whole.
-- `read_existing_nodes` / `build_native_group` — an edge whose endpoint is neither in the group
-  nor already in the graph is dropped, silently (AC-BI-004). The legacy `MATCH ... MERGE` matched
-  zero rows for it; the gateway would reject the whole group. One batched read per label, issued
-  once, immediately before the submit (a node deleted in between makes the gateway reject the
-  group: the pre-flight/write race that was always accepted, mapped to the persistence error).
-- `verify_structural_graph_reachable` — AC-004's reachability check: for every structural label,
-  no node may be an orphan — unreachable from *every* RegulatoryInstrument node via `HAS` (any
-  depth). Version-agnostic (a `{short}_native` graph can hold several coexisting versions'
-  subtrees after a Change-Monitor re-ingest). Raises `IngestionPersistenceError` — not a silent
-  warning — on any orphan. It reads the live graph, so the caller runs it only once the graph
-  holds everything committed (`graph_submission.require_caught_up`).
+- `build_native_writes` validates and builds the RegulatoryInstrument node, the structural nodes
+  and the `HAS` edges. It validates every node and edge `element_type` against
+  `_KNOWN_ELEMENT_TYPES` in a whole-collection first pass and raises `IngestionPersistenceError`
+  on the first violation, before a single primitive exists. The whole graph is one group that the
+  gateway commits or rejects as a whole, so a large regulation is never partially written.
+- `read_existing_nodes` and `build_native_group`: an edge whose endpoint is neither in the group
+  nor already in the graph is dropped silently, because the gateway would reject the whole group
+  for it. One batched read per label is issued once, immediately before the submit; a node
+  deleted in between makes the gateway reject the group, which surfaces as the persistence error.
+- `verify_structural_graph_reachable` checks that, for every structural label, no node is an
+  orphan, meaning unreachable from every RegulatoryInstrument node via `HAS` at any depth. It is
+  version-agnostic, because a `{short}_native` graph can hold several coexisting versions'
+  subtrees after a re-ingest. It raises `IngestionPersistenceError`, not a warning, on any orphan.
+  It reads the live graph, so the caller runs it only once the graph holds everything committed
+  (`graph_submission.require_caught_up`).
 
-Structural node/edge ids are used exactly as produced by the Cellar/ELI
-adapter (CELEX-prefixed, e.g. `"32024R2847#art_1"`) — never rewritten or
-re-derived here. This is an explicit orchestrator decision (see
-`.orchestrator/tracker/issue-14-ingestion-adapter/CONTEXT.md`'s "Structural
-node id prefixing" section): graph-per-regulation scoping (one FalkorDB
-graph per regulation, `falkordb_client.native_graph_name`, PLAN_REVIEWED.md
-§4.1) already makes CELEX-prefixed ids globally unique within their graph
-and deterministic across re-ingest, so AC-004's reachability/count checks
-are traversal- and count-based, not id-string-based.
+Structural node and edge ids are used exactly as the Cellar/ELI adapter produces them
+(CELEX-prefixed, for example `"32024R2847#art_1"`) and are never rewritten here. One FalkorDB
+graph per regulation (`falkordb_client.native_graph_name`) makes those ids unique within their
+graph and stable across re-ingest, so the reachability and count checks are traversal- and
+count-based, not id-string-based.
 
-**Increment 13 fix — RegulatoryInstrument-anchored edge endpoint substitution.** The
-adapter never sees the final `{SHORT}-{VERSION}` regulation id (only the
-raw CELEX `identifier` it was called with — see the id-prefixing decision
-above), so every `StructuralEdge` it produces with `parent_element_type ==
-"RegulatoryInstrument"` carries that CELEX identifier as a *placeholder*
-`parent_id`, not the real RegulatoryInstrument node's id. `_has_edge` substitutes the
-caller-supplied `regulatory_instrument_id` for it, and uses `edge.parent_id` unchanged for every
-other edge. Left unsubstituted, every top-level structural edge would name a node that does not
-exist, and every Chapter/Recital/Annex that anchors directly to the RegulatoryInstrument (and
-everything nested under them) would end up unreachable, breaking AC-004 for the whole graph.
+The adapter never sees the final `{SHORT}-{VERSION}` regulation id, only the CELEX identifier it
+was called with. Every `StructuralEdge` with `parent_element_type == "RegulatoryInstrument"`
+therefore carries that CELEX as a placeholder `parent_id`. `_has_edge` substitutes the
+caller-supplied `regulatory_instrument_id` for it and uses `edge.parent_id` unchanged for every
+other edge. Without the substitution, top-level edges would name a node that does not exist and
+everything beneath them would be unreachable.
 
-Gateway delta (issue #208): every edge carries an `identity`, `HAS:<parent>-><child>` (the gateway's
-merge key; the legacy edges had none), and a node property the gateway reserves (`id`,
-`embedding`) or cannot store (a non-finite number) is rejected instead of silently rewriting the
-node id.
+Every edge carries an `identity`, `HAS:<parent>-><child>`, which is the gateway's merge key. A node
+property the gateway reserves (`id`, `embedding`) or cannot store (a non-finite number) is
+rejected instead of silently rewriting the node id.
 
-Query Safety (L2): `element_type` becomes a FalkorDB label via f-string interpolation in
-`read_existing_nodes` and the reachability reads — Cypher cannot parameterize a label. This is
-safe because `_validate_element_types` already checked every element_type against the allow-list
-before any query executes (`read_existing_nodes` only takes labels from the built, validated
-edges); the reachability reads iterate this module's own fixed constants.
+Query safety: `element_type` becomes a FalkorDB label by f-string interpolation in
+`read_existing_nodes` and the reachability reads, because Cypher cannot parameterize a label. This
+is safe because `_validate_element_types` checks every `element_type` against the allow-list
+before any query runs (`read_existing_nodes` takes labels only from the built, validated edges),
+and the reachability reads iterate this module's own fixed constants.
 """
 
 from __future__ import annotations
@@ -95,20 +82,10 @@ _KNOWN_ELEMENT_TYPES = frozenset(
 def _read_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """The one call site every `graph.query()` read in this module goes through.
+    """Run one read query, recording FalkorDB health and wrapping driver errors.
 
-    FalkorDB connectivity failures get recorded in
-    `ps_service.dependency_health` for `/ready`'s live signal, self-healing
-    on the next successful call the same way
-    `falkordb_client.check_connectivity` already does for the startup
-    probe.
-
-    Wraps `redis.exceptions.RedisError` — the base class every
-    connection/timeout error the underlying `falkordb`/`redis-py` stack
-    raises subclasses — into `IngestionPersistenceError`, distinct from this
-    module's own data-validation `IngestionPersistenceError`s
-    (`_validate_element_types`, `verify_structural_graph_reachable`), which
-    are raised directly by this module's own logic and never reach here.
+    A `redis.exceptions.RedisError` marks FalkorDB unhealthy (the `/ready` signal) and is raised
+    as `IngestionPersistenceError`; the next successful call marks it healthy again.
     """
     try:
         result = graph.query(query, params=params)
@@ -123,15 +100,11 @@ def _validate_element_types(
     nodes: tuple[StructuralNode, ...],
     edges: tuple[StructuralEdge, ...],
 ) -> None:
-    """B1 FIX: a whole-collection validation pass.
+    """Validate every node and edge `element_type` against the allow-list, before anything is built.
 
-    Called once, before `build_native_writes` builds a single primitive for ANY element — not
-    interleaved validate-then-build per element. Checks every node's `element_type` and
-    every edge's parent/child `element_type` (`"RegulatoryInstrument"` is
-    the one allowed non-`element_type` parent label, for edges anchoring a
-    top-level structural node directly to the RegulatoryInstrument node)
-    against the allow-list. Raises `IngestionPersistenceError` on the first
-    violation found, with nothing built by the time this raises.
+    Runs once over the whole collection, not interleaved with building. `"RegulatoryInstrument"`
+    is the one allowed parent label outside the allow-list (edges anchoring a top-level node to
+    the instrument). Raises `IngestionPersistenceError` on the first violation found.
     """
     for node in nodes:
         if node.element_type not in _KNOWN_ELEMENT_TYPES:
@@ -154,16 +127,18 @@ def _validate_element_types(
             )
 
 
-# --- Graph Write Gateway builders (issue #208) ---
+# --- Graph Write Gateway builders ---
 
 
 @dataclass(frozen=True, slots=True)
 class NativeWrites:
     """The primitives of one external ingestion's native graph, validated and not yet submitted.
 
-    `instrument` is the RegulatoryInstrument node, `nodes` the structural nodes in adapter
-    order, `edges` every `HAS` edge in adapter order (before the endpoints that exist nowhere
-    are dropped, which needs a read of the graph: `read_existing_nodes`).
+    Attributes:
+        instrument: The RegulatoryInstrument node.
+        nodes: The structural nodes, in adapter order.
+        edges: Every `HAS` edge in adapter order, including edges whose endpoints exist nowhere;
+            `build_native_group` drops those once `read_existing_nodes` has reported what exists.
     """
 
     instrument: UpsertNode
@@ -210,11 +185,11 @@ def _structural_node(node: StructuralNode) -> UpsertNode:
 
 
 def _has_edge(regulatory_instrument_id: str, edge: StructuralEdge) -> UpsertEdge:
-    """One `HAS` edge; the adapter's placeholder RegulatoryInstrument parent id is replaced.
+    """Build one `HAS` edge, replacing the adapter's placeholder RegulatoryInstrument parent id.
 
     The adapter only knows the CELEX, so every edge anchored to the RegulatoryInstrument carries
-    it as `parent_id` (Increment 13); the real node id is the caller-supplied one. Same-type
-    edges between the same two nodes share an identity, as `MERGE (a)-[:HAS]->(b)` collapsed them.
+    it as `parent_id`; the real node id is the caller-supplied one. Edges between the same two
+    nodes share an identity, so they collapse into one.
     """
     parent_id = (
         regulatory_instrument_id
@@ -240,14 +215,25 @@ def build_native_writes(
 ) -> NativeWrites:
     """Build every primitive of one external ingestion's native graph, or raise before any exist.
 
-    Pure: nothing is read or submitted. The whole collection is validated first
-    (`_validate_element_types`, the B1 fix), so an invalid element anywhere means no primitive
-    reaches the caller.
+    Pure: nothing is read or submitted. The whole collection is validated first, so an invalid
+    element anywhere means no primitive reaches the caller.
+
+    Args:
+        regulatory_instrument_id: Final `{SHORT}-{VERSION}` id of the RegulatoryInstrument node;
+            also substituted for the placeholder parent id on instrument-anchored edges.
+        metadata: Bibliographic metadata written as the instrument node's properties.
+        nodes: Structural nodes from the adapter; each `element_type` must be in the allow-list
+            (TITLE, CHAPTER, SECTION, ARTICLE, PARAGRAPH, ANNEX, RECITAL).
+        edges: Parent to child edges from the adapter; element types must be in the allow-list,
+            except that a parent may be `RegulatoryInstrument`.
+
+    Returns:
+        A `NativeWrites` holding the instrument node, the structural nodes and all `HAS` edges.
 
     Raises:
         IngestionPersistenceError: an element type is outside the allow-list, or a node carries
             a property the gateway cannot store (a reserved key such as `id`, a non-finite
-            number); the latter was silently accepted by the legacy `SET n += $properties`.
+            number).
     """
     _validate_element_types(nodes, edges)
     try:
@@ -278,8 +264,19 @@ def read_existing_nodes(graph: GraphHandle, writes: NativeWrites) -> ExistingNod
     """Read which of the edge endpoints outside `writes` already exist in the graph.
 
     One batched read per label, issued once and immediately before the group is submitted; no
-    read at all when every endpoint is in the group. A read, so the write handle stays out of it.
-    The labels come from the validated edges, the ids are parameters (Query Safety).
+    read at all when every endpoint is in the group. The labels come from the validated edges,
+    the ids are parameters.
+
+    Args:
+        graph: Read handle for the target graph.
+        writes: The built primitives whose outside endpoints are looked up.
+
+    Returns:
+        The `(label, id)` pairs found; empty when none of the outside endpoints exist or there
+        are none.
+
+    Side Effects:
+        Reads from FalkorDB and records its health.
 
     Raises:
         IngestionPersistenceError: FalkorDB could not be reached.
@@ -307,12 +304,20 @@ def build_native_group(
 ) -> MutationGroup:
     """Assemble the one native group: the instrument, the structural nodes, then the edges.
 
-    `checkpoint_requested` asks the gateway to record the graph's digest once the group is
-    applied; the pipeline sets it because this group is the last one it writes to the graph.
+    An edge whose endpoint is neither in the group nor in `existing` is dropped silently, because
+    the gateway would reject the whole group for it. Dropped edges are never submitted, so
+    nothing is logged for them.
 
-    An edge whose endpoint is neither in the group nor in `existing` is dropped, silently
-    (AC-BI-004): `MATCH ... MERGE` matched zero rows for it before, and the gateway would reject
-    the whole group for it. Dropped edges are never submitted, so nothing is logged for them.
+    Args:
+        writes: The built primitives.
+        existing: Nodes already in the graph, from `read_existing_nodes`.
+        graph_name: Target graph name.
+        audit_event_id: Audit event the group is logged under.
+        checkpoint_requested: Asks the gateway to record the graph's digest once the group is
+            applied; the pipeline sets it because this group is the last one it writes.
+
+    Returns:
+        A `MutationGroup` ordered instrument, structural nodes, surviving edges.
     """
     present = {(writes.instrument.label, writes.instrument.id)} | {
         (node.label, node.id) for node in writes.nodes
@@ -333,16 +338,10 @@ def build_native_group(
 
 
 def _scalar_count(result: GraphQueryResult) -> int:
-    """Extract a single integer from a `RETURN count(...)` query's first cell.
+    """Return the first cell of a `RETURN count(...)` result as an int; no rows counts as zero.
 
-    Reads the first row, first column of a `RETURN count(...)` /
-    `RETURN count(DISTINCT ...)` result.
-    `cast` used twice, unavoidably: `GraphQueryResult.result_set` is typed
-    `list[object]` (matching `falkordb.QueryResult`'s own untyped shape —
-    the library ships no more specific stub), so a first cast recovers the
-    row-of-columns shape a real FalkorDB result actually has, and a second
-    recovers the cell's runtime `int` value from a `count(...)` clause. No rows (a graph key
-    that does not exist, read through `GRAPH.RO_QUERY`) counts as zero.
+    The casts recover the row shape and the `int` cell that `GraphQueryResult.result_set`
+    (typed `list[object]`) does not express.
     """
     rows = cast("list[list[object]]", result.result_set)
     if not rows:
@@ -355,16 +354,12 @@ def _count_nodes(graph: GraphHandle, label: str) -> int:
 
 
 def _count_orphans(graph: GraphHandle, label: str) -> int:
-    """Nodes of `label` not reachable from ANY RegulatoryInstrument via `HAS` (any depth).
+    """Count nodes of `label` not reachable from any RegulatoryInstrument via `HAS` (any depth).
 
-    Version-agnostic denominator for the reachability check: after a
-    Change-Monitor re-ingest, one `{short}_native` graph holds several
-    versions' structural subtrees, each anchored to its own
-    `{SHORT}-{VERSION}` RegulatoryInstrument node (domain-concepts: a new
-    version supersedes, never overwrites). A node owned by a sibling version
-    is still reachable from *some* RegulatoryInstrument, so it is not an
-    orphan; only a node that a `persist` wrote but left unlinked from every
-    RegulatoryInstrument is counted.
+    Version-agnostic: one `{short}_native` graph can hold several versions' subtrees, each
+    anchored to its own `{SHORT}-{VERSION}` RegulatoryInstrument node (a new version supersedes,
+    never overwrites). A node owned by a sibling version is reachable from some instrument, so it
+    is not an orphan; only a node left unlinked from every instrument is counted.
     """
     return _scalar_count(
         _read_query(
@@ -377,21 +372,28 @@ def _count_orphans(graph: GraphHandle, label: str) -> int:
 def verify_structural_graph_reachable(
     graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, ReachabilityCount]:
-    """AC-004: every structural node must be reachable from some RegulatoryInstrument.
+    """Check that every structural node is reachable from some RegulatoryInstrument.
 
-    For every structural label (plus `RegulatoryInstrument` itself), reports
-    the whole-graph node count (`total`) and how many of those are actually
-    linked into a RegulatoryInstrument's `HAS` tree
-    (`reachable = total - orphans`). `total` stays a whole-graph count so the
-    public shape is unchanged; `reachable` equals `total` on every clean
-    graph, single- or multi-version, because the orphan denominator counts
-    only nodes unreachable from *every* RegulatoryInstrument.
+    For every structural label plus `RegulatoryInstrument`, counts the whole-graph nodes
+    (`total`) and how many are linked into a RegulatoryInstrument's `HAS` tree
+    (`reachable = total - orphans`). The `RegulatoryInstrument` entry always has
+    `reachable == total`. On a clean graph, single- or multi-version, `reachable == total` for
+    every label, because only nodes unreachable from every instrument count as orphans.
 
-    Raises `IngestionPersistenceError` — not a silent warning — if any label
-    has an orphan, matching the CA doc's `PersistNativeStructuralGraph`
-    post-condition (no partial/undetected write left behind). A node this run
-    wrote but failed to link is unreachable from every RegulatoryInstrument
-    (its id prefix is unique to this run), so it is always caught.
+    Args:
+        graph: Read handle for the native graph.
+        regulatory_instrument_id: Id of the instrument just written; used only in the error
+            message.
+
+    Returns:
+        A `ReachabilityCount` per label.
+
+    Side Effects:
+        Reads from FalkorDB and records its health.
+
+    Raises:
+        IngestionPersistenceError: any label has an orphan (the write left a node unlinked), or
+            FalkorDB could not be reached.
     """
     counts: dict[str, ReachabilityCount] = {}
     for label in (_REGULATORY_INSTRUMENT_LABEL, *_KNOWN_ELEMENT_TYPES):

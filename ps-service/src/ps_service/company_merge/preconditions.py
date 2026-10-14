@@ -1,18 +1,13 @@
-"""Company Merge's own precondition check on a `{short}_baseline` graph.
+"""Live precondition check that every Obligation in a graph has exactly one `HAS` edge.
 
-Issue #28 (AC-BI-002/AC-BI-003): before `merge_baseline_graph` runs against
-the real, shared `policy_system` graph, Domain Mapper's structural guarantee
-(#15) -- exactly one `HAS` edge per Obligation -- is reconfirmed live,
-mirroring how `merge.py` already treats `similarity_threshold is None` as a
-precondition it itself enforces (`CompanyMergeConfigurationError`) rather
-than something upstream enforces on Company Merge's behalf. Placed in
-`company_merge`, not `domain_mapper`: it is Company Merge, not Domain
-Mapper, that has a new reason to re-check this invariant here (#34's
-precedent -- a live-capstone re-run against an already-populated baseline
-can silently violate it after the fact).
+Company Merge runs `check_obligation_has_edge_cardinality` before merging a baseline into the
+shared `policy_system` graph. Domain Mapper writes one inbound `HAS` edge per Obligation, but a
+re-run against an already-populated baseline can break that invariant afterwards, so Company
+Merge re-checks it itself rather than trusting upstream. This mirrors how `merge.py` enforces a
+resolved `similarity_threshold` itself.
 
-Read-only: the single query issued here is a `MATCH ... OPTIONAL MATCH ...
-RETURN ...`, never a `MERGE`/`SET`/`DELETE`.
+Read-only: the single query issued is a `MATCH ... OPTIONAL MATCH ... RETURN ...`, never a
+`MERGE`, `SET` or `DELETE`.
 """
 
 from __future__ import annotations
@@ -30,7 +25,13 @@ _OBLIGATION_HAS_EDGE_CARDINALITY_QUERY = (
 
 @dataclass(frozen=True, slots=True)
 class ObligationHasEdgeViolation:
-    """One Obligation whose inbound `HAS`-edge count is not exactly 1."""
+    """One Obligation whose inbound `HAS`-edge count is not exactly 1.
+
+    Attributes:
+        obligation_id: The `id` property of the offending Obligation node.
+        has_edge_count: Number of inbound `Role -[HAS]-> Obligation` edges; any value except 1
+            (0 means no owning Role, 2 or more means competing owners).
+    """
 
     obligation_id: str
     has_edge_count: int
@@ -39,16 +40,22 @@ class ObligationHasEdgeViolation:
 def check_obligation_has_edge_cardinality(
     baseline_graph: GraphHandle,
 ) -> tuple[ObligationHasEdgeViolation, ...]:
-    """Reconfirm Domain Mapper's structural guarantee (#15) for AC-BI-002/003.
+    """Find Obligations whose inbound `HAS`-edge count is not exactly 1.
 
-    Issues the exact exhaustive query #15's/#34's own verification used
-    (`ps-service/tests/domain_mapper/test_live_capstone.py:232`):
-    `MATCH (o:Obligation) OPTIONAL MATCH (:Role)-[h:HAS]->(o) RETURN o.id,
-    count(h)` -- never a paraphrase. Returns one `ObligationHasEdgeViolation`
-    per Obligation whose `HAS`-edge count is not exactly 1, in query-result
-    order; an empty tuple means the invariant holds. A baseline graph with
-    zero Obligations returns an empty tuple, not an error -- there is
-    nothing to violate.
+    Guards the merge against a baseline where an Obligation has no owning Role or several.
+    The query is exhaustive: `MATCH (o:Obligation) OPTIONAL MATCH (:Role)-[h:HAS]->(o) RETURN
+    o.id, count(h)`. Read-only.
+
+    Args:
+        baseline_graph: Handle on the graph to check, normally a `{short}_baseline` graph.
+
+    Returns:
+        One `ObligationHasEdgeViolation` per offending Obligation, in query-result order. An
+        empty tuple means the invariant holds, including when the graph has no Obligations.
+
+    Raises:
+        Exception: Whatever `baseline_graph.query` raises on a connection or query failure is
+            propagated unchanged.
     """
     result = baseline_graph.query(_OBLIGATION_HAS_EDGE_CARDINALITY_QUERY)
     rows = cast("list[list[object]]", result.result_set)

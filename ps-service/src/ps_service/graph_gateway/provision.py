@@ -1,10 +1,10 @@
-"""Operator command that brings `ps_state` from any state to ready (issue #205).
+"""Operator command that brings `ps_state` from any state to ready.
 
 Run as `python -m ps_service.graph_gateway.provision` with ADMIN credentials in the
 environment. In one idempotent run, on one admin connection, it (1) applies the pending ordinary
 component migrations (`ps_service.state_migrations`) as the `ps_state` application role -- via
-`SET LOCAL ROLE`, so `ps_state` owns every public table exactly as when the service applied them
-itself -- and then (2) applies the `graph_gateway` migration through
+`SET LOCAL ROLE`, so `ps_state` owns every public table exactly as if the service had applied
+them itself -- and then (2) applies the `graph_gateway` migration through
 `ps_service.persistence.privileged_migration_runner`, so the immutable `graph_log` tables are
 owned by a dedicated non-login owner role and the `ps_state` application role only holds INSERT
 and SELECT on them (plus UPDATE on the applied-marker table). From an empty database it needs no
@@ -71,11 +71,30 @@ _DEFAULT_LOCK_DEADLINE_SECONDS = 60
 _DEFAULT_CONNECT_DEADLINE_SECONDS = 120
 _CONNECT_RETRY_INTERVAL_SECONDS = 1.0
 _SQLSTATE_CANNOT_CONNECT_NOW = "57P03"
+_PARSER_DESCRIPTION = (
+    "Bring the ps_state database from any state to ready: apply the pending ordinary component "
+    "migrations and the graph_gateway migration in one idempotent admin run. "
+    "Reads its target and admin credential from the environment: "
+    "PS_STATE_POSTGRES_HOST/PORT/DATABASE/USER, PS_STATE_ADMIN_POSTGRES_USER, "
+    "PS_STATE_ADMIN_POSTGRES_PASSWORD and PS_STATE_GRAPH_OWNER_ROLE."
+)
 
 
 @dataclass(frozen=True)
 class ProvisioningTarget:
-    """Where and as whom to provision: the target database, the app role, the admin credential."""
+    """Where and as whom to provision: the target database, the app role, the admin credential.
+
+    Attributes:
+        host: Postgres server host name.
+        port: Postgres server TCP port.
+        database: Name of the `ps_state` database.
+        app_user: The `ps_state` application role that owns the ordinary tables.
+        admin_user: Admin login used for the whole run.
+        admin_password: Admin password; excluded from `repr`.
+        owner_role: Non-login role that owns the immutable `graph_log` tables.
+        connect_timeout_seconds: How long to keep retrying while the server is not ready.
+        lock_timeout_seconds: How long to wait for the migration advisory lock; at least 1.
+    """
 
     host: str
     port: int
@@ -91,9 +110,16 @@ class ProvisioningTarget:
     def from_environ(cls, environ: Mapping[str, str]) -> ProvisioningTarget:
         """Read the target from `environ`, naming (never echoing) any missing variable.
 
+        Args:
+            environ: Environment variable names to values (see the module docstring for the
+                names, defaults and which are required).
+
+        Returns:
+            The validated target; optional values not set take their defaults.
+
         Raises:
-            StatePostgresProvisioningError: a required variable is unset or blank, or the
-                port is not an integer.
+            StatePostgresProvisioningError: a required variable is unset or blank, a port or
+                timeout is not an integer, or the lock timeout is below 1.
         """
 
         def required(name: str) -> str:
@@ -134,7 +160,14 @@ class ProvisioningTarget:
 
 @dataclass(frozen=True)
 class ProvisionResult:
-    """What one provisioning run applied: `component/file` ordinary entries, bare graph files."""
+    """What one provisioning run applied: `component/file` ordinary entries, bare graph files.
+
+    Attributes:
+        ordinary_applied: `component/file` of each ordinary migration applied, in order; empty
+            when none was pending.
+        graph_gateway_applied: File names of the `graph_gateway` migrations applied, in order;
+            empty when none was pending.
+    """
 
     ordinary_applied: list[str]
     graph_gateway_applied: list[str]
@@ -147,6 +180,12 @@ def _is_server_not_ready(exc: psycopg.OperationalError) -> bool:
 
 def _connect_when_server_is_ready(target: ProvisioningTarget) -> psycopg.Connection[TupleRow]:
     """Connect as the admin, retrying until the server accepts connections or the deadline.
+
+    Args:
+        target: The target whose host, database, admin credential and connect timeout are used.
+
+    Returns:
+        An open admin connection; the caller closes it.
 
     Raises:
         StatePostgresProvisioningError: the server did not accept connections in time (fixed
@@ -198,6 +237,25 @@ def provision(target: ProvisioningTarget, *, emitter: LogEmitter | None = None) 
     made it), then the owner-protected `graph_gateway` migration (which links to
     `public.audit_events`, hence the order). An ordinary failure raises before any `graph_log`
     object is created; partial ordinary progress stays committed and the next run resumes.
+
+    Args:
+        target: Where and as whom to provision.
+        emitter: Destination of the migration log entries; `None` uses the process-wide one.
+
+    Returns:
+        The migrations applied by this run; both lists are empty when the database was already up
+        to date.
+
+    Raises:
+        StatePostgresProvisioningError: The server did not accept connections in time, or a
+            provisioning precondition failed.
+        StatePostgresMigrationApplyError: A migration failed to apply.
+        StatePostgresMigrationLockError: The migration lock was not obtained in time.
+        psycopg.OperationalError: The server refused the connection (authentication, permission).
+
+    Side Effects:
+        Applies migrations to the target database and creates the owner-protected `graph_log`
+        tables.
     """
     with _connect_when_server_is_ready(target) as conn:
         ordinary = apply_pending_migrations(
@@ -231,12 +289,10 @@ def _emit_provision_entry(*, outcome: str, extra: Mapping[str, object]) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser, whose help text is `_PARSER_DESCRIPTION`."""
     return argparse.ArgumentParser(
         prog="python -m ps_service.graph_gateway.provision",
-        description=(__doc__ or "").split("\n\n", maxsplit=1)[0]
-        + " Reads its target and admin credential from the environment: "
-        "PS_STATE_POSTGRES_HOST/PORT/DATABASE/USER, PS_STATE_ADMIN_POSTGRES_USER, "
-        "PS_STATE_ADMIN_POSTGRES_PASSWORD and PS_STATE_GRAPH_OWNER_ROLE.",
+        description=_PARSER_DESCRIPTION,
     )
 
 
@@ -245,6 +301,18 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
 
     Failures print one sanitized line to stderr (variable names, role names, migration filenames
     only -- never a host, SQL, a driver message or the admin password).
+
+    Args:
+        argv: Command-line arguments; `None` reads `sys.argv`. The command takes none besides
+            `--help`.
+        environ: Environment to read the target from; `None` uses `os.environ`.
+
+    Returns:
+        0 when provisioning succeeded (including a run that applied nothing), 1 on any failure.
+
+    Side Effects:
+        Provisions the database (see `provision`), writes one line to stdout on success or to
+        stderr on failure, and emits a `provision_graph_log` log entry.
     """
     _build_parser().parse_args(argv)
     try:

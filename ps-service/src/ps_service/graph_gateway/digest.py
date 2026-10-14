@@ -1,7 +1,7 @@
-"""The canonical digest of one FalkorDB graph (issue #207, AC-RD-001/002).
+"""The canonical digest of one FalkorDB graph.
 
-The digest depends on logical content only: ids, properties (embeddings included) and, as the
-slices land, labels and relationships. It does not depend on FalkorDB's internal ids or on
+The digest depends on logical content only: ids, properties (embeddings included), labels and
+relationships. It does not depend on FalkorDB's internal ids or on
 insertion order. Every element is encoded as a type-tagged, length-prefixed byte string, hashed
 with SHA-256, and the sorted 32-byte hashes are hashed again under a versioned domain prefix.
 
@@ -62,13 +62,29 @@ class QueryableGraph(Protocol):
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _ScanResult:
-        """Run Cypher `q` with `params` and return its rows."""
+        """Run Cypher `q` with `params` and return its rows.
+
+        Args:
+            q: Read-only Cypher text.
+            params: Query parameters, or `None` for none.
+
+        Returns:
+            The query result, whose `result_set` holds the rows.
+        """
         ...
 
 
 @dataclass(frozen=True)
 class DigestSettings:
-    """Tunables of the digest scans."""
+    """Tunables of the digest scans.
+
+    Attributes:
+        node_chunk_rows: Nodes read per scan query; at least 1.
+        edge_chunk_rows: Relationships read per scan query; at least 1.
+
+    Raises:
+        ValueError: Either chunk size is below 1 (checked on construction).
+    """
 
     node_chunk_rows: int = DEFAULT_NODE_CHUNK_ROWS
     """Nodes read per scan query."""
@@ -85,9 +101,19 @@ class DigestSettings:
 def canonical_digest(graph: QueryableGraph, settings: DigestSettings | None = None) -> str:
     """Return `sha256:<hex>` of `graph`'s logical content.
 
+    Args:
+        graph: The graph to digest; a missing graph key reads as the empty graph.
+        settings: Scan chunk sizes; `None` uses the defaults.
+
+    Returns:
+        `sha256:` followed by 64 hex digits. An empty graph yields `EMPTY_GRAPH_DIGEST`.
+
     Raises:
         GraphDigestError: a scan answered an unexpected shape, or an element holds a value the
             gateway cannot have written.
+
+    Side Effects:
+        Runs read queries against `graph`; it writes nothing.
     """
     chosen = settings if settings is not None else DigestSettings()
     return combine_element_hashes(
@@ -99,7 +125,12 @@ def canonical_digest(graph: QueryableGraph, settings: DigestSettings | None = No
 
 
 class ElementHashes(NamedTuple):
-    """The 32-byte hash of every node and of every relationship of a graph."""
+    """The 32-byte hash of every node and of every relationship of a graph.
+
+    Attributes:
+        nodes: One hash per node, in scan order.
+        edges: One hash per relationship, in scan order.
+    """
 
     nodes: tuple[bytes, ...]
     edges: tuple[bytes, ...]
@@ -110,6 +141,20 @@ def element_hashes(graph: QueryableGraph, settings: DigestSettings | None = None
 
     Lets a caller tell which elements two graphs disagree on without reading any content (the
     hashes are one-way). Memory: 32 bytes per element, as for the digest itself.
+
+    Args:
+        graph: The graph to scan; a missing graph key reads as the empty graph.
+        settings: Scan chunk sizes; `None` uses the defaults.
+
+    Returns:
+        The node hashes and the relationship hashes; both empty for an empty graph.
+
+    Raises:
+        GraphDigestError: a scan answered an unexpected shape, or an element holds a value the
+            gateway cannot have written.
+
+    Side Effects:
+        Runs read queries against `graph`; it writes nothing.
     """
     chosen = settings if settings is not None else DigestSettings()
     return ElementHashes(
@@ -124,6 +169,12 @@ def combine_element_hashes(hashes: Iterable[bytes]) -> str:
     The hashes are sorted before they are hashed again, so the order the elements were read in
     (and so the insertion order and FalkorDB's internal ids) cannot matter, while a repeated
     element still counts twice.
+
+    Args:
+        hashes: The 32-byte hash of each element; may be empty.
+
+    Returns:
+        `sha256:` followed by 64 hex digits.
     """
     combined = hashlib.sha256(_DOMAIN + b"".join(sorted(hashes))).hexdigest()
     return f"{_ALGORITHM}:{combined}"
@@ -202,7 +253,17 @@ def _label_set(labels: object) -> bytes:
 
 
 def encode_properties(properties: dict[str, object]) -> bytes:
-    """Encode a property map: its size, then each key and value in key order."""
+    """Encode a property map: its size, then each key and value in key order.
+
+    Args:
+        properties: Property names to values; each value must satisfy `encode_value`.
+
+    Returns:
+        The unambiguous byte encoding; key order in `properties` does not matter.
+
+    Raises:
+        GraphDigestError: A value cannot be encoded.
+    """
     return _length(len(properties)) + b"".join(
         _text(key) + encode_value(properties[key]) for key in sorted(properties)
     )
@@ -214,6 +275,12 @@ def encode_value(value: object) -> bytes:
     The tag keeps `True`, `1` and `1.0` apart; floats are their 8 IEEE-754 bytes, so `-0.0`
     differs from `0.0` and one unit in the last place shows. A value the gateway cannot have
     written (None, a map, a non-finite float, an integer beyond 64 bits) is refused.
+
+    Args:
+        value: A str, bool, int64, finite float, or list of those.
+
+    Returns:
+        The type tag followed by the encoded body.
 
     Raises:
         GraphDigestError: `value` is not a str, bool, int64, finite float or list of those.
@@ -240,22 +307,26 @@ def _text(text: str) -> bytes:
 
 
 def _encode_bool(value: bool) -> bytes:  # noqa: FBT001 -- a private encoder, called only by type
+    """Encode a bool as a tag and one byte."""
     return b"b" + (b"\x01" if value else b"\x00")
 
 
 def _encode_int(value: int) -> bytes:
+    """Encode an int64 as a tag and eight signed big-endian bytes."""
     if not _INT64_MIN <= value <= _INT64_MAX:
         raise GraphDigestError(_VALUE_MESSAGE)
     return b"i" + value.to_bytes(_LENGTH_BYTES, "big", signed=True)
 
 
 def _encode_float(value: float) -> bytes:
+    """Encode a finite float as a tag and its eight IEEE-754 bytes."""
     if not math.isfinite(value):
         raise GraphDigestError(_VALUE_MESSAGE)
     return b"f" + struct.pack(">d", value)
 
 
 def _encode_list(items: list[object]) -> bytes:
+    """Encode a list as a tag, its length and each encoded item."""
     if items and set(map(type, items)) == {float}:
         return b"l" + _length(len(items)) + _encode_floats(cast("list[float]", items))
     return b"l" + _length(len(items)) + b"".join(encode_value(item) for item in items)
@@ -271,6 +342,7 @@ def _encode_floats(items: list[float]) -> bytes:
 
 
 def _length(size: int) -> bytes:
+    """Encode a size as eight big-endian bytes."""
     return size.to_bytes(_LENGTH_BYTES, "big")
 
 

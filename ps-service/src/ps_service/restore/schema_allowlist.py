@@ -1,23 +1,18 @@
-"""L2 Query Safety: 'allow-list labels/relationship types before interpolation'.
+"""Allow-lists for the node labels and relationship types a restore artifact may carry.
 
-A restore artifact is parsed from a file (curated-content/git repo, or a
-POST /restorations upload) -- unlike a live FalkorDB read, its label/
-relationship_type strings are untrusted content that `populate_graph`
-f-string-interpolates into Cypher (labels/relationship types cannot be
-parameterized). Checksum verification (D9) catches accidental corruption in
-transit; this allow-list is the separate, deliberate defense against a
-maliciously-crafted-but-checksum-consistent artifact attempting label/
-relationship-type Cypher injection -- AC-BI-010's "a tampered artifact
-can't inject unverified content" reads, under this redesign, as covering
-CONTENT safety, not just byte-integrity.
+A restore artifact is parsed from a file (curated-content repository, or a
+`POST /restorations` upload). Unlike a live FalkorDB read, its label and relationship type
+strings are untrusted content, and labels and relationship types cannot be parameterized in
+Cypher. Checksum verification catches accidental corruption in transit; these allow-lists are
+the separate defense against a crafted artifact with a consistent checksum that attempts
+label or relationship-type Cypher injection, so a tampered artifact cannot inject unverified
+content.
 
-The four lists below are deliberately hand-written literals (defense in
-depth: this sink-side layer stays independent of the intake boundary's
-`internal_seed/models.py::NodeLabel`/`EdgeType` `Literal` types, so widening
-the intake vocabulary never silently widens what an uploaded artifact may
-inject) and are pinned to that vocabulary by
-`tests/restore/test_schema_allowlist.py` -- drift fails the test and is
-widened here on purpose (GH #104).
+The four lists are deliberately hand-written literals (defense in depth): this sink-side layer
+stays independent of the intake boundary's `internal_seed/models.py::NodeLabel`/`EdgeType`
+`Literal` types, so widening the intake vocabulary never silently widens what an uploaded
+artifact may inject. They are pinned to that vocabulary by `tests/restore/test_schema_allowlist.py`;
+drift fails the test and is widened here on purpose.
 """
 
 from __future__ import annotations
@@ -40,9 +35,9 @@ BASELINE_ALLOWED_LABELS: frozenset[str] = frozenset(
         "Capability",
         "Policy",
         "Standard",
-        "Control",  # Policy/Standard/Control: internal-source only, D15
+        "Control",  # Policy/Standard/Control: internal-source only
         "PracticeArea",
-        "RiskPath",  # PracticeArea/RiskPath: internal-source classification layer, GH #93
+        "RiskPath",  # PracticeArea/RiskPath: internal-source classification layer
     }
 )
 BASELINE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
@@ -58,7 +53,7 @@ BASELINE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
         "VERIFIED_BY",
         "OWNS",
         "COVERS",
-        "MITIGATED_BY",  # VERIFIED_BY/OWNS/COVERS/MITIGATED_BY: classification layer, GH #93
+        "MITIGATED_BY",  # VERIFIED_BY/OWNS/COVERS/MITIGATED_BY: classification layer
     }
 )
 NATIVE_ALLOWED_LABELS: frozenset[str] = frozenset(
@@ -71,48 +66,43 @@ NATIVE_ALLOWED_LABELS: frozenset[str] = frozenset(
         "PARAGRAPH",
         "ANNEX",
         "RECITAL",
-        # Internal-source native shape (issue #54, B5): the internal-seed
-        # adapter's `{short}_native` graph carries the customer's own
-        # submission verbatim, using the full internal-seed intake vocabulary
-        # (`internal_seed/models.py::NodeLabel`/`EdgeType`, pinned by
-        # `tests/restore/test_schema_allowlist.py`) -- a differently-shaped
-        # native leg than Cellar/ELI's structural element vocabulary above.
-        # Not previously allow-listed (#66's own allow-list only anticipated
-        # the baseline leg's Policy/Standard/Control, not this
-        # differently-shaped native leg) -- closed here so an internal
-        # instrument's native graph can be exported (#71) and restored (B6)
-        # once it exists; widened to the whole vocabulary in GH #104.
+        # Internal-source native shape: the internal-seed adapter's `{short}_native` graph
+        # carries the customer's own submission verbatim, using the full internal-seed intake
+        # vocabulary (`internal_seed/models.py::NodeLabel`/`EdgeType`, pinned by
+        # `tests/restore/test_schema_allowlist.py`), which differs from the structural element
+        # vocabulary of Cellar/ELI above.
         "Role",
         "Requirement",
         "Obligation",
         "Capability",
         "Policy",
         "Standard",
-        "Control",  # Policy/Standard/Control: authored governance layer, GH #76
+        "Control",  # Policy/Standard/Control: authored governance layer
         "PracticeArea",
-        "RiskPath",  # PracticeArea/RiskPath: internal-source classification layer, GH #93
+        "RiskPath",  # PracticeArea/RiskPath: internal-source classification layer
     }
 )  # = internal-seed NodeLabel | ingestion/graph_writer.py::_KNOWN_ELEMENT_TYPES
 NATIVE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
     {
         "HAS",
-        # Internal-source native shape (issue #54, B5) -- see NATIVE_ALLOWED_LABELS.
+        # Internal-source native shape -- see NATIVE_ALLOWED_LABELS.
         "DEFINES",
         "EXPRESSES",
         "SATISFIED_BY",
         "REQUIRES",
         "GOVERNED_BY",
         "SUPPORTED_BY",
-        "IMPLEMENTED_BY",  # GOVERNED_BY/SUPPORTED_BY/IMPLEMENTED_BY: governance layer, GH #76
+        "IMPLEMENTED_BY",  # GOVERNED_BY/SUPPORTED_BY/IMPLEMENTED_BY: governance layer
         "VERIFIED_BY",
         "OWNS",
         "COVERS",
-        "MITIGATED_BY",  # VERIFIED_BY/OWNS/COVERS/MITIGATED_BY: classification layer, GH #93
+        "MITIGATED_BY",  # VERIFIED_BY/OWNS/COVERS/MITIGATED_BY: classification layer
     }
 )  # = internal-seed EdgeType (Cellar/ELI's HAS is already a member)
 
 
 def _validate_node_id(node_label: str, properties: Mapping[str, object]) -> None:
+    """Reject a node whose `id` property is missing or not a string."""
     node_id = properties.get("id")
     if not isinstance(node_id, str):
         raise ArtifactContentRejectedError(
@@ -121,7 +111,7 @@ def _validate_node_id(node_label: str, properties: Mapping[str, object]) -> None
 
 
 def _validate_no_tombstone(node_label: str, properties: Mapping[str, object]) -> None:
-    """Reject a `Capability` carrying `status = 'merged'` (issue #190).
+    """Reject a `Capability` carrying `status = 'merged'`.
 
     A tombstone exists only in a deployment's own graph, written by a Compliance
     Officer cleanup merge. An artifact that carried one would mint an orphan
@@ -142,18 +132,23 @@ def validate_serialized_graph(
     allowed_labels: frozenset[str],
     allowed_relationship_types: frozenset[str],
 ) -> None:
-    """Whole-collection validation, before any write.
+    """Validate a whole parsed artifact leg against its allow-lists, before any write.
 
-    Mirrors `ingestion/graph_writer.py::_validate_element_types`'s exact
-    shape (validate the ENTIRE nodes+edges collection first, raise on the
-    first violation, zero `graph.query()` calls made by the time this
-    raises).
+    The entire node and edge collection is checked first and the first violation raises; no
+    graph call is made.
 
-    Raises `ArtifactContentRejectedError` on: a node/edge label or
-    relationship_type outside its allow-list; a node whose
-    `properties["id"]` is missing or not a string (`populate_graph`'s
-    edge-matching step depends on it existing); a `Capability` with
-    `status = 'merged'` (issue #190, `_validate_no_tombstone`).
+    Args:
+        graph: The parsed native or baseline leg.
+        allowed_labels: Labels a node, and an edge's source and target, may carry.
+        allowed_relationship_types: Relationship types an edge may carry.
+
+    Returns:
+        None; returns normally only when every node and edge passes.
+
+    Raises:
+        ArtifactContentRejectedError: a node or edge label, or a relationship type, is outside
+            its allow-list; a node's `properties["id"]` is missing or not a string; or a
+            `Capability` has `status = 'merged'` (a tombstone never belongs in an artifact).
     """
     for node in graph.nodes:
         if node.label not in allowed_labels:

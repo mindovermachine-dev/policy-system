@@ -1,35 +1,22 @@
-"""Cellar/ELI XHTML -> native structural graph.
+"""Cellar/ELI XHTML to the native structural graph.
 
-Produces `StructuralNode`/`StructuralEdge` (from
-`ps_service.ingestion.models`). Ports `spikes/cellar1/parse_structure.py`'s
-tree-walking logic (`_walk_body`/`_walk_article`/`_mint_paragraph`/
-`parse_structure`), retyped to the project's real types instead of the
-spike's untyped `Node`/`Edge`.
+Produces `StructuralNode` and `StructuralEdge` (from `ps_service.ingestion.models`) by walking the
+document tree.
 
-Real DOM tree, not PDF-style regex heading detection: Cellar's XHTML nests
-chapters/articles/paragraphs as actual parent/child elements
-(``eli-container`` > ``eli-subdivision`` > ...), tagged with stable ids
-(``art_9``, ``cpt_I``, ``rct_12``, ``anx_I``) and CSS classes
-(``eli-subdivision``, ``eli-title``) — verified directly against CRA/NIS2
-(see `spikes/cellar1/LEARNINGS.md`). This parser just walks the tree; no
-branch anywhere on which regulation a document is, only on what each
-document's own markup contains (AC-006).
+Cellar's XHTML nests chapters, articles and paragraphs as real parent/child elements
+(``eli-container`` > ``eli-subdivision`` > ...), tagged with stable ids (``art_9``, ``cpt_I``,
+``rct_12``, ``anx_I``) and CSS classes (``eli-subdivision``, ``eli-title``). The parser walks that
+tree rather than detecting headings by pattern, and never branches on which regulation a document
+is, only on what its own markup contains.
 
-Mints ``CHAPTER``/``SECTION``/``ARTICLE``/``PARAGRAPH``/``ANNEX``/
-``RECITAL``. ``TITLE``-shaped div ids (``ttl_*``) are NOT in the
-id-dispatch table below (`_STRUCT_ID_RE`/`_ELEMENT_LABEL`) — a TITLE div is
-therefore a transparent pass-through container: `_walk_body` recurses into
-it, mints nothing for it, and attaches its children to whichever parent was
-already current. This is a deliberate, tested gap (PLAN_REVIEWED.md §2.4/
-§7 Increment 4, "S2"): AC-003 only requires every recital/article/annex,
-and no real CRA/GDPR/NIS2 document exercises TITLE-level markup per
-`spikes/cellar1/LEARNINGS.md`.
+It mints ``CHAPTER``, ``SECTION``, ``ARTICLE``, ``PARAGRAPH``, ``ANNEX`` and ``RECITAL`` nodes.
+``TITLE``-shaped div ids (``ttl_*``) are not in the id-dispatch table (`_STRUCT_ID_RE`,
+`_ELEMENT_LABEL`), so a TITLE div is a transparent pass-through container: `_walk_body` recurses
+into it, mints nothing for it, and attaches its children to the parent already current. Every
+recital, article and annex is still captured.
 
-S1 fix (PLAN_REVIEWED.md §7): the spike's `_walk_body` is cyclomatic
-complexity 10, failing this repo's `max-complexity = 8` gate. The "mint a
-CHAPTER/SECTION/RECITAL node" branch is split out into `_mint_struct_node`
-(ARTICLE is handled separately by `_walk_article`, unchanged) so
-`_walk_body` itself stays a thin id-dispatch loop.
+The CHAPTER/SECTION/RECITAL minting is split into `_mint_struct_node` (ARTICLE is handled by
+`_walk_article`) so `_walk_body` stays a thin id-dispatch loop within the complexity limit.
 """
 
 from __future__ import annotations
@@ -77,12 +64,11 @@ an ASCII apostrophe, a U+25BA/U+25BC amendment change-marker, and whitespace."""
 
 
 def _normalise_paragraph_number(raw: str) -> str:
-    """A clean paragraph number from a raw id group or `no-parag` marker text.
+    """Return a clean paragraph number from a raw id group or `no-parag` marker text.
 
-    Strips surrounding whitespace, a leading typographic quote / change-marker,
-    and the trailing `.`; an all-digit result has its leading zeros dropped
-    (`"001"` -> `"1"`). An alphanumeric result (`"1a"`, an amendment-inserted
-    paragraph) is kept verbatim — never `int()`-parsed.
+    Strips surrounding whitespace, a leading typographic quote or change-marker, and the trailing
+    `.`; an all-digit result has its leading zeros dropped (`"001"` gives `"1"`). An alphanumeric
+    result (`"1a"`, an amendment-inserted paragraph) is kept verbatim.
     """
     cleaned = raw.strip().lstrip(_PARAGRAPH_NUMBER_LEADING_STRIP).rstrip(". ").strip()
     return str(int(cleaned)) if cleaned.isdigit() else cleaned
@@ -134,8 +120,7 @@ _CITATION_WORD = {
 class _StructuralSink:
     """Regulation-scoped accumulator threaded through every tree-walk helper.
 
-    `frozen` protects the three references from rebinding; `nodes`/`edges`
-    are still appended to in place.
+    `frozen` protects the references from rebinding; `nodes` and `edges` are appended to in place.
     """
 
     regulatory_instrument_id: str
@@ -174,16 +159,13 @@ def _heading_text(element: ET.Element) -> str:
 
 
 class _OrderCounter:
-    """One counter per (parent_label, parent_id) scope.
-
-    Yields 'position among siblings' per the container architecture doc's
-    attribute table.
-    """
+    """One counter per `(parent_label, parent_id)` scope, yielding the position among siblings."""
 
     def __init__(self) -> None:
         self._counts: dict[tuple[str, str], int] = {}
 
     def next(self, parent_label: str, parent_id: str) -> int:
+        """Return the next 1-based sibling position under the given parent."""
         key = (parent_label, parent_id)
         self._counts[key] = self._counts.get(key, 0) + 1
         return self._counts[key]
@@ -286,10 +268,8 @@ def _mint_struct_node(
 ) -> None:
     """Mint one CHAPTER/SECTION/RECITAL node and recurse for CHAPTER/SECTION.
 
-    ARTICLE is minted by `_walk_article` instead. For CHAPTER/SECTION,
-    recurses into the element's children with itself as the new parent.
-    Split out of `_walk_body`'s id-dispatch loop — S1 fix, see module
-    docstring.
+    ARTICLE is minted by `_walk_article` instead. For CHAPTER/SECTION, recurses into the
+    element's children with itself as the new parent.
     """
     label = _ELEMENT_LABEL[kind]
     node_id = f"{sink.regulatory_instrument_id}#{local_id}"
@@ -414,16 +394,27 @@ def _mint_annexes(
 def parse_structure(
     xhtml: bytes, regulatory_instrument_id: str
 ) -> tuple[tuple[StructuralNode, ...], tuple[StructuralEdge, ...]]:
-    """Native structural graph for one regulation.
+    """Parse a Cellar/ELI XHTML document into the native structural graph of one regulation.
 
-    CHAPTER/SECTION/ARTICLE/PARAGRAPH/RECITAL nested under
-    `regulatory_instrument_id`, plus ANNEX as top-level children. An annex is
-    either its own top-level `eli-container` (base-act convention) or an
-    `anx_*` div nested in the main container (consolidated convention); both
-    forms are collected and minted the same way, deduped by annex number.
-    `regulatory_instrument_id` is an opaque prefix for structural node ids
-    (`f"{regulatory_instrument_id}#{local_id}"`) — it is not required to
-    already be the final `{SHORT}-{VERSION}` RegulatoryInstrument id.
+    Produces CHAPTER, SECTION, ARTICLE, PARAGRAPH and RECITAL nodes nested under
+    `regulatory_instrument_id`, plus ANNEX nodes as top-level children. An annex is either its own
+    top-level `eli-container` (base-act markup) or an `anx_*` div nested in the main container
+    (consolidated markup); both are collected and minted the same way, deduped by annex number.
+    The walk is deterministic, so re-parsing the same document yields the same ids.
+
+    Args:
+        xhtml: The Official Journal XHTML document as bytes.
+        regulatory_instrument_id: Opaque prefix for structural node ids
+            (`f"{regulatory_instrument_id}#{local_id}"`); it need not be the final
+            `{SHORT}-{VERSION}` RegulatoryInstrument id. Edges anchored to the instrument carry it
+            as their parent id.
+
+    Returns:
+        A `(nodes, edges)` pair of tuples, in document order; empty tuples if the main container
+        holds no structural elements.
+
+    Raises:
+        CellarParseError: The document has no main `eli-container`.
     """
     root = parse_xml(xhtml)
     _strip_namespace(root)

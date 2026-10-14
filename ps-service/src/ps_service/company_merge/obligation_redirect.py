@@ -1,11 +1,11 @@
-"""Obligation redirect for Company Merge (issue #190, CHANGES.md H1 / A7).
+"""Obligation redirect for Company Merge: keep a cleanup-merged Obligation from being re-minted.
 
 A Compliance Officer cleanup merge of two Obligations deletes the absorbed one and leaves a
 `MergedObligation {id, merged_into}` marker. Obligation ids are content hashes, so a later
 live merge or offline restore whose baseline regenerates the absorbed Obligation would
 otherwise mint it again. Before any persist, `resolve_obligation_redirects` drops such a node
 from the baseline and maps its id to the terminal survivor; the caller folds that mapping
-into `canonical_id_by_incoming_id`, so the existing endpoint-agnostic `persist_rewired_edges`
+into `canonical_id_by_incoming_id`, so the endpoint-agnostic `persist_rewired_edges`
 unions `SATISFIED_BY` / `REQUIRES` onto the survivor and re-MERGEs the (idempotent) `HAS` edge.
 
 Read-only; every failure is raised before the caller's first write.
@@ -36,7 +36,15 @@ _EXISTING_QUERY = "MATCH (o:Obligation) WHERE o.id IN $ids RETURN o.id"
 
 
 def read_obligation_redirects(single_tenant_graph: GraphHandle) -> dict[str, str]:
-    """Read every `MergedObligation` marker as `{absorbed_id: merged_into}` (one hop)."""
+    """Read every `MergedObligation` marker as `{absorbed_id: merged_into}` (one hop).
+
+    Args:
+        single_tenant_graph: Read handle on the single-tenant graph.
+
+    Returns:
+        A dict from each absorbed Obligation id to the id it was merged into; empty when no
+        marker exists. Chains are not followed here.
+    """
     result = single_tenant_graph.query(_MARKER_QUERY)
     rows = cast("list[list[object]]", result.result_set)
     return {cast("str", row[0]): cast("str", row[1]) for row in rows}
@@ -45,7 +53,12 @@ def read_obligation_redirects(single_tenant_graph: GraphHandle) -> dict[str, str
 def follow_obligation_redirect(obligation_id: str, redirects: dict[str, str]) -> str:
     """Follow `obligation_id`'s marker chain to its terminal survivor.
 
-    An id with no marker is its own terminal.
+    Args:
+        obligation_id: The Obligation id to start from.
+        redirects: Absorbed id to merged-into id, as read by `read_obligation_redirects`.
+
+    Returns:
+        The last id of the chain; an id with no marker is its own terminal.
 
     Raises:
         CompanyMergeValidationError: the chain contains a cycle.
@@ -66,8 +79,15 @@ def apply_obligation_redirects(
 ) -> tuple[BaselineGraph, dict[str, str]]:
     """Drop absorbed Obligations from `baseline`; map each to its terminal survivor.
 
-    `existing_ids` are the Obligation ids known to exist in the single-tenant graph. A
-    baseline with no absorbed Obligation is returned unchanged with an empty mapping.
+    Args:
+        baseline: The baseline to filter.
+        redirects: Absorbed id to merged-into id, as read by `read_obligation_redirects`.
+        existing_ids: The Obligation ids known to exist in the single-tenant graph.
+
+    Returns:
+        The baseline without its absorbed Obligations and a mapping from each dropped id to its
+        terminal survivor. A baseline with no absorbed Obligation is returned unchanged with an
+        empty mapping.
 
     Raises:
         CompanyMergeValidationError: a cycle, or a terminal survivor that exists neither in
@@ -98,7 +118,23 @@ def resolve_obligation_redirects(
 ) -> tuple[BaselineGraph, dict[str, str]]:
     """Read the markers and apply them to `baseline` (one extra read only when one applies).
 
-    Emits one `redirect_merged_obligations` log entry when at least one Obligation is redirected.
+    Args:
+        single_tenant_graph: Read handle on the single-tenant graph.
+        baseline: The baseline whose absorbed Obligations are dropped.
+        emitter: Log emitter, or `None` for the default.
+
+    Returns:
+        The rewritten baseline and the absorbed-id to terminal-survivor mapping (empty when no
+        Obligation is redirected).
+
+    Raises:
+        CompanyMergeValidationError: A redirect chain has a cycle, or ends at an Obligation that
+            exists in neither the graph nor the baseline.
+
+    Side Effects:
+        Reads the markers and, when a terminal survivor is outside the baseline, one more query
+        for its existence. Emits one `redirect_merged_obligations` log entry when at least one
+        Obligation is redirected.
     """
     redirects = read_obligation_redirects(single_tenant_graph)
     absorbed = [node.id for node in baseline.obligation_nodes if node.id in redirects]

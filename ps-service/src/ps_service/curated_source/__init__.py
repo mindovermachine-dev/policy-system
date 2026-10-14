@@ -1,18 +1,17 @@
-"""ps_service.curated_source -- package front door.
+"""Runtime fetch of curated-content catalog listings and instrument artifacts.
 
-Runtime fetch of the curated-content catalog listing and, in a later slice,
-per-instrument artifacts, from a configurable HTTP(S) source (issue #125),
-replacing the build-time-packaged `catalog.json` copy `ps_service.api.catalog`
-previously served unconditionally. Domain path: `ps.service.curatedsource`
+This component reads the curated-content catalog listing and, per instrument, the artifact
+(manifest plus baseline and native graph blobs) from a configurable HTTP(S) source, instead of
+a copy packaged at build time. Domain path: `ps.service.curatedsource`
 (`docs/architecture/ps-service-container-architecture.md`).
 
-Re-exports `CuratedSourceConfigurationError`/`CuratedSourceFetchError`
-(`ps_service.curated_source.errors`), matching the `ps_service.restore`/
-`ps_service.export` package front doors' own re-export convention.
+Re-exports `CuratedSourceConfigurationError` and `CuratedSourceFetchError`
+(`ps_service.curated_source.errors`), as the `ps_service.restore` and `ps_service.export`
+package front doors re-export their errors.
 
-The runtime override of the source URL lives in `ps_service.runtime_config` (issue #130);
-importing `ps_service.curated_source.config_key` below registers its key, so the key is
-registered whenever any part of this component is used.
+The runtime override of the source URL lives in `ps_service.runtime_config`. Importing
+`ps_service.curated_source.config_key` below registers its key, so the key is registered
+whenever any part of this component is used.
 """
 
 from __future__ import annotations

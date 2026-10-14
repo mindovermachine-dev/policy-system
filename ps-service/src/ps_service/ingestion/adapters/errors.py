@@ -1,8 +1,7 @@
-"""Domain-specific exception types for Ingestion Adapters.
+"""Exception types for Ingestion Adapters (source-specific fetch and parse failures).
 
-Source-specific fetch/parse failures — distinct from
-`ps_service.ingestion.errors`, which covers the Ingestion core pipeline's
-own persistence/configuration errors.
+Distinct from `ps_service.ingestion.errors`, which covers the ingestion core pipeline's own
+persistence and configuration errors.
 """
 
 from __future__ import annotations
@@ -11,12 +10,9 @@ from __future__ import annotations
 class CellarFetchError(Exception):
     """The Cellar/ELI Adapter's HTTP fetch failed.
 
-    The CELEX identifier doesn't resolve, or the Cellar/ELI service is
-    unreachable/times out. Always raised via `raise CellarFetchError(...)
-    from exc` so the
-    original transport exception is preserved as `__cause__` — per the CA
-    doc's "fails clearly and lets the caller decide whether to retry"
-    (retry policy is deliberately not built into this component).
+    The CELEX identifier does not resolve, or the Cellar/ELI service is unreachable or times
+    out. Always raised with `from exc`, so the original transport exception is preserved as
+    `__cause__`. The adapter does not retry; the caller decides whether to retry.
     """
 
 
@@ -35,6 +31,6 @@ class CellarNotFoundError(CellarFetchError):
 class CellarParseError(Exception):
     """The fetched Cellar/ELI XHTML could not be parsed.
 
-    Structural nodes/edges or bibliographic metadata could not be extracted
-    (malformed/unexpected markup).
+    Structural nodes and edges, or bibliographic metadata, could not be extracted because the
+    markup is malformed or not in the expected shape. Retrying the same document will not help.
     """

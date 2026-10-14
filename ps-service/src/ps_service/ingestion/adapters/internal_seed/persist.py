@@ -1,40 +1,33 @@
-"""Referential validation, canonical-id minting, and dual-graph persistence (S2).
+"""Referential validation, canonical-id minting and dual-graph persistence of an internal seed.
 
-`ingest_internal_regulatory_instrument` is the internal-seed pipeline's single
-stage (`PLAN.md` S2): given an already-parsed `InternalRegulationSeed`
-(`adapter.read_seed`'s output), it
+`ingest_internal_regulatory_instrument` is the internal-seed pipeline's single stage. Given an
+already-parsed `InternalRegulationSeed` (the output of
+`adapter.InternalSeedIngestionAdapter.parse_seed`), it:
 
-1. validates the whole document's referential integrity and cardinality
-   rules -- every edge endpoint must be declared, every `Obligation` has
-   exactly one bearing `Role`, every `Requirement` has exactly one
-   `EXPRESSES` source -- entirely before any write (AC-BI-011, mirroring
-   `ingestion/graph_writer.py`'s own B1-fix validate-then-write shape: this
-   function raises with zero writes recorded, or writes everything);
-2. mints every non-`RegulatoryInstrument` node's canonical id using the
-   same identity formulas the external path's `domain_mapper.identity`
-   module already exports (`role_id`/`obligation_id`/`capability_id` --
-   imported, never reimplemented, so an internal Capability genuinely
-   converges onto the same canonical node an external regulation's
-   Capability of the same name would, per `ps-domain-concepts.md`'s
-   cross-source convergence design) plus a `Requirement`-only formula local
-   to this module (the external path's own `requirement_id` is shaped for a
-   structured article/paragraph/letter locator, which does not fit an
-   internal source's freeform `source_ref`);
-3. writes the customer's raw, un-minted submission verbatim to
-   `{short}_native` (B5) and the minted, remapped spine to `{short}_baseline`,
-   both add/merge-only (AC-BI-012).
+1. validates the whole document's referential integrity and cardinality rules (every edge
+   endpoint is declared with the expected label, every `Obligation` has exactly one bearing
+   `Role`, every `Requirement` has exactly one `EXPRESSES` source, and the governance
+   cardinalities for `Capability`, `Standard` and `Control` hold) entirely before any write, so a
+   failure leaves both graphs untouched;
+2. mints every non-`RegulatoryInstrument` node's canonical id with the identity formulas exported
+   by `domain_mapper.identity` (imported, never reimplemented, so an internal Capability converges
+   onto the same canonical node as an external regulation's Capability of the same name, per
+   `ps-domain-concepts.md`), plus a `Requirement` formula local to this module because the
+   external one is shaped for a structured article/paragraph/letter locator, which a freeform
+   internal `source_ref` does not fit;
+3. writes the customer's raw, un-minted submission verbatim to `{short}_native` and the minted,
+   remapped spine to `{short}_baseline`, both add/merge-only.
 
-Both writes go through the Graph Write Gateway (issue #208): each graph is one mutation group
+Both writes go through the Graph Write Gateway: each graph is one mutation group
 (`build_native_primitives`, `build_baseline_primitives`), nodes before edges, the native group
 submitted first. Every group is built, and so validated, before either is submitted: a property
 the gateway cannot store raises `InternalSeedError` with nothing written. An edge whose endpoint
-is not among the group's nodes is dropped without a trace (AC-BI-004); this module opens no
-graph connection of its own.
+is not among the group's nodes is dropped without a trace. This module opens no graph connection
+of its own.
 
-D6: `Requirement.properties["role_id"]` is synthesized here by resolving the
-`SATISFIED_BY -> Obligation <- HAS -> Role` chain; when it resolves to more
-than one distinct Role (or none), the property key is omitted entirely --
-never set to `None`/`null`.
+A `Requirement`'s `role_id` property is synthesized by resolving the
+`SATISFIED_BY -> Obligation <- HAS -> Role` chain; when it resolves to more than one distinct Role
+(or none), the property key is omitted entirely, never set to `None`.
 """
 
 from __future__ import annotations
@@ -98,7 +91,21 @@ _EDGE_ENDPOINT_LABELS: dict[EdgeType, tuple[NodeLabel, NodeLabel]] = {
 
 @dataclass(frozen=True, slots=True)
 class InternalIngestResult:
-    """`ingest_internal_regulatory_instrument`'s return value -- one run's outcome."""
+    """Outcome of one `ingest_internal_regulatory_instrument` run.
+
+    Attributes:
+        regulatory_instrument_id: The submitted `RegulatoryInstrument` node's id, used as-is as
+            the canonical id.
+        role_count: Number of `Role` nodes minted.
+        requirement_count: Number of `Requirement` nodes minted.
+        obligation_count: Number of `Obligation` nodes minted.
+        capability_count: Number of `Capability` nodes minted.
+        policy_count: Number of `Policy` nodes minted.
+        standard_count: Number of `Standard` nodes minted.
+        control_count: Number of `Control` nodes minted.
+        practice_area_count: Number of `PracticeArea` nodes minted.
+        risk_path_count: Number of `RiskPath` nodes minted.
+    """
 
     regulatory_instrument_id: str
     role_count: int
@@ -112,41 +119,37 @@ class InternalIngestResult:
     risk_path_count: int
 
 
-# --- Requirement id (internal-source formula; not domain_mapper.identity's external one) ---
+# --- Requirement id (internal-source formula) ---
 
 
 def _slug(text: str) -> str:
     """Slugify `text`: lowercase, non-alphanumeric runs to `_`, no leading/trailing `_`.
 
-    A small, deliberately duplicated copy of `domain_mapper.identity._slug`
-    (that helper is module-private) -- per L1 DRY's "prefer duplication over
-    the wrong abstraction," reaching into another component's private
-    helper would be a worse coupling than re-deriving two lines locally.
+    Duplicates `domain_mapper.identity._slug` on purpose: that helper is module-private, and
+    re-deriving two lines is a smaller coupling than reaching into another component's internals.
     """
     slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
     return re.sub(r"_+", "_", slug)
 
 
 def _requirement_id(regulatory_instrument_id: str, source_ref: str) -> str:
-    """`{instrument_id}_req_{slug(source_ref)}` -- internal-source Requirement identity.
+    """Return the internal-source Requirement id `{instrument_id}_req_{slug(source_ref)}`.
 
-    Per `internal-regulation-intake-format.md`'s Ids table: "Minted from your
-    instrument's id plus this Requirement's EXPRESSES edge's source_ref."
-    Deliberately non-opaque, mirroring `domain_mapper.identity.requirement_id`'s
-    own "location alone, no hash" design for the external path -- but that
-    function's signature is shaped for a structured article/paragraph/letter
-    locator, which an internal source's freeform `source_ref` does not fit,
-    so this is its own formula, not a reuse.
+    The id is minted from the instrument's id plus the Requirement's `EXPRESSES` edge's
+    `source_ref` (see the Ids table in `internal-regulation-intake-format.md`). It is
+    deliberately non-opaque: location alone, no hash, as for the external path. It is a separate
+    formula from `domain_mapper.identity.requirement_id`, whose signature expects a structured
+    article/paragraph/letter locator.
     """
     return f"{regulatory_instrument_id}_req_{_slug(source_ref)}"
 
 
-# --- fail-closed validation (AC-BI-011), entirely before any graph.query() call ---
+# --- fail-closed validation, entirely before any graph write ---
 
 
 @dataclass(frozen=True, slots=True)
 class _SeedIndex:
-    """Everything minting/persistence needs, pre-resolved by the validation pass."""
+    """Everything minting and persistence need, pre-resolved by the validation pass."""
 
     regulatory_instrument: SeedNode
     obligation_bearer: dict[str, str]
@@ -156,32 +159,35 @@ class _SeedIndex:
     requirement_obligation_ids: dict[str, tuple[str, ...]]
     """Requirement local id -> the local ids of the Obligations it SATISFIED_BY-links to."""
     policy_governor: dict[str, str]
-    """Capability local id -> its single governing Policy's local id (GH #76 Slice 1).
+    """Capability local id -> its single governing Policy's local id.
 
-    At most one outbound GOVERNED_BY per Capability -- zero is valid
-    (governance is optional per-Capability, Design Decision 4)."""
+    At most one outbound GOVERNED_BY per Capability; zero is valid because governance is
+    optional per Capability."""
     standard_supporter: dict[str, str]
-    """Standard local id -> its single supporting Policy's local id (GH #76 Slice 2).
+    """Standard local id -> its single supporting Policy's local id.
 
-    Exactly one inbound SUPPORTED_BY per Standard -- zero or more than one
-    is rejected (unlike GOVERNED_BY, a Standard is a weak entity of exactly
-    one Policy)."""
+    Exactly one inbound SUPPORTED_BY per Standard; zero or more than one is rejected because a
+    Standard is a weak entity of exactly one Policy."""
     control_implementer: dict[str, str]
-    """Control local id -> its single implemented Standard's local id (GH #76 Slice 3).
+    """Control local id -> its single implemented Standard's local id.
 
-    Exactly one inbound IMPLEMENTED_BY per Control -- zero or more than one
-    is rejected, mirroring standard_supporter's exactly-one-parent shape (a
-    Control is a weak entity of exactly one Standard)."""
+    Exactly one inbound IMPLEMENTED_BY per Control; zero or more than one is rejected because a
+    Control is a weak entity of exactly one Standard."""
 
 
 def find_regulatory_instrument(seed: InternalRegulationSeed) -> SeedNode:
     """Return the seed's single `RegulatoryInstrument` node.
 
-    Called both by orchestration (to derive the `{short}_baseline`/
-    `{short}_native` graph name before any FalkorDB handle is opened) and,
-    again, by this module's own `_validate_and_index` -- deliberately
-    re-checked rather than cached across that boundary, since orchestration
-    and persistence are separate call sites that must each hold independently.
+    Orchestration calls this to derive the `{short}_native` and `{short}_baseline` graph names
+    before any graph handle is opened, and `_validate_and_index` calls it again; the check is
+    repeated rather than cached because the two call sites must each hold independently.
+
+    Args:
+        seed: The parsed submission.
+
+    Returns:
+        The one `RegulatoryInstrument` node; it carries the customer's local id, which is the
+        canonical instrument id.
 
     Raises:
         InternalSeedError: The seed declares zero or more than one
@@ -197,7 +203,7 @@ def find_regulatory_instrument(seed: InternalRegulationSeed) -> SeedNode:
 
 
 def _check_referential_integrity(seed: InternalRegulationSeed) -> None:
-    """Every edge endpoint (and its label) must match a declared node, exactly."""
+    """Require unique nodes and edge endpoints declared with the labels the edge type allows."""
     declared = {(node.label, node.id) for node in seed.nodes}
     if len(declared) != len(seed.nodes):
         raise InternalSeedError("seed document declares a duplicate (label, id) node pair")
@@ -215,6 +221,7 @@ def _check_referential_integrity(seed: InternalRegulationSeed) -> None:
 def _check_endpoint_declared(
     edge: SeedEdge, ref: SeedRef, side: str, declared: set[tuple[str, str]]
 ) -> None:
+    """Raise `InternalSeedError` if `ref`, the `side` endpoint of `edge`, is undeclared."""
     if (ref.label, ref.id) not in declared:
         raise InternalSeedError(
             f"{edge.type} edge references undeclared node {ref.label}:{ref.id!r} ({side})"
@@ -222,11 +229,10 @@ def _check_endpoint_declared(
 
 
 def _index_obligation_bearers(seed: InternalRegulationSeed) -> dict[str, str]:
-    """Obligation local id -> its single bearing Role's local id.
+    """Map each Obligation's local id to its single bearing Role's local id.
 
-    Raises `InternalSeedError` for any Obligation with zero or more than one
-    inbound HAS edge (the intake format's own "exactly one Role per
-    Obligation" authoring rule).
+    Raises `InternalSeedError` for any Obligation with zero or more than one inbound HAS edge
+    (the intake format's "exactly one Role per Obligation" rule).
     """
     bearer_by_obligation: dict[str, str] = {}
     has_count: dict[str, int] = {}
@@ -277,12 +283,11 @@ def _index_requirement_source_refs(seed: InternalRegulationSeed) -> dict[str, st
 
 
 def _index_policy_governors(seed: InternalRegulationSeed) -> dict[str, str]:
-    """Capability local id -> its single governing Policy's local id (GH #76 Slice 1).
+    """Map each governed Capability's local id to its single governing Policy's local id.
 
-    Raises `InternalSeedError`, naming the offending Capability, for any
-    Capability with 2+ outbound GOVERNED_BY edges. Zero is valid --
-    governance is optional per-Capability (Design Decision 4) -- so a
-    Capability absent from the returned mapping simply has no Policy.
+    Raises `InternalSeedError`, naming the offending Capability, for any Capability with two or
+    more outbound GOVERNED_BY edges. Zero is valid, so a Capability absent from the mapping has
+    no Policy.
     """
     governor_by_capability: dict[str, str] = {}
     governed_by_count: dict[str, int] = {}
@@ -301,12 +306,10 @@ def _index_policy_governors(seed: InternalRegulationSeed) -> dict[str, str]:
 
 
 def _index_standard_supporters(seed: InternalRegulationSeed) -> dict[str, str]:
-    """Standard local id -> its single supporting Policy's local id (GH #76 Slice 2).
+    """Map each Standard's local id to its single supporting Policy's local id.
 
-    Raises `InternalSeedError` for any Standard with zero or more than one
-    inbound SUPPORTED_BY edge -- mirrors `_index_obligation_bearers`'s
-    exactly-one-bearer shape (a Standard is a weak entity of exactly one
-    Policy, unlike GOVERNED_BY's optional-per-Capability rule).
+    Raises `InternalSeedError` for any Standard with zero or more than one inbound SUPPORTED_BY
+    edge: a Standard is a weak entity of exactly one Policy.
     """
     supporter_by_standard: dict[str, str] = {}
     supported_by_count: dict[str, int] = {}
@@ -328,12 +331,10 @@ def _index_standard_supporters(seed: InternalRegulationSeed) -> dict[str, str]:
 
 
 def _index_control_implementers(seed: InternalRegulationSeed) -> dict[str, str]:
-    """Control local id -> its single implemented Standard's local id (GH #76 Slice 3).
+    """Map each Control's local id to its single implemented Standard's local id.
 
-    Raises `InternalSeedError` for any Control with zero or more than one
-    inbound IMPLEMENTED_BY edge -- mirrors `_index_standard_supporters`'s
-    exactly-one-parent shape (a Control is a weak entity of exactly one
-    Standard).
+    Raises `InternalSeedError` for any Control with zero or more than one inbound IMPLEMENTED_BY
+    edge: a Control is a weak entity of exactly one Standard.
     """
     implementer_by_control: dict[str, str] = {}
     implemented_by_count: dict[str, int] = {}
@@ -355,11 +356,10 @@ def _index_control_implementers(seed: InternalRegulationSeed) -> dict[str, str]:
 
 
 def _policy_status_by_local_id(seed: InternalRegulationSeed) -> dict[str, str]:
-    """Policy local id -> its own `status` property.
+    """Map each Policy's local id to its own `status` property.
 
-    The mint-time source of truth for `_standard_properties`/`_control_properties`'s
-    `status` field (GH #134 D-6/S7): a Standard/Control's governance `status`
-    mirrors its root Policy's `status`, never a hardcoded default.
+    A Standard's or Control's governance `status` mirrors its root Policy's `status`, never a
+    default, so this map is the source for `_standard_properties` and `_control_properties`.
     """
     return {
         node.id: _require_str_property(node, "status")
@@ -382,11 +382,13 @@ def _index_requirement_obligations(seed: InternalRegulationSeed) -> dict[str, tu
 
 
 def _validate_and_index(seed: InternalRegulationSeed) -> _SeedIndex:
-    """Run every fail-closed check and return the index minting/persistence needs.
+    """Run every fail-closed check and return the index that minting and persistence need.
 
-    Nothing in this function (or anything it calls) issues a `graph.query()`
-    call -- confirmed by `test_dangling_requires_edge_fails_closed_no_partial_write`
-    asserting zero recorded calls when this raises (AC-BI-011).
+    Nothing here (or in anything it calls) touches a graph, so a failure leaves both graphs
+    unwritten.
+
+    Raises:
+        InternalSeedError: any referential-integrity or cardinality rule is violated.
     """
     regulatory_instrument = find_regulatory_instrument(seed)
     _check_referential_integrity(seed)
@@ -405,6 +407,7 @@ def _validate_and_index(seed: InternalRegulationSeed) -> _SeedIndex:
 
 
 def _require_str_property(node: SeedNode, key: str) -> str:
+    """Return `node`'s non-empty string property `key`, or raise `InternalSeedError`."""
     value = node.properties.get(key)
     if not isinstance(value, str) or not value:
         raise InternalSeedError(f"{node.label} {node.id!r} is missing required property {key!r}")
@@ -412,7 +415,8 @@ def _require_str_property(node: SeedNode, key: str) -> str:
 
 
 def _mint_role_ids(seed: InternalRegulationSeed, regulatory_instrument_id: str) -> dict[str, str]:
-    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    """Mint the canonical id of every `Role` node, keyed by local id."""
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         role_id,
     )
 
@@ -424,7 +428,8 @@ def _mint_role_ids(seed: InternalRegulationSeed, regulatory_instrument_id: str) 
 
 
 def _mint_capability_ids(seed: InternalRegulationSeed) -> dict[str, str]:
-    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    """Mint the canonical id of every `Capability` node, keyed by local id."""
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         capability_id,
     )
 
@@ -436,7 +441,8 @@ def _mint_capability_ids(seed: InternalRegulationSeed) -> dict[str, str]:
 
 
 def _mint_practice_area_ids(seed: InternalRegulationSeed) -> dict[str, str]:
-    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    """Mint the canonical id of every `PracticeArea` node, keyed by local id."""
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         practice_area_id,
     )
 
@@ -448,7 +454,8 @@ def _mint_practice_area_ids(seed: InternalRegulationSeed) -> dict[str, str]:
 
 
 def _mint_risk_path_ids(seed: InternalRegulationSeed) -> dict[str, str]:
-    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    """Mint the canonical id of every `RiskPath` node, keyed by local id."""
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         risk_path_id,
     )
 
@@ -460,7 +467,8 @@ def _mint_risk_path_ids(seed: InternalRegulationSeed) -> dict[str, str]:
 
 
 def _mint_policy_ids(seed: InternalRegulationSeed) -> dict[str, str]:
-    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    """Mint the canonical id of every `Policy` node, keyed by local id."""
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         policy_id,
     )
 
@@ -474,7 +482,8 @@ def _mint_policy_ids(seed: InternalRegulationSeed) -> dict[str, str]:
 def _mint_standard_ids(
     seed: InternalRegulationSeed, index: _SeedIndex, policy_canonical_ids: dict[str, str]
 ) -> dict[str, str]:
-    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    """Mint every `Standard`'s canonical id from its supporting Policy's canonical id and title."""
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         standard_id,
     )
 
@@ -492,7 +501,8 @@ def _mint_standard_ids(
 def _mint_control_ids(
     seed: InternalRegulationSeed, index: _SeedIndex, standard_canonical_ids: dict[str, str]
 ) -> dict[str, str]:
-    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    """Mint every `Control`'s canonical id from its Standard's canonical id and its title."""
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         control_id,
     )
 
@@ -510,7 +520,8 @@ def _mint_control_ids(
 def _mint_obligation_ids(
     seed: InternalRegulationSeed, index: _SeedIndex, role_canonical_ids: dict[str, str]
 ) -> dict[str, str]:
-    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+    """Mint every `Obligation`'s canonical id from its bearing Role's canonical id and its text."""
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Domain Mapper at import
         obligation_id,
     )
 
@@ -528,6 +539,7 @@ def _mint_obligation_ids(
 def _mint_requirement_ids(
     seed: InternalRegulationSeed, regulatory_instrument_id: str, index: _SeedIndex
 ) -> dict[str, str]:
+    """Mint every `Requirement`'s canonical id from the instrument id and its `source_ref`."""
     return {
         node.id: _requirement_id(regulatory_instrument_id, index.requirement_source_ref[node.id])
         for node in seed.nodes
@@ -538,13 +550,12 @@ def _mint_requirement_ids(
 def _resolve_requirement_role_id(
     requirement_local_id: str, index: _SeedIndex, role_canonical_ids: dict[str, str]
 ) -> str | None:
-    """D6: the Requirement's `role_id` bookkeeping property, or `None` when ambiguous.
+    """Return the Requirement's `role_id` property value, or `None` when it is ambiguous.
 
-    Resolves `SATISFIED_BY -> Obligation <- HAS -> Role`. Returns the single
-    bearing Role's canonical id when every Obligation this Requirement
-    satisfies is borne by the *same* Role; returns `None` (never a string
-    to be written as `null`) when the chain resolves to zero or more than
-    one distinct Role.
+    Resolves `SATISFIED_BY -> Obligation <- HAS -> Role`. Returns the single bearing Role's
+    canonical id when every Obligation the Requirement satisfies is borne by the same Role, and
+    `None` when the chain resolves to zero or to more than one distinct Role, so the caller omits
+    the property rather than writing a null.
     """
     obligation_ids = index.requirement_obligation_ids.get(requirement_local_id, ())
     bearer_local_ids = {
@@ -558,10 +569,11 @@ def _resolve_requirement_role_id(
     return role_canonical_ids.get(bearer_local_id)
 
 
-# --- canonical property shaping (per `ps-domain-concepts.md`) ---
+# --- canonical property shaping (see `ps-domain-concepts.md`) ---
 
 
 def _regulatory_instrument_properties(node: SeedNode) -> dict[str, object]:
+    """Required: title, source_type, effective_date, version, status; optional: jurisdiction."""
     properties: dict[str, object] = {
         "title": _require_str_property(node, "title"),
         "source_type": _require_str_property(node, "source_type"),
@@ -576,6 +588,7 @@ def _regulatory_instrument_properties(node: SeedNode) -> dict[str, object]:
 
 
 def _role_properties(node: SeedNode) -> dict[str, object]:
+    """Required `name`, `confidence` (default 1.0), and optional `description`."""
     properties: dict[str, object] = {
         "name": _require_str_property(node, "name"),
         "confidence": node.properties.get("confidence", _DEFAULT_CONFIDENCE),
@@ -587,6 +600,7 @@ def _role_properties(node: SeedNode) -> dict[str, object]:
 
 
 def _requirement_properties(node: SeedNode, role_id_value: str | None) -> dict[str, object]:
+    """Required `text`, `type`, `confidence` (default 1.0); optional `status`, `role_id`."""
     properties: dict[str, object] = {
         "text": _require_str_property(node, "text"),
         "type": _require_str_property(node, "type"),
@@ -595,12 +609,13 @@ def _requirement_properties(node: SeedNode, role_id_value: str | None) -> dict[s
     status = node.properties.get("status")
     if status is not None:
         properties["status"] = status
-    if role_id_value is not None:  # D6/MAJOR-B: never write a literal null
+    if role_id_value is not None:  # an ambiguous role is omitted, never written as null
         properties["role_id"] = role_id_value
     return properties
 
 
 def _obligation_properties(node: SeedNode) -> dict[str, object]:
+    """Required `text` and `confidence` (default 1.0)."""
     return {
         "text": _require_str_property(node, "text"),
         "confidence": node.properties.get("confidence", _DEFAULT_CONFIDENCE),
@@ -608,6 +623,7 @@ def _obligation_properties(node: SeedNode) -> dict[str, object]:
 
 
 def _capability_properties(node: SeedNode) -> dict[str, object]:
+    """Required `name`, `confidence` (default 1.0), and optional `description` and `type`."""
     properties: dict[str, object] = {
         "name": _require_str_property(node, "name"),
         "confidence": node.properties.get("confidence", _DEFAULT_CONFIDENCE),
@@ -630,8 +646,7 @@ def _policy_properties(node: SeedNode) -> dict[str, object]:
     `capability_grouping_rationale` -- see
     `ps-skills/ps-plugin/rubrics/policy-rubric.md`.
 
-    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
-    §3) -- an authored Policy carries no LLM-derivation uncertainty.
+    Never sets a `confidence` key: an authored Policy carries no LLM-derivation uncertainty.
     """
     properties: dict[str, object] = {
         "title": _require_str_property(node, "title"),
@@ -658,10 +673,8 @@ def _policy_properties(node: SeedNode) -> dict[str, object]:
 def _practice_area_properties(node: SeedNode) -> dict[str, object]:
     """Required `name`/`status`, optional `description`/`version`/`owner_id`.
 
-    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
-    §3) -- an authored PracticeArea carries no LLM-derivation uncertainty,
-    mirroring Policy/Standard/Control's omission. Mirrors `_policy_properties`'s
-    shape.
+    Never sets a `confidence` key: an authored PracticeArea carries no LLM-derivation
+    uncertainty.
     """
     properties: dict[str, object] = {
         "name": _require_str_property(node, "name"),
@@ -677,10 +690,7 @@ def _practice_area_properties(node: SeedNode) -> dict[str, object]:
 def _risk_path_properties(node: SeedNode) -> dict[str, object]:
     """Required `name`/`status`, optional `description`/`risk_type`/`version`.
 
-    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
-    §3) -- an authored RiskPath carries no LLM-derivation uncertainty,
-    mirroring PracticeArea/Policy/Standard/Control's omission. Mirrors
-    `_practice_area_properties`'s shape.
+    Never sets a `confidence` key: an authored RiskPath carries no LLM-derivation uncertainty.
     """
     properties: dict[str, object] = {
         "name": _require_str_property(node, "name"),
@@ -702,13 +712,10 @@ def _standard_properties(node: SeedNode, policy_status: str) -> dict[str, object
     `ps-skills/ps-plugin/rubrics/standard-rubric.md`.
 
     `status` (governance status, independent of `implementation_status`) is
-    never read off the seed node itself -- it mirrors the root Policy's own
-    `status` at mint time (GH #134 D-6/S7), passed in by the caller, which
-    has already resolved the Standard's supporting Policy via `_SeedIndex`.
+    never read off the seed node itself: it mirrors the root Policy's `status`, passed in by the
+    caller, which has already resolved the Standard's supporting Policy via `_SeedIndex`.
 
-    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
-    §3) -- an authored Standard carries no LLM-derivation uncertainty.
-    Mirrors `_policy_properties`'s shape.
+    Never sets a `confidence` key: an authored Standard carries no LLM-derivation uncertainty.
     """
     properties: dict[str, object] = {
         "title": _require_str_property(node, "title"),
@@ -743,13 +750,10 @@ def _control_properties(node: SeedNode, policy_status: str) -> dict[str, object]
     stays the operational pointer populated once real evidence exists.
 
     `status` (governance status, independent of `implementation_status`) is
-    never read off the seed node itself -- it mirrors the root Policy's own
-    `status` at mint time (GH #134 D-6/S7), resolved transitively through the
-    Control's implemented Standard, passed in by the caller.
+    never read off the seed node itself: it mirrors the root Policy's `status`, resolved
+    transitively through the Control's implemented Standard and passed in by the caller.
 
-    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
-    §3) -- an authored Control carries no LLM-derivation uncertainty.
-    Mirrors `_standard_properties`'s shape.
+    Never sets a `confidence` key: an authored Control carries no LLM-derivation uncertainty.
     """
     properties: dict[str, object] = {
         "type": _require_str_property(node, "type"),
@@ -780,6 +784,7 @@ def _control_properties(node: SeedNode, policy_status: str) -> dict[str, object]
 
 
 def _unstorable(what: str) -> InternalSeedError:
+    """Build the `InternalSeedError` for a node or edge `what` that holds an unstorable property."""
     return InternalSeedError(
         f"{what} has a property the graph cannot store "
         "(a reserved key, or a value that is not finite or is out of range)"
@@ -789,9 +794,9 @@ def _unstorable(what: str) -> InternalSeedError:
 def _upsert_node(label: str, node_id: str, properties: dict[str, object]) -> UpsertNode:
     """Build one node primitive, or raise `InternalSeedError` if the gateway cannot store it.
 
-    The gateway reserves the property keys `id` and `embedding` and rejects non-finite floats;
-    the legacy `SET n += $properties` accepted them (a property named `id` silently rewrote the
-    node id), so they are rejected here, before anything is submitted (issue #208, G5).
+    The gateway reserves the property keys `id` and `embedding` and rejects non-finite floats.
+    They are rejected here, before anything is submitted, because a property named `id` would
+    otherwise overwrite the node id.
     """
     try:
         return UpsertNode(label=label, id=node_id, properties=properties)
@@ -821,12 +826,12 @@ def _upsert_edge(
 def _without_dangling_edges(
     nodes: tuple[UpsertNode, ...], edges: tuple[UpsertEdge, ...]
 ) -> tuple[UpsertEdge, ...]:
-    """Keep only the edges whose two endpoints are among `nodes` (AC-BI-004, silently).
+    """Keep only the edges whose two endpoints are among `nodes`, dropping the rest silently.
 
-    The gateway rejects a group holding an edge to a node that exists nowhere, where the legacy
-    `MATCH ... MERGE` matched zero rows and wrote nothing. Dropped edges are not submitted, so
-    nothing is logged or raised for them. A seed validated by `_validate_and_index` declares every
-    endpoint, so the nodes of the document are exactly the nodes an edge may point at.
+    The gateway rejects a group holding an edge to a node that exists nowhere, so such edges are
+    not submitted and nothing is logged or raised for them. A seed validated by
+    `_validate_and_index` declares every endpoint, so the nodes of the document are exactly the
+    nodes an edge may point at.
     """
     present = {(node.label, node.id) for node in nodes}
     return tuple(
@@ -838,11 +843,19 @@ def _without_dangling_edges(
 
 
 def build_native_primitives(seed: InternalRegulationSeed) -> tuple[Primitive, ...]:
-    """The native graph's mutations: the raw submission verbatim (B5), nodes before edges.
+    """Build the native graph's mutations: the raw submission verbatim, nodes before edges.
 
-    No remapping, no minting -- exactly the labels, ids and properties submitted, in document
+    No remapping and no minting: exactly the labels, ids and properties submitted, in document
     order. Labels and edge types are already constrained to the intake vocabulary by the seed
     model's `Literal` types.
+
+    Args:
+        seed: The parsed submission; need not have passed the referential checks, because
+            dangling edges are dropped.
+
+    Returns:
+        One `UpsertNode` per seed node followed by one `UpsertEdge` per seed edge whose endpoints
+        are both submitted nodes.
 
     Raises:
         InternalSeedError: a node or edge carries a property the gateway cannot store.
@@ -869,9 +882,13 @@ def _submit_group(
 ) -> None:
     """Submit `plan` as one group on `graph_name`; raise `InternalSeedError` on failure.
 
-    The group requires the log to still be where the plan's read found it (plus the entries the
-    legacy-edge backfill may log first), so a writer that got in between is refused
-    with nothing written instead of being reconciled over.
+    Edges written before the gateway existed carry no identity, so they are stamped first. The
+    group requires the log to still be where the plan's read found it (plus the entries that
+    stamp logged), so a writer that got in between is refused with nothing written instead of
+    being reconciled over.
+
+    Side Effects:
+        May log one edge-identity stamp group on `graph_name`, then submits the plan's group.
     """
     stamp = stamp_legacy_edges_before_first_write(
         submitter, graph_name, audit_event_id, InternalSeedError
@@ -882,14 +899,17 @@ def _submit_group(
         audit_event_id=audit_event_id,
         primitives=plan.primitives,
         preconditions=(ExpectedPosition(position=expected),),
-        checkpoint_requested=True,  # the last group the seed writes to this graph (#215)
+        checkpoint_requested=True,  # the last group the seed writes to this graph
     )
     submit_or_raise(submitter, group, InternalSeedError)
 
 
 @dataclass(frozen=True, slots=True)
 class _CanonicalIds:
-    """Every node's local id -> canonical id, one map per label."""
+    """Every node's local id -> canonical id, one map per label.
+
+    `regulatory_instrument_id` is the single instrument's id, kept as submitted.
+    """
 
     regulatory_instrument_id: str
     role: dict[str, str]
@@ -903,13 +923,21 @@ class _CanonicalIds:
     risk_path: dict[str, str]
 
     def resolve(self, ref: SeedRef) -> str:
-        """Return `ref`'s canonical id, dispatching on its own declared label.
+        """Return `ref`'s canonical id, dispatching on its declared label.
 
-        A dict-of-maps dispatch (rather than an if/elif chain) keeps this
-        under the L1/L2 cyclomatic-complexity ceiling as new labels are
-        added slice by slice -- `RegulatoryInstrument` is the one label
-        with no per-node map (its id is fixed at parse time), so it stays
-        a single early return.
+        `RegulatoryInstrument` has no per-node map because its id is fixed, so it is a single
+        early return. The other labels use a label-to-map lookup, which keeps cyclomatic
+        complexity under the repo ceiling.
+
+        Args:
+            ref: A reference to a node declared in the seed.
+
+        Returns:
+            The canonical id minted for `ref`.
+
+        Raises:
+            KeyError: `ref` names a node that was not minted; cannot happen for a seed that
+                passed `_validate_and_index`.
         """
         if ref.label == "RegulatoryInstrument":
             return self.regulatory_instrument_id
@@ -934,7 +962,7 @@ class _BaselineContext:
     index: _SeedIndex
     canonical: _CanonicalIds
     policy_status: dict[str, str]
-    """Policy local id -> its `status`; a Standard/Control mirrors its root Policy's (GH #134)."""
+    """Policy local id -> its `status`; a Standard or Control mirrors its root Policy's."""
 
 
 type _NodeContent = tuple[str, dict[str, object]]
@@ -942,24 +970,29 @@ type _NodeContent = tuple[str, dict[str, object]]
 
 
 def _role_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """Canonical id and properties of a `Role` node."""
     return context.canonical.role[node.id], _role_properties(node)
 
 
 def _capability_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """Canonical id and properties of a `Capability` node."""
     return context.canonical.capability[node.id], _capability_properties(node)
 
 
 def _policy_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """Canonical id and properties of a `Policy` node."""
     return context.canonical.policy[node.id], _policy_properties(node)
 
 
 def _standard_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """Canonical id and properties of a `Standard` node, with its supporting Policy's status."""
     supporting_policy = context.index.standard_supporter[node.id]
     properties = _standard_properties(node, context.policy_status[supporting_policy])
     return context.canonical.standard[node.id], properties
 
 
 def _control_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """Canonical id and properties of a `Control` node, with its root Policy's status."""
     implemented_standard = context.index.control_implementer[node.id]
     supporting_policy = context.index.standard_supporter[implemented_standard]
     properties = _control_properties(node, context.policy_status[supporting_policy])
@@ -977,20 +1010,23 @@ _REFERENCE_CONTENT: dict[str, Callable[[SeedNode, _BaselineContext], _NodeConten
 
 
 def _obligation_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """Canonical id and properties of an `Obligation` node."""
     return context.canonical.obligation[node.id], _obligation_properties(node)
 
 
 def _requirement_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
-    """D6: `role_id` is resolved through the bearing Role and omitted, never null, if ambiguous."""
+    """Canonical id and properties of a `Requirement`; an ambiguous `role_id` is omitted."""
     role_id_value = _resolve_requirement_role_id(node.id, context.index, context.canonical.role)
     return context.canonical.requirement[node.id], _requirement_properties(node, role_id_value)
 
 
 def _practice_area_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """Canonical id and properties of a `PracticeArea` node."""
     return context.canonical.practice_area[node.id], _practice_area_properties(node)
 
 
 def _risk_path_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """Canonical id and properties of a `RiskPath` node."""
     return context.canonical.risk_path[node.id], _risk_path_properties(node)
 
 
@@ -998,13 +1034,13 @@ _DEPENDENT_CONTENT: dict[str, Callable[[SeedNode, _BaselineContext], _NodeConten
     "Obligation": _obligation_content,
     "Requirement": _requirement_content,
 }
-"""Nodes whose properties depend on the reference nodes (D6's `role_id` needs Role's id)."""
+"""Nodes whose properties depend on the reference nodes (`role_id` needs the Role's id)."""
 
 _CLASSIFICATION_CONTENT: dict[str, Callable[[SeedNode, _BaselineContext], _NodeContent]] = {
     "PracticeArea": _practice_area_content,
     "RiskPath": _risk_path_content,
 }
-"""Nodes that need no edge to exist (GH #93), so need no ordering among the others."""
+"""Nodes that need no edge to exist, so need no ordering among the others."""
 
 
 def _content_nodes(
@@ -1024,7 +1060,7 @@ def _content_nodes(
 def _baseline_nodes(
     seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
 ) -> tuple[UpsertNode, ...]:
-    """The baseline graph's nodes, with canonical (minted) ids, in a fixed order.
+    """Build the baseline graph's nodes, with canonical (minted) ids, in a fixed order.
 
     The RegulatoryInstrument first, then Role, Capability, Policy, Standard and Control in
     document order (the labels other nodes and edges point at), then Obligation and Requirement,
@@ -1052,7 +1088,7 @@ def _baseline_nodes(
 def _baseline_edges(
     seed: InternalRegulationSeed, canonical: _CanonicalIds
 ) -> tuple[UpsertEdge, ...]:
-    """The baseline edges between canonical ids; only DEFINES and EXPRESSES keep `source_ref`."""
+    """Build the baseline edges between canonical ids; only DEFINES/EXPRESSES keep `source_ref`."""
     return tuple(
         _upsert_edge(
             edge.type,
@@ -1069,7 +1105,16 @@ def _baseline_edges(
 def build_baseline_primitives(
     seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
 ) -> tuple[Primitive, ...]:
-    """The baseline graph's mutations: the minted spine, every node before every edge.
+    """Build the baseline graph's mutations: the minted spine, every node before every edge.
+
+    Args:
+        seed: The parsed submission, already validated by `_validate_and_index`.
+        index: The validation pass's pre-resolved index for `seed`.
+        canonical: The canonical ids minted for every node of `seed`.
+
+    Returns:
+        The `UpsertNode` primitives (canonical ids, normalised properties) followed by the
+        `UpsertEdge` primitives between canonical ids whose endpoints are both present.
 
     Raises:
         InternalSeedError: a node or edge carries a property the gateway cannot store.
@@ -1110,29 +1155,37 @@ def ingest_internal_regulatory_instrument(
     audit_event_id: str,
     emitter: LogEmitter | None = None,
 ) -> InternalIngestResult:
-    """Validate, mint, and persist one internal-regulation seed (S2's one pipeline stage).
+    """Validate, mint and persist one internal-regulation seed to its native and baseline graphs.
+
+    The native graph receives the raw submission; the baseline graph receives the minted spine
+    with canonical ids. Both are add/merge-only. Everything that can fail on the document is
+    checked and built before the first read or write, then each graph is read once (so a lagging
+    graph or failed read leaves both logs untouched) before either group is submitted, native
+    first.
 
     Args:
-        seed: The already-parsed submission (`adapter.read_seed`'s output).
-        submitter: The Graph Write Gateway; the raw submission (B5) is submitted as one native
-            mutation group on it, nodes then edges (issue #208).
-        native_graph_name: The name of the `{short}_native` graph, the native group's target.
-        baseline_graph_name: The name of the `{short}_baseline` graph, the baseline group's target.
-        audit_event_id: The id of the audit event of the command that caused this run; the
-            group is logged under it.
-        emitter: Reserved for future per-node audit logging; unused today.
+        seed: The parsed submission (the output of `InternalSeedIngestionAdapter.parse_seed`).
+            Must declare exactly one `RegulatoryInstrument` and satisfy the referential and
+            cardinality rules in the module docstring.
+        submitter: The Graph Write Gateway seam used to read and submit both graphs.
+        native_graph_name: The `{short}_native` graph, the native group's target.
+        baseline_graph_name: The `{short}_baseline` graph, the baseline group's target.
+        audit_event_id: The id of the audit event of the command that caused this run; each group
+            is logged under it.
+        emitter: Reserved for per-node audit logging; accepted and ignored.
 
     Returns:
-        An `InternalIngestResult` naming the regulatory instrument id and
-        the count of each minted node label.
+        An `InternalIngestResult` with the instrument id and the number of nodes minted per label.
+
+    Side Effects:
+        Reads both graphs through `submitter`, may log an edge-identity stamp group on each, and
+        submits one mutation group to each graph (native first).
 
     Raises:
-        InternalSeedError: The document fails referential integrity or
-            cardinality validation (AC-BI-011) -- raised with zero
-            writes made to either graph -- or the instrument carries a
-            node or edge property the gateway cannot store (a reserved key,
-            a non-finite number), or a graph write fails
-            (message `FalkorDB write failed: ...`).
+        InternalSeedError: The document fails referential-integrity or cardinality validation
+            (nothing written to either graph); a node or edge carries a property the gateway
+            cannot store (a reserved key, a non-finite number); a graph is behind its log or
+            cannot be read; or a group submission does not take effect.
     """
     _ = emitter
     index = _validate_and_index(seed)

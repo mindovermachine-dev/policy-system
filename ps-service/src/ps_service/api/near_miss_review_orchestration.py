@@ -330,7 +330,7 @@ def run_resolve_near_miss(
 
 def _graph_write_target(gateway: GroupSubmitter, audit_event_id: str) -> GraphWriteTarget:
     """Where the resolution's group goes: `policy_system`, under the opening row's audit event."""
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         single_tenant_graph_name,
     )
     from ps_service.company_merge.graph_submission import (  # noqa: PLC0415 -- M6, as above
@@ -370,7 +370,7 @@ def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
     (CHANGES.md M1) -- an independent copy, not a shared import, mirroring
     this component's established "own copy per module" convention.
     """
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         connect_from_config,
         select_graph,
         single_tenant_graph_name,
@@ -441,7 +441,7 @@ def build_default_near_miss_review_dependencies(
         `list_pending_reviews`/`resolve_review` and the given (or real)
         single-tenant-graph opener.
     """
-    from ps_service.company_merge.pending_review import (  # noqa: PLC0415 -- M6: function-local
+    from ps_service.company_merge.pending_review import (  # noqa: PLC0415 -- function-local
         get_pending_review,
         list_pending_reviews,
         resolve_review,

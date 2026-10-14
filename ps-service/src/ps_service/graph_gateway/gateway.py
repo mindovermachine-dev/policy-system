@@ -1,4 +1,4 @@
-"""The Graph Write Gateway: log-first writes of graph mutations (issue #206).
+"""The Graph Write Gateway: log-first writes of graph mutations.
 
 A caller submits a `MutationGroup`. The gateway appends it to the Postgres mutation log (the
 commit point), applies the logged entries to FalkorDB in batches and moves the applied marker
@@ -112,7 +112,17 @@ DEFAULT_STARTUP_REPLAY_MAX_BACKOFF_SECONDS = 30.0
 
 @dataclass(frozen=True)
 class GatewaySettings:
-    """Tunables of the gateway."""
+    """Tunables of the gateway.
+
+    Attributes:
+        batch_size: Rows per `UNWIND` query; at least 1.
+        max_attempts: Tries of one transient-failure-prone step; at least 1.
+        initial_backoff_seconds: Wait before the first retry; not negative.
+        backoff_multiplier: Factor applied to each further wait; at least 1.
+        reconciler_max_backoff_seconds: Longest wait between background reconciler passes.
+        startup_replay_max_backoff_seconds: Longest wait between startup replay tries.
+        replay_page_size: Log entries a replay reads per query; at least 1.
+    """
 
     batch_size: int = DEFAULT_BATCH_SIZE
     """Rows per `UNWIND` query."""
@@ -130,7 +140,12 @@ class GatewaySettings:
     """Log entries a replay reads per query, so a long log is never held in memory at once."""
 
     def __post_init__(self) -> None:
-        """Reject values that would make the retry schedule meaningless."""
+        """Reject values that would make the retry schedule meaningless.
+
+        Raises:
+            ValueError: `batch_size`, `max_attempts` or `replay_page_size` is below 1, a backoff
+                wait is negative, or `backoff_multiplier` is below 1.
+        """
         if self.batch_size < 1:
             message = "batch_size must be at least 1"
             raise ValueError(message)
@@ -152,7 +167,16 @@ class GatewaySettings:
 
 
 class GraphWriteGateway:
-    """Single chokepoint for graph writes: validate, log, apply, report."""
+    """Single chokepoint for graph writes: validate, log, apply, report.
+
+    A write is committed when its entries are appended to the Postgres mutation log, and is then
+    applied to FalkorDB; the applied marker records how far a graph reflects the log. Instances
+    are thread-safe: writers of one graph are serialised by that graph's lock.
+
+    Side Effects:
+        Appends to the mutation log, writes to FalkorDB graphs, starts the background reconciler
+        and drift monitor threads on demand, and emits gateway log events.
+    """
 
     def __init__(  # noqa: PLR0913, PLR0917 -- the stores, the openers and the injectable pauses
         self,
@@ -166,16 +190,21 @@ class GraphWriteGateway:
         read_graph_opener: Callable[[str], QueryableGraph] | None = None,
         drift_wait: Callable[[float], bool] | None = None,
     ) -> None:
-        """Take the log store, a graph opener (graph name to handle) and optional tunables.
+        """Create a gateway over a log store and a graph opener.
 
-        `read_graph_opener` opens the read-only handle the drift check reads the live graph
-        through (default: the writable `graph_opener`, which can also be read); `drift_wait` is
-        the drift monitor's pause between passes, like `reconciler_wait`.
-
-        `sleep` waits out a retry backoff and `reconciler_wait` the pause between background
-        reconciler passes (it returns True to stop the reconciler); tests inject both,
-        production uses the real clock and an interruptible `Event.wait`. `key_port` copies and
-        swaps whole graphs: without it a group that asks to be applied by swap is refused.
+        Args:
+            log_store: The mutation log; the commit point of every write.
+            graph_opener: Opens the writable FalkorDB graph of a given name.
+            settings: Tunables; the defaults of `GatewaySettings` when None.
+            emitter: Receives gateway log events; None emits nothing.
+            sleep: Waits out a retry backoff; None uses the real clock.
+            reconciler_wait: Pause between background reconciler passes; it returns True to stop
+                the reconciler. None uses an interruptible `Event.wait`.
+            key_port: Copies and swaps whole graphs; without it a group that asks to be applied
+                by swap is refused.
+            read_graph_opener: Opens the read-only handle the drift check reads the live graph
+                through; None uses `graph_opener`, which can also be read.
+            drift_wait: The drift monitor's pause between passes, like `reconciler_wait`.
         """
         self._log_store = log_store
         self._graph_opener = graph_opener
@@ -223,18 +252,40 @@ class GraphWriteGateway:
         )
 
     def submit_group(self, group: MutationGroup) -> GroupOutcome:
-        """Log what `group` changes, apply it to its graph and return what happened to it.
+        """Log what a group changes, apply it to its graph and return what happened to it.
 
         A group none of whose mutations changes the graph is not logged and is reported as
         `unchanged`. The graph's lock is held from the state read to the marker advance, so
         groups for one graph never interleave (see `graph_locks` for the lock order).
+
+        Args:
+            group: The mutations for one graph, with optional preconditions and checkpoint
+                request.
+
+        Returns:
+            A `GroupOutcome`: `applied`, `committed_apply_pending` (logged, FalkorDB
+            unreachable; applied on recovery) or `unchanged`.
+
+        Side Effects:
+            Appends the changing mutations to the log, applies them to the graph, advances the
+            applied marker and, when requested, stores a digest checkpoint.
+
+        Raises:
+            GraphReplayGatedError: the graph is closed by a running or failed replay.
+            GraphApplyBlockedError: the graph holds a logged entry FalkorDB cannot apply.
+            GraphWriteRejectedError: the group was refused (unlisted name, stale position,
+                missing target); nothing was logged.
+            GraphUnavailableError: FalkorDB could not be reached before the commit.
+            GraphLogUnavailableError: the log could not be reached.
+            GraphLogPersistenceError: the append failed; nothing was logged.
+            GraphApplyError: FalkorDB refused an entry after the commit; the graph is blocked.
         """
         self._gate.require_open(group.graph)
         with self._locks.lock_for(group.graph), self._failure_logged(group.graph):
             return self._submit_locked(group)
 
     def submit_multi_graph_group(self, group: MultiGraphGroup) -> MultiGraphOutcome:
-        """Log what `group` changes on every graph in ONE transaction, apply it, report per graph.
+        """Log what a group changes on every graph in ONE transaction, apply it, report per graph.
 
         Every leg is gated, checked against its own graph (blocked, caught up, allow-list,
         preconditions, missing targets, no-ops) before anything is logged: a refusal on any leg
@@ -244,6 +295,17 @@ class GraphWriteGateway:
         deadlock. A leg that changes nothing is reported `unchanged` and not logged; a set where
         no leg changes anything logs nothing. After the commit the legs are applied in ascending
         graph order, and a leg whose graph cannot be reached is `committed_apply_pending`.
+
+        Args:
+            group: Two or more legs for distinct graphs, the causing command's audit event id and
+                how the entries reach FalkorDB (`in_place` or `swap`).
+
+        Returns:
+            A `MultiGraphOutcome` with one `GroupOutcome` per graph, ordered by graph name.
+
+        Side Effects:
+            Appends the changing legs to the log in one transaction, applies them to FalkorDB
+            (in place or by swap), advances the applied markers and stores requested checkpoints.
 
         Raises:
             GraphWriteRejectedError: a leg was refused (nothing logged on any graph).
@@ -265,10 +327,16 @@ class GraphWriteGateway:
             return self._submit_multi_locked(group.audit_event_id, legs, group.apply)
 
     def read_persisted_elements(self, graph: str) -> PersistedElements:
-        """Read the node keys, edge keys and log position of `graph`; writes and logs nothing.
+        """Read the node keys, edge keys and log position of a graph; writes and logs nothing.
 
         The position is read first, under the graph's lock, so a caller that submits with an
         `ExpectedPosition` of it is refused if anything was logged since.
+
+        Args:
+            graph: Name of the graph to read.
+
+        Returns:
+            The keys of every node and edge the graph holds and the log's last position.
 
         Raises:
             GraphUnavailableError: FalkorDB could not be reached for the scan.
@@ -283,11 +351,17 @@ class GraphWriteGateway:
                 raise GraphUnavailableError from exc
 
     def read_log_position(self, graph: str) -> int:
-        """Read the last log position of `graph`: the narrow accessor behind an `ExpectedPosition`.
+        """Read the last log position of a graph: the narrow accessor behind an `ExpectedPosition`.
 
         What a guarded group needs, without the node and edge scan `read_persisted_elements`
-        also does (issue #211, CHANGES M3). Read under the graph's lock, retrying while Postgres
-        is unreachable. Reads only the log; writes and logs nothing.
+        also does. Read under the graph's lock, retrying while Postgres is unreachable. Reads
+        only the log; writes and logs nothing.
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            The last log position; 0 when nothing is logged.
 
         Raises:
             GraphReplayGatedError: the graph is closed by a pending or failed replay.
@@ -300,14 +374,24 @@ class GraphWriteGateway:
     def stamp_legacy_edge_identity(
         self, graph: str, audit_event_id: str | None
     ) -> EdgeIdentityBackfillOutcome:
-        """Give the identity-less edges of `graph` their identity before a writer's first group.
+        """Give the identity-less edges of a graph their identity before a writer's first group.
 
-        A graph written before the gateway holds edges with no `identity`; the gateway merges
-        edges on it, so a write onto such a graph would add parallel edges (issue #208, F1). The
-        graph is first caught up with its log (the scan must see what the log wrote), then
-        scanned read-only; only if an identity-less edge exists one `StampEdgeIdentity` group is
-        logged under `audit_event_id` (`None`: with no audit link). A graph with none (a fresh
-        graph, a stamped one) costs one read and logs nothing. Idempotent.
+        A graph can hold edges with no `identity`; the gateway merges edges on it, so a write
+        onto such a graph would add parallel edges. The graph is first caught up with its log
+        (the scan must see what the log wrote), then scanned read-only; only if an identity-less
+        edge exists one `StampEdgeIdentity` group is logged under `audit_event_id`. A graph with
+        none (a fresh graph, a stamped one) costs one read and logs nothing. Idempotent.
+
+        Args:
+            graph: Name of the graph to stamp.
+            audit_event_id: Audit event of the causing command (a UUID string), or None to log
+                the stamp with no audit link.
+
+        Returns:
+            The `EdgeIdentityBackfillOutcome` saying whether anything was stamped.
+
+        Side Effects:
+            May catch the graph up, and logs and applies one stamp group.
 
         Raises:
             GraphUnavailableError: FalkorDB could not be reached for the scan.
@@ -329,7 +413,7 @@ class GraphWriteGateway:
     def submit_group_in_transaction(
         self, cur: psycopg.Cursor[TupleRow], group: MutationGroup
     ) -> StagedSubmission:
-        """Stage `group` on the caller's transaction; the caller commits, then `complete()`s.
+        """Stage a group on the caller's transaction; the caller commits, then `complete()`s.
 
         For writers whose audit row is recorded on `cur`: the group is appended on the same
         transaction (linked by `group.audit_event_id`), so the audit row and the log group commit
@@ -337,6 +421,17 @@ class GraphWriteGateway:
         completed, aborted or its `with` block ends; a rejection or an append failure releases it
         before raising. One in-transaction submission per transaction; a group none of whose
         mutations changes the graph appends nothing, holds no lock and reports `unchanged`.
+
+        Args:
+            cur: Cursor of the caller's open transaction, under READ COMMITTED.
+            group: The mutations for one graph; `audit_event_id` links it to the audit row.
+
+        Returns:
+            A `StagedSubmission` to `complete()` after the caller's commit, or to abort.
+
+        Side Effects:
+            Appends the group to the log on `cur` (committed or rolled back with the caller's
+            transaction) and holds the graph's lock until the submission ends.
 
         Raises:
             GraphWriteRejectedError: the group was refused (nothing appended, lock released).
@@ -355,11 +450,20 @@ class GraphWriteGateway:
         return staged
 
     def catch_up(self, graph: str) -> CatchUpResult:
-        """Apply every logged entry of `graph` beyond its applied marker, in order.
+        """Apply every logged entry of a graph beyond its applied marker, in order.
 
         Idempotent. While FalkorDB stays unreachable the result says `caught_up=False` (the
         entries stay in the log and the background reconciler keeps trying); a success also
         unblocks a graph that an earlier permanent failure blocked.
+
+        Args:
+            graph: Name of the graph to catch up.
+
+        Returns:
+            A `CatchUpResult` with the applied and last log positions and whether they are equal.
+
+        Side Effects:
+            Applies entries to FalkorDB and advances the applied marker.
 
         Raises:
             GraphLogUnavailableError: the log could not be read through the retry budget.
@@ -394,10 +498,26 @@ class GraphWriteGateway:
         return self._standing(graph)
 
     def replay_graph(self, graph: str) -> ReplayReport:
-        """Rebuild `graph` from its log, in sequence order, and verify it against a checkpoint.
+        """Rebuild a graph from its log, in sequence order, and verify it against a checkpoint.
 
         The graph's lock is held throughout. The applied marker only moves forward, to the log's
         head. No checkpoint is recorded: a digest of a rebuilt graph would vouch for nothing.
+
+        Args:
+            graph: Name of the graph to rebuild.
+
+        Returns:
+            The `ReplayReport` of what was applied and how much a checkpoint vouches for.
+
+        Side Effects:
+            Closes the graph to writes until the replay completes (it stays closed if it fails),
+            rewrites graph content, advances the applied marker and emits gateway events.
+
+        Raises:
+            GraphReplayError: the replay failed (digest mismatch, gap, corrupt entry or
+                unverifiable resume); the graph stays closed.
+            GraphReplayStoppedError: `stop_replay` was called; a later run resumes.
+            GraphReplayGatedError: the graph's earlier replay is recorded as failed.
         """
         self._gate.begin(graph)
         try:
@@ -443,6 +563,9 @@ class GraphWriteGateway:
         A stopped replay raises `GraphReplayStoppedError`, leaves its progress record in the
         graph and keeps the graph closed to writes as incomplete. The request is permanent for
         this gateway: a restarted service builds a new one and resumes.
+
+        Side Effects:
+            Sets the stop flag read by every replay and by the startup replay's retry wait.
         """
         self._stop_replay.set()
 
@@ -452,6 +575,9 @@ class GraphWriteGateway:
         The service calls this synchronously before it accepts a request, then runs
         `startup_replay` in the background; `startup_replay` also calls it, so a direct caller
         needs nothing else.
+
+        Side Effects:
+            Every graph refuses writes with `GraphReplayGatedError` until the hold ends.
         """
         self._gate.begin_all_pending()
 
@@ -465,6 +591,13 @@ class GraphWriteGateway:
         the log has never seen included. An infrastructure error (Postgres or FalkorDB down)
         propagates with the hold still in place, so a caller can retry: each graph resumes from
         its progress record.
+
+        Returns:
+            A `StartupReplayReport` placing every logged graph in exactly one list.
+
+        Side Effects:
+            Rebuilds, resumes or catches up graphs, advances applied markers, opens graphs for
+            writes and emits one gateway event per graph.
 
         Raises:
             GraphLogUnavailableError: the log could not be read.
@@ -498,10 +631,19 @@ class GraphWriteGateway:
     ) -> StartupReplayReport:
         """Run `startup_replay`, trying again through an infrastructure outage until it ends.
 
-        The service's background task runs this. `wait(delay)` pauses between tries and returns
-        True when the retrying should end (default: an interruptible wait that `stop_replay`
-        cuts short); the last outage error is then raised. A graph already dealt with by an
-        earlier try is found healthy by the next one, so only the last try's report is returned.
+        The service's background task runs this. A graph already dealt with by an earlier try is
+        found healthy by the next one, so only the last try's report is returned.
+
+        Args:
+            wait: `wait(delay)` pauses between tries and returns True when the retrying should
+                end; the last outage error is then raised. None uses an interruptible wait that
+                `stop_replay` cuts short.
+
+        Returns:
+            The `StartupReplayReport` of the last try.
+
+        Side Effects:
+            As `startup_replay`, plus one gateway event per retry.
 
         Raises:
             GraphLogUnavailableError, redis.exceptions.RedisError: the outage outlived a stop.
@@ -527,10 +669,13 @@ class GraphWriteGateway:
         )
 
     def gated_graphs(self) -> tuple[str, ...]:
-        """Names of the graphs that refuse writes for good until someone acts, sorted.
+        """List the graphs that refuse writes for good until someone acts.
 
         A graph whose replay failed, or whose logged entry FalkorDB refuses. A graph that is merely
-        waiting for the startup replay is not listed (`graph_replay` covers it in `/ready`).
+        waiting for the startup replay is not listed (the `graph_replay` readiness check covers it).
+
+        Returns:
+            The graph names, sorted; empty when none.
         """
         return tuple(sorted(self._gate.failed_graphs() | self._blocked))
 
@@ -566,6 +711,12 @@ class GraphWriteGateway:
         applied (the background reconciler retries a graph that is merely down; a refused one
         stays blocked). Nothing is started when nothing is pending.
 
+        Returns:
+            A `RecoveryResult` listing the graphs caught up and those still gated, in name order.
+
+        Side Effects:
+            Applies entries to FalkorDB, advances applied markers and emits one event per graph.
+
         Raises:
             GraphLogUnavailableError: the log could not be read to find the lagging graphs.
         """
@@ -593,10 +744,20 @@ class GraphWriteGateway:
         return RecoveryResult(recovered=tuple(recovered), gated=tuple(gated))
 
     def is_caught_up(self, graph: str) -> bool:
-        """Answer True only if every committed entry of `graph` is applied.
+        """Answer True only if every committed entry of a graph is applied.
 
         A read-only predicate, so it does not retry: when the log cannot be read it raises
         `GraphLogUnavailableError` instead of answering.
+
+        Args:
+            graph: Name of the graph.
+
+        Returns:
+            True when the graph is open and its applied marker equals its last log position; False
+            when it is closed by a replay or behind its log.
+
+        Raises:
+            GraphLogUnavailableError: the log could not be read.
         """
         if self._gate.is_gated(graph):
             return False
@@ -605,25 +766,54 @@ class GraphWriteGateway:
 
     @property
     def is_reconciling(self) -> bool:
-        """Whether the background reconciler thread is running."""
+        """Report whether the background reconciler thread is running.
+
+        Returns:
+            True while the reconciler runs.
+        """
         return self._reconciler.is_running
 
     def stop_reconciler(self, timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS) -> bool:
-        """Stop the background reconciler, waiting up to `timeout` seconds; True if it ended."""
+        """Stop the background reconciler.
+
+        Args:
+            timeout: Seconds to wait for the thread to end.
+
+        Returns:
+            True if the reconciler ended within `timeout` (or was not running).
+
+        Side Effects:
+            Signals and joins the reconciler thread.
+        """
         return self._reconciler.stop(timeout)
 
     def check_drift(self, graph: str) -> DriftResult:
-        """Compare `graph` with the checkpoint at the head of its log; log the finding.
+        """Compare a graph with the checkpoint at the head of its log; log the finding.
 
         Read-only and never waits for a writer: a graph that is closed, locked, behind its log or
         written to while it is read is skipped, a graph without a checkpoint at its head is
         reported `no_baseline`, and a difference is an alert in the log (outcome `failed`,
         `error_class` `GraphDriftDetected`). Nothing is repaired and nothing raises.
+
+        Args:
+            graph: Name of the graph to check.
+
+        Returns:
+            The `DriftResult` naming the finding.
+
+        Side Effects:
+            Read-only queries; emits a gateway log event.
         """
         return self._drift.check(graph)
 
     def check_all_drift(self) -> DriftPass:
         """Run `check_drift` over every graph the log holds; one pass of the drift monitor.
+
+        Returns:
+            The `DriftPass` with one result per logged graph.
+
+        Side Effects:
+            As `check_drift`, per graph.
 
         Raises:
             GraphLogUnavailableError: the log could not be asked which graphs it holds.
@@ -631,7 +821,17 @@ class GraphWriteGateway:
         return self._drift.run_pass(self._log_store.logged_graphs())
 
     def start_drift_monitor(self, interval_seconds: float) -> bool:
-        """Start the periodic drift check; False if `interval_seconds` is 0 or it already runs."""
+        """Start the periodic drift check.
+
+        Args:
+            interval_seconds: Seconds between passes; 0 disables the monitor.
+
+        Returns:
+            True if the monitor was started; False if `interval_seconds` is 0 or it already runs.
+
+        Side Effects:
+            Starts a background thread running `check_all_drift` every interval.
+        """
         if self._drift_monitor is None:
             self._drift_monitor = GraphDriftMonitor(
                 self.check_all_drift,
@@ -642,7 +842,17 @@ class GraphWriteGateway:
         return self._drift_monitor.start()
 
     def stop_drift_monitor(self, timeout: float = DEFAULT_DRIFT_STOP_TIMEOUT_SECONDS) -> bool:
-        """Stop the periodic drift check, waiting up to `timeout` seconds; True if it ended."""
+        """Stop the periodic drift check.
+
+        Args:
+            timeout: Seconds to wait for the thread to end.
+
+        Returns:
+            True if the monitor ended within `timeout` or was never started.
+
+        Side Effects:
+            Signals and joins the monitor thread.
+        """
         return True if self._drift_monitor is None else self._drift_monitor.stop(timeout)
 
     def _is_closed_to_drift_checks(self, graph: str) -> bool:
@@ -1219,8 +1429,8 @@ class GraphWriteGateway:
     def _require_not_blocked(self, graph: str) -> None:
         """Refuse to take a group for a graph that holds an entry FalkorDB cannot apply.
 
-        Keeps AC-BI-011 (nothing new is accepted while an entry is unapplied) without spinning:
-        the graph stays blocked until the process restarts or `catch_up` applies the entry.
+        Nothing new is accepted while an entry is unapplied, and retrying is not attempted: the
+        graph stays blocked until the process restarts or `catch_up` applies the entry.
         """
         if graph in self._blocked:
             raise GraphApplyBlockedError(graph)

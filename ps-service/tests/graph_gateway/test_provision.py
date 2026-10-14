@@ -1,4 +1,4 @@
-"""Fast tests for the `graph_gateway` provisioning CLI's environment handling (issue #205 slice 1).
+"""Fast tests for the `graph_gateway` provisioning CLI's environment handling.
 
 The database side (it really provisions, and never prints the admin password) is covered by
 `test_provision_live.py`.
@@ -6,11 +6,13 @@ The database side (it really provisions, and never prints the admin password) is
 
 from __future__ import annotations
 
+import re
 import socket
 import time
 
 import pytest
 
+from ps_service.graph_gateway import provision
 from ps_service.graph_gateway.provision import ProvisioningTarget, main
 from ps_service.persistence import StatePostgresProvisioningError
 
@@ -149,3 +151,14 @@ def test_provisioning_target_rejects_a_non_positive_lock_timeout_by_variable_nam
 
     with pytest.raises(StatePostgresProvisioningError, match="PS_STATE_PROVISION_LOCK_TIMEOUT"):
         ProvisioningTarget.from_environ(environ)
+
+
+def test_parser_description_is_explicit_and_provenance_free() -> None:
+    description = provision._build_parser().description  # pyright: ignore[reportPrivateUsage]
+
+    assert description == provision._PARSER_DESCRIPTION  # pyright: ignore[reportPrivateUsage]
+    assert description is not None
+    assert "ps_state" in description
+    assert "PS_STATE_GRAPH_OWNER_ROLE" in description
+    assert not re.search(r"#\d+|issue", description, re.IGNORECASE)
+    assert description != (provision.__doc__ or "").split("\n\n", 1)[0]

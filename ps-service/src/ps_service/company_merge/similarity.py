@@ -1,9 +1,7 @@
 """Cosine similarity -- a pure function.
 
-New logic not present anywhere in shipped `ps_service` code
-(PLAN_REVIEWED.md §0.4/§10 Increment 2). Used by
-`dedup.find_best_semantic_match` to score an incoming node's embedding
-against every existing canonical candidate's embedding.
+`dedup.find_best_semantic_match` uses it to score an incoming node's embedding against every
+existing canonical candidate's embedding.
 """
 
 from __future__ import annotations
@@ -14,12 +12,19 @@ from ps_service.company_merge.errors import CompanyMergeValidationError
 
 
 def cosine_similarity(a: tuple[float, ...], b: tuple[float, ...]) -> float:
-    """Cosine similarity between two equal-length embedding vectors, in `[-1.0, 1.0]`.
+    """Cosine similarity between two equal-length embedding vectors.
 
-    Raises `CompanyMergeValidationError` if the vectors have different
-    lengths (naming both lengths in the message) or if either vector is the
-    zero vector (cosine similarity is undefined when a vector's magnitude is
-    zero).
+    Args:
+        a: First embedding vector; non-zero.
+        b: Second embedding vector; non-zero and the same length as `a`.
+
+    Returns:
+        The cosine of the angle between the vectors, in `[-1.0, 1.0]`.
+
+    Raises:
+        CompanyMergeValidationError: The vectors have different lengths (both lengths are named
+            in the message) or either is the zero vector, for which cosine similarity is
+            undefined.
     """
     if len(a) != len(b):
         message = f"vectors must have the same length, got {len(a)} and {len(b)}"

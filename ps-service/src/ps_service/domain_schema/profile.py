@@ -28,7 +28,12 @@ type EdgeKey = tuple[str, str, str]
 
 @dataclass(frozen=True, slots=True)
 class Omit:
-    """Drop `property_name` from node `label`."""
+    """Drop `property_name` from node `label`.
+
+    Attributes:
+        label: The node label; must exist in the schema.
+        property_name: The property to remove; must exist on that node.
+    """
 
     label: str
     property_name: str
@@ -36,7 +41,14 @@ class Omit:
 
 @dataclass(frozen=True, slots=True)
 class Narrow:
-    """Replace the type of `label.property_name` with a stricter type `to`."""
+    """Replace the type of `label.property_name` with a stricter type `to`.
+
+    Attributes:
+        label: The node label; must exist in the schema.
+        property_name: The property to narrow; must exist on that node.
+        to: The new type. It must be a refinement: an enum to a subset of its values or to one of
+            them as a constant, or a string to an equal or larger minimum length.
+    """
 
     label: str
     property_name: str
@@ -45,7 +57,12 @@ class Narrow:
 
 @dataclass(frozen=True, slots=True)
 class Add:
-    """Append `property` to node `label`."""
+    """Append `property` to node `label`.
+
+    Attributes:
+        label: The node label; must exist in the schema.
+        property: The property to add; its name must not already exist on that node.
+    """
 
     label: str
     property: Property
@@ -56,7 +73,16 @@ type Operation = Omit | Narrow | Add
 
 @dataclass(frozen=True, slots=True)
 class Profile:
-    """An ordered list of operations plus optional node/edge order and edge removals."""
+    """An ordered list of operations plus optional node/edge order and edge removals.
+
+    Attributes:
+        name: Profile name, used in error messages.
+        operations: Applied in order, each to the result of the previous ones.
+        node_order: Exact permutation of the schema's node labels, or `None` to keep the order.
+        edge_order: Exact permutation of the (type, source, target) keys of the edges that
+            remain after `omitted_edges`, or `None` to keep the order.
+        omitted_edges: Keys of schema edges to drop; each must exist.
+    """
 
     name: str
     operations: tuple[Operation, ...]
@@ -66,6 +92,7 @@ class Profile:
 
 
 def _is_narrowing(base: PropertyType, to: PropertyType) -> bool:
+    """Whether `to` refines `base`: a subset enum, a member constant or a longer minimum."""
     match base, to:
         case EnumType(values=base_values), EnumType(values=to_values):
             return set(to_values) <= set(base_values)
@@ -78,6 +105,7 @@ def _is_narrowing(base: PropertyType, to: PropertyType) -> bool:
 
 
 def _find(node: Node, property_name: str) -> Property:
+    """Return the property `property_name` of `node`, or raise `SchemaProfileError`."""
     for prop in node.properties:
         if prop.name == property_name:
             return prop
@@ -85,12 +113,14 @@ def _find(node: Node, property_name: str) -> Property:
 
 
 def _omit(node: Node, operation: Omit) -> Node:
+    """Return `node` without the property named by `operation`."""
     _find(node, operation.property_name)
     kept = tuple(p for p in node.properties if p.name != operation.property_name)
     return replace(node, properties=kept)
 
 
 def _narrow(node: Node, operation: Narrow) -> Node:
+    """Return `node` with the property's type replaced, or raise if that is not a refinement."""
     current = _find(node, operation.property_name)
     if not _is_narrowing(current.type, operation.to):
         raise SchemaProfileError(
@@ -105,12 +135,14 @@ def _narrow(node: Node, operation: Narrow) -> Node:
 
 
 def _add(node: Node, operation: Add) -> Node:
+    """Return `node` with the property appended, or raise if the name is already taken."""
     if any(p.name == operation.property.name for p in node.properties):
         raise SchemaProfileError(f"{node.label} already has property {operation.property.name!r}")
     return replace(node, properties=(*node.properties, operation.property))
 
 
 def _apply_operation(node: Node, operation: Operation) -> Node:
+    """Apply one profile operation to `node`."""
     match operation:
         case Omit():
             return _omit(node, operation)
@@ -134,7 +166,22 @@ def _reorder[T, K](
 
 
 def apply_profile(schema: Schema, profile: Profile) -> Schema:
-    """Return a new schema: `schema` with `profile` applied, validated like any `Schema`."""
+    """Return a new schema: `schema` with `profile` applied, validated like any `Schema`.
+
+    Args:
+        schema: The base schema; it is not modified.
+        profile: The operations, edge removals and orderings to apply.
+
+    Returns:
+        A new `Schema` with operations applied in order, the omitted edges removed, and nodes and
+        edges reordered when the profile gives an order.
+
+    Raises:
+        SchemaProfileError: An operation names an unknown label or property, a narrowing is not
+            a refinement, an added property already exists, an omitted edge is unknown, or an
+            order is not an exact permutation.
+        DomainSchemaError: The resulting schema is invalid.
+    """
     nodes = {node.label: node for node in schema.nodes}
     for operation in profile.operations:
         if operation.label not in nodes:

@@ -1,10 +1,9 @@
-"""Parse a curated instrument's `manifest.json`, fetched from the curated-content source.
+"""Parse a curated instrument's `manifest.json` fetched from the curated-content source.
 
-Mirrors `ps_cli.catalog_repo`'s own `_parse_manifest` validation shape
-(PLAN.md §2) field-for-field -- the only difference is that this parses raw
-HTTP response bytes (not an already-`json.loads`-ed local-file payload) and
-raises `CuratedSourceFetchError` naming the source URL (AC-BI-006) instead of
-`PsCliError` on any shape violation.
+The validation matches `ps_cli.catalog_repo`'s `_parse_manifest` field for field. The differences
+are that this module parses raw HTTP response bytes rather than an already decoded local-file
+payload, and that every shape violation raises `CuratedSourceFetchError` naming the source URL
+instead of `PsCliError`.
 """
 
 from __future__ import annotations
@@ -44,20 +43,23 @@ def _require_optional_str(body: dict[str, object], field: str, *, url: str) -> s
 
 
 def parse_manifest_json(raw_bytes: bytes, *, url: str) -> InstrumentManifest:
-    """Parse `manifest.json`'s raw response bytes into an `InstrumentManifest` (AC-BI-004).
+    """Parse `manifest.json`'s raw response bytes into an `InstrumentManifest`.
+
+    Every field must be present with the right type: `celex` and `jurisdiction` may be `null`,
+    all other fields must be strings, and `source_type` must be `"external"` or `"internal"`.
+    Extra keys are ignored.
 
     Args:
         raw_bytes: The raw response body fetched from `url`.
-        url: The exact URL `raw_bytes` was fetched from -- named in every
-            error message (AC-BI-006).
+        url: The exact URL `raw_bytes` was fetched from; named in every error message.
 
     Returns:
         The parsed `InstrumentManifest`.
 
     Raises:
-        CuratedSourceFetchError: `raw_bytes` is not valid UTF-8 JSON, is not
-            a JSON object, a required field is missing/mistyped, or
-            `source_type` is neither `"external"` nor `"internal"`.
+        CuratedSourceFetchError: `raw_bytes` is not valid UTF-8 JSON, is not a JSON object, a
+            required field is missing or mistyped, or `source_type` is neither `"external"` nor
+            `"internal"`.
     """
     try:
         payload = json.loads(raw_bytes.decode("utf-8"))

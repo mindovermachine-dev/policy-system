@@ -1,30 +1,29 @@
-"""ps_service.restore.restore_instrument -- D8's restore orchestration entry point.
+"""Restore of one curated instrument's artifact into the compliance graphs.
 
-PLAN.md D5/D6/D8/D20, CHANGES.md B1/MA2, CHANGES2.md §3.7; issue #214 moved the writes onto
-the Graph Write Gateway. `restore_instrument` verifies a `RestoreArtifact` before doing
-anything else with it: D9's checksum check, then D10's `schema_version` check -- both with zero
-graph calls, in that order, so a corrupted or version-mismatched artifact is refused before the
-gateway is opened or any graph is read.
+`restore_instrument` verifies a `RestoreArtifact` before doing anything else with it: the
+checksum check, then the `schema_version` check -- both with zero graph calls, in that order,
+so a corrupted or version-mismatched artifact is refused before the gateway is opened or any
+graph is read.
 
 Once verification passes:
 
-1. Parse both blobs (`export.serialize.parse_serialized_graph_json`), content-validate BOTH
-   parsed graphs (`_validate_content`, GH #104) and require an owner for governance content,
-   still with zero graph calls.
+1. Parse both blobs (`export.serialize.parse_serialized_graph_json`), content-validate both
+   parsed graphs (`_validate_content`) and require an owner for governance content, still with
+   zero graph calls.
 2. Open the gateway (`open_gateway`; none installed fails the request closed) and build the
    native and baseline legs as upserts (`leg_primitives`).
 3. Read `policy_system` at a known log position and build its leg
    (`merge_primitives.build_policy_system_leg`: the offline Company Merge as primitives over the
-   live graph plus an overlay of the leg's own writes, D-1 Option A).
-4. Submit ONE multi-graph group of the three legs under the restore's opening audit event: the
+   live graph plus an overlay of the leg's own writes).
+4. Submit one multi-graph group of the three legs under the restore's opening audit event: the
    native and baseline legs replace their graphs, the `policy_system` leg is guarded by
    `ExpectedPosition`. A refusal because `policy_system` moved (another writer) re-reads and
    rebuilds, up to `MAX_POLICY_SYSTEM_ATTEMPTS` times, then raises
    `RestoreConcurrencyConflictError`. Every other refusal raises a `RestoreGraphWriteError`.
 
-D14/AC-BI-016's audit log entry (MA2's exact call shape) is emitted at `"started"` (once
-verification has passed), `"succeeded"` (after the group took effect) and `"failed"` (whenever
-anything after `"started"` raises -- no `"succeeded"` entry follows a `"failed"` one).
+An audit log entry is emitted at `"started"` (once verification has passed), `"succeeded"`
+(after the group took effect) and `"failed"` (whenever anything after `"started"` raises -- no
+`"succeeded"` entry follows a `"failed"` one).
 """
 
 from __future__ import annotations
@@ -84,9 +83,8 @@ _RETRY_ACTION = "retry_policy_system_leg"
 def _verify_checksums(artifact: RestoreArtifact) -> None:
     """Raise `ArtifactIntegrityError` if either blob's SHA-256 doesn't match its manifest digest.
 
-    D9: checked before `schema_version` comparison and before any FalkorDB
-    call of any kind. Baseline is checked before native, matching
-    `InstrumentManifest`'s own field order.
+    Checked before the `schema_version` comparison and before any graph call. Baseline is
+    checked before native, matching `InstrumentManifest`'s own field order.
     """
     manifest = artifact.manifest
     for blob_name, blob, expected in (
@@ -105,9 +103,8 @@ def _verify_checksums(artifact: RestoreArtifact) -> None:
 def _verify_schema_version(artifact: RestoreArtifact) -> None:
     """Raise `ArtifactSchemaVersionMismatchError` on a `schema_version` mismatch.
 
-    D10: checked immediately after checksum verification, still before any
-    FalkorDB call. No migrate/warn path -- an exact string mismatch always
-    refuses outright.
+    Checked immediately after checksum verification, still before any graph call. There is no
+    migrate or warn path: an exact string mismatch always refuses outright.
     """
     manifest_version = artifact.manifest.schema_version
     if manifest_version != DOMAIN_SCHEMA_VERSION:
@@ -121,9 +118,8 @@ def _verify_schema_version(artifact: RestoreArtifact) -> None:
 def _validate_content(native_graph: SerializedGraph, baseline_graph: SerializedGraph) -> None:
     """Raise `ArtifactContentRejectedError` if EITHER parsed leg violates its allow-list.
 
-    GH #104 / AC-BI-006: both legs are content-validated here, before the gateway
-    is opened or any graph is read, so a violation in either leg writes nothing.
-    Native first, then baseline.
+    Both legs are content-validated here, before the gateway is opened or any graph is read,
+    so a violation in either leg writes nothing. Native first, then baseline.
     """
     schema_allowlist.validate_serialized_graph(
         native_graph,
@@ -147,33 +143,24 @@ def _emit_restore_log(
     source: str | None = None,
     extra: dict[str, int] | None = None,
 ) -> None:
-    """Emit one D14/AC-BI-016 audit log entry, in MA2's corrected call shape.
+    """Emit one audit log entry for the restore of `instrument_id`.
 
-    `extra={"caller": actor, "schema_version": ...}` -- `entity_id` mirrors
-    `company_merge/merge.py`'s own `merge_baseline_graph` call
-    (`entity_id=regulatory_instrument_id`); `extra`'s key name mirrors
-    `api/ingestion_orchestration.py::_emit_run`'s own `"caller"` key exactly.
-    Never `extra={"actor": ...}` -- MA2's explicit correction of D14's
-    original wording, since `"caller"` is ingestion's real, existing key
-    name.
+    The entry's `extra` carries `"caller"` (the key the ingestion log entries use for the
+    actor) and `"schema_version"`. The `"succeeded"` call folds in the PracticeArea, RiskPath
+    and classification-edge write counts via `extra`, so the entry matches the live merge's
+    `"succeeded"` entry; `"started"` and `"failed"` pass no `extra`, since no classification pass
+    has necessarily run by then. A `"source"` key (the resolved curated-content source URL) is
+    added only when `source` is not `None`, so an upload restore, which passes none, logs no
+    `"source"`.
 
-    Issue #106/AC-BI-011: the `"succeeded"` call site folds in the six
-    PracticeArea/RiskPath/classification-edge write counts
-    (`graph_writer.classification_write_counts`) via `extra=`, merged
-    alongside `caller`/`schema_version` rather than replacing them --
-    mirroring `company_merge/merge.py`'s own `"succeeded"` entry so the
-    requirement holds regardless of which of the two entry points (live
-    merge vs. restore) a given caller exercises. `"started"`/`"failed"`
-    never pass `extra`, since no classification pass has necessarily run by
-    those points.
-
-    Issue #125/AC-BI-011 (D-AUDIT): `source` folds in a `"source"` key --
-    the resolved curated-content source URL -- only when not `None`. The
-    existing `POST /restorations` (upload) call site never passes `source`
-    (it defaults to `None` on every `restore_instrument` call it makes), so
-    its audit log entries stay byte-identical to before this issue; only
-    `run_restoration_from_catalog_source` (issue #125, Slice 2) passes the
-    resolved effective source URL.
+    Args:
+        instrument_id: Canonical instrument id; becomes the entry's `entity_id`.
+        outcome: `"started"`, `"succeeded"` or `"failed"`.
+        actor: The restoring caller; logged as `extra["caller"]`.
+        schema_version: The manifest's schema version; logged as `extra["schema_version"]`.
+        emitter: Log emitter; `None` uses the default emitter.
+        source: Resolved curated-content source URL, or `None` for an upload restore.
+        extra: Additional counts merged into the entry's `extra`; `None` adds nothing.
     """
     payload: dict[str, object] = {"caller": actor, "schema_version": schema_version}
     if source is not None:
@@ -190,7 +177,7 @@ def _emit_restore_log(
 
 
 def _require_owner_for_governance(baseline_graph: SerializedGraph, owner: object | None) -> None:
-    """Fail fast, before any graph is touched: a restored Policy needs an owner (issue #183)."""
+    """Fail fast, before any graph is touched: a restored Policy needs an owner."""
     if owner is None and any(node.label == "Policy" for node in baseline_graph.nodes):
         raise RestoreOwnerRequiredError
 
@@ -237,7 +224,7 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
     The graph is made caught up with its log, its position read, and the leg built from reads of
     the live graph; the leg is guarded by that position, so a write landing in between makes the
     gateway refuse the whole group (nothing logged) and the next attempt reads again. After
-    `MAX_POLICY_SYSTEM_ATTEMPTS` refused attempts the existing conflict error is raised.
+    `MAX_POLICY_SYSTEM_ATTEMPTS` refused attempts `RestoreConcurrencyConflictError` is raised.
 
     Returns:
         The classification and governance counts of the built `policy_system` leg.
@@ -322,31 +309,47 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
 ) -> RestoreOutcome:
     """Restore one curated instrument's artifact end to end as one gateway group.
 
-    Verification (D9 checksum, D10 schema_version) runs first and unconditionally, with zero
+    Verification (checksum, then `schema_version`) runs first and unconditionally, with zero
     graph calls of any kind -- a rejected artifact never reaches `db`, the gateway or the audit
     log at all. Once verification passes, one `outcome="started"` audit log entry is emitted,
-    then both blobs are parsed and content-validated (both legs, before the gateway is opened --
-    GH #104), the gateway is opened and the three legs are submitted as one multi-graph group
-    (see the module docstring).
+    then both blobs are parsed and content-validated (both legs, before the gateway is opened),
+    the gateway is opened and the three legs are submitted as one multi-graph group (see the
+    module docstring).
 
     On success, one `outcome="succeeded"` audit log entry is emitted and a `RestoreOutcome` is
     returned. On any exception raised after `"started"` one `outcome="failed"` entry is emitted
     and the exception is re-raised unchanged -- no `"succeeded"` entry ever follows a `"failed"`
     one.
 
-    `audit_event_id` is the id of the restore's opening `instrument.restore` audit row (issue
-    #195): every log group of the restore carries it (AC-BI-012). `open_gateway` returns the
-    process's Graph Write Gateway, or raises when there is none; it is called after
-    verification, parsing and content validation, before the first read of a live graph.
-    `db` is used only to read `policy_system`.
+    Business Rules: an internal-sourced artifact's Policy/Standard/Control tree is imported as
+    `draft`, owned by `owner`, and never converged onto an existing Policy; an artifact with a
+    Policy and no `owner` is refused before the gateway is opened.
 
-    `source` (issue #125, D-AUDIT) is `None` by default and is folded into every emitted audit
-    log entry's `"source"` key when given.
+    Args:
+        artifact: The artifact to restore; its blobs are verified against its manifest.
+        db: Read-only handle used only to read `policy_system`.
+        single_tenant_graph_name: Name of the `policy_system` graph (non-empty).
+        similarity_threshold: Minimum Capability embedding similarity for convergence.
+        actor: The restoring caller; recorded as `caller` in the audit log entries.
+        open_gateway: Returns the process's Graph Write Gateway, or raises when there is none;
+            called after verification, parsing and content validation, before the first read of
+            a live graph.
+        audit_event_id: Id of the restore's opening `instrument.restore` audit row; every log
+            group of the restore carries it.
+        emitter: Log emitter; `None` uses the default emitter.
+        source: Resolved curated-content source URL for the catalog restore, added to every
+            audit log entry as `"source"`; `None` (upload restore) adds none.
+        owner: The restoring caller's verified `(sub, iss)` pair; `None` when there is none.
 
-    `owner` (issue #183) is the restoring caller's verified `(sub, iss)` pair. An
-    internal-sourced artifact's Policy/Standard/Control tree is imported as `draft`, owned by
-    `owner`, and never converged onto an existing Policy; an artifact with a Policy and no
-    `owner` raises `RestoreOwnerRequiredError` before the gateway is opened.
+    Returns:
+        A `RestoreOutcome` with the instrument id and the stages that ran. A failed restore
+        raises instead of returning.
+
+    Side Effects:
+        Emits `started`, then `succeeded` or `failed` audit log entries, plus a
+        `retry_policy_system_leg` entry per stale attempt. Reads `policy_system` through `db`.
+        On success the native and baseline graphs are replaced and `policy_system` is merged,
+        all through the gateway as one logged group.
 
     Raises:
         ArtifactIntegrityError: a blob does not match its manifest digest.
@@ -363,9 +366,8 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
 
     manifest = artifact.manifest
     instrument_id = manifest.instrument_id
-    # Lowercased to match ingestion.falkordb_client.native_graph_name/
-    # domain_mapper.falkordb_client.baseline_graph_name's own documented
-    # `{short_name.lower()}_native`/`{short_name.lower()}_baseline` convention.
+    # Lowercased to match the `{short_name.lower()}_native` / `{short_name.lower()}_baseline`
+    # graph names that ingestion and the domain mapper write.
     short = manifest.short_name.lower()
 
     _emit_restore_log(

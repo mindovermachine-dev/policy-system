@@ -1,4 +1,4 @@
-"""Validation of a submitted group before anything is logged (issue #206).
+"""Validation of a submitted group before anything is logged.
 
 Shape and value rules live in the models (the trust boundary); this module adds the rules that
 need the gateway's own knowledge: the label allow-list and the caller's preconditions. Rules
@@ -31,7 +31,15 @@ if TYPE_CHECKING:
 
 
 def validate_group(group: MutationGroup) -> None:
-    """Raise `UnlistedNameError` if `group` names a label or type the gateway does not allow."""
+    """Check that `group` names only labels and relationship types the gateway allows.
+
+    Args:
+        group: The submitted group.
+
+    Raises:
+        UnlistedNameError: A primitive names a node label or relationship type outside the
+            allow-list.
+    """
     for primitive in group.primitives:
         for label in node_labels(primitive):
             require_allowed_node_label(label)
@@ -43,6 +51,14 @@ def require_preconditions(group: MutationGroup, last_position: Callable[[str], i
     """Raise `StaleGraphStateError` if any caller precondition of `group` does not hold.
 
     Reads the log position only (`last_position(graph)`); the graph is never consulted.
+
+    Args:
+        group: The submitted group; one without preconditions always passes.
+        last_position: Returns the highest logged position of a graph (0 when none).
+
+    Raises:
+        StaleGraphStateError: A precondition's expected position differs from the graph's
+            current last position.
     """
     for precondition in group.preconditions:
         actual = last_position(group.graph)
@@ -51,7 +67,14 @@ def require_preconditions(group: MutationGroup, last_position: Callable[[str], i
 
 
 def node_labels(primitive: Primitive) -> Iterator[str]:
-    """Yield every node label `primitive` names (an edge names both endpoints' labels)."""
+    """Yield every node label `primitive` names (an edge names both endpoints' labels).
+
+    Args:
+        primitive: Any graph primitive.
+
+    Yields:
+        The label of a node primitive, or the source then the target label of an edge primitive.
+    """
     match primitive:
         case UpsertNode() | MergeProperty() | RemoveProperty() | DeleteNode():
             yield primitive.label
@@ -61,5 +84,6 @@ def node_labels(primitive: Primitive) -> Iterator[str]:
 
 
 def _relationship_types(primitive: Primitive) -> Iterator[str]:
+    """Yield the relationship type of an edge primitive; nothing for a node primitive."""
     if isinstance(primitive, UpsertEdge | DeleteEdge | StampEdgeIdentity):
         yield primitive.type

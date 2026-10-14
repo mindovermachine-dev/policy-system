@@ -515,7 +515,7 @@ def _reingest_one(
     adapter = dependencies.default_adapter()
     graph = dependencies.open_native(config, entry.short_name)
     new_version = finding.detected_consolidated_celex
-    from ps_service.change_monitor.graph_submission import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
+    from ps_service.change_monitor.graph_submission import (  # noqa: PLC0415 -- keeps ps_service.main off Regulatory Change Monitor at import
         ensure_caught_up,
     )
 
@@ -579,7 +579,7 @@ def _build_pipeline_runner(  # noqa: PLR0913 -- one runner's collaborators; no n
     Nothing is caught: a `PipelineStageError`, `IngestionConfigIncompleteError` or
     `AuditTrailUnavailableError` propagates to the sweep's per-instrument boundary.
     """
-    from ps_service.change_monitor.models import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
+    from ps_service.change_monitor.models import (  # noqa: PLC0415 -- keeps ps_service.main off Regulatory Change Monitor at import
         PipelineRunResult,
         StageSummary,
     )
@@ -848,13 +848,13 @@ def build_default_change_check_dependencies() -> ChangeCheckDependencies:
         A :class:`ChangeCheckDependencies` bound to the production
         Regulatory Change Monitor entry points.
     """
-    from ps_service.change_monitor.graph_reader import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
+    from ps_service.change_monitor.graph_reader import (  # noqa: PLC0415 -- keeps ps_service.main off Regulatory Change Monitor at import
         read_tracked_instruments,
     )
-    from ps_service.change_monitor.poll import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
+    from ps_service.change_monitor.poll import (  # noqa: PLC0415 -- keeps ps_service.main off Regulatory Change Monitor at import
         poll_for_amendments,
     )
-    from ps_service.change_monitor.trigger import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
+    from ps_service.change_monitor.trigger import (  # noqa: PLC0415 -- keeps ps_service.main off Regulatory Change Monitor at import
         trigger_reingestion,
         will_reingest,
     )

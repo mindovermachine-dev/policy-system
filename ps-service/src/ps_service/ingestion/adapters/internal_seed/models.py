@@ -1,12 +1,11 @@
-"""Pydantic models for the internal-regulation intake format (D2/D7).
+"""Pydantic models for the internal-regulation intake format.
 
-`InternalRegulationSeed` is the Pydantic-parsed form of a submitted document,
-built only after `schema.validate_seed_document` has already passed (the
-structural JSON Schema layer) -- these models are the second, statically-typed
-half of the same boundary check, not a replacement for it. Per D2,
-`InternalRegulationSeed` declares only `nodes`/`edges` and forbids any other
-top-level key (`extra="forbid"`), so a submitted `graph_name` is rejected
-structurally even if the packaged JSON Schema copy ever drifted.
+`InternalRegulationSeed` is the typed form of a submitted document, built after
+`schema.validate_seed_document` has passed the structural JSON Schema layer. The models are the
+second, statically typed half of the same boundary check, not a replacement for it.
+`InternalRegulationSeed` declares only `nodes` and `edges` and forbids any other top-level key
+(`extra="forbid"`), so a submitted `graph_name` is rejected structurally even if the packaged JSON
+Schema were out of date.
 """
 
 from __future__ import annotations
@@ -29,13 +28,10 @@ NodeLabel = Literal[
 ]
 """The intake format's allowed node labels. Pinned to the code-defined domain
 schema (and so to the generated intake JSON Schema's `nodeLabel` enum) by
-`tests/ingestion/adapters/internal_seed/test_models_vocabulary_pin.py`
-(AC-BI-013); drift fails there. `Policy` (GH #76 Slice 1), `Standard` (GH #76
-Slice 2), and `Control` (GH #76 Slice 3) are authored governance labels --
-AC-BI-001 is fully satisfied now that all three land. `PracticeArea` (GH #93
-Slice 1) and `RiskPath` (GH #93 Slice 2) are the two authored
-baseline-classification labels the issue adds -- see the intake format doc's
-PracticeArea/RiskPath sections."""
+`tests/ingestion/adapters/internal_seed/test_models_vocabulary_pin.py`; drift fails there.
+`Policy`, `Standard` and `Control` are authored governance labels; `PracticeArea` and `RiskPath`
+are authored baseline-classification labels (see the intake format doc's PracticeArea and
+RiskPath sections)."""
 
 EdgeType = Literal[
     "DEFINES",
@@ -53,15 +49,18 @@ EdgeType = Literal[
 ]
 """The intake format's allowed edge types. Pinned to the code-defined domain
 schema (and so to the generated intake JSON Schema's `edge.type` enum) by
-`tests/ingestion/adapters/internal_seed/test_models_vocabulary_pin.py`
-(AC-BI-013); schema-only system-minted edges are named exceptions there.
-`GOVERNED_BY` (GH #76 Slice 1), `SUPPORTED_BY`
-(GH #76 Slice 2), and `IMPLEMENTED_BY` (GH #76 Slice 3) are authored
-governance edges -- AC-BI-001 is fully satisfied now that all three land."""
+`tests/ingestion/adapters/internal_seed/test_models_vocabulary_pin.py`; schema-only
+system-minted edge types are named exceptions there. `GOVERNED_BY`, `SUPPORTED_BY` and
+`IMPLEMENTED_BY` are authored governance edges."""
 
 
 class SeedRef(BaseModel):
-    """A `{label, id}` reference to a node declared elsewhere in the same document."""
+    """A `{label, id}` reference to a node declared elsewhere in the same document.
+
+    Attributes:
+        label: The referenced node's label; one of `NodeLabel`.
+        id: The referenced node's local id as declared in the document; non-empty.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
@@ -72,10 +71,14 @@ class SeedRef(BaseModel):
 class SeedNode(BaseModel):
     """One submitted node.
 
-    `id` is the customer's own local id -- never stored verbatim except for
-    `RegulatoryInstrument` (used as-is); every other label's canonical id is
-    minted by the persister from `properties` content (`ps-domain-concepts.md`'s
-    identity formulas), never from this field.
+    The customer's local `id` is stored verbatim only for `RegulatoryInstrument`. For every other
+    label the persister mints the canonical id from `properties` content (the identity formulas in
+    `ps-domain-concepts.md`), never from this field.
+
+    Attributes:
+        label: The node's label; one of `NodeLabel`.
+        id: The customer's local id, unique per label within the document; non-empty.
+        properties: Node properties keyed by name; values are strings or floats. Empty by default.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
@@ -86,7 +89,14 @@ class SeedNode(BaseModel):
 
 
 class SeedEdge(BaseModel):
-    """One submitted edge, referencing its endpoints by `{label, id}` (`SeedRef`)."""
+    """One submitted edge, referencing its endpoints by `{label, id}` (`SeedRef`).
+
+    Attributes:
+        type: The edge type; one of `EdgeType`.
+        from_: The source endpoint; serialised and parsed under the key `from`.
+        to: The target endpoint.
+        properties: Edge properties keyed by name; values are strings. Empty by default.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
@@ -97,14 +107,19 @@ class SeedEdge(BaseModel):
 
 
 class InternalRegulationSeed(BaseModel):
-    """The whole submitted document: `{nodes: [...], edges: [...]}` (D2).
+    """The whole submitted document: `{nodes: [...], edges: [...]}`.
 
-    No `graph_name` or other target-graph field exists on this model --
-    PS Service determines where the data is stored from the submitted
-    `RegulatoryInstrument` node's own `id` (`internal-regulation-intake-
-    format.md`'s "Format overview"). `extra="forbid"` makes AC-BI-010's
-    "graph_name can never redirect a write" guarantee structural: an
-    unrecognized top-level key is rejected outright, not silently dropped.
+    The model has no `graph_name` or other target-graph field. PS Service derives where the data
+    is stored from the submitted `RegulatoryInstrument` node's own `id` (see "Format overview" in
+    `internal-regulation-intake-format.md`). `extra="forbid"` makes that structural: an
+    unrecognized top-level key is rejected outright rather than silently dropped, so no submitted
+    field can redirect a write.
+
+    Attributes:
+        nodes: Every submitted node; may be empty at this layer (content rules are checked by the
+            persister).
+        edges: Every submitted edge; each endpoint must reference a node in `nodes`, which the
+            persister enforces.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

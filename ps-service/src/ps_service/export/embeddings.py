@@ -1,18 +1,16 @@
-"""ps_service.export.embeddings -- D7's Capability/Policy embedding backfill.
+"""Backfill graph embeddings on exported Capability and Policy nodes.
 
-`backfill_capability_embeddings` computes and persists an embedding on every
-exported Capability (and, for `internal` sources, Policy) node that doesn't
-already carry one -- a new, one-time `RouteEmbedding` call per canonical
-node, paid at curation time only (PLAN.md D7). Since issue #213 the write goes through the
-Graph Write Gateway: every embedding is computed first, then ONE group of embedding-only
-`UpsertNode` primitives is submitted on the live source instance's `{short}_baseline` graph,
-anchored to the system audit row Export recorded -- a deliberate, documented side effect of
-running Export, not of any customer-facing action -- so that restore never needs a live LLM
-provider (AC-BI-005/AC-BI-006). If no node lacks an embedding nothing is submitted, so a re-run
-adds no log entry; if an embedding call fails nothing has been written.
+`backfill_capability_embeddings` computes and stores an embedding on every Capability node (and,
+for `internal` sources, every Policy node) of the baseline graph that does not already carry one.
+The cost of embedding calls is paid once, at curation time, so restoring an instrument never
+needs a live LLM provider. All embeddings are computed first, then one group of embedding-only
+`UpsertNode` primitives is submitted through the Graph Write Gateway on the source instance's
+baseline graph, anchored to the audit row that Export recorded. If no node lacks an embedding
+nothing is submitted, so a re-run adds no log entry; if an embedding call fails nothing has
+been written.
 
-Called by `ps_service.export.export_instrument.export_instrument` before
-either graph is serialized (D7's own ordering: embed, then dump/serialize).
+`ps_service.export.export_instrument.export_instrument` calls it before either graph is
+serialized, so the exported artifacts include the embeddings.
 """
 
 from __future__ import annotations
@@ -40,15 +38,14 @@ __all__ = ["backfill_capability_embeddings"]
 _COMPONENT = "export"
 _ACTION = "backfill_embeddings"
 
-# The property this Capability/Policy node's embedding text is computed from --
-# Capability has no `title`, Policy has no `name` (docs/artifacts/ps-domain-concepts.md's
-# own Properties tables), so this mapping is a fixed, per-label literal, never adapter-sourced.
+# The property each label's embedding text is computed from: Capability has no `title` and Policy
+# has no `name` (see docs/artifacts/ps-domain-concepts.md), so the mapping is a fixed per-label
+# literal, never adapter-sourced.
 _TEXT_PROPERTY_BY_LABEL: dict[str, str] = {"Capability": "name", "Policy": "title"}
 
-# Which labels D7 backfills, keyed by `source_type` -- an `external` source's ingestion
-# pipeline always stops at Capability (docs/artifacts/ps-domain-concepts.md:44); both
-# Capability (all sources) and Policy (internal-SoP-derived instances, authored via
-# Ingestion's internal-seed adapter) get embeddings backfilled here.
+# Labels that receive embeddings, keyed by `source_type`: an `external` source's ingestion
+# pipeline stops at Capability, while an `internal` source also carries Policy nodes (authored
+# through Ingestion's internal-seed adapter).
 _EMBEDDABLE_LABELS_BY_SOURCE_TYPE: dict[Literal["external", "internal"], tuple[str, ...]] = {
     "external": ("Capability",),
     "internal": ("Capability", "Policy"),
@@ -56,7 +53,7 @@ _EMBEDDABLE_LABELS_BY_SOURCE_TYPE: dict[Literal["external", "internal"], tuple[s
 
 
 class _QueryResult(Protocol):
-    """Structural stand-in for `falkordb.QueryResult` -- the one field this module reads."""
+    """Structural stand-in for `falkordb.QueryResult`, limited to the field this module reads."""
 
     @property
     def result_set(self) -> list[object]: ...
@@ -65,12 +62,13 @@ class _QueryResult(Protocol):
 def _rows(
     graph: _GraphQueryHandle, query: str, params: dict[str, object] | None = None
 ) -> list[list[object]]:
-    """The one call site every `graph.query()` read in this module goes through."""
+    """Run a read query on `graph` and return its result rows (single call site for reads)."""
     result = graph.query(query, params)
     return cast("list[list[object]]", cast("_QueryResult", result).result_set)
 
 
 def _read_nodes_missing_embedding(graph: _GraphQueryHandle, label: str) -> list[tuple[str, str]]:
+    """Return `(node id, embedding text)` for every `label` node whose `embedding` is unset."""
     text_property = _TEXT_PROPERTY_BY_LABEL[label]
     query = f"MATCH (n:{label}) WHERE n.embedding IS NULL RETURN n.id, n.{text_property}"
     return [(cast("str", row[0]), cast("str", row[1])) for row in _rows(graph, query)]
@@ -103,24 +101,46 @@ def backfill_capability_embeddings(
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> int:
-    """Compute and persist an embedding on every embeddable node lacking one.
+    """Compute and store an embedding on every embeddable node that lacks one.
 
-    Order: the graph must hold everything committed to its log (an earlier pending group would
-    make the read below stale); read every Capability (and, for `source_type="internal"`, Policy)
-    node whose `embedding` property is not yet set; call `RouteEmbedding` once per node on its
-    own name/title text -- ALL of them, before anything is submitted, so a failure here has
-    written nothing; then submit ONE `baseline_graph_name` group of embedding-only `UpsertNode`
-    primitives anchored to `audit_event_id` (D7). With nothing to embed no group is submitted.
-    Caller has already selected `baseline_graph` (mirrors `export.serialize.serialize_graph`'s own
-    "caller selects, this function doesn't" convention).
+    The baseline graph is first required to hold everything committed to its log, because an
+    earlier pending group would make the read below stale. Every Capability node (and, for
+    `source_type="internal"`, every Policy node) whose `embedding` property is unset is then
+    read, and one embedding is computed per node from its `name` (Capability) or `title`
+    (Policy). All embeddings are computed before anything is submitted, so a failed embedding
+    call has written nothing. Finally one group of embedding-only `UpsertNode` primitives is
+    submitted on `baseline_graph_name` and the graph is required to have applied it. With
+    nothing to embed no group is submitted.
 
-    Returns the total count of nodes written -- callers use this only for
-    observability, never as a correctness signal.
+    Args:
+        baseline_graph: Read handle on the already-selected baseline graph; the caller picks the
+            graph, this function does not.
+        baseline_graph_name: Name of that graph, used as the target of the submitted group and
+            for the caught-up checks. Non-empty.
+        submitter: Graph Write Gateway submitter used for the group and the caught-up checks.
+        audit_event_id: Id of the audit row Export recorded; the group is anchored to it.
+        source_type: `"external"` backfills Capability nodes only; `"internal"` backfills
+            Capability and Policy nodes.
+        model: Embedding model name passed to `RouteEmbedding`.
+        call_embedding: Embedding provider callable; `None` uses the default provider caller.
+        emitter: Log emitter for the outcome entry and the embedding-call entries; `None` uses
+            the default emitter.
+
+    Returns:
+        The number of nodes whose embedding was written; `0` when every node already had one.
+        Callers use it for observability only, not as a correctness signal.
 
     Raises:
-        ExportGraphWriteError: the graph is behind its log, the gateway refused the group or could
-            not reach its stores, the group was committed but not applied, or an embedding cannot
-            be stored.
+        ExportGraphWriteError: The graph is behind its log, the gateway refused the group or
+            could not reach its stores, the group was committed but not applied, or an embedding
+            holds a value the graph cannot store (empty or non-finite).
+        LlmProviderError: An embedding call failed or returned no usable vector; nothing has
+            been written.
+
+    Side Effects:
+        One `RouteEmbedding` call per node lacking an embedding, one gateway group submission
+        on `baseline_graph_name` when at least one node needs an embedding, and one log entry
+        with outcome `unchanged`, `submitted` or `failed`.
     """
     require_caught_up(submitter, baseline_graph_name, ExportGraphWriteError)
     computed: list[tuple[str, str, list[float]]] = []

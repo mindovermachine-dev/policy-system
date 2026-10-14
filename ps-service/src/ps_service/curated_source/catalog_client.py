@@ -1,17 +1,14 @@
-"""Runtime fetch of `catalog.json` from the configured curated-content source (AC-BI-003).
+"""Runtime fetch of `catalog.json` from the configured curated-content source.
 
-`fetch_catalog` GETs `{base_url}/catalog.json` (D-DEFAULT-URL's layout) and
-parses it into the exact same `CuratedInstrumentEntry` shape
-`ps_service.api.catalog.load_regulation_catalog` already parses from the
-build-time-packaged copy (field-for-field reuse of that shape, not its
-`importlib.resources` plumbing) -- so `GET /catalog`'s route handler and
-response model need no change beyond swapping where the tuple comes from.
+`fetch_catalog` GETs `{base_url}/catalog.json` and parses it into `CuratedInstrumentEntry`, the
+shape `ps_service.api.catalog.load_regulation_catalog` produces from the packaged copy (the
+entry shape is shared; the `importlib.resources` plumbing is not), so `GET /catalog` needs only
+a different source of the entry tuple.
 
-Also holds this component's FastAPI dependency-injection seam
+The module also holds this component's FastAPI dependency-injection seam
 (:class:`CuratedCatalogDependencies`, :func:`build_default_curated_catalog_dependencies`),
-mirroring `ps_service.api.restore_orchestration.RestoreDependencies`'s exact
-shape -- a plain provider a test can swap wholesale via
-`app.dependency_overrides`.
+shaped like `ps_service.api.restore_orchestration.RestoreDependencies`: a plain provider that
+a test can swap wholesale through `app.dependency_overrides`.
 """
 
 from __future__ import annotations
@@ -100,9 +97,9 @@ def _parse_catalog_entries(raw_bytes: bytes, *, url: str) -> tuple[CuratedInstru
     """Parse `catalog.json`'s raw response bytes into `CuratedInstrumentEntry` objects.
 
     Raises:
-        CuratedSourceFetchError: `raw_bytes` is not valid UTF-8 JSON, is not a
-            JSON array, or any entry fails `_parse_one_entry` -- always names
-            `url` (AC-BI-006). No partial result is ever returned.
+        CuratedSourceFetchError: `raw_bytes` is not valid UTF-8 JSON, is not a JSON array, or
+            any entry fails `_parse_one_entry`. The message always names `url`. No partial
+            result is ever returned.
     """
     try:
         payload = json.loads(raw_bytes.decode("utf-8"))
@@ -122,36 +119,30 @@ def fetch_catalog(
     transport: CuratedSourceTransport | None = None,
     emitter: LogEmitter | None = None,
 ) -> tuple[CuratedInstrumentEntry, ...]:
-    """Fetch and parse `catalog.json` from `{base_url}/catalog.json` (AC-BI-003).
+    """Fetch and parse `catalog.json` from `{base_url}/catalog.json`.
 
-    Emits one structured log entry on completion -- `outcome="success"` with
-    the resolved instrument count, or `outcome="failed"` with the error
-    message -- mirroring `ps_service.restore.restore_instrument`'s own
-    `emit_log_entry` usage (matched here by the `curated_source`/
-    `fetch_catalog` component/action pair).
+    Every entry must be well formed; one bad entry fails the whole fetch, and there is never a
+    silent fallback to stale data.
 
     Args:
-        base_url: The configured curated-content source's base URL
-            (D-DEFAULT-URL layout: `{base_url}/catalog.json`,
-            `{base_url}/{instrument_id}/...`).
-        transport: The HTTP transport to use -- `None` (the default) keeps
-            `http_fetch.fetch_bytes`'s own default (the real
-            `urllib.request.urlopen`); call-site injectable so tests never
-            reach real network.
-        emitter: The `LogEmitter` to emit through -- `None` (the default)
-            falls back to the process-wide default emitter `Logging.configure()`
-            installs (matches every other `emitter: LogEmitter | None = None`
-            call site in this codebase); call-site injectable so tests can
-            substitute their own without a process-wide `configure()` call.
+        base_url: Base URL of the configured curated-content source. Normally has no trailing
+            slash.
+        transport: HTTP transport; `None` uses the default of `http_fetch.fetch_bytes` (real
+            network access). Injectable so tests never reach the network.
+        emitter: Log emitter; `None` uses the process-wide default emitter.
 
     Returns:
-        Every curated entry, in file order, as `CuratedInstrumentEntry`
-        tuples.
+        Every curated entry as a `CuratedInstrumentEntry`, in file order. An empty JSON array
+        yields an empty tuple.
 
     Raises:
-        CuratedSourceFetchError: The source is unreachable, or the response
-            is missing/malformed (AC-BI-006) -- never a silent fallback to
-            stale data.
+        CuratedSourceFetchError: The source is unreachable, or the response is missing or
+            malformed.
+
+    Side Effects:
+        One HTTP GET and one structured log entry (component `curated_source`, action
+        `fetch_catalog`): outcome `success` with the instrument count, or `failed` with the
+        error text.
     """
     url = f"{base_url}/{_CATALOG_FILENAME}"
     try:
@@ -189,12 +180,23 @@ class FetchCatalogCall(Protocol):
 class ResolveEffectiveSourceCall(Protocol):
     """Call shape of :func:`ps_service.curated_source.resolve.resolve_effective_source`.
 
-    The DI seam `list_curated_catalog` calls through to check for a
-    persisted override before fetching (issue #125, Slice 3, AC-BI-013).
+    The dependency-injection seam that `list_curated_catalog` calls through to check for a
+    persisted override before fetching.
     """
 
     def __call__(self, config: ServiceConfig) -> EffectiveCatalogSource:
-        """Return the effective curated-content source for `config`."""
+        """Return the effective curated-content source for `config`.
+
+        Args:
+            config: Resolved service configuration; its `curated_source_base_url` applies when no
+                override is persisted.
+
+        Returns:
+            The effective source: the persisted override, else the configured default.
+
+        Raises:
+            RuntimeConfigError: the persisted override could not be read.
+        """
         ...
 
 
@@ -202,8 +204,12 @@ class ResolveEffectiveSourceCall(Protocol):
 class CuratedCatalogDependencies:
     """Everything `GET /catalog`'s route handler needs that is not per-request.
 
-    Mirrors `ps_service.api.restore_orchestration.RestoreDependencies`'s own
-    injection-seam shape.
+    Shaped like `ps_service.api.restore_orchestration.RestoreDependencies`.
+
+    Attributes:
+        fetch_catalog: Callable that fetches and parses the catalog of a given base URL.
+        resolve_effective_source: Callable that returns the effective source for a
+            `ServiceConfig`, taking any persisted override into account.
     """
 
     fetch_catalog: FetchCatalogCall
@@ -211,14 +217,12 @@ class CuratedCatalogDependencies:
 
 
 def build_default_curated_catalog_dependencies() -> CuratedCatalogDependencies:
-    """Wire the real :func:`fetch_catalog`/:func:`resolve_effective_source` into a bundle.
+    """Wire the production catalog fetcher and source resolver into a dependency bundle.
 
     Returns:
-        A `CuratedCatalogDependencies` bound to the production `fetch_catalog`
-        (the real HTTP transport, `http_fetch.fetch_bytes`'s own default) and
-        the production `resolve_effective_source`, checking the persisted
-        override in the PS state Postgres's `runtime_config` table (issue #130;
-        a failed read raises rather than falling back to the default source).
+        A `CuratedCatalogDependencies` bound to :func:`fetch_catalog` (real HTTP transport) and
+        to a resolver that checks the override persisted in the PS state Postgres `runtime_config`
+        table. A failed override read raises instead of falling back to the default source.
     """
 
     def _resolve_effective_source(config: ServiceConfig) -> EffectiveCatalogSource:

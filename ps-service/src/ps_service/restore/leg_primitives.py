@@ -1,16 +1,14 @@
-"""An artifact's native or baseline leg as gateway primitives (issue #214, D-1 Option A, D-4).
+"""An artifact's native or baseline leg as gateway primitives.
 
-The pre-#214 restore built each leg in a staged graph key with `populate.populate_graph` and
-renamed it into place. Restore now hands the gateway the leg's content as `UpsertNode` and
-`UpsertEdge` primitives; the gateway's replace semantics (a replacing `GraphLeg`) make the graph
-hold exactly that content. Nothing here reads or writes a graph.
+Restore hands the gateway a leg's content as `UpsertNode` and `UpsertEdge` primitives; the
+gateway's replace semantics (a replacing `GraphLeg`) make the graph hold exactly that content.
+Nothing here reads or writes a graph.
 
-The folds below are exactly what `populate_graph`'s `MATCH ... MERGE` did, so the gateway's
-`MissingTargetError` never fires for content the old path accepted: an edge whose endpoint is
-absent from the artifact is dropped, a repeated edge folds into one (the last occurrence's
-properties win) and a repeated node id keeps its last occurrence. An edge's `identity` is
-recomputed as `TYPE:source->target`; an artifact that carries a different one, or any value the
-gateway cannot store, is an `ArtifactContentRejectedError`.
+The leg is folded first so the gateway's `MissingTargetError` never fires for it: an edge whose
+endpoint is absent from the artifact is dropped, a repeated edge folds into one (the last
+occurrence's properties win) and a repeated node id keeps its last occurrence. An edge's
+`identity` is recomputed as `TYPE:source->target`; an artifact that carries a different one, or
+any value the gateway cannot store, is an `ArtifactContentRejectedError`.
 """
 
 from __future__ import annotations
@@ -34,6 +32,7 @@ _IDENTITY = "identity"
 
 
 def _node_id(node: SerializedNode) -> str:
+    """The node's string `id` property; a missing or non-string one rejects the artifact."""
     node_id = node.properties.get("id")
     if not isinstance(node_id, str):
         raise ArtifactContentRejectedError(
@@ -43,16 +42,33 @@ def _node_id(node: SerializedNode) -> str:
 
 
 def edge_identity(edge: SerializedEdge) -> str:
-    """The gateway identity of `edge`: `TYPE:source->target`, one per (type, endpoints)."""
+    """The gateway identity of `edge`: `TYPE:source->target`, one per (type, endpoints).
+
+    Args:
+        edge: A serialized edge with its relationship type and endpoint ids.
+
+    Returns:
+        The identity string the gateway keys the edge by.
+    """
     return f"{edge.relationship_type}:{edge.source_id}->{edge.target_id}"
 
 
 def fold_serialized_graph(graph: SerializedGraph) -> SerializedGraph:
-    """`graph` as the staged graph `populate_graph` would have built, content-wise.
+    """`graph` reduced to the content a written graph would hold.
 
     Repeated node ids keep their last occurrence (at the first occurrence's place), an edge with
     an endpoint the artifact does not hold is dropped, and repeated edges fold into one that keeps
     the last occurrence's properties.
+
+    Args:
+        graph: A parsed artifact leg.
+
+    Returns:
+        A new `SerializedGraph` with unique nodes (by label and id) and unique, fully anchored
+        edges; empty when `graph` is empty.
+
+    Raises:
+        ArtifactContentRejectedError: a node has a missing or non-string `id` property.
     """
     nodes: dict[tuple[str, str], SerializedNode] = {}
     for node in graph.nodes:
@@ -79,6 +95,16 @@ def embeddings_by_label(graph: SerializedGraph, label: str) -> dict[str, tuple[f
 
     `graph_reader.read_baseline_graph` reads no Policy embedding and a live baseline carries
     none, so the artifact's parsed blob is the only place a restore recovers these vectors from.
+
+    Args:
+        graph: A parsed artifact leg.
+        label: Node label to collect embeddings for, for example `"Policy"`.
+
+    Returns:
+        Map of node id to embedding vector; empty when no node of `label` carries one.
+
+    Raises:
+        ArtifactContentRejectedError: a node of `label` with an embedding has no string `id`.
     """
     return {
         _node_id(node): tuple(cast("list[float]", node.properties[_EMBEDDING]))
@@ -88,6 +114,7 @@ def embeddings_by_label(graph: SerializedGraph, label: str) -> dict[str, tuple[f
 
 
 def _upsert_node(node: SerializedNode) -> UpsertNode:
+    """The node as an `UpsertNode`; a property the gateway cannot store rejects the artifact."""
     node_id = _node_id(node)
     properties: dict[str, object] = {
         key: value for key, value in node.properties.items() if key not in {"id", _EMBEDDING}
@@ -108,6 +135,7 @@ def _upsert_node(node: SerializedNode) -> UpsertNode:
 
 
 def _upsert_edge(edge: SerializedEdge) -> UpsertEdge:
+    """The edge as an `UpsertEdge` keyed by its recomputed identity; a foreign identity rejects."""
     identity = edge_identity(edge)
     properties: dict[str, object] = dict(edge.properties)
     authored = properties.pop(_IDENTITY, identity)
@@ -133,7 +161,13 @@ def _upsert_edge(edge: SerializedEdge) -> UpsertEdge:
 
 
 def leg_primitives(graph: SerializedGraph) -> tuple[Primitive, ...]:
-    """Every node, then every edge, of `graph` (folded as the old path folded it) as primitives.
+    """Every node, then every edge, of the folded `graph` as gateway primitives.
+
+    Args:
+        graph: A parsed artifact leg (native or baseline).
+
+    Returns:
+        Upsert primitives, nodes first and then edges; empty when the folded leg has no content.
 
     Raises:
         ArtifactContentRejectedError: a node has no string id, an edge carries an identity other

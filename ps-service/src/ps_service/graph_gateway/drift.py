@@ -1,4 +1,4 @@
-"""Drift detection: does a graph still hold what the gateway last checkpointed? (issue #215).
+"""Drift detection: does a graph still hold what the gateway last checkpointed?
 
 A graph the gateway wrote should only ever change through the gateway. A writer that asked for a
 digest checkpoint left, at the log position of its last group, the canonical digest of the graph
@@ -60,7 +60,18 @@ type SkipReason = Literal["busy", "unapplied", "in_flight", "gated"]
 
 @dataclass(frozen=True, slots=True)
 class DriftResult:
-    """What one check of one graph found."""
+    """What one check of one graph found.
+
+    Attributes:
+        graph: Name of the checked graph.
+        status: Outcome: `ok`, `drift`, `no_baseline`, `skipped` or `failed`.
+        reason: Why the check was skipped; set only when `status == "skipped"`.
+        last_position: Log head position the check was made at; `None` when not read.
+        checkpoint_digest: The recorded digest at the head; set when a comparison was made.
+        live_digest: The digest of the live graph; set when a comparison was made.
+        error_class: The exception class that stopped the check; set only when
+            `status == "failed"`.
+    """
 
     graph: str
     status: DriftStatus
@@ -75,13 +86,21 @@ class DriftResult:
 
 @dataclass(frozen=True, slots=True)
 class DriftPass:
-    """What one pass over every logged graph found."""
+    """What one pass over every logged graph found.
+
+    Attributes:
+        results: One result per checked graph, in check order; empty when no graph was checked.
+    """
 
     results: tuple[DriftResult, ...]
 
     @property
     def drift_count(self) -> int:
-        """Graphs whose live content differs from their head checkpoint."""
+        """Count the graphs whose live content differs from their head checkpoint.
+
+        Returns:
+            The number of results with status `drift`; 0 when none drifted.
+        """
         return sum(1 for result in self.results if result.status == "drift")
 
 
@@ -91,13 +110,20 @@ class _Baseline:
     __slots__ = ("applied", "checkpoint_digest", "last")
 
     def __init__(self, last: int, applied: int, checkpoint_digest: str | None) -> None:
+        """Hold the head position, the applied marker and the head checkpoint digest, if any."""
         self.last = last
         self.applied = applied
         self.checkpoint_digest = checkpoint_digest
 
 
 class DriftChecker:
-    """Compares graphs with their head checkpoints; logs, never repairs."""
+    """Compares graphs with their head checkpoints; logs, never repairs.
+
+    Business Rules:
+        A check is skipped, never alerted, when a replay or permanent failure gates the graph,
+        a writer holds its lock, the log has unapplied entries, or the head or applied marker
+        moved while the live digest was read.
+    """
 
     def __init__(
         self,
@@ -109,7 +135,16 @@ class DriftChecker:
         emitter: LogEmitter | None,
         digest_settings: DigestSettings | None = None,
     ) -> None:
-        """Take the log, the read-only opener, the gateway's locks and gate."""
+        """Take the log, the read-only opener, the gateway's locks and gate.
+
+        Args:
+            log_store: Source of log head, applied marker and digest checkpoints.
+            read_graph_opener: Opens a read-only handle on a named graph.
+            locks: The gateway's per-graph locks, shared with the writers.
+            is_gated: Whether a graph is closed to writes by a replay or permanent failure.
+            emitter: Destination of the drift log entries; `None` disables logging.
+            digest_settings: Scan chunk sizes; `None` uses the defaults.
+        """
         self._log_store = log_store
         self._read_graph_opener = read_graph_opener
         self._locks = locks
@@ -118,7 +153,18 @@ class DriftChecker:
         self._digest_settings = digest_settings if digest_settings is not None else DigestSettings()
 
     def check(self, graph: str) -> DriftResult:
-        """Check `graph` once and log the finding; never raises, never waits for a writer."""
+        """Check `graph` once and log the finding; never raises, never waits for a writer.
+
+        Args:
+            graph: Name of the graph to check.
+
+        Returns:
+            The finding. An unexpected error is returned as status `failed` with its
+            `error_class`, not raised.
+
+        Side Effects:
+            Reads the log and the live graph, and emits one `drift_check` log entry.
+        """
         try:
             result = self._check(graph)
         except Exception as exc:  # noqa: BLE001  # a check must not fail its caller; it is logged
@@ -127,7 +173,17 @@ class DriftChecker:
         return result
 
     def run_pass(self, graphs: Iterable[str]) -> DriftPass:
-        """Check every graph in `graphs` once and log the pass (graphs checked, drifts found)."""
+        """Check every graph in `graphs` once and log the pass (graphs checked, drifts found).
+
+        Args:
+            graphs: Names of the graphs to check; empty checks none.
+
+        Returns:
+            One result per graph, in the order given.
+
+        Side Effects:
+            Emits one `drift_check` entry per graph and one `drift_pass` entry.
+        """
         started = time.monotonic()
         names = tuple(graphs)
         outcome = DriftPass(results=tuple(self.check(graph) for graph in names))
@@ -145,6 +201,7 @@ class DriftChecker:
         return outcome
 
     def _check(self, graph: str) -> DriftResult:
+        """Check one graph, or say why the check was skipped."""
         if self._is_gated(graph):
             return _skipped(graph, "gated")
         baseline = self._read_baseline(graph)
@@ -195,6 +252,7 @@ class DriftChecker:
             lock.release()
 
     def _log(self, result: DriftResult) -> None:
+        """Emit the `drift_check` entry for `result`; a drift is logged as a failed outcome."""
         fields: dict[str, str | int | float] = {"graph": result.graph}
         if result.last_position is not None:
             fields["last_position"] = result.last_position
@@ -216,6 +274,7 @@ class DriftChecker:
 
 
 def _skipped(graph: str, reason: SkipReason, last_position: int | None = None) -> DriftResult:
+    """Build the result of a check that was skipped for `reason`."""
     return DriftResult(graph=graph, status="skipped", reason=reason, last_position=last_position)
 
 
@@ -223,8 +282,8 @@ class GraphDriftMonitor:
     """A perpetual daemon thread that runs one drift pass per interval.
 
     Thread mechanics follow `GraphReconciler` (daemon, interruptible `Event.wait`, injectable
-    `wait`, `stop(timeout)`); unlike it the monitor never retires: it ends only on `stop()`. The
-    first pass runs one interval after `start()`, never at startup.
+    `wait`, `stop(timeout)`); the monitor never retires: it ends only on `stop()`. The first pass
+    runs one interval after `start()`, never at startup.
     """
 
     def __init__(
@@ -237,8 +296,12 @@ class GraphDriftMonitor:
     ) -> None:
         """Take the pass to run and the pause between passes.
 
-        `wait(seconds)` sleeps between passes and returns True if the monitor must stop; by
-        default it is `Event.wait` on the stop event, so `stop()` interrupts it.
+        Args:
+            run_pass: Runs one drift pass over every logged graph.
+            interval_seconds: Pause between passes; 0 or less disables the monitor.
+            emitter: Destination of the monitor log entries; `None` disables logging.
+            wait: `wait(seconds)` sleeps between passes and returns True if the monitor must
+                stop. Defaults to `Event.wait` on the stop event, so `stop()` interrupts it.
         """
         self._run_pass = run_pass
         self._interval = interval_seconds
@@ -250,12 +313,24 @@ class GraphDriftMonitor:
 
     @property
     def is_running(self) -> bool:
-        """Whether the monitor thread is alive."""
+        """Whether the monitor thread is alive.
+
+        Returns:
+            True while the thread started by `start` is running.
+        """
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
 
     def start(self) -> bool:
-        """Start the thread; False (and a `disabled` log) when the interval is 0 or it runs."""
+        """Start the thread, once.
+
+        Returns:
+            True if a thread was started. False when the interval is 0 or less (a `disabled`
+            entry is logged), or the monitor already runs or was stopped.
+
+        Side Effects:
+            Starts a daemon thread and emits a `drift_monitor` entry.
+        """
         fields: dict[str, str | int | float] = {"interval_seconds": self._interval}
         if self._interval <= 0:
             emit_gateway_event("drift_monitor", "disabled", fields, emitter=self._emitter)
@@ -271,7 +346,17 @@ class GraphDriftMonitor:
         return True
 
     def stop(self, timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS) -> bool:
-        """Ask the thread to stop and wait up to `timeout` seconds; True if it ended."""
+        """Ask the thread to stop and wait up to `timeout` seconds.
+
+        Args:
+            timeout: Seconds to wait for the thread to end.
+
+        Returns:
+            True if the thread ended, or was never started; False if it was still running.
+
+        Side Effects:
+            Sets the stop event and emits a `drift_monitor` entry (`stopped` or `not_stopped`).
+        """
         self._stop_event.set()
         with self._lock:
             thread = self._thread

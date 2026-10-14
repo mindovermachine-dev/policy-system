@@ -1,4 +1,4 @@
-"""Document-scoped reconciliation of one internal-seed submission against its graphs (GH #99).
+"""Document-scoped reconciliation of one internal-seed submission against its graphs.
 
 A submission is always the complete document, so whatever an instrument's `{short}_native` or
 `{short}_baseline` graph holds beyond it was left behind by an earlier submission (a rename mints
@@ -46,17 +46,32 @@ SEED_EDGE_TYPES: frozenset[str] = frozenset(get_args(EdgeType))
 
 @dataclass(frozen=True, slots=True)
 class GroupPlan:
-    """One graph's submission: upserts then retirements, and the log position they were read at."""
+    """One graph's submission: upserts then retirements, and the log position they were read at.
+
+    Attributes:
+        primitives: The upserts followed by the deletes of everything the graph holds that the
+            upserts no longer name; submitted as one group.
+        log_position: The graph's mutation-log position when its contents were read; the
+            submitter uses it to detect a concurrent write.
+    """
 
     primitives: tuple[Primitive, ...]
     log_position: int
 
 
 def edge_identity(edge_type: str, source_id: str, target_id: str) -> str:
-    """`{type}:{source}->{target}`: the gateway identity of an edge, one per (type, endpoints).
+    """Return the gateway identity of an edge: `{type}:{source}->{target}`.
 
-    Same-type edges between the same two nodes share an identity, which reproduces the
-    `MERGE (a)-[:T]->(b)` collapse the legacy writer had (the later `SET +=` wins).
+    Same-type edges between the same two nodes share one identity, so they collapse to a single
+    edge.
+
+    Args:
+        edge_type: The edge type name, for example `HAS`.
+        source_id: The source node's canonical id.
+        target_id: The target node's canonical id.
+
+    Returns:
+        The identity string; endpoint labels are not part of it.
     """
     return f"{edge_type}:{source_id}->{target_id}"
 
@@ -65,6 +80,19 @@ def prepare_group(
     submitter: GroupSubmitter, graph: str, upserts: tuple[Primitive, ...]
 ) -> GroupPlan:
     """Read `graph` (writing nothing) and return `upserts` followed by what they no longer hold.
+
+    Args:
+        submitter: The group submitter through which the graph's log position and contents are
+            read; no connection is opened here.
+        graph: The graph name, `{short}_native` or `{short}_baseline`.
+        upserts: The submission's built upserts for this graph; may be empty.
+
+    Returns:
+        A `GroupPlan` whose `primitives` are `upserts` followed by the retirement deletes, and
+        whose `log_position` is the position the graph was read at.
+
+    Side Effects:
+        Reads the graph's log position and contents through `submitter`; writes nothing.
 
     Raises:
         InternalSeedError: the graph is behind its log, could not be read, or holds a key the
@@ -83,11 +111,20 @@ def retirement_primitives(
 ) -> tuple[Primitive, ...]:
     """Return the deletes for what `persisted` holds and `upserts` no longer name, sorted.
 
+    Only seed-vocabulary nodes and edges are retired (`SEED_NODE_LABELS`, `SEED_EDGE_TYPES`).
+
     Order: first a `DeleteEdge` for every seed-vocabulary edge the submission does not contain
     (edges incident to a retired node and edges dropped between survivors; an identity-less one
     as a stamp then a delete), then a `DeleteNode` per retired node. The edge deletes must come
     first: a node delete removes its edges, and an edge delete after it would be dropped from
     the log as a no-op.
+
+    Args:
+        persisted: The elements the graph currently holds, as read through the submitter.
+        upserts: The submission's built upserts; anything they name is kept.
+
+    Returns:
+        The delete primitives in the order above; empty when nothing is left behind.
 
     Raises:
         InternalSeedError: a persisted key is one the gateway cannot name.
@@ -142,6 +179,7 @@ def retirement_primitives(
 
 
 def _delete_edge(key: EdgeKey) -> DeleteEdge:
+    """Build the `DeleteEdge` that names the persisted edge `key`."""
     edge_type, source_label, source_id, target_label, target_id, identity = key
     return DeleteEdge(
         type=edge_type,
@@ -152,7 +190,10 @@ def _delete_edge(key: EdgeKey) -> DeleteEdge:
 
 
 def _stamp_then_delete(key: tuple[str, str, str, str, str]) -> tuple[Primitive, Primitive]:
-    """An identity-less edge cannot be named by a delete, so give it its identity first."""
+    """Stamp an identity-less edge with its identity, then delete it by that identity.
+
+    A delete can only name an edge that has an identity.
+    """
     edge_type, source_label, source_id, target_label, target_id = key
     identity = edge_identity(edge_type, source_id, target_id)
     source = NodeRef(label=source_label, id=source_id)

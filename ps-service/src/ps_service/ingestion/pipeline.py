@@ -1,34 +1,17 @@
-"""ps_service.ingestion pipeline — the primary-use-case entry point.
+"""The ingestion entry point: fetch, register, persist and verify one regulation.
 
-Implements PLAN_REVIEWED.md §7 Increment 11: `ingest_regulatory_instrument()` wires
-Increments 1-10 (adapter Protocol, FalkorDB persistence) into the
-fetch -> register -> persist -> verify sequence that is Ingestion's whole
-job for one regulation-ingestion run (CA doc's `FetchRegulatoryInstrumentStructure` /
-`RegisterRegulatoryInstrumentVersion` / `PersistNativeStructuralGraph` actions, plus
-this component's own AC-004 reachability check).
+`ingest_regulatory_instrument` runs the fetch, register, persist, verify sequence that is
+Ingestion's whole job for one regulation-ingestion run.
 
-AC-005 (structured logging correlation, closing CA doc line 618's flagged
-gap): this is the first real caller of `bind_run_context()` for Ingestion.
-One `with bind_run_context(run_id) as bound_run_id:` block wraps the whole
-pipeline; every `emit_log_entry(...)` call inside it auto-bakes that run_id
-via the `run_context` ContextVar mechanism (never passed explicitly — see
-`ps_service.llm_interface._logging_support.log`'s identical precedent).
-When the caller passes no `run_id` (the default), `bind_run_context(None)`
-mints a fresh uuid4, so two `ingest_regulatory_instrument()` calls carry two
-distinct run_ids in their emitted log entries; an API caller may instead pass
-its request-scoped `run_id` to correlate these entries with the wider request
-(issue #51 T2).
+Every run is wrapped in one `bind_run_context(run_id)` block, so each `emit_log_entry` call inside
+it carries that run id through the `run_context` ContextVar and the id is never passed
+explicitly. When the caller passes no `run_id`, a fresh uuid4 is minted, so two calls log two
+distinct run ids; an API caller may pass its request-scoped `run_id` to correlate these entries
+with the wider request.
 
-AC-006 (regulation-independence, verifiable at the code level): `short_name`
-(e.g. "CRA") and `version` (e.g. "1.0") are CALLER-SUPPLIED parameters —
-never derived by inspecting `structure.metadata.title` or branching on
-`identifier`'s value. This file contains no `if`/`elif`/comparison naming a
-specific regulation anywhere in its executable code. The only place
-"CRA"/"GDPR"/"NIS2" appear in this module is this docstring's illustrative
-prose, right here — `tests/ingestion/test_pipeline.py`'s AST-based scan
-explicitly excludes docstring nodes from its check, so naming regulations
-here as examples does not trip it; only executable if/elif/comparison logic
-naming a regulation would.
+The module is regulation-independent: `short_name` (for example "CRA") and `version` (for
+example "1.0") are caller-supplied and never derived from `structure.metadata.title` or by
+branching on `identifier`'s value. Its executable code names no specific regulation.
 """
 
 from __future__ import annotations
@@ -73,29 +56,52 @@ def ingest_regulatory_instrument(  # noqa: PLR0913 -- the stage's call shape: id
 ) -> IngestResult:
     """Ingest one regulation end to end: fetch, register, persist, verify.
 
-    The primary-use-case entry point (UC-1's manual trigger; UC-4's
-    TriggerReingestion calls this too). Binds a run_id for the whole call
-    (AC-005): a caller may pass a request-scoped ``run_id`` to correlate
-    ingestion-stage logs with the rest of an API request (issue #51 T2);
-    ``None`` (the default) preserves today's fresh-uuid4 behaviour exactly.
-    It then runs, in order: `adapter.fetch_regulatory_instrument_structure(identifier)`
-    -> build and validate the native graph's primitives -> submit them as ONE group through
-    the Graph Write Gateway (issue #208; the RegulatoryInstrument, the structural nodes, then the
-    `HAS` edges, logged under `audit_event_id`) -> `verify_structural_graph_reachable`, emitting
-    one log entry per completed stage (the `register_regulatory_instrument_version` entry after
-    the primitives are built, `persist_native_structural_graph` after the group is applied).
-    `graph` is only read: the existence read for edge endpoints outside the group, and the
-    reachability check. `identifier` is whatever the injected `adapter` expects (a CELEX number
-    for `CellarEliAdapter`); `short_name`/`version` are caller-supplied and combined into the
-    RegulatoryInstrument's natural-key id (`f"{short_name}-{version}"`, e.g. "CRA-1.0") —
-    never derived from the fetched document or from `identifier`'s value, which is what keeps
-    this function regulation-independent (AC-006).
+    Runs, in order: `adapter.fetch_regulatory_instrument_structure(identifier)`; build and
+    validate the native graph's primitives; stamp identity onto any legacy identity-less edges of
+    the target graph; submit the primitives as one group through the Graph Write Gateway (the
+    RegulatoryInstrument, the structural nodes, then the `HAS` edges, logged under
+    `audit_event_id`); require the graph to be caught up with its log; then
+    `verify_structural_graph_reachable`. One log entry is emitted per completed stage
+    (`fetch_regulatory_instrument_structure`, `register_regulatory_instrument_version` after the
+    primitives are built, `persist_native_structural_graph` after the group is applied,
+    `verify_structural_graph_reachable`).
 
-    Raises whatever the underlying adapter/`graph_writer` calls raise
-    (`CellarFetchError`/`CellarParseError` from the adapter,
-    `IngestionPersistenceError` from `graph_writer` and from a group the gateway refused, or
-    committed but could not apply yet) — this function adds no other error handling; a failure
-    at any stage aborts the run with no further stage's log entry emitted.
+    Business Rules:
+        The RegulatoryInstrument id is `f"{short_name}-{version}"` (for example "CRA-1.0"),
+        never derived from the fetched document or from `identifier`, which keeps this function
+        regulation-independent.
+
+    Args:
+        identifier: Source key understood by `adapter` (a CELEX number for `CellarEliAdapter`).
+        short_name: Caller-supplied short name of the regulation; also selects the native graph
+            name (`native_graph_name`).
+        version: Caller-supplied version label combined with `short_name` into the instrument id.
+        adapter: Fetches and parses the instrument's structure.
+        graph: Read handle for the native graph; it is only read (existence of edge endpoints
+            outside the group, and the reachability check).
+        submitter: Graph Write Gateway seam through which all writes are made.
+        audit_event_id: Audit event the submitted group and any legacy-edge stamp are logged
+            under.
+        run_id: Request-scoped run id to bind; None mints a fresh uuid4.
+        emitter: Log emitter for the stage entries; None uses the default emitter.
+
+    Returns:
+        An `IngestResult` with the instrument id, the bound run id and the per-label
+        `ReachabilityCount` from the final check.
+
+    Side Effects:
+        Fetches the instrument from the source, submits one mutation group (and possibly one
+        legacy-edge stamp group) to the graph write log and graph, reads FalkorDB, and emits one
+        log entry per completed stage.
+
+    Raises:
+        CellarFetchError: Raised by the Cellar/ELI adapter when the fetch fails.
+        CellarParseError: Raised by the Cellar/ELI adapter when the markup cannot be parsed.
+        IngestionPersistenceError: A structure element is invalid, the gateway refused the group
+            or could not apply it yet, or the reachability check found an orphan.
+
+    No other error handling is added; a failure at any stage aborts the run and no later stage
+    emits a log entry.
     """
     with bind_run_context(run_id) as bound_run_id:
         regulatory_instrument_id = f"{short_name}-{version}"
@@ -154,12 +160,7 @@ def ingest_regulatory_instrument(  # noqa: PLR0913 -- the stage's call shape: id
 def _emit(
     *, component: str, action: str, regulatory_instrument_id: str, emitter: LogEmitter | None
 ) -> None:
-    """Emit one completed-stage log entry.
-
-    `run_id` is never passed explicitly — `emit_log_entry` auto-bakes the
-    currently bound run context (AC-005's mechanism; mirrors
-    `ps_service.llm_interface._logging_support.log`).
-    """
+    """Emit one succeeded-stage log entry; `emit_log_entry` adds the bound run id itself."""
     emit_log_entry(
         component=component,
         action=action,

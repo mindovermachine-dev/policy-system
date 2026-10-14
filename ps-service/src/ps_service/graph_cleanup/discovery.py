@@ -1,4 +1,4 @@
-"""Pure candidate grouping for `ps_service.graph_cleanup` (issue #190).
+"""Pure candidate grouping for `ps_service.graph_cleanup`.
 
 Discovery is advisory: a human Compliance Officer decides every merge, so a
 wrong guess costs review time, never data. No LLM or embedding-model call is
@@ -36,9 +36,9 @@ __all__ = [
     "resolve_min_similarity",
 ]
 
-# Advisory default (CHANGES.md E5, recorded in the slice-7 commit): high enough that a
-# group is nearly always a true duplicate, used only when neither the caller nor
-# `company_merge_similarity_threshold` supplies a value. A wrong guess costs review time.
+# Advisory default: high enough that a group is nearly always a true duplicate, used only
+# when neither the caller nor `company_merge_similarity_threshold` supplies a value. A wrong
+# guess costs review time.
 DEFAULT_CAPABILITY_MIN_SIMILARITY = 0.90
 
 # Advisory: token-set Jaccard of normalised Obligation text at or above which two Obligations
@@ -49,12 +49,28 @@ _NON_ALNUM = re.compile(r"[\W_]+")
 
 
 def normalise_name(name: str) -> str:
-    """Casefold `name` and collapse every run of non-alphanumerics to one space."""
+    """Casefold `name` and collapse every run of non-alphanumerics to one space.
+
+    Args:
+        name: Any text, typically a Capability name or Obligation text.
+
+    Returns:
+        The normalised, stripped text; empty when `name` has no alphanumeric characters.
+    """
     return _NON_ALNUM.sub(" ", name.casefold()).strip()
 
 
 def resolve_min_similarity(requested: float | None, configured: float | None) -> float:
-    """Pick the threshold: explicit request, else the Company Merge value, else the default."""
+    """Pick the threshold: explicit request, else the Company Merge value, else the default.
+
+    Args:
+        requested: Cosine threshold the caller asked for; `None` when not supplied.
+        configured: The configured `company_merge_similarity_threshold`; `None` when unset.
+
+    Returns:
+        The first of `requested`, `configured` that is not `None`, else
+        `DEFAULT_CAPABILITY_MIN_SIMILARITY`. No range check is applied.
+    """
     if requested is not None:
         return requested
     if configured is not None:
@@ -63,11 +79,18 @@ def resolve_min_similarity(requested: float | None, configured: float | None) ->
 
 
 def classify_case(members: Sequence[CapabilityRecord]) -> tuple[MergeCase, bool]:
-    """Return a group's `(merge_case, policies_distinct)` (CHANGES D-A2).
+    """Return a group's `(merge_case, policies_distinct)`.
 
     Case 1: no member is governed; case 2: exactly one is; case 3: two or more are.
     `policies_distinct` is true when the governed members name more than one Policy,
     which is what makes a case-3 merge blocked (release governance first).
+
+    Args:
+        members: The Capabilities of one candidate group; each may or may not carry a
+            governing Policy.
+
+    Returns:
+        The merge case (1, 2 or 3) and whether the governed members name distinct Policies.
     """
     governed = {m.governing_policy.id for m in members if m.governing_policy is not None}
     count = sum(1 for m in members if m.governing_policy is not None)
@@ -76,6 +99,7 @@ def classify_case(members: Sequence[CapabilityRecord]) -> tuple[MergeCase, bool]
 
 
 def _find(parent: list[int], index: int) -> int:
+    """Return the root of `index` in the union-find forest, compressing the path."""
     while parent[index] != index:
         parent[index] = parent[parent[index]]
         index = parent[index]
@@ -83,12 +107,14 @@ def _find(parent: list[int], index: int) -> int:
 
 
 def _union(parent: list[int], a: int, b: int) -> None:
+    """Join the components of `a` and `b`, keeping the smaller root."""
     root_a, root_b = _find(parent, a), _find(parent, b)
     if root_a != root_b:
         parent[max(root_a, root_b)] = min(root_a, root_b)
 
 
 def _similar(a: CapabilityRecord, b: CapabilityRecord, threshold: float) -> bool:
+    """Return whether both Capabilities have embeddings with cosine at or above `threshold`."""
     if a.embedding is None or b.embedding is None:
         return False
     try:
@@ -109,6 +135,13 @@ def group_capabilities(
     embedding can only be linked by name. Pairwise cosine is O(n^2) over the active
     Capabilities that carry an embedding; pairs already in one component are skipped.
     Members are ordered by id and groups by their first member's id (deterministic).
+
+    Args:
+        capabilities: Active Capability records to compare; any order.
+        min_similarity: Cosine threshold for embedding links; compared with `>=`.
+
+    Returns:
+        Candidate groups of two or more members; empty when no pair is linked.
     """
     ordered = sorted(capabilities, key=lambda c: c.id)
     parent = list(range(len(ordered)))
@@ -134,6 +167,7 @@ def group_capabilities(
 
 
 def _build_group(members: Sequence[CapabilityRecord]) -> CapabilityCandidateGroup:
+    """Build the candidate group for one connected component of Capabilities."""
     case, distinct = classify_case(members)
     return CapabilityCandidateGroup(
         basis="name" if len({normalise_name(c.name) for c in members}) == 1 else "embedding",
@@ -152,6 +186,7 @@ def _build_group(members: Sequence[CapabilityRecord]) -> CapabilityCandidateGrou
 
 
 def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
+    """Return the Jaccard similarity of two token sets; 0.0 when both are empty."""
     union = left | right
     return len(left & right) / len(union) if union else 0.0
 
@@ -162,10 +197,16 @@ def group_duplicate_obligations(
     """Group Obligations of ONE Role whose normalised text is identical or near-identical.
 
     Never links across Roles: an Obligation is a weak entity of its Role and the same
-    wording under two Roles is two distinct duties (DC Obligation). Near-identical means
+    wording under two Roles is two distinct duties. Near-identical means
     token-set Jaccard >= `OBLIGATION_NEAR_TEXT_MIN_JACCARD`. `basis` is `"identical_text"`
     when every member shares one normalised text, else `"near_text"`. Members are ordered
     by id and groups by (role id, first member id).
+
+    Args:
+        obligations: Obligation records across any Roles; each carries its `role_id`.
+
+    Returns:
+        Candidate groups of two or more Obligations of one Role; empty when none match.
     """
     by_role: dict[str, list[ObligationRecord]] = defaultdict(list)
     for obligation in sorted(obligations, key=lambda o: o.id):

@@ -1,26 +1,18 @@
-"""LLM prompt strings + response-parsing helpers for `ps_service.domain_mapper`.
+"""LLM prompt strings and response-parsing helpers for `ps_service.domain_mapper`.
 
-This module holds the extraction stage (PLAN_REVIEWED.md §11 Increment 6)
-and the obligation-derivation stage (Increment 11). Capability-derivation
-prompts/parsers are added by a later increment (14) in the same module.
+Holds the prompts and the parsers that validate their responses for each stage: duty extraction,
+defined-term extraction, Obligation derivation, Capability derivation and Capability reuse
+verification. A parser turns raw completion text into a typed model, or raises a typed error
+that names the unit it came from; it never substitutes a silent default.
 
-Extraction system prompt is ported in spirit from
-`spikes/cellar2/extract_requirements.py::_SYSTEM_PROMPT`, retaining its two
-LEARNINGS.md-proven exclusions verbatim in effect (not copied word-for-word,
-re-composed against this component's own `RequirementCandidate` field
-names):
+The extraction system prompt excludes two kinds of text that are not duties:
 
-1. Scope/applicability clauses are not duties.
-2. Conditional-permissive "may be X where <conditions>" constructions are
-   not duties.
+1. Scope and applicability clauses.
+2. Conditional-permissive "may be X where <conditions>" constructions.
 
-Per PLAN_REVIEWED.md §5.3/Open Question 8, the model is instructed not to
-emit a candidate at all for these two categories, rather than emit one with
-a deliberately low `confidence`. This is a deliberate, permanent design
-tradeoff (not a gap this issue's implementation can or should try to close)
-— see PLAN_REVIEWED.md §13 Open Question 8 for the full reasoning. Do not
-"fix" this by changing the prompt to always extract and rely on confidence
-alone; that is an explicitly out-of-scope behavior change.
+The model is told not to emit a candidate at all for these two categories, rather than emit one
+with a deliberately low `confidence`. This is a permanent design choice; do not change the
+prompt to always extract and rely on confidence alone.
 """
 
 from __future__ import annotations
@@ -110,14 +102,24 @@ Return strict JSON with a top-level "requirements" key: {"requirements": \
 def parse_extraction_response(text: str, unit: ExtractionUnit) -> list[RequirementCandidate]:
     """Parse one unit's raw LLM completion text into `RequirementCandidate`s.
 
-    `unit_citation_ref`/`unit_article_number`/`unit_paragraph_number` are
-    populated from `unit` (the source location the model was never asked to
-    reproduce); every other field comes from the LLM's own JSON. Raises
-    `DomainMapperExtractionError`, naming `unit.citation_ref`, on:
-    - malformed JSON (`json.JSONDecodeError`),
-    - a response missing the top-level `"requirements"` key,
-    - any item that fails `RequirementCandidate` validation (e.g. a missing
-      `confidence` — never silently defaulted).
+    `unit_citation_ref`, `unit_article_number` and `unit_paragraph_number` are filled from `unit`
+    (the source location the model is never asked to reproduce); every other field comes from
+    the LLM's JSON.
+
+    Args:
+        text: Raw completion text; must be a JSON object with a top-level `"requirements"` list.
+        unit: The extraction unit the completion was produced for.
+
+    Returns:
+        The candidates in response order; empty when the response lists none.
+
+    Raises:
+        DomainMapperExtractionError: Naming `unit.citation_ref`, when the text is malformed JSON
+            (`error_kind="invalid_json"`), lacks the top-level `"requirements"` key
+            (`"missing_requirements_key"`), has a non-list `"requirements"` value
+            (`"non_list_requirements"`), contains a non-object item (`"non_object_item"`), or
+            contains an item that fails `RequirementCandidate` validation, for example a missing
+            `confidence`, which is never defaulted (`"invalid_requirement_item"`).
     """
     try:
         payload = json.loads(text)
@@ -146,11 +148,12 @@ def parse_extraction_response(text: str, unit: ExtractionUnit) -> list[Requireme
 
 
 def _build_candidate(item: object, unit: ExtractionUnit) -> RequirementCandidate:
-    """Validate one raw JSON item against `RequirementCandidate`.
+    """Validate one raw JSON item against `RequirementCandidate`, adding the unit's location.
 
-    Raises `DomainMapperExtractionError` (naming `unit.citation_ref`) on a
-    `pydantic.ValidationError` — a missing/invalid `confidence` (or any
-    other field) is a typed error, never a silent default.
+    Raises:
+        DomainMapperExtractionError: Naming `unit.citation_ref`, when `item` is not an object
+            (`error_kind="non_object_item"`) or fails validation (`"invalid_requirement_item"`);
+            a missing or invalid field such as `confidence` is a typed error, never a default.
     """
     if not isinstance(item, dict):
         raise DomainMapperExtractionError(
@@ -194,17 +197,23 @@ the text formally defines no terms."""
 def parse_definitions_response(text: str, unit: ExtractionUnit) -> list[DefinedTermCandidate]:
     """Parse one definitions unit's raw LLM completion text into `DefinedTermCandidate`s.
 
-    Mirrors `parse_extraction_response`'s exact validation-boundary shape:
-    `citation_ref` is populated from `unit.citation_ref` (the source
-    location the model is never asked to reproduce); `term` alone comes
-    from the LLM's own JSON. Raises `DomainMapperExtractionError`, naming
-    `unit.citation_ref`, on:
-    - malformed JSON (`error_kind="invalid_definitions_json"`),
-    - a response missing the top-level `"terms"` key
-      (`error_kind="missing_terms_key"`),
-    - a non-list `"terms"` value (`error_kind="non_list_terms"`),
-    - any item that is not a non-empty string
-      (`error_kind="invalid_defined_term_item"`).
+    Mirrors `parse_extraction_response`'s validation boundary: `citation_ref` is filled from
+    `unit.citation_ref` (the source location the model is never asked to reproduce) and only
+    `term` comes from the LLM's JSON.
+
+    Args:
+        text: Raw completion text; must be a JSON object with a top-level `"terms"` list of
+            non-empty strings.
+        unit: The definitions unit the completion was produced for.
+
+    Returns:
+        The defined terms in response order; empty when the response lists none.
+
+    Raises:
+        DomainMapperExtractionError: Naming `unit.citation_ref`, when the text is malformed JSON
+            (`error_kind="invalid_definitions_json"`), lacks the top-level `"terms"` key
+            (`"missing_terms_key"`), has a non-list `"terms"` value (`"non_list_terms"`), or
+            contains an item that is not a non-empty string (`"invalid_defined_term_item"`).
     """
     try:
         payload = json.loads(text)
@@ -235,13 +244,12 @@ def parse_definitions_response(text: str, unit: ExtractionUnit) -> list[DefinedT
 def _build_defined_term_candidate(item: object, unit: ExtractionUnit) -> DefinedTermCandidate:
     """Validate one raw JSON item against `DefinedTermCandidate`.
 
-    Raises `DomainMapperExtractionError` (naming `unit.citation_ref`) on a
-    `pydantic.ValidationError` — a non-string item and an empty-string item
-    both fail `DefinedTermCandidate`'s own field validation (pydantic v2's
-    default `str` field does not coerce non-string input), so one
-    `try/except` covers both, unlike `_build_candidate`'s separate
-    `isinstance(item, dict)` pre-check (which has no analogue for a
-    scalar-string item shape).
+    A non-string item and an empty-string item both fail the model's own field validation (a
+    pydantic `str` field does not coerce non-string input), so one `try/except` covers both.
+
+    Raises:
+        DomainMapperExtractionError: Naming `unit.citation_ref`, with
+            `error_kind="invalid_defined_term_item"`, when validation fails.
     """
     try:
         return DefinedTermCandidate.model_validate(
@@ -255,19 +263,13 @@ def _build_defined_term_candidate(item: object, unit: ExtractionUnit) -> Defined
         ) from exc
 
 
-# --- Obligation derivation (PLAN_REVIEWED.md §11 Increment 11) -------------
+# --- Obligation derivation ---
 #
-# Ported in spirit from `spikes/cellar2/derive_obligations.py::_SYSTEM_PROMPT`,
-# extended with an explicit `unmatchable: bool` third outcome (§7.5's AC-004
-# unmatched-handling mechanism) alongside the spike's original
-# `matched_existing_id`/`new_text` pair. `role_view` (this Role's own slice
-# of the whole-run registry, §7.3) is presented as the match-candidate set
-# for the mint-or-match decision — the model is never shown the whole-run
-# registry, only what has already been assigned to the current Role. That
-# scoping is also all that is needed: Obligation identity is Role-scoped
-# (#42), so a duty text under a different Role is a different node by
-# construction — there is no cross-Role case for the model, or the code, to
-# resolve.
+# The prompt has three outcomes: match an existing Obligation, mint a new one, or declare the
+# Requirement `unmatchable`. The model sees only the calling Role's own slice of the whole-run
+# registry as match candidates. That scoping is all that is needed: Obligation identity is
+# Role-scoped, so a duty text under a different Role is a different node by construction and
+# there is no cross-Role case to resolve.
 
 OBLIGATION_DERIVATION_SYSTEM_PROMPT = """You maintain a canonical registry of Obligations \
 (reusable duty statements) for one Role in a compliance graph. Given a Requirement's duty \
@@ -300,34 +302,35 @@ def parse_obligation_response(
 ) -> ObligationAssignment:
     """Parse a Requirement's obligation-derivation completion into an `ObligationAssignment`.
 
-    `role_view_registry` is the calling Role's own slice of the whole-run
-    registry (`obligation_id -> text`, §7.3) — used to resolve a
-    `matched_existing_id` back into its text (the model is never asked to
-    repeat text it already has access to).
+    `role_view_registry` is the calling Role's own slice of the whole-run registry
+    (`obligation_id -> text`); it resolves a `matched_existing_id` back into its text, so the
+    model is never asked to repeat text it already has.
 
     Three valid outcomes, per `OBLIGATION_DERIVATION_SYSTEM_PROMPT`:
-    - `unmatchable: true` -> `ObligationAssignment(obligation_node_id=None,
-      obligation_text=None, ...)`. Not an error — a valid, expected AC-004
-      outcome (§7.5).
-    - a `matched_existing_id` present in `role_view_registry` -> the
-      assignment's `obligation_text` is that registry entry's text, and
-      `obligation_node_id` is `identity.obligation_id(role_node_id, text)`
-      recomputed from it (always equal to `matched_existing_id` itself,
-      since registry keys are themselves `obligation_id()` outputs for this
-      same Role).
-    - a non-empty `new_text` -> the assignment's `obligation_text` is
-      `new_text`, `obligation_node_id` is
+
+    - `unmatchable: true`: an assignment with `obligation_node_id` and `obligation_text` both
+      `None`. This is a valid, expected outcome, not an error.
+    - A `matched_existing_id` present in `role_view_registry`: `obligation_text` is that entry's
+      text and `obligation_node_id` is `identity.obligation_id(role_node_id, text)` recomputed
+      from it (equal to `matched_existing_id`, since registry keys are `obligation_id()` outputs
+      for the same Role).
+    - A non-empty `new_text`: `obligation_text` is `new_text` and `obligation_node_id` is
       `identity.obligation_id(role_node_id, new_text)`.
 
-    Raises `DomainMapperDerivationError`, naming `requirement_id`, on:
-    - malformed JSON (`json.JSONDecodeError`) or a non-object response,
-    - a response with neither a `matched_existing_id` that resolves within
-      `role_view_registry`, nor a valid `new_text`, nor `unmatchable: true`
-      set — the exact shape `spikes/cellar2/LEARNINGS.md`'s B1 finding
-      documents ("neither a valid match nor a new-text value"),
-    - an invalid/missing `confidence` (via `ObligationAssignment`'s own
-      `Field` constraint, surfaced as this same typed error, not a bare
-      `pydantic.ValidationError`).
+    Args:
+        text: Raw completion text; must be a JSON object.
+        requirement_id: Id of the Requirement being decided; used in error messages.
+        role_node_id: Id of the Role that bears the Requirement; folded into the Obligation id.
+        role_view_registry: The Role's existing Obligations, `obligation_id -> text`.
+
+    Returns:
+        The assignment, whose `confidence` comes from the response.
+
+    Raises:
+        DomainMapperDerivationError: Naming `requirement_id`, when the text is malformed JSON or
+            not an object; when the response has neither a `matched_existing_id` that resolves
+            in `role_view_registry`, nor a non-empty `new_text`, nor `unmatchable: true`; or
+            when `confidence` is missing or outside [0, 1].
     """
     payload = _load_obligation_payload(text, requirement_id)
 
@@ -351,6 +354,7 @@ def parse_obligation_response(
 
 
 def _load_obligation_payload(text: str, requirement_id: str) -> dict[str, object]:
+    """Parse `text` as a JSON object, or raise `DomainMapperDerivationError`."""
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -371,8 +375,8 @@ def _resolve_proposed_obligation_text(
 ) -> str:
     """Resolve a match-or-mint outcome to its proposed duty text.
 
-    Raises the LEARNINGS.md B1-shaped `DomainMapperDerivationError` when
-    neither a resolvable match nor a valid mint is present.
+    Raises:
+        DomainMapperDerivationError: Neither a resolvable match nor a valid mint is present.
     """
     matched_existing_id = payload.get("matched_existing_id")
     if isinstance(matched_existing_id, str) and matched_existing_id in role_view_registry:
@@ -397,6 +401,7 @@ def _build_obligation_assignment(
     obligation_text: str | None,
     confidence: object,
 ) -> ObligationAssignment:
+    """Validate the fields into an `ObligationAssignment`, mapping bad confidence to an error."""
     try:
         return ObligationAssignment.model_validate(
             {
@@ -414,19 +419,13 @@ def _build_obligation_assignment(
         ) from exc
 
 
-# --- Capability derivation (PLAN_REVIEWED.md §11 Increment 13) -------------
+# --- Capability derivation ---
 #
-# Ported in spirit from `spikes/cellar2/derive_capabilities.py::_SYSTEM_PROMPT`,
-# retaining its multi-capability-per-Obligation support unchanged — a
-# proven finding from that spike (a single Obligation may bundle more than
-# one distinct technical/organizational capacity, e.g. a reporting duty
-# needing both "Incident Detection" and "Regulatory Notification
-# Workflow") worth keeping, per PLAN_REVIEWED.md §7.4/§11 Increment 13's
-# explicit instruction. Unlike obligation derivation's Role-scoped
-# `role_view`, the registry shown here spans the WHOLE run across every
-# distinct Obligation processed so far — Capability convergence is
-# deliberately Obligation- and Role-independent (§7.4); there is no
-# role-qualification concept anywhere in this stage.
+# The prompt supports several Capabilities per Obligation, because one Obligation can bundle
+# more than one distinct capacity (a reporting duty may need both "Incident Detection" and
+# "Regulatory Notification Workflow"). Unlike Obligation derivation, the registry shown here
+# spans the whole run across every distinct Obligation processed so far: Capability convergence
+# is Obligation- and Role-independent.
 
 CAPABILITY_DERIVATION_SYSTEM_PROMPT = """You maintain a canonical registry of Capabilities \
 (reusable technical/organizational capacities) for a compliance graph, built as Obligations \
@@ -466,39 +465,39 @@ def parse_capability_response(
 ) -> list[CapabilityDecision]:
     """Parse an Obligation's capability-derivation completion into `CapabilityDecision`s.
 
-    ZERO OR MORE per Obligation (multi-capability-per-Obligation support,
-    PLAN_REVIEWED.md §7.4).
+    Produces zero or more decisions per Obligation. `registry` is the whole-run Capability
+    registry (`capability_id -> (name, description)`) built up across every distinct Obligation
+    processed so far; it resolves a `matched_existing_id` back into its name and description, so
+    the model is never asked to repeat text it already has.
 
-    `registry` is the whole-run Capability registry (`capability_id ->
-    (name, description)`, §7.4) built up so far across every distinct
-    Obligation processed — used to resolve a `matched_existing_id` back
-    into its name/description (the model is never asked to repeat text it
-    already has access to).
+    Each response item resolves to exactly one decision:
 
-    Each response item resolves to exactly one `CapabilityDecision`:
-    - a `matched_existing_id` present in `registry` -> that entry's own
-      name/description, `capability_node_id` equal to the matched id
-      itself.
-    - a non-empty `new_name` -> `capability_node_id =
-      identity.capability_id(new_name)`, `description = new_description`
-      (may be `None`).
+    - A `matched_existing_id` present in `registry`: that entry's name and description, with
+      `capability_node_id` equal to the matched id.
+    - A non-empty `new_name`: `capability_node_id` is `identity.capability_id(new_name)` and the
+      description is `new_description` (may be `None`).
 
-    Raises `DomainMapperDerivationError`, naming `obligation_node_id`, on:
-    - malformed JSON (`json.JSONDecodeError`) or a non-object response,
-    - a response missing the top-level `"capabilities"` key, or whose
-      value is not a list,
-    - a non-object item in that list,
-    - an item with neither a `matched_existing_id` resolvable in
-      `registry` nor a valid `new_name` set — the same "surface, don't
-      crash" defensive shape `parse_obligation_response` follows for its
-      own LEARNINGS.md B1 case,
-    - an invalid/missing `confidence` on any item.
+    Args:
+        text: Raw completion text; must be a JSON object with a top-level `"capabilities"` list.
+        obligation_node_id: Id of the Obligation being decided; used in error messages.
+        registry: The whole-run Capability registry.
+
+    Returns:
+        The decisions in response order; empty when the response lists no capabilities.
+
+    Raises:
+        DomainMapperDerivationError: Naming `obligation_node_id`, when the text is malformed JSON
+            or not an object; when the top-level `"capabilities"` key is missing or not a list;
+            when an item is not an object; when an item has neither a `matched_existing_id`
+            resolvable in `registry` nor a non-empty `new_name`; or when an item's `confidence`
+            is missing or outside [0, 1].
     """
     items = _load_capability_items(text, obligation_node_id)
     return [_build_capability_decision(item, obligation_node_id, registry) for item in items]
 
 
 def _load_capability_items(text: str, obligation_node_id: str) -> list[object]:
+    """Return the `"capabilities"` list of the response, or raise `DomainMapperDerivationError`."""
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -527,6 +526,7 @@ def _build_capability_decision(
     obligation_node_id: str,
     registry: dict[str, tuple[str, str | None]],
 ) -> CapabilityDecision:
+    """Validate one response item into a `CapabilityDecision`, raising on a malformed item."""
     if not _is_json_object(item):
         raise DomainMapperDerivationError(
             f"capability derivation response for obligation {obligation_node_id!r} has a "
@@ -560,15 +560,14 @@ def _resolve_capability(
 ) -> tuple[str, str, str | None, bool]:
     """Resolve one response item to `(capability_node_id, name, description, is_reuse)`.
 
-    `is_reuse` (#187) is `True` for a matched-existing item AND for a mint
-    whose `capability_id` is already in `registry`: both attach the
-    Obligation to an existing Capability, so both are verified. A colliding
-    mint resolves to the registry's own name/description -- the model's
-    `new_description` is discarded, because the verifier judges the
-    EXISTING Capability's description.
+    `is_reuse` is `True` for a matched-existing item AND for a mint whose `capability_id` is
+    already in `registry`: both attach the Obligation to an existing Capability, so both are
+    verified. A colliding mint resolves to the registry's own name and description; the model's
+    `new_description` is discarded, because the verifier judges the EXISTING Capability's
+    description.
 
-    Raises the LEARNINGS.md B1-shaped `DomainMapperDerivationError` when
-    neither a resolvable match nor a valid mint is present.
+    Raises:
+        DomainMapperDerivationError: Neither a resolvable match nor a valid mint is present.
     """
     matched_existing_id = item.get("matched_existing_id")
     if isinstance(matched_existing_id, str) and matched_existing_id in registry:
@@ -592,12 +591,11 @@ def _resolve_capability(
     )
 
 
-# #187: per-reuse verification. Each proposal that would attach an
-# Obligation to an EXISTING Capability (a matched-existing item, or a mint
-# whose `capability_id` is already registered) gets one dedicated LLM call
-# that judges just that pair. The Obligation's duty text and the Capability's
-# name/description reach the model only as tag-delimited user content (L2's
-# untrusted-content rule), never in this system prompt.
+# Per-reuse verification: each proposal that would attach an Obligation to an EXISTING
+# Capability (a matched-existing item, or a mint whose `capability_id` is already registered)
+# gets one dedicated LLM call that judges just that pair. The Obligation's duty text and the
+# Capability's name and description reach the model only as tag-delimited user content, never
+# in this system prompt, because they are untrusted input.
 
 CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT = """You verify one proposed Capability reuse for a \
 compliance graph. You are given one Obligation's duty text and one existing Capability's name and \
@@ -649,13 +647,22 @@ str|null, "confidence": float|null}. On "accept", new_name and new_description a
 def parse_capability_reuse_verdict(
     text: str, obligation_node_id: str, capability_node_id: str
 ) -> CapabilityReuseVerdict:
-    """Parse one reuse-verification completion into a `CapabilityReuseVerdict` (#187).
+    """Parse one reuse-verification completion into a `CapabilityReuseVerdict`.
 
-    Raises `DomainMapperDerivationError`, naming both `obligation_node_id`
-    and `capability_node_id`, on: malformed JSON or a non-object response;
-    a missing or unknown `verdict`; a `reject` without a non-empty
-    `new_name`, without a non-empty `new_description`, or without a valid
-    `confidence` in [0, 1]. On `accept`, `confidence` is optional.
+    Args:
+        text: Raw completion text; must be a JSON object with a `verdict` of `accept` or
+            `reject`.
+        obligation_node_id: Id of the Obligation under verification; used in error messages.
+        capability_node_id: Id of the proposed existing Capability; used in error messages.
+
+    Returns:
+        The validated verdict. On `accept`, `confidence` is optional; a `reject` always carries
+        `new_name`, `new_description` and `confidence`.
+
+    Raises:
+        DomainMapperDerivationError: Naming both ids, when the text is malformed JSON or not an
+            object; when `verdict` is missing or unknown; or when a `reject` lacks a non-empty
+            `new_name`, a non-empty `new_description`, or a `confidence` in [0, 1].
     """
     payload = _load_reuse_verdict_payload(text, obligation_node_id, capability_node_id)
     try:
@@ -670,6 +677,7 @@ def parse_capability_reuse_verdict(
 
 
 def _reuse_verdict_subject(obligation_node_id: str, capability_node_id: str) -> str:
+    """Return the error-message subject naming the Obligation and Capability under verification."""
     return (
         f"reuse verification response for obligation {obligation_node_id!r} and capability "
         f"{capability_node_id!r}"
@@ -679,6 +687,7 @@ def _reuse_verdict_subject(obligation_node_id: str, capability_node_id: str) -> 
 def _load_reuse_verdict_payload(
     text: str, obligation_node_id: str, capability_node_id: str
 ) -> dict[str, object]:
+    """Parse `text` as a JSON object, or raise `DomainMapperDerivationError`."""
     subject = _reuse_verdict_subject(obligation_node_id, capability_node_id)
     try:
         payload = json.loads(text)
@@ -692,6 +701,7 @@ def _load_reuse_verdict_payload(
 def _require_complete_reject(
     verdict: CapabilityReuseVerdict, obligation_node_id: str, capability_node_id: str
 ) -> None:
+    """Raise `DomainMapperDerivationError` unless a `reject` verdict is complete."""
     subject = _reuse_verdict_subject(obligation_node_id, capability_node_id)
     if verdict.new_name is None or not verdict.new_name.strip():
         raise DomainMapperDerivationError(f"{subject} rejected without a non-empty new_name")

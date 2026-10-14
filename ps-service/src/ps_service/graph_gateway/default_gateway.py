@@ -1,4 +1,4 @@
-"""The production composition of the Graph Write Gateway (issue #206).
+"""The production composition of the Graph Write Gateway.
 
 Builds the gateway over the real `ps_state` log store and a FalkorDB opener, both resolved
 lazily: constructing the gateway contacts neither service, so a Postgres or FalkorDB outage at
@@ -46,7 +46,11 @@ class FalkorDBGraphOpener:
     """
 
     def __init__(self, config: ServiceConfig) -> None:
-        """Remember `config`; nothing is connected yet."""
+        """Remember `config`; nothing is connected yet.
+
+        Args:
+            config: Service configuration naming the FalkorDB host and port.
+        """
         self._config = config
         self._db: FalkorDB | None = None
         self._lock = threading.Lock()
@@ -54,9 +58,15 @@ class FalkorDBGraphOpener:
     def database(self) -> FalkorDB:
         """Return the shared connection, connecting first if needed.
 
+        Returns:
+            The one FalkorDB client this opener shares across calls.
+
         Raises:
             redis.exceptions.ConnectionError: FalkorDB is unreachable (the gateway treats it
                 as transient).
+
+        Side Effects:
+            Opens a network connection on the first successful call.
         """
         with self._lock:
             if self._db is None:
@@ -66,9 +76,18 @@ class FalkorDBGraphOpener:
     def __call__(self, graph: str) -> WritableGraph:
         """Return the handle of `graph`, connecting first if needed.
 
+        Args:
+            graph: Name of the graph to select.
+
+        Returns:
+            A write-capable handle on the named graph.
+
         Raises:
             redis.exceptions.ConnectionError: FalkorDB is unreachable (the gateway treats it
                 as transient).
+
+        Side Effects:
+            Opens a network connection on the first successful call.
         """
         return select_graph(self.database(), graph)
 
@@ -86,7 +105,12 @@ class ReadOnlyGraphOpener:
         *,
         connect: Callable[[str, int], DriverDatabase] | None = None,
     ) -> None:
-        """Remember `config` (and the driver seam `connect`); nothing is connected yet."""
+        """Remember `config` (and the driver seam `connect`); nothing is connected yet.
+
+        Args:
+            config: Service configuration naming the FalkorDB host and port.
+            connect: Driver constructor taking `(host, port)`; `None` uses the real driver.
+        """
         self._config = config
         self._connect = connect
         self._db: ReadOnlyDatabase | None = None
@@ -95,8 +119,17 @@ class ReadOnlyGraphOpener:
     def __call__(self, graph: str) -> ReadOnlyGraph:
         """Return the read-only handle of `graph`, connecting first if needed.
 
+        Args:
+            graph: Name of the graph to select.
+
+        Returns:
+            A handle on the named graph that can only run read queries.
+
         Raises:
             redis.exceptions.ConnectionError: FalkorDB is unreachable.
+
+        Side Effects:
+            Opens a network connection on the first successful call.
         """
         with self._lock:
             if self._db is None:
@@ -112,13 +145,20 @@ class _PipelineSwapper:
     """The swap of one `watching` block: one `MULTI`/`EXEC` of renames on the watching pipeline."""
 
     def __init__(self, pipe: _WatchablePipeline) -> None:
+        """Hold the pipeline that already watches the live keys."""
         self._pipe = pipe
 
     def swap_in(self, pairs: Sequence[tuple[str, str]]) -> None:
         """Rename every `(staged, live)` pair atomically.
 
+        Args:
+            pairs: `(staged key, live key)` pairs; each staged key replaces its live key.
+
         Raises:
             SwapConflictError: a watched key changed since the watch began; nothing renamed.
+
+        Side Effects:
+            Runs one `MULTI`/`EXEC` of renames on the server.
         """
         self._pipe.multi()
         for staged, live in pairs:
@@ -138,11 +178,27 @@ class FalkorDBKeyPort:
     """
 
     def __init__(self, database: Callable[[], FalkorDB]) -> None:
-        """Take the lazy connection accessor; nothing is connected yet."""
+        """Take the lazy connection accessor; nothing is connected yet.
+
+        Args:
+            database: Returns the shared FalkorDB connection, connecting on first use.
+        """
         self._database = database
 
     def copy(self, source: str, destination: str) -> None:
-        """Copy graph `source` to `destination`; a never-created `source` becomes an empty graph."""
+        """Copy graph `source` to `destination`; a never-created `source` becomes an empty graph.
+
+        Args:
+            source: Key of the graph to copy.
+            destination: Key to create; the copy fails if it already exists.
+
+        Raises:
+            redis.exceptions.ResponseError: The server rejected the copy for a reason other than
+                an empty `source` key.
+
+        Side Effects:
+            Creates the `destination` graph key on the server.
+        """
         db = self._database()
         try:
             graph_copy_handle(db, source).copy(destination)
@@ -152,13 +208,30 @@ class FalkorDBKeyPort:
             graph_copy_handle(db, destination).query(_EMPTY_GRAPH_VIVIFY)
 
     def discard(self, *names: str) -> None:
-        """Delete every key in `names` that exists; a missing one is skipped."""
+        """Delete every key in `names` that exists; a missing one is skipped.
+
+        Args:
+            names: Keys to delete; none means nothing is sent.
+
+        Side Effects:
+            Deletes the keys on the server.
+        """
         if names:
             raw_connection(self._database()).delete(*names)
 
     @contextlib.contextmanager
     def watching(self, names: Sequence[str]) -> Generator[KeySwapper]:
-        """Watch the live keys `names` for the block and offer the swap."""
+        """Watch the live keys `names` for the block and offer the swap.
+
+        Args:
+            names: Live graph keys whose modification by anyone aborts the swap.
+
+        Yields:
+            A swapper whose `swap_in` renames staged keys over the live ones atomically.
+
+        Side Effects:
+            Holds a Redis `WATCH` on a pipeline for the length of the block and resets it on exit.
+        """
         pipe = raw_connection(self._database()).pipeline(transaction=True)
         try:
             pipe.watch(*names)
@@ -168,7 +241,14 @@ class FalkorDBKeyPort:
 
 
 def build_default_graph_write_gateway(config: ServiceConfig) -> GraphWriteGateway:
-    """Build the gateway over `config`'s `ps_state` Postgres and FalkorDB; contacts neither."""
+    """Build the gateway over `config`'s `ps_state` Postgres and FalkorDB; contacts neither.
+
+    Args:
+        config: Service configuration naming the Postgres and FalkorDB targets.
+
+    Returns:
+        A gateway whose connections open lazily on first use.
+    """
     opener = FalkorDBGraphOpener(config)
     return GraphWriteGateway(
         log_store=PsycopgGraphLogStore(config),

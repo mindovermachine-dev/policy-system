@@ -1,4 +1,4 @@
-"""Locating the merge an `unmerge` reverses, from the audit trail (issue #190, AC-BI-019, M4).
+"""Locate the merge an `unmerge` reverses, from the audit trail.
 
 Reads `audit_events` through `AuditStore.query` only. The merge to reverse is the newest
 `applied` merge row for the id that was not followed by a `failed` row with the same
@@ -32,7 +32,14 @@ _PAGE_SIZE = 100
 
 @dataclass(frozen=True, slots=True)
 class LocatedMerge:
-    """The merge audit row an unmerge reverses, with its typed details."""
+    """The merge audit row an unmerge reverses, with its typed details.
+
+    Attributes:
+        kind: `"capability"` or `"obligation"`, matching the type of `details`.
+        approval_id: Id of the approval that authorised the merge; ties the row to its
+            `failed` follow-up, if any.
+        details: The audit row's `details` payload parsed into its typed model.
+    """
 
     kind: Literal["capability", "obligation"]
     approval_id: str
@@ -40,6 +47,7 @@ class LocatedMerge:
 
 
 def _parse(action: str, raw: dict[str, object]) -> LocatedMerge:
+    """Parse an audit row's details into the typed model for its merge action."""
     try:
         if action == CAPABILITY_MERGE_ACTION:
             capability = CapabilityMergeDetails.model_validate(raw)
@@ -53,6 +61,17 @@ def _parse(action: str, raw: dict[str, object]) -> LocatedMerge:
 
 def locate_effective_merge(audit_store: AuditStore, *, merged_id: str) -> LocatedMerge:
     """Return the newest merge of `merged_id` that actually applied.
+
+    Pages through the audit events for the resource newest-first; a `failed` row marks its
+    `approval_id` as not applied, so an `applied` row with that approval id is skipped.
+
+    Args:
+        audit_store: Audit trail to search.
+        merged_id: Id of the merged Capability or Obligation; matched against the audit
+            row's `resource_id`.
+
+    Returns:
+        The located merge with its parsed details. It is never `None`: absence raises.
 
     Raises:
         GraphCleanupValidationError: no such merge row exists, or its details are unreadable.

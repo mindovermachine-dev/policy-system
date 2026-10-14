@@ -1,12 +1,9 @@
-"""ps_service.ingestion core types.
+"""Core ingestion types.
 
-The shapes that cross the Adapter -> Ingestion-core boundary
-(`RegulatoryInstrumentMetadata`, `FetchedRegulatoryInstrumentStructure`)
-plus the Ingestion pipeline's own structural/result types.
-
-See `docs/architecture/ps-service-container-architecture.md`'s RegulatoryInstrument
-node and Native Structural Graph attribute tables (lines 183-222) for the
-field-level contract these types encode.
+The shapes that cross the adapter to ingestion-core boundary (`RegulatoryInstrumentMetadata`,
+`FetchedRegulatoryInstrumentStructure`) plus the pipeline's own structural and result types. The
+field-level contract they encode is the RegulatoryInstrument node and Native Structural Graph
+attribute tables in `docs/architecture/ps-service-container-architecture.md`.
 """
 
 from __future__ import annotations
@@ -25,40 +22,47 @@ InstrumentType = Literal["regulation", "directive", "national_transposition"]
 class RegulatoryInstrumentMetadata(BaseModel):
     """Bibliographic metadata for a RegulatoryInstrument node.
 
-    Crosses the Adapter -> Ingestion-core boundary, so modeled as Pydantic
-    (frozen) per L2 Data Modeling's principle for boundary-crossing
-    fixed-shape entities, even though RegulatoryInstrument isn't in L2's
-    named PS-Conceptual-Model-type list
-    (Role/Requirement/Obligation/Capability/Policy/Standard/Control) — a
-    reasoned extension of that principle (PLAN_REVIEWED.md §2.2, Open
-    Question 4).
+    Crosses the adapter to ingestion-core boundary, so it is a frozen Pydantic model that
+    validates on construction.
+
+    Attributes:
+        title: Official title; non-empty.
+        jurisdiction: Issuing jurisdiction; non-empty.
+        effective_date: Date the instrument takes effect; an ISO-8601 string is parsed to a
+            `date`, and a malformed one fails validation.
+        version: Version label; non-empty.
+        status: One of `active`, `superseded`, `vacated`.
+        source_type: `external` or `internal`.
+        instrument_type: `regulation`, `directive` or `national_transposition`. Required when
+            `source_type` is `external`, forbidden when it is `internal`.
+        celex: Source CELEX identifier in base-act form (for example `32024R2847`), or None when
+            unknown or not applicable. Carried onto the RegulatoryInstrument node so the change
+            monitor can poll Cellar for consolidated versions. No cross-field rule applies.
     """
 
     model_config = ConfigDict(frozen=True)
     title: str = Field(min_length=1)
     jurisdiction: str = Field(min_length=1)
-    # `date`, not `str`: CA doc line 200 types this `date`. Pydantic parses
-    # an ISO-8601 string ("2024-10-17") into a real `date` automatically, so
-    # this is free boundary validation — a malformed/unparseable date string
-    # fails at model-construction time instead of silently passing through
-    # as an opaque string (PLAN_REVIEWED.md §2.2, S3 fix).
+    # `date`, not `str`: Pydantic parses an ISO-8601 string into a real `date`, so a malformed
+    # date fails at construction instead of passing through as an opaque string.
     effective_date: date
     version: str = Field(min_length=1)
     status: RegulatoryInstrumentStatus
     source_type: SourceType
     instrument_type: InstrumentType | None = None
-    # The source CELEX identifier (base-act form, e.g. "32024R2847"), when the
-    # adapter knows it. Optional and additive: carried onto the RegulatoryInstrument
-    # node so the Regulatory Change Monitor can poll Cellar for consolidated
-    # versions without a caller-supplied CELEX map (issue #19, D2). No cross-field
-    # rule — a null `celex` is a valid pre-D2 / internal-source state.
+    # Optional: a null `celex` is valid (the adapter may not know it, or the source is internal).
     celex: str | None = None
 
     @model_validator(mode="after")
     def _check_instrument_type_matches_source_type(self) -> Self:
-        """Require `instrument_type` for external sources, forbid it for internal.
+        """Require `instrument_type` for external sources and forbid it for internal ones.
 
-        Per `ps-domain-concepts.md`, Regulatory instrument -> Properties.
+        Returns:
+            The validated model.
+
+        Raises:
+            ValueError: `source_type` is `external` and `instrument_type` is None, or
+                `source_type` is `internal` and `instrument_type` is set.
         """
         if self.source_type == "external" and self.instrument_type is None:
             raise ValueError("instrument_type is required when source_type is 'external'")
@@ -69,11 +73,16 @@ class RegulatoryInstrumentMetadata(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class StructuralNode:
-    """One native structural element.
+    """One native structural element of an instrument (chapter, article, recital and so on).
 
-    Not a PS Conceptual Model type — CA doc line 164 explicitly says this
-    shape is adapter-defined, not a fixed project-wide schema — so a plain
-    typed dataclass, not Pydantic.
+    The shape is defined by the adapter, not a fixed project-wide schema, so it is a plain frozen
+    dataclass.
+
+    Attributes:
+        element_type: Source vocabulary label, for example CHAPTER, SECTION, ARTICLE, PARAGRAPH,
+            ANNEX or RECITAL.
+        id: Node id, unique within the instrument.
+        properties: Element properties (text, citation_ref, order, heading), each a str or int.
     """
 
     element_type: str  # Cellar/ELI vocabulary: CHAPTER/SECTION/ARTICLE/PARAGRAPH/ANNEX/RECITAL
@@ -83,7 +92,15 @@ class StructuralNode:
 
 @dataclass(frozen=True, slots=True)
 class StructuralEdge:
-    """One parent -> child edge in the native structural graph."""
+    """One parent to child edge in the native structural graph.
+
+    Attributes:
+        parent_element_type: `RegulatoryInstrument` for top-level children, otherwise the
+            parent `StructuralNode.element_type`.
+        parent_id: Id of the parent node.
+        child_element_type: `element_type` of the child node.
+        child_id: Id of the child node.
+    """
 
     parent_element_type: (
         str  # "RegulatoryInstrument" for top-level children, else a StructuralNode.element_type
@@ -95,11 +112,12 @@ class StructuralEdge:
 
 @dataclass(frozen=True, slots=True)
 class FetchedRegulatoryInstrumentStructure:
-    """The Adapter's single return type.
+    """What an adapter returns for one instrument: fetch and parse are a single action.
 
-    `FetchRegulatoryInstrumentStructure`'s post-condition ('structural text
-    held in memory, ready for PersistNativeStructuralGraph') confirms
-    fetch+parse are one Adapter action, not two.
+    Attributes:
+        metadata: The instrument's bibliographic metadata.
+        nodes: Structural nodes held in memory, ready to be persisted.
+        edges: Parent to child edges between the nodes (and the instrument node).
     """
 
     metadata: RegulatoryInstrumentMetadata
@@ -111,8 +129,12 @@ class FetchedRegulatoryInstrumentStructure:
 class ReachabilityCount:
     """Per-label result of `verify_structural_graph_reachable`.
 
-    How many nodes of one label exist in the graph versus how many are
-    actually reachable from the RegulatoryInstrument node.
+    How many nodes of one label exist in the graph versus how many are reachable from the
+    RegulatoryInstrument node.
+
+    Attributes:
+        total: Count of nodes with the label in the graph.
+        reachable: Count of those nodes reachable from the RegulatoryInstrument node.
     """
 
     total: int
@@ -121,7 +143,13 @@ class ReachabilityCount:
 
 @dataclass(frozen=True, slots=True)
 class IngestResult:
-    """`ingest_regulatory_instrument()`'s return value — the outcome of one run."""
+    """The outcome of one `ingest_regulatory_instrument` run.
+
+    Attributes:
+        regulatory_instrument_id: Final `{SHORT}-{VERSION}` id of the persisted instrument.
+        run_id: Identifier of this run.
+        counts: Per-label `ReachabilityCount` measured after the write.
+    """
 
     regulatory_instrument_id: str
     run_id: str

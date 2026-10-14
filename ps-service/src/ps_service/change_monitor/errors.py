@@ -1,11 +1,9 @@
 """Domain-specific exception types for `ps_service.change_monitor`.
 
 One exception type per distinct failure boundary this component owns, never
-a generic `Exception`/`ValueError` (L1 Error Handling, L2 Error Handling).
-Mirrors the shape of `ps_service.ingestion.errors` /
-`ps_service.company_merge.errors`, but with a shared `ChangeMonitorError`
-base so a caller can catch every change-monitor failure with one `except`
-(PLAN_REVIEWED.md §2 "Error types").
+a generic `Exception`/`ValueError`. Every type derives from `ChangeMonitorError`
+so a caller can catch every change-monitor failure with one `except` while
+still handling each concrete failure precisely.
 """
 
 from __future__ import annotations
@@ -21,17 +19,18 @@ _NATIONAL_TRANSPOSITION_NOT_SUPPORTED_MESSAGE = (
 class ChangeMonitorError(Exception):
     """Base class for every error raised by `ps_service.change_monitor`.
 
-    Lets a caller catch any change-monitor failure with a single `except`
-    while still allowing precise handling of each concrete subclass.
+    Never raised directly. Catch it to handle any change-monitor failure with a
+    single `except`; catch a subclass to handle one failure boundary.
     """
 
 
 class ChangeMonitorConfigurationError(ChangeMonitorError):
     """The FalkorDB connection could not be established or validated.
 
-    The resolved `ServiceConfig` gave an unreachable host/port, or
-    connectivity could not be confirmed. Raised by
-    `falkordb_client.check_connectivity`.
+    Raised by `falkordb_client.check_connectivity` when the resolved
+    `ServiceConfig` names an unreachable host/port or connectivity cannot be
+    confirmed. The caller should fix the service configuration or database
+    availability and retry.
     """
 
 
@@ -41,7 +40,8 @@ class CellarConsolidationQueryError(ChangeMonitorError):
     Transport failure, a non-200 response, a body that is not the expected
     SPARQL-results JSON shape, or a base-act CELEX that is malformed or
     outside the legislation sector. Raised by
-    `cellar_consolidated.fetch_consolidated_versions`.
+    `cellar_consolidated.fetch_consolidated_versions`. The caller may retry a
+    transport failure; a malformed CELEX is a caller error and will not succeed.
     """
 
 
@@ -49,7 +49,8 @@ class SuccessionPersistenceError(ChangeMonitorError):
     """A FalkorDB write in `succession.py` could not be completed safely.
 
     Wraps the underlying `redis.exceptions.RedisError` and marks FalkorDB
-    unhealthy, mirroring `ingestion.graph_writer._execute_query`.
+    unhealthy. The succession may be partially recorded; the caller should
+    re-run `trigger_reingestion`, which repairs an incomplete succession.
     """
 
 
@@ -57,13 +58,17 @@ class NationalTranspositionNotSupportedError(ChangeMonitorError):
     """`trigger_reingestion` was invoked for a `national_transposition` instrument.
 
     The change monitor supports `regulation` and `directive` framework
-    instruments only. National transposition modeling (#41) and its
-    succession/versioning story (#46) are deferred; this guard raises before
-    any graph write so the prior instrument is left untouched (AC-010).
+    instruments only; national transposition succession and versioning is not
+    modelled. The guard raises before any graph write, so the prior instrument
+    is left untouched. The caller should not retry.
+
+    Args:
+        message: Text of the error; defaults to a message explaining that
+            national transposition re-ingestion is unsupported.
     """
 
     def __init__(self, message: str = _NATIONAL_TRANSPOSITION_NOT_SUPPORTED_MESSAGE) -> None:
-        """Initialise with a default message that names issues #41 and #46."""
+        """Store `message` as the error text."""
         super().__init__(message)
 
 
@@ -74,4 +79,5 @@ class ChangeMonitorStateError(ChangeMonitorError):
     than one — a genuinely inconsistent graph rather than a crash artifact,
     since the prior lookup already excludes the new node and any node
     already superseded into it. Raised by `succession.find_prior_instrument`.
+    The caller should inspect the graph for the short name before retrying.
     """

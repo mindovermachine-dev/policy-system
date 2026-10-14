@@ -1,4 +1,4 @@
-"""Build a swap set on staged copies of its graphs and flip them in together (issue #214 S4).
+"""Build a swap set on staged copies of its graphs and flip them in together.
 
 The caller holds the in-process locks of every leg. For each leg this copies the live graph to a
 staged key named after the set, applies the leg's logged entries beyond its applied marker to the
@@ -41,12 +41,20 @@ STAGED_KEY_MARKER = "__swap__"
 
 
 def staged_name(graph: str, swap_set_id: uuid.UUID) -> str:
-    """Name the staged key of `graph` for one swap set (unique to the set)."""
+    """Name the staged key of `graph` for one swap set (unique to the set).
+
+    Args:
+        graph: Name of the live graph.
+        swap_set_id: Id of the swap set.
+
+    Returns:
+        `{graph}__swap__{swap_set_id}`.
+    """
     return f"{graph}{STAGED_KEY_MARKER}{swap_set_id}"
 
 
 def _ignore(position: int) -> None:
-    """A staged apply moves no applied marker: the caller moves them after the rename."""
+    """Ignore a run callback: a staged apply moves no marker (the caller moves them later)."""
     del position
 
 
@@ -63,7 +71,16 @@ class SwapApplier:
         guard: GraphCallGuard,
         emitter: LogEmitter | None = None,
     ) -> None:
-        """Take the log, the graph opener, the key port, the retry budget and the call guard."""
+        """Take the log, the graph opener, the key port, the retry budget and the call guard.
+
+        Args:
+            log_store: Source of pending log entries and applied markers.
+            graph_opener: Opens a writable handle on a named graph key.
+            key_port: Copies, discards and swaps whole graph keys.
+            settings: Supplies `max_attempts` and the apply batch size.
+            guard: Runs each step with retries and sanitized errors.
+            emitter: Destination of the `swap_discard` entries; `None` disables logging.
+        """
         self._log_store = log_store
         self._graph_opener = graph_opener
         self._key_port = key_port
@@ -74,14 +91,24 @@ class SwapApplier:
     def apply(self, swap_set_id: uuid.UUID, legs: Sequence[SwapGroupRef]) -> float:
         """Make every leg's live graph hold its staged result; return the seconds that took.
 
-        `legs` are the set's pending legs in ascending graph order. Every staged key is gone when
-        this returns or raises, except when the process itself dies.
+        Every staged key is gone when this returns or raises, except when the process itself dies.
+
+        Args:
+            swap_set_id: Id of the swap set; names the staged keys.
+            legs: The set's pending legs in ascending graph order; at least one.
+
+        Returns:
+            The seconds the successful try took, from the first copy to the rename.
 
         Raises:
             SwapConflictError: the watch refused the rename on every try.
             GraphUnavailableError: the graph store stayed unreachable through the retry budget.
             GraphLogUnavailableError: the log stayed unreachable through the retry budget.
             GraphApplyError: the graph store refused a copy or an entry.
+
+        Side Effects:
+            Creates and deletes staged graph keys, replaces each live key by its staged copy and
+            emits a `swap_discard` entry when cleanup fails. It moves no applied marker.
         """
         names = {leg.graph: staged_name(leg.graph, swap_set_id) for leg in legs}
         pending = {leg.graph: self._pending_entries(leg.graph) for leg in legs}

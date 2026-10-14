@@ -1,30 +1,23 @@
-"""ps_service.domain_mapper.derivation — the DeriveObligationsAndCapabilities action.
+"""ps_service.domain_mapper.derivation: the derive-obligations-and-capabilities action.
 
-Holds the public orchestrating function (`derive_obligations_and_capabilities`,
-PLAN_REVIEWED.md §11 Increment 16, wiring Increments 11-15 plus §7.2's
-`_read_requirements_by_role`), the whole-run Obligation derivation
-(`_derive_obligations`, Increment 12), and the whole-run Capability
-derivation (`_derive_capabilities`, Increment 14, §7.4).
+Holds the public orchestrating function (`derive_obligations_and_capabilities`), the read-back
+of Requirements grouped by Role (`_read_requirements_by_role`), the whole-run Obligation
+derivation (`_derive_obligations`) and the whole-run Capability derivation
+(`_derive_capabilities`).
 
-Obligation identity is Role-scoped (`identity.obligation_id(role_node_id,
-text)`, resolution of issue #42), so a given duty text under two different
-Roles is two distinct Obligation nodes by construction — there is no
-cross-Role collision to detect or resolve here. The whole-run registry
-below still guarantees that the SAME Role independently minting the same
-duty text twice in one run converges onto a single node (the code, not the
-LLM, owns that).
+Obligation identity is Role-scoped (`identity.obligation_id(role_node_id, text)`), so a given
+duty text under two different Roles is two distinct Obligation nodes by construction and there
+is no cross-Role collision to resolve. The whole-run registry still guarantees that the SAME
+Role minting the same duty text twice in one run converges onto a single node: the code, not
+the LLM, owns that.
 
-**`_read_requirements_by_role`** (this increment) is §7.2's B3 fix (b): the
-read-side complement to `graph_writer.py`'s write-side B3 fix (a)
-(`_validate_role_references`). It reads every Requirement back from the
-baseline graph, grouped by its `role_id` bookkeeping property (§7.2), and
-raises `DomainMapperDerivationError` — naming the offending Requirement id
-and its unresolved `role_id` — if any Requirement's `role_id` does not
-resolve to a Role node in this baseline graph, BEFORE any LLM call is made
-for any Role's Requirements. This defends against a baseline graph left in
-a partially-written state by an older run or edited out of band; it should
-never fire against a graph written by the current, B3-hardened
-`persist_role_and_requirement_graph`.
+`_read_requirements_by_role` is the read-side complement to the write-side check in
+`graph_writer.py` (`_validate_role_references`). It reads every Requirement back from the
+baseline graph, grouped by its `role_id` bookkeeping property, and raises
+`DomainMapperDerivationError` (naming the Requirement id and its unresolved `role_id`) if any
+`role_id` does not resolve to a Role node, before any LLM call is made. This defends against a
+baseline graph left partially written or edited out of band; it does not fire against a graph
+written by `persist_role_and_requirement_graph`.
 """
 
 from __future__ import annotations
@@ -94,43 +87,58 @@ def derive_obligations_and_capabilities(
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> DerivationResult:
-    """DeriveObligationsAndCapabilities — PLAN_REVIEWED.md §7.1/§11 Increment 16's flow.
+    """Derive Obligations and Capabilities from one instrument's Requirements in its baseline graph.
 
-    No `adapter` parameter (§7.1) — this action reads only the baseline
-    graph's own fixed PS-Conceptual-Model shape, identical regardless of
-    source.
+    Takes no `adapter`: it reads only the baseline graph's fixed domain-model shape, identical
+    regardless of source.
 
-    0. `require_caught_up` on the baseline graph: a group an earlier run committed but did not
+    Steps:
+
+    0. `require_caught_up` on the baseline graph. A group an earlier run committed but did not
        apply (extraction's, on a solo resume) would make the read below stale, so the stage
        fails with `DomainMapperPersistenceError` before any read, LLM call or write.
-    1. `_read_requirements_by_role(baseline_graph, regulatory_instrument_id)` — §7.2's read-back
-       (scoped to the Requirements this instrument version `EXPRESSES`),
-       including its whole-collection dangling-`role_id` check, which runs
-       to completion (raising on the first violation found) before any LLM
-       call is made anywhere in this function.
-    2. `_derive_obligations` (Increment 12) — whole-run
-       mint/match/unmatchable resolution. Its own `outcome="unmatched"` log
-       entries are emitted internally (§7.5) — not duplicated here.
-    3. `_derive_capabilities` (Increment 14), called with `_derive_obligations`'s
-       `obligation_nodes` output directly — whole-run Capability
-       mint/match.
+    1. `_read_requirements_by_role`, scoped to the Requirements this instrument version
+       `EXPRESSES`, including its whole-collection dangling-`role_id` check, which completes
+       before any LLM call.
+    2. `_derive_obligations`: whole-run mint, match or unmatchable resolution. It emits its own
+       `outcome="unmatched"` log entries.
+    3. `_derive_capabilities` over the resulting Obligation nodes: whole-run Capability mint or
+       match. Obligations whose Capability response was malformed are returned in
+       `DerivationResult.unmatched_obligation_ids` as surfaced data, not a run failure; every
+       Obligation node is still submitted.
+    4. `graph_writer.persist_obligation_and_capability_graph` submits the Obligations,
+       Capabilities and edges as ONE Graph Write Gateway group on `baseline_graph_name` under
+       `audit_event_id`. `baseline_graph` is only read. Nothing to write submits nothing.
+    5. Emit one `outcome="succeeded"` log entry for the whole call. `run_id` is whatever the
+       caller already bound, or `None`; no run context is bound here.
 
-       Capability derivation's own `unmatched_obligation_ids` (issue #64)
-       flows straight into this function's returned
-       `DerivationResult.unmatched_obligation_ids`, mirroring
-       `unmatched_requirement_ids`'s own path from step 2 — this is
-       surfaced data, not a run failure. Every Obligation node is still
-       submitted via `graph_writer.persist_obligation_and_capability_graph`
-       (step 4) regardless of whether its own Capability derivation
-       resolved.
-    4. `graph_writer.persist_obligation_and_capability_graph` (Increment 15, gateway since #209)
-       — submits the Obligations, Capabilities and edges as ONE Graph Write Gateway group on
-       `baseline_graph_name` under `audit_event_id`; `baseline_graph` is only read (the
-       Requirements here, the existing-endpoint check there); nothing to write submits nothing.
-    5. Emits one `outcome="succeeded"` entry for the whole call. No
-       `bind_run_context()` call here (§6) — `run_id` is whatever the
-       caller already bound, or `None`.
-    6. Returns `DerivationResult`.
+    Args:
+        regulatory_instrument_id: Id of the RegulatoryInstrument whose Requirements are derived
+            from.
+        baseline_graph: Read handle on the `{short}_baseline` graph.
+        submitter: Gateway submitter for the derivation group.
+        baseline_graph_name: Target `{short}_baseline` graph.
+        audit_event_id: Audit event the group is recorded under.
+        model: Model identifier passed to the LLM interface.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        The `DerivationResult` with the Obligation and Capability ids written and the ids of
+        unmatched Requirements and Obligations; the tuples are empty when there is nothing to
+        derive.
+
+    Raises:
+        DomainMapperDerivationError: A Requirement's `role_id` does not resolve to a Role node.
+        DomainMapperPersistenceError: The baseline graph is behind its log, a property cannot be
+            stored, or the gateway does not take the group.
+        LlmProviderError: The LLM provider fails; this is an infrastructure failure and aborts
+            the whole run.
+
+    Side Effects:
+        Reads the baseline graph, calls the LLM per Requirement and per distinct Obligation (plus
+        one verification call per Capability reuse proposal), submits one gateway group, and
+        emits structured log entries.
     """
     require_caught_up(submitter, baseline_graph_name, DomainMapperPersistenceError)
     roles = tuple(_read_requirements_by_role(baseline_graph, regulatory_instrument_id).values())
@@ -174,33 +182,31 @@ def derive_obligations_and_capabilities(
 def _read_requirements_by_role(
     baseline_graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, RoleRequirements]:
-    """PLAN_REVIEWED.md §7.2's exact Cypher and validation logic — the B3 read-side fix.
+    """Read the instrument's Requirements back from the baseline graph, grouped by Role.
 
-    `MATCH (:RegulatoryInstrument {id: $rid})-[:EXPRESSES]->(req:Requirement)
-    OPTIONAL MATCH (rl:Role {id: req.role_id})
-    RETURN req.id, req.text, req.role_id, rl.id, rl.name` — every row is
-    materialized FIRST, then every row's `rl.id` (the `OPTIONAL MATCH`
-    result) is checked non-null for every row whose `req.role_id` is itself
-    non-null, BEFORE any grouping/return happens. If any row has a non-null
-    `req.role_id` but a null `rl.id` — a Requirement references a Role that
-    doesn't exist in this baseline graph — raises
-    `DomainMapperDerivationError` naming the dangling Requirement id and its
-    unresolved `role_id`, on the FIRST violation found. This is a
-    whole-collection check, not incremental, and runs before any LLM call
-    is made for any Role's Requirements (this function makes no LLM calls
-    itself, and is always called before `_derive_obligations` by
-    `derive_obligations_and_capabilities`).
+    Runs `MATCH (:RegulatoryInstrument {id: $rid})-[:EXPRESSES]->(req:Requirement)
+    OPTIONAL MATCH (rl:Role {id: req.role_id}) RETURN req.id, req.text, req.role_id, rl.id,
+    rl.name`. Every row is materialized first and checked before any grouping: a row with a
+    non-null `req.role_id` but a null `rl.id` means the Requirement references a Role absent
+    from this baseline graph. The check is whole-collection and runs before any LLM call (this
+    function makes none).
 
-    A Requirement with no `role_id` at all (`req.role_id is None`) is not a
-    dangling reference — there is nothing to resolve — and is silently
-    excluded from every group (it belongs to no Role's derivation). Every
-    `RequirementNode` `extraction.py::_build_requirement_graph` produces
-    always sets `role_id`, so this should never occur from a correctly
-    written baseline graph.
+    A Requirement with no `role_id` is not a dangling reference and is excluded from every
+    group, since it belongs to no Role's derivation. `extraction.py::_build_requirement_graph`
+    always sets `role_id`, so this does not occur in a correctly written baseline graph.
 
-    Returns a `dict[role_node_id, RoleRequirements]`, grouping Requirements
-    by their resolved Role node id in the order each Role is first
-    encountered among the rows, each Role's own Requirements in row order.
+    Args:
+        baseline_graph: Read handle on the baseline graph.
+        regulatory_instrument_id: Id of the RegulatoryInstrument whose Requirements are read.
+
+    Returns:
+        Map from Role node id to its `RoleRequirements`, with Roles in the order first
+        encountered among the rows and each Role's Requirements in row order; empty when the
+        instrument has no Requirements.
+
+    Raises:
+        DomainMapperDerivationError: On the first Requirement whose `role_id` does not resolve to
+            a Role node, naming the Requirement id and the unresolved `role_id`.
     """
     result = baseline_graph.query(
         _READ_REQUIREMENTS_BY_ROLE_QUERY, params={"rid": regulatory_instrument_id}
@@ -246,14 +252,18 @@ def _read_requirements_by_role(
 class _DerivationState:
     """Mutable whole-run accumulator threaded through `_process_requirement`.
 
-    Threaded by `_derive_obligations`'s own loop — never returned to a
-    caller outside this module.
+    Created and owned by `_derive_obligations`; never returned outside this module.
 
-    `registry` is the single whole-run registry (`obligation_id -> (text,
-    assigned_role_node_id)`), seeded empty once for the entire run. It
-    exists so the SAME Role minting identical duty text twice in one run
-    converges onto one node; cross-Role separation is already guaranteed by
-    the Role-scoped `obligation_id` hash (#42), not by this registry.
+    Attributes:
+        registry: The single whole-run registry, `obligation_id -> (text, assigned_role_node_id)`,
+            seeded empty once per run. It makes the SAME Role minting identical duty text twice
+            converge onto one node; cross-Role separation comes from the Role-scoped
+            `obligation_id` hash, not from this registry.
+        obligation_nodes: Obligation nodes minted so far.
+        has_edges: `HAS` edges, one per minted Obligation.
+        satisfied_by_edges: `SATISFIED_BY` edges, one per matched or minted Requirement.
+        unmatched_requirement_ids: Requirements the LLM judged unmatchable or answered
+            malformed.
     """
 
     registry: dict[str, tuple[str, str]] = field(default_factory=dict)
@@ -275,45 +285,43 @@ def _derive_obligations(
     tuple[RequirementSatisfiedByEdge, ...],
     tuple[str, ...],
 ]:
-    """Whole-run Obligation derivation, adapted for #42's Role-scoped Obligation identity.
+    """Run the whole-run Obligation derivation over `roles` and return pure data.
 
-    PLAN_REVIEWED.md §7.3.
+    Iterates `roles` in the given document order and, within each Role, its `requirements` in
+    the given order; no reordering is applied. One registry spans the whole run and is never
+    reset per Role.
 
-    Iterates `roles` in document order, and within each Role its
-    `requirements` in document order (the caller's own tuple order — this
-    function imposes no reordering of its own). A single `registry`
-    (`_DerivationState.registry`) spans the WHOLE run, seeded empty once at
-    the start, never reset per-Role.
+    For each Requirement the LLM is called with the calling Role's own slice of the registry,
+    recomputed immediately before every call so that a Role's earlier mint in this run is visible
+    to its later Requirements' match decisions. Two outcomes:
 
-    For each Requirement: calls the LLM (Increment 11's prompt/parser) with
-    `role_view` — the calling Role's own slice of `registry`, recomputed
-    fresh immediately before every call (not cached once per Role) so that
-    a Role's own earlier mint in this same run is visible to its own later
-    Requirements' match decisions (Increment 12 test (a) requires this: a
-    second, duty-matching Requirement under the SAME Role must be able to
-    match the first's freshly-minted entry). Three outcomes:
+    - Unmatchable, either explicitly or because the response was malformed
+      (`DomainMapperDerivationError` from `parse_obligation_response`): the Requirement id is
+      added to the unmatched ids, an `outcome="unmatched"` log entry is emitted, and derivation
+      continues. No Obligation is involved. An `LlmProviderError` is not caught and aborts the
+      run.
+    - Otherwise `_resolve_obligation_id` decides between a mint and a same-Role reuse against
+      the whole-run registry. The Obligation node and `HAS` edge are created only on a mint; a
+      `SATISFIED_BY` edge is always written.
 
-    - `unmatchable` (explicit, or an unparseable/malformed
-      `DomainMapperDerivationError` from `parse_obligation_response` —
-      §7.5 unifies both under one mechanism, "surfaced, not silently
-      skipped"): the Requirement's id is added to `unmatched_requirement_ids`,
-      an `outcome="unmatched"` log entry is emitted, and derivation
-      continues to the next Requirement — no exception propagates and no
-      Obligation is involved. An `LlmProviderError` (a genuine infra
-      failure calling the LLM at all) is, as in extraction, never caught
-      here — it propagates and aborts the whole derivation run.
-    - Otherwise, `_resolve_obligation_id` (below) computes the Obligation
-      id/text against the WHOLE-run `registry` — either a mint or a
-      same-Role reuse (the Role-scoped `obligation_id` hash means a
-      different Role can never produce a colliding id). A `HAS` edge and
-      Obligation node are created only the first time a given id appears
-      (mint); a `SATISFIED_BY` edge is always written.
+    Persisting the result is `graph_writer.persist_obligation_and_capability_graph`'s job.
 
-    Returns `(obligation_nodes, has_edges, satisfied_by_edges,
-    unmatched_requirement_ids)` — pure data, no graph writes. Persisting
-    this is `graph_writer.persist_obligation_and_capability_graph`'s job (a gateway
-    group), the same split Increment 8 (pure) / Increment 9 (writer) established for
-    Role/Requirement.
+    Args:
+        roles: Roles with their Requirements, in document order.
+        model: Model identifier for the LLM call.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        `(obligation_nodes, has_edges, satisfied_by_edges, unmatched_requirement_ids)`; all
+        empty when `roles` is empty.
+
+    Raises:
+        LlmProviderError: The LLM call fails.
+
+    Side Effects:
+        Calls the LLM once per Requirement and emits one `outcome="unmatched"` entry per
+        unmatched Requirement. Writes nothing to the graph.
     """
     state = _DerivationState()
     for role in roles:
@@ -345,10 +353,10 @@ def _process_requirement(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> None:
-    """One Requirement's mint-or-match-or-unmatchable decision.
+    """Decide one Requirement as mint, match or unmatchable, and record the result in `state`.
 
-    Plus the whole-registry id resolution and the corresponding node/edge
-    bookkeeping. Mutates `state` in place.
+    Includes the whole-run registry id resolution and the node and edge bookkeeping. Mutates
+    `state` in place.
     """
     role_view = _role_view(state.registry, role.role_node_id)
 
@@ -392,11 +400,10 @@ def _process_requirement(
 
 
 def _role_view(registry: dict[str, tuple[str, str]], role_node_id: str) -> dict[str, str]:
-    """PLAN_REVIEWED.md §7.3 step 1 — "the slice of the whole-run registry already assigned to R".
+    """Return the slice of the whole-run `registry` already assigned to `role_node_id`.
 
-    Recomputed fresh from the live whole-run `registry` at each call site
-    (not cached once per Role) so a Role's own earlier mint in this run is
-    visible to that same Role's later Requirements.
+    Maps obligation id to text. It is recomputed from the live registry at each call site, not
+    cached per Role, so a Role's own earlier mint is visible to that Role's later Requirements.
     """
     return {
         oid: text
@@ -408,11 +415,11 @@ def _role_view(registry: dict[str, tuple[str, str]], role_node_id: str) -> dict[
 def _mark_unmatched(
     requirement_id: str, state: _DerivationState, emitter: LogEmitter | None
 ) -> None:
-    """§7.5 — unify the "explicit unmatchable" and "malformed response" failure modes.
+    """Record `requirement_id` as unmatched and log it.
 
-    One mechanism: surfaced via the return value and an
-    `outcome="unmatched"` log entry, never a silently-dropped Requirement
-    and never an uncaught exception.
+    One mechanism covers both the explicit unmatchable outcome and a malformed response: the
+    id is surfaced in the result and as an `outcome="unmatched"` log entry, never silently
+    dropped and never raised.
     """
     state.unmatched_requirement_ids.append(requirement_id)
     emit_log_entry(
@@ -432,22 +439,25 @@ def _resolve_obligation_id(
 ) -> tuple[str, str, bool]:
     """Resolve one proposed duty text to its final Obligation id against the whole-run registry.
 
-    Mutates `registry` in place on a mint; a reuse never mutates it.
+    Mutates `registry` on a mint; a reuse does not.
 
-    Returns `(final_obligation_id, final_text, is_new_mint)`.
+    - `obligation_id(role_node_id, proposed_text)` not in `registry`: mint it and register
+      `(proposed_text, role_node_id)`.
+    - Already in `registry`: the SAME Role is re-minting or re-matching its own registered
+      Obligation (only that Role can produce the id, since the Role is in the hash). The
+      existing id and text are reused. This keeps same-Role convergence correct even when the
+      LLM independently mints the same text twice.
 
-    - `oid = obligation_id(role_node_id, proposed_text)` not in `registry`:
-      mint it, register `(proposed_text, role_node_id)`, `is_new_mint=True`.
-    - `oid` already in `registry`: the SAME Role re-minting/re-matching its
-      own already-registered Obligation (only the same Role can produce
-      this id — it is in the hash). Reuse the existing id/text,
-      `is_new_mint=False`. This is what makes same-Role convergence correct
-      even when the LLM independently mints the same text twice — the code,
-      not the model, guarantees uniqueness.
+    There is no cross-Role case: the Role-scoped `obligation_id` gives two Roles two ids for
+    identical duty text, so each is its own mint with its own `HAS` edge.
 
-    There is no cross-Role case: #42's Role-scoped `obligation_id` gives two
-    different Roles two different ids for identical duty text, so each
-    lands as its own mint with its own `HAS` edge.
+    Args:
+        proposed_text: The duty text proposed by the LLM.
+        role_node_id: Id of the Role that bears the duty.
+        registry: The whole-run registry, `obligation_id -> (text, assigned_role_node_id)`.
+
+    Returns:
+        `(final_obligation_id, final_text, is_new_mint)`.
     """
     oid = obligation_id(role_node_id, proposed_text)
     existing = registry.get(oid)
@@ -471,17 +481,26 @@ def _derive_obligation_for_requirement(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> ObligationAssignment:
-    """Call the LLM once for one Requirement, returning its `ObligationAssignment`.
+    """Call the LLM once for one Requirement and return its `ObligationAssignment`.
 
-    Uses Increment 11's prompt/parser.
+    Args:
+        requirement_id: Id of the Requirement being decided.
+        role_node_id: Id of the Role that bears the Requirement.
+        role_name: Name of that Role, shown to the LLM.
+        requirement_text: The Requirement's duty text.
+        role_view: The Role's existing Obligations, `obligation_id -> text`.
+        model: Model identifier for the LLM call.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
 
-    A `DomainMapperDerivationError` from a malformed/unparseable LLM
-    response propagates unchanged — this function does not catch it;
-    unifying it with the explicit `unmatchable` outcome is
-    `_process_requirement`'s job (§7.5), not this one's. An
-    `LlmProviderError` from `route_completion` itself is likewise never
-    caught here — it propagates and aborts the whole run, the same
-    fail-fast infra boundary `extraction.py` follows.
+    Returns:
+        The parsed assignment; its `obligation_*` fields are `None` when the Requirement is
+        unmatchable.
+
+    Raises:
+        DomainMapperDerivationError: The LLM response is malformed. Not caught here; unifying it
+            with the unmatchable outcome is `_process_requirement`'s job.
+        LlmProviderError: The LLM call itself fails; this aborts the whole run.
     """
     messages = _build_obligation_messages(
         role_name=role_name, requirement_text=requirement_text, role_view=role_view
@@ -495,10 +514,10 @@ def _derive_obligation_for_requirement(
 def _build_obligation_messages(
     *, role_name: str, requirement_text: str, role_view: dict[str, str]
 ) -> list[ChatMessage]:
-    """System prompt + one user message carrying the Requirement's duty text and registry view.
+    """Build the system prompt and one user message carrying the duty text and registry view.
 
-    The duty text and the Role's own registry view are clearly delimited
-    from the system prompt's instructions (L2's untrusted-content rule).
+    The duty text and the Role's own registry view are delimited from the system prompt's
+    instructions because they are untrusted input.
     """
     registry_text = "\n".join(f"- {oid}: {text}" for oid, text in role_view.items()) or "(empty)"
     user_content = (
@@ -514,17 +533,23 @@ def _build_obligation_messages(
     ]
 
 
-# --- Capability derivation (PLAN_REVIEWED.md §11 Increment 14) -------------
+# --- Capability derivation ---
 
 
 @dataclass
 class _CapabilityDerivationState:
     """Mutable whole-run accumulator threaded through `_derive_capabilities`'s loop.
 
-    Mirrors `_DerivationState`. `registry` is the single whole-run Capability
-    registry (`capability_id -> (name, description)`), seeded empty once for
-    the entire run — deliberately Obligation- and Role-independent (§7.4),
+    Mirrors `_DerivationState`, but its registry is deliberately Obligation- and Role-independent,
     unlike Obligation derivation's Role-scoped registry.
+
+    Attributes:
+        registry: The single whole-run Capability registry,
+            `capability_id -> (name, description)`, seeded empty once per run.
+        capability_nodes: Capability nodes minted so far.
+        requires_edges: `REQUIRES` edges recorded so far.
+        unmatched_obligation_ids: Obligations whose Capability derivation was malformed or
+            failed verification.
     """
 
     registry: dict[str, tuple[str, str | None]] = field(default_factory=dict)
@@ -540,51 +565,45 @@ def _derive_capabilities(
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> tuple[tuple[CapabilityNode, ...], tuple[CapabilityRequiresEdge, ...], tuple[str, ...]]:
-    """PLAN_REVIEWED.md §7.4 — whole-run Capability derivation.
+    """Run the whole-run Capability derivation over `obligations` and return pure data.
 
-    Dedups `obligations` by `.id` first (`_distinct_obligations`,
-    first-seen text wins for a repeated id) — exactly one LLM call per
-    DISTINCT Obligation, never more, even if the same Obligation appears
-    more than once in `obligations` (e.g. because two Requirements both
-    routed to it upstream — §7.4's explicit "you must not call the LLM
-    twice for it" instruction). Since all downstream processing (the LLM
-    call, node/edge creation) is keyed off this same deduped list, a
-    repeated input entry also collapses to a single Capability set and a
-    single `REQUIRES` edge per Capability it requires — not one per
-    occurrence in the input.
+    `obligations` is de-duplicated by `.id` first (`_distinct_obligations`; the first-seen text
+    wins), so there is exactly one LLM call per DISTINCT Obligation even if the same Obligation
+    appears more than once (for example because two Requirements routed to it). A repeated input
+    entry therefore also collapses to a single Capability set and a single `REQUIRES` edge per
+    Capability.
 
-    A single registry (`capability_id -> (name, description)`) spans the
-    WHOLE run, across every distinct Obligation processed — Capability
-    convergence is deliberately Obligation- AND Role-independent (§7.4),
-    unlike Obligation derivation's own Role-scoped `role_view` — there is
-    no role-qualification concept anywhere in this stage. If two different
-    Obligations' LLM responses both name/match the same Capability (by
-    `identity.capability_id(name)`), that is a legitimate single shared
-    Capability node with multiple `REQUIRES` edges, one per Obligation —
-    the registry, not the model, guarantees this, mirroring
-    `_resolve_obligation_id`'s own code-guarantees-uniqueness philosophy.
+    One registry spans the whole run. Capability convergence is Obligation- and Role-independent:
+    if two Obligations' responses name or match the same Capability (by
+    `identity.capability_id(name)`), it is one shared node with one `REQUIRES` edge per
+    Obligation. The registry, not the model, guarantees this. One Obligation's response may name
+    more than one Capability, each giving its own `REQUIRES` edge from the same Obligation.
 
-    A single Obligation's response may name/match MORE THAN ONE
-    Capability — each produces its own `REQUIRES` edge off the SAME
-    Obligation node (multi-capability-per-Obligation support, ported from
-    `spikes/cellar2/derive_capabilities.py`, a proven finding retained
-    here per §7.4/§11 Increment 13's explicit instruction).
+    A malformed response for one Obligation (`DomainMapperDerivationError` from
+    `parse_capability_response`) is isolated by `_process_obligation`: that Obligation's id is
+    added to the unmatched ids and an `outcome="unmatched"` log entry is emitted, but derivation
+    continues for every other Obligation and the registry built so far is not affected. An
+    `LlmProviderError` is not caught and aborts the run.
 
-    Returns `(capability_nodes, requires_edges, unmatched_obligation_ids)` —
-    pure data, no graph writes (persisting is
-    `graph_writer.persist_obligation_and_capability_graph`'s job, a gateway group).
-    A malformed/unparseable response for one Obligation
-    (`DomainMapperDerivationError` from `parse_capability_response`) is
-    isolated by `_process_obligation` (issue #64): that one Obligation's id
-    is added to `unmatched_obligation_ids` and an `outcome="unmatched"` log
-    entry is emitted, but derivation continues for every other distinct
-    Obligation — the failure neither aborts the run nor poisons the
-    whole-run registry state built up so far. `unmatched_obligation_ids` is
-    threaded all the way into `DerivationResult`, mirroring
-    `unmatched_requirement_ids` — surfaced, never silently dropped. An
-    `LlmProviderError` (a genuine infra failure calling the LLM at all) is,
-    as elsewhere in this module, never caught here — it still propagates
-    and aborts the whole run.
+    Persisting the result is `graph_writer.persist_obligation_and_capability_graph`'s job.
+
+    Args:
+        obligations: Obligation nodes to derive Capabilities for; each must carry a `text`
+            property.
+        model: Model identifier for the LLM call.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        `(capability_nodes, requires_edges, unmatched_obligation_ids)`; all empty when
+        `obligations` is empty.
+
+    Raises:
+        LlmProviderError: The LLM call fails.
+
+    Side Effects:
+        Calls the LLM per distinct Obligation (plus one verification call per reuse proposal) and
+        emits log entries. Writes nothing to the graph.
     """
     state = _CapabilityDerivationState()
 
@@ -614,29 +633,21 @@ def _process_obligation(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> None:
-    """One distinct Obligation's Capability mint-or-match decision, in two phases.
+    """Decide one distinct Obligation's Capabilities in two phases, mutating `state` in place.
 
-    1. **Resolve** (#187): derive the Obligation's `CapabilityDecision`s,
-       then send each reuse proposal (`is_reuse`) through `_verify_reuse`
-       -- one verification call per reuse; first mints pass through
-       unverified. Nothing in `state` changes during this phase.
-    2. **Apply**: register any new Capability and append the `REQUIRES`
-       edges.
+    1. Resolve: derive the Obligation's `CapabilityDecision`s, then send each reuse proposal
+       (`is_reuse`) through `_verify_reuse`, one verification call per reuse. First mints pass
+       through unverified. `state` does not change in this phase.
+    2. Apply: register each new Capability and append the `REQUIRES` edges.
 
-    Mirrors `_process_requirement`'s isolation shape exactly (issue #64):
-    a `DomainMapperDerivationError` raised anywhere in the Resolve phase (a
-    malformed derivation response or a malformed verification response) is
-    caught here, before any state change, and unified with the "surfaced,
-    not silently dropped" outcome via `_mark_capability_unmatched` -- so the
-    Obligation is atomic: it gets either all of its `REQUIRES` edges or
-    none. An `LlmProviderError` is never caught. Mutates `state` in place.
+    A `DomainMapperDerivationError` raised anywhere in the Resolve phase (a malformed derivation
+    or verification response) is caught before any state change and recorded through
+    `_mark_capability_unmatched`, so an Obligation gets either all of its `REQUIRES` edges or
+    none. An `LlmProviderError` is not caught.
 
-    Converge: if a verifier mints the same id as another mint in the same
-    response, the apply loop creates the node once (registry guard), but
-    `requires_edges` holds the `(obligation, capability)` pair twice (no
-    edge dedup). This is harmless: the graph writer
-    de-duplicates edges by identity before submitting, so the gateway group and the
-    graph hold one edge.
+    If a verifier mints the same id as another mint in the same response, the apply loop creates
+    the node once (registry guard) but `requires_edges` holds the `(obligation, capability)` pair
+    twice. This is harmless: the graph writer de-duplicates edges by identity before submitting.
     """
     try:
         proposed_decisions = _derive_capabilities_for_obligation(
@@ -688,35 +699,40 @@ def _verify_reuse(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> CapabilityDecision:
-    """Verify one reuse proposal with exactly one LLM call (#187).
+    """Verify one Capability reuse proposal with exactly one LLM call.
 
-    1. One `route_completion` call judging whether the proposed existing
-       Capability's description covers the Obligation's whole duty.
-    2. `parse_capability_reuse_verdict` -- a malformed verdict raises
+    1. One `route_completion` call judges whether the proposed existing Capability's
+       description covers the Obligation's whole duty.
+    2. `parse_capability_reuse_verdict` parses the verdict; a malformed verdict raises
        `DomainMapperDerivationError` and emits no verdict line.
-    3. On `accept`: emit `outcome="reuse_accepted"`, then return `decision`
-       unchanged (same Capability, no registry change; the first-pass
-       confidence is kept).
-    4. On `reject`: `minted_id = capability_id(verdict.new_name)`.
-       - If `minted_id` is already in `registry` (the verifier "minted" an
-         existing Capability, exactly or case-insensitively): emit
-         `outcome="reuse_rejected"` with `collision=True` and
-         `proposed_capability_id`, then raise `DomainMapperDerivationError`
-         -- the Obligation is marked unmatched; no retry, no second call.
-       - Otherwise: emit `outcome="reuse_rejected"` with
-         `minted_capability_id`, then return a new non-reuse
-         `CapabilityDecision` carrying the verifier's name, description and
-         confidence.
+    3. On `accept`, emit `outcome="reuse_accepted"` and return `decision` unchanged (same
+       Capability, no registry change, first-pass confidence kept).
+    4. On `reject`, `_mint_verifier_capability` turns the verdict into a decision minting the
+       verifier's Capability, or raises when that Capability already exists.
 
-    Design note (confidence): `reject` requires a `confidence` in [0, 1],
-    because the verifier-minted `CapabilityDecision` needs one and
-    `CapabilityDecision.confidence` has no default; a missing or invalid
-    value takes the malformed -> unmatched route. On `accept` the verdict's
-    `confidence` is optional and ignored: the decision keeps the first-pass
-    confidence. Like `new_description`, this is stricter than AC-BI-008's
-    wording.
+    On `reject` the verdict must carry a `confidence` in [0, 1], because the minted
+    `CapabilityDecision` needs one and has no default; a missing or invalid value is a malformed
+    verdict. On `accept` the verdict's `confidence` is optional and ignored.
 
-    An `LlmProviderError` is never caught.
+    Args:
+        decision: The reuse proposal to verify.
+        obligation_text: The Obligation's duty text.
+        registry: The whole-run Capability registry, read only.
+        model: Model identifier for the LLM call.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        `decision` itself on accept, or a new non-reuse decision carrying the verifier's
+        Capability on reject.
+
+    Raises:
+        DomainMapperDerivationError: The verdict is malformed, or the verifier's Capability is
+            already in `registry`.
+        LlmProviderError: The LLM call fails; this is never caught.
+
+    Side Effects:
+        One LLM call and one `verify_capability_reuse` log entry.
     """
     messages = _build_reuse_verification_messages(
         obligation_text=obligation_text,
@@ -748,14 +764,16 @@ def _mint_verifier_capability(
     registry: Mapping[str, tuple[str, str | None]],
     emitter: LogEmitter | None,
 ) -> CapabilityDecision:
-    """Turn a rejected reuse into a decision minting the verifier's Capability (#187).
+    """Turn a rejected reuse into a decision minting the verifier's Capability.
 
-    Raises `DomainMapperDerivationError` when the verifier's Capability is
-    already in `registry` (a collision), after emitting its audit line.
+    `parse_capability_reuse_verdict` guarantees a reject carries a non-empty `new_name` and a
+    `confidence`; the model types them as optional only because `accept` leaves them null.
+
+    Raises:
+        DomainMapperDerivationError: The verifier's Capability is already in `registry` (a
+            collision). Its audit line is emitted first; the Obligation is then marked unmatched
+            by the caller, with no retry and no second call.
     """
-    # `parse_capability_reuse_verdict` guarantees a reject carries a
-    # non-empty `new_name` and a `confidence`; the model types them as
-    # optional only because `accept` leaves them null.
     new_name = cast("str", verdict.new_name)
     minted_id = capability_id(new_name)
     if minted_id in registry:
@@ -813,16 +831,12 @@ def _emit_reuse_verdict(
 def _mark_capability_unmatched(
     obligation_node_id: str, state: _CapabilityDerivationState, emitter: LogEmitter | None
 ) -> None:
-    """§7.5-equivalent for Capability derivation (issue #64).
+    """Record `obligation_node_id` as unmatched for Capability derivation and log it.
 
-    Unifies the malformed-response failure mode with the same "surfaced,
-    never silently dropped" mechanism `_mark_unmatched` establishes for
-    Obligation derivation: the Obligation's id is recorded and an
-    `outcome="unmatched"` log entry is emitted, never a silently-skipped
-    Obligation and never an uncaught exception. Not extracted into a shared
-    helper with `_mark_unmatched` — only the second occurrence of this
-    log-emission shape in this module, below L2's third-occurrence
-    extraction threshold.
+    Uses the same "surfaced, never silently dropped" mechanism as `_mark_unmatched`: the id is
+    recorded and an `outcome="unmatched"` log entry is emitted. It is not shared with
+    `_mark_unmatched` because this is only the second occurrence of the shape, below the
+    third-occurrence extraction threshold.
     """
     state.unmatched_obligation_ids.append(obligation_node_id)
     emit_log_entry(
@@ -835,11 +849,10 @@ def _mark_capability_unmatched(
 
 
 def _distinct_obligations(obligations: tuple[ObligationNode, ...]) -> list[tuple[str, str]]:
-    """First-seen-wins dedup by `.id`.
+    """Return `(id, text)` pairs of `obligations`, de-duplicated by id with the first text winning.
 
-    The mechanism that guarantees the LLM is called at most once per
-    distinct Obligation, even if the same Obligation appears more than once
-    in `obligations` (§7.4).
+    This guarantees the LLM is called at most once per distinct Obligation even if the same
+    Obligation appears more than once in `obligations`.
     """
     seen: dict[str, str] = {}
     for obligation in obligations:
@@ -847,11 +860,8 @@ def _distinct_obligations(obligations: tuple[ObligationNode, ...]) -> list[tuple
     return list(seen.items())
 
 
-# issue #109: status="active" at mint time, mirroring extraction.py's
-# RequirementNode (same ingest-time-active, deprecate-later-via-supersede
-# rule) and ingestion's RegulatoryInstrument.status pattern
-# (graph_writer.py:163).
 def _to_capability_node(decision: CapabilityDecision) -> CapabilityNode:
+    """Build the Capability node for `decision`, active at creation, with `description` if set."""
     properties: dict[str, str | float] = {
         "name": decision.name,
         "status": "active",
@@ -871,16 +881,25 @@ def _derive_capabilities_for_obligation(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> list[CapabilityDecision]:
-    """Call the LLM once for one distinct Obligation, returning its `CapabilityDecision` list.
+    """Call the LLM once for one distinct Obligation and return its `CapabilityDecision` list.
 
-    Uses Increment 13's prompt/parser — possibly more than one entry
-    (multi-capability-per-Obligation, §7.4).
+    The list may hold more than one entry when the Obligation requires several Capabilities.
 
-    A `DomainMapperDerivationError` from a malformed/unparseable response
-    propagates unchanged — this function does not catch it, mirroring
-    `_derive_obligation_for_requirement`'s own split of responsibility. An
-    `LlmProviderError` from `route_completion` itself is likewise never
-    caught here.
+    Args:
+        obligation_node_id: Id of the Obligation being decided.
+        obligation_text: The Obligation's duty text.
+        registry: The whole-run Capability registry, shown to the LLM.
+        model: Model identifier for the LLM call.
+        call_completion: LLM completion caller; `None` uses the default.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        The parsed decisions, mints and reuse proposals alike.
+
+    Raises:
+        DomainMapperDerivationError: The response is malformed. Not caught here;
+            `_process_obligation` isolates it.
+        LlmProviderError: The LLM call fails; this is never caught here.
     """
     messages = _build_capability_messages(obligation_text=obligation_text, registry=registry)
     result = route_completion(
@@ -892,13 +911,12 @@ def _derive_capabilities_for_obligation(
 def _build_capability_messages(
     *, obligation_text: str, registry: dict[str, tuple[str, str | None]]
 ) -> list[ChatMessage]:
-    """System prompt + one user message carrying the Obligation's duty text and the registry.
+    """Build the system prompt and one user message carrying the duty text and the registry.
 
-    The duty text and the WHOLE-run Capability registry built so far are
-    clearly delimited from the system prompt's instructions (L2's
-    untrusted-content rule). Each registry entry is rendered as
-    `id: name — description` (or `— (no description)`), so the model can
-    judge whether an existing Capability covers the Obligation's whole duty.
+    The duty text and the whole-run Capability registry built so far are delimited from the
+    system prompt's instructions because they are untrusted input. Each registry entry is
+    rendered as `id: name — description` (or `— (no description)`), so the model can judge
+    whether an existing Capability covers the Obligation's whole duty.
     """
     registry_text = (
         "\n".join(
@@ -924,11 +942,10 @@ def _build_capability_messages(
 def _build_reuse_verification_messages(
     *, obligation_text: str, capability_name: str, capability_description: str | None
 ) -> list[ChatMessage]:
-    """System prompt + one user message carrying one Obligation/Capability pair (#187).
+    """Build the system prompt and one user message carrying one Obligation and Capability pair.
 
-    The duty text and the Capability's name/description are delimited by
-    their own tags in the user message and never placed in the system
-    prompt (L2's untrusted-content rule).
+    The duty text and the Capability's name and description sit in their own tags in the user
+    message and never in the system prompt, because they are untrusted input.
     """
     user_content = (
         "<obligation_text>\n"

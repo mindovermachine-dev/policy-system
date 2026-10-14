@@ -1,10 +1,10 @@
-"""Typed `details` for the graph-cleanup audit actions (issue #190).
+"""Typed `details` for the graph-cleanup audit actions.
 
 Registers each model with `ps_service.audit.models.register_audit_action` at import time
 (the idiom `ps_service.authz.audit_actions` and `ps_service.policy_lifecycle.audit_actions`
 use). The emitting module imports this one, so registration precedes any record.
 
-`capability.merge` (AC-BI-021): both ids, policy case, acknowledgment, approval id and a
+`capability.merge` records both ids, policy case, acknowledgment, approval id and a
 before/after `GraphSnapshot` sufficient to reverse the merge. `obligation.merge` carries the
 same audit contract minus the policy case and acknowledgment, which do not apply to an
 Obligation; its `before` snapshot holds the deleted node in full with all of its edges.
@@ -66,7 +66,7 @@ class CapabilityMergeDetails(AuditDetails):
     reason_code: (
         Literal["graph_guard_missed", "graph_write_failed", "interrupted_no_effect"] | None
     ) = None
-    # Case 2 (M3): the governing policy's status at execution and the ids of every Capability
+    # Case 2: the governing policy's status at execution and the ids of every Capability
     # it governed before and after the merge. Absent for case 1 and for an orphan `failed` row.
     policy_id: str | None = None
     policy_status: str | None = None

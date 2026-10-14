@@ -2,7 +2,7 @@
 
 Generated tables live between `BEGIN GENERATED <id>` and `END GENERATED <id>` marker lines;
 `replace_regions` rewrites only the bytes between a marker pair and returns everything
-outside the markers unchanged (AC-BI-007).
+outside the markers unchanged.
 """
 
 from __future__ import annotations
@@ -55,7 +55,15 @@ _EDGE_PRESENCE_TEXT = {
 
 
 def begin_marker(region_id: str) -> str:
-    """Return the BEGIN marker line (without newline) for `region_id`."""
+    """Return the BEGIN marker line (without newline) for `region_id`.
+
+    Args:
+        region_id: The generated region's id, for example `edge-catalog`; must match the marker
+            id pattern (a letter, then letters, digits, `:` or `-`).
+
+    Returns:
+        An HTML comment line that names the region and the command that regenerates it.
+    """
     return (
         f"{_BEGIN_PREFIX}{region_id}. Generated from ps_service.domain_schema, "
         f"do not edit by hand. Regenerate with: {_REGENERATE_COMMAND} -->"
@@ -63,11 +71,19 @@ def begin_marker(region_id: str) -> str:
 
 
 def end_marker(region_id: str) -> str:
-    """Return the END marker line (without newline) for `region_id`."""
+    """Return the END marker line (without newline) for `region_id`.
+
+    Args:
+        region_id: The id of the region the line closes.
+
+    Returns:
+        An HTML comment line that closes the region.
+    """
     return f"{_END_PREFIX}{region_id} -->"
 
 
 def _line_body(line: str) -> str:
+    """Return `line` without its trailing line break."""
     return line.rstrip("\r\n")
 
 
@@ -80,7 +96,14 @@ def _marker_of(line: str) -> tuple[str, str] | None:
 
 
 def find_region_ids(text: str) -> tuple[str, ...]:
-    """Return the region ids of every BEGIN marker in `text`, in document order."""
+    """Return the region ids of every BEGIN marker in `text`, in document order.
+
+    Args:
+        text: A document that may contain generated-region markers.
+
+    Returns:
+        The ids in order of appearance, duplicates included; empty when there are no markers.
+    """
     ids: list[str] = []
     for line in text.splitlines():
         marker = _marker_of(line)
@@ -94,6 +117,13 @@ def replace_regions(text: str, rendered: Mapping[str, str]) -> str:
 
     The marker lines and every byte outside them are kept as found; a region body becomes a
     blank line, the rendered table (LF line endings) and a blank line.
+
+    Args:
+        text: The document containing BEGIN/END marker pairs.
+        rendered: Region id -> rendered table text; must hold an entry for every region in `text`.
+
+    Returns:
+        The updated document text.
 
     Raises:
         DomainSchemaError: on a BEGIN without END, an END without BEGIN or for another id, a
@@ -127,6 +157,7 @@ def replace_regions(text: str, rendered: Mapping[str, str]) -> str:
 def _check_can_open(
     open_id: str | None, region_id: str, seen: set[str], rendered: Mapping[str, str]
 ) -> None:
+    """Raise unless region `region_id` may open: not nested, not repeated, and renderable."""
     if open_id is not None:
         raise DomainSchemaError(f"region {region_id!r} is nested inside region {open_id!r}")
     if region_id in seen:
@@ -136,6 +167,7 @@ def _check_can_open(
 
 
 def _cell(text: str) -> str:
+    """Escape pipes so `text` stays inside one markdown table cell."""
     return text.replace("|", "\\|")
 
 
@@ -148,6 +180,7 @@ def _escape_cardinality(cardinality: str) -> str:
 
 
 def _type_text(property_type: PropertyType) -> str:
+    """Return the markdown text for a property type, for example `date (ISO 8601)` or `string`."""
     match property_type:
         case StringType():
             return "string"
@@ -162,12 +195,14 @@ def _type_text(property_type: PropertyType) -> str:
 
 
 def _edge_properties_catalog(properties: tuple[EdgeProperty, ...]) -> str:
+    """Return an edge's properties for the Edge Catalog cell, or an em dash when it has none."""
     if not properties:
         return _EM_DASH
     return ", ".join(f"`{p.name}` ({_EDGE_PRESENCE_TEXT[p.presence]})" for p in properties)
 
 
 def _catalog_row(edge: Edge) -> str:
+    """Return one Edge Catalog table row for `edge`."""
     cells = (
         f"`{edge.type}`",
         f"{edge.source} {_ARROW} {edge.target}",
@@ -179,7 +214,14 @@ def _catalog_row(edge: Edge) -> str:
 
 
 def render_edge_catalog(schema: Schema) -> str:
-    """Render the Edge Catalog table: one row per schema edge, in schema order."""
+    """Render the Edge Catalog table: one row per schema edge, in schema order.
+
+    Args:
+        schema: The schema whose edges are listed.
+
+    Returns:
+        A markdown table (header, separator, rows), newline-terminated.
+    """
     header = (
         (
             "| Edge | Source → Target | Cardinality | Properties "
@@ -192,19 +234,34 @@ def render_edge_catalog(schema: Schema) -> str:
 
 
 def _property_row(prop: Property) -> str:
+    """Return one Properties table row for `prop`."""
     prefix = f"| `{prop.name}` | {_type_text(prop.type)} | {_PRESENCE_TEXT[prop.presence]} |"
     note = f" {_cell(prop.note)}" if prop.note else ""
     return f"{prefix}{note} |"
 
 
 def render_properties_table(node: Node) -> str:
-    """Render a node's Properties table: one row per property, in declaration order."""
+    """Render a node's Properties table: one row per property, in declaration order.
+
+    Args:
+        node: The node whose properties are listed.
+
+    Returns:
+        A markdown table (header, separator, rows), newline-terminated.
+    """
     header = ("| Property | Type | Required | Notes |", "|----------|------|----------|-------|")
     return "\n".join((*header, *(_property_row(prop) for prop in node.properties))) + "\n"
 
 
 def properties_region_id(label: str) -> str:
-    """Return the region id of the Properties table of node `label`."""
+    """Return the region id of the Properties table of node `label`.
+
+    Args:
+        label: A node label.
+
+    Returns:
+        The id `properties:<label>`.
+    """
     return f"properties:{label}"
 
 
@@ -213,11 +270,20 @@ _ANCHOR_BY_LABEL = {"RegulatoryInstrument": "regulatory-instrument"}
 
 
 def section_anchor(label: str) -> str:
-    """Return the in-document anchor of the heading that describes node `label`."""
+    """Return the in-document anchor of the heading that describes node `label`.
+
+    Args:
+        label: A node label.
+
+    Returns:
+        The heading anchor: the lower-cased label, except for the labels in a small override map
+        whose heading is a phrase (`RegulatoryInstrument` -> `regulatory-instrument`).
+    """
     return _ANCHOR_BY_LABEL.get(label, label.lower())
 
 
 def _edge_properties_relationship(properties: tuple[EdgeProperty, ...]) -> str:
+    """Return an edge's properties with types for a Relationships cell, or an em dash if none."""
     if not properties:
         return _EM_DASH
     return ", ".join(
@@ -226,6 +292,7 @@ def _edge_properties_relationship(properties: tuple[EdgeProperty, ...]) -> str:
 
 
 def _relationship_row(edge: Edge, *, inbound: bool) -> str:
+    """Return one Relationships row: the edge seen from its target (inbound) or source."""
     other = edge.source if inbound else edge.target
     cardinality = edge.cardinality.flipped() if inbound else edge.cardinality
     direction = "inbound" if inbound else "outbound"
@@ -245,7 +312,16 @@ def _relationship_row(edge: Edge, *, inbound: bool) -> str:
 
 
 def render_relationships_table(schema: Schema, label: str) -> str:
-    """Render the Relationships table of `label`: inbound edges first, then outbound."""
+    """Render the Relationships table of `label`: inbound edges first, then outbound.
+
+    Args:
+        schema: The schema whose edges are scanned.
+        label: The node label whose relationships are listed.
+
+    Returns:
+        A markdown table (header, separator, rows), newline-terminated; header only when the
+        label has no edges.
+    """
     header = (
         "| Edge | Target | Cardinality | Edge Properties | Note |",
         "|------|--------|-------------|------------------|------|",
@@ -256,12 +332,27 @@ def render_relationships_table(schema: Schema, label: str) -> str:
 
 
 def relationships_region_id(label: str) -> str:
-    """Return the region id of the Relationships table of node `label`."""
+    """Return the region id of the Relationships table of node `label`.
+
+    Args:
+        label: A node label.
+
+    Returns:
+        The id `relationships:<label>`.
+    """
     return f"relationships:{label}"
 
 
 def render_regions(schema: Schema) -> dict[str, str]:
-    """Return every generated region id with its rendered table."""
+    """Return every generated region id with its rendered table.
+
+    Args:
+        schema: The schema to render.
+
+    Returns:
+        A mapping holding the `edge-catalog` region, then a Properties and a Relationships region
+        per node, in schema order.
+    """
     regions = {EDGE_CATALOG_REGION: render_edge_catalog(schema)}
     for node in schema.nodes:
         regions[properties_region_id(node.label)] = render_properties_table(node)

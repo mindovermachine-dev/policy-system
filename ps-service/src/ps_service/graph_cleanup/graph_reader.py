@@ -1,8 +1,10 @@
-"""Read-only single-tenant graph reads for `ps_service.graph_cleanup` (issue #190).
+"""Read-only single-tenant graph reads for `ps_service.graph_cleanup`.
 
-Own copy of the connectivity-wrapping shape used by `company_merge.pending_review`
-(`_execute_query`): a driver failure marks FalkorDB unhealthy and is re-raised as
-a generic `GraphCleanupPersistenceError`; success marks it healthy.
+Every read is a literal, parameterised query with no write keyword. The connectivity-wrapping
+shape matches `company_merge.pending_review._execute_query`: a driver failure marks FalkorDB
+unhealthy and is re-raised as a generic `GraphCleanupPersistenceError`; success marks it
+healthy. The planners validate; these reads only report what the graph holds, reporting a
+missing node as `None` or absent.
 """
 
 from __future__ import annotations
@@ -52,8 +54,8 @@ __all__ = [
     "read_release_state",
 ]
 
-# `merged` tombstones and `deprecated` Capabilities are not merge candidates; a
-# legacy node with no `status` counts as active (DC Capability lifecycle).
+# `merged` tombstones and `deprecated` Capabilities are not merge candidates; a node with no
+# `status` property counts as active.
 _ACTIVE_CAPABILITIES_QUERY = (
     "MATCH (c:Capability) WHERE coalesce(c.status,'active') = 'active' "
     "OPTIONAL MATCH (c)-[:GOVERNED_BY]->(p:Policy) "
@@ -63,8 +65,8 @@ _ACTIVE_CAPABILITIES_QUERY = (
 
 
 # One row per (Obligation, Requirement); the Role is the Obligation's single inbound `HAS`.
-# `source_ref` lives on the `EXPRESSES` edge (DC provenance rule, case 2), reached through
-# `SATISFIED_BY`. `$role_id` NULL means every Role.
+# `source_ref` lives on the `EXPRESSES` edge, reached through `SATISFIED_BY`. `$role_id` NULL
+# means every Role.
 _OBLIGATIONS_BY_ROLE_QUERY = (
     "MATCH (r:Role)-[:HAS]->(o:Obligation) "
     "WHERE $role_id IS NULL OR r.id = $role_id "
@@ -78,6 +80,17 @@ def query_rows(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> list[list[object]]:
     """Run one literal query, marking FalkorDB health; a driver failure is a generic error.
+
+    Args:
+        graph: Handle for the policy graph.
+        query: Literal Cypher text; values go in `params`, never into the text.
+        params: Query parameters; `None` runs the query without any.
+
+    Returns:
+        The result set, one list of column values per row; empty when nothing matched.
+
+    Side Effects:
+        Marks the FalkorDB dependency healthy on success and unhealthy on a driver failure.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -99,6 +112,13 @@ def read_obligations_by_role(
 
     `role_id` limits the read to one Role. An Obligation with no live `SATISFIED_BY`
     edge (unprovenanced) is returned with no requirements.
+
+    Args:
+        graph: Handle for the policy graph.
+        role_id: Role to read; `None` reads every Role.
+
+    Returns:
+        One record per Obligation, in query order; empty when no Obligation matches.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -138,6 +158,12 @@ def read_active_capabilities(graph: GraphHandle) -> tuple[CapabilityRecord, ...]
     nothing is fetched or computed here. A Capability reported on several rows
     (more than one `GOVERNED_BY` edge, which the model forbids) appears once, with
     its first row's policy.
+
+    Args:
+        graph: Handle for the policy graph.
+
+    Returns:
+        One record per active Capability; empty when there is none.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -204,6 +230,7 @@ _NODE_PROPERTY_NAMES = ("description", "type", "confidence")
 
 
 def _node_state(row: list[object]) -> CapabilityNodeState:
+    """Build a Capability node state from a node-query row, skipping null properties."""
     properties: dict[str, PropertyValue] = {
         name: cast("PropertyValue", value)
         for name, value in zip(_NODE_PROPERTY_NAMES, row[3:6], strict=True)
@@ -225,6 +252,15 @@ def read_capability_merge_state(
     When either is governed, also reads every Capability each such Policy governs.
     A pure read: four to seven literal queries, no write keyword. A missing node is
     reported as `None` for that side; validation is the planner's job.
+
+    Args:
+        graph: Handle for the policy graph.
+        survivor_id: Id of the Capability that would remain after the merge.
+        absorbed_id: Id of the Capability that would be merged away.
+
+    Returns:
+        The merge state: both nodes (`None` when absent), incoming edges, governing Policies
+        of each side and the governed set of every involved Policy.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -271,6 +307,14 @@ def read_capability_merge_state(
 def read_capability_tombstone(graph: GraphHandle, *, survivor_id: str, absorbed_id: str) -> bool:
     """Whether `absorbed_id` is a `merged` tombstone with a `MERGED_INTO` edge to `survivor_id`.
 
+    Args:
+        graph: Handle for the policy graph.
+        survivor_id: Id of the expected merge target.
+        absorbed_id: Id of the Capability expected to be the tombstone.
+
+    Returns:
+        True when such a tombstone exists, False otherwise.
+
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
     """
@@ -283,7 +327,7 @@ def read_capability_tombstone(graph: GraphHandle, *, survivor_id: str, absorbed_
 
 
 # Obligation-merge reads. An Obligation carries only `text` and `confidence` besides its id
-# (DC Obligation properties), so its snapshot is read as scalar columns.
+# so its snapshot is read as scalar columns.
 _OBLIGATION_NODES_QUERY = (
     "MATCH (o:Obligation) WHERE o.id IN $ids RETURN o.id, o.text, o.confidence"
 )
@@ -309,6 +353,7 @@ _OBLIGATION_PRESENT_QUERY = "MATCH (o:Obligation {id: $obligation_id}) RETURN co
 
 
 def _obligation_state(row: list[object]) -> ObligationNodeState:
+    """Build an Obligation node state from an `_OBLIGATION_NODES_QUERY` row."""
     properties: dict[str, PropertyValue] = (
         {"confidence": cast("PropertyValue", row[2])} if row[2] is not None else {}
     )
@@ -326,6 +371,15 @@ def read_obligation_merge_state(
     side's Requirements.
 
     A missing node is reported as `None` for that side; validation is the planner's job.
+
+    Args:
+        graph: Handle for the policy graph.
+        survivor_id: Id of the Obligation that would remain after the merge.
+        absorbed_id: Id of the Obligation that would be merged away.
+
+    Returns:
+        The merge state: both nodes (`None` when absent), the Roles bearing each, their
+        `SATISFIED_BY` / `REQUIRES` edges and the absorbed side's requirement source refs.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -377,6 +431,14 @@ def read_obligation_merge_state(
 def read_obligation_marker(graph: GraphHandle, *, survivor_id: str, absorbed_id: str) -> bool:
     """Whether a `MergedObligation` marker redirects `absorbed_id` to `survivor_id`.
 
+    Args:
+        graph: Handle for the policy graph.
+        survivor_id: Id the marker must name in `merged_into`.
+        absorbed_id: Id of the marker.
+
+    Returns:
+        True when such a marker exists, False otherwise.
+
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
     """
@@ -391,6 +453,13 @@ def read_obligation_marker(graph: GraphHandle, *, survivor_id: str, absorbed_id:
 def read_obligation_marker_present(graph: GraphHandle, *, obligation_id: str) -> bool:
     """Whether any `MergedObligation` marker exists for `obligation_id`.
 
+    Args:
+        graph: Handle for the policy graph.
+        obligation_id: Marker id to look for, whatever it redirects to.
+
+    Returns:
+        True when a marker exists, False otherwise.
+
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
     """
@@ -400,6 +469,13 @@ def read_obligation_marker_present(graph: GraphHandle, *, obligation_id: str) ->
 
 def read_obligation_present(graph: GraphHandle, *, obligation_id: str) -> bool:
     """Whether an `Obligation` node with `obligation_id` exists.
+
+    Args:
+        graph: Handle for the policy graph.
+        obligation_id: Id of the Obligation to look for.
+
+    Returns:
+        True when the node exists, False otherwise.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -420,6 +496,14 @@ def read_release_state(graph: GraphHandle, *, capability_id: str) -> ReleaseStat
     """Read one Capability, its governing Policies and the governed set of that Policy, a pure read.
 
     A missing Capability is reported as `None`; validation is the planner's job.
+
+    Args:
+        graph: Handle for the policy graph.
+        capability_id: Id of the Capability to release.
+
+    Returns:
+        The release state: the Capability (`None` when absent), its governing Policies and the
+        ids of every Capability the first governing Policy governs (empty when ungoverned).
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -459,6 +543,14 @@ def read_governed_by_edge_present(
 ) -> bool:
     """Whether `capability_id` is still `GOVERNED_BY` the Policy `policy_id`.
 
+    Args:
+        graph: Handle for the policy graph.
+        capability_id: Id of the governed Capability.
+        policy_id: Id of the governing Policy.
+
+    Returns:
+        True when the edge exists, False otherwise.
+
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
     """
@@ -492,6 +584,16 @@ def read_capability_unmerge_state(
     """Read the live graph around the tombstone `inputs.absorbed_id` for an unmerge, a pure read.
 
     A missing node is `None`; validation is the planner's job.
+
+    Args:
+        graph: Handle for the policy graph.
+        inputs: What the merge's audit snapshot says to reverse: both ids and the edges and
+            Policy to restore.
+
+    Returns:
+        The live state: both nodes (`None` when absent), redirects, the survivor's incoming
+        edges and governing Policy ids, which snapshot endpoints still exist, and whether the
+        Policy to restore exists.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -553,6 +655,13 @@ def read_capability_unmerge_state(
 def read_capability_unmerged(graph: GraphHandle, *, capability_id: str) -> bool:
     """Whether `capability_id` is an active Capability with no `MERGED_INTO` edge (unmerged).
 
+    Args:
+        graph: Handle for the policy graph.
+        capability_id: Id of the previously absorbed Capability.
+
+    Returns:
+        True when it is active and has no `MERGED_INTO` edge, False otherwise.
+
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
     """
@@ -577,6 +686,16 @@ def read_obligation_unmerge_state(
     graph: GraphHandle, *, inputs: ObligationUnmergeInputs
 ) -> ObligationUnmergeState:
     """Read the live graph around the deleted Obligation `inputs.absorbed_id`, a pure read.
+
+    Args:
+        graph: Handle for the policy graph.
+        inputs: What the merge's audit snapshot says to reverse: both ids, the Role, and the
+            Requirement and Capability ids to reattach.
+
+    Returns:
+        The live state: whether each Obligation exists, the survivor's text, `MergedObligation`
+        marker targets, whether the Role exists, which snapshot Requirements exist, the status
+        of each snapshot Capability and the survivor's current edges.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.

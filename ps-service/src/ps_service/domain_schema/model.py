@@ -1,8 +1,8 @@
 """Frozen dataclasses describing the PS compliance-graph schema.
 
-The schema is a code artifact: node labels, their properties (name, type,
-presence) and, in later slices, edges. Everything is immutable
-(`frozen=True`, tuples) so a constructed `Schema` can be shared freely.
+The schema is a code artifact: node labels, their properties (name, type, presence) and edges
+with cardinalities. Everything is immutable (`frozen=True`, tuples) so a constructed `Schema` can
+be shared freely. Constructors validate their input and raise `DomainSchemaError` on violations.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ _MULTIPLICITY_PATTERN = re.compile(r"^(\d+)(?:\.\.(\d+|\*))?$")
 class Presence(Enum):
     """Whether a property must be present on a node.
 
-    Named `Presence` (not `Requirement`) because `Requirement` is a domain
+    The class is named `Presence` rather than `Requirement` because `Requirement` is a domain
     node label.
     """
 
@@ -33,7 +33,11 @@ class Presence(Enum):
 
 @dataclass(frozen=True, slots=True)
 class StringType:
-    """A string property; `min_length` raised above 0 forbids the empty string."""
+    """A string property; `min_length` raised above 0 forbids the empty string.
+
+    Attributes:
+        min_length: Minimum number of characters; must be >= 0.
+    """
 
     min_length: int = 0
 
@@ -50,7 +54,11 @@ class DateType:
 
 @dataclass(frozen=True, slots=True)
 class EnumType:
-    """A string property restricted to a non-empty, duplicate-free set of values."""
+    """A string property restricted to a non-empty, duplicate-free set of values.
+
+    Attributes:
+        values: The allowed values in declaration order; non-empty, no duplicates.
+    """
 
     values: tuple[str, ...]
 
@@ -65,7 +73,12 @@ class EnumType:
 
 @dataclass(frozen=True, slots=True)
 class FloatRangeType:
-    """A float property bounded to the closed interval [`minimum`, `maximum`]."""
+    """A float property bounded to the closed interval [`minimum`, `maximum`].
+
+    Attributes:
+        minimum: Inclusive lower bound.
+        maximum: Inclusive upper bound; must be >= `minimum`.
+    """
 
     minimum: float
     maximum: float
@@ -80,7 +93,11 @@ class FloatRangeType:
 
 @dataclass(frozen=True, slots=True)
 class ConstType:
-    """A string property fixed to one value; produced only by profiles that narrow an enum."""
+    """A string property fixed to one value; produced only by profiles that narrow an enum.
+
+    Attributes:
+        value: The only allowed value.
+    """
 
     value: str
 
@@ -99,11 +116,13 @@ def _check_note(owner: str, field: str, text: str) -> None:
 
 
 def _check_label(label: str) -> None:
+    """Raise unless `label` is a letter followed by letters and digits."""
     if not _LABEL_PATTERN.fullmatch(label):
         raise DomainSchemaError(f"malformed label {label!r}")
 
 
 def _check_unique(kind: str, owner: str, names: tuple[str, ...]) -> None:
+    """Raise if any of `names` appears more than once; `kind` and `owner` word the message."""
     for name in names:
         if names.count(name) > 1:
             raise DomainSchemaError(f"duplicate {kind} {name!r} in {owner}")
@@ -116,6 +135,14 @@ class Property:
     `is_identity_bearing` marks values that name or own the node (title, owner fields); the
     system sets them, content tools never patch them. `is_lifecycle_managed` marks values the
     governance lifecycle sets (status, version). A property with neither flag is patchable.
+
+    Attributes:
+        name: The property name, unique within its node.
+        type: The property's value type.
+        presence: Whether the property is required, optional or conditional.
+        note: One-line summary of at most `NOTE_MAX_CHARS` characters; empty for none.
+        is_identity_bearing: The property names or owns the node; set by the system only.
+        is_lifecycle_managed: The governance lifecycle sets the property.
     """
 
     name: str
@@ -132,7 +159,13 @@ class Property:
 
 @dataclass(frozen=True, slots=True)
 class Node:
-    """A node label together with its properties, in declaration order."""
+    """A node label together with its properties, in declaration order.
+
+    Attributes:
+        label: Starts with a letter, then letters and digits.
+        properties: The node's properties; names must be unique.
+        note: One-line summary of at most `NOTE_MAX_CHARS` characters; empty for none.
+    """
 
     label: str
     properties: tuple[Property, ...]
@@ -147,7 +180,12 @@ class Node:
 
 @dataclass(frozen=True, slots=True)
 class Multiplicity:
-    """How many nodes sit at one end of an edge: `minimum`..`maximum` (None is unbounded)."""
+    """How many nodes sit at one end of an edge: `minimum`..`maximum` (None is unbounded).
+
+    Attributes:
+        minimum: Lower bound; >= 0.
+        maximum: Upper bound, >= `minimum`; `None` for unbounded.
+    """
 
     minimum: int
     maximum: int | None
@@ -159,7 +197,17 @@ class Multiplicity:
 
     @classmethod
     def parse(cls, text: str) -> Multiplicity:
-        """Parse `"1"`, `"0..1"`, `"1..*"` or `"0..*"`."""
+        """Parse `"1"`, `"0..1"`, `"1..*"` or `"0..*"` (surrounding whitespace is ignored).
+
+        Args:
+            text: One side of a cardinality in the document's notation.
+
+        Returns:
+            The parsed `Multiplicity`; a bare number means exactly that many.
+
+        Raises:
+            DomainSchemaError: `text` is not in that notation, or the bounds are inverted.
+        """
         matched = _MULTIPLICITY_PATTERN.match(text.strip())
         if matched is None:
             raise DomainSchemaError(f"malformed cardinality side {text!r}")
@@ -177,14 +225,29 @@ class Multiplicity:
 
 @dataclass(frozen=True, slots=True)
 class Cardinality:
-    """Edge cardinality `"S : T"`: S source nodes per target node, T target nodes per source."""
+    """Edge cardinality `"S : T"`: S source nodes per target node, T target nodes per source.
+
+    Attributes:
+        sources_per_target: How many source nodes may point at one target node.
+        targets_per_source: How many target nodes one source node may point at.
+    """
 
     sources_per_target: Multiplicity
     targets_per_source: Multiplicity
 
     @classmethod
     def parse(cls, text: str) -> Cardinality:
-        """Parse the doc's `"1 : 0..*"` notation."""
+        """Parse the doc's `"1 : 0..*"` notation.
+
+        Args:
+            text: Two multiplicities separated by a single colon.
+
+        Returns:
+            The parsed `Cardinality`.
+
+        Raises:
+            DomainSchemaError: `text` does not have exactly two valid sides.
+        """
         sides = text.split(":")
         if len(sides) != 2:  # noqa: PLR2004  # exactly two sides around the colon
             raise DomainSchemaError(f"malformed cardinality {text!r}")
@@ -201,7 +264,13 @@ class Cardinality:
 
 @dataclass(frozen=True, slots=True)
 class EdgeProperty:
-    """One named property carried by an edge."""
+    """One named property carried by an edge.
+
+    Attributes:
+        name: The property name, unique within its edge.
+        type: The property's value type.
+        presence: Whether the property is required, optional or conditional.
+    """
 
     name: str
     type: PropertyType
@@ -210,7 +279,18 @@ class EdgeProperty:
 
 @dataclass(frozen=True, slots=True)
 class Edge:
-    """A typed, directed edge between two node labels."""
+    """A typed, directed edge between two node labels.
+
+    Attributes:
+        type: Upper-case edge type name (letters, digits, underscores; starts with a letter).
+        source: Label of the source node.
+        target: Label of the target node.
+        cardinality: How many nodes sit at each end.
+        properties: The edge's properties; names must be unique.
+        note: One-line summary of at most `NOTE_MAX_CHARS` characters; empty for none.
+        provenance_rule: One-line statement of the document's provenance-placement rule case that
+            applies to this edge (same length limit); empty for none.
+    """
 
     type: str
     source: str
@@ -237,7 +317,13 @@ class Edge:
 
 @dataclass(frozen=True, slots=True)
 class Schema:
-    """The whole graph schema: nodes and edges in declaration order."""
+    """The whole graph schema: nodes and edges in declaration order.
+
+    Attributes:
+        nodes: The node definitions; labels must be unique.
+        edges: The edge definitions; (type, source, target) must be unique and both ends must be
+            labels defined in `nodes`.
+    """
 
     nodes: tuple[Node, ...]
     edges: tuple[Edge, ...] = ()

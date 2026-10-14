@@ -1,4 +1,4 @@
-"""The replay-progress record: a sentinel node inside the graph being rebuilt (issue #207).
+"""The replay-progress record: a sentinel node inside the graph being rebuilt.
 
 A replay that dies half way leaves a graph that is non-empty while the applied marker (which only
 moves forward and is moved once, at the end) says everything is applied, so nothing outside the
@@ -37,7 +37,15 @@ _ROW_WIDTH = 4
 
 @dataclass(frozen=True)
 class ReplayState:
-    """What the sentinel says about a replay of this graph."""
+    """What the sentinel says about a replay of this graph.
+
+    Attributes:
+        position: The last log position applied.
+        state: `in_progress` or `failed`.
+        kind: Names the failure of a failed replay.
+        verified: The checkpoint position the graph was compared with, or `NOT_VERIFIED` (-1)
+            when not compared yet.
+    """
 
     position: int
     state: ReplayStateName
@@ -47,6 +55,12 @@ class ReplayState:
 
 def read_replay_state(graph: WritableGraph) -> ReplayState | None:
     """Return the sentinel of `graph`, or None when no replay is recorded (or the key is missing).
+
+    Args:
+        graph: The graph holding the sentinel.
+
+    Returns:
+        The recorded state, or `None` when the graph holds no sentinel.
 
     Raises:
         UnexpectedGraphReplyError: the graph answered something that is not a sentinel.
@@ -69,7 +83,15 @@ def read_replay_state(graph: WritableGraph) -> ReplayState | None:
 
 
 def write_replay_state(graph: WritableGraph, state: ReplayState) -> None:
-    """Create the sentinel of `graph` or move it to `state`."""
+    """Create the sentinel of `graph` or move it to `state`.
+
+    Args:
+        graph: The graph that holds the sentinel.
+        state: The progress to record.
+
+    Side Effects:
+        Creates or updates the sentinel node in `graph`.
+    """
     graph.query(
         REPLAY_STATE_WRITE,
         {
@@ -82,5 +104,12 @@ def write_replay_state(graph: WritableGraph, state: ReplayState) -> None:
 
 
 def delete_replay_state(graph: WritableGraph) -> None:
-    """Remove the sentinel of `graph` (a no-op when there is none)."""
+    """Remove the sentinel of `graph` (a no-op when there is none).
+
+    Args:
+        graph: The graph holding the sentinel.
+
+    Side Effects:
+        Deletes the sentinel node from `graph`.
+    """
     graph.query(REPLAY_STATE_DELETE)

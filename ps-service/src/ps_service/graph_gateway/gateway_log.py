@@ -1,4 +1,4 @@
-"""Semantic structured logging of the Graph Write Gateway (issue #206, AC-BI-013).
+"""Semantic structured logging of the Graph Write Gateway.
 
 Only identifiers and positions may be logged: never a payload, an embedding, a label, an
 identity, exception text, a host or a credential. `emit_gateway_event` refuses any other key, so
@@ -57,7 +57,19 @@ def emit_gateway_event(
 ) -> None:
     """Log one `action` entry of the gateway; `fields` must be a subset of `ALLOWED_LOG_FIELDS`.
 
-    `duration_ms` is the envelope's standard duration field, for an entry that times a pass.
+    Args:
+        action: Name of the gateway action the entry records.
+        outcome: Result of the action (for example `completed` or `failed`).
+        fields: Extra entry fields; every key must be in `ALLOWED_LOG_FIELDS`.
+        emitter: Log emitter; `None` uses the process-wide one.
+        duration_ms: The envelope's standard duration field, for an entry that times a pass;
+            `None` omits it.
+
+    Raises:
+        ValueError: `fields` holds a key outside `ALLOWED_LOG_FIELDS`; nothing is logged.
+
+    Side Effects:
+        Emits one structured log entry. A logging lifecycle error is swallowed.
     """
     unexpected = set(fields) - ALLOWED_LOG_FIELDS
     if unexpected:

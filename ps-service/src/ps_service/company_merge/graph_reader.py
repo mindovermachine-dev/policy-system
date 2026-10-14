@@ -1,71 +1,43 @@
 """`read_baseline_graph` -- read a complete `{short}_baseline` graph into a `BaselineGraph`.
 
-Ready for `company_merge.dedup`/`company_merge.merge` to consume
-(PLAN_REVIEWED.md §4).
+The result is what `company_merge.dedup` and `company_merge.merge` consume.
 
-Read-only: every query here is a `MATCH ... RETURN ...`, never a `MERGE`/
-`SET`/`DELETE`. RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` are
-carried forward unconditionally alongside Obligation/Capability/`HAS`/
-`SATISFIED_BY`/`REQUIRES` (§4's rationale: provenance recoverability via
-`SATISFIED_BY` -> `EXPRESSES` only holds as a live guarantee if `EXPRESSES`
-and the RegulatoryInstrument node it originates from actually exist in whichever
-graph a caller traverses).
+Read-only: every query here is a `MATCH ... RETURN ...`, never a `MERGE`/`SET`/`DELETE`.
+RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` are carried forward unconditionally
+alongside Obligation/Capability/`HAS`/`SATISFIED_BY`/`REQUIRES`: provenance recoverability via
+`SATISFIED_BY` -> `EXPRESSES` only holds if `EXPRESSES` and the RegulatoryInstrument node it
+originates from exist in whichever graph a caller traverses.
 
-Node/edge shape cross-checked directly against
-`ps_service.domain_mapper.graph_writer`'s actual shipped write path (the
-module this reader's queries must round-trip against), not invented by
-analogy:
+Node and edge shapes match what `ps_service.domain_mapper.graph_writer` writes, which these
+queries must round-trip against:
 
-- RegulatoryInstrument: `MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties`, an
-  open/variable properties set (title, jurisdiction, effective_date,
-  source_type, ...) -- read back the same way
-  `ps_service.domain_mapper.extraction._read_regulatory_instrument_properties` already
-  does (`MATCH (r:RegulatoryInstrument) RETURN r`, then `dict(node.properties)`,
-  `id` included), via this module's own `_RegulatoryInstrumentNode` structural
-  Protocol copy.
-- Role: properties are `name`/`confidence` only (`RoleNode.properties`).
-- Requirement: properties are `text`/`type`/`confidence`/`role_id`
-  (`RequirementNode.properties`) -- `role_id` is bookkeeping, not an Edge
-  Catalog relationship, carried through unchanged.
-- Obligation: properties are `text`/`confidence` only (`ObligationNode.
-  properties`) -- no `source_ref` (provenance is transitive).
-- Capability: properties are `name`/`confidence` and, when set,
-  `description` (`CapabilityNode.properties`) -- `description` is omitted
-  from the returned `BaselineNode.properties` dict entirely when absent,
-  mirroring how `_upsert_node` never receives a `description` key for a
-  Capability minted without one.
-- `DEFINES`/`EXPRESSES` edges carry a `source_ref` property
-  (Domain Mapper `persist_role_and_requirement_graph`); `HAS`/`SATISFIED_BY`/`REQUIRES`
-  edges carry no properties at all (`persist_obligation_and_capability_graph`) --
-  each relationship type here is read via its own fixed-literal query, never parsed from a returned
-  type string, mirroring the Domain Mapper writers' own
-  "always a fixed Python literal, never adapter/DB-sourced" design note.
+- RegulatoryInstrument: an open, variable properties set (title, jurisdiction, effective_date,
+  source_type, ...), read back as `dict(node.properties)` with `id` included, through this
+  module's own `_RegulatoryInstrumentNode` structural Protocol.
+- Role: properties are `name`/`confidence` only.
+- Requirement: properties are `text`/`type`/`confidence`/`role_id`; `role_id` is bookkeeping, not
+  an Edge Catalog relationship, and is carried through unchanged when present.
+- Obligation: properties are `text`/`confidence` only; there is no `source_ref` because
+  provenance is transitive.
+- Capability: properties are `name`/`confidence`, `description` when set, and the cached
+  `embedding` when one exists. `description` is omitted from the returned `BaselineNode.properties`
+  entirely when absent.
+- `DEFINES`/`EXPRESSES` edges carry a `source_ref` property; `HAS`/`SATISFIED_BY`/`REQUIRES` edges
+  carry no properties.
 
-**Deviation from PLAN_REVIEWED.md's "six/seven queries" phrasing**: this
-implementation issues twenty-two queries -- one RegulatoryInstrument, one
-each for Role/Requirement/Obligation/Capability/Policy/Standard/Control/
-PracticeArea/RiskPath (nine, the last two added by issue #106), two
-provenance-edge queries (`DEFINES`, `EXPRESSES`), six bare-edge queries
-(`HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`,
-`IMPLEMENTED_BY`, the last three added by issue #54's S4), and four
-classification-edge queries (`COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY`,
-added by issue #106) -- rather than collapsing the edge reads into one
-combined query per category via a runtime `type(e)` dispatch. Each
-relationship type's Python-side literal is fixed by which query produced the
-row, never parsed/cast from a returned string, matching `graph_writer.py`'s
-own "no allow-list needed, always a fixed literal" precedent exactly and
-avoiding an unforced runtime-narrowing cast that a combined query would
-require. The plan's own count was written as an approximation ("six/seven")
-and does not fix a specific number.
+The reader issues twenty-two fixed queries: one RegulatoryInstrument query, one per node label for
+Role/Requirement/Obligation/Capability/Policy/Standard/Control/PracticeArea/RiskPath (nine), two
+provenance-edge queries (`DEFINES`, `EXPRESSES`), six bare-edge queries (`HAS`, `SATISFIED_BY`,
+`REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`, `IMPLEMENTED_BY`) and four classification-edge queries
+(`COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY`). Each relationship type has its own query so its
+Python-side literal is fixed by which query produced the row, never parsed from a returned string;
+a combined query with a runtime `type(e)` dispatch would need an unforced narrowing cast.
 
-`_HANDLED_NODE_LABELS`/`_HANDLED_EDGE_TYPES` (issue #106, AC-BI-001) are a
-second, independent, hand-maintained record of exactly which labels/edge
-types this module reads -- compared directly against
-`ps_service.ingestion.adapters.internal_seed.models.NodeLabel`/`EdgeType` by
-`tests/company_merge/test_graph_reader_vocabulary_drift.py`, so a future
-vocabulary addition that forgets to also extend this module's queries fails
-a test loudly instead of silently dropping data (this issue's own root
-cause).
+`_HANDLED_NODE_LABELS`/`_HANDLED_EDGE_TYPES` are a second, independent, hand-maintained record of
+the labels and edge types this module reads. `test_graph_reader_vocabulary_drift.py`
+compares them against `ps_service.ingestion.adapters.internal_seed.models.NodeLabel`/`EdgeType`, so
+a vocabulary addition that forgets to extend these queries fails a test instead of silently
+dropping data.
 """
 
 from __future__ import annotations
@@ -103,10 +75,9 @@ _HAS_QUERY = "MATCH (s:Role)-[:HAS]->(t:Obligation) RETURN s.id, t.id"
 _SATISFIED_BY_QUERY = "MATCH (s:Requirement)-[:SATISFIED_BY]->(t:Obligation) RETURN s.id, t.id"
 _REQUIRES_QUERY = "MATCH (s:Obligation)-[:REQUIRES]->(t:Capability) RETURN s.id, t.id"
 
-# issue #54, S4 -- Policy/Standard/Control + governance edges. Empty result
-# sets for an external-sourced baseline (DeriveGovernanceArtifacts never ran).
-# issue #227 -- the governance read takes every authored node, whatever its `status`:
-# an imported tree arrives `draft` and is written through the shared draft import.
+# Policy/Standard/Control and the governance edges. Result sets are empty for an
+# external-sourced baseline. The governance read takes every authored node, whatever its
+# `status`, because an imported tree arrives `draft` and is written through the draft import.
 _POLICY_ALL_QUERY = "MATCH (n:Policy) RETURN n"
 _STANDARD_ALL_QUERY = "MATCH (n:Standard) RETURN n"
 _CONTROL_ALL_QUERY = "MATCH (n:Control) RETURN n"
@@ -114,8 +85,7 @@ _GOVERNED_BY_QUERY = "MATCH (s:Capability)-[:GOVERNED_BY]->(t:Policy) RETURN s.i
 _SUPPORTED_BY_QUERY = "MATCH (s:Policy)-[:SUPPORTED_BY]->(t:Standard) RETURN s.id, t.id"
 _IMPLEMENTED_BY_QUERY = "MATCH (s:Standard)-[:IMPLEMENTED_BY]->(t:Control) RETURN s.id, t.id"
 
-# issue #106 -- PracticeArea/RiskPath node passthrough (edge reads are a
-# later slice). Empty result sets for a baseline with no authored
+# PracticeArea/RiskPath nodes. Result sets are empty for a baseline with no authored
 # classification-layer content (same tolerance as Policy/Standard/Control).
 _PRACTICE_AREA_QUERY = (
     "MATCH (n:PracticeArea) RETURN n.id, n.name, n.status, n.description, n.version, n.owner_id"
@@ -124,9 +94,9 @@ _RISK_PATH_QUERY = (
     "MATCH (n:RiskPath) RETURN n.id, n.name, n.status, n.description, n.risk_type, n.version"
 )
 
-# issue #106 -- COVERS/OWNS/MITIGATED_BY/VERIFIED_BY classification edges.
-# Empty result sets for a baseline with no authored classification-layer
-# content (same tolerance as the governance edges above).
+# COVERS/OWNS/MITIGATED_BY/VERIFIED_BY classification edges. Result sets are empty for a
+# baseline with no authored classification-layer content (same tolerance as the governance
+# edges above).
 _COVERS_QUERY = "MATCH (s:PracticeArea)-[:COVERS]->(t:Capability) RETURN s.id, t.id"
 _OWNS_QUERY = "MATCH (s:PracticeArea)-[:OWNS]->(t:Policy) RETURN s.id, t.id"
 _MITIGATED_BY_QUERY = "MATCH (s:RiskPath)-[:MITIGATED_BY]->(t:Capability) RETURN s.id, t.id"
@@ -163,13 +133,11 @@ artifact) is keyed by these; `tests/restore/test_baseline_reader.py` pins that t
 complete against this module's own `_*_QUERY` constants.
 """
 
-# AC-BI-001's drift guard (issue #106): a second, independent,
-# hand-maintained record of exactly which labels/edge types this module
-# reads, compared directly against internal_seed.models.NodeLabel/EdgeType
-# by test_graph_reader_vocabulary_drift.py. Deliberately not derived by
-# introspecting the query strings above -- the whole point is to catch a
-# human adding a new label/edge type to NodeLabel/EdgeType without also
-# updating this module's queries (and this constant).
+# Drift guard: a hand-maintained record of exactly which labels/edge types this module reads,
+# compared against internal_seed.models.NodeLabel/EdgeType by
+# test_graph_reader_vocabulary_drift.py. Deliberately not derived from the query strings above:
+# the point is to catch a label/edge type added to NodeLabel/EdgeType without also updating this
+# module's queries (and this constant).
 _HANDLED_NODE_LABELS: frozenset[str] = frozenset(
     {
         "RegulatoryInstrument",
@@ -203,13 +171,10 @@ _HANDLED_EDGE_TYPES: frozenset[str] = frozenset(
 
 
 class _RegulatoryInstrumentNode(Protocol):
-    """Structural stand-in for the `falkordb.Node` a `RETURN n` on RegulatoryInstrument returns.
+    """Structural stand-in for the `falkordb.Node` a `RETURN n` query returns.
 
-    Only `.properties` is ever read, mirroring
-    `ps_service.domain_mapper.extraction._RegulatoryInstrumentNode`'s own
-    minimal structural-Protocol style (own copy, per this component's
-    "vendored as an independent copy" convention). A hand-written test fake
-    needs only this one attribute to satisfy it.
+    Only `.properties` is read, so a hand-written test fake needs only that one attribute. This
+    component keeps its own copy rather than importing the Domain Mapper's.
     """
 
     @property
@@ -220,23 +185,30 @@ def read_baseline_graph(
     baseline_graph: GraphHandle,
     regulatory_instrument_id: str,
 ) -> BaselineGraph:
-    """Read one regulation's complete `{short}_baseline` graph.
+    """Read one regulation's complete `{short}_baseline` graph into a `BaselineGraph`.
 
-    The caller has already selected `baseline_graph` (e.g. via
-    `ps_service.domain_mapper.falkordb_client.select_graph` +
-    `baseline_graph_name(short_name)`); this function does no graph selection
-    of its own.
+    Policy/Standard/Control nodes are read at every `status` with every scalar property, because
+    an imported tree arrives `draft` and `governance_import` writes it.
 
-    Every query below is read-only. A baseline graph with zero Obligation/
-    Capability nodes (a regulation whose derivation surfaced everything as
-    unmatched, per `DeriveObligationsAndCapabilities`'s own AC-004 edge
-    case) returns empty tuples for those fields -- and empty tuples for
-    every edge collection that would otherwise reference them -- with no
-    exception raised.
+    Args:
+        baseline_graph: Read handle on the regulation's `{short}_baseline` graph, already
+            selected by the caller; this function does no graph selection of its own.
+        regulatory_instrument_id: Id of the RegulatoryInstrument whose node and
+            `DEFINES`/`EXPRESSES` edges are read.
 
-    Policy/Standard/Control nodes are read at every `status` with every
-    property (`_read_governance_nodes`): the imported tree arrives `draft`
-    (issues #183, #227) and is written by `governance_import`.
+    Returns:
+        A `BaselineGraph` holding the RegulatoryInstrument properties, the node tuples, and the
+        provenance, bare, governance and classification edge tuples. A collection with no
+        matching rows is an empty tuple, so a baseline with no Obligation/Capability nodes (a
+        regulation whose derivation matched nothing) yields empty tuples for those fields and for
+        every edge collection that would reference them.
+
+    Raises:
+        Exception: Whatever `baseline_graph.query` raises (for example a Redis error) propagates
+            unchanged.
+
+    Side Effects:
+        Issues read-only queries against `baseline_graph`; writes nothing.
     """
     regulatory_instrument_properties = _read_regulatory_instrument_properties(
         baseline_graph, regulatory_instrument_id
@@ -277,16 +249,10 @@ def read_baseline_graph(
 def _read_regulatory_instrument_properties(
     baseline_graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, object]:
-    """Read the RegulatoryInstrument node back as a plain properties dict.
+    """Read the RegulatoryInstrument node back as a plain properties dict (`id` included).
 
-    `MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n`,
-    mirroring
-    `ps_service.domain_mapper.extraction._read_regulatory_instrument_properties`'s
-    exact read shape. An absent RegulatoryInstrument node (a baseline graph
-    left in an unexpected state) yields an empty dict rather than raising --
-    this function's own contract only covers reading whatever is present;
-    whether a missing RegulatoryInstrument node should abort the whole merge
-    is `merge.py`'s call, not this reader's.
+    An absent node yields an empty dict rather than raising: this reader only reports what is
+    present, and whether a missing RegulatoryInstrument aborts the merge is the merge's decision.
     """
     result = baseline_graph.query(
         _REGULATORY_INSTRUMENT_QUERY, params={"regulatory_instrument_id": regulatory_instrument_id}
@@ -299,6 +265,7 @@ def _read_regulatory_instrument_properties(
 
 
 def _read_role_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every Role node with its `name` and `confidence`."""
     result = baseline_graph.query(_ROLE_QUERY)
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[BaselineNode] = []
@@ -316,11 +283,9 @@ def _read_role_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
 def _read_requirement_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
     """Read every Requirement node, omitting `role_id` when the graph returns `NULL`.
 
-    F1 (CHANGES.md): `role_id` is bookkeeping, not always present -- an
-    internal-source Requirement can lack one. D6's "never write `None`" rule
-    applied symmetrically on the read side: `role_id` is added to
-    `properties` only `if role_id is not None`, never unconditionally
-    `cast()`.
+    `role_id` is bookkeeping and not always present (an internal-source Requirement can lack
+    one), so it is added to `properties` only when it is not `None`; a `None` is never written
+    into the properties.
     """
     result = baseline_graph.query(_REQUIREMENT_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -339,6 +304,7 @@ def _read_requirement_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, 
 
 
 def _read_obligation_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every Obligation node with its `text` and `confidence`."""
     result = baseline_graph.query(_OBLIGATION_QUERY)
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[BaselineNode] = []
@@ -354,14 +320,11 @@ def _read_obligation_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, .
 
 
 def _read_capability_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every Capability node, including its cached `embedding` if any (issue #31).
+    """Read every Capability node, including its cached `embedding` if any.
 
-    `embedding` (AC-BI-001) is `None` when this Capability has never had one
-    computed/backfilled -- `graph_writer.backfill_incoming_capability_embeddings`
-    is what eventually sets it, onto this same `{short}_baseline` graph, once
-    `dedup.dedupe_canonical_nodes` computes one for it. Mirrors
-    `dedup.read_existing_canonical_index`'s own "preserve `None`, never `()`
-    or a crash" contract for a cached embedding property.
+    `embedding` is `None` when the Capability has no cached embedding; it is never `()` and
+    absence never raises. `graph_writer.backfill_incoming_capability_embeddings` sets it on this
+    baseline graph once `dedup.dedupe_canonical_nodes` has computed one.
     """
     result = baseline_graph.query(_CAPABILITY_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -393,7 +356,7 @@ def _read_provenance_edges(
     `DEFINES` targets Role, `EXPRESSES` targets Requirement. Each is read via
     its own fixed-relationship-type query, so `relationship_type` is always a
     Python literal known at the call site, never parsed from a returned
-    string (see module docstring).
+    string.
     """
     edges: list[ProvenanceEdge] = []
 
@@ -432,10 +395,10 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
     `HAS` (Role -> Obligation), then `SATISFIED_BY` (Requirement ->
     Obligation), then `REQUIRES` (Obligation -> Capability) -- each read via
     its own fixed-relationship-type query, same reasoning as
-    `_read_provenance_edges`. Endpoint ids here are BASELINE-LOCAL; rewiring
-    a `REQUIRES` edge's Capability endpoint onto its canonical id is
-    `dedup`/`graph_writer`'s job, not this reader's (§6). Obligation, Role,
-    and Requirement endpoints are passthrough (#42) -- their baseline-local
+    `_read_provenance_edges`. Endpoint ids are baseline-local; rewiring a
+    `REQUIRES` edge's Capability endpoint onto its canonical id is
+    `dedup`/`graph_writer`'s job, not this reader's. Obligation, Role,
+    and Requirement endpoints are passthrough, so their baseline-local
     id is already final.
     """
     edges: list[BareEdge] = []
@@ -477,14 +440,12 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
 
 
 def _read_governance_nodes(baseline_graph: GraphHandle, query: str) -> tuple[BaselineNode, ...]:
-    """Read every Policy/Standard/Control node `query` returns, whatever its `status` (issue #183).
+    """Read every Policy/Standard/Control node `query` returns, whatever its `status`.
 
-    Returns each node's full property map so an imported draft keeps its
-    authored content.
-    `id` is the node identity and `embedding` is carried separately (restore
-    reads the artifact-supplied vectors off the parsed blob), so neither is
-    left in `properties`. Only scalar properties are kept -- the node
-    properties this reader maps are `str | float`.
+    Returns each node's full scalar property map so an imported draft keeps its authored
+    content. `id` is the node identity and `embedding` is carried separately (restore reads the
+    artifact-supplied vectors off the parsed artifact), so neither is left in `properties`.
+    Only `str`, `int` and `float` property values are kept.
     """
     result = baseline_graph.query(query)
     rows = cast("list[list[_RegulatoryInstrumentNode]]", result.result_set)
@@ -501,12 +462,12 @@ def _read_governance_nodes(baseline_graph: GraphHandle, query: str) -> tuple[Bas
 
 
 def _read_governance_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
-    """Read the `GOVERNED_BY`, `SUPPORTED_BY`, and `IMPLEMENTED_BY` edges (issue #54, S4).
+    """Read the `GOVERNED_BY`, `SUPPORTED_BY`, and `IMPLEMENTED_BY` edges.
 
     `GOVERNED_BY` (Capability -> Policy), then `SUPPORTED_BY` (Policy ->
     Standard), then `IMPLEMENTED_BY` (Standard -> Control) -- each read via
     its own fixed-relationship-type query, same reasoning as
-    `_read_bare_edges`. Endpoint ids here are BASELINE-LOCAL; rewiring a
+    `_read_bare_edges`. Endpoint ids are baseline-local; rewiring a
     `GOVERNED_BY` edge's Policy endpoint onto its canonical id is
     `dedup`/`graph_writer`'s job, not this reader's. Empty for an
     external-sourced baseline, with no exception raised.
@@ -550,11 +511,10 @@ def _read_governance_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
 
 
 def _read_practice_area_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every PracticeArea node (issue #106). Empty for a baseline with no authored content.
+    """Read every PracticeArea node. Empty for a baseline with no authored content.
 
-    Properties are `name`/`status` (required) and, when set, `description`/
-    `version`/`owner_id` -- with an "optional
-    description" shape (`ps-domain-concepts.md`'s PracticeArea section).
+    Properties are `name`/`status` (required) and, when set, `description`/`version`/`owner_id`;
+    an unset optional property is omitted from the dict.
     """
     result = baseline_graph.query(_PRACTICE_AREA_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -576,12 +536,10 @@ def _read_practice_area_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode
 
 
 def _read_risk_path_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every RiskPath node (issue #106). Empty for a baseline with no authored content.
+    """Read every RiskPath node. Empty for a baseline with no authored content.
 
-    Properties are `name`/`status` (required) and, when set, `description`/
-    `risk_type`/`version` -- same "optional property omission" shape as
-    `_read_practice_area_nodes`, with `risk_type` in place of `owner_id`
-    (`ps-domain-concepts.md`'s RiskPath section).
+    Properties are `name`/`status` (required) and, when set, `description`/`risk_type`/`version`;
+    an unset optional property is omitted from the dict, as in `_read_practice_area_nodes`.
     """
     result = baseline_graph.query(_RISK_PATH_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -603,18 +561,13 @@ def _read_risk_path_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ..
 
 
 def _read_classification_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
-    """Read `COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY` edges (issue #106).
+    """Read `COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY` edges.
 
-    Empty for a baseline with no authored classification-layer content, with
-    no exception raised -- same contract as `_read_governance_edges`. Unlike
-    `_read_bare_edges`/`_read_governance_edges` (which write out one block
-    per relationship type), this loops over a tuple of `(literal, query)`
-    pairs -- an equally valid style per those functions' own docstrings,
-    used here to keep this function's own cyclomatic complexity within L1's
-    budget. `relationship_type` is still always a fixed Python literal
-    defined in this module, never parsed/cast from a returned Cypher type
-    string -- the loop variable is bound to one of the four literals below,
-    never to adapter/DB-sourced data.
+    Empty for a baseline with no authored classification-layer content, with no exception
+    raised (same contract as `_read_governance_edges`). It loops over `(literal, query)` pairs
+    rather than writing one block per type, to keep the function's cyclomatic complexity low.
+    `relationship_type` is still always one of the four literals below, never parsed from a
+    returned Cypher type string.
     """
     edges: list[BareEdge] = []
     for relationship_type, query in (

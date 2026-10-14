@@ -5,7 +5,7 @@
 `confidence` is optional everywhere). `intake_property_defs` turns the profiled nodes
 into the per-label `*Properties` JSON Schema definitions.
 `generate_intake_schema` assembles the whole file; the fixed skeleton (id, title, prose
-description, `confidence`, `nodeRef`, `node`) lives here as constants.
+description, `confidence`, `nodeRef`, `node`) is defined in this module.
 """
 
 from __future__ import annotations
@@ -120,7 +120,19 @@ INTAKE_PROFILE = Profile(
 
 
 def property_json(field_type: PropertyType, *, required: bool) -> JsonObject:
-    """Map a property type to its JSON Schema fragment."""
+    """Map a property type to its JSON Schema fragment.
+
+    Args:
+        field_type: The property's schema type.
+        required: Whether the property is required. A required string gets `minLength` of at
+            least 1; an optional one keeps the type's own `min_length`.
+
+    Returns:
+        The JSON Schema fragment for the type.
+
+    Raises:
+        DomainSchemaError: `field_type` is a float range other than the unit interval 0..1.
+    """
     match field_type:
         case StringType(min_length=min_length):
             minimum = max(min_length, 1 if required else 0)
@@ -138,16 +150,19 @@ def property_json(field_type: PropertyType, *, required: bool) -> JsonObject:
 
 
 def _def_name(label: str) -> str:
+    """Return the `$defs` name of a label's property definition, for example `policyProperties`."""
     return f"{label[0].lower()}{label[1:]}Properties"
 
 
 def _in_committed_order(node: Node) -> list[Property]:
+    """Return the node's properties in the committed file's order (required first)."""
     if node.label in _SCHEMA_ORDER_LABELS:
         return list(node.properties)
     return sorted(node.properties, key=lambda p: p.presence is not Presence.REQUIRED)
 
 
 def _node_def(node: Node) -> JsonObject:
+    """Build the JSON Schema object definition for a profiled node's properties."""
     ordered = _in_committed_order(node)
     required = [p.name for p in ordered if p.presence is Presence.REQUIRED]
     definition: JsonObject = {"type": "object", "additionalProperties": False}
@@ -160,12 +175,24 @@ def _node_def(node: Node) -> JsonObject:
 
 
 def intake_property_defs(schema: Schema) -> dict[str, JsonObject]:
-    """Return `<label>Properties` -> JSON Schema definition for the intake-profiled `schema`."""
+    """Return `<label>Properties` -> JSON Schema definition for the intake-profiled `schema`.
+
+    Args:
+        schema: The base graph schema; `INTAKE_PROFILE` is applied to it first.
+
+    Returns:
+        One definition per node of the profiled schema, keyed by `<label>Properties` with a
+        lower-case first letter, in the profile's node order.
+
+    Raises:
+        SchemaProfileError: The profile does not apply to `schema`.
+    """
     profiled = apply_profile(schema, INTAKE_PROFILE)
     return {_def_name(node.label): _node_def(node) for node in profiled.nodes}
 
 
 def _ref(name: str) -> JsonObject:
+    """Return a JSON Schema `$ref` to `$defs/<name>`."""
     return {"$ref": f"#/$defs/{name}"}
 
 
@@ -181,6 +208,7 @@ def _node_dispatch(labels: list[str]) -> list[Json]:
 
 
 def _edge_def(profiled: Schema) -> JsonObject:
+    """Build the `edge` definition: the profiled edge types and the union of their properties."""
     types = list(dict.fromkeys(edge.type for edge in profiled.edges))
     properties: dict[str, Json] = {}
     for edge in profiled.edges:
@@ -204,6 +232,7 @@ def _edge_def(profiled: Schema) -> JsonObject:
 
 
 def _fixed_defs(labels: list[str]) -> dict[str, Json]:
+    """Build the definitions that do not depend on the schema's properties for `labels`."""
     string_id: JsonObject = {"type": "string", "minLength": 1}
     return {
         "confidence": {
@@ -234,7 +263,18 @@ def _fixed_defs(labels: list[str]) -> dict[str, Json]:
 
 
 def generate_intake_schema(schema: Schema) -> str:
-    """Return the intake JSON Schema text for `schema`, in the committed hand layout."""
+    """Return the intake JSON Schema text for `schema`, in the committed hand layout.
+
+    Args:
+        schema: The base graph schema; `INTAKE_PROFILE` is applied to it.
+
+    Returns:
+        The newline-terminated JSON text of the intake schema; deterministic for a given schema.
+
+    Raises:
+        SchemaProfileError: The profile does not apply to `schema`.
+        DomainSchemaError: A property type cannot be expressed in the intake format.
+    """
     profiled = apply_profile(schema, INTAKE_PROFILE)
     labels = [node.label for node in profiled.nodes]
     document: dict[str, Json] = {

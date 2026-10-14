@@ -1,12 +1,10 @@
 """ps_service.company_merge.governance_import -- the shared draft-governance import pass.
 
-Issue #227 (extracted from `restore.restore_instrument`, issue #183). A Policy/
-Standard/Control tree that arrives from outside the customer's governance -- a
-restored curated instrument, or a live internal-document ingest -- is written
-`draft`, owned by the importing caller, each node under its own content-hashed
-id (`graph_writer.persist_governance_drafts`), and never converged onto an
-existing canonical Policy. Both entry points call `import_draft_governance`, so
-the two paths cannot drift apart.
+A Policy/Standard/Control tree that arrives from outside the customer's governance -- a restored
+curated instrument, or a live internal-document ingest -- is written `draft`, owned by the
+importing caller, each node under its own content-hashed id
+(`graph_writer.persist_governance_drafts`), and never converged onto an existing canonical Policy.
+Both entry points call `import_draft_governance`, so the two paths cannot drift apart.
 """
 
 from __future__ import annotations
@@ -31,8 +29,8 @@ class DraftGovernanceWriter(Protocol):
     """The write step of the pass: persists a Policy/Standard/Control tree as `draft`.
 
     Company Merge passes `graph_writer.persist_governance_drafts` with its gateway write target
-    bound (a Graph Write Gateway group, issue #210); Restore passes its own primitive writer.
-    `graph` is the handle the writer reads through.
+    bound (a Graph Write Gateway group); Restore passes its own primitive writer. `graph` is the
+    handle the writer reads through.
     """
 
     def __call__(
@@ -54,11 +52,14 @@ class DraftGovernanceWriter(Protocol):
 class GovernanceImport:
     """The caller-supplied inputs the draft-governance pass needs.
 
-    `owner` is the importing caller's verified `(sub, iss)` pair -- the owner of
-    every imported draft Policy (`None` when no verified identity exists, in
-    which case governance content is refused). `policy_embeddings` are the
-    artifact-supplied Policy vectors (by id), stored on the draft; empty on the
-    live ingest path. Bundled so callers keep a bounded parameter count.
+    Bundled so callers keep a bounded parameter count.
+
+    Attributes:
+        owner: The importing caller's verified `(sub, iss)` pair, the owner of every imported
+            draft Policy. `None` when no verified identity exists, in which case governance
+            content is refused.
+        policy_embeddings: Artifact-supplied Policy vectors by Policy id, stored on the draft.
+            Empty on the live ingest path.
     """
 
     owner: tuple[str, str] | None = None
@@ -84,7 +85,15 @@ def import_draft_governance(
     of `GOVERNED_BY`/`SUPPORTED_BY`/`OWNS`, and here canonical == incoming.
 
     `write_drafts` is the persistence step and has no default: the caller decides whether the tree
-    goes through the gateway (live merge) or into a staged snapshot (restore, issue #210 D1).
+    goes through the gateway (live merge) or into a staged snapshot (restore).
+
+    Args:
+        baseline: The baseline whose Policy/Standard/Control nodes are imported.
+        single_tenant_graph: Handle passed to `write_drafts` as the graph it reads through.
+        governance: The owner and artifact-supplied Policy embeddings for the import.
+        canonical_id_by_incoming_id: Incoming-to-canonical id mapping; mutated in place with one
+            self-mapping per imported Policy.
+        write_drafts: The persistence step that writes the tree as `draft`.
 
     Returns:
         The written counts, or `None` when there was nothing to import.
@@ -92,6 +101,10 @@ def import_draft_governance(
     Raises:
         GovernanceOwnerRequiredError: Governance content is present and
             `governance.owner` is `None`; raised before any write.
+
+    Side Effects:
+        Calls `write_drafts` once and adds the Policy self-mappings to
+        `canonical_id_by_incoming_id`.
     """
     if not (baseline.policy_nodes or baseline.standard_nodes or baseline.control_nodes):
         return None
@@ -112,7 +125,15 @@ def import_draft_governance(
 
 
 def governance_count_fields(counts: GovernanceDraftCounts | None) -> dict[str, int]:
-    """The four audit/summary keys for `counts` (all zero when no governance was imported)."""
+    """Return the four audit/summary count fields for `counts`.
+
+    Args:
+        counts: The written counts, or `None` when no governance was imported.
+
+    Returns:
+        A dict with `governance_policies`, `governance_standards`, `governance_controls` and
+        `governance_status_overridden`; every value is 0 when `counts` is `None`.
+    """
     return {
         "governance_policies": counts.policies if counts else 0,
         "governance_standards": counts.standards if counts else 0,

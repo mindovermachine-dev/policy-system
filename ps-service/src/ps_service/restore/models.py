@@ -1,9 +1,7 @@
-"""Core types for `ps_service.restore` -- the artifact restore admits.
+"""Core types for `ps_service.restore`: the artifact a restore admits and its outcome.
 
-Depends on `ps_service.export.models.InstrumentManifest` -- one-directional
-(Restore depends on Export's manifest shape; Export never imports from
-Restore). Plain frozen dataclasses, matching `ps_service.export.models`'s own
-convention for internal-pipeline-plumbing shapes.
+Depends on `ps_service.export.models.InstrumentManifest` one-directionally: Restore depends on
+Export's manifest shape; Export never imports from Restore. Plain frozen dataclasses.
 """
 
 from __future__ import annotations
@@ -19,12 +17,16 @@ if TYPE_CHECKING:
 class RestoreArtifact:
     """One curated instrument's artifact, read off disk and ready to restore.
 
-    `baseline_blob`/`native_blob` are UTF-8 JSON bytes (`export.serialize.
-    to_json_bytes`'s output), read verbatim from `baseline.json`/
-    `native.json` (PLAN.md D1, CHANGES2.md §2.1/§3.1) -- never parsed until
-    AFTER checksum verification (D9) and schema_version comparison (D10);
-    `export.serialize.parse_serialized_graph_json` is the parse step,
-    called by `restore_instrument` between D10 and D8 step 2.
+    The blobs are read verbatim and are not parsed until checksum verification and the
+    `schema_version` comparison have passed; `export.serialize.parse_serialized_graph_json` is
+    the parse step, called by `restore_instrument`.
+
+    Attributes:
+        manifest: The instrument's manifest: ids, `schema_version` and the SHA-256 digests the
+            blobs are verified against.
+        baseline_blob: UTF-8 JSON bytes of the baseline graph (`baseline.json`, as written by
+            `export.serialize.to_json_bytes`).
+        native_blob: UTF-8 JSON bytes of the native graph (`native.json`, same format).
     """
 
     manifest: InstrumentManifest
@@ -36,8 +38,12 @@ class RestoreArtifact:
 class RestoreOutcome:
     """The result of a completed `restore_instrument` call.
 
-    `stages` records, in order, which stages of D8's staged-write sequence
-    actually ran -- an audit-facing summary, not a control-flow signal.
+    Only a successful restore returns one; a failed restore raises instead.
+
+    Attributes:
+        instrument_id: Canonical id of the restored instrument (non-empty).
+        stages: Names, in order, of the restore stages that ran; an audit-facing summary, not a
+            control-flow signal.
     """
 
     instrument_id: str

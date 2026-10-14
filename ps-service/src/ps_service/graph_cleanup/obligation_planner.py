@@ -1,4 +1,4 @@
-"""Pure planning and validation for `merge-obligations` (issue #190, AC-BI-005/007/015/016).
+"""Pure planning and validation for `merge-obligations`.
 
 No I/O: takes the `ObligationMergeState` the reader produced and returns the preview, the
 guard counts the writer pins, the before/after snapshots and a state digest. The
@@ -7,7 +7,7 @@ digest binds a passkey approval to the exact state that was previewed.
 Both sides must be borne by the same single Role (an Obligation is a Role-scoped weak
 entity). The survivor keeps its single `HAS` edge; the absorbed node is deleted, its
 `SATISFIED_BY` / `REQUIRES` edges union onto the survivor, and a `MergedObligation` marker
-records the redirect (CHANGES.md H1).
+records the redirect.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ __all__ = ["plan_obligation_merge", "validate_obligation_merge"]
 
 
 def _single_role(roles: tuple[RoleRef, ...], side: str, node_id: str) -> RoleRef:
+    """Return the one Role bearing the obligation, or raise when it has none or several."""
     if len(roles) != 1:
         message = f"the {side} obligation {node_id!r} is not borne by exactly one role"
         raise GraphCleanupValidationError(message)
@@ -43,6 +44,13 @@ def validate_obligation_merge(
     state: ObligationMergeState,
 ) -> tuple[ObligationNodeState, ObligationNodeState, RoleRef]:
     """Reject a merge that must never get an approval; return (survivor, absorbed, role).
+
+    Args:
+        state: What the reader found: both Obligations (each `None` when absent) and the
+            Roles bearing each.
+
+    Returns:
+        The survivor, the absorbed Obligation and the one Role that bears both.
 
     Raises:
         GraphCleanupValidationError: self-merge, a nonexistent side, a side not borne by
@@ -69,12 +77,14 @@ def validate_obligation_merge(
 
 
 def _snapshot_node(node: ObligationNodeState) -> NodeRecord:
+    """Return the snapshot record of an Obligation node, including its text."""
     return NodeRecord(
         label="Obligation", id=node.id, properties={**node.properties, "text": node.text}
     )
 
 
 def _sorted_edges(edges: list[EdgeRecord]) -> tuple[EdgeRecord, ...]:
+    """Order edges deterministically so equal states produce equal snapshots and digests."""
     return tuple(
         sorted(
             edges,
@@ -84,11 +94,13 @@ def _sorted_edges(edges: list[EdgeRecord]) -> tuple[EdgeRecord, ...]:
 
 
 def _digest(before: GraphSnapshot) -> str:
+    """Return the SHA-256 hex digest of the canonical JSON of the before snapshot."""
     canonical = json.dumps(before.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _has_edge(role: RoleRef, obligation_id: str) -> EdgeRecord:
+    """Return the `HAS` edge from `role` to the Obligation `obligation_id`."""
     return EdgeRecord(
         rel_type="HAS",
         source_label="Role",
@@ -103,9 +115,22 @@ def plan_obligation_merge(state: ObligationMergeState) -> ObligationMergePlan:
 
     Every `SATISFIED_BY` and `REQUIRES` edge of the absorbed Obligation unions onto the
     survivor (an endpoint already linked to the survivor collapses into the existing edge).
+    The state digest hashes the before snapshot, so an approval only applies to the state
+    previewed.
+
+    Args:
+        state: What the reader found for both Obligations; validated by
+            `validate_obligation_merge`.
+
+    Returns:
+        An `ObligationMergePlan`: the preview (edges to move, count of collapsed duplicate
+        edges, requirement source refs), the expected edge counts the writer pins, the
+        before/after snapshots and the state digest. The after snapshot keeps the survivor
+        and replaces the absorbed node with a `MergedObligation` marker.
 
     Raises:
-        GraphCleanupValidationError: see `validate_obligation_merge`.
+        GraphCleanupValidationError: self-merge, a nonexistent side, a side not borne by exactly
+            one Role, or two Obligations under different Roles.
     """
     survivor, absorbed, role = validate_obligation_merge(state)
     incident = [

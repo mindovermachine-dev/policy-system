@@ -1,8 +1,8 @@
 """Domain-specific exception types for `ps_service.company_merge`.
 
-Mirrors `ps_service.domain_mapper.errors`'s shape (PLAN_REVIEWED.md §1): one
-exception type per distinct failure boundary this component owns, never a
-generic `Exception`/`ValueError` (L1 Error Handling, L2 Error Handling).
+Mirrors `ps_service.domain_mapper.errors`: one exception type per distinct failure boundary
+this component owns, so callers can catch a specific failure instead of a generic
+`Exception` or `ValueError`.
 """
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ class CompanyMergeConfigurationError(Exception):
     """`merge_baseline_graph` was called without a resolved similarity threshold.
 
     `similarity_threshold is None` means `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`
-    was never set/resolved via `ServiceConfig` (PLAN_REVIEWED.md §7 step 0,
-    §8's B1 fix). Raised by `merge.py`, before any graph call of any kind is
-    made.
+    was never set or resolved via `ServiceConfig`. Also raised by
+    `falkordb_client.check_connectivity` when FalkorDB cannot be reached. `merge.py` raises it
+    before any graph call is made. The caller should fix the configuration or start FalkorDB.
     """
 
 
@@ -22,16 +22,17 @@ class CompanyMergePersistenceError(Exception):
     """A FalkorDB write for the single-tenant graph could not be completed safely.
 
     For example, an edge rewiring write references a canonical id with no
-    corresponding `CanonicalResolution` (PLAN_REVIEWED.md §6). Raised by
-    `graph_writer.py`, before any group is submitted for the offending write; also raised when
-    the Graph Write Gateway refuses a group or cannot confirm it was applied.
+    corresponding `CanonicalResolution`. `graph_writer.py` raises it before any group is
+    submitted for the offending write; it is also raised when the Graph Write Gateway refuses
+    a group or cannot confirm it was applied. The graph may be partly written only if the
+    gateway applied earlier groups; the caller should not assume the failed write took effect.
     """
 
 
 class GovernanceOwnerRequiredError(Exception):
     """A baseline carries Policy/Standard/Control content but no importing owner was supplied.
 
-    Issue #227: raised by `governance_import.import_draft_governance` before any
+    Raised by `governance_import.import_draft_governance` before any
     write. An imported tree is created `draft`, owned by whoever imports it; an
     ownerless draft would be unreachable by the propose/edit flow, so the import
     is refused instead. The message is fixed and domain-level.
@@ -43,30 +44,29 @@ class CompanyMergeValidationError(Exception):
 
     For example, `similarity.cosine_similarity` was given vectors of
     mismatched length, or a zero-magnitude vector for which cosine similarity
-    is undefined. Raised by `similarity.py`, before any similarity score is
-    computed.
+    is undefined. Also raised by `dedup.py` and `obligation_redirect.py` for malformed
+    inputs. It is raised before any result is computed; the caller should correct the input.
     """
 
 
 class StalePendingReviewError(Exception):
     """A `PendingReview`'s referenced incoming/existing node no longer exists.
 
-    Issue #35 Slice 4, CHANGES.md H2: raised by
-    `pending_review.resolve_review` (`decision="merge"`) when the combined
-    existence-check read finds either `incoming_id` or `nearest_existing_id`
-    no longer resolves to a real node -- e.g. a prior, unrelated merge
-    already deleted it (the review is "stale"). Raised **before** the merge
-    write query is ever issued, so AC-BI-008's "no graph changes" half holds
-    on this path too. The API-boundary translation to
-    `PendingReviewNotFoundError` (with H2's dedicated stale-reference
-    message) happens in `api.near_miss_review_orchestration.
-    run_resolve_near_miss` -- mirrors `RestoreArtifactRejectedError`'s own
-    "API-boundary translation of a lower-layer condition" pattern;
-    `ps_service.company_merge` never imports `ps_service.api` (M6 layering
-    stays one-directional).
+    Raised by `pending_review.resolve_review` (`decision="merge"`) when the combined
+    existence-check read finds that `incoming_id` or `nearest_existing_id` no longer resolves
+    to a node, for example because an unrelated merge already deleted it. It is raised before
+    the merge write is issued, so the graph is unchanged. The API layer translates it to
+    `PendingReviewNotFoundError`; `ps_service.company_merge` never imports `ps_service.api`.
+
+    Attributes:
+        review_id: Id of the pending review whose reference went stale.
     """
 
     def __init__(self, review_id: str) -> None:
-        """Store `review_id` for the API-boundary layer's message-building."""
+        """Keep `review_id` so the API layer can build its own message.
+
+        Args:
+            review_id: Id of the stale pending review.
+        """
         self.review_id = review_id
         super().__init__(f"pending review {review_id!r} references a node that no longer exists")

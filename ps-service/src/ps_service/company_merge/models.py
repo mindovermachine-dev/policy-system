@@ -1,12 +1,9 @@
-"""ps_service.company_merge core types.
+"""Core types of `ps_service.company_merge`.
 
-The shapes `graph_reader.py`/`dedup.py`/`graph_writer.py`/`merge.py` build
-and consume internally, plus `MergeBaselineGraph`'s own return value.
-
-Per PLAN_REVIEWED.md §2: all types here are plain frozen dataclasses —
-internal pipeline plumbing, not PS Conceptual Model types crossing an LLM
-boundary (nothing here is LLM-structured output, unlike
-`ps_service.domain_mapper.models`'s Pydantic types).
+The shapes `graph_reader`, `dedup`, `graph_writer` and `merge` build and consume internally, plus
+`MergeBaselineGraph`'s own return value. All are plain frozen dataclasses: internal pipeline
+plumbing, not PS Conceptual Model types crossing an LLM boundary (nothing here is LLM-structured
+output, unlike the Pydantic types of `ps_service.domain_mapper.models`).
 """
 
 from __future__ import annotations
@@ -17,21 +14,19 @@ from typing import Literal
 
 @dataclass(frozen=True, slots=True)
 class BaselineNode:
-    """A Role, Requirement, Obligation, or Capability node read from a {short}_baseline graph.
+    """A Role, Requirement, Obligation, Capability, Policy, Standard or Control node of a baseline.
 
-    Exactly as Domain Mapper wrote it. `properties` is used for Role/
-    Requirement/Obligation, which never carry an embedding -- this shape is
-    deliberately NOT reused for the properties dict Company Merge itself
-    writes onto a canonical Capability node (see CanonicalNodeProperties
-    below, S1's fix).
+    Read from a `{short}_baseline` graph exactly as the Domain Mapper wrote it. `properties` is used
+    for nodes that never carry an embedding; the properties dict Company Merge itself writes onto a
+    canonical Capability node has its own wider type (`CanonicalNodeProperties`).
 
-    `embedding` (issue #31) is populated only by `_read_capability_nodes`,
-    from a Capability node's own cached `embedding` property in
-    `{short}_baseline` (`None` if absent) -- every other node kind's
-    `read_baseline_graph` reader leaves it at its `None` default, since Role/
-    Requirement/Obligation/Policy/Standard/Control never carry one (AC-BI-009).
-    Reused directly by `dedup.find_best_semantic_match` in place of a fresh
-    `route_embedding` call when present.
+    Attributes:
+        id: The node's baseline-local id.
+        properties: The node's properties, string or float valued.
+        embedding: The Capability node's cached `embedding` property in `{short}_baseline`, or None
+            when it has none. Only the Capability reader populates it; every other node kind leaves
+            it None. `dedup.find_best_semantic_match` reuses it in place of a fresh
+            `route_embedding` call when present.
     """
 
     id: str
@@ -41,7 +36,13 @@ class BaselineNode:
 
 @dataclass(frozen=True, slots=True)
 class ProvenanceEdge:
-    """RegulatoryInstrument -[:DEFINES|EXPRESSES {source_ref}]-> Role|Requirement."""
+    """A `RegulatoryInstrument -[:DEFINES|EXPRESSES {source_ref}]-> Role|Requirement` edge.
+
+    Attributes:
+        relationship_type: `DEFINES` (target is a Role) or `EXPRESSES` (target is a Requirement).
+        target_id: Baseline-local id of the Role or Requirement the instrument points at.
+        source_ref: Citation of the regulation text the edge derives from.
+    """
 
     relationship_type: Literal["DEFINES", "EXPRESSES"]
     target_id: str
@@ -50,25 +51,27 @@ class ProvenanceEdge:
 
 @dataclass(frozen=True, slots=True)
 class BareEdge:
-    """One edge, as read from the baseline graph.
+    """One edge, as read from the baseline graph, with no properties.
 
-    `HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`, or
-    `IMPLEMENTED_BY`: Role-[:HAS]->Obligation | Requirement-[:SATISFIED_BY]->Obligation |
+    `HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY` or `IMPLEMENTED_BY`:
+    Role-[:HAS]->Obligation | Requirement-[:SATISFIED_BY]->Obligation |
     Obligation-[:REQUIRES]->Capability | Capability-[:GOVERNED_BY]->Policy |
-    Policy-[:SUPPORTED_BY]->Standard | Standard-[:IMPLEMENTED_BY]->Control
-    (issue #54, S4 -- the governance edge types reuse this same type rather
-    than a parallel `GovernanceEdge` type). `COVERS`, `OWNS`, `MITIGATED_BY`,
-    or `VERIFIED_BY`: PracticeArea-[:COVERS]->Capability |
+    Policy-[:SUPPORTED_BY]->Standard | Standard-[:IMPLEMENTED_BY]->Control. `COVERS`, `OWNS`,
+    `MITIGATED_BY` or `VERIFIED_BY`: PracticeArea-[:COVERS]->Capability |
     PracticeArea-[:OWNS]->Policy | RiskPath-[:MITIGATED_BY]->Capability |
-    RiskPath-[:VERIFIED_BY]->Control (issue #106 -- the classification-layer
-    edge types reuse this same type rather than a parallel type). Endpoint
-    ids here are BASELINE-LOCAL -- since #42 only a `REQUIRES` edge's
-    Capability target (and, since #54, a `GOVERNED_BY` edge's Policy target,
-    and, since #106, a `COVERS`/`MITIGATED_BY` edge's Capability target and
-    an `OWNS` edge's Policy target) is rewritten to its canonical id before
-    being persisted; every other endpoint (Role, Requirement, Obligation,
-    Standard, Control, PracticeArea, RiskPath) is a passthrough node whose
-    baseline-local id is already final (§6).
+    RiskPath-[:VERIFIED_BY]->Control. The governance and classification edge types reuse this one
+    type rather than a parallel one.
+
+    Endpoint ids are baseline-local. Only a `REQUIRES` edge's Capability target, a `GOVERNED_BY`
+    edge's Capability source and Policy target, a `COVERS`/`MITIGATED_BY` edge's Capability target
+    and an `OWNS` edge's Policy target are rewritten to their canonical ids before the edge is
+    persisted; every other endpoint (Role, Requirement, Obligation, Standard, Control, PracticeArea,
+    RiskPath) is a passthrough node whose baseline-local id is already final.
+
+    Attributes:
+        relationship_type: One of the ten edge types above.
+        source_id: Baseline-local id of the source node.
+        target_id: Baseline-local id of the target node.
     """
 
     relationship_type: Literal[
@@ -89,17 +92,31 @@ class BareEdge:
 
 @dataclass(frozen=True, slots=True)
 class BaselineGraph:
-    """The complete contents of one regulation's {short}_baseline graph.
+    """The complete contents of one regulation's `{short}_baseline` graph.
 
-    Read back by graph_reader.read_baseline_graph -- MergeBaselineGraph's
-    input. `policy_nodes`/`standard_nodes`/`control_nodes`/`governance_edges`
-    (issue #54, S4) are empty tuples for an external-sourced baseline --
-    Policy/Standard/Control are only ever derived for `source_type:
-    "internal"` (`DeriveGovernanceArtifacts`, S3). `practice_area_nodes`/
-    `risk_path_nodes`/`classification_edges` (issue #106) are likewise empty
-    tuples for a baseline that never went through `internal_seed` --
-    PracticeArea/RiskPath and their `COVERS`/`OWNS`/`MITIGATED_BY`/
-    `VERIFIED_BY` edges are only ever authored by that adapter today.
+    Read back by `graph_reader.read_baseline_graph` and consumed by `MergeBaselineGraph`. The
+    governance fields are empty tuples for an external-sourced baseline: Policy, Standard and
+    Control are only derived for `source_type: "internal"`. The classification fields are likewise
+    empty tuples for a baseline that never went through the internal-seed adapter, which is the only
+    author of PracticeArea and RiskPath nodes and of their
+    `COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY` edges.
+
+    Attributes:
+        regulatory_instrument_id: Id of the baseline's RegulatoryInstrument.
+        regulatory_instrument_properties: Properties of the instrument node.
+        role_nodes: Role nodes.
+        requirement_nodes: Requirement nodes.
+        obligation_nodes: Obligation nodes.
+        capability_nodes: Capability nodes, each carrying its cached embedding when it has one.
+        provenance_edges: `DEFINES`/`EXPRESSES` edges from the instrument.
+        bare_edges: The `HAS`, `SATISFIED_BY` and `REQUIRES` edges.
+        policy_nodes: Policy nodes; empty for an external baseline.
+        standard_nodes: Standard nodes; empty for an external baseline.
+        control_nodes: Control nodes; empty for an external baseline.
+        governance_edges: The `GOVERNED_BY`, `SUPPORTED_BY` and `IMPLEMENTED_BY` edges.
+        practice_area_nodes: PracticeArea nodes.
+        risk_path_nodes: RiskPath nodes.
+        classification_edges: The `COVERS`, `OWNS`, `MITIGATED_BY` and `VERIFIED_BY` edges.
     """
 
     regulatory_instrument_id: str
@@ -121,12 +138,17 @@ class BaselineGraph:
 
 @dataclass(frozen=True, slots=True)
 class GovernanceDraftCounts:
-    """What `graph_writer.persist_governance_drafts` wrote for one restore (issue #183).
+    """What `graph_writer.persist_governance_drafts` wrote for one restore or internal ingest.
 
-    `status_overridden` counts nodes whose artifact carried a `status` other
-    than `"draft"` (a restore never imports an authored `approved`/`proposed`
-    status -- the customer's own governance decides that), so the audit entry
-    can show that an override happened.
+    The counts describe the input tree, not the nodes actually created. A restore never imports an
+    authored `approved`/`proposed` status (the customer's own governance decides that), so
+    `status_overridden` lets the audit entry show that an override happened.
+
+    Attributes:
+        policies: Number of Policy nodes in the tree.
+        standards: Number of Standard nodes in the tree.
+        controls: Number of Control nodes in the tree.
+        status_overridden: Number of nodes whose artifact carried a `status` other than `"draft"`.
     """
 
     policies: int
@@ -139,11 +161,14 @@ class GovernanceDraftCounts:
 class ExistingCanonicalNode:
     """One Capability already present in the single-tenant graph.
 
-    As read by dedup.read_existing_canonical_index, OR an in-memory stand-in
-    for one just minted/updated during this same dedup run (§5.4).
-    `embedding` is None when this node has never had one computed/cached.
-    (Since #42 Obligation is not a canonical node -- it is passed through,
-    not deduped.)
+    As read by `dedup.read_existing_canonical_index`, or an in-memory stand-in for one just
+    minted or updated during the same dedup run. Obligation is not a canonical node: it is passed
+    through, not deduped.
+
+    Attributes:
+        id: The canonical node's id.
+        text: The Capability's `name`, the text compared during dedup.
+        embedding: The node's cached embedding, or None when none has been computed or cached.
     """
 
     id: str
@@ -153,14 +178,19 @@ class ExistingCanonicalNode:
 
 @dataclass(frozen=True, slots=True)
 class NearMissPair:
-    """A near-miss pair, surfaced, never merged.
+    """A near-miss pair, surfaced for review and never merged automatically.
 
-    Either AC-004's original case (a below-threshold pair) or, since issue
-    #30 (AC-BI-004), a pair whose only qualifying match was excluded as a
-    same-run mint: the incoming node's best-scoring candidate cleared
-    threshold, but that candidate was minted earlier in this same run
-    (never a pre-existing canonical node), so it was not an eligible merge
-    target -- the pair is recorded here instead of merged.
+    Either a below-threshold pair, or a pair whose only qualifying match was excluded as a same-run
+    mint: the incoming node's best-scoring candidate cleared the threshold, but that candidate was
+    minted earlier in the same run (never a pre-existing canonical node), so it was not an eligible
+    merge target and the pair is recorded here instead of merged.
+
+    Attributes:
+        incoming_id: Id of the incoming node.
+        incoming_text: Text of the incoming node.
+        nearest_existing_id: Id of its nearest candidate.
+        nearest_existing_text: Text of that candidate.
+        similarity: Embedding similarity between the two, in the dedup metric's range.
     """
 
     incoming_id: str
@@ -172,41 +202,49 @@ class NearMissPair:
 
 @dataclass(frozen=True, slots=True)
 class CanonicalResolution:
-    """The outcome of resolving one incoming Capability node to its canonical id."""
+    """The outcome of resolving one incoming Capability node to its canonical id.
+
+    Attributes:
+        incoming_id: Baseline-local id of the incoming node.
+        canonical_id: Id of the canonical node it resolved to (its own when newly minted).
+        match_kind: `exact` (same key as an existing node), `semantic` (embedding match), `new`
+            (minted), or `redirected` (the incoming id is a cleanup-merge
+            tombstone, resolved through `MERGED_INTO` to its survivor).
+        embedding: The node's own embedding, written into its properties at mint time; meaningful
+            only when `match_kind` is `new`, and None when no comparison produced one.
+    """
 
     incoming_id: str
     canonical_id: str
     match_kind: Literal["exact", "semantic", "new", "redirected"]
-    embedding: tuple[float, ...] | None  # this node's OWN embedding, to be
-    # written into its properties at mint time (match_kind == "new" only)
+    embedding: tuple[float, ...] | None
 
 
 @dataclass(frozen=True, slots=True)
 class SemanticMatchResult:
-    """find_best_semantic_match's return value when existing_index is non-empty.
+    """`find_best_semantic_match`'s return value when `existing_index` is non-empty.
 
-    §5.3, B2's fix. Since issue #30, carries TWO independent "best" pairs
-    computed from one embedding scan, at zero extra cost:
-    `best_existing_id`/`best_similarity` is the overall best-scoring entry
-    across EVERY entry scanned, used only for near-miss citation;
-    `best_eligible_id`/`best_eligible_similarity` is the best-scoring entry
-    restricted to the caller's `eligible_ids` (identical to the overall best
-    when the caller omits `eligible_ids`), used only for the merge decision.
-    `best_eligible_id`/`best_eligible_similarity` are both `None` when no
-    scanned entry belongs to `eligible_ids` (e.g. `eligible_ids` is an empty
-    frozenset).
+    Carries two independent "best" pairs computed from one embedding scan at no extra cost.
+    `best_existing_id`/`best_similarity` is the overall best-scoring entry across every entry
+    scanned, used only for near-miss citation. `best_eligible_id`/`best_eligible_similarity` is the
+    best-scoring entry restricted to the caller's `eligible_ids` (identical to the overall best when
+    the caller omits `eligible_ids`), used only for the merge decision; both are None when no
+    scanned entry belongs to `eligible_ids`, for example when it is an empty frozenset.
 
-    `newly_computed_existing_embeddings` holds every existing_index entry's
-    embedding that had to be freshly computed during THIS call (existing_id
-    -> embedding) -- an entry that already carried a cached embedding is
-    excluded, since nothing was computed for it. This type only carries
-    values, it performs no I/O: the caller (dedupe_canonical_nodes) is
-    responsible for (a) folding these into its own in-memory working index
-    before the next incoming node is processed -- closing the within-run
-    reuse gap -- and (b) arranging their eventual persistence onto the
-    already-existing graph nodes they belong to via
-    graph_writer.backfill_canonical_embeddings -- closing the across-run
-    reuse gap. See §5.4/§5.5/§6.2 for the full mechanism.
+    This type only carries values and performs no I/O. The caller (`dedupe_canonical_nodes`) folds
+    `newly_computed_existing_embeddings` into its in-memory working index before the next incoming
+    node, so the embeddings are reused within the run, and arranges their persistence onto the
+    existing graph nodes through `graph_writer.backfill_canonical_embeddings`, so they are reused
+    across runs.
+
+    Attributes:
+        best_existing_id: Id of the overall best-scoring existing entry.
+        best_similarity: Its similarity to the incoming node.
+        best_eligible_id: Id of the best-scoring eligible entry, or None.
+        best_eligible_similarity: Its similarity, or None.
+        incoming_embedding: The incoming node's embedding used for the comparison.
+        newly_computed_existing_embeddings: Existing id to the embedding freshly computed during
+            this call; an entry that already carried a cached embedding is excluded.
     """
 
     best_existing_id: str
@@ -219,49 +257,50 @@ class SemanticMatchResult:
 
 @dataclass(frozen=True, slots=True)
 class DedupResult:
-    """dedupe_canonical_nodes()'s return value for the Capability pass."""
+    """`dedupe_canonical_nodes`'s return value for one kind's pass.
+
+    Attributes:
+        resolutions: One `CanonicalResolution` per incoming node.
+        near_misses: Pairs surfaced for review instead of merged.
+        embedding_backfills: Existing id to embedding, for every canonical node that already existed
+            in the graph before this run (in `read_existing_canonical_index`'s original result) and
+            whose embedding had to be freshly computed during this run. A node minted during this
+            run is excluded: its embedding is written as part of its own properties at mint time,
+            never by backfill. `merge.py` passes this to
+            `graph_writer.backfill_canonical_embeddings` after both kinds' dedup passes and all node
+            and edge writes complete.
+        incoming_embedding_backfills: Incoming id to embedding, for every incoming node whose own
+            embedding had to be freshly computed because its `BaselineNode.embedding` was None.
+            Populated by the Capability pass in practice, so it is empty for a Policy `DedupResult`
+            (Policy nodes never carry a cached embedding). `merge.py` passes it to
+            `graph_writer.backfill_incoming_capability_embeddings`, which targets the incoming
+            `{short}_baseline` graph's Capability nodes, unlike `embedding_backfills`, which targets
+            the single-tenant graph's canonical nodes. Defaults to `{}`, as an offline resolution
+            that never calls `route_embedding` has none to report.
+    """
 
     resolutions: tuple[CanonicalResolution, ...]
     near_misses: tuple[NearMissPair, ...]
     embedding_backfills: dict[str, tuple[float, ...]]
-    """existing_id -> embedding, for every PRE-EXISTING canonical node
-    (present in read_existing_canonical_index's original result, i.e.
-    already persisted before this run started) whose embedding had to be
-    freshly computed during this run. A node minted DURING this run is
-    deliberately excluded here -- its embedding is written as part of its
-    own properties at mint time (§6), never via backfill.
-    merge.py (§7) passes this straight to
-    graph_writer.backfill_canonical_embeddings after both kinds' dedup
-    passes and all node/edge writes complete."""
-
     incoming_embedding_backfills: dict[str, tuple[float, ...]] = field(default_factory=dict)
-    """incoming_id -> embedding, for every incoming node whose OWN embedding
-    had to be freshly computed during this run because its `BaselineNode.
-    embedding` came in `None` (issue #31). Populated only by the Capability
-    pass in practice -- Policy's own `BaselineNode`s never carry a cached
-    embedding to begin with (no reader/backfill writes one), so this is
-    always empty for a Policy `DedupResult`, with no kind-specific branching
-    needed here to make that so. `merge.py` passes this straight to
-    `graph_writer.backfill_incoming_capability_embeddings`, targeting the
-    INCOMING `{short}_baseline` graph's own Capability nodes -- distinct from
-    `embedding_backfills` above, which targets the single-tenant graph's
-    canonical nodes. Defaults to `{}` so `resolve_capability_convergence_offline`
-    (which never calls `route_embedding`, so never has one to report) and
-    every pre-issue-#31 `DedupResult(...)` construction in this codebase's
-    tests stay valid unchanged."""
 
 
 @dataclass(frozen=True, slots=True)
 class PendingReviewRecord:
     """One persisted `PendingReview` node, as read back from FalkorDB.
 
-    Issue #35 (near-miss review workflow), §2.3: a distinct type from
-    `NearMissPair` above -- adds `id`/`kind`/`created_at`, which
-    `NearMissPair` correctly has no business carrying, since it is a
-    pre-persistence, in-memory-only shape. Slice 1 only ever constructs the
-    params written onto this node (`pending_review.persist_pending_reviews`);
-    nothing reads a `PendingReviewRecord` back yet -- that is Slice 2's
-    `list_pending_reviews`.
+    Distinct from `NearMissPair`: it adds `id`, `kind` and `created_at`, which the pre-persistence,
+    in-memory-only `NearMissPair` has no business carrying.
+
+    Attributes:
+        id: The review's unique id.
+        kind: Which canonical kind the pair belongs to.
+        incoming_id: Id of the incoming node of the pair.
+        incoming_text: Text of the incoming node.
+        nearest_existing_id: Id of its nearest candidate.
+        nearest_existing_text: Text of that candidate.
+        similarity: Embedding similarity between the two.
+        created_at: ISO-8601 instant the review node was created.
     """
 
     id: str
@@ -276,15 +315,18 @@ class PendingReviewRecord:
 
 @dataclass(frozen=True, slots=True)
 class ResolveOutcome:
-    """The result of resolving one `PendingReview` (issue #35).
+    """The result of resolving one `PendingReview`.
 
-    `decision="keep-separate"` leaves `winner_id`/`loser_id` as `None`
-    (AC-BI-004: only the `PendingReview` record itself is removed).
-    `decision="merge"` populates both with the deterministically-chosen
-    winner/loser canonical node ids (AC-BI-005/006). `decision` is a plain
-    `str`, not a `Literal`, mirroring `ResolveReviewResponse`'s own wire
-    shape (`api/models.py`) -- the request-side `Literal` is what widens
-    slice to slice, not this output type.
+    `decision="keep-separate"` leaves `winner_id`/`loser_id` as None: only the `PendingReview`
+    record itself is removed. `decision="merge"` populates both with the deterministically chosen
+    winner and loser canonical node ids. `decision` is a plain `str`, not a `Literal`, mirroring
+    `ResolveReviewResponse`'s wire shape (`api/models.py`).
+
+    Attributes:
+        review_id: Id of the resolved review.
+        decision: The decision applied, `"keep-separate"` or `"merge"`.
+        winner_id: Id of the surviving canonical node for a merge, else None.
+        loser_id: Id of the node merged away for a merge, else None.
     """
 
     review_id: str
@@ -295,42 +337,48 @@ class ResolveOutcome:
 
 @dataclass(frozen=True, slots=True)
 class MergeResult:
-    """merge_baseline_graph()'s return value -- MergeBaselineGraph's outcome."""
+    """`merge_baseline_graph`'s return value: `MergeBaselineGraph`'s outcome.
+
+    The counts are facts for the audit trail, not approximations.
+
+    Attributes:
+        regulatory_instrument_id: Id of the merged instrument.
+        obligation_ids: Ids of the Obligations passed through (never deduped).
+        capability_canonical_ids: Canonical ids the incoming Capabilities resolved to.
+        near_misses: Capability near-miss pairs surfaced for review.
+        pending_review_count: Number of `PendingReview` nodes this call persisted, which is
+            `len(near_misses)`: one create per near miss, never a fresh read of all unresolved
+            reviews in the graph.
+        new_capability_count: Capabilities the dedup pass minted (`match_kind == "new"`).
+        matched_capability_count: Capabilities resolved onto an existing node (`exact`, `semantic`
+            or `redirected`).
+        new_obligation_count: Obligations this call wrote that did not already exist in the
+            single-tenant graph, read before the write; ids dropped by a cleanup-merge redirect are
+            never counted.
+        governance_policies: Policy nodes the draft-governance import covered; 0 for a baseline with
+            no Policy/Standard/Control.
+        governance_standards: Standard nodes covered by the import.
+        governance_controls: Control nodes covered by the import.
+        governance_status_overridden: Nodes whose authored status was forced to `"draft"`; the same
+            four counts a restore records.
+    """
 
     regulatory_instrument_id: str
-    obligation_ids: tuple[str, ...]  # passed through per source since #42, not deduped
+    obligation_ids: tuple[str, ...]
     capability_canonical_ids: tuple[str, ...]
-    near_misses: tuple[NearMissPair, ...]  # AC-004, Capability
-    # issue #35, Slice 5 (AC-BI-010): the run-scoped count of `PendingReview`
-    # nodes THIS call actually persisted -- `len(capability near_misses)`
-    # (Policy near-misses no longer exist, issue #227), i.e. exactly the number of
-    # `persist_pending_reviews` writes issued during this call (CREATE, not
-    # MERGE -- see pending_review.py), never a fresh "all unresolved reviews
-    # ever" graph read. Zero by default so every pre-existing `MergeResult(...)`
-    # construction in this codebase's tests stays valid unchanged.
+    near_misses: tuple[NearMissPair, ...]
     pending_review_count: int = 0
-    # issue #195, Slice 6: facts for the audit trail, not approximations. Capabilities the dedup
-    # pass minted (`match_kind == "new"`) versus resolved onto an existing node (`exact`,
-    # `semantic`, `redirected`); and Obligations this call wrote that did not already exist in
-    # the single-tenant graph (read BEFORE the write; ids dropped by a cleanup-merge redirect are
-    # never counted). All default to 0 so pre-existing constructions stay valid.
     new_capability_count: int = 0
     matched_capability_count: int = 0
     new_obligation_count: int = 0
-    # issue #227: what the shared draft-governance import wrote (all 0 for a baseline with no
-    # Policy/Standard/Control), the same four counts restore records (#183).
     governance_policies: int = 0
     governance_standards: int = 0
     governance_controls: int = 0
     governance_status_overridden: int = 0
 
 
-# S1's fix: a properties-dict type distinct from BaselineNode.properties,
-# wide enough to legally carry an embedding value. Used exclusively for the
-# $properties param graph_writer.persist_canonical_nodes builds for a
-# match_kind == "new" Capability resolution, and for the $embedding param
-# graph_writer.backfill_canonical_embeddings builds. Never used for
-# Role/Requirement/RegulatoryInstrument/Obligation properties (those stay
-# dict[str, str | float] via BaselineNode -- they never carry an embedding,
-# by design, per AC-008 / #42).
+# Wider than `BaselineNode.properties` so it can legally carry an embedding value. Used only for
+# the `$properties` of a newly minted canonical Capability node and the `$embedding` of a
+# canonical-embedding backfill; Role, Requirement, RegulatoryInstrument and Obligation properties
+# never carry an embedding and stay `dict[str, str | float]`.
 CanonicalNodeProperties = dict[str, str | float | list[float]]

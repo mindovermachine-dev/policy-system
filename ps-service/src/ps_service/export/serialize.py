@@ -1,14 +1,11 @@
-"""Serialization/checksum primitives for `ps_service.export`.
+"""Serialize a graph to canonical JSON, checksum it, and parse it back.
 
-PLAN.md D9, CHANGES2.md §2 -- replaces `dump.py`'s `DUMP`-based design
-entirely. `serialize_graph` reads a whole FalkorDB graph into a `SerializedGraph`
-generically -- via `CALL db.labels()`/`CALL db.relationshipTypes()`
-enumeration plus one `MATCH` per label/relationship type -- rather than
-hardcoding a fixed node/edge catalog, so the same function is correct for
-both the baseline graph and the native structural graph (CHANGES2.md §2.3).
-`to_json_bytes`/`parse_serialized_graph_json` are the deterministic
-JSON <-> `SerializedGraph` codec (§2.1); `checksum_bytes` is unchanged from
-the old `dump.py` (still a pure `hashlib.sha256` wrapper, D9).
+`serialize_graph` reads a whole FalkorDB graph into a `SerializedGraph` generically: it enumerates
+the graph's own labels and relationship types and runs one `MATCH` per label or type, instead of
+hardcoding a node and edge catalog, so the same function serves the baseline graph and the native
+structural graph. `to_json_bytes` and `parse_serialized_graph_json` are the deterministic
+JSON <-> `SerializedGraph` codec, and `checksum_bytes` is the SHA-256 hex digest recorded in a
+manifest.
 """
 
 from __future__ import annotations
@@ -35,12 +32,21 @@ _EDGE_ROWS_QUERY = (
 
 
 def checksum_bytes(blob: bytes) -> str:
-    """SHA-256 hex digest of `blob` (D9) -- a manifest's `baseline_sha256`/`native_sha256` value."""
+    """Return the lowercase SHA-256 hex digest of `blob`.
+
+    This is the value a manifest records as `baseline_sha256` or `native_sha256`.
+
+    Args:
+        blob: The exact bytes to hash; the empty bytestring is allowed.
+
+    Returns:
+        A 64-character hex string.
+    """
     return hashlib.sha256(blob).hexdigest()
 
 
 class _QueryResult(Protocol):
-    """Structural stand-in for `falkordb.QueryResult` -- the one field this module reads."""
+    """Structural stand-in for `falkordb.QueryResult`, limited to the field this module reads."""
 
     @property
     def result_set(self) -> list[object]: ...
@@ -49,24 +55,28 @@ class _QueryResult(Protocol):
 def _rows(
     graph: _GraphQueryHandle, query: str, params: dict[str, object] | None = None
 ) -> list[list[object]]:
-    """The one call site every `graph.query()` read in this module goes through."""
+    """Run a read query on `graph` and return its result rows (single call site for reads)."""
     result = graph.query(query, params)
     return cast("list[list[object]]", cast("_QueryResult", result).result_set)
 
 
 def _enumerate_labels(graph: _GraphQueryHandle) -> list[str]:
+    """Return every node label defined in the graph's schema."""
     return [cast("str", row[0]) for row in _rows(graph, "CALL db.labels()")]
 
 
 def _enumerate_relationship_types(graph: _GraphQueryHandle) -> list[str]:
+    """Return every relationship type defined in the graph's schema."""
     return [cast("str", row[0]) for row in _rows(graph, "CALL db.relationshipTypes()")]
 
 
 def _properties(raw: object) -> dict[str, SerializedPropertyValue]:
+    """Copy a driver property mapping into a plain dict."""
     return cast("dict[str, SerializedPropertyValue]", dict(cast("dict[str, object]", raw)))
 
 
 def _read_nodes_for_label(graph: _GraphQueryHandle, label: str) -> list[SerializedNode]:
+    """Read every node carrying `label`; raise `ExportSourceGraphError` if one has != 1 label."""
     query = _NODE_ROWS_QUERY.format(label=label)
     nodes: list[SerializedNode] = []
     for node_labels_raw, properties_raw in _rows(graph, query):
@@ -83,6 +93,7 @@ def _read_nodes_for_label(graph: _GraphQueryHandle, label: str) -> list[Serializ
 def _read_edges_for_relationship_type(
     graph: _GraphQueryHandle, relationship_type: str
 ) -> list[SerializedEdge]:
+    """Read every edge of `relationship_type`; raise `ExportSourceGraphError` on a bad endpoint."""
     query = _EDGE_ROWS_QUERY.format(relationship_type=relationship_type)
     edges: list[SerializedEdge] = []
     for row in _rows(graph, query):
@@ -107,24 +118,28 @@ def _read_edges_for_relationship_type(
 
 
 def serialize_graph(graph: _GraphQueryHandle) -> SerializedGraph:
-    """Read every node/edge out of an already-selected graph, generically.
+    """Read every node and edge out of an already-selected graph.
 
-    Caller has already selected `graph` (mirrors `company_merge.graph_reader.
-    read_baseline_graph`'s own "caller selects, this function doesn't"
-    convention exactly). Enumerates the graph's OWN labels/relationship
-    types via `CALL db.labels()`/`CALL db.relationshipTypes()` rather than
-    hardcoding Role/Requirement/Obligation/Capability -- this is what makes
-    ONE function correct for both the baseline graph (RegulatoryInstrument/
-    Role/Requirement/Obligation/Capability[/Policy/Standard/Control], D15)
-    and the native structural graph (RegulatoryInstrument plus dynamic
-    per-element-type labels, `ingestion/graph_writer.py`'s
-    `_KNOWN_ELEMENT_TYPES`) with no graph-kind parameter. One query per
-    label for nodes, one per relationship type for edges -- empirically
-    confirmed both correct and cheap (a handful of queries per graph, not
-    one per node/edge; CHANGES2.md §4).
+    The graph's own labels and relationship types are enumerated (`CALL db.labels()` and
+    `CALL db.relationshipTypes()`) rather than hardcoded, so one function is correct for both
+    the baseline graph and the native structural graph. The cost is one query per label for
+    nodes and one per relationship type for edges, not one per node or edge.
 
-    Raises `ExportSourceGraphError` if any node, or any edge endpoint,
-    carries zero or more than one label.
+    Business Rules:
+        Every node and every edge endpoint carries exactly one label. A graph that still holds
+        a replay progress record is not exported, because its replay from the mutation log is
+        unfinished or failed and nobody has verified its contents.
+
+    Args:
+        graph: Read handle on the graph to serialize; the caller has already selected it.
+
+    Returns:
+        A `SerializedGraph` with every node and edge, in query order (not sorted). An empty
+        graph yields empty tuples.
+
+    Raises:
+        ExportSourceGraphError: A node or edge endpoint carries zero or more than one label, or
+            the graph holds a replay progress record.
     """
     nodes: list[SerializedNode] = []
     for label in _enumerate_labels(graph):
@@ -153,21 +168,29 @@ def serialize_graph(graph: _GraphQueryHandle) -> SerializedGraph:
 
 
 def _node_sort_key(node: SerializedNode) -> tuple[str, str]:
+    """Order nodes by label, then by domain id (empty string when absent)."""
     return (node.label, cast("str", node.properties.get("id", "")))
 
 
 def _edge_sort_key(edge: SerializedEdge) -> tuple[str, str, str]:
+    """Order edges by relationship type, then source id, then target id."""
     return (edge.relationship_type, edge.source_id, edge.target_id)
 
 
 def to_json_bytes(graph: SerializedGraph) -> bytes:
-    """Canonical, deterministic encoding of `graph`.
+    """Encode `graph` as canonical, deterministic JSON bytes.
 
-    Nodes sorted by (label, id), edges sorted by (relationship_type,
-    source_id, target_id), `json.dumps(..., sort_keys=True, ensure_ascii=
-    False, indent=2)` + trailing newline. THIS is what lands as
-    baseline.json/native.json's bytes -- checksum_bytes hashes exactly this
-    output, nothing else.
+    These are exactly the bytes written as `baseline.json` or `native.json`, and
+    `checksum_bytes` hashes exactly this output. Nodes are sorted by `(label, id)`, edges by
+    `(relationship_type, source_id, target_id)`, keys are sorted, non-ASCII text is kept as is,
+    the indent is two spaces, and the text ends with a newline, so equal graphs always encode
+    to equal bytes.
+
+    Args:
+        graph: The serialized graph to encode.
+
+    Returns:
+        UTF-8 bytes of the JSON document `{"nodes": [...], "edges": [...]}`.
     """
     document = {
         "nodes": [
@@ -191,10 +214,20 @@ def to_json_bytes(graph: SerializedGraph) -> bytes:
 
 
 def parse_serialized_graph_json(blob: bytes) -> SerializedGraph:
-    """Inverse of `to_json_bytes`.
+    """Decode bytes produced by `to_json_bytes` back into a `SerializedGraph`.
 
-    Restore calls this AFTER checksum verification (D9) -- a corrupted/
-    tampered blob never reaches `json.loads`.
+    Restore calls this after checksum verification, so a corrupted or tampered blob never
+    reaches `json.loads`. The document shape is trusted, not validated.
+
+    Args:
+        blob: JSON bytes in the `to_json_bytes` format.
+
+    Returns:
+        The decoded graph, with nodes and edges in document order.
+
+    Raises:
+        json.JSONDecodeError: `blob` is not valid JSON.
+        KeyError: A required key (`nodes`, `edges`, or an item field) is missing.
     """
     document = cast("dict[str, object]", json.loads(blob))
     nodes = tuple(

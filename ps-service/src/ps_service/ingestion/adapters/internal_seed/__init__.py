@@ -1,12 +1,12 @@
-"""The internal-seed Ingestion Adapter package (issue #54).
+"""Ingestion adapter for customer-authored internal regulations.
 
 Ingests a customer-authored, local-id JSON document (`docs/artifacts/
-internal-regulation-intake-format.md`) rather than fetching from an external
-source, unlike `cellar_eli`. S1 shipped the structural JSON Schema validation
-layer (`schema.py`, D7); S2 adds the parse (`adapter.py`), referential-
-integrity/cardinality checks and canonical-id minting, and dual-graph
-persistence (`persist.py`) -- this module re-exports every public entry
-point across both slices.
+internal-regulation-intake-format.md`) that the caller has already read, instead of fetching
+from an external source as `cellar_eli` does. Validation runs in layers: structural JSON Schema
+validation (`schema.py`), a typed parse (`adapter.py`, `models.py`), then referential-integrity
+and cardinality checks, canonical-id minting and dual-graph persistence (`persist.py`).
+
+This package re-exports the public entry points of all layers.
 """
 
 from __future__ import annotations

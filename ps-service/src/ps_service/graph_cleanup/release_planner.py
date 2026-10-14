@@ -1,9 +1,9 @@
-"""Pure planning and validation for `release-capability-governance` (issue #190, AC-BI-013/014).
+"""Pure planning and validation for `release-capability-governance`.
 
 No I/O: takes the `ReleaseState` the reader produced and returns the preview, the before/after
 snapshots and a state digest that binds a passkey approval to the exact state previewed. Only a
-`draft` governing Policy may lose a Capability (CHANGES.md D12 rejects `deprecated` like
-`approved`); a non-draft Policy is rejected with an honest pointer to the policy lifecycle.
+`draft` governing Policy may lose a Capability; a `proposed`, `approved` or `deprecated`
+Policy is rejected with a pointer to the policy lifecycle.
 """
 
 from __future__ import annotations
@@ -42,10 +42,17 @@ _NOT_DRAFT_PROPOSED = (
 def validate_release_governance(state: ReleaseState) -> tuple[CapabilityNodeState, GoverningPolicy]:
     """Reject a release that must never get an approval; return the (capability, policy).
 
+    Args:
+        state: What the reader found: the Capability (or `None` if absent), its governing
+            Policies and the governed set.
+
+    Returns:
+        The Capability and the single `draft` Policy governing it, when the release is allowed.
+
     Raises:
         GraphCleanupValidationError: the capability does not exist, is a `merged` tombstone or
             not active, is not governed, has more than one governing policy (a data fault), or
-            its governing policy is not a `draft` (AC-BI-014, D12).
+            its governing policy is not a `draft`.
     """
     capability = state.capability
     if capability is None:
@@ -75,6 +82,7 @@ def validate_release_governance(state: ReleaseState) -> tuple[CapabilityNodeStat
 
 
 def _digest(before: GraphSnapshot) -> str:
+    """Return the SHA-256 hex digest of the canonical JSON of the before snapshot."""
     canonical = json.dumps(before.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -82,8 +90,22 @@ def _digest(before: GraphSnapshot) -> str:
 def plan_release_governance(state: ReleaseState) -> ReleasePlan:
     """Plan releasing a Capability from its draft governing Policy (no I/O).
 
+    The plan removes the `GOVERNED_BY` edge between the two nodes and nothing else. Its state
+    digest hashes the before snapshot, so an approval only applies to the state previewed.
+
+    Args:
+        state: What the reader found for the Capability; validated by
+            `validate_release_governance`.
+
+    Returns:
+        A `ReleasePlan` with the preview (governed set before and after, both sorted), the
+        before snapshot (two nodes and the edge), the after snapshot (same nodes, no edge)
+        and the state digest.
+
     Raises:
-        GraphCleanupValidationError: see `validate_release_governance`.
+        GraphCleanupValidationError: the capability does not exist, is a `merged` tombstone or not
+            active, is not governed, has more than one governing policy (a data fault), or its
+            governing policy is not a `draft`.
     """
     capability, policy = validate_release_governance(state)
     nodes = (

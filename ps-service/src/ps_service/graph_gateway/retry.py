@@ -1,4 +1,4 @@
-"""Bounded retry with backoff and failure classification for the gateway (issue #206, App-B).
+"""Bounded retry with backoff and failure classification for the gateway.
 
 Transient failures are retried on a fixed schedule (no jitter, so it is deterministic): a redis
 `ConnectionError` (which includes `BusyLoadingError`), a redis `TimeoutError`, and
@@ -41,12 +41,27 @@ TRANSIENT_ERRORS = (
 
 
 def system_sleep(seconds: float) -> None:
-    """Wait `seconds` on the real clock (the production `sleep`)."""
+    """Wait `seconds` on the real clock (the production `sleep`).
+
+    Args:
+        seconds: How long to block; 0 or less returns at once.
+
+    Side Effects:
+        Blocks the calling thread.
+    """
     time.sleep(seconds)
 
 
 def backoff_seconds(settings: GatewaySettings, attempt: int) -> float:
-    """Return the wait after the `attempt`-th failed try (1-based): 0.2, 0.4, 0.8 by default."""
+    """Return the wait after the `attempt`-th failed try (1-based): 0.2, 0.4, 0.8 by default.
+
+    Args:
+        settings: The gateway settings supplying the initial wait and the multiplier.
+        attempt: Number of the failed try, starting at 1.
+
+    Returns:
+        The wait in seconds: `initial_backoff_seconds * backoff_multiplier ** (attempt - 1)`.
+    """
     return settings.initial_backoff_seconds * settings.backoff_multiplier ** (attempt - 1)
 
 
@@ -59,8 +74,21 @@ def call_with_backoff[T](
 ) -> T:
     """Call `operation`, retrying `TRANSIENT_ERRORS` up to `settings.max_attempts` tries.
 
-    Returns its result. Raises the last transient error once the budget is spent, and any other
-    error at once. `on_retry(attempt, delay, error)` runs before each wait.
+    Args:
+        operation: The step to run; called again after each transient failure.
+        settings: Supplies `max_attempts` and the backoff schedule.
+        sleep: Waits the given number of seconds between tries.
+        on_retry: Called as `on_retry(attempt, delay, error)` before each wait.
+
+    Returns:
+        The result of the first successful call to `operation`.
+
+    Raises:
+        Exception: The last transient error once the budget is spent, and any other error
+            from `operation` at once.
+
+    Side Effects:
+        Calls `sleep` and `on_retry` between tries.
     """
     attempt = 1
     while True:
@@ -76,7 +104,12 @@ def call_with_backoff[T](
 
 
 class GraphCallGuard:
-    """Run one step against FalkorDB or the log with retries, raising sanitized errors only."""
+    """Run one step against FalkorDB or the log with retries, raising sanitized errors only.
+
+    Business Rules:
+        A failed Postgres commit is never retried here: its outcome is unknown and a replay
+        could log a group twice.
+    """
 
     def __init__(
         self,
@@ -84,7 +117,13 @@ class GraphCallGuard:
         sleep: Callable[[float], None],
         emitter: LogEmitter | None,
     ) -> None:
-        """Take the retry budget, the injected sleep and the log emitter."""
+        """Take the retry budget, the injected sleep and the log emitter.
+
+        Args:
+            settings: Supplies `max_attempts` and the backoff schedule.
+            sleep: Waits the given number of seconds between tries.
+            emitter: Destination of the `apply_retry` entries; `None` disables logging.
+        """
         self._settings = settings
         self._sleep = sleep
         self._emitter = emitter
@@ -98,12 +137,23 @@ class GraphCallGuard:
     ) -> T:
         """Run `operation` for `graph`, retrying transient failures.
 
-        `position()` names the first unapplied log position when a permanent failure is raised.
+        Args:
+            graph: Name of the graph the step works on; carried by the errors and log entries.
+            operation: The step to run.
+            position: Returns the first unapplied log position (or `None`), called only when a
+                permanent failure is raised.
+
+        Returns:
+            The result of the first successful call to `operation`.
 
         Raises:
             GraphUnavailableError: FalkorDB stayed unreachable through the budget.
             GraphLogUnavailableError: Postgres stayed unreachable through the budget.
             GraphApplyError: FalkorDB refused the query; retrying cannot help.
+
+        Side Effects:
+            Sleeps between tries, emits an `apply_retry` entry per retry and marks the FalkorDB
+            dependency unhealthy when it stays unreachable.
         """
 
         def log_retry(attempt: int, delay: float, error: BaseException) -> None:
@@ -123,6 +173,7 @@ class GraphCallGuard:
             raise GraphApplyError(graph, position()) from exc
 
     def _log_retry(self, graph: str, attempt: int, delay: float, error: BaseException) -> None:
+        """Emit an `apply_retry` entry carrying the attempt, the delay and the error class."""
         emit_gateway_event(
             "apply_retry",
             "retry",

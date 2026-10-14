@@ -1,13 +1,12 @@
 """Named, justified exceptions to "every graph name is in the domain schema".
 
-The pin tests (internal_seed vocabulary, restore allow-lists, company_merge
-read set, Cypher scan) compare a hand-written vocabulary copy with
-`DOMAIN_SCHEMA`. A few names legitimately appear on only one side; each is
-listed here with the reason, so a new exception is a conscious, reviewed edit
-rather than a silent widening. Imported by tests and, at runtime, by the Graph Write Gateway
-(`ps_service.graph_gateway.label_allow_list`), which builds its label allow-list from
-`DOMAIN_SCHEMA` plus these named sets. The restore allow-lists must stay independent of this
-package (AC-BI-014).
+The pin tests (internal_seed vocabulary, restore allow-lists, company_merge read set, Cypher
+scan) compare a hand-written vocabulary copy with `DOMAIN_SCHEMA`. A few names legitimately
+appear on only one side; each is listed here with the reason, so a new exception is a conscious,
+reviewed edit rather than a silent widening. The exception sets are imported by tests and, at
+runtime, by the Graph Write Gateway (`ps_service.graph_gateway.label_allow_list`), which builds
+its label allow-list from `DOMAIN_SCHEMA` plus these named sets.
+The restore allow-lists must stay independent of this package.
 """
 
 from __future__ import annotations
@@ -45,9 +44,9 @@ REPLAY_SENTINEL_LABELS: Mapping[str, str] = MappingProxyType(
         ),
     }
 )
-"""Labels written only by the gateway's own replay machinery. Deliberately NOT part of the gateway's
-label allow-list (D6): a writer forging or deleting the sentinel could fake replay progress or clear
-a failed gate. Only the Cypher vocabulary scan admits them."""
+"""Labels written only by the gateway's own replay machinery. Deliberately not part of the
+gateway's label allow-list: a writer forging or deleting the sentinel could fake replay progress
+or clear a failed gate. Only the Cypher vocabulary scan admits them."""
 
 CELLAR_ELI_NATIVE_LABELS: Mapping[str, str] = MappingProxyType(
     dict.fromkeys(
@@ -60,6 +59,15 @@ CELLAR_ELI_NATIVE_LABELS: Mapping[str, str] = MappingProxyType(
 def find_unpinned(
     names: Iterable[str], schema_names: Iterable[str], exceptions: Iterable[str]
 ) -> tuple[str, ...]:
-    """Return the sorted names that are neither schema names nor named exceptions."""
+    """Return the sorted names that are neither schema names nor named exceptions.
+
+    Args:
+        names: The hand-written vocabulary to check.
+        schema_names: The names `DOMAIN_SCHEMA` defines.
+        exceptions: The named exceptions accepted in addition (for example a mapping's keys).
+
+    Returns:
+        The unknown names, deduplicated and sorted; empty when the vocabulary is fully pinned.
+    """
     known = set(schema_names) | set(exceptions)
     return tuple(sorted({name for name in names if name not in known}))

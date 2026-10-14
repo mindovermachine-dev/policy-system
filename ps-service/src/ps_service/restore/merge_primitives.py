@@ -1,22 +1,19 @@
-"""The `policy_system` leg of a restore as gateway primitives (issue #214, D-1 Option A).
+"""The `policy_system` leg of a restore as gateway primitives.
 
-The pre-#214 restore ran the offline baseline merge inside a `GRAPH.COPY` snapshot of
-`policy_system` (`restore_instrument._run_baseline_merge`), because
-later steps read what earlier steps had written. The D-1 classification of that merge found that
-the only reads of its own writes are node existence by id (the provenance edges' endpoints, the
-classification edge endpoints, the rewired edges' endpoints). So the merge is rebuilt here from
-reads of the live graph and an overlay:
+The offline baseline merge is built from reads of the live graph and an overlay of the leg's
+own writes; the only thing a later step reads of an earlier step's writes is node existence by
+id (the provenance edges', classification edges' and rewired edges' endpoints):
 
 - every decision that depends on graph content (Capability convergence, `MergedObligation`
   redirects, which ids already exist) is read from `live` and made before anything is built;
 - an id counts as existing when `live` holds it or an earlier primitive of this same leg creates
-  it (`_Overlay`), which is exactly what the snapshot answered;
-- nothing is written: the result is a tuple of primitives, in the old write order, for one
-  `GraphLeg` that the caller submits with `ExpectedPosition(P)`, where P is the log position at
-  which `live` was read. The caller makes the graph caught up and reads that position first.
+  it (`_Overlay`);
+- nothing is written: the result is a tuple of primitives for one `GraphLeg` that the caller
+  submits with `ExpectedPosition(P)`, where P is the log position at which `live` was read. The
+  caller makes the graph caught up and reads that position first.
 
-The builders are the post-#210 pure builders of `company_merge.graph_writer`, so a restore and a
-live merge decide create-only, set-if-null and edge rewiring identically.
+The builders are the pure builders of `company_merge.graph_writer`, so a restore and a live
+merge decide create-only, set-if-null and edge rewiring identically.
 """
 
 from __future__ import annotations
@@ -86,31 +83,41 @@ _NODE_LABELS = (
 
 @dataclass(frozen=True)
 class PolicySystemLeg:
-    """What one restore does to `policy_system`, as primitives, and its audit counts."""
+    """What one restore does to `policy_system`: its primitives and its audit counts.
+
+    Attributes:
+        primitives: The writes, in dependency order; empty when the artifact adds nothing to
+            `policy_system`.
+        counts: The six classification keys and the four governance keys of the `succeeded`
+            audit entry, each a non-negative count.
+    """
 
     primitives: tuple[Primitive, ...]
     counts: dict[str, int]
-    """The six classification keys and the three governance keys of the `succeeded` audit entry."""
 
 
 class _Overlay:
     """The ids `live` held at the read position, plus the ids of the primitives built so far."""
 
     def __init__(self, existing: dict[str, set[str]]) -> None:
+        """Start from `existing`: the ids found in `live`, by label."""
         self.existing = existing
         self._created: dict[str, set[str]] = defaultdict(set)
         self.primitives: list[Primitive] = []
 
     def add(self, primitives: tuple[Primitive, ...]) -> None:
+        """Append `primitives`, counting each `UpsertNode` as an existing id from now on."""
         for primitive in primitives:
             if isinstance(primitive, UpsertNode):
                 self._created[primitive.label].add(primitive.id)
         self.primitives.extend(primitives)
 
     def known(self, label: str) -> set[str]:
+        """Ids of `label` that exist in `live` or are created by the primitives added so far."""
         return self.existing.get(label, set()) | self._created.get(label, set())
 
     def created_ids(self) -> set[str]:
+        """Ids of every node the primitives added so far create, across labels."""
         return {node_id for ids in self._created.values() for node_id in ids}
 
 
@@ -119,9 +126,8 @@ def _check_instrument(
 ) -> None:
     """Refuse a manifest id that names no instrument of an artifact that holds some.
 
-    A baseline with no RegulatoryInstrument node at all is a legitimate no-op leg (native-only
-    fixtures). One that has an instrument under another id used to merge silently with every
-    instrument property blanked out.
+    A baseline with no RegulatoryInstrument node at all is a legitimate no-op leg. One that has
+    an instrument under another id would merge with every instrument property blanked out.
     """
     if read.regulatory_instrument_properties:
         return
@@ -159,6 +165,7 @@ def _candidate_ids(
 
 
 def _read_known_ids_of_unresolved_endpoints(live: GraphHandle, unresolved: set[str]) -> set[str]:
+    """The subset of `unresolved` ids that exist in `live` under any label."""
     if not unresolved:
         return set()
     rows = read_rows(live, _ANY_LABEL_EXISTENCE_READ, {"ids": sorted(unresolved)})
@@ -179,20 +186,39 @@ def build_policy_system_leg(
 
     The caller reads `live` at a known log position P (graph caught up, position read, then this
     call) and submits `primitives` as one leg with `ExpectedPosition(P)`; any write in between
-    moves the position and the gateway refuses the leg. Primitives come in the old write order:
+    moves the position and the gateway refuses the leg. Primitives come in dependency order:
     instrument, Roles, Requirements, provenance edges, Obligations, Capability mints, draft
     governance, PracticeArea and RiskPath nodes, then the rewired edges (regulatory spine,
     governance and classification).
 
-    `governance` carries the restoring caller's owner and the artifact's Policy embeddings; an
-    artifact with a Policy and no owner is refused before `live` is read.
+    Business Rules: Capabilities converge onto an existing one by embedding similarity; a draft
+    Policy never converges; Obligations a cleanup merge absorbed are redirected to their
+    survivor; governance content is created only as a `draft` owned by `governance.owner`.
+
+    Args:
+        baseline_graph: The parsed baseline leg of the artifact.
+        instrument_id: Id of the artifact's `RegulatoryInstrument` (the manifest's
+            `instrument_id`); must match one in `baseline_graph` when it holds any.
+        live: Handle on the live `policy_system` graph; read only.
+        governance: The restoring caller's `owner` and the artifact's Policy embeddings; an
+            artifact with a Policy and no owner is refused before `live` is read.
+        similarity_threshold: Minimum Capability embedding similarity for convergence.
+        emitter: Log emitter for the leg's log entries; `None` uses the default emitter.
+        values: Source of generated values (timestamps); defaults to the system clock.
+
+    Returns:
+        The leg's primitives (empty for a baseline that adds nothing) and its audit counts.
+
+    Side Effects:
+        Reads `live` and emits log entries (dedup, redirect and `build_policy_system_leg`
+        success); writes no graph.
 
     Raises:
         RestoreOwnerRequiredError: the baseline carries governance content and `governance.owner`
             is `None`.
         ArtifactContentRejectedError: `instrument_id` matches no instrument of an artifact that
             holds some.
-        CompanyMergeValidationError: an Obligation redirect's survivor no longer exists.
+        CompanyMergeValidationError: an Obligation redirect's survivor does not exist.
         CompanyMergePersistenceError: a node carries a property the gateway cannot store, a
             classification edge endpoint exists nowhere, an edge endpoint has no mapping entry,
             or a read of `live` failed.
@@ -211,13 +237,13 @@ def build_policy_system_leg(
         threshold=similarity_threshold,
         emitter=emitter,
     )
-    # issue #190 (H1): drop Obligations a cleanup merge absorbed, before any build, and map them
-    # to their terminal survivor so the rewiring below re-targets their edges.
+    # Drop Obligations a cleanup merge absorbed before any build, and map them to their terminal
+    # survivor so the rewiring below re-targets their edges.
     read, obligation_redirects = resolve_obligation_redirects(live, read, emitter=emitter)
     canonical_id_by_incoming_id = {r.incoming_id: r.canonical_id for r in dedup_result.resolutions}
     canonical_id_by_incoming_id.update(obligation_redirects)
     for policy in read.policy_nodes:
-        canonical_id_by_incoming_id[policy.id] = policy.id  # a draft never converges (issue #183)
+        canonical_id_by_incoming_id[policy.id] = policy.id  # a draft never converges
 
     edges = read.bare_edges + read.governance_edges + read.classification_edges
     endpoint_ids = rewired_edge_endpoint_ids(edges, canonical_id_by_incoming_id)
@@ -294,7 +320,10 @@ def _add_draft_governance(
     canonical_id_by_incoming_id: dict[str, str],
     values: ValueSource,
 ) -> GovernanceDraftCounts | None:
-    """Add the Policy/Standard/Control drafts (issue #183): create-only, `draft`, caller-owned."""
+    """Add the Policy/Standard/Control drafts to `overlay`: create-only, `draft`, caller-owned.
+
+    Returns the draft counts, or `None` when the baseline holds no governance content.
+    """
     created_at = values.now().isoformat()
 
     def collect(
@@ -334,7 +363,7 @@ def _check_classification_endpoints(
     read: BaselineGraph,
     canonical_id_by_incoming_id: dict[str, str],
 ) -> None:
-    """AC-BI-008: every classification edge endpoint must exist, in `live` or in this leg."""
+    """Raise unless every classification edge endpoint exists, in `live` or in this leg."""
     unresolved = unresolved_classification_endpoint_ids(
         read.classification_edges, canonical_id_by_incoming_id
     )
