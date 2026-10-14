@@ -47,6 +47,57 @@ Architecture and domain documentation lives in [docs/](./docs):
 - [`docs/architecture/ps-service-container-architecture.md`](./docs/architecture/ps-service-container-architecture.md) — PS Service component design
 - [`docs/artifacts/ps-domain-concepts.md`](./docs/artifacts/ps-domain-concepts.md) — the graph's entities, relationships, and vocabulary
 
+## Repository layout
+
+Every top-level entry in the repository and its purpose. Entries marked untracked exist only in a local checkout.
+
+| Path                       | Purpose                                                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `.agents/`                 | Agent skills used when developing the repo (`init-takt-devcontainer`, `ps-pentest`)                                                  |
+| `charts/`                  | Helm chart `policy-system` and its tests                                                                                             |
+| `.claude-plugin/`          | Plugin marketplace manifest that distributes `ps-skills/ps-plugin`                                                                   |
+| `.claude/`                 | Claude Code project skills (`skills/`); local state files in it are not tracked                                                      |
+| `CONTRIBUTING.md`          | Development setup, coding standards, testing and release workflow                                                                    |
+| `.cspell.jsonc`            | Spell-check configuration (pre-commit)                                                                                               |
+| `curated-content/`         | Curated, restorable instrument artifacts and `catalog.json`; see its README                                                          |
+| `default.code-workspace`   | VS Code workspace file produced by the `init-takt-devcontainer` skill                                                                |
+| `deploy/`                  | Local kind cluster definition used by `scripts/deploy-ps-eval.sh`                                                                    |
+| `.devcontainer/`           | Dev container definition: image, FalkorDB compose service, post-create script                                                        |
+| `.dict`                    | Repository word list for the spell checker, referenced from `.cspell.jsonc`                                                          |
+| `Dockerfile`               | PS Service container image build                                                                                                     |
+| `.dockerignore`            | Allow-list build context for the `Dockerfile`                                                                                        |
+| `docs/`                    | Architecture, artifacts (guides and contracts), audits, coding standards, regulation texts, templates                                |
+| `.env.example`             | Template of environment variables for local runs; copy to the untracked `.env`                                                       |
+| `.falkordb-data/`          | Local FalkorDB persistence volume (untracked, ignored; see CONTRIBUTING.md)                                                          |
+| `.git-blame-ignore-revs`   | Revisions skipped by `git blame` (currently only a placeholder entry)                                                                |
+| `.gitattributes`           | Line-ending normalisation (`eol=lf`)                                                                                                 |
+| `.gitconfig`               | Repository git settings (hooks path, aliases); include it from your local git config                                                 |
+| `.githooks/`               | Git hooks: pre-commit and pre-push                                                                                                   |
+| `.github/`                 | GitHub workflows, composite action, issue template, Copilot instructions and skills                                                  |
+| `.gitignore`               | Ignore rules for caches, virtual environments, build output, logs and local state                                                    |
+| `.insitu.yml`              | `gh insitu` task definitions for local checks and fixes                                                                              |
+| `internal-sources/`        | Source documents and seed data for the internal Engineering Practices instrument                                                     |
+| `logs/`                    | Local service logs (untracked, ignored; only `.gitkeep` is tracked)                                                                  |
+| `.markdownlint-cli2.jsonc` | Markdown lint configuration (pre-commit)                                                                                             |
+| `node_modules/`            | Pinned pre-commit tool packages installed by `npm ci` (untracked, ignored)                                                           |
+| `package-lock.json`        | Lock file for `package.json`                                                                                                         |
+| `package.json`             | Dev-only pins for prettier, markdownlint-cli2 and cspell used by pre-commit                                                          |
+| `.pre-commit-config.yaml`  | Pre-commit hooks: formatting, lint, type check, spelling, repository checks                                                          |
+| `.prettierignore`          | Paths prettier does not format                                                                                                       |
+| `ps-cli/`                  | `ps-cli` command-line client for PS Service                                                                                          |
+| `ps-service/`              | PS Service: the REST API, MCP server and ingestion pipeline                                                                          |
+| `ps-skills/`               | Source of the Claude plugin (`ps-plugin`): skills, rubrics, MCP connector config                                                     |
+| `ps-test-support/`         | Shared test helpers (uv workspace member)                                                                                            |
+| `pyproject.toml`           | uv workspace root and shared tool configuration                                                                                      |
+| `README.md`                | This file                                                                                                                            |
+| `scripts/`                 | Deployment, release and verification scripts                                                                                         |
+| `spikes/`                  | Local throwaway experiments (untracked, ignored)                                                                                     |
+| `test-data/`               | EU regulation extraction samples and capability-merge decisions consumed by `tools/graph-ingestion`                                  |
+| `tools/`                   | Developer tools: graph ingestion and query, curated export, backup-restore verification, company merge, domain mapper, skill tooling |
+| `uv.lock`                  | Locked Python dependency set                                                                                                         |
+| `.venv/`                   | Python virtual environment created by `uv sync` (untracked, ignored)                                                                 |
+| `.vscode/`                 | Shared VS Code workspace settings                                                                                                    |
+
 ---
 
 ## Target audiences
