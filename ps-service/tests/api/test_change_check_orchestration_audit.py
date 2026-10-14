@@ -424,7 +424,7 @@ def test_sweep_abort_keeps_the_pairs_of_earlier_instruments_and_emits_a_failed_s
                 raise AuditPersistenceError("db down")
         return inner_record(**kwargs)  # pyright: ignore[reportArgumentType]
 
-    store.record_standalone_with_event_id = _second_submit_fails  # type: ignore[method-assign]  # pyright: ignore[reportAttributeAccessIssue]
+    store.record_standalone_with_event_id = _second_submit_fails  # pyright: ignore[reportAttributeAccessIssue]
 
     with pytest.raises(AuditTrailUnavailableError):
         _sweep(app_config, fake, store, emitter)

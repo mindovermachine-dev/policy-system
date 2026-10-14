@@ -44,7 +44,7 @@ class FakeCurl:
             "PS_TEST_CURL_LOG": str(self.log_path),
         }
         proc = subprocess.run(  # noqa: S603 - repo-local fake under sys.executable, literal args
-            cmd, input=stdin, capture_output=True, text=True, env=env, check=False
+            cmd, input=stdin, capture_output=True, text=True, env=env, check=False, timeout=60
         )
         out = proc.stdout
         status = int(out[-3:]) if len(out) >= 3 and out[-3:].isdigit() else 0
@@ -251,6 +251,7 @@ def test_fake_podman_reports_machine_state_and_logs_argv(tmp_path: Path) -> None
         text=True,
         env=env,
         check=False,
+        timeout=60,
     )
     assert "stopped" in proc.stdout
     assert json.loads(log.read_text().splitlines()[0]) == ["machine", "list"]

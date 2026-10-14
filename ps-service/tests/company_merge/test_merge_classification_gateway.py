@@ -103,7 +103,7 @@ class _SpyGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
         self.statements.append(q)
-        return self._inner.query(q, params)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownVariableType, reportUnknownMemberType]
+        return self._inner.query(q, params)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownVariableType, reportUnknownMemberType]
 
 
 @pytest.fixture

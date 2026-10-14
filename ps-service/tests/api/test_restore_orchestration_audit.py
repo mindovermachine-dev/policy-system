@@ -310,7 +310,7 @@ def test_from_catalog_restore_result_unchanged_when_the_terminal_row_cannot_be_w
 
     # the opening row is written through this method directly, the terminal row through
     # `record_standalone`, which delegates to it
-    store.record_standalone_with_event_id = _flaky  # type: ignore[method-assign]  # pyright: ignore[reportAttributeAccessIssue]
+    store.record_standalone_with_event_id = _flaky  # pyright: ignore[reportAttributeAccessIssue]
 
     result = _run_catalog(store, _Delegate(store), emitter=emitter)
 

@@ -102,7 +102,7 @@ max-complexity = 8          # AC-BI-001; L1 "never more than 8"
 ban-relative-imports = "all"   # AC-BI-001; L2 "Absolute imports only"
 
 [tool.ruff.lint.pylint]
-max-args = 8               # D-6: match max-complexity=8 (ruff default is 5). Drops PLR0913 23→2; the 2 residual (structure.py 9- and 10-arg builders) refactored in B12.
+max-args = 8               # matches max-complexity=8 (ruff default is 5); 23 PLR0913 sites remain individually suppressed with `# noqa: PLR0913`.
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"      # AC-BI-001. Justification below.

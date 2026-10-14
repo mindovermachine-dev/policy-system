@@ -47,7 +47,7 @@ def test_registry_resolves_catalog_key_after_importing_only_the_store_and_api_de
     )
 
     completed = subprocess.run(  # noqa: S603 -- fixed interpreter and a literal script
-        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False, timeout=60
     )
 
     assert completed.returncode == 0, completed.stderr

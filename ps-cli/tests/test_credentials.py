@@ -499,6 +499,7 @@ def test_live_keychain_reader_survives_concurrent_rewrites(tmp_path: Path) -> No
             ["/usr/bin/security", "delete-generic-password", "-s", service, "-a", account],
             check=False,
             capture_output=True,
+            timeout=60,
         )
     assert failures == 0
 

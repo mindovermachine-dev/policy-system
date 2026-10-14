@@ -179,7 +179,7 @@ def _emit_resolve_log(
             emitter=emitter,
         )
     except LoggingLifecycleError:
-        return
+        return  # diagnostics only
 
 
 def run_resolve_near_miss(

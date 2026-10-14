@@ -351,7 +351,7 @@ def test_terminal_row_failure_is_logged_with_run_id_and_the_outcome_is_returned_
             raise AuditPersistenceError("host=db.internal")
         original_write(**kwargs)  # pyright: ignore[reportArgumentType]
 
-    store.record_standalone = _flaky  # type: ignore[method-assign]  # pyright: ignore[reportAttributeAccessIssue]
+    store.record_standalone = _flaky  # pyright: ignore[reportAttributeAccessIssue]
 
     outcome = _run(
         store, build_fake_pipeline_dependencies(rid="CRA-1.0").dependencies, emitter=emitter

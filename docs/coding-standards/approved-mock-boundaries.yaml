@@ -17,7 +17,6 @@ falkordb:
   - ps_service.change_monitor.falkordb_client.connect_from_config
   - ps_service.query_engine.falkordb_client.connect
   - ps_service.query_engine.falkordb_client.connect_from_config
-  - ps_service.export.falkordb_connection.raw_connection
   # The raw third-party class itself, for direct-import call sites that construct
   # `FalkorDB(...)` themselves instead of going through a per-component
   # `*.falkordb_client.connect*` wrapper, e.g. `tools/curated-export/export_instrument.py`.

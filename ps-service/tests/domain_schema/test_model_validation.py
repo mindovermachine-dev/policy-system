@@ -176,6 +176,7 @@ def test_domain_schema_imports_cleanly() -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
 
     assert completed.returncode == 0, completed.stderr
