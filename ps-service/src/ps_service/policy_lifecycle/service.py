@@ -1,30 +1,27 @@
-"""`ps_service.policy_lifecycle` service functions (issue #134, PLAN.md S11).
+"""Policy lifecycle service: create, read, edit and move Policies through governance.
 
-`create_policy_draft` is the first (and, for this slice, only) service
-function: the human-authored `create-policy-draft` MCP tool's own delegate
-(L2 MCP Interface Patterns' "delegate, don't reimplement" rule -- the tool
-itself, S12, is a thin wrapper over this function).
+Each public function is the single delegate of one MCP tool. The tool layer only parses input
+and maps errors; the business rules, ordering and audit trail live here. Every function takes
+the verified caller identity as a `(sub, iss)` tuple together with the collaborators it needs
+(graph handle, audit store, access-role store, Graph Write Gateway submitter), so it opens no
+connection of its own.
 
-Importing `ps_service.policy_lifecycle.audit_actions` here (for its
-import-time `register_audit_action` side effect) is deliberate and required:
-per that module's own docstring, "the component that actually emits
-`policy.*` audit events... is responsible for importing this module so
-registration happens before any event is recorded" -- this is that
-component.
+Lifecycle: a Policy is created as a `draft` (optionally forked from an `approved` Policy as a
+successor), edited while `draft`, proposed (`draft` to `proposed`), then approved (`proposed` to
+`approved`) or rejected (`proposed` to `draft`); the owner may also revert a `proposed` Policy to
+`draft`. A status change cascades to every Standard and Control in the Policy's tree. Approving a
+successor auto-deprecates the `approved` Policy it supersedes.
 
-Ordering (D-9, applied to the single-step `create_policy_draft` case since
-there is no prior status to transition from): (1) compute the v1
-`policy_id(title)`; (2) a pure read (`graph_writer.find_existing_policy`)
-checks for a title collision (AC-BI-022) -- on collision, record a
-`outcome="rejected"` audit event (plan decision, for audit completeness)
-then raise, no graph write ever attempted; (3) on no collision, record the
-`outcome="applied"` audit event BEFORE the graph write (AC-BI-016); (4)
-mint the Policy (+ optional Standard/Control children, always
-`status="draft"`, D-6) via `graph_writer.create_policy_draft`; (5) on a
-graph failure, record a follow-up `outcome="failed"` event for the same
-action/resource_id, then raise `PolicyLifecycleGraphUnavailableError`
-(AC-BI-024) -- the original `redis.exceptions.RedisError` is chained, never
-leaked to the caller.
+Ordering of every audited action: read the current state, evaluate the gates in order, and on the
+first failing gate record a `rejected` audit event and raise; when all gates pass record an
+`applied` audit event BEFORE the graph write, write the graph through the Graph Write Gateway as
+one group linked to that event, and if the write fails record a `failed` event for the same
+action and resource and raise `PolicyLifecycleGraphUnavailableError`. Content edits of a draft
+(`update_*`, `add_*`) write no audit event.
+
+Importing `ps_service.policy_lifecycle.audit_actions` here registers the `policy.*` audit
+actions; the component that emits those events must import that module before any event is
+recorded, and this module is that component.
 """
 
 from __future__ import annotations
@@ -34,7 +31,7 @@ from typing import TYPE_CHECKING, cast
 
 import redis.exceptions
 
-import ps_service.policy_lifecycle.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers this component's own audit actions (issue #134) before any create/propose/approve/... call can reach AuditStore.record
+import ps_service.policy_lifecycle.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers this component's own audit actions before any lifecycle call can reach AuditStore.record
 from ps_service.audit.store import EventIdAuditStore
 from ps_service.authz.models import AccessRole
 from ps_service.authz.service import require_role, resolve_active_roles
@@ -109,41 +106,31 @@ __all__ = [
     "update_standard_draft",
 ]
 
-# `AccessRole`s that see a Draft Policy regardless of ownership (issue #134, S13).
+# `AccessRole`s that see and edit a draft Policy regardless of ownership.
 _DRAFT_VISIBILITY_OVERRIDE_ROLES = frozenset({AccessRole.SYSTEM_OWNER, AccessRole.SYSTEM_ADMIN})
 
-# Issue #136, Slice 1, §1.6: `update-policy-draft`'s patchable-field allow-list,
-# derived from the domain schema's property flags (issue #199): every Policy
-# property not flagged identity-bearing (`title`, `owner_id`, `owner_subject`,
-# `owner_issuer`) or lifecycle-managed (`status`, `version`). Declared once here
-# and imported into `mcp_interface.mcp_server` (its own `_parse_patch_fields`
-# call site) to avoid drift between the two layers.
+# `update-policy-draft`'s patchable-field allow-list, derived from the domain schema's property
+# flags: every Policy property not flagged identity-bearing (`title`, `owner_id`,
+# `owner_subject`, `owner_issuer`) or lifecycle-managed (`status`, `version`). Declared once here
+# and imported into `mcp_interface.mcp_server` (its `_parse_patch_fields` call site) so the two
+# layers cannot drift.
 _POLICY_PATCHABLE_FIELDS = patchable_fields("Policy")
 
-# Issue #136, Slice 2, §1.6: `add-standard-to-draft`'s (and the future
-# `update-standard-draft`'s) patchable-field allow-list, derived from the
-# domain schema's property flags (issue #199). Excludes `title`
-# (identity-bearing -- `standard_id` is content-derived from it), and `status`
-# and `version` (lifecycle-managed, never set through the content tools).
-# `implementation_status` IS included (unlike Policy's `version`/`status`) --
-# it is Standard's own workflow field, distinct from governance `status`, and
-# AC-BI-007 requires it be independently settable.
+# `add-standard-to-draft`'s and `update-standard-draft`'s patchable-field allow-list, derived
+# from the domain schema's property flags. Excludes `title` (identity-bearing: `standard_id` is
+# content-derived from it), `status` and `version` (lifecycle-managed, never set through the
+# content tools). `implementation_status` is included: it is the Standard's own workflow field,
+# distinct from governance `status`, and must be independently settable.
 _STANDARD_PATCHABLE_FIELDS = patchable_fields("Standard")
 _STANDARD_IMPLEMENTATION_STATUS_VALUES = enum_values("Standard", "implementation_status")
 
-# Issue #136, Slice 4, §1.6: `add-control-to-draft`'s (and the future
-# `update-control-draft`'s) patchable-field allow-list, derived from the
-# domain schema's property flags (issue #199). Excludes `title`
-# (identity-bearing -- `control_id` is content-derived from it) and `status`
-# (governance status -- lifecycle-managed only). Unlike
-# `_STANDARD_PATCHABLE_FIELDS`, this includes `"type"` -- CHANGES.md finding
-# #8: `add-control-to-draft` itself excludes `"type"` from ITS OWN allow-list
-# at the MCP boundary (the top-level `control_type` param is the only way to
-# set it at creation), but `update-control-draft` (Slice 5) needs the full
-# set including `"type"` as the only post-creation path to change it. This
-# constant is the full set; `mcp_interface.mcp_server`'s own
-# `_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS` narrows it by one key for that
-# tool alone.
+# `add-control-to-draft`'s and `update-control-draft`'s patchable-field allow-list, derived from
+# the domain schema's property flags. Excludes `title` (identity-bearing: `control_id` is
+# content-derived from it) and `status` (governance status, lifecycle-managed only). Unlike
+# `_STANDARD_PATCHABLE_FIELDS` it includes `"type"`, because `update-control-draft` is the only
+# post-creation path to change it. This is the full set; `add-control-to-draft` narrows it by
+# `"type"` at the MCP boundary (`mcp_interface.mcp_server`'s
+# `_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS`), since creation sets the type through `control_type`.
 _CONTROL_PATCHABLE_FIELDS = patchable_fields("Control")
 _CONTROL_IMPLEMENTATION_STATUS_VALUES = enum_values("Control", "implementation_status")
 
@@ -158,7 +145,12 @@ _POLICY_RESOURCE_TYPE = "policy"
 
 @dataclass(frozen=True, slots=True)
 class ControlDraftInput:
-    """One Control child a `create_policy_draft` caller wants minted alongside the Policy."""
+    """One Control to mint under a Standard when a draft Policy is created.
+
+    Attributes:
+        title: The Control's title; its id is derived from the parent Standard id and this title.
+        control_type: The Control's `type`, `"automated"` or `"manual"` (default `"manual"`).
+    """
 
     title: str
     control_type: Literal["automated", "manual"] = "manual"
@@ -166,7 +158,12 @@ class ControlDraftInput:
 
 @dataclass(frozen=True, slots=True)
 class StandardDraftInput:
-    """One Standard child (with its own optional Control children) to mint."""
+    """One Standard, with its optional Controls, to mint when a draft Policy is created.
+
+    Attributes:
+        title: The Standard's title; its id is derived from the parent Policy id and this title.
+        controls: The Controls to mint under this Standard; empty when it starts with none.
+    """
 
     title: str
     controls: tuple[ControlDraftInput, ...] = field(default_factory=tuple)
@@ -174,15 +171,22 @@ class StandardDraftInput:
 
 @dataclass(frozen=True, slots=True)
 class PolicyDraftResult:
-    """The newly-minted draft Policy's identity and initial state.
+    """Identity and initial state of a draft Policy that `create_policy_draft` created.
 
-    `version` (issue #136, Slice 6, CHANGES.md finding #1): widened from
-    `Literal["1"]` to `str` -- an ordinary draft still gets `"1"`, but a
-    supersede fork's successor version is `str(int(prior_version) + 1)`,
-    genuinely variable. `superseded_policy_id` is `None` for an ordinary
-    draft, or the forked-from Policy's id (AC-BI-010). `capability_ids`
-    (issue #185) are the Capabilities the fresh draft now governs; `()` for
-    a fork or a draft created without any.
+    Attributes:
+        policy_id: The new Policy's content-derived id.
+        title: The Policy's title.
+        status: Always `"draft"`.
+        version: `"1"` for an ordinary draft; for a successor fork, the prior version plus one,
+            as a decimal string.
+        owner_subject: The creator's subject claim; the Policy's owner.
+        owner_issuer: The creator's issuer claim; the Policy's owner.
+        standard_ids: Ids of every Standard minted (or forked) under the Policy.
+        control_ids: Ids of every Control minted (or forked) under those Standards.
+        superseded_policy_id: The `approved` Policy this draft was forked from, or `None` for an
+            ordinary draft.
+        capability_ids: The Capabilities the new draft governs; empty for a fork or when none were
+            claimed.
     """
 
     policy_id: str
@@ -200,11 +204,17 @@ class PolicyDraftResult:
 def _build_standard_drafts(
     new_policy_id: str, standards: tuple[StandardDraftInput, ...]
 ) -> tuple[graph_writer.StandardDraft, ...]:
-    """Compute every Standard/Control child's identity up front (pure, no graph I/O).
+    """Compute the id of every requested Standard and Control without any graph I/O.
 
-    Ids are computed before either audit write so both the `applied` audit
-    event's `affected_node_ids` and the eventual graph write use the exact
-    same ids.
+    The ids are fixed before the `applied` audit event is written so that the event's
+    `affected_node_ids` and the graph write name exactly the same nodes.
+
+    Args:
+        new_policy_id: Id of the Policy the Standards will belong to.
+        standards: The requested Standards and their Controls; may be empty.
+
+    Returns:
+        One `StandardDraft` per input Standard, each with its derived id and Controls.
     """
     drafts: list[graph_writer.StandardDraft] = []
     for standard in standards:
@@ -223,16 +233,11 @@ def _build_standard_drafts(
     return tuple(drafts)
 
 
-# Property keys never carried over as a forked node's own `extra_properties`
-# (issue #136, Slice 6): `id`/`status` are always freshly computed/forced by
-# the fork itself (a new node's id always differs from its source's; a
-# forked node's governance status is always `"draft"`, never copied from the
-# source, which is `"approved"` -- AC-BI-007), `title` is carried separately
-# via each `Forked*Record.title` field. `type` is stripped from a forked
-# Control's own `extra_properties` too -- `graph_writer.create_policy_draft`
-# always sets it from `ControlDraft.control_type` (never from
-# `extra_properties`), mirroring `add_control_to_standard`'s own defence-in-
-# depth discipline (CHANGES.md finding #8).
+# Property keys never carried over as a forked node's `extra_properties`: `id` and `status` are
+# set by the fork itself (a new node's id differs from its source's, and a forked node is always
+# a `"draft"` although its source is `"approved"`), and `title` is carried separately on each
+# forked record. `type` is also stripped from a forked Control's extra properties because
+# `graph_writer.create_policy_draft` always sets it from `ControlDraft.control_type`.
 _FORKED_STANDARD_STRIPPED_KEYS = frozenset({"id", "title", "status"})
 _FORKED_CONTROL_STRIPPED_KEYS = frozenset({"id", "title", "status", "type"})
 
@@ -240,23 +245,25 @@ _FORKED_CONTROL_STRIPPED_KEYS = frozenset({"id", "title", "status", "type"})
 def _build_forked_standard_drafts(
     new_policy_id: str, prior_policy_id: str, graph: GraphHandle
 ) -> tuple[graph_writer.StandardDraft, ...]:
-    """Fork `prior_policy_id`'s current Standard/Control tree onto `new_policy_id` (Slice 6).
+    """Copy `prior_policy_id`'s Standard and Control tree as new drafts under `new_policy_id`.
 
-    Reads the prior tree's FULL content via `graph_writer.read_policy_tree_for_fork`
-    (G7 -- `read_policy_tree`'s own `StandardRecord`/`ControlRecord` are too
-    narrow, id/title/status only) and computes every forked child's own new,
-    independent id up front (`standard_id(new_policy_id, ...)`/
-    `control_id(new_standard_id, ...)` -- the SAME id formulas every ordinary
-    creation path uses, mirroring `_build_standard_drafts`'s own "compute
-    ids before either audit write or the graph write" discipline), so both
-    the `applied` audit event's `affected_node_ids` and the eventual graph
-    write use the exact same ids.
+    Reads the prior tree's full content and gives every copied Standard and Control a new id derived
+    from `new_policy_id`, so the copies are independent nodes. Properties `id`, `title` and `status`
+    (and `type` for a Control) are not copied as extra properties because the id, title and
+    `"draft"` status are set explicitly. The ids are computed before the `applied` audit event so
+    the event and the graph write name the same nodes. Read-only against the prior tree.
 
-    AC-BI-006 (the prior tree is never mutated): this function is READ-ONLY
-    against the prior -- it never calls any `graph_writer` write function
-    against `prior_policy_id` or any of its own Standard/Control ids; every
-    `StandardDraft`/`ControlDraft` this returns carries a brand-new id under
-    `new_policy_id`.
+    Args:
+        new_policy_id: Id of the successor Policy that will own the copies.
+        prior_policy_id: Id of the Policy whose tree is copied.
+        graph: The single-tenant policy graph handle.
+
+    Returns:
+        One `StandardDraft` per Standard of the prior tree, each with its Controls; empty when the
+        prior has no Standards.
+
+    Raises:
+        redis.exceptions.RedisError: the graph read failed (propagated unwrapped).
     """
     forked_standards = graph_writer.read_policy_tree_for_fork(graph, prior_policy_id)
     drafts: list[graph_writer.StandardDraft] = []
@@ -298,12 +305,27 @@ def _validate_capability_claims(
     new_policy_id: str,
     capability_ids: tuple[str, ...],
 ) -> None:
-    """Reject a fresh draft's claim on missing or already-governed Capabilities (issue #185).
+    """Reject a fresh draft's claim on Capabilities that do not exist or already have a governor.
 
-    Pure read (`graph_writer.read_capability_governors`); on a bad claim a
-    `rejected` `policy.create_draft` audit event (with `capability_ids=()`,
-    nothing is claimed) is recorded BEFORE the named error is raised, and no
-    graph write is ever attempted.
+    Reads each Capability's current governing Policy. When any claimed Capability is missing or
+    already governed, records a `rejected` `policy.create_draft` audit event (`capability_ids`
+    empty, because nothing is claimed) and then raises; no graph write is attempted.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        audit_store: Where the `rejected` audit event is recorded.
+        actor: The creating caller's `(sub, iss)` identity, recorded on the event.
+        new_policy_id: Id of the draft being created, recorded as the event's resource id.
+        capability_ids: The claimed Capability ids; expected non-empty and de-duplicated.
+
+    Raises:
+        PolicyCapabilityNotFoundError: at least one claimed Capability does not exist (checked
+            first, so it wins over the governed case).
+        PolicyCapabilityAlreadyGovernedError: every claimed Capability exists but at least one
+            already has a governing Policy.
+        redis.exceptions.RedisError: the graph read failed (propagated unwrapped).
+        AuditPostgresUnavailableError: the audit database is unreachable (propagated).
+        AuditPersistenceError: the audit insert failed (propagated).
     """
     governors = graph_writer.read_capability_governors(graph, capability_ids)
     missing = tuple(cap for cap in capability_ids if cap not in governors)
@@ -335,7 +357,21 @@ def _record_create_draft(
     outcome: Literal["applied", "rejected", "failed"],
     details: Mapping[str, object],
 ) -> None:
-    """Record one `policy.create_draft` audit event (the component's semantic log)."""
+    """Record one standalone `policy.create_draft` audit event.
+
+    Args:
+        audit_store: Where the event is recorded.
+        actor: The creating caller's `(sub, iss)` identity.
+        resource_id: Id of the Policy the event is about.
+        outcome: `"applied"`, `"rejected"` or `"failed"`.
+        details: The event's `details` payload, validated against the registered action model.
+
+    Raises:
+        AuditUnknownActionError: the action has no registered details model (wiring error).
+        AuditInvalidDetailsError: `details` does not match the action's model.
+        AuditPostgresUnavailableError: the audit database is unreachable.
+        AuditPersistenceError: the audit insert failed.
+    """
     audit_store.record_standalone(
         actor_subject=actor[0],
         actor_issuer=actor[1],
@@ -355,13 +391,27 @@ def _record_applied_with_event_id(
     resource_id: str,
     details: Mapping[str, object],
 ) -> str:
-    """Record an `applied` `policy.*` event and return its id (the gateway group's anchor).
+    """Record an `applied` `policy.*` audit event and return the id of the row written.
 
-    The row is written BEFORE any graph write exactly as before (AC-BI-008) and an audit write
-    error propagates unchanged; the id lets the gateway group name the row it belongs to.
+    The row is written before any graph write, and the returned id lets the gateway group name the
+    audit row it belongs to. An audit write failure propagates unchanged.
+
+    Args:
+        audit_store: Where the event is recorded; must be able to report the id of the row it wrote.
+        actor: The caller's `(sub, iss)` identity.
+        action: The registered `policy.*` audit action name.
+        resource_id: Id of the Policy the event is about.
+        details: The event's `details` payload, validated against the action's model.
+
+    Returns:
+        The id of the `applied` audit row.
 
     Raises:
         TypeError: `audit_store` cannot report the id of the row it wrote (a wiring error).
+        AuditUnknownActionError: `action` has no registered details model.
+        AuditInvalidDetailsError: `details` does not match the action's model.
+        AuditPostgresUnavailableError: the audit database is unreachable.
+        AuditPersistenceError: the audit insert failed.
     """
     if not isinstance(audit_store, EventIdAuditStore):
         message = f"{type(audit_store).__name__} cannot report an audit event id"
@@ -379,7 +429,17 @@ def _record_applied_with_event_id(
 
 @dataclass(frozen=True, slots=True)
 class _NewPolicy:
-    """What `_write_new_policy` writes: the Policy's identity, content and audit details."""
+    """The Policy `_write_new_policy` writes: identity, content and audit details.
+
+    Attributes:
+        policy_id: Id of the new Policy.
+        title: The Policy's title.
+        standard_drafts: Standards (with Controls) to mint under it.
+        supersedes_policy_id: Id of the `approved` Policy being forked, or `None`.
+        version: The Policy's version string.
+        capability_ids: Capabilities claimed at creation; empty for a fork or no claim.
+        details: The `details` payload shared by the `applied` and `failed` audit events.
+    """
 
     policy_id: str
     title: str
@@ -400,14 +460,28 @@ def _write_new_policy(
 ) -> bool:
     """Record `applied`, write the new Policy, and record `failed` if the write fails.
 
-    The `applied` row is written BEFORE any graph write (AC-BI-008); its id anchors the one gateway
-    group. A Capability claim is a guarded group (`graph_writer.create_claimed_policy_draft`).
-    Returns `False` only when the claim no longer held at write time (nothing was written).
+    The `applied` row is written before the graph write and its id anchors the one gateway group.
+    A Policy that claims Capabilities is written as a guarded group that fails if a claimed
+    Capability gained a governor since it was read.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        audit_store: Where the `applied` and any `failed` events are recorded.
+        submitter: The Graph Write Gateway the group is submitted through.
+        actor: The creating caller's `(sub, iss)` identity; becomes the owner.
+        new: The Policy to write.
+
+    Returns:
+        `True` when the Policy was written; `False` only when a claimed Capability was governed
+        by another Policy at write time, in which case nothing was written.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: the write failed; a `failed` event with the same
-            `details` was recorded first (AC-BI-024). Gateway failures carry the
-            `FalkorDB write failed: ` prefix.
+        PolicyLifecycleGraphUnavailableError: the write failed (the message starts with
+            `FalkorDB write failed: ` for a gateway failure); a `failed` event with the same
+            `details` was recorded first. A driver `RedisError` is chained as the cause.
+        AuditPostgresUnavailableError: an audit event could not be written (propagated).
+        AuditPersistenceError: an audit insert failed (propagated).
+        TypeError: `audit_store` cannot report the id of the row it wrote (a wiring error).
     """
     try:
         audit_event_id = _record_applied_with_event_id(
@@ -471,76 +545,68 @@ def create_policy_draft(
     audit_store: AuditStore,
     submitter: LifecycleSubmitter,
 ) -> PolicyDraftResult:
-    """Create a new draft Policy owned by `actor` (AC-BI-001/009/015/016/022/024).
+    """Create a draft Policy owned by `actor`, or a successor draft forked from an approved Policy.
 
-    `supersedes_policy_id` (issue #136, Slice 6 -- the amendment fork): when
-    given, this call mints a successor draft instead of a v1 Policy. Ordering
-    (extends D-9, applied before the existing title-collision check): (0) if
-    `supersedes_policy_id` is set, `_read_transition_target` reads the prior
-    Policy (backfill + read + `PolicyNotFoundError` if it doesn't exist,
-    reused unchanged, G11) and its `status` must be `"approved"`
-    (`PolicySupersedePriorNotApprovedError` otherwise, AC-BI-011) -- no audit
-    event is recorded for either rejection, and no graph write is ever
-    attempted; (1) the successor id is `policy_id(title, prior_policy_id)`
-    and its `version` is `str(int(prior_version) + 1)` (CHANGES.md finding
-    #1 -- string-typed arithmetic, no schema migration); (2) its Standard/
-    Control children are the prior tree's own current content, forked as
-    brand-new, independently-editable nodes (`_build_forked_standard_drafts`)
-    instead of any caller-supplied `standards` -- `standards` is silently
-    ignored when `supersedes_policy_id` is set (documented in the tool's own
-    docstring, not a separate validation error); (3) the graph write also
-    creates a single Policy-level `(prior)-[:SUPERSEDED_BY]->(new)` edge, no
-    per-Standard/Control lineage edges (AC-BI-005); (4) the prior tree's own
-    nodes are never mutated (AC-BI-006 -- `_build_forked_standard_drafts` is
-    read-only against the prior, and the graph write only ever `MERGE`s onto
-    the new tree's own freshly-computed ids). The existing `policy.
-    create_draft` audit call (both its `applied` and `failed` events) is
-    reused unchanged in shape, only gaining `supersedes_policy_id` in
-    `details` (present-but-`None` on an ordinary draft, populated on a fork)
-    -- no second/separate audit call is added for the fork (AC-BI-014).
+    An ordinary call mints a version-1 Policy whose id is derived from `title`, plus any requested
+    Standards and Controls, all with status `"draft"`, and optionally claims Capabilities for it.
+    When `supersedes_policy_id` is given the call instead forks an amendment: the successor copies
+    the prior Policy's current Standard and Control tree as new, independently editable nodes.
+
+    Business Rules:
+        - Ordinary draft: id is `policy_id(title)`, version `"1"`. A title that derives an existing
+          Policy id is refused.
+        - Fork: the prior Policy must exist and be `"approved"`. The successor id is
+          `policy_id(title, prior_policy_id)` and its version is the prior version plus one. The
+          caller-supplied `standards` and `capability_ids` are silently ignored. One
+          `(prior)-[:SUPERSEDED_BY]->(new)` edge links the two Policies; the prior tree is never
+          modified. A successor takes over the prior's Capabilities only when it is approved.
+        - Capability claims on an ordinary draft: each id must name an existing Capability that no
+          Policy governs; duplicates are dropped, keeping first-seen order.
+        - A rejection of the fork precondition (missing or not approved prior) records no audit
+          event; a title collision or a bad Capability claim records a `rejected` event.
 
     Args:
-        actor: The creating caller's verified `(sub, iss)` identity --
-            becomes the new Policy's `owner_subject`/`owner_issuer`.
-        title: The new Policy's title (feeds `policy_id(title)`, v1, or
-            `policy_id(title, supersedes_policy_id)` for a fork).
-        standards: Optional Standard children (each with its own optional
-            Control children) to mint alongside the Policy, all
-            unconditionally `status="draft"` (D-6). Ignored when
-            `supersedes_policy_id` is set.
-        supersedes_policy_id: An existing, `"approved"` Policy id to fork a
-            successor draft from, or `None` for an ordinary v1 draft.
-        capability_ids: Capabilities a FRESH draft claims via `GOVERNED_BY`
-            at creation (issue #185, de-duplicated order-preserving).
-            Silently ignored when `supersedes_policy_id` is set -- a fork's
-            edges stay on the prior Policy until it is approved.
+        actor: The creating caller's verified `(sub, iss)` identity; becomes the Policy's
+            `owner_subject` and `owner_issuer`.
+        title: The new Policy's title; the id is derived from it (and the prior id for a fork).
+        standards: Standards, each with optional Controls, to mint under the Policy, all with
+            status `"draft"`. Ignored when `supersedes_policy_id` is given. Empty by default.
+        supersedes_policy_id: Id of an existing `"approved"` Policy to fork a successor from, or
+            `None` (default) for an ordinary version-1 draft.
+        capability_ids: Capabilities the fresh draft governs from creation. Ignored when
+            `supersedes_policy_id` is given. Empty by default.
         graph: The single-tenant policy graph handle.
-        audit_store: Where every `policy.create_draft` audit event is
-            recorded, via `record_standalone` -- this call has no
-            surrounding state-changing transaction to join.
-        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
-            #211); only used if some node of the tree needs a fill.
+        audit_store: Where `policy.create_draft` audit events are recorded as standalone rows.
+        submitter: The Graph Write Gateway used for the Policy write and for backfilling a legacy
+            prior tree; the backfill only writes when some node of that tree needs it.
 
     Returns:
-        A `PolicyDraftResult` describing the newly-minted Policy.
+        A `PolicyDraftResult` with the new Policy's id, version, owner, and the ids of every
+        Standard and Control minted.
 
     Raises:
-        PolicyNotFoundError: `supersedes_policy_id` names a Policy that does
-            not exist (AC-BI-011).
-        PolicySupersedePriorNotApprovedError: `supersedes_policy_id` names a
-            Policy that exists but is not currently `"approved"` (AC-BI-011).
-        PolicyTitleAlreadyExistsError: the computed id already exists
-            (AC-BI-022) -- a rejected audit event is recorded first; no
-            graph write is ever attempted.
-        PolicyCapabilityNotFoundError: a `capability_ids` entry names no
-            Capability (issue #185) -- rejected audit event, no write.
-        PolicyCapabilityAlreadyGovernedError: a `capability_ids` entry is
-            already governed, or was claimed concurrently (the guarded write
-            matched nothing -- `applied` then `failed` audit events).
-        PolicyLifecycleGraphUnavailableError: the graph write failed after
-            the `applied` audit event was already recorded -- a `failed`
-            follow-up event is recorded for the same action/resource_id
-            before this is raised (AC-BI-024).
+        PolicyNotFoundError: `supersedes_policy_id` names no Policy.
+        PolicySupersedePriorNotApprovedError: the prior Policy exists but is not `"approved"`.
+        PolicyTitleAlreadyExistsError: the derived Policy id already exists; a `rejected` audit
+            event is recorded first and nothing is written.
+        PolicyCapabilityNotFoundError: a claimed Capability does not exist; a `rejected` event is
+            recorded first and nothing is written.
+        PolicyCapabilityAlreadyGovernedError: a claimed Capability already has a governing Policy,
+            or gained one between the check and the guarded write (then an `applied` event is
+            followed by a `failed` event and nothing is written).
+        PolicyLifecycleGraphUnavailableError: the graph write failed, or a backfill write of the
+            prior tree failed; after an `applied` event a `failed` follow-up event is recorded for
+            the same action and resource first.
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+        AuditPostgresUnavailableError: an audit event could not be written (propagated).
+        AuditPersistenceError: an audit insert failed (propagated).
+
+    Side Effects:
+        Records `policy.create_draft` audit events (`rejected`, or `applied` then optionally
+        `failed`). On success writes the Policy, its Standards and Controls (and the
+        `SUPERSEDED_BY` edge or the `GOVERNED_BY` claims) as one Graph Write Gateway group linked to
+        the `applied` event. On a fork, may also backfill missing `version`/`status` properties on
+        the prior tree through the gateway.
     """
     owner_subject, owner_issuer = actor
 
@@ -646,7 +712,14 @@ def create_policy_draft(
 
 @dataclass(frozen=True, slots=True)
 class ControlView:
-    """One Control in a `get_policy` result's tree."""
+    """One Control in the tree returned by `get_policy`.
+
+    Attributes:
+        control_id: The Control's id.
+        title: The Control's title.
+        control_type: The Control's `type`, for example `"automated"` or `"manual"`.
+        status: The Control's governance status.
+    """
 
     control_id: str
     title: str
@@ -656,7 +729,14 @@ class ControlView:
 
 @dataclass(frozen=True, slots=True)
 class StandardView:
-    """One Standard (with its own Control children) in a `get_policy` result's tree."""
+    """One Standard, with its Controls, in the tree returned by `get_policy`.
+
+    Attributes:
+        standard_id: The Standard's id.
+        title: The Standard's title.
+        status: The Standard's governance status.
+        controls: The Standard's Controls; empty when it has none.
+    """
 
     standard_id: str
     title: str
@@ -666,7 +746,17 @@ class StandardView:
 
 @dataclass(frozen=True, slots=True)
 class PolicyView:
-    """A Policy's own fields plus its full Standard/Control tree (issue #134, S13)."""
+    """A Policy's own fields plus its full Standard and Control tree, as returned by `get_policy`.
+
+    Attributes:
+        policy_id: The Policy's id.
+        title: The Policy's title.
+        status: The Policy's governance status: `draft`, `proposed`, `approved` or `deprecated`.
+        version: The Policy's version, a decimal string.
+        owner_subject: The owner's subject claim.
+        owner_issuer: The owner's issuer claim.
+        standards: The Policy's Standards; empty when it has none.
+    """
 
     policy_id: str
     title: str
@@ -678,13 +768,17 @@ class PolicyView:
 
 
 def _to_policy_view(record: graph_writer.PolicyRecord) -> PolicyView:
-    """Map `graph_writer.read_policy_tree`'s raw `PolicyRecord` onto this module's own view shape.
+    """Map the graph writer's raw `PolicyRecord` onto the public `PolicyView` shape.
 
-    A deliberate, separate shape from `graph_writer.PolicyRecord` (L1 "prefer
-    duplication over the wrong abstraction"): the graph-writer record is this
-    component's own internal FalkorDB row-grouping detail, while `PolicyView`
-    is `get_policy`'s public return contract -- coupling them would mean a
-    future change to either one's shape silently changes the other.
+    The two shapes are kept separate on purpose: the record is an internal grouping of graph rows,
+    the view is the contract of `get_policy`, and coupling them would make a change to one silently
+    change the other.
+
+    Args:
+        record: A Policy tree as read from the graph.
+
+    Returns:
+        The equivalent `PolicyView`, with Standards and Controls in record order.
     """
     return PolicyView(
         policy_id=record.id,
@@ -721,47 +815,43 @@ def get_policy(
     access_role_store: AccessRoleStore,
     submitter_source: Callable[[], LifecycleSubmitter],
 ) -> PolicyView:
-    """Read `policy_id` plus its full Standard/Control tree (AC-BI-002/AC-BI-020).
+    """Read a Policy and its full Standard and Control tree, enforcing draft visibility.
 
-    Runs `graph_writer.backfill_governance_status` first (D-7), so a Policy
-    minted before this issue's `version`/Standard-or-Control `status`
-    properties existed is self-healed before this read (and before the
-    visibility gate below ever inspects `status`).
+    A Policy minted before `version` and the Standard/Control `status` properties existed is
+    backfilled first, so the visibility check never sees a missing status.
 
-    Visibility gate -- **Draft status only**: the issue's own AC-BI-002 text
-    ("attempts to view or act on a Draft Policy") scopes this gate to Draft
-    Policies; a Proposed/Approved/Deprecated Policy is readable by any
-    already-authenticated caller, no further check. For a Draft Policy,
-    `actor` must either be the Policy's own owner
-    (`ps_service.policy_lifecycle.rules.require_owner`) or hold `SystemOwner`
-    or `SystemAdmin` (`ps_service.authz.service.resolve_active_roles`, reused
-    unchanged -- no new authz infrastructure). A non-owner `PolicyManager` is
-    **not** carved out by AC-BI-002's literal wording, so it is rejected the
-    same as any other non-owner, non-`SystemOwner`/`SystemAdmin` caller.
+    Business Rules:
+        - A Policy that is `proposed`, `approved` or `deprecated` is readable by any
+          authenticated caller.
+        - A `draft` Policy is readable only by its owner, or by a caller holding `SystemOwner` or
+          `SystemAdmin`. A non-owner `PolicyManager` is refused like any other caller.
+        - Reads write no audit event.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        policy_id: The Policy id to read.
+        actor: The reading caller's verified `(sub, iss)` identity.
+        policy_id: Id of the Policy to read.
         graph: The single-tenant policy graph handle.
-        access_role_store: Where `actor`'s active `AccessRole`s are resolved
-            from, only ever consulted when `policy_id`'s Policy is a Draft
-            and `actor` is not its owner.
-        submitter_source: Resolves the Graph Write Gateway for the backfill; called ONLY when
-            some node of the tree needs a fill (issue #211, D3), so a read of an already
-            backfilled Policy works with no gateway installed.
+        access_role_store: Where `actor`'s active roles are resolved from; consulted only when
+            the Policy is a draft and `actor` is not its owner.
+        submitter_source: Returns the Graph Write Gateway for the backfill; called only when some
+            node of the tree needs a fill, so reading an already backfilled Policy needs no gateway.
 
     Returns:
-        A `PolicyView` describing the Policy and its full Standard/Control
-        tree.
+        A `PolicyView` of the Policy and its tree.
 
     Raises:
-        PolicyNotFoundError: no `Policy` node exists with `policy_id`.
-        PolicyDraftAccessDeniedError: `policy_id`'s Policy is a Draft and
-            `actor` is neither its owner nor a `SystemOwner`/`SystemAdmin`.
-            No audit event is recorded for this denial -- AC-BI-016 only
-            mandates an audit trail for the six write transitions, not reads.
-        PolicyLifecycleGraphUnavailableError: a needed backfill could not be written
+        PolicyNotFoundError: no Policy has `policy_id`.
+        PolicyDraftAccessDeniedError: the Policy is a draft and `actor` is neither its owner nor a
+            `SystemOwner`/`SystemAdmin`.
+        PolicyLifecycleGraphUnavailableError: a needed backfill write failed
             (`FalkorDB write failed: ...`).
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated
+            from role resolution).
+
+    Side Effects:
+        May backfill missing `version` and `status` properties through the gateway. Otherwise
+        read-only.
     """
     graph_writer.backfill_governance_status(graph, policy_id, submitter_source=submitter_source)
     record = graph_writer.read_policy_tree(graph, policy_id)
@@ -787,7 +877,14 @@ def get_policy(
 
 @dataclass(frozen=True, slots=True)
 class PolicyProposeResult:
-    """A successful `propose_policy` call's resulting state (issue #134, S15)."""
+    """Resulting state of a successful `propose_policy` call.
+
+    Attributes:
+        policy_id: The proposed Policy's id.
+        status: Always `"proposed"`.
+        standard_ids: Ids of every Standard in the Policy's tree.
+        control_ids: Ids of every Control in the Policy's tree.
+    """
 
     policy_id: str
     status: Literal["proposed"]
@@ -803,49 +900,40 @@ def propose_policy(
     audit_store: AuditStore,
     submitter: LifecycleSubmitter,
 ) -> PolicyProposeResult:
-    """Propose `policy_id`, cascading its whole tree to `status="proposed"` (S15).
+    """Propose a draft Policy for approval, moving its whole tree to `status="proposed"`.
 
-    Ordering (D-9): (0) `backfill_governance_status`; (1) a pure read
-    (`graph_writer.read_policy_tree`) of the Policy's owner/status and every
-    Standard/Control id in its tree; (2) `require_owner` (AC-BI-002/003 --
-    only the owner may propose); (3) `require_status` (AC-BI-023 -- must be
-    `"draft"`); (4) completeness (AC-BI-013 -- at least one Standard; a
-    Standard with zero Controls is never checked, AC-BI-014); (5) on any gate
-    or completeness failure, a `outcome="rejected"` audit event (naming the
-    failed check's own `reason_code`) is recorded before the named error is
-    raised; (6) on all checks passing, the `outcome="applied"` audit event is
-    recorded BEFORE the graph write (AC-BI-016); (7)
-    `graph_writer.cascade_status` sets the Policy and its entire tree to
-    `"proposed"` in one gateway group; (8) on a graph failure, a
-    `outcome="failed"` follow-up event is recorded for the same
-    action/resource_id, then `PolicyLifecycleGraphUnavailableError` is raised
-    (AC-BI-024), the gateway error chained.
+    Gates are checked in this order; the first failure records a `rejected` audit event (with the
+    failed gate's `reason_code`) and raises: the caller owns the Policy (`access_denied`), the
+    Policy is `"draft"` (`invalid_status`), and the Policy has at least one Standard
+    (`incomplete_for_proposal`; a Standard without Controls is allowed). When all pass, an `applied`
+    event is recorded before the graph write.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        policy_id: The Policy id to propose.
+        actor: The proposing caller's verified `(sub, iss)` identity; must be the Policy's owner.
+        policy_id: Id of the Policy to propose.
         graph: The single-tenant policy graph handle.
-        audit_store: Where every `policy.propose` audit event is recorded,
-            via `record_standalone` -- this call has no surrounding
-            state-changing transaction to join.
-        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
-            #211); only used if some node of the tree needs a fill.
+        audit_store: Where `policy.propose` audit events are recorded as standalone rows.
+        submitter: The Graph Write Gateway used for the status cascade and for backfilling a
+            legacy tree; the backfill only writes when some node needs it.
 
     Returns:
-        A `PolicyProposeResult` describing the now-`"proposed"` Policy and
-        its full Standard/Control id tree.
+        A `PolicyProposeResult` with the Policy's id, the new status and the ids of its tree.
 
     Raises:
-        PolicyNotFoundError: no `Policy` node exists with `policy_id`.
-        PolicyDraftAccessDeniedError: `actor` is not `policy_id`'s owner.
-        PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
-            currently `"draft"`.
-        PolicyIncompleteForProposalError: `policy_id`'s Policy has zero
-            Standards.
-        PolicyLifecycleGraphUnavailableError: the graph write failed after
-            the `applied` audit event was already recorded -- a `failed`
-            follow-up event is recorded for the same action/resource_id
-            before this is raised (AC-BI-024).
+        PolicyNotFoundError: no Policy has `policy_id`.
+        PolicyDraftAccessDeniedError: `actor` is not the Policy's owner.
+        PolicyInvalidStatusTransitionError: the Policy is not currently `"draft"`.
+        PolicyIncompleteForProposalError: the Policy has no Standards.
+        PolicyLifecycleGraphUnavailableError: the graph write failed; a `failed` follow-up event
+            for the same action and resource is recorded first. A failed backfill raises it too.
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+        AuditPostgresUnavailableError: an audit event could not be written (propagated).
+        AuditPersistenceError: an audit insert failed (propagated).
+
+    Side Effects:
+        Records `policy.propose` audit events (`rejected`, or `applied` then optionally `failed`).
+        On success sets `status` to `"proposed"` on the Policy and every Standard and Control as one
+        gateway group linked to the `applied` event. May backfill missing `version` and `status`.
     """
     record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
 
@@ -901,15 +989,13 @@ def propose_policy(
 
 
 def _tree_node_ids(record: graph_writer.PolicyRecord) -> tuple[str, ...]:
-    """`(policy_id, *standard_ids, *control_ids)` for one already-read tree (S17/S25).
+    """List a Policy tree's node ids: the Policy id, then every Standard id, then every Control id.
 
-    A small shared helper across `approve_policy`'s two audit-then-cascade
-    calls (the successor's own tree, and -- when applicable -- the
-    auto-deprecated prior's tree) -- not the cross-*action* D-9 helper
-    Slice 26 defers (that one spans `create_policy_draft`/`propose_policy`/
-    `approve_policy`/`reject_policy`/`revert_policy_to_draft`'s differing gate
-    stacks); this is only ever called from within `approve_policy` itself, on
-    two structurally identical `PolicyRecord`s.
+    Args:
+        record: A Policy tree as read from the graph.
+
+    Returns:
+        The ids in that order; the Policy id is always first.
     """
     standard_ids = tuple(standard.id for standard in record.standards)
     control_ids = tuple(
@@ -920,7 +1006,12 @@ def _tree_node_ids(record: graph_writer.PolicyRecord) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True)
 class _Repoint:
-    """A fork approval's governed-Capability move (issue #185): from `prior_id` to the fork."""
+    """The move of governed Capabilities when a fork is approved: from the prior Policy to the fork.
+
+    Attributes:
+        prior_id: Id of the superseded Policy that currently governs the Capabilities.
+        capability_ids: The Capabilities to move to the fork.
+    """
 
     prior_id: str
     capability_ids: tuple[str, ...]
@@ -935,7 +1026,25 @@ def _write_cascade(
     repoint: _Repoint | None,
     audit_event_id: str,
 ) -> bool:
-    """Submit the one status-cascade group; `False` only when a re-point guard failed."""
+    """Submit the one status-cascade group, optionally moving governed Capabilities with it.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        submitter: The Graph Write Gateway the group is submitted through.
+        policy_id: Id of the Policy whose tree gets `target_status`.
+        target_status: The status written to the Policy and its Standards and Controls.
+        repoint: The Capability move to include, or `None` for a plain cascade.
+        audit_event_id: Id of the `applied` audit row the group is linked to.
+
+    Returns:
+        `True` when the group was written; `False` only when a Capability move was requested and
+        its guard failed (the prior's governed set changed), in which case nothing was written.
+
+    Raises:
+        PolicyLifecycleGraphUnavailableError: the gateway write failed
+            (`FalkorDB write failed: ...`).
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+    """
     target = GraphWriteTarget(submitter, single_tenant_graph_name())
     if repoint is None:
         graph_writer.cascade_status(
@@ -968,33 +1077,38 @@ def _cascade_with_audit(
     submitter: LifecycleSubmitter,
     repoint: _Repoint | None = None,
 ) -> None:
-    """D-9's audit-then-cascade tail: `applied` audit, cascade group, `failed` audit on failure.
+    """Run the audited cascade tail: `applied` event, status cascade, `failed` event on failure.
 
-    Shared by `approve_policy`'s two calls (the successor's own transition to
-    `"approved"`, and the auto-deprecated prior's own separate transition to
-    `"deprecated"`) -- both are the exact same shape with zero branching
-    differences, so factoring out this literal duplication within one
-    function is not the premature cross-action abstraction D-9/Slice 26
-    explicitly defers (that refactor unifies the *gate* stacks across five
-    differently-gated top-level actions; this helper has no gates of its
-    own at all -- every gate has already run by the time either caller
-    reaches this point).
+    The `applied` event is written first and its id links the single gateway group that cascades the
+    status over the tree. When `repoint` is given (approving a fork whose prior governs
+    Capabilities) the same group also moves the `GOVERNED_BY` edges, guarded so that it is refused
+    if the governed set changed; the `applied` event then carries the intended `capability_ids`. A
+    guard refusal records a `failed` event (`reason_code="governance_conflict"`, empty
+    `capability_ids`, because nothing moved) and raises.
 
-    Since issue #211 the cascade is one Graph Write Gateway group linked to the `applied` row
-    (written first, with its id read back). When `repoint` is given (issue #185: approving a fork
-    whose prior governs Capabilities) the group also moves the `GOVERNED_BY` edges, guarded by the
-    log position, and the `applied` event carries the intended `capability_ids`. A guard mismatch
-    records a `failed` event (`reason_code="governance_conflict"`, `capability_ids=()` -- nothing
-    moved) and raises `PolicyGovernanceConflictError`.
+    Args:
+        actor: The caller's `(sub, iss)` identity, recorded on the events.
+        policy_id: Id of the Policy whose tree is transitioned.
+        spec: The audit action name and the from and to statuses.
+        affected_node_ids: Ids of every node in the tree, recorded on the events.
+        graph: The single-tenant policy graph handle.
+        audit_store: Where the events are recorded.
+        submitter: The Graph Write Gateway the group is submitted through.
+        repoint: The Capability move to include, or `None` (default) for a plain cascade.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: the graph write failed after the `applied` audit
-            event was already recorded -- a `failed` follow-up event is recorded for the same
-            action/resource_id before this is raised (AC-BI-024). A gateway failure carries the
-            `FalkorDB write failed: ` prefix; a failed read of the tree chains the
-            `redis.exceptions.RedisError`.
-        PolicyGovernanceConflictError: `repoint` was given and the governed
-            set no longer matched at write time; nothing was written.
+        PolicyLifecycleGraphUnavailableError: the write failed after the `applied` event; a `failed`
+            follow-up event is recorded first. A gateway failure message starts with
+            `FalkorDB write failed: `; a driver `RedisError` is chained as the cause.
+        PolicyGovernanceConflictError: `repoint` was given and the governed set no longer matched
+            at write time; nothing was written.
+        TypeError: `audit_store` cannot report the id of the row it wrote (a wiring error).
+        AuditPostgresUnavailableError: an audit event could not be written (propagated).
+        AuditPersistenceError: an audit insert failed (propagated).
+
+    Side Effects:
+        Records one `applied` and optionally one `failed` audit event; on success writes the status
+        (and Capability move) as one gateway group.
     """
     actor_subject, actor_issuer = actor
     base_details: dict[str, object] = {
@@ -1045,27 +1159,39 @@ def _cascade_with_audit(
 
 
 def _eager(submitter: LifecycleSubmitter) -> Callable[[], LifecycleSubmitter]:
-    """A submitter source for a caller that already holds its gateway (issue #211, M4)."""
+    """Wrap an already available gateway submitter as a zero-argument source of it.
+
+    Args:
+        submitter: The Graph Write Gateway submitter the caller already holds.
+
+    Returns:
+        A callable that returns `submitter` and has no other effect.
+    """
     return lambda: submitter
 
 
 def _read_transition_target(
     graph: GraphHandle, policy_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
 ) -> graph_writer.PolicyRecord:
-    """The (backfill, read, not-found) preamble shared by all 4 transition functions (S26).
+    """Backfill, read and return the Policy tree a lifecycle action operates on.
 
-    Before this refactor, `propose_policy`/`approve_policy`/`reject_policy`/
-    `revert_policy_to_draft` each ran the identical
-    `graph_writer.backfill_governance_status` + `graph_writer.read_policy_tree`
-    + "raise `PolicyNotFoundError` on a miss" sequence, with zero per-action
-    variation. `get_policy` (S13) runs the same two calls but is
-    deliberately NOT routed through this helper -- it is a read tool, not a
-    transition, and PLAN.md's own S26 scope names only the 4 transition
-    functions (`create_policy_draft` likewise stays untouched: it has no
-    prior tree to read at all).
+    Runs the governance backfill (which writes through the gateway only when some node lacks
+    `version` or `status`) and then reads the tree. Shared by every action that needs the current
+    tree; reads that follow a Standard or Control id use the `_read_*_with_parent_backfilled`
+    helpers instead.
 
-    Since issue #211 the backfill is a gateway read-resolve-write: `submitter_source` is called
-    only if some node of the tree needs a fill.
+    Args:
+        graph: The single-tenant policy graph handle.
+        policy_id: Id of the Policy to read.
+        submitter_source: Returns the gateway for the backfill; called only when a fill is needed.
+
+    Returns:
+        The Policy's `PolicyRecord`, with `version` and `status` populated.
+
+    Raises:
+        PolicyNotFoundError: no Policy has `policy_id`.
+        PolicyLifecycleGraphUnavailableError: a needed backfill write failed.
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
     """
     graph_writer.backfill_governance_status(graph, policy_id, submitter_source=submitter_source)
     record = graph_writer.read_policy_tree(graph, policy_id)
@@ -1076,13 +1202,16 @@ def _read_transition_target(
 
 @dataclass(frozen=True, slots=True)
 class _TransitionGate:
-    """One already-evaluated precondition in `_apply_transition`'s own gate list (S26).
+    """One already-evaluated precondition of a status transition.
 
-    Each transition function still builds its own `PolicyLifecycleRuleContext`
-    and picks its own error type/message/`reason_code` -- that part
-    genuinely differs per action, so it is not shared. `_apply_transition`
-    only ever consumes the result: the first `not allowed` gate in the
-    sequence it's handed determines the rejection.
+    The transition function builds its own rule context and picks the error and `reason_code`, since
+    those differ per action; `_check_gates` only consumes the results, and the first gate that is
+    not allowed decides the rejection.
+
+    Attributes:
+        allowed: Whether the precondition holds.
+        reason_code: The `reason_code` recorded on the `rejected` audit event when it does not.
+        error: The exception raised when it does not hold.
     """
 
     allowed: bool
@@ -1092,13 +1221,12 @@ class _TransitionGate:
 
 @dataclass(frozen=True, slots=True)
 class _TransitionSpec:
-    """The "what transition is this" facts `_apply_transition` needs (S26).
+    """The facts that identify one status transition.
 
-    Split out from `_apply_transition`'s own parameter list purely to stay
-    under L2's `PLR0913` argument-count limit -- `action`/`from_status`/
-    `target_status` are always supplied together by every call site (one
-    literal triple per transition function), so grouping them costs no
-    expressiveness.
+    Attributes:
+        action: The registered `policy.*` audit action name.
+        from_status: The Policy's status before the transition.
+        target_status: The status the transition writes.
     """
 
     action: str
@@ -1117,7 +1245,26 @@ def _apply_transition(
     audit_store: AuditStore,
     submitter: LifecycleSubmitter,
 ) -> None:
-    """Run `_check_gates`, then `_cascade_with_audit` -- see `_check_gates` for the gate rules."""
+    """Check the gates, then run the audited cascade.
+
+    Args:
+        actor: The caller's `(sub, iss)` identity.
+        policy_id: Id of the Policy being transitioned.
+        spec: The audit action and from and to statuses.
+        affected_node_ids: Ids of every node of the tree, recorded on the audit events.
+        gates: The preconditions, evaluated in order.
+        graph: The single-tenant policy graph handle.
+        audit_store: Where the audit events are recorded.
+        submitter: The Graph Write Gateway the cascade is submitted through.
+
+    Raises:
+        Exception: the error of the first gate that is not allowed, after its `rejected` event
+            is recorded.
+        PolicyLifecycleGraphUnavailableError: the cascade write failed (after a `failed` event).
+        AuditPostgresUnavailableError: an audit event could not be written (propagated).
+        AuditPersistenceError: an audit insert failed (propagated).
+        TypeError: `audit_store` cannot report the id of the row it wrote (a wiring error).
+    """
     _check_gates(actor=actor, policy_id=policy_id, spec=spec, gates=gates, audit_store=audit_store)
     _cascade_with_audit(
         actor=actor,
@@ -1138,46 +1285,27 @@ def _check_gates(
     gates: Sequence[_TransitionGate],
     audit_store: AuditStore,
 ) -> None:
-    """D-9's full gate-check + audit-then-cascade sequence, shared by every transition (S26).
+    """Evaluate the transition's preconditions in order; reject on the first one that fails.
 
-    Extracted only after `propose_policy`/`approve_policy`/`reject_policy`/
-    `revert_policy_to_draft` (plus `approve_policy`'s own auto-deprecation
-    cascade, S25) were each independently green -- L1's "prefer duplication
-    over the wrong abstraction" rule argues against extracting this before
-    real call sites exist to prove the right shape; five call sites is well
-    past that threshold. `create_policy_draft` is deliberately NOT routed
-    through this helper: it is a creation, not a transition -- it has no
-    prior status to gate on, no owner/role check to run, and its own
-    title-collision read has a different shape than a `PolicyRecord` tree
-    read (PLAN.md D-9/S26's own scoping).
-
-    `gates` is evaluated in order; the first `not allowed` entry records an
-    `outcome="rejected"` audit event (that gate's own `reason_code`, with
-    `affected_node_ids` fixed to `(policy_id,)` -- nothing was ever
-    transitioned, so only the root Policy id is named) then raises that
-    gate's own named error -- byte-identical to every transition function's
-    own pre-refactor if/raise chain. When every gate passes this returns and
-    the caller runs `_cascade_with_audit` (`_apply_transition` does so
-    directly; `approve_policy` first reads the fork's governed Capabilities,
-    which must not happen before a gate has rejected).
+    On the first gate that is not allowed, records a `rejected` audit event with that gate's
+    `reason_code`, `from_status` as both the from and to status (a rejected call changes nothing),
+    and `affected_node_ids` of just the root Policy id, then raises the gate's error. When every
+    gate passes it returns and the caller runs the audited cascade.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        policy_id: The Policy id being transitioned.
-        spec: The registered `policy.*` audit action name plus the
-            before/after status pair -- `from_status` is used verbatim for a
-            rejected event's `from_status`/`to_status` (a rejected call
-            never actually changes status) and for the applied event's own
-            `from_status`; `target_status` only for the applied event.
-        gates: Every precondition for this transition, already evaluated by
-            the caller, in the exact order the pre-refactor code checked
-            them.
-        audit_store: Where every rejected audit event is written, via
-            `record_standalone`.
+        actor: The caller's `(sub, iss)` identity, recorded on the `rejected` event.
+        policy_id: Id of the Policy being transitioned.
+        spec: The audit action and statuses; `from_status` is recorded on a rejection.
+        gates: The preconditions, already evaluated, in checking order.
+        audit_store: Where the `rejected` event is recorded as a standalone row.
 
     Raises:
-        Exception: whichever named error the first failing gate in `gates`
-            carries.
+        Exception: the `error` carried by the first gate that is not allowed.
+        AuditPostgresUnavailableError: the `rejected` event could not be written (propagated).
+        AuditPersistenceError: the audit insert failed (propagated).
+
+    Side Effects:
+        Records at most one `rejected` audit event.
     """
     actor_subject, actor_issuer = actor
     for gate in gates:
@@ -1202,7 +1330,18 @@ def _check_gates(
 
 @dataclass(frozen=True, slots=True)
 class PolicyApproveResult:
-    """A successful `approve_policy` call's resulting state (issue #134, S17/S25)."""
+    """Resulting state of a successful `approve_policy` call.
+
+    Attributes:
+        policy_id: The approved Policy's id.
+        status: Always `"approved"`.
+        standard_ids: Ids of every Standard in the Policy's tree.
+        control_ids: Ids of every Control in the Policy's tree.
+        auto_deprecated_policy_id: Id of the superseded Policy that was moved to `"deprecated"`,
+            or `None` when none was.
+        governed_capability_ids: Capabilities moved from the superseded Policy to this one; empty
+            when none were.
+    """
 
     policy_id: str
     status: Literal["approved"]
@@ -1213,10 +1352,18 @@ class PolicyApproveResult:
 
 
 def _read_repoint(graph: GraphHandle, policy_id: str) -> _Repoint | None:
-    """The fork's governed-Capability move, or `None` for the plain cascade (issue #185, D-5).
+    """Return the Capability move needed to approve a fork, or `None` for a plain cascade.
 
-    `None` for a non-fork and for a fork whose prior governs nothing (legacy
-    forks without `GOVERNED_BY` edges stay approvable).
+    Args:
+        graph: The single-tenant policy graph handle.
+        policy_id: Id of the Policy about to be approved.
+
+    Returns:
+        A `_Repoint` naming the superseded Policy and the Capabilities it governs; `None` when
+        `policy_id` is not a fork or its prior governs nothing (such a fork stays approvable).
+
+    Raises:
+        redis.exceptions.RedisError: the graph read failed (propagated unwrapped).
     """
     governance = graph_writer.read_fork_governance(graph, policy_id)
     if governance is None or not governance.capability_ids:
@@ -1233,72 +1380,60 @@ def approve_policy(
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
 ) -> PolicyApproveResult:
-    """Approve `policy_id`, cascading its whole tree to `status="approved"` (S17).
+    """Approve a proposed Policy, moving its whole tree to `status="approved"`.
 
-    Ordering (D-9, mirroring `propose_policy` exactly): (0)
-    `backfill_governance_status`; (1) a pure read
-    (`graph_writer.read_policy_tree`) of the Policy's owner/status and every
-    Standard/Control id in its tree; (2) RBAC gate --
-    `ps_service.authz.service.require_role(actor,
-    minimum=AccessRole.POLICY_MANAGER, store=access_role_store)`, reused
-    verbatim -- it raises `AccessDeniedError` itself (AC-BI-008), so this
-    function adds no audit-then-raise wrapping around it, exactly like
-    PLAN.md's own instruction for this specific gate; (3) `block_self_approval`
-    (AC-BI-006 -- a caller may never approve a Policy they own; AC-BI-017's
-    same-subject-different-issuer case falls out for free from `(subject,
-    issuer)` tuple equality, no special-casing); (4) `require_status
-    (action="approve")` -- must be `"proposed"` (AC-BI-023); (5) on gate 3/4
-    failure, a `outcome="rejected"` audit event (`reason_code`
-    `"self_approval_blocked"`/`"invalid_status"`) is recorded before the
-    named error is raised; (6) on all gates passing, `_cascade_with_audit`
-    records the `outcome="applied"` event BEFORE the graph write, then issues
-    `graph_writer.cascade_status(..., target_status="approved")`; (7) on a
-    graph failure, `_cascade_with_audit` records a `outcome="failed"`
-    follow-up event and raises `PolicyLifecycleGraphUnavailableError`
-    (AC-BI-024); (8) **auto-deprecation** (D-10/S25): only once the
-    successor's own cascade has succeeded, `graph_writer.find_approved_prior`
-    checks for an inbound `SUPERSEDED_BY` edge from an `approved` prior -- if
-    one exists, `_cascade_with_audit` runs again against the *prior's own*
-    tree, target status `"deprecated"`, action `"policy.auto_deprecate"`,
-    `resource_id` the prior's own id -- a second, wholly separate audit
-    event, not folded into the successor's own `policy.approve` event
-    (AC-BI-019). A `SUPERSEDED_BY`-linked prior that is not itself currently
-    `"approved"` (still `"draft"`/`"proposed"`) is left untouched.
+    Approving a successor also deprecates the `approved` Policy it supersedes (its own tree moves
+    to `"deprecated"`) and moves that prior's governed Capabilities to the successor.
+
+    Business Rules:
+        - The caller must hold `PolicyManager` or above. This check runs after the Policy is read
+          (so an unknown id is reported first) and records no audit event.
+        - A caller may never approve a Policy they own; the owner comparison uses the full
+          `(subject, issuer)` pair, so the same subject under another issuer is a different person.
+        - The Policy must be `"proposed"`.
+        - A failure of the last two gates records a `rejected` audit event with `reason_code`
+          `self_approval_blocked` or `invalid_status` before raising.
+        - Auto-deprecation runs only after the successor's cascade succeeded. A `SUPERSEDED_BY`
+          prior that is not `"approved"` is left untouched. Deprecation is audited as a separate
+          `policy.auto_deprecate` event on the prior, not folded into `policy.approve`.
+        - If the deprecation step fails, the successor stays approved.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        policy_id: The Policy id to approve.
+        actor: The approving caller's verified `(sub, iss)` identity.
+        policy_id: Id of the Policy to approve.
         graph: The single-tenant policy graph handle.
-        audit_store: Where every `policy.approve`/`policy.auto_deprecate`
-            audit event is recorded, via `record_standalone` -- this call has
-            no surrounding state-changing transaction to join.
-        access_role_store: Where `actor`'s active `AccessRole`s are resolved
-            from, for the `PolicyManager` RBAC gate.
-        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
-            #211); only used if some node of the tree needs a fill.
+        audit_store: Where `policy.approve` and `policy.auto_deprecate` events are recorded as
+            standalone rows.
+        access_role_store: Where `actor`'s active roles are resolved from, for the
+            `PolicyManager` check.
+        submitter: The Graph Write Gateway used for the cascades and for backfilling a legacy
+            tree; the backfill only writes when some node needs it.
 
     Returns:
-        A `PolicyApproveResult` describing the now-`"approved"` Policy, its
-        full Standard/Control id tree, and (when an auto-deprecation
-        cascade also ran) the auto-deprecated prior Policy's own id.
+        A `PolicyApproveResult` with the new status, the tree's ids, the auto-deprecated prior's id
+        (or `None`) and the Capabilities moved to the approved Policy.
 
     Raises:
-        PolicyNotFoundError: no `Policy` node exists with `policy_id`.
-        AccessDeniedError: `actor` does not hold `PolicyManager`
-            (`ps_service.api.errors.AccessDeniedError`, raised directly by
-            `require_role`).
-        PolicySelfApprovalBlockedError: `actor` is `policy_id`'s own owner.
-        PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
-            currently `"proposed"`.
-        PolicyGovernanceConflictError: the fork's prior governs Capabilities
-            (issue #185) and that set changed between the read and the single
-            guarded write; nothing was moved or approved. A `failed` audit
-            event (`reason_code="governance_conflict"`) follows the `applied`
-            one.
-        PolicyLifecycleGraphUnavailableError: a graph write failed after its
-            own `applied` audit event was already recorded -- a `failed`
-            follow-up event is recorded for that same action/resource_id
-            before this is raised (AC-BI-024).
+        PolicyNotFoundError: no Policy has `policy_id`.
+        AccessDeniedError: `actor` does not hold `PolicyManager` or above
+            (`ps_service.api.errors.AccessDeniedError`).
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        PolicySelfApprovalBlockedError: `actor` owns the Policy.
+        PolicyInvalidStatusTransitionError: the Policy is not currently `"proposed"`.
+        PolicyGovernanceConflictError: the prior's governed Capabilities changed between the read
+            and the guarded write; nothing was moved or approved, and a `failed` event
+            (`reason_code="governance_conflict"`) follows the `applied` one.
+        PolicyLifecycleGraphUnavailableError: a graph write failed after its `applied` event; a
+            `failed` follow-up event for the same action and resource is recorded first.
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+        AuditPostgresUnavailableError: an audit event could not be written (propagated).
+        AuditPersistenceError: an audit insert failed (propagated).
+
+    Side Effects:
+        Records `policy.approve` audit events (`rejected`, or `applied` then optionally `failed`)
+        and, when a prior is deprecated, `policy.auto_deprecate` events. Writes the status cascade
+        (and the Capability move for a fork) as one gateway group per transition. May backfill
+        missing `version` and `status`.
     """
     record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
 
@@ -1309,9 +1444,8 @@ def approve_policy(
         actor=actor, owner=owner, action="approve", current_status=current_status
     )
 
-    # (2) RBAC gate -- raises `AccessDeniedError` itself; no audit-then-raise
-    # wrapping needed for this specific gate (PLAN.md S17's own instruction)
-    # -- deliberately not one of `_apply_transition`'s own `gates` below.
+    # The role check raises `AccessDeniedError` itself and records no audit event, so it is
+    # deliberately not one of the audited `gates` below.
     require_role(actor, minimum=AccessRole.POLICY_MANAGER, store=access_role_store)
 
     gates = (
@@ -1378,7 +1512,14 @@ def approve_policy(
 
 @dataclass(frozen=True, slots=True)
 class PolicyRejectResult:
-    """A successful `reject_policy` call's resulting state (issue #134, S19)."""
+    """Resulting state of a successful `reject_policy` call.
+
+    Attributes:
+        policy_id: The rejected Policy's id.
+        status: Always `"draft"`.
+        standard_ids: Ids of every Standard in the Policy's tree.
+        control_ids: Ids of every Control in the Policy's tree.
+    """
 
     policy_id: str
     status: Literal["draft"]
@@ -1395,60 +1536,49 @@ def reject_policy(
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
 ) -> PolicyRejectResult:
-    """Reject `policy_id`, cascading its whole tree back to `status="draft"` (S19).
+    """Reject a proposed Policy, returning its whole tree to `status="draft"`.
 
-    Ordering (D-9, an IDENTICAL gate stack to `approve_policy` -- same RBAC
-    gate, same `block_self_approval` rule, same `require_status` check --
-    just cascading to `"draft"` instead of `"approved"`, with no
-    auto-deprecation call (D-10 is approve-only)): (0)
-    `backfill_governance_status`; (1) a pure read
-    (`graph_writer.read_policy_tree`) of the Policy's owner/status and every
-    Standard/Control id in its tree; (2) RBAC gate --
-    `ps_service.authz.service.require_role(actor,
-    minimum=AccessRole.POLICY_MANAGER, store=access_role_store)`, reused
-    verbatim -- it raises `AccessDeniedError` itself (AC-BI-008), so this
-    function adds no audit-then-raise wrapping around it; (3)
-    `block_self_approval` (AC-BI-006 -- a caller may never reject a Policy
-    they own; AC-BI-017's same-subject-different-issuer case falls out for
-    free from `(subject, issuer)` tuple equality); (4) `require_status
-    (action="reject")` -- must be `"proposed"` (AC-BI-023); (5) on gate 3/4
-    failure, a `outcome="rejected"` audit event (`reason_code`
-    `"self_approval_blocked"`/`"invalid_status"`) is recorded before the
-    named error is raised; (6) on all gates passing, `_cascade_with_audit`
-    records the `outcome="applied"` event BEFORE the graph write, then issues
-    `graph_writer.cascade_status(..., target_status="draft")` (AC-BI-005);
-    (7) on a graph failure, `_cascade_with_audit` records a `outcome="failed"`
-    follow-up event and raises `PolicyLifecycleGraphUnavailableError`
-    (AC-BI-024).
+    Uses the same gates as `approve_policy` but never auto-deprecates a prior Policy.
+
+    Business Rules:
+        - The caller must hold `PolicyManager` or above. This check runs after the Policy is read
+          and records no audit event.
+        - A caller may never reject a Policy they own; the owner comparison uses the full
+          `(subject, issuer)` pair.
+        - The Policy must be `"proposed"`.
+        - A failure of the last two gates records a `rejected` audit event with `reason_code`
+          `self_approval_blocked` or `invalid_status` before raising.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        policy_id: The Policy id to reject.
+        actor: The rejecting caller's verified `(sub, iss)` identity.
+        policy_id: Id of the Policy to reject.
         graph: The single-tenant policy graph handle.
-        audit_store: Where every `policy.reject` audit event is recorded, via
-            `record_standalone` -- this call has no surrounding
-            state-changing transaction to join.
-        access_role_store: Where `actor`'s active `AccessRole`s are resolved
-            from, for the `PolicyManager` RBAC gate.
-        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
-            #211); only used if some node of the tree needs a fill.
+        audit_store: Where `policy.reject` events are recorded as standalone rows.
+        access_role_store: Where `actor`'s active roles are resolved from, for the
+            `PolicyManager` check.
+        submitter: The Graph Write Gateway used for the cascade and for backfilling a legacy tree;
+            the backfill only writes when some node needs it.
 
     Returns:
-        A `PolicyRejectResult` describing the now-`"draft"` Policy and its
-        full Standard/Control id tree.
+        A `PolicyRejectResult` with the Policy's id, the new status and the ids of its tree.
 
     Raises:
-        PolicyNotFoundError: no `Policy` node exists with `policy_id`.
-        AccessDeniedError: `actor` does not hold `PolicyManager`
-            (`ps_service.api.errors.AccessDeniedError`, raised directly by
-            `require_role`).
-        PolicySelfApprovalBlockedError: `actor` is `policy_id`'s own owner.
-        PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
-            currently `"proposed"`.
-        PolicyLifecycleGraphUnavailableError: a graph write failed after its
-            own `applied` audit event was already recorded -- a `failed`
-            follow-up event is recorded for that same action/resource_id
-            before this is raised (AC-BI-024).
+        PolicyNotFoundError: no Policy has `policy_id`.
+        AccessDeniedError: `actor` does not hold `PolicyManager` or above
+            (`ps_service.api.errors.AccessDeniedError`).
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        PolicySelfApprovalBlockedError: `actor` owns the Policy.
+        PolicyInvalidStatusTransitionError: the Policy is not currently `"proposed"`.
+        PolicyLifecycleGraphUnavailableError: a graph write failed after its `applied` event; a
+            `failed` follow-up event for the same action and resource is recorded first.
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+        AuditPostgresUnavailableError: an audit event could not be written (propagated).
+        AuditPersistenceError: an audit insert failed (propagated).
+
+    Side Effects:
+        Records `policy.reject` audit events (`rejected`, or `applied` then optionally `failed`).
+        On success sets `status` to `"draft"` on the Policy and every Standard and Control as one
+        gateway group. May backfill missing `version` and `status`.
     """
     record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
 
@@ -1459,9 +1589,8 @@ def reject_policy(
         actor=actor, owner=owner, action="reject", current_status=current_status
     )
 
-    # (2) RBAC gate -- raises `AccessDeniedError` itself; no audit-then-raise
-    # wrapping needed for this specific gate (mirrors `approve_policy`, S17)
-    # -- deliberately not one of `_apply_transition`'s own `gates` below.
+    # The role check raises `AccessDeniedError` itself and records no audit event, so it is
+    # deliberately not one of the audited `gates` below.
     require_role(actor, minimum=AccessRole.POLICY_MANAGER, store=access_role_store)
 
     gates = (
@@ -1503,7 +1632,14 @@ def reject_policy(
 
 @dataclass(frozen=True, slots=True)
 class PolicyRevertResult:
-    """A successful `revert_policy_to_draft` call's resulting state (issue #134, S21)."""
+    """Resulting state of a successful `revert_policy_to_draft` call.
+
+    Attributes:
+        policy_id: The reverted Policy's id.
+        status: Always `"draft"`.
+        standard_ids: Ids of every Standard in the Policy's tree.
+        control_ids: Ids of every Control in the Policy's tree.
+    """
 
     policy_id: str
     status: Literal["draft"]
@@ -1519,53 +1655,42 @@ def revert_policy_to_draft(
     audit_store: AuditStore,
     submitter: LifecycleSubmitter,
 ) -> PolicyRevertResult:
-    """Revert `policy_id`, cascading its whole tree back to `status="draft"` (S21).
+    """Revert a proposed Policy to `status="draft"`, moving its whole tree back to draft.
 
-    Structurally DISTINCT from `approve_policy`/`reject_policy`: this action
-    is OWNER-only, with no `PolicyManager` RBAC gate at all -- a non-owner,
-    INCLUDING a `PolicyManager` who is not the owner, is rejected
-    (AC-BI-002/007 -- this proves the action is genuinely owner-only, not
-    role-gated).
+    Unlike `approve_policy` and `reject_policy` this action is owner-only and has no role check: a
+    `PolicyManager` who is not the owner is refused.
 
-    Ordering (D-9, mirroring `propose_policy`'s owner-only shape): (0)
-    `backfill_governance_status`; (1) a pure read
-    (`graph_writer.read_policy_tree`) of the Policy's owner/status and every
-    Standard/Control id in its tree; (2) `require_owner` (AC-BI-002/007 --
-    only the Policy's own owner may revert it); (3) `require_status
-    (action="revert")` -- must be `"proposed"` (AC-BI-023); (4) on gate 2/3
-    failure, a `outcome="rejected"` audit event (`reason_code`
-    `"access_denied"`/`"invalid_status"`) is recorded before the named error
-    is raised; (5) on all gates passing, `_cascade_with_audit` records the
-    `outcome="applied"` event BEFORE the graph write, then issues
-    `graph_writer.cascade_status(..., target_status="draft")`; (6) on a graph
-    failure, `_cascade_with_audit` records a `outcome="failed"` follow-up
-    event and raises `PolicyLifecycleGraphUnavailableError` (AC-BI-024).
+    Business Rules:
+        - The caller must be the Policy's owner, else `reason_code="access_denied"`.
+        - The Policy must be `"proposed"`, else `reason_code="invalid_status"`.
+        - A failing gate records a `rejected` audit event before raising.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        policy_id: The Policy id to revert.
+        actor: The reverting caller's verified `(sub, iss)` identity; must be the Policy's owner.
+        policy_id: Id of the Policy to revert.
         graph: The single-tenant policy graph handle.
-        audit_store: Where every `policy.revert` audit event is recorded, via
-            `record_standalone` -- this call has no surrounding
-            state-changing transaction to join.
-        submitter: The Graph Write Gateway the backfill of a legacy tree is written through (issue
-            #211); only used if some node of the tree needs a fill.
+        audit_store: Where `policy.revert` events are recorded as standalone rows.
+        submitter: The Graph Write Gateway used for the cascade and for backfilling a legacy tree;
+            the backfill only writes when some node needs it.
 
     Returns:
-        A `PolicyRevertResult` describing the now-`"draft"` Policy and its
-        full Standard/Control id tree.
+        A `PolicyRevertResult` with the Policy's id, the new status and the ids of its tree.
 
     Raises:
-        PolicyNotFoundError: no `Policy` node exists with `policy_id`.
-        PolicyDraftAccessDeniedError: `actor` is not `policy_id`'s owner --
-            including when `actor` holds `PolicyManager` but is not the
-            owner.
-        PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
-            currently `"proposed"`.
-        PolicyLifecycleGraphUnavailableError: a graph write failed after its
-            own `applied` audit event was already recorded -- a `failed`
-            follow-up event is recorded for that same action/resource_id
-            before this is raised (AC-BI-024).
+        PolicyNotFoundError: no Policy has `policy_id`.
+        PolicyDraftAccessDeniedError: `actor` is not the Policy's owner, including when `actor`
+            holds `PolicyManager`.
+        PolicyInvalidStatusTransitionError: the Policy is not currently `"proposed"`.
+        PolicyLifecycleGraphUnavailableError: a graph write failed after its `applied` event; a
+            `failed` follow-up event for the same action and resource is recorded first.
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+        AuditPostgresUnavailableError: an audit event could not be written (propagated).
+        AuditPersistenceError: an audit insert failed (propagated).
+
+    Side Effects:
+        Records `policy.revert` audit events (`rejected`, or `applied` then optionally `failed`).
+        On success sets `status` to `"draft"` on the Policy and every Standard and Control as one
+        gateway group. May backfill missing `version` and `status`.
     """
     record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
 
@@ -1616,25 +1741,20 @@ def revert_policy_to_draft(
 def _authorize_draft_edit(
     context: PolicyLifecycleRuleContext, *, access_role_store: AccessRoleStore
 ) -> None:
-    """AC-BI-002/003 (owner-or-SystemOwner/SystemAdmin) then AC-BI-004 (must be draft).
+    """Check that the caller may edit a draft: owner or elevated role, and the node is a draft.
 
-    Issue #136 (PLAN.md §1.3): the shared owner-or-elevated + status gate
-    every one of the six draft-content tools calls before doing anything
-    else. Mirrors `get_policy`'s own override branch (§333-394 above)
-    exactly, generalized from that one read-only visibility check to every
-    draft-content mutation this issue introduces.
+    The role lookup happens only when the caller is not the owner.
 
     Args:
-        context: The lifecycle call's facts, built with `action="edit"`.
-        access_role_store: Where `context.actor`'s active `AccessRole`s are
-            resolved from, only ever consulted when `context.actor` is not
-            the owner.
+        context: The call's facts, built with `action="edit"`; `current_status` is the status of
+            the node being edited.
+        access_role_store: Where `context.actor`'s active roles are resolved from.
 
     Raises:
-        PolicyDraftAccessDeniedError: `context.actor` is neither the
-            owner nor a `SystemOwner`/`SystemAdmin`.
-        PolicyInvalidStatusTransitionError: `context.current_status` is not
-            `"draft"`.
+        PolicyDraftAccessDeniedError: `context.actor` is neither the owner nor a `SystemOwner` or
+            `SystemAdmin`.
+        PolicyInvalidStatusTransitionError: `context.current_status` is not `"draft"`.
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
     """
     if not require_owner(context).allowed:
         active_roles = resolve_active_roles(context.actor, store=access_role_store)
@@ -1648,7 +1768,12 @@ def _authorize_draft_edit(
 
 @dataclass(frozen=True, slots=True)
 class PolicyDraftUpdateResult:
-    """A successful `update_policy_draft` call's resulting state (issue #136, Slice 1)."""
+    """Resulting state of a successful `update_policy_draft` call.
+
+    Attributes:
+        policy_id: The patched Policy's id.
+        updated_fields: Names of the fields supplied, sorted.
+    """
 
     policy_id: str
     updated_fields: tuple[str, ...]
@@ -1663,48 +1788,39 @@ def update_policy_draft(
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
 ) -> PolicyDraftUpdateResult:
-    """PATCH a subset of a draft Policy's own content fields (issue #136, Slice 1).
+    """Patch a subset of a draft Policy's own content fields.
 
-    Ordering: (1) `_read_transition_target` (backfill + read + not-found,
-    reused unchanged from the four #134 transition functions); (2)
-    `_authorize_draft_edit` (owner-or-elevated, then must be `"draft"`); (3)
-    `graph_writer.update_policy_fields` applies exactly the supplied
-    `fields`, nothing else (AC-BI-008 -- omitted fields keep their existing
-    value; an explicitly-`None` value clears that field).
-
-    Unlike every #134 transition function, this records no audit_events row
-    at all (PLAN.md §1.1 -- only the Slice 6 supersede-fork path does that);
-    it still gets the full `_run_mcp_action` started/succeeded/failed log
-    triad for free at the MCP layer (AC-BI-014).
+    Exactly the supplied fields change: an omitted field keeps its value and a field supplied as
+    `None` is cleared. The caller must be the Policy's owner or hold `SystemOwner`/`SystemAdmin`,
+    and the Policy must be a draft. Draft edits write no audit event.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        policy_id: The draft Policy id to patch.
-        fields: Field name -> new value (or `None` to clear), already
-            restricted to `_POLICY_PATCHABLE_FIELDS` by the MCP-boundary
-            parser -- this function does not re-validate keys.
-        graph: The single-tenant policy graph handle (reads only).
-        access_role_store: Where `actor`'s active `AccessRole`s are resolved
-            from, only ever consulted when `actor` is not the Policy's
-            owner.
-        submitter: The Graph Write Gateway the patch is submitted through
-            (issue #211).
+        actor: The editing caller's verified `(sub, iss)` identity.
+        policy_id: Id of the draft Policy to patch.
+        fields: Field name to new value, or `None` to clear. The caller must already have restricted
+            the keys to the patchable Policy fields; this function does not re-validate them.
+        graph: The single-tenant policy graph handle.
+        access_role_store: Where `actor`'s active roles are resolved from; consulted only when
+            `actor` is not the owner.
+        submitter: The Graph Write Gateway the patch is submitted through, also used to backfill a
+            legacy tree if needed.
 
     Returns:
-        A `PolicyDraftUpdateResult` naming the Policy id and the fields
-        that were actually supplied (sorted, for deterministic output).
+        A `PolicyDraftUpdateResult` with the Policy id and the sorted names of the supplied fields.
 
     Raises:
-        PolicyNotFoundError: no `Policy` node exists with `policy_id`.
-        PolicyDraftAccessDeniedError: `actor` is neither `policy_id`'s owner
-            nor a `SystemOwner`/`SystemAdmin`.
-        PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
-            currently `"draft"`.
-        PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            (AC-BI-013's "graph unavailable" failure mode): `FalkorDB write
-            failed: ...` with the gateway error chained (issue #211), never a
-            raw driver error. No audit event is recorded either way (§1.1 --
-            this tool never touches `audit_events` at all).
+        PolicyNotFoundError: no Policy has `policy_id`.
+        PolicyDraftAccessDeniedError: `actor` is neither the owner nor a
+            `SystemOwner`/`SystemAdmin`.
+        PolicyInvalidStatusTransitionError: the Policy is not currently `"draft"`.
+        PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
+            with the gateway error chained); no audit event is recorded.
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+
+    Side Effects:
+        Writes the patch as one gateway group with no audit link; a patch that changes nothing logs
+        nothing. May backfill missing `version` and `status`.
     """
     record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
     context = PolicyLifecycleRuleContext(
@@ -1724,7 +1840,14 @@ def update_policy_draft(
 
 @dataclass(frozen=True, slots=True)
 class StandardDraftResult:
-    """A successful `add_standard_to_draft` call's resulting state (issue #136, Slice 2)."""
+    """Resulting state of a successful `add_standard_to_draft` or `update_standard_draft` call.
+
+    Attributes:
+        standard_id: The Standard's id.
+        policy_id: Id of the Standard's parent Policy.
+        title: The Standard's title.
+        status: Always `"draft"`.
+    """
 
     standard_id: str
     policy_id: str
@@ -1742,55 +1865,41 @@ def add_standard_to_draft(
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
 ) -> StandardDraftResult:
-    """Add a new Standard under a draft Policy (issue #136, Slice 2).
+    """Add a new Standard under a draft Policy.
 
-    Ordering mirrors `update_policy_draft` (Slice 1) exactly: (1)
-    `_read_transition_target` (backfill + read + not-found -- reused
-    unchanged; ownership/status are read directly off the parent Policy
-    itself, since a Standard being newly minted has no ownership of its own
-    to traverse to yet -- AC-BI-003's "direct" case, distinct from the
-    transitive traversal Slices 3-5 need for an *existing* Standard/
-    Control); (2) `_authorize_draft_edit` (owner-or-elevated, then must be
-    `"draft"`); (3) the new Standard's id is computed via
-    `domain_mapper.identity.standard_id(policy_id, title)`; (4)
-    `graph_writer.add_standard_to_policy` mints the node, unconditionally
-    `status="draft"` (AC-BI-007's governance-status half), `SUPPORTED_BY`-
-    linked to `policy_id`.
-
-    Like `update_policy_draft`, this records no audit_events row (PLAN.md
-    §1.1 -- only the Slice 6 supersede-fork path does that); it still gets
-    the full `_run_mcp_action` started/succeeded/failed log triad for free
-    at the MCP layer (AC-BI-014).
+    The Standard's id is derived from the Policy id and `title`, and the Standard is created with
+    `status="draft"`. The caller must be the parent Policy's owner or hold `SystemOwner` or
+    `SystemAdmin`, and the Policy must be a draft. Draft edits write no audit event.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        policy_id: The existing draft Policy id to attach the new Standard to.
+        actor: The editing caller's verified `(sub, iss)` identity.
+        policy_id: Id of the draft Policy to attach the Standard to.
         title: The new Standard's title.
-        fields: Any additional patchable content fields, already restricted
-            to `_STANDARD_PATCHABLE_FIELDS` by the MCP-boundary parser
-            (`implementation_status`, when present, defaults content-side to
-            `"draft"` if omitted -- AC-BI-007's implementation-status half).
+        fields: Further content fields to set, already restricted by the caller to the patchable
+            Standard fields; `implementation_status` defaults to `"draft"` when absent.
         graph: The single-tenant policy graph handle.
-        access_role_store: Where `actor`'s active `AccessRole`s are resolved
-            from, only ever consulted when `actor` is not the parent
-            Policy's owner.
-        submitter: The Graph Write Gateway the write is submitted through
-            (issue #211).
+        access_role_store: Where `actor`'s active roles are resolved from; consulted only when
+            `actor` is not the Policy's owner.
+        submitter: The Graph Write Gateway the write is submitted through, also used to backfill a
+            legacy tree if needed.
 
     Returns:
-        A `StandardDraftResult` naming the new Standard's id (usable
-        immediately in a following call, AC-BI-009), its parent Policy id,
-        title, and status.
+        A `StandardDraftResult` with the new Standard's id (usable in the next call), its parent
+        Policy id, its title and its status.
 
     Raises:
-        PolicyNotFoundError: no `Policy` node exists with `policy_id`.
-        PolicyDraftAccessDeniedError: `actor` is neither `policy_id`'s owner
-            nor a `SystemOwner`/`SystemAdmin`.
-        PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
-            currently `"draft"`.
-        PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            -- `FalkorDB write failed: ...` with the gateway error chained
-            (issue #211), never a raw driver error.
+        PolicyNotFoundError: no Policy has `policy_id`.
+        PolicyDraftAccessDeniedError: `actor` is neither the owner nor a
+            `SystemOwner`/`SystemAdmin`.
+        PolicyInvalidStatusTransitionError: the Policy is not currently `"draft"`.
+        PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
+            with the gateway error chained).
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+
+    Side Effects:
+        Writes the Standard and its link to the Policy as one gateway group with no audit link.
+        May backfill missing `version` and `status`.
     """
     record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
     context = PolicyLifecycleRuleContext(
@@ -1816,32 +1925,25 @@ def add_standard_to_draft(
 def _read_standard_with_parent_backfilled(
     graph: GraphHandle, standard_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
 ) -> graph_writer.StandardWithParent:
-    """Backfill-then-reread wrapper around `find_standard_with_parent` (issue #136, Slice 3).
+    """Read a Standard with its parent Policy's owner and status, backfilling first.
 
-    CHANGES.md finding #2 (High): a legitimately-draft Standard minted before
-    any status-backfilling call (e.g. via the internal-seed adapter) may
-    still carry a `NULL` own `status`. `_read_transition_target`'s own
-    backfill-first order (D-7) only covers root-Policy reads that already
-    know their own `policy_id` up front; the transitive reads Slices 3-5
-    introduce don't know the root `policy_id` until AFTER the first
-    traversal, so this reads twice: once to learn `row.policy_id`, then
-    `graph_writer.backfill_governance_status` against that id, then a second
-    read so the draft-status gate that follows sees the now-backfilled
-    value -- never a stale, spuriously-`NULL` one that would cause a false
-    `PolicyInvalidStatusTransitionError` rejection.
+    A Standard created before statuses were backfilled can carry no `status`. The parent Policy
+    id is only known after the first read, so this reads once to find it, backfills that Policy's
+    tree, then reads again so the draft check that follows sees the filled-in status rather than
+    a missing one.
 
     Args:
         graph: The single-tenant policy graph handle.
-        standard_id: The Standard id to read, plus its parent Policy's
-            owner/status.
-        submitter_source: Resolves the gateway for the backfill, if one is needed (issue #211).
+        standard_id: Id of the Standard to read.
+        submitter_source: Returns the gateway for the backfill; called only when a fill is needed.
 
     Returns:
-        The freshly-reread `StandardWithParent` row, post-backfill.
+        The re-read `StandardWithParent` row, after the backfill.
 
     Raises:
-        PolicyStandardNotFoundError: no `Policy -[:SUPPORTED_BY]-> Standard`
-            path exists for `standard_id`, on either read.
+        PolicyStandardNotFoundError: no Policy is linked to `standard_id` by `SUPPORTED_BY`.
+        PolicyLifecycleGraphUnavailableError: a needed backfill write failed.
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
     """
     row = graph_writer.find_standard_with_parent(graph, standard_id)
     if row is None:
@@ -1864,52 +1966,41 @@ def update_standard_draft(
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
 ) -> StandardDraftResult:
-    """PATCH a subset of a draft Standard's own content fields (issue #136, Slice 3).
+    """Patch a subset of a draft Standard's own content fields.
 
-    Ordering: (1) `_read_standard_with_parent_backfilled` (backfill + one-hop
-    transitive read + not-found, CHANGES.md finding #2); (2)
-    `_authorize_draft_edit`, built from the PARENT Policy's owner pair (AC-
-    BI-003 -- Standard has no ownership field of its own, TASK.md's
-    Implementation-decisions paragraph) and the STANDARD's own status (the
-    node directly being mutated, not the parent Policy's -- mirrors
-    `add_standard_to_draft`'s own "gate reads the existing node being acted
-    on" discipline, just one level deeper); (3)
-    `graph_writer.update_standard_fields` applies exactly the supplied
-    `fields`, nothing else (AC-BI-008).
-
-    Like `update_policy_draft`/`add_standard_to_draft`, this records no
-    audit_events row at all (PLAN.md §1.1 -- only the Slice 6 supersede-fork
-    path does that); it still gets the full `_run_mcp_action`
-    started/succeeded/failed log triad for free at the MCP layer (AC-BI-014).
+    Exactly the supplied fields change: an omitted field keeps its value and a field supplied as
+    `None` is cleared. Ownership comes from the parent Policy, because a Standard has no owner of
+    its own; the draft check applies to the Standard's own status. The caller must be the parent
+    Policy's owner or hold `SystemOwner`/`SystemAdmin`. Draft edits write no audit event.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        standard_id: The draft Standard id to patch.
-        fields: Field name -> new value (or `None` to clear), already
-            restricted to `_STANDARD_PATCHABLE_FIELDS` by the MCP-boundary
-            parser -- this function does not re-validate keys.
+        actor: The editing caller's verified `(sub, iss)` identity.
+        standard_id: Id of the draft Standard to patch.
+        fields: Field name to new value, or `None` to clear. The caller must already have restricted
+            the keys to the patchable Standard fields; this function does not re-validate them.
         graph: The single-tenant policy graph handle.
-        access_role_store: Where `actor`'s active `AccessRole`s are resolved
-            from, only ever consulted when `actor` is not the parent
-            Policy's owner.
-        submitter: The Graph Write Gateway the write is submitted through
-            (issue #211).
+        access_role_store: Where `actor`'s active roles are resolved from; consulted only when
+            `actor` is not the parent Policy's owner.
+        submitter: The Graph Write Gateway the write is submitted through, also used to backfill a
+            legacy tree if needed.
 
     Returns:
-        A `StandardDraftResult` naming the Standard id, its parent Policy id,
-        its title, and its (pre-patch, always `"draft"` -- the gate already
-        required it) status.
+        A `StandardDraftResult` with the Standard's id, parent Policy id and title, and status
+        `"draft"` (the draft check requires it before the patch).
 
     Raises:
-        PolicyStandardNotFoundError: no `Policy -[:SUPPORTED_BY]-> Standard`
-            path exists for `standard_id`.
-        PolicyDraftAccessDeniedError: `actor` is neither the parent Policy's
-            owner nor a `SystemOwner`/`SystemAdmin`.
-        PolicyInvalidStatusTransitionError: `standard_id`'s Standard is not
-            currently `"draft"`.
-        PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            -- `FalkorDB write failed: ...` with the gateway error chained
-            (issue #211), never a raw driver error.
+        PolicyStandardNotFoundError: no Policy is linked to `standard_id` by `SUPPORTED_BY`.
+        PolicyDraftAccessDeniedError: `actor` is neither the parent Policy's owner nor a
+            `SystemOwner`/`SystemAdmin`.
+        PolicyInvalidStatusTransitionError: the Standard is not currently `"draft"`.
+        PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
+            with the gateway error chained).
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+
+    Side Effects:
+        Writes the patch as one gateway group with no audit link. May backfill missing `version`
+        and `status`.
     """
     row = _read_standard_with_parent_backfilled(
         graph, standard_id, submitter_source=_eager(submitter)
@@ -1933,7 +2024,15 @@ def update_standard_draft(
 
 @dataclass(frozen=True, slots=True)
 class ControlDraftResult:
-    """A successful `add_control_to_draft` call's resulting state (issue #136, Slice 4)."""
+    """Resulting state of a successful `add_control_to_draft` or `update_control_draft` call.
+
+    Attributes:
+        control_id: The Control's id.
+        standard_id: Id of the Control's parent Standard.
+        policy_id: Id of the root Policy.
+        title: The Control's title.
+        status: Always `"draft"`.
+    """
 
     control_id: str
     standard_id: str
@@ -1953,68 +2052,45 @@ def add_control_to_draft(
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
 ) -> ControlDraftResult:
-    """Add a new Control under a draft Standard (issue #136, Slice 4).
+    """Add a new Control under a draft Standard.
 
-    Ordering mirrors `update_standard_draft` (Slice 3) exactly, one level
-    deeper: (1) `_read_standard_with_parent_backfilled` (backfill + one-hop
-    transitive read + not-found, CHANGES.md finding #2) -- PLAN.md §1.4's own
-    correction: ownership for a new Control is derived from the SAME one-hop
-    `Policy -[:SUPPORTED_BY]-> Standard` traversal `update-standard-draft`
-    already uses (the caller supplies a `standard_id`, exactly like that
-    tool), never a two-hop `...->Control` traversal -- that shape belongs to
-    `update-control-draft` (Slice 5) alone, which is keyed on an existing
-    Control's own id; (2) `_authorize_draft_edit`, built from the PARENT
-    Policy's owner pair and the STANDARD's own status (the node directly
-    parented, the same "gate reads the existing node being acted on"
-    discipline `add_standard_to_draft` established); (3) the new Control's id
-    is computed via `domain_mapper.identity.control_id(standard_id, title)`;
-    (4) `graph_writer.add_control_to_standard` mints the node, unconditionally
-    `status="draft"` (AC-BI-007's governance-status half), `IMPLEMENTED_BY`-
-    linked to `standard_id`, `implementation_status` defaulting to
-    `"planned"` (NOT `"draft"` -- the one deliberate divergence from
-    `add_standard_to_draft`'s own default, per `ps-domain-concepts.md`'s
-    "earliest state in status workflow" convention for Control).
-
-    Like every other tool in this issue bar the supersede fork, this records
-    no audit_events row (PLAN.md §1.1); it still gets the full
-    `_run_mcp_action` started/succeeded/failed log triad for free at the MCP
-    layer (AC-BI-014).
+    The Control's id is derived from the Standard id and `title`; it is created with
+    `status="draft"` and linked to the Standard. Ownership comes from the root Policy, and the
+    draft check applies to the parent Standard's status. The caller must be the root Policy's
+    owner or hold `SystemOwner`/`SystemAdmin`. Draft edits write no audit event.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        standard_id: The existing draft Standard id to attach the new
-            Control to.
+        actor: The editing caller's verified `(sub, iss)` identity.
+        standard_id: Id of the draft Standard to attach the Control to.
         title: The new Control's title.
-        control_type: The new Control's `type` (`"automated"` or
-            `"manual"`), already validated at the MCP boundary.
-        fields: Any additional patchable content fields, already restricted
-            to `_CONTROL_PATCHABLE_FIELDS - {"type"}` by the MCP-boundary
-            parser (CHANGES.md finding #8 -- `type` is set only via
-            `control_type`; `implementation_status`, when present, defaults
-            content-side to `"planned"` if omitted -- AC-BI-007's
-            implementation-status half).
+        control_type: The Control's `type`, `"automated"` or `"manual"` (default `"manual"`),
+            already validated by the caller.
+        fields: Further content fields to set, already restricted by the caller to the patchable
+            Control fields without `type` (which is set only through `control_type`);
+            `implementation_status` defaults to `"planned"` when absent.
         graph: The single-tenant policy graph handle.
-        access_role_store: Where `actor`'s active `AccessRole`s are resolved
-            from, only ever consulted when `actor` is not the parent
-            Policy's owner.
-        submitter: The Graph Write Gateway the write is submitted through
-            (issue #211).
+        access_role_store: Where `actor`'s active roles are resolved from; consulted only when
+            `actor` is not the root Policy's owner.
+        submitter: The Graph Write Gateway the write is submitted through, also used to backfill a
+            legacy tree if needed.
 
     Returns:
-        A `ControlDraftResult` naming the new Control's id (usable
-        immediately in a following call), its parent Standard and Policy
-        ids, title, and status.
+        A `ControlDraftResult` with the new Control's id (usable in the next call), its parent
+        Standard and Policy ids, its title and its status.
 
     Raises:
-        PolicyStandardNotFoundError: no `Policy -[:SUPPORTED_BY]-> Standard`
-            path exists for `standard_id`.
-        PolicyDraftAccessDeniedError: `actor` is neither the parent Policy's
-            owner nor a `SystemOwner`/`SystemAdmin`.
-        PolicyInvalidStatusTransitionError: `standard_id`'s Standard is not
-            currently `"draft"`.
-        PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            -- `FalkorDB write failed: ...` with the gateway error chained
-            (issue #211), never a raw driver error.
+        PolicyStandardNotFoundError: no Policy is linked to `standard_id` by `SUPPORTED_BY`.
+        PolicyDraftAccessDeniedError: `actor` is neither the root Policy's owner nor a
+            `SystemOwner`/`SystemAdmin`.
+        PolicyInvalidStatusTransitionError: the Standard is not currently `"draft"`.
+        PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
+            with the gateway error chained).
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+
+    Side Effects:
+        Writes the Control and its link to the Standard as one gateway group with no audit link.
+        May backfill missing `version` and `status`.
     """
     row = _read_standard_with_parent_backfilled(
         graph, standard_id, submitter_source=_eager(submitter)
@@ -2047,31 +2123,26 @@ def add_control_to_draft(
 def _read_control_with_parent_backfilled(
     graph: GraphHandle, control_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
 ) -> graph_writer.ControlWithParent:
-    """Backfill-then-reread wrapper around `find_control_with_parent` (issue #136, Slice 5).
+    """Read a Control with its parent Standard and root Policy, backfilling first.
 
-    CHANGES.md finding #2 (High), two-hop case: same fix as
-    `_read_standard_with_parent_backfilled` (Slice 3), except the root
-    `policy_id` needed to call `backfill_governance_status` is only known
-    after a TWO-hop traversal here, not one. A legacy Control minted before
-    any status-backfilling call (e.g. via the internal-seed adapter) may
-    still carry a `NULL` own `status` even though its root Policy is
-    genuinely `draft` -- without this wrapper, `update_control_draft`'s
-    draft-status gate would see that stale `NULL` and spuriously reject the
-    call with `PolicyInvalidStatusTransitionError`.
+    A Control created before statuses were backfilled can carry no `status` even though its root
+    Policy is a draft. The root Policy id is only known after a two-hop read, so this reads once to
+    find it, backfills that Policy's tree, then reads again so the draft check that follows sees the
+    filled-in status.
 
     Args:
         graph: The single-tenant policy graph handle.
-        control_id: The Control id to read, plus its parent Standard id and
-            root Policy's owner/status.
-        submitter_source: Resolves the gateway for the backfill, if one is needed (issue #211).
+        control_id: Id of the Control to read.
+        submitter_source: Returns the gateway for the backfill; called only when a fill is needed.
 
     Returns:
-        The freshly-reread `ControlWithParent` row, post-backfill.
+        The re-read `ControlWithParent` row, after the backfill.
 
     Raises:
-        PolicyControlNotFoundError: no `Policy -[:SUPPORTED_BY]-> Standard
-            -[:IMPLEMENTED_BY]-> Control` path exists for `control_id`, on
-            either read.
+        PolicyControlNotFoundError: no Policy reaches `control_id` through `SUPPORTED_BY` then
+            `IMPLEMENTED_BY`.
+        PolicyLifecycleGraphUnavailableError: a needed backfill write failed.
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
     """
     row = graph_writer.find_control_with_parent(graph, control_id)
     if row is None:
@@ -2094,55 +2165,43 @@ def update_control_draft(
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
 ) -> ControlDraftResult:
-    """PATCH a subset of a draft Control's own content fields (issue #136, Slice 5).
+    """Patch a subset of a draft Control's own content fields.
 
-    Ordering: (1) `_read_control_with_parent_backfilled` (backfill + TWO-hop
-    transitive read + not-found, CHANGES.md finding #2 -- the genuinely
-    two-hop case in this issue, `Policy -[:SUPPORTED_BY]-> Standard
-    -[:IMPLEMENTED_BY]-> Control`, distinct from `update_standard_draft`'s/
-    `add_control_to_draft`'s own one-hop traversal); (2)
-    `_authorize_draft_edit`, built from the ROOT Policy's owner pair (AC-
-    BI-003 -- neither Control nor its parent Standard has an ownership field
-    of its own, TASK.md's Implementation-decisions paragraph) and the
-    CONTROL's own status (the node directly being mutated, not the parent
-    Standard's or root Policy's -- mirrors `update_standard_draft`'s own
-    "gate reads the existing node being acted on" discipline, one hop
-    deeper); (3) `graph_writer.update_control_fields` applies exactly the
-    supplied `fields`, nothing else (AC-BI-008).
-
-    Like every PATCH/add tool in this issue bar the supersede fork, this
-    records no audit_events row at all (PLAN.md §1.1 -- only Slice 6's
-    supersede-fork path does that); it still gets the full `_run_mcp_action`
-    started/succeeded/failed log triad for free at the MCP layer (AC-BI-014).
+    Exactly the supplied fields change: an omitted field keeps its value and a field supplied as
+    `None` is cleared. Ownership comes from the root Policy, because neither a Control nor its
+    Standard has an owner of its own; the draft check applies to the Control's own status. The
+    caller must be the root Policy's owner or hold `SystemOwner`/`SystemAdmin`. Draft edits write
+    no audit event.
 
     Args:
-        actor: The calling caller's verified `(sub, iss)` identity.
-        control_id: The draft Control id to patch.
-        fields: Field name -> new value (or `None` to clear), already
-            restricted to `_CONTROL_PATCHABLE_FIELDS` by the MCP-boundary
-            parser -- this function does not re-validate keys.
+        actor: The editing caller's verified `(sub, iss)` identity.
+        control_id: Id of the draft Control to patch.
+        fields: Field name to new value, or `None` to clear. The caller must already have restricted
+            the keys to the patchable Control fields; this function does not re-validate them.
         graph: The single-tenant policy graph handle.
-        access_role_store: Where `actor`'s active `AccessRole`s are resolved
-            from, only ever consulted when `actor` is not the root Policy's
-            owner.
-        submitter: The Graph Write Gateway the write is submitted through
-            (issue #211).
+        access_role_store: Where `actor`'s active roles are resolved from; consulted only when
+            `actor` is not the root Policy's owner.
+        submitter: The Graph Write Gateway the write is submitted through, also used to backfill a
+            legacy tree if needed.
 
     Returns:
-        A `ControlDraftResult` naming the Control id, its parent Standard and
-        root Policy ids, its title, and its (pre-patch, always `"draft"` --
-        the gate already required it) status.
+        A `ControlDraftResult` with the Control's id, parent Standard id, root Policy id and title,
+        and status `"draft"` (the draft check requires it before the patch).
 
     Raises:
-        PolicyControlNotFoundError: no `Policy -[:SUPPORTED_BY]-> Standard
-            -[:IMPLEMENTED_BY]-> Control` path exists for `control_id`.
-        PolicyDraftAccessDeniedError: `actor` is neither the root Policy's
-            owner nor a `SystemOwner`/`SystemAdmin`.
-        PolicyInvalidStatusTransitionError: `control_id`'s Control is not
-            currently `"draft"`.
-        PolicyLifecycleGraphUnavailableError: the graph write itself failed
-            -- `FalkorDB write failed: ...` with the gateway error chained
-            (issue #211), never a raw driver error.
+        PolicyControlNotFoundError: no Policy reaches `control_id` through `SUPPORTED_BY` then
+            `IMPLEMENTED_BY`.
+        PolicyDraftAccessDeniedError: `actor` is neither the root Policy's owner nor a
+            `SystemOwner`/`SystemAdmin`.
+        PolicyInvalidStatusTransitionError: the Control is not currently `"draft"`.
+        PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
+            with the gateway error chained).
+        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
+
+    Side Effects:
+        Writes the patch as one gateway group with no audit link. May backfill missing `version`
+        and `status`.
     """
     row = _read_control_with_parent_backfilled(
         graph, control_id, submitter_source=_eager(submitter)

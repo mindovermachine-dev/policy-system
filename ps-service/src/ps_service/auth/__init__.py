@@ -1,12 +1,17 @@
-"""ps_service.auth -- package front door.
+"""ps_service.auth -- OIDC bearer-token authentication for the REST and MCP surfaces.
 
-Shared OIDC bearer-token configuration/verification component used by both
-the REST middleware and the MCP `token_verifier=` wiring (issue #58). As of
-Slice 3, fail-closed startup configuration resolution (`resolve_auth_context`,
-AC-BI-001/AC-BI-002), the shared `PsTokenVerifier` (AC-BI-003 signature/iss/
-aud/exp/nbf validation), and `RestAuthMiddleware` (the REST-side 401 gate)
-are implemented. The RFC 9728 protected-resource endpoint lands in a later
-slice and is not yet re-exported here.
+One shared component resolves the OIDC configuration at startup and verifies bearer tokens:
+
+- `resolve_auth_context` fails closed at startup (or returns `None` under the local-test bypass),
+  producing the process-lifetime `AuthContext`.
+- `PsTokenVerifier` validates a token's signature, issuer, audience, expiry and not-before time and
+  is shared by the REST middleware and the MCP `token_verifier=` hook.
+- `RestAuthMiddleware` is the REST-side default-deny gate that answers 401 for unauthenticated
+  requests; `Principal` is the verified identity it binds to the request scope.
+- `AuthConfigurationError` and `AuthDiscoveryError` are the startup failures.
+
+The RFC 9728 protected-resource-metadata route lives in `ps_service.auth.protected_resource` and
+is registered directly by `ps_service.main.create_app`, so it is not re-exported here.
 """
 
 from __future__ import annotations

@@ -1,18 +1,19 @@
-"""ps_service.authz -- package front door (issue #133).
+"""Role-based and attribute-based access control for the PS Service.
 
-Shared RBAC/ABAC authorization component used by both MCP Interface and (from
-Slice 5) the REST API. Domain path: `ps.service.authz`
+Shared authorization component used by both the MCP interface and the REST API. It owns
+the operational access roles (`AccessRole`), their persisted assignments, the role-gating
+checks (`require_role`), the grant/revoke operations with their attribute rules, and the
+audit-event listing. Its domain path is `ps.service.authz`
 (`docs/architecture/ps-service-container-architecture.md`).
 
-This slice (Slice 3) adds `SystemOwner` revoke, floor protection, and the
-soft floor warning: `rules.enforce_system_owner_floor` (AC-BI-006) is now
-reachable via `revoke_role`'s widened `SYSTEM_OWNER` support, alongside
-Slice 1's `resolve_active_roles`/`require_role`/`list_assignments`, Slice
-2's `grant_role`/`revoke_role` (`SystemAdmin`/`PolicyManager`) and
-`rules.block_self_target` (AC-BI-005).
+Re-exports the service functions, the store seam and its PostgreSQL implementation, the
+rule types, the component's domain-specific errors and `MIGRATIONS_DIR`, following the
+package front-door convention of `ps_service.passkey_signing`.
 
-Re-exports the store/service front door and its domain-specific errors,
-matching `ps_service.passkey_signing`'s own package front-door convention.
+Side Effects:
+    Importing the package imports `ps_service.authz.store`, which imports
+    `ps_service.authz.audit_actions` and thereby registers the `access_role.*` audit
+    actions and the `principal` audit resource type with `ps_service.audit.models`.
 """
 
 from __future__ import annotations

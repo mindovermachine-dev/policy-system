@@ -1,34 +1,28 @@
-"""In-process orchestration of the external ingestion pipeline (AC-BI-002/003/008).
+"""In-process orchestration of the Ingestion -> Domain Mapper -> Company Merge pipelines.
 
-``ps_service.api`` owns the sequential Ingestion -> Domain Mapper -> Company Merge
-pipeline for a catalog (CELEX) regulation. This module holds:
+``ps_service.api`` owns the sequential pipeline for a catalog (CELEX) regulation and for an
+internal-document seed. This module holds:
 
-* the injection seam -- :class:`PipelineDependencies` and its nested
-  :class:`GraphOpeners` / :class:`PipelineStages` / :class:`PipelineAdapters`
-  bundles, plus :func:`build_default_pipeline_dependencies`, which wires the real
-  shipped entry points via **function-local** imports so that importing
-  ``ps_service.main`` never transitively loads Domain Mapper / Company Merge at
-  module load (M6 / the Process Harness decoupling guarantee);
-* :func:`_require_ingestion_config` -- the config-completeness guard, returning a
-  narrowed :class:`_ResolvedPipelineConfig` (HTTP 503 before any I/O if a
-  required value is unset);
-* :func:`_run_stage` -- the per-stage ``try``/``except`` wrapper that converts any
-  stage failure into a :class:`~ps_service.api.errors.PipelineStageError` with a
-  caller-safe, path/host-scrubbed reason (AC-BI-008/009);
-* :func:`resolve_via_cellar` -- the pre-pipeline Cellar/ELI existence-and-metadata
-  fallback for a CELEX absent from the curated catalog (AC-BI-003/004/005/006/007);
-* :func:`run_catalog_ingestion_pipeline` -- the sequencer itself, which also drives
-  :mod:`ps_service.api.run_status` (via :func:`_execute_catalog_stages`) so a
-  concurrent poller can read the currently-executing stage of an in-flight run
-  (AC-BI-008).
+* the injection seam: ``PipelineDependencies`` and its nested ``GraphOpeners``,
+  ``PipelineStages`` and ``PipelineAdapters`` bundles, plus
+  ``build_default_pipeline_dependencies``, which wires the real stage entry points through
+  function-local imports so that importing ``ps_service.main`` never loads Domain Mapper or
+  Company Merge at module load;
+* the configuration guard that turns an incomplete model/threshold configuration into
+  ``IngestionConfigIncompleteError`` before any I/O;
+* the per-stage wrapper that converts any stage failure into a ``PipelineStageError`` carrying
+  a caller-safe, path/host-scrubbed reason, and ``classify_ingestion_failure``, which maps a
+  failure to the enumerated audit reason code;
+* identity resolution before a run: ``resolve_via_cellar`` (existence and metadata for a CELEX
+  absent from the curated catalog), the CELEX and ``short_name`` collision checks and
+  ``resolve_ingestion_entry``, the single function both ingestion entry points call;
+* the sequencers ``run_catalog_ingestion_pipeline``, ``run_audited_catalog_ingestion`` and
+  ``run_internal_ingestion_pipeline``, which drive ``ps_service.api.run_status`` so a
+  concurrent poller can read the stage an in-flight run is executing.
 
-No ``falkordb`` import ever crosses into ``ps_service.api``: graphs are opened
-through the injected :class:`GraphOpeners` callables and handled via the local
-:class:`GraphHandle` Protocol, which the three components' near-duplicate handle
-types satisfy structurally.
-
-The internal-document pipeline (request ``source: internal``) is issue #54; this
-module covers the catalog path only.
+No ``falkordb`` import crosses into ``ps_service.api``: graphs are opened through the injected
+``GraphOpeners`` callables and handled through the local ``GraphHandle`` Protocol, which the
+three components' near-duplicate handle types satisfy structurally.
 """
 
 from __future__ import annotations
@@ -40,7 +34,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from ps_service.api.catalog_entry import CatalogEntry
 from ps_service.api.error_handlers import (
-    _scrub_text,  # pyright: ignore[reportPrivateUsage]  # shared scrubber; IMPL_4 deviation 1 sanctions reuse
+    _scrub_text,  # pyright: ignore[reportPrivateUsage]  # shared scrubber, one redaction rule for every surface
     is_safe_verbatim,
 )
 from ps_service.api.errors import (
@@ -98,20 +92,17 @@ if TYPE_CHECKING:
     from ps_service.llm_interface.client import CompletionCaller, EmbeddingCaller
     from ps_service.logging import LogEmitter
 
-# D-SHORTNAME-PATTERN: must start with a letter, alnum/`_`/`-` body, 1-64 chars --
-# mirrors every existing catalog short_name ("cra", "gdpr", "nis2"). Public (not
-# module-private) so both this module's own `CatalogIngestionRequest` `Field()` and
-# `mcp_interface.mcp_server`'s tool-parameter `Field()` share one canonical pattern
-# literal. Per AC-BI-005/CHANGES.md row F4, "one shared validation function" is
-# satisfied at this constant/regex level -- one literal, consumed by two independent
-# declarative `Field(pattern=...)` annotations -- rather than via a single shared
-# callable; the two call sites are pydantic `Field` declarations, not imperative code
-# paths a function could usefully wrap.
+# A short_name starts with a letter, continues with letters, digits, `_` or `-`, and is 1-64
+# characters long, like every existing catalog short_name ("cra", "gdpr", "nis2"). Public so the
+# REST request model and the MCP tool parameter share one pattern literal; both are declarative
+# pydantic `Field(pattern=...)` annotations, which a shared callable could not usefully wrap.
 SHORT_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
 
 _COMPONENT = "api"
 _RUN_ACTION = "ingestion_run"
 _STAGE_REASON_MAX_LEN = 300
+# Fixed `source_identifier` for every internal-ingestion `_emit_run` call: there is no file path
+# to use, and the parsed document's own id is unknown when the "started" log line fires.
 _INTERNAL_INGESTION_SOURCE_IDENTIFIER = "internal-document"
 _INTERNAL_RUN_AUDIT_TRIGGER = "internal_seed"
 _OWNER_REQUIRED_MESSAGE = (
@@ -120,13 +111,9 @@ _OWNER_REQUIRED_MESSAGE = (
 )
 Owner = tuple[str, str]
 """A verified caller's ``(sub, iss)`` identity pair."""
-"""Fixed ``source_identifier`` for every internal-ingestion ``_emit_run`` call
-(D7, issue #91) -- there is no filesystem path any more to use as this value,
-and the parsed document's own id is not known until after parsing (the
-"started" log line fires before then)."""
 
 
-# --- graph seam (m9 -- no `falkordb` type ever crosses into `ps_service.api`) ---
+# --- graph seam: no `falkordb` type ever crosses into `ps_service.api` ---
 
 
 class _QueryResult(Protocol):
@@ -134,7 +121,14 @@ class _QueryResult(Protocol):
 
     @property
     def result_set(self) -> list[object]:
-        """The rows returned by the query."""
+        """Return the rows the query produced.
+
+        Returns:
+            One entry per result row; empty when the query matched nothing.
+
+        Side Effects:
+            None; the rows are already materialised, so reading never fails or queries again.
+        """
         ...
 
 
@@ -147,11 +141,26 @@ class GraphHandle(Protocol):
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _QueryResult:
-        """Run Cypher ``q`` (optionally parameterized via ``params``) and return the result."""
+        """Run a Cypher query against the graph.
+
+        Args:
+            q: The Cypher text; use ``$name`` placeholders for values.
+            params: Values bound to the placeholders in ``q``. ``None`` means no parameters.
+
+        Returns:
+            The query result; its ``result_set`` is empty when nothing matched.
+
+        Raises:
+            Exception: The graph database is unreachable or rejects the query; the concrete
+                error type belongs to the database client and is not narrowed here.
+
+        Side Effects:
+            Whatever ``q`` does. The orchestration only passes read queries.
+        """
         ...
 
 
-# --- stage seams (each Protocol mirrors the real shipped stage fn signature) ---
+# --- stage seams: each Protocol mirrors the real stage function's signature ---
 
 
 class IngestStage(Protocol):
@@ -170,7 +179,32 @@ class IngestStage(Protocol):
         run_id: str | None = None,
         emitter: LogEmitter | None = None,
     ) -> IngestResult:
-        """Ingest one regulatory instrument's native structural graph."""
+        """Ingest one regulatory instrument's native structural graph.
+
+        Args:
+            identifier: Source key understood by ``adapter`` (a CELEX number for the Cellar
+                adapter).
+            short_name: Caller-supplied short name of the regulation; selects the native graph.
+            version: Version label; combined with ``short_name`` into the instrument id.
+            adapter: Fetches and parses the instrument's structure.
+            graph: Read handle on the native graph.
+            submitter: Graph Write Gateway seam through which every write is made.
+            audit_event_id: Audit event the submitted group is logged under.
+            run_id: Request-scoped run id to bind; ``None`` mints a fresh one.
+            emitter: Log emitter for the stage entries; ``None`` uses the default.
+
+        Returns:
+            The ``IngestResult`` with the instrument id, the run id and the per-label
+            reachability counts.
+
+        Raises:
+            Exception: Any fetch, parse, validation or persistence failure of the ingestion
+                stage; the sequencer wraps it into a ``PipelineStageError``.
+
+        Side Effects:
+            Fetches the instrument from the source, reads the native graph, submits mutation
+            groups through ``submitter`` and emits one log entry per completed step.
+        """
         ...
 
 
@@ -190,7 +224,31 @@ class ExtractStage(Protocol):
         call_completion: CompletionCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> ExtractionResult:
-        """Extract the Role / Requirement spine into the baseline graph."""
+        """Extract the Role / Requirement spine into the baseline graph.
+
+        Args:
+            regulatory_instrument_id: Id of the instrument node in ``native_graph``.
+            adapter: Domain Mapping Adapter paired with the instrument's source.
+            native_graph: Read handle on the native graph.
+            submitter: Graph Write Gateway seam for the baseline group.
+            baseline_graph_name: Name of the baseline graph the group targets.
+            audit_event_id: Audit event the group is logged under.
+            model: Chat model identifier passed to the LLM interface.
+            call_completion: LLM completion caller; ``None`` uses the default.
+            emitter: Log emitter; ``None`` uses the default.
+
+        Returns:
+            The ``ExtractionResult`` with the Role and Requirement ids written and the counts;
+            all counts are zero when the instrument has no extraction units.
+
+        Raises:
+            Exception: Extraction or persistence failure, or an LLM provider failure; the
+                sequencer wraps it into a ``PipelineStageError``.
+
+        Side Effects:
+            Calls the LLM per unit, submits one baseline group through ``submitter`` and
+            emits log entries.
+        """
         ...
 
 
@@ -209,7 +267,31 @@ class DeriveStage(Protocol):
         call_completion: CompletionCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> DerivationResult:
-        """Derive Obligation / Capability nodes on the baseline graph."""
+        """Derive Obligation / Capability nodes on the baseline graph.
+
+        Args:
+            regulatory_instrument_id: Id of the instrument whose Requirements are derived from.
+            baseline_graph: Read handle on the baseline graph.
+            submitter: Graph Write Gateway seam for the derivation group.
+            baseline_graph_name: Name of the baseline graph the group targets.
+            audit_event_id: Audit event the group is logged under.
+            model: Chat model identifier passed to the LLM interface.
+            call_completion: LLM completion caller; ``None`` uses the default.
+            emitter: Log emitter; ``None`` uses the default.
+
+        Returns:
+            The ``DerivationResult`` with the Obligation and Capability ids written; empty
+            tuples when there is nothing to derive.
+
+        Raises:
+            Exception: Derivation or persistence failure (including a baseline graph behind its
+                log) or an LLM provider failure; the sequencer wraps it into a
+                ``PipelineStageError``.
+
+        Side Effects:
+            Reads the baseline graph, calls the LLM, submits one group through ``submitter``
+            and emits log entries.
+        """
         ...
 
 
@@ -217,7 +299,22 @@ class InternalSeedAdapter(Protocol):
     """Call shape of ``InternalSeedIngestionAdapter.parse_seed``."""
 
     def parse_seed(self, document: dict[str, object]) -> InternalRegulationSeed:
-        """Validate and parse one already-read internal-regulation seed document."""
+        """Validate and parse one already-read internal-regulation seed document.
+
+        Args:
+            document: The intake document as a JSON object with ``nodes`` and ``edges``
+                arrays.
+
+        Returns:
+            The parsed ``InternalRegulationSeed``; never ``None``.
+
+        Raises:
+            InternalSeedError: The document fails the packaged schema or does not parse into
+                the seed model.
+
+        Side Effects:
+            None; the adapter performs no I/O.
+        """
         ...
 
 
@@ -234,14 +331,34 @@ class IngestInternalStage(Protocol):
         audit_event_id: str,
         emitter: LogEmitter | None = None,
     ) -> InternalIngestResult:
-        """Validate, mint, and persist one internal-regulation seed."""
+        """Validate, mint, and persist one internal-regulation seed.
+
+        Args:
+            seed: The parsed submission; declares exactly one regulatory instrument.
+            submitter: Graph Write Gateway seam used to read and submit both graphs.
+            native_graph_name: Target of the raw submission group.
+            baseline_graph_name: Target of the minted spine group.
+            audit_event_id: Audit event each group is logged under.
+            emitter: Accepted for call-shape parity; ignored.
+
+        Returns:
+            The ``InternalIngestResult`` with the instrument id and the per-label node counts.
+
+        Raises:
+            InternalSeedError: The document violates a referential or cardinality rule, a graph
+                is behind its log or unreadable, or a group submission does not take effect.
+
+        Side Effects:
+            Reads both graphs and submits one mutation group to each (native first) through
+            ``submitter``.
+        """
         ...
 
 
 class MergeStage(Protocol):
     """Call shape of ``ps_service.company_merge.merge_baseline_graph``."""
 
-    def __call__(  # noqa: PLR0913 -- the two read handles, the gateway seam (#210) and the merge's own options; no natural grouping
+    def __call__(  # noqa: PLR0913 -- the two read handles, the gateway seam and the merge's own options; no natural grouping
         self,
         regulatory_instrument_id: str,
         *,
@@ -259,18 +376,50 @@ class MergeStage(Protocol):
     ) -> MergeResult:
         """Merge one regulation's baseline graph into the single-tenant graph.
 
-        The two handles are READ handles; the merge's writes are submitted through `submitter`
-        as groups on the named graphs under `audit_event_id` (issue #210).
+        Args:
+            regulatory_instrument_id: Id of the instrument whose baseline is merged.
+            baseline_graph: Read handle on the baseline graph.
+            single_tenant_graph: Read handle on the single-tenant graph.
+            submitter: Graph Write Gateway seam; every write is submitted through it as a group
+                on a named graph.
+            single_tenant_graph_name: Graph the merged groups are submitted to.
+            baseline_graph_name: Graph the embedding backfills are submitted to.
+            audit_event_id: Audit event the groups are logged under.
+            embed_model: Embedding model used for the semantic duplicate comparison.
+            similarity_threshold: Cosine similarity at or above which a semantic match is
+                accepted; ``None`` is a configuration error.
+            call_embedding: Embedding caller; ``None`` uses the default.
+            emitter: Log emitter; ``None`` uses the default.
+            governance: The ingesting caller's owner for an internal baseline's Policy tree;
+                ``None`` means ownerless, so a baseline with a Policy tree fails closed.
+
+        Returns:
+            The ``MergeResult`` with the merged ids, near-miss pairs and counts.
+
+        Raises:
+            Exception: Missing threshold, missing governance owner, embedding failure, read or
+                persistence failure; the sequencer wraps it into a ``PipelineStageError``.
+
+        Side Effects:
+            Calls the embedding model, submits gateway groups to both graphs (including
+            ``PendingReview`` nodes for near misses) and emits log entries.
         """
         ...
 
 
-# --- injection seam (M2) ---
+# --- injection seam ---
 
 
 @dataclass(frozen=True, slots=True)
 class GraphOpeners:
-    """Callables that open the three graphs a pipeline run needs, by ``short_name``."""
+    """Callables that open the three graphs a pipeline run needs, by ``short_name``.
+
+    Attributes:
+        native: Opens the instrument's native graph from the configuration and ``short_name``.
+        baseline: Opens the instrument's baseline graph from the configuration and
+            ``short_name``.
+        single_tenant: Opens the shared single-tenant graph from the configuration.
+    """
 
     native: Callable[[ServiceConfig, str], GraphHandle]
     baseline: Callable[[ServiceConfig, str], GraphHandle]
@@ -281,13 +430,17 @@ class GraphOpeners:
 class PipelineStages:
     """The four external-pipeline stage entry points, plus the internal-seed pipeline's own stage.
 
-    In run order. S2 added ``ingest_internal``. GH #76 removed S3 (issue
-    #54)'s ``derive_governance`` stage outright -- Policy/Standard/Control
-    are now authored directly in the internal-seed document and minted by
-    ``ingest_internal`` itself, so there is no separate governance-derivation
-    stage any more. S4 reuses the catalog pipeline's own ``merge`` as the
-    internal pipeline's second stage -- one shared stage function, two
-    callers.
+    Policy, Standard and Control nodes are authored directly in an internal-seed document and
+    minted by ``ingest_internal`` itself, so there is no separate governance stage. The internal
+    pipeline reuses ``merge`` as its second stage: one stage function, two callers.
+
+    Attributes:
+        ingest: Fetches and persists the native structural graph (external pipeline stage 1).
+        extract: Extracts Roles and Requirements into the baseline graph (stage 2).
+        derive: Derives Obligations and Capabilities on the baseline graph (stage 3).
+        merge: Merges a baseline graph into the single-tenant graph (stage 4 of both pipelines).
+        ingest_internal: Validates and persists an internal-regulation seed (stage 1 of the
+            internal pipeline).
     """
 
     ingest: IngestStage
@@ -299,7 +452,13 @@ class PipelineStages:
 
 @dataclass(frozen=True, slots=True)
 class PipelineAdapters:
-    """Zero-arg factories for the source-specific adapters the stages consume."""
+    """Zero-arg factories for the source-specific adapters the stages consume.
+
+    Attributes:
+        ingestion: Builds the adapter that fetches an external instrument's structure.
+        mapping: Builds the Domain Mapping Adapter the extraction stage uses.
+        internal_seed: Builds the adapter that parses an internal-regulation seed document.
+    """
 
     ingestion: Callable[[], IngestionAdapter]
     mapping: Callable[[], DomainMappingAdapter]
@@ -308,19 +467,31 @@ class PipelineAdapters:
 
 @dataclass(frozen=True, slots=True)
 class PipelineDependencies:
-    """Everything ``run_catalog_ingestion_pipeline`` needs that is not per-request."""
+    """Everything the pipeline sequencers need that is not per-request.
+
+    Attributes:
+        graphs: Openers for the native, baseline and single-tenant graphs.
+        stages: The stage entry points to run.
+        adapters: Factories for the source-specific adapters.
+    """
 
     graphs: GraphOpeners
     stages: PipelineStages
     adapters: PipelineAdapters
 
 
-# --- config-completeness guard (M1) ---
+# --- config-completeness guard ---
 
 
 @dataclass(frozen=True, slots=True)
 class _ResolvedPipelineConfig:
-    """The pipeline-relevant ``ServiceConfig`` values, narrowed to non-``None``."""
+    """The pipeline-relevant ``ServiceConfig`` values, narrowed to non-``None``.
+
+    Attributes:
+        chat_model: Chat model identifier for extraction and derivation.
+        embed_model: Embedding model identifier for the merge's duplicate comparison.
+        similarity_threshold: Cosine similarity threshold for a semantic match.
+    """
 
     chat_model: str
     embed_model: str
@@ -330,20 +501,18 @@ class _ResolvedPipelineConfig:
 def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
     """Return the narrowed pipeline config, or raise if any required value is unset.
 
-    Called first by :func:`run_catalog_ingestion_pipeline` and (issue #54, S3)
-    :func:`run_internal_ingestion_pipeline`, before any graph or
-    stage call, so an incomplete configuration fails as HTTP 503 with no I/O.
+    Called first by both pipeline sequencers, before any graph or stage call, so an incomplete
+    configuration fails as HTTP 503 with no I/O.
 
     Args:
         config: The resolved service configuration.
 
     Returns:
-        A :class:`_ResolvedPipelineConfig` whose three fields are all non-``None``.
+        A ``_ResolvedPipelineConfig`` whose three fields are all non-``None``.
 
     Raises:
         IngestionConfigIncompleteError: If ``llm_interface_model``,
-            ``llm_interface_embed_model``, or
-            ``company_merge_similarity_threshold`` is ``None``.
+            ``llm_interface_embed_model``, or ``company_merge_similarity_threshold`` is ``None``.
     """
     chat_model = config.llm_interface_model
     embed_model = config.llm_interface_embed_model
@@ -357,7 +526,7 @@ def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
     )
 
 
-# --- short_name derivation for a Cellar-resolved (non-curated) entry (AC-BI-004) ---
+# --- short_name derivation for a Cellar-resolved (non-curated) entry ---
 
 _SLUG_WORD_RE = re.compile(r"[A-Za-z0-9]+")
 _SLUG_MAX_WORDS = 6
@@ -368,9 +537,8 @@ def _derive_short_name(title: str, celex: str) -> str:
 
     A slug of the Cellar-extracted title (its first ``_SLUG_MAX_WORDS`` words,
     lowercased and ``_``-joined) with the lowercase CELEX appended for
-    uniqueness -- the concrete slugging function for the rule already decided
-    for AC-BI-004 (a curated ``CatalogEntry.short_name`` is never derived this
-    way; this is the Cellar-fallback path only). Pure -- no I/O.
+    uniqueness. Only the Cellar fallback derives a name this way; a curated
+    ``CatalogEntry.short_name`` is never derived. Pure, no I/O.
 
     Args:
         title: The regulation's title, as extracted from Cellar/ELI.
@@ -385,7 +553,7 @@ def _derive_short_name(title: str, celex: str) -> str:
     return f"{slug}_{celex.lower()}"
 
 
-# --- per-stage failure wrapper (m2 / M5) ---
+# --- per-stage failure wrapper ---
 
 
 def _classify_stage_failure(
@@ -393,9 +561,8 @@ def _classify_stage_failure(
 ) -> PipelineStageError:
     """Classify one stage failure into a caller-safe ``PipelineStageError``.
 
-    Extracted from :func:`_run_stage` so :func:`resolve_via_cellar` (a
-    pre-pipeline step, not itself a ``_run_stage``-wrapped stage) can reuse the
-    exact same classification for its own Cellar-fetch/parse failures.
+    Shared by :func:`_run_stage` and :func:`resolve_via_cellar` (a pre-pipeline step, not itself a
+    ``_run_stage``-wrapped stage), so both classify failures identically.
 
     Args:
         name: The stage name (e.g. ``"extraction"``) for the error and log lines.
@@ -405,8 +572,7 @@ def _classify_stage_failure(
     Returns:
         A :class:`PipelineStageError` whose ``reason`` is the scrubbed message
         for a whitelisted domain error, else a generic ``"<name> failed"`` --
-        with the scrubbed, truncated message and exception type emitted server-side only
-        (AC-BI-009/010, issue #227).
+        with the scrubbed, truncated message and exception type emitted server-side only.
     """
     if is_safe_verbatim(exc):
         reason = _scrub_text(f"{type(exc).__name__}: {exc}")[:_STAGE_REASON_MAX_LEN]
@@ -440,8 +606,8 @@ def _run_stage[T](name: str, thunk: Callable[[], T], *, emitter: LogEmitter | No
     Raises:
         PipelineStageError: If ``thunk`` raises. ``reason`` is the scrubbed
             message for a whitelisted domain error, else a generic
-            ``"<name> failed"`` -- with the full ``repr`` emitted server-side
-            only (AC-BI-009).
+            ``"<name> failed"`` -- with the scrubbed failure detail emitted server-side
+            only.
     """
     try:
         return thunk()
@@ -459,40 +625,49 @@ _REASON_BY_EXCEPTION_NAME: dict[str, IngestionReasonCode] = {
     "SuccessionPersistenceError": "graph_unavailable",
     "GraphWriteUnavailableError": "graph_unavailable",
 }
-"""Failure class name -> the enumerated audit `reason_code` (issue #195, AC-BI-010).
+"""Failure class name -> the enumerated audit `reason_code`.
 
 ``McpGraphUnavailableError`` is matched by class name so ``api`` does not import
 ``mcp_interface`` (the idiom of ``change_check_orchestration._NATIONAL_TRANSPOSITION_ERROR_NAME``);
 ``ChangeMonitorStateError`` / ``SuccessionPersistenceError`` (the amendment sweep's graph-state
 and persistence failures) are matched by name for the same reason (``api`` must not import
-``change_monitor`` at module load, M6).
+``change_monitor`` at module load).
 """
 
 
 def classify_ingestion_failure(exc: BaseException) -> IngestionReasonCode:
-    """Map a failed ingestion to its enumerated ``reason_code`` (pure; never reads the message).
+    """Map a failed ingestion to its enumerated audit ``reason_code``.
 
-    Decided by the exception TYPE only, so no free text, path or host can reach an audit row.
-    Anything that is not one of the known domain failures is ``unexpected_error``.
+    Decided by the exception TYPE name only, so no free text, path or host can reach an audit
+    row.
+
+    Args:
+        exc: The exception that ended the ingestion run.
+
+    Returns:
+        The reason code for a known domain failure (configuration incomplete, graph
+        unavailable, identifier not found, short-name collision, stage failure, inconsistent
+        graph state), else ``"unexpected_error"``. Pure; never raises and never reads the
+        message.
     """
     return _REASON_BY_EXCEPTION_NAME.get(type(exc).__name__, "unexpected_error")
 
 
-# --- Cellar-fallback existence resolution (D1/D2/D3, AC-BI-003/004/005/006/007) ---
+# --- Cellar-fallback existence resolution ---
 
 
 @dataclass(frozen=True, slots=True)
 class CellarResolution:
     """A CELEX resolved via Cellar/ELI, plus its fetch-once adapter.
 
-    ``entry`` is a :class:`CatalogEntry` carrying the CELEX, the fetched title and
-    version, and the caller's ``short_name``, which downstream code
-    (``_execute_catalog_stages``, graph naming, id construction) consumes.
     Public because both ingestion entry points (``routes.create_ingestion`` and the
-    ``ingest_regulation`` MCP tool) receive it from
-    :func:`resolve_ingestion_entry`. ``adapter`` is a
-    :class:`CellarEliAdapter` whose fetch step replays the bytes already
-    retrieved during resolution -- the AC-BI-006 fetch-once mechanism (D2).
+    ``ingest_regulation`` MCP tool) receive it from :func:`resolve_ingestion_entry`.
+
+    Attributes:
+        entry: The ``CatalogEntry`` carrying the CELEX, the fetched title and version, and the
+            caller's ``short_name``; graph naming and id construction consume it.
+        adapter: A ``CellarEliAdapter`` whose fetch steps replay the bytes already retrieved
+            during resolution, so the ingestion stage never fetches the same document again.
     """
 
     entry: CatalogEntry
@@ -506,63 +681,40 @@ def resolve_via_cellar(
     cellar_fetch: Callable[[str], bytes] | None = None,
     cellar_fetch_rdf: Callable[[str], bytes] | None = None,
 ) -> CellarResolution:
-    """Resolve a CELEX against Cellar/ELI.
+    """Resolve a CELEX against Cellar/ELI before any pipeline stage runs.
 
-    Fetches the XHTML document once (``cellar_fetch``) and the RDF/XML
-    metadata document once (``cellar_fetch_rdf``), extracts bibliographic
-    metadata from both, and resolves a ``short_name`` -- all *before* the
-    pipeline ever runs (D1), so the resolved :class:`CatalogEntry` is ready
-    for ``run_catalog_ingestion_pipeline``. The returned adapter's fetch steps
-    replay both already-fetched byte strings, so Stage 1 never re-fetches
-    either (D2, AC-BI-006) -- proven by counting fakes in this function's
-    own tests, not just documented here. Without this second cached-bytes
-    replay, Stage 1 would issue a third real Cellar/ELI request for the RDF
-    document, silently doubling the per-resolution request cost
-    (PLAN_REVISED.md §6 item 2).
+    Fetches the XHTML document once and the RDF/XML metadata document once, extracts the
+    bibliographic metadata from both and settles a ``short_name``. The returned adapter replays
+    both byte strings, so the ingestion stage issues no further Cellar/ELI request (a third,
+    RDF request would silently double the per-resolution cost).
 
     Args:
-        celex: A well-formed CELEX identifier absent from the curated
-            catalog.
-        short_name: A caller-supplied ``short_name`` to use verbatim instead
-            of deriving one (issue #96, issue #126 CHANGES.md Appendix C1).
-            When ``None`` (the default -- REST's ``POST /ingestions`` path,
-            which does not collect a ``short_name`` from its caller), the
-            title fetched by this same call is slugged via
-            :func:`_derive_short_name`, exactly as before. When supplied
-            (the MCP ``ingest_regulation`` tool's path), that value is used
-            as-is and :func:`_derive_short_name` is never reached -- this is
-            the actual #96 fix: two resolutions of the same CELEX with
-            differently-worded Cellar titles no longer derive two different
-            ``short_name``s, because nothing is derived at all.
-        cellar_fetch: The Cellar/ELI XHTML fetch callable; injectable for
-            tests. When ``None`` (the default), the module-level
-            :func:`fetch_xhtml` name is resolved at call time -- not bound
-            as a literal default value -- so a caller-side
-            ``monkeypatch.setattr("ps_service.api.
-            ingestion_orchestration.fetch_xhtml", ...)`` takes effect even
-            for callers (e.g. ``routes.create_ingestion``) that never pass
-            ``cellar_fetch`` explicitly. A plain ``= fetch_xhtml`` default
-            would bind the real function at module-import time and silently
-            ignore such a monkeypatch -- confirmed by a real, unmocked
-            outbound call to Cellar/ELI during this increment's own TDD red
-            step before this ``None``-sentinel form was adopted.
-        cellar_fetch_rdf: The Cellar/ELI RDF/XML fetch callable; injectable
-            for tests. Same ``None``-sentinel-resolved-at-call-time pattern
-            as ``cellar_fetch``, for the same monkeypatch-safety reason,
-            resolving to the module-level :func:`fetch_rdf` name.
+        celex: A well-formed CELEX identifier absent from the curated catalog.
+        short_name: A caller-supplied name used verbatim. ``None`` (the REST path, which does
+            not collect one) derives it from the fetched title, so two resolutions of one CELEX
+            with differently worded titles can yield different names; when supplied, nothing is
+            derived.
+        cellar_fetch: Callable fetching the XHTML document for a CELEX (test seam). ``None``
+            resolves the module-level ``fetch_xhtml`` at call time, so a monkeypatch of that
+            name takes effect for callers that never pass this argument.
+        cellar_fetch_rdf: Callable fetching the RDF/XML document for a CELEX (test seam).
+            ``None`` resolves the module-level ``fetch_rdf`` at call time, as above.
 
     Returns:
-        A :class:`CellarResolution` pairing the resolved entry with a
-        cached-bytes :class:`CellarEliAdapter`.
+        A ``CellarResolution`` pairing the resolved ``CatalogEntry`` with a cached-bytes
+        ``CellarEliAdapter``.
 
     Raises:
-        CatalogIdentifierNotFoundError: ``celex`` does not exist on Cellar/ELI
-            (a genuine 404, distinguished from an outage -- AC-BI-005).
-        PipelineStageError: The Cellar/ELI fetch failed for any other reason,
-            or the fetched document could not be turned into valid metadata
-            (an unparseable structure, an unsupported CELEX type code, or an
-            empty title) -- all classified as stage ``"ingestion"`` (the same
-            502 shape a Stage-1 failure would produce, D3).
+        CatalogIdentifierNotFoundError: ``celex`` does not exist on Cellar/ELI (a genuine 404,
+            distinguished from an outage).
+        PipelineStageError: The Cellar/ELI fetch failed for any other reason, or the fetched
+            document could not be turned into valid metadata (an unparseable structure, an
+            unsupported CELEX type code, or an empty title); stage ``"ingestion"``, the same
+            502 shape an ingestion-stage failure produces.
+
+    Side Effects:
+        Two outbound HTTP requests to Cellar/ELI (through the injected callables); on a
+        non-whitelisted failure, one failure-detail log entry.
     """
     fetch = cellar_fetch if cellar_fetch is not None else fetch_xhtml
     fetch_rdf_ = cellar_fetch_rdf if cellar_fetch_rdf is not None else fetch_rdf
@@ -578,14 +730,11 @@ def resolve_via_cellar(
     try:
         metadata = extract_metadata(xhtml, rdf, celex)
     except Exception as exc:
-        # Broad on purpose, not narrowed to CellarParseError: an empty
-        # extracted title (no `eli-main-title` div, or an empty one) does not
-        # make extract_metadata *return* with title="" -- RegulatoryInstrument
-        # Metadata.title is `Field(min_length=1)`, so that case raises
-        # pydantic.ValidationError instead (verified directly, not assumed).
-        # Both failure shapes -- and any other extract_metadata failure --
-        # get the same stage="ingestion" classification, so a degenerate
-        # `_<celex>`-shaped short_name is never derived from either.
+        # Broad on purpose, not narrowed to CellarParseError: an empty extracted title does not
+        # make extract_metadata return title="" (RegulatoryInstrumentMetadata.title has
+        # min_length=1), it raises pydantic.ValidationError. Every extract_metadata failure gets
+        # the same stage="ingestion" classification, so a degenerate `_<celex>`-shaped
+        # short_name is never derived.
         raise _classify_stage_failure("ingestion", exc) from exc
 
     resolved_short_name = (
@@ -604,7 +753,7 @@ def normalize_short_name(short_name: str) -> str:
     the ingest stage, the graph openers) sees one spelling. Deliberately NOT
     applied in the request validators, in ``ingestion/pipeline.py`` or in the
     graph-name builders: restore and the change-check sweep share those, and the
-    graph names stay lowercase by user decision (issue #193, DECISIONS.md T1).
+    graph names stay lowercase.
 
     Args:
         short_name: The caller-supplied short name, any case.
@@ -627,7 +776,7 @@ def resolve_ingestion_entry(
     """Resolve one ingestion request's identity -- the single shared entry-point function.
 
     Called by both ``routes.create_ingestion`` and the ``ingest_regulation`` MCP
-    tool (issue #193, AC-BI-014), so both entry points reach identical outcomes.
+    tool, so both entry points reach identical outcomes.
     Identity is decided by the live graph and Cellar -- never by the curated
     catalog. Checks run in order, graph first so a request that is doomed by the
     graph never reaches the network:
@@ -644,15 +793,18 @@ def resolve_ingestion_entry(
 
     Args:
         celex: The request's CELEX identifier.
-        short_name: The request's caller-supplied ``short_name``.
+        short_name: The request's caller-supplied ``short_name``, any case; upper-cased before
+            use.
         single_tenant_graph: The already-opened single-tenant graph, read by the
-            collision check.
-        emitter: Optional explicit log emitter.
-        cellar_fetch: Optional Cellar/ELI XHTML fetch callable (test seam).
-        cellar_fetch_rdf: Optional Cellar/ELI RDF/XML fetch callable (test seam).
+            collision checks.
+        emitter: Log emitter for the identity-check and failure entries; ``None`` uses the
+            default.
+        cellar_fetch: Cellar/ELI XHTML fetch callable (test seam); ``None`` uses the real fetch.
+        cellar_fetch_rdf: Cellar/ELI RDF/XML fetch callable (test seam); ``None`` uses the real
+            fetch.
 
     Returns:
-        The :class:`CellarResolution` for ``celex`` under ``short_name``.
+        The ``CellarResolution`` for ``celex`` under the normalized ``short_name``.
 
     Raises:
         CelexAlreadyIngestedError: ``celex`` is already in the graph.
@@ -661,6 +813,10 @@ def resolve_ingestion_entry(
         CatalogIdentifierNotFoundError: ``celex`` does not exist on Cellar/ELI.
         PipelineStageError: The CELEX check, the collision check or the Cellar
             resolution failed.
+
+    Side Effects:
+        Reads the single-tenant graph, makes the Cellar/ELI requests of
+        :func:`resolve_via_cellar` and emits one identity-check log entry per outcome.
     """
     short_name = normalize_short_name(short_name)
     _reject_if_celex_already_ingested(
@@ -688,7 +844,7 @@ def _reject_if_celex_already_ingested(
 ) -> None:
     """Raise :class:`CelexAlreadyIngestedError` if the graph already holds ``celex``.
 
-    Queries only the passed single-tenant handle (AC-BI-006), inside
+    Queries only the passed single-tenant handle, inside
     :func:`_run_stage` so a genuine I/O failure fails closed as a
     ``celex_check`` :class:`PipelineStageError` rather than being read as "not
     ingested". The thunk only reads; the rejection is raised here, in the
@@ -766,7 +922,7 @@ def _emit_identity_check(
     emitter: LogEmitter | None,
     extra: dict[str, object] | None = None,
 ) -> None:
-    """Emit one ``ingestion_identity_check`` log entry (PLAN D7).
+    """Emit one ``ingestion_identity_check`` log entry.
 
     Carries only the CELEX, the ``short_name`` and the conflicting CELEX -- never
     raw Cypher, exception text, or another tenant's data. The run id comes from
@@ -794,7 +950,13 @@ def _emit_identity_check(
 
 @dataclass(frozen=True, slots=True)
 class StageReport:
-    """One completed pipeline stage and a small integer summary of what it produced."""
+    """One completed pipeline stage and a small integer summary of what it produced.
+
+    Attributes:
+        stage: Stage name: ``"ingestion"``, ``"extraction"``, ``"derivation"`` or ``"merge"``
+            (``"ingestion"`` and ``"merge"`` for the internal pipeline).
+        summary: Counter name to integer count, as produced by the stage's summary function.
+    """
 
     stage: str
     summary: dict[str, int]
@@ -804,10 +966,13 @@ class StageReport:
 class IngestionOutcome:
     """The result of a full ingestion pipeline run.
 
-    ``outcome`` defaults to ``"fresh"`` (a run that executed its stages).
-    ``"already_ingested"`` (issue #135, catalog path only) means the
-    pre-flight check found an existing fully-merged ``RegulatoryInstrument``
-    and skipped every stage -- ``stages`` is empty in that case.
+    Attributes:
+        regulatory_instrument_id: The ``{short_name}-{version}`` id the run ingested under.
+        source: ``"catalog"`` for a CELEX run, ``"internal"`` for an internal-document run.
+        stages: The completed stages in run order; empty for ``"already_ingested"``.
+        outcome: ``"fresh"`` (the default) for a run that executed its stages;
+            ``"already_ingested"`` (catalog path only) when the pre-flight check found an
+            existing fully-merged ``RegulatoryInstrument`` and skipped every stage.
     """
 
     regulatory_instrument_id: str
@@ -844,16 +1009,11 @@ def _derivation_summary(result: DerivationResult) -> dict[str, int]:
 def _merge_summary(result: MergeResult) -> dict[str, int]:
     """Summarise a ``MergeResult`` as small integer counts.
 
-    ``pending_reviews`` (issue #35, Slice 5, AC-BI-010) is a NEW, additive key
-    alongside the pre-existing ``near_misses`` -- ``StageOutcome.summary`` is
-    ``dict[str, int]``, and ``ps-cli``'s own summary parsing already iterates
-    ``summary.items()`` generically, so this is backward-compatible by
-    construction (CHANGES.md C2 / PLAN.md §5).
-
-    ``new_obligations``, ``new_capabilities`` and ``matched_capabilities`` (issue #195, Slice 6)
-    are the net-new / matched facts ``company_merge`` computed (never approximations): the
-    ingestion audit rows carry these three counts. ``obligations`` /
-    ``canonical_capabilities`` stay the total processed.
+    ``new_obligations``, ``new_capabilities`` and ``matched_capabilities`` are the net-new and
+    matched facts ``company_merge`` computed (never approximations); the ingestion audit rows
+    carry these three counts. ``obligations`` and ``canonical_capabilities`` are the totals
+    processed, ``pending_reviews`` counts the near-miss reviews opened. Consumers iterate
+    the mapping generically, so a new key is additive.
     """
     return {
         "obligations": len(result.obligation_ids),
@@ -889,21 +1049,21 @@ def _emit_run(
     failing_stage: str | None = None,
     audit_facts: dict[str, object] | None = None,
 ) -> None:
-    """Emit one ``ingestion_run`` log entry (AC-BI-010 / AC-BI-011).
+    """Emit one ``ingestion_run`` log entry.
 
     Args:
         outcome: ``"started"`` / ``"succeeded"`` / ``"failed"``.
         run_id: The request-scoped run id, carried on every line.
-        source_identifier: The catalog CELEX, or (issue #91) the fixed
+        source_identifier: The catalog CELEX, or the fixed
             ``_INTERNAL_INGESTION_SOURCE_IDENTIFIER`` literal for the
-            internal-document path -- content-transport carries no path or
-            other stable identifier known before parsing.
+            internal-document path, whose content carries no stable identifier known before
+            parsing.
         caller: The requesting client host (or ``"unknown"``).
         emitter: Optional explicit emitter; otherwise the process default.
         duration_ms: Wall time for the run so far (omitted on ``"started"``).
         failing_stage: The stage that raised, on the ``"failed"`` entry only.
-        audit_facts: The ``trigger`` and the three counts the audit rows carry (issue #195),
-            on the ``"succeeded"`` entry of an audited run only, so log and audit agree.
+        audit_facts: The ``trigger`` and the three counts the audit rows carry, on the
+            ``"succeeded"`` entry of an audited run only, so log and audit agree.
     """
     extra: dict[str, object] = {"source_identifier": source_identifier, "caller": caller}
     if audit_facts is not None:
@@ -921,7 +1081,7 @@ def _emit_run(
     )
 
 
-# --- pre-flight already-merged check (issue #135) ---
+# --- pre-flight already-merged check ---
 
 _MERGED_INSTRUMENT_EXISTS_QUERY = (
     "MATCH (n:RegulatoryInstrument) WHERE toUpper(n.id) = $id RETURN n.id LIMIT 1"
@@ -933,18 +1093,16 @@ def _is_already_merged(single_tenant_graph: GraphHandle, regulatory_instrument_i
 
     Company Merge's ``persist_canonical_nodes`` (``company_merge/graph_writer.py``)
     writes a ``RegulatoryInstrument`` node into the single-tenant graph
-    unconditionally at the end of every merge run -- its existence there is
-    therefore a reliable proxy for "Domain Mapper and Company Merge already
-    completed for this exact identifier" (issue #135, AC-BI-001), mirroring
-    ``api.export_orchestration``'s own ``_EXISTENCE_QUERY`` shape, pointed at
-    the single-tenant graph instead of a ``{short}_baseline`` graph.
+    unconditionally at the end of every merge run, so its existence there is
+    a reliable proxy for "Domain Mapper and Company Merge already
+    completed for this exact identifier".
 
     Args:
         single_tenant_graph: The already-opened single-tenant graph.
         regulatory_instrument_id: The ``{short_name}-{version}`` id the
             catalog pipeline would ingest under. Matched case-insensitively
             (``toUpper(n.id) = $id``), so a legacy lowercase celex-less node is
-            found for its upper-case successor id (issue #193, M2).
+            found for its upper-case successor id.
 
     Returns:
         ``True`` if a matching ``RegulatoryInstrument`` node exists.
@@ -956,17 +1114,15 @@ def _is_already_merged(single_tenant_graph: GraphHandle, regulatory_instrument_i
     return len(rows) > 0
 
 
-# --- cross-instrument short_name collision check (issue #146, AC-BI-006) ---
+# --- cross-instrument short_name collision check ---
 #
 # Two independent `single_tenant` graph opens are accepted for this check plus the
 # `_is_already_merged` preflight above: `FalkorDB.__init__` is not lazy -- it calls
 # `Is_Cluster(conn)`, which issues a real `conn.info(section="server")` round-trip
-# to the FalkorDB/Redis backend. The accepted cost is one extra network round-trip
-# (single-digit milliseconds), negligible against this pipeline's own ~613s
-# end-to-end SLA (`docs/architecture/ps-service-container-architecture.md:734`).
-# Threading a single handle through both call sites to avoid this cost is not
-# worth it -- it would require changing `run_catalog_ingestion_pipeline`'s public
-# signature for no measurable benefit.
+# to the FalkorDB/Redis backend. The cost is one extra network round-trip
+# (single-digit milliseconds), negligible against the pipeline's end-to-end run time.
+# Threading a single handle through both call sites would change
+# `run_catalog_ingestion_pipeline`'s public signature for no measurable benefit.
 
 _SHORT_NAME_COLLISION_QUERY = (
     "MATCH (n:RegulatoryInstrument) WHERE toUpper(n.id) STARTS WITH $prefix "
@@ -978,6 +1134,8 @@ def check_short_name_collision(
     single_tenant_graph: GraphHandle, *, celex: str, short_name: str
 ) -> str | None:
     """Return the conflicting CELEX if `short_name` is already claimed by a different one.
+
+    Used before ingestion so two regulations never share one graph naming prefix.
 
     `STARTS WITH $prefix` is a cheap DB-side candidate filter, not the final answer: a
     differently-named short_name that happens to be a hyphenated extension of this one
@@ -993,11 +1151,18 @@ def check_short_name_collision(
         short_name: The caller-supplied short name to check. Compared
             case-insensitively: it is upper-cased here (idempotent for an
             already-normalized value), as is each stored id (``toUpper``), so
-            ``cra`` collides with a recorded ``CRA-1.0`` (issue #193, AC-BI-004).
+            ``cra`` collides with a recorded ``CRA-1.0``.
 
     Returns:
         The conflicting CELEX, or ``None`` if no other-CELEX instrument is
         recorded under this short name, ignoring case.
+
+    Raises:
+        Exception: The graph query failed (database unreachable); the error type belongs to the
+            database client and propagates unchanged.
+
+    Side Effects:
+        One read query on the single-tenant graph.
     """
     normalized = normalize_short_name(short_name)
     result = single_tenant_graph.query(
@@ -1018,7 +1183,7 @@ def check_short_name_collision(
 _STAGE_ORDER = ("ingestion", "extraction", "derivation", "merge")
 """The stage names, in run order. Mirrors ``change_monitor.models.PIPELINE_STAGES``
 (duplicated, not imported: ``api`` must not import ``ps_service.change_monitor`` at
-module level, M6; a test pins the two equal)."""
+module level; a test pins the two equal)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1046,9 +1211,9 @@ def _record_catalog_run_audit(
 ) -> str:
     """Record the system audit row of one catalog run's graph write and return its id.
 
-    The id anchors the native group in the graph log (issue #208). Every external path uses this
-    one helper, so the rows the entry points already write (the sync opening row, the run
-    store's rows) are untouched; ``resource_id`` is the run id, which joins them.
+    The id anchors the native group in the graph log. Every external path uses this one helper;
+    ``resource_id`` is the run id, which joins this row to the rows the entry points write (the
+    synchronous opening row, the run store's rows).
 
     Raises:
         AuditTrailUnavailableError: The row could not be written (HTTP 503); the ingest stage
@@ -1073,7 +1238,7 @@ class _LazyWriteContext:
     """The gateway and the one system audit event id of a run, resolved on first use.
 
     Ingestion, extraction, derivation and merge all write a graph under the same audit event; the
-    first of them to run resolves the gateway and records the run's one row (AC-BI-007).
+    first of them to run resolves the gateway and records the run's one row.
     """
 
     def __init__(
@@ -1124,9 +1289,9 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
     """Run ingest -> extract -> derive -> merge, aborting at the first failure.
 
     Each stage after the first consumes the ``regulatory_instrument_id`` the
-    ingest stage returned (AC-BI-003). The first :func:`_run_stage` to raise a
-    ``PipelineStageError`` aborts the sequence -- later stages never run
-    (AC-BI-008). :func:`~ps_service.api.run_status.set_stage` is called for each
+    ingest stage returned. The first :func:`_run_stage` to raise a
+    ``PipelineStageError`` aborts the sequence -- later stages never run.
+    :func:`~ps_service.api.run_status.set_stage` is called for each
     stage name immediately *before* that stage runs, so a concurrent poller of
     ``run_status`` sees "currently executing", never "just completed" -- the
     caller (:func:`run_catalog_ingestion_pipeline`) clears the entry once the
@@ -1139,10 +1304,9 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
         graphs: The three already-opened graph handles for this run.
         dependencies: The injected stage functions and adapter factories.
         emitter: Optional explicit log emitter; otherwise the process default.
-        ingestion_adapter: A pre-built adapter to use for the ingest stage
-            (AC-BI-006 -- the fetch-once Cellar-fallback adapter); when
-            ``None``, ``dependencies.adapters.ingestion()`` builds the default
-            one, exactly as the curated path does today.
+        ingestion_adapter: A pre-built adapter to use for the ingest stage (the fetch-once
+            Cellar-fallback adapter); when ``None``, ``dependencies.adapters.ingestion()``
+            builds the default one, as the curated path does.
         stages_to_run: The stage names to run (the amendment
             re-ingest resumes at the stages a new version is missing); ``None``
             runs all four. Skipped stages are neither run, ``set_stage``d nor
@@ -1151,7 +1315,7 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
         on_stage_complete: Called with the stage name after each run stage
             returns (never for a stage that raised), before the next stage starts.
         graph_writes: The Graph Write Gateway and system audit recorder the ingest, extract and
-            derive stages write their graphs through (issues #208, #209); required when any of
+            derive stages write their graphs through; required when any of
             ``ingestion``, ``extraction`` or ``derivation`` runs. One system audit row is recorded
             per run, before the first of those stages, and its id is shared by all of them.
         trigger: The audited entry point that started the run, recorded on the system audit row
@@ -1286,32 +1450,23 @@ def run_catalog_ingestion_pipeline(
 ) -> IngestionOutcome:
     """Run the external ingestion pipeline for one catalog regulation.
 
-    Sequences Ingestion -> Domain Mapper (extract, derive) -> Company Merge
-    in-process (AC-BI-002/003). Before any stage runs, a pre-flight check
-    (issue #135, AC-BI-001) looks for an already-fully-merged
-    ``RegulatoryInstrument`` for this exact ``{short_name}-{version}`` id in
-    the single-tenant graph (:func:`_is_already_merged`); if found, Domain
-    Mapper and Company Merge never run and this returns immediately with
-    ``outcome="already_ingested"`` and an empty ``stages`` tuple (AC-BI-002/
-    003) -- otherwise the pipeline runs exactly as before (AC-BI-004), and
-    the check itself failing (e.g. the graph is unreachable) fails closed into
-    the same ``PipelineStageError`` path a stage failure would (AC-BI-006),
-    never silently treated as already ingested. Re-running for the same
-    identifier when no merged instrument exists yet converges on the
-    exact-canonical-identity nodes, but LLM-extraction non-determinism
-    (issue #34) can still fragment a reworded Capability across re-ingestions
-    until #34 is addressed. The whole run shares one ``run_id`` -- it is
-    passed explicitly into the ingest stage (the only stage fn that self-binds a
-    fresh run context) and carried on the ``ingestion_run`` start/end log entries
-    (AC-BI-010/011). A stage failure aborts the sequence and surfaces as a
-    ``PipelineStageError`` naming the failing stage (AC-BI-008), with no
-    filesystem path / host / URL in its reason (AC-BI-009). The ``run_status``
-    entry :func:`_execute_catalog_stages` maintains for this ``run_id`` is
-    cleared unconditionally once the run ends -- success or failure -- via a
-    ``finally`` block, so the registry never grows unbounded across a long
-    server uptime (AC-BI-008; see ``ps_service.api.run_status``'s module
-    docstring for the accepted last-writer-wins tradeoff on a colliding
-    ``run_id``).
+    Sequences Ingestion -> Domain Mapper (extract, derive) -> Company Merge in-process. Before
+    any stage runs, a pre-flight check looks in the single-tenant graph for an
+    already-fully-merged ``RegulatoryInstrument`` with this exact ``{short_name}-{version}`` id;
+    if found, no stage runs and the call returns at once with ``outcome="already_ingested"`` and
+    an empty ``stages`` tuple. If the check itself fails (for example the graph is unreachable)
+    it fails closed as a ``PipelineStageError``, never as "already ingested".
+
+    Business Rules:
+        Re-running for the same identifier when no merged instrument exists converges on the
+        exact-canonical-identity nodes, but LLM extraction is not deterministic, so a reworded
+        Capability can still fragment across re-ingestions. The whole run shares one ``run_id``:
+        it is passed into the ingest stage (the only stage that binds its own run context) and
+        carried on the ``ingestion_run`` start/end log entries. A stage failure aborts the
+        sequence as a ``PipelineStageError`` naming the failing stage, with no path, host or URL
+        in its reason. The ``run_status`` entry for this ``run_id`` is cleared unconditionally
+        when the run ends, so the registry never grows across a long server uptime (a colliding
+        ``run_id`` is last-writer-wins).
 
     Args:
         entry: The curated catalog entry (CELEX, title, short name, version).
@@ -1322,14 +1477,12 @@ def run_catalog_ingestion_pipeline(
             factories (``build_default_pipeline_dependencies`` in production; a
             fake in fast tests).
         emitter: Optional explicit log emitter; otherwise the process default.
-        ingestion_adapter: A pre-built adapter to use for the ingest stage
-            (AC-BI-006 -- the fetch-once Cellar-fallback adapter from
-            :func:`resolve_via_cellar`); when ``None``, the dependency
-            bundle's default factory builds one, exactly as the curated path
-            does today.
-        trigger: The audited entry point that started this run (issue #195); when given, the
-            ``succeeded`` log line also carries it and the merge-stage counts. The audit rows
-            themselves are written by the caller, not here.
+        ingestion_adapter: A pre-built adapter for the ingest stage (the fetch-once
+            Cellar-fallback adapter from :func:`resolve_via_cellar`); when ``None``, the
+            dependency bundle's default factory builds one, as the curated path does.
+        trigger: The audited entry point that started this run; when given, the ``succeeded``
+            log line also carries it and the merge-stage counts. The audit rows themselves are
+            written by the caller, not here.
 
     Returns:
         An :class:`IngestionOutcome` with ``source="catalog"``, one
@@ -1338,10 +1491,18 @@ def run_catalog_ingestion_pipeline(
         ``outcome="already_ingested"`` with no stage reports at all.
 
     Raises:
-        IngestionConfigIncompleteError: If the configuration is missing an LLM
-            model / embed model / similarity threshold (HTTP 503).
-        PipelineStageError: If any stage -- or the pre-flight check itself --
-            raises (HTTP 502).
+        IngestionConfigIncompleteError: The configuration is missing an LLM model, embed model
+            or similarity threshold (HTTP 503); nothing was opened.
+        GraphWriteUnavailableError: The process has no graph write gateway installed (HTTP 503).
+        AuditTrailUnavailableError: The run's system audit row could not be written (HTTP 503);
+            nothing was written to any graph.
+        PipelineStageError: Any stage, or the pre-flight check itself, raised (HTTP 502).
+
+    Side Effects:
+        Opens the native, baseline and single-tenant graphs; reads and writes graphs through the
+        gateway by way of the stages; records one system audit row (before the first writing
+        stage); emits ``ingestion_run`` start/end log entries; sets and finally clears the
+        ``run_status`` stage for ``run_id``.
     """
     resolved = _require_ingestion_config(config)
     regulatory_instrument_id = f"{entry.short_name}-{entry.version}"
@@ -1417,7 +1578,7 @@ def run_catalog_ingestion_pipeline(
     return IngestionOutcome(regulatory_instrument_id=rid, source="catalog", stages=reports)
 
 
-# --- audited synchronous ingestion (issue #195) ---
+# --- audited synchronous ingestion ---
 
 
 def _outcome_as_result(outcome: IngestionOutcome) -> dict[str, object]:
@@ -1438,7 +1599,7 @@ def _record_terminal_row(
     reason_code: IngestionReasonCode | None,
     emitter: LogEmitter | None,
 ) -> None:
-    """Write the run's one terminal `ingestion_run.complete` row; BEST-EFFORT (AC-BI-015)."""
+    """Write the run's one terminal `ingestion_run.complete` row; best-effort."""
     entry = completion_audit_entry(
         status="failed" if reason_code is not None else "succeeded",
         celex=celex,
@@ -1467,24 +1628,25 @@ def run_audited_catalog_ingestion(
     audit: AuditContext,
     emitter: LogEmitter | None = None,
 ) -> IngestionOutcome:
-    """Resolve and run one synchronous catalog ingestion between its two audit rows (issue #195).
+    """Resolve and run one synchronous catalog ingestion between its two audit rows.
 
     The shared orchestration of ``POST /ingestions`` and the ``ingest_regulation`` MCP tool.
     An ``ingestion_run.submit`` opening row (``applied``, ``status=started``,
-    ``trigger='sync_ingest'``) is written FIRST, before the identity check (D-A), and is
-    FAIL-CLOSED: if it cannot be written nothing runs and ``AuditTrailUnavailableError``
-    propagates (AC-BI-011). It is followed by identity resolution
-    (:func:`resolve_ingestion_entry`) and the pipeline
-    (:func:`run_catalog_ingestion_pipeline`), then one terminal ``ingestion_run.complete`` row
-    carrying the instrument id and the merge-stage counts. ``resource_id`` of both rows is
-    ``run_id``. The terminal row is BEST-EFFORT (AC-BI-015: a failed write is logged with the run
-    id and never changes the outcome or the raised error). Outcomes: a fresh or pre-flight
-    ``already_ingested`` run -> ``succeeded``; ``CelexAlreadyIngestedError`` -> ``succeeded`` with
-    ``outcome='already_ingested'`` and zero counts, then re-raised; any other exception -> a
-    ``failed`` row with an enumerated ``reason_code`` (no message, trace or path; AC-BI-010), then
-    re-raised unchanged. The unaudited pipeline function stays public for the async worker, whose
-    rows are
-    written by the run store.
+    ``trigger='sync_ingest'``) is written FIRST, before the identity check, and is
+    fail-closed: if it cannot be written nothing runs and ``AuditTrailUnavailableError``
+    propagates. It is followed by identity resolution (:func:`resolve_ingestion_entry`) and the
+    pipeline (:func:`run_catalog_ingestion_pipeline`), then one terminal
+    ``ingestion_run.complete`` row carrying the instrument id and the merge-stage counts.
+    ``resource_id`` of both rows is ``run_id``.
+
+    Business Rules:
+        The terminal row is best-effort: a failed write is logged with the run id and never
+        changes the outcome or the raised error. A fresh or pre-flight ``already_ingested`` run
+        records ``succeeded``; ``CelexAlreadyIngestedError`` records ``succeeded`` with
+        ``outcome='already_ingested'`` and zero counts, then is re-raised; any other exception
+        records ``failed`` with an enumerated ``reason_code`` (no message, trace or path) and is
+        re-raised unchanged. The unaudited pipeline function stays public for the async worker,
+        whose rows are written by the run store.
 
     Args:
         celex: The request's CELEX identifier.
@@ -1500,12 +1662,19 @@ def run_audited_catalog_ingestion(
         The pipeline's :class:`IngestionOutcome`, unchanged.
 
     Raises:
-        AuditTrailUnavailableError: The opening row could not be written; nothing ran.
+        AuditTrailUnavailableError: The opening row could not be written, or the pipeline's
+            system audit row could not; nothing ran or nothing was written to a graph.
         CelexAlreadyIngestedError: ``celex`` is already in the graph.
         ShortNameCollisionError: ``short_name`` is claimed by a different CELEX.
         CatalogIdentifierNotFoundError: ``celex`` does not exist on Cellar/ELI.
         IngestionConfigIncompleteError: The pipeline configuration is incomplete.
+        GraphWriteUnavailableError: The process has no graph write gateway.
         PipelineStageError: A stage, or the identity/pre-flight reads, failed.
+
+    Side Effects:
+        Writes the opening and terminal audit rows; everything
+        :func:`run_catalog_ingestion_pipeline` and :func:`resolve_ingestion_entry` do (graph
+        writes, Cellar/ELI requests, log entries).
     """
     submission = submission_audit_entry(
         celex=celex, short_name=normalize_short_name(short_name), trigger="sync_ingest"
@@ -1529,8 +1698,8 @@ def run_audited_catalog_ingestion(
                 emitter=emitter,
             )
         except CelexAlreadyIngestedError:
-            # AC-BI-006: the request was understood and the instrument is already there -- a
-            # succeeded run that changed nothing; the caller still gets the existing rejection.
+            # The request was understood and the instrument is already there: a succeeded run
+            # that changed nothing; the caller still gets the existing rejection.
             _record_terminal_row(
                 audit,
                 run_id,
@@ -1590,7 +1759,7 @@ def _resolve_and_run(
     )
 
 
-# --- internal-seed pipeline (issue #54, S2) ---
+# --- internal-seed pipeline ---
 
 
 def _internal_ingestion_summary(result: InternalIngestResult) -> dict[str, int]:
@@ -1612,8 +1781,7 @@ def _internal_short_name(regulatory_instrument_id: str) -> str:
     """``{SHORT}`` from a ``{SHORT}-{VERSION}`` internal RegulatoryInstrument id.
 
     Mirrors the intake format's own ``{SHORT}-{VERSION}`` natural-key
-    pattern (``internal-regulation-intake-format.md``, ``ps-domain-
-    concepts.md``); ``native_graph_name``/``baseline_graph_name`` lowercase
+    pattern; ``native_graph_name``/``baseline_graph_name`` lowercase
     it themselves, so no case handling is needed here. Splits on the
     *last* ``-`` so a short name that itself contains a hyphen (unusual but
     not forbidden) is not truncated early -- only the version segment is
@@ -1643,9 +1811,8 @@ def _read_internal_seed_and_short_name(
 ) -> tuple[InternalRegulationSeed, str]:
     """Parse ``document`` and derive the graph ``short_name`` for it.
 
-    Runs before any pipeline stage and before any graph is opened (AC-BI-006's
-    "no I/O until validated" precedent, applied to the internal path): both a
-    schema/shape violation (AC-BI-002/003) from ``adapter.parse_seed`` and a
+    Runs before any pipeline stage and before any graph is opened (no I/O until validated):
+    both a schema/shape violation from ``adapter.parse_seed`` and a
     missing/duplicate ``RegulatoryInstrument`` node from ``find_regulatory_instrument``
     are translated to ``InternalSeedValidationError`` (422) here, distinct from a
     later ``PipelineStageError`` (502) a genuine stage failure would raise.
@@ -1659,9 +1826,9 @@ def _read_internal_seed_and_short_name(
 
 
 def _require_owner_for_policies(seed: InternalRegulationSeed, owner: Owner | None) -> None:
-    """Refuse a seed that carries a Policy when the caller has no verified identity (issue #227).
+    """Refuse a seed that carries a Policy when the caller has no verified identity.
 
-    An imported Policy tree is created ``draft`` and owned by the ingesting caller (AC-BI-001);
+    An imported Policy tree is created ``draft`` and owned by the ingesting caller;
     without an owner the draft would be unreachable by the propose/edit flow. Runs before any
     audit row, stage, or graph write. A seed with no Policy is not gated.
 
@@ -1673,7 +1840,7 @@ def _require_owner_for_policies(seed: InternalRegulationSeed, owner: Owner | Non
 
 
 def _require_graph_write_gateway(gateway: GroupSubmitter | None) -> GroupSubmitter:
-    """Return ``gateway``, or raise if the service has none (issue #208, fail closed).
+    """Return ``gateway``, or raise if the service has none (fail closed).
 
     Called before any graph is opened. There is deliberately no fallback to a direct FalkorDB
     write: a deployment without a gateway (no PS state Postgres) does not ingest.
@@ -1748,32 +1915,26 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
 ) -> IngestionOutcome:
     """Run the internal-seed ingestion pipeline for one already-parsed document.
 
-    Two stages in sequence (GH #76 removed issue #54 S3's ``governance_
-    derivation`` stage outright -- Policy/Standard/Control are now authored
-    directly in the submitted document and minted by ``internal_ingestion``
-    itself, so there is no separate governance-derivation stage any more):
-    ``internal_ingestion`` (read + validate + mint + persist, including the
-    now-authored Policy layer, S2) then ``merge`` (``merge_baseline_graph``,
-    S4 -- merges the internal baseline's spine and governance layer into the
-    single-tenant ``policy_system`` graph, the same stage function
-    :func:`run_catalog_ingestion_pipeline` already uses), each wrapped by
-    :func:`_run_stage` so a failure in either of them aborts the sequence and
-    names the failing stage (AC-BI-013). The seed is parsed (and translated to
-    :class:`InternalSeedValidationError` on a schema/shape violation)
-    *before* any graph is opened, since the ``{short}_baseline``/``{short}_
-    native`` graph names are derived from the seed's own
-    ``RegulatoryInstrument.id`` -- unlike the catalog path, the short name is
-    not known until the document has been parsed. This pipeline needs a
-    resolved LLM model and similarity threshold (``merge`` needs the Company
-    Merge similarity threshold; the LLM model is required for its embedding-
-    based dedup pass), so :func:`_require_ingestion_config` runs first,
-    before any graph is opened or any stage runs -- the same
-    HTTP-503-before-any-I/O guarantee the catalog pipeline already gives.
+    Two stages in sequence: ``internal_ingestion`` (read, validate, mint and persist, including
+    the Policy/Standard/Control layer authored in the document) then ``merge``
+    (``merge_baseline_graph``, which merges the internal baseline's spine and governance layer
+    into the single-tenant ``policy_system`` graph, the stage function the catalog pipeline also
+    uses). Each stage is wrapped by :func:`_run_stage`, so a failure in either aborts the
+    sequence and names the failing stage.
+
+    Business Rules:
+        The seed is parsed (an invalid document raises :class:`InternalSeedValidationError`)
+        before any graph is opened, because the ``{short}_baseline`` and ``{short}_native`` graph
+        names derive from the seed's own ``RegulatoryInstrument.id``; unlike the catalog path,
+        the short name is unknown until the document is parsed. The merge needs the Company
+        Merge similarity threshold and an embedding model, so :func:`_require_ingestion_config`
+        runs first, before any graph is opened or stage runs, giving the same
+        HTTP-503-before-any-I/O guarantee as the catalog pipeline. The gateway is required before
+        anything else is opened.
 
     Args:
-        document: The already-parsed intake document (the request body's
-            ``content`` field, issue #91) -- carried directly in the request,
-            never resolved against PS Service's own filesystem.
+        document: The already-parsed intake document (the request body's ``content`` field),
+            carried in the request and never resolved against the service's filesystem.
         config: The resolved service configuration.
         run_id: The request-scoped run id.
         caller: The requesting client host, or ``"unknown"``.
@@ -1782,16 +1943,16 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
             production; a fake in fast tests).
         gateway: The Graph Write Gateway the seed's graph writes are submitted through, or
             ``None`` if the service has none -- then the run fails closed, never writing a
-            graph directly (issue #208).
+            graph directly.
         system_audit: Records the system audit row (actor ``system:ingestion``) the run's graph
-            groups are logged under; the internal path has no principal of its own (issue #208).
+            groups are logged under; the internal path has no principal of its own.
         owner: The ingesting caller's verified ``(sub, iss)``, or ``None`` with no verified
-            identity; a seed carrying a Policy is refused without it (issue #227).
+            identity; a seed carrying a Policy is refused without it.
         emitter: Optional explicit log emitter; otherwise the process default.
 
     Returns:
         An :class:`IngestionOutcome` with ``source="internal"`` and two
-        :class:`StageReport` entries, in pipeline order (GH #76).
+        :class:`StageReport` entries (``internal_ingestion`` then ``merge``).
 
     Raises:
         IngestionConfigIncompleteError: If the configuration is missing an
@@ -1805,9 +1966,14 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
             shape validation (422), or its ``RegulatoryInstrument.id`` is
             not in the expected ``{SHORT}-{VERSION}`` shape.
         PipelineStageError: The ``internal_ingestion`` or ``merge`` stage
-            raises for any other reason -- e.g. a referential-integrity/
-            cardinality violation (AC-BI-011), or a FalkorDB write failure
-            (502).
+            raises for any other reason, for example a referential-integrity or
+            cardinality violation, or a FalkorDB write failure (502).
+
+    Side Effects:
+        Opens the baseline and single-tenant graphs, records one system audit row, writes the
+        native and baseline graphs and the single-tenant graph through ``gateway``, emits
+        ``ingestion_run`` start/end log entries, and sets and finally clears the ``run_status``
+        stage for ``run_id``.
     """
     resolved = _require_ingestion_config(config)
     submitter = _require_graph_write_gateway(gateway)
@@ -1893,7 +2059,7 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
     )
 
 
-# --- default wiring (M6 -- every pipeline import below is function-local) ---
+# --- default wiring: every pipeline import below is function-local ---
 
 
 def _open_native_graph(config: ServiceConfig, short_name: str) -> GraphHandle:
@@ -1948,7 +2114,7 @@ def _default_mapping_adapter() -> DomainMappingAdapter:
 
 
 def _default_internal_seed_adapter() -> InternalSeedAdapter:
-    """Build the default internal-seed Ingestion Adapter (issue #54, S2)."""
+    """Build the default internal-seed Ingestion Adapter."""
     from ps_service.ingestion.adapters.internal_seed.adapter import (  # noqa: PLC0415 -- mirrors _default_ingestion_adapter's own local-import style
         InternalSeedIngestionAdapter,
     )
@@ -1959,27 +2125,21 @@ def _default_internal_seed_adapter() -> InternalSeedAdapter:
 def build_default_graph_openers() -> GraphOpeners:
     """Wire the real shipped FalkorDB graph openers into a ``GraphOpeners``.
 
-    This is the *only* moving part :func:`build_default_pipeline_dependencies`
-    lets a caller substitute (M2/issue #163 Slice C) -- the true infra
-    boundary (three FalkorDB client constructions), never the real
-    ``PipelineStages``/``PipelineAdapters`` business logic sitting on top of
-    it. Extracted to its own top-level function (rather than inlined in
-    :func:`build_default_pipeline_dependencies`) specifically so it is its
-    own, independently addressable module-level name: a caller-side
-    ``monkeypatch.setattr("ps_service.api.ingestion_orchestration.
-    build_default_graph_openers", ...)`` substitutes graphs alone, while
-    ``build_default_pipeline_dependencies`` itself -- called with no
-    arguments -- still resolves this name at call time (ordinary Python
-    late-binding for a bare module-level call, the same mechanism
-    :func:`resolve_via_cellar`'s own ``None``-sentinel pattern relies on) and
-    so picks up the substitution automatically, with zero change to its own
-    call sites. ``docs/coding-standards/approved-mock-boundaries.yaml`` lists
-    this function itself as the approved boundary -- not
-    ``build_default_pipeline_dependencies``, which stays off that list since
-    it still bundles real business logic alongside this boundary.
+    This is the only part of :func:`build_default_pipeline_dependencies` a caller may
+    substitute: the true infrastructure boundary (three FalkorDB client constructions), never
+    the stage and adapter business logic above it. It is its own module-level name so that a
+    caller-side ``monkeypatch.setattr("ps_service.api.ingestion_orchestration.
+    build_default_graph_openers", ...)`` swaps the graphs alone; ``build_default_pipeline_
+    dependencies`` resolves this name at call time (ordinary late binding of a module-level
+    call) and picks the substitute up. ``docs/coding-standards/approved-mock-boundaries.yaml``
+    lists this function as the approved boundary.
 
     Returns:
-        A :class:`GraphOpeners` bound to the production FalkorDB openers.
+        A :class:`GraphOpeners` bound to the production FalkorDB openers. The openers connect
+        lazily: no connection is made until one is called.
+
+    Side Effects:
+        None; building the bundle opens no connection and cannot fail.
     """
     return GraphOpeners(
         native=_open_native_graph,
@@ -1996,31 +2156,28 @@ def build_default_pipeline_dependencies(
     Every stage entry point, adapter class, and FalkorDB client is imported
     **function-locally** (here and in the opener helpers) so that importing
     ``ps_service.main`` never transitively loads Domain Mapper or Company Merge at
-    module load (M6 / the Process Harness decoupling guarantee).
+    module load.
 
-    issue #163 Slice C narrowed this factory's own DI seam: ``graphs`` is the
-    *only* substitutable parameter. There is deliberately no ``stages``/
-    ``adapters`` parameter any more -- ``PipelineStages`` (
-    ``ingest_regulatory_instrument``/``extract_roles_and_requirements``/
-    ``derive_obligations_and_capabilities``/``merge_baseline_graph``) and
-    ``PipelineAdapters`` are always the real, shipped implementations,
-    unconditionally, with no way for a caller (test or otherwise) to
-    substitute fake business logic through this function's own signature.
-    Before this change, a caller could -- and 23 ``mcp_interface`` unit tests
-    did -- replace this factory's *entire* return value wholesale, faking
-    real Domain Mapper/Company Merge/Ingestion engine logic in the name of
-    substituting only the FalkorDB boundary beneath it (the "delegate, don't
-    reimplement" violation L2's MCP Interface Patterns section warns
-    against; see ``.orchestrator/tracker/issue-163/AUDIT_RAW/
-    mcp_interface_part1.md``'s DOMINANT FINDING). ``graphs=None`` (the
-    default -- every production caller, unchanged) builds the real
-    :class:`GraphOpeners` via :func:`build_default_graph_openers`; a caller
-    that passes ``graphs`` explicitly substitutes only that true infra
-    boundary.
+    Business Rules:
+        ``graphs`` is the only substitutable part. ``PipelineStages`` and ``PipelineAdapters`` are
+        always the real implementations, so a caller cannot replace Domain Mapper, Company Merge
+        or Ingestion engine logic through this signature; only the infrastructure boundary
+        beneath them is replaceable.
+
+    Args:
+        graphs: Graph openers to use instead of the real FalkorDB openers. ``None`` (the default,
+            used by every production caller) builds them with
+            :func:`build_default_graph_openers`.
 
     Returns:
         A :class:`PipelineDependencies` bound to the production stage functions,
-        graph openers, and adapter factories.
+        the given or default graph openers, and adapter factories.
+
+    Raises:
+        ImportError: A pipeline component cannot be imported.
+
+    Side Effects:
+        Imports the Ingestion, Domain Mapper and Company Merge components on first call.
     """
     from ps_service.company_merge import merge_baseline_graph  # noqa: PLC0415 -- function-local
     from ps_service.domain_mapper import (  # noqa: PLC0415 -- function-local

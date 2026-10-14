@@ -25,143 +25,124 @@ _DEFAULT_FALKORDB_HOST = "127.0.0.1"
 _DEFAULT_FALKORDB_PORT = 6379
 _DEFAULT_PASSKEY_SIGNING_POSTGRES_PORT = 5432
 _DEFAULT_STATE_POSTGRES_PORT = 5432
-_DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB (CHANGES.md OQ7)
+_DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB
 _DEFAULT_QUERY_TIMEOUT_MS = 5000
 _DEFAULT_QUERY_ROW_CAP = 1000
 _DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS = 3600
 _DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT = 1
-# D-DEFAULT-URL (issue #125, AC-BI-001): this repo's own public GitHub remote,
-# `raw.githubusercontent.com`-served, at the default branch's `curated-content/`
-# tree -- the same layout `ps_cli.catalog_repo` already reads locally
+# This repo's own public GitHub remote, `raw.githubusercontent.com`-served, at the default
+# branch's `curated-content/` tree -- the same layout `ps_cli.catalog_repo` reads locally
 # (`{base}/catalog.json`, `{base}/{instrument_id}/manifest.json` etc.).
 _DEFAULT_CURATED_SOURCE_BASE_URL = (
     "https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/curated-content"
 )
 
-# The fixed caller identity attached to every query answered while the
-# local-test bypass (issue #67, AC-BI-008) is active. Colocated with the
-# bypass flag since it is a fact *about* the bypass concept, not a variable.
+# The fixed caller identity attached to every query answered while the local-test bypass is
+# active. Colocated with the bypass flag since it is a fact *about* the bypass concept, not a
+# variable.
 LOCAL_TEST_PRINCIPAL_ID: Final = "local-test-bypass"
 
 
 class ServiceConfigurationError(Exception):
-    """`PS_SERVICE_*`/`PS_LOGGING_DIR` could not be resolved into a valid `ServiceConfig`."""
+    """An environment variable could not be resolved into a valid `ServiceConfig`.
+
+    Raised by `load_config()` when a `PS_*` variable holds a malformed, out-of-range, blank or
+    unrecognised value. The message names the variable and the offending value, except for
+    credential variables, whose values are never echoed. The process must not start; the
+    operator should correct the variable.
+    """
 
 
 @dataclass(frozen=True)
 class ServiceConfig:
     """Fully-resolved PS Service process configuration.
 
-    Immutable by design: once `load_config()` resolves the environment into
-    a `ServiceConfig`, nothing downstream may mutate it.
+    Immutable: once `load_config()` resolves the environment into a `ServiceConfig`, nothing
+    downstream may mutate it. Optional fields (`None` or an empty tuple) only record that the
+    environment did not set a value; whether a value is required is enforced by the consuming
+    component at its own call site, because `load_config()` runs in every process entrypoint
+    and in tests of components that need none of them. The credential fields
+    (`passkey_signing_postgres_password`, `state_postgres_password`, `authentik_api_token`,
+    `authentik_base_url`) are excluded from `repr()` so they are never logged by accident.
 
-    `llm_interface_model`/`llm_interface_embed_model` (from
-    `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL`) are `<provider>/<model>`
-    strings passed straight through to `litellm.completion`/`litellm.embedding` —
-    see `_parse_model_string` and CONTRIBUTING.md for format/examples.
-
-    `falkordb_host`/`falkordb_port` (from `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`)
-    are the connection knobs `ps_service.ingestion.falkordb_client.connect_from_config`
-    (Increment 12) uses to build the real FalkorDB connection — see
-    PLAN_REVIEWED.md §6.1/§6.4. No `falkordb_graph` field: `PS_FALKORDB_GRAPH`
-    already names a different thing (the query-surface's single company
-    graph name); Ingestion computes its own per-regulation graph name from
-    `short_name` via `native_graph_name`, not from config.
-
-    `company_merge_similarity_threshold` (from
-    `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is deliberately optional with no
-    default here: this field only records what the environment resolved to,
-    if anything. Whether a value is *required* is enforced at
-    `ps_service.company_merge.merge.merge_baseline_graph`'s own call site,
-    not here — `load_config()` is called unconditionally by every process
-    entrypoint (`main.py`) and by tests for components that have nothing to
-    do with Company Merge, so this layer must never fail closed on the env
-    var simply being absent. See PLAN_REVIEWED.md §8 (issue #16, B1's fix).
-
-    `auth_issuer`/`auth_audience`/`auth_cli_client_id`/`auth_scopes` (from
-    `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE`/`PS_AUTH_CLI_CLIENT_ID`/`PS_AUTH_SCOPES`,
-    issue #58) follow the exact same "record what the environment resolved
-    to, absence is not an error here" shape as
-    `company_merge_similarity_threshold` -- whether both `auth_issuer` and
-    `auth_audience` are *required* (fail-closed when the local-test bypass,
-    issue #67, is inactive) is enforced by
-    `ps_service.auth.startup.resolve_auth_context`'s own call site inside
-    `create_app`, not by `load_config()`.
-
-    `curated_source_base_url`/`curated_source_allow_insecure_http` (from
-    `PS_CURATEDSOURCE_URL`/`PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP`, issue #125)
-    configure where `GET /catalog` fetches the curated-content catalog
-    listing from at runtime (AC-BI-001/002/003). Both are validated through
-    the shared `ps_service.curated_source.source_url.validate_source_url`
-    guard at load time (AC-BI-008/010) -- the same function the runtime
-    `set-catalog-source` MCP tool (Slice 3) validates a new override URL
-    through, so both surfaces reject exactly the same inputs.
-
-    `passkey_signing_postgres_host`/`_port`/`_database`/`_user`/`_password`
-    (from `PS_PASSKEYSIGNING_POSTGRES_HOST`/`_PORT`/`_DATABASE`/`_USER`/
-    `_PASSWORD`, issue #131) configure `ps_service.passkey_signing.store.
-    connect_from_config`'s connection to PS Service's own, distinct
-    Postgres instance (PLAN.md §1.3) -- follows the exact same
-    "record what the environment resolved to, absence is not an error here"
-    optional shape as `falkordb_host`/`falkordb_port` and
-    `company_merge_similarity_threshold` above; whether these are *required*
-    is enforced at the Passkey Signing component's own call sites (its
-    migration runner / connection opener), not here. `_password` is the
-    first credential value `ServiceConfig` itself carries (every other
-    credential in this codebase -- LLM provider keys, FalkorDB access -- is
-    resolved independently, per `level2-python-instructions.md:48`); it is
-    excluded from this dataclass's `repr()` (`field(repr=False)` below) so
-    it is never accidentally logged via `repr(config)`/`%r`/an uncaught
-    exception's local-variable dump.
-
-    `state_postgres_host`/`_port`/`_database`/`_user`/`_password` (from
-    `PS_STATE_POSTGRES_HOST`/`_PORT`/`_DATABASE`/`_USER`/`_PASSWORD`, issue
-    #133) configure `ps_service.persistence.connect_from_config`'s
-    connection to PS Service's own, distinct, second Postgres instance
-    (PLAN.md §0.3/§1.3/§1.4) -- a deliberately independent copy of the
-    `passkey_signing_postgres_*` pattern above (own tables, own
-    migration-tracking table, own config block), never sharing fields or
-    tables with Passkey Signing even if an operator points both at the same
-    physical instance. Follows the same "record what the environment
-    resolved to, absence is not an error here" optional-at-load-time shape
-    -- but unlike `passkey_signing_postgres_*`, an unset
-    `state_postgres_host` is *not* treated as "not applicable" by
-    `ps_service.persistence.connect_from_config`'s own callers: every one of them fails closed
-    (raises `StatePostgresConnectionError`) when unset, since every
-    role-gated action must deny by default rather than silently fall open
-    (PLAN.md §0.11).
-
-    `authz_bootstrap_owner_subject`/`_issuer` (from
-    `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`,
-    issue #144) are the operator-configured expected first-owner identity
-    (matching `Principal.sub`/`Principal.iss`): only a principal whose
-    `(sub, iss)` matches these two values is ever granted `SYSTEM_OWNER` by
-    `ps_service.authz.store.PsycopgAccessRoleStore.bootstrap_first_owner`.
-    Follows the exact same "record what the environment resolved to, absence
-    is not an error here" optional-at-load-time shape as `auth_issuer`/
-    `auth_audience` above -- whether both are *required* (fail-closed when
-    the local-test bypass is inactive) is enforced by
-    `ps_service.authz.startup.require_bootstrap_owner_configured`'s own call
-    site inside `create_app`, not by `load_config()`.
-
-    `authentik_api_token`/`authentik_base_url` (from `PS_AUTHENTIK_API_TOKEN`/
-    `PS_AUTHENTIK_BASE_URL`, issue #140) are PS Service's own service
-    credential for calling Authentik's invitation-stage API on behalf of the
-    `invite_user` MCP tool -- never a caller-supplied token. Follows the same
-    "record what the environment resolved to, absence is not an error here"
-    optional-at-load-time shape as every other credential field above --
-    but unlike those, whether both are *required* is enforced
-    **unconditionally** (no local-test-bypass exemption) by
-    `ps_service.invitations.startup.require_authentik_credential_configured`'s
-    own call site inside `create_app`, immediately after
-    `require_bootstrap_owner_configured` (CHANGES.md #140 Row 2: AC-BI-003's
-    wording carries no bypass carve-out, unlike AC-BI-002's). `authentik_api_token`
-    is excluded from this dataclass's `repr()` (`field(repr=False)`,
-    AC-BI-004) for the same reason `passkey_signing_postgres_password` is.
-
-    `authentik_public_url` (from `PS_AUTHENTIK_PUBLIC_URL`, issue #165) is
-    optional: when set, it is the base of the invitee-facing enrollment link
-    only; the Authentik API call still uses `authentik_base_url`.
+    Attributes:
+        host: Interface the HTTP server binds to (`PS_SERVICE_HOST`); non-blank.
+        port: TCP port the HTTP server binds to (`PS_SERVICE_PORT`); 1 to 65535.
+        graceful_shutdown_seconds: Seconds the server waits for in-flight requests on shutdown
+            (`PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS`); non-negative.
+        logging_dir: Directory for log files (`PS_LOGGING_DIR`); `None` when unset.
+        llm_interface_model: `<provider>/<model>` string passed straight to LiteLLM's
+            completion call (`PS_LLMINTERFACE_MODEL`), for example `azure/gpt-5.4-mini`;
+            `None` when unset. Provider credentials are separate environment variables that
+            LiteLLM resolves itself and are never part of this config.
+        llm_interface_embed_model: Same shape, for LiteLLM's embedding call
+            (`PS_LLMINTERFACE_EMBED_MODEL`); `None` when unset.
+        falkordb_host: FalkorDB host (`PS_FALKORDB_HOST`); non-blank, default `127.0.0.1`.
+        falkordb_port: FalkorDB port (`PS_FALKORDB_PORT`); 1 to 65535, default 6379.
+        company_merge_similarity_threshold: Minimum embedding similarity for Company Merge to
+            treat two entities as the same (`PS_COMPANYMERGE_SIMILARITY_THRESHOLD`); greater
+            than 0.0 and at most 1.0, `None` when unset. Required only when a merge runs.
+        is_local_test_bypass_active: Whether authentication is bypassed and every request
+            runs as `LOCAL_TEST_PRINCIPAL_ID` (`PS_SERVICE_LOCAL_TEST_BYPASS`); default `False`.
+        max_request_body_bytes: Largest accepted request body, checked against the
+            `Content-Length` header before any body is read
+            (`PS_SERVICE_MAX_REQUEST_BODY_BYTES`); positive, default 100 MiB.
+        query_timeout_ms: Server-side time limit for one Cypher query in milliseconds
+            (`PS_QUERY_TIMEOUT_MS`); positive, default 5000.
+        query_row_cap: Maximum rows one Cypher query returns (`PS_QUERY_ROW_CAP`); positive,
+            default 1000.
+        graph_drift_check_interval_seconds: Pause between two passes of the graph write
+            gateway's drift check (`PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS`); zero turns
+            the periodic check off, default 3600.
+        ingestion_runs_max_in_flight: Most ingestion runs executing concurrently in this
+            process (`PS_INGESTIONRUNS_MAX_IN_FLIGHT`); positive, default 1.
+        auth_issuer: Expected token issuer (`PS_AUTH_ISSUER`); `None` when unset. With
+            `auth_audience`, required unless the local-test bypass is active.
+        auth_audience: Expected token audience (`PS_AUTH_AUDIENCE`); `None` when unset.
+        auth_cli_client_id: OAuth client id advertised to command-line clients
+            (`PS_AUTH_CLI_CLIENT_ID`); `None` when unset.
+        auth_scopes: Informational scope names advertised to clients (`PS_AUTH_SCOPES`, split
+            on commas and whitespace); never enforced as authorization. Empty when unset.
+        curated_source_base_url: Base URL the curated-content catalog is fetched from
+            (`PS_CURATEDSOURCE_URL`); validated by
+            `ps_service.curated_source.source_url.validate_source_url`, the same check the
+            runtime source override uses. Defaults to this project's public curated-content
+            tree.
+        curated_source_allow_insecure_http: Whether a plain `http` source URL is accepted
+            (`PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP`); default `False` (TLS required).
+        passkey_signing_postgres_host: Host of Passkey Signing's own Postgres instance
+            (`PS_PASSKEYSIGNING_POSTGRES_HOST`); `None` when unset, in which case Passkey
+            Signing treats its store as not applicable.
+        passkey_signing_postgres_port: Its port (`PS_PASSKEYSIGNING_POSTGRES_PORT`); 1 to
+            65535, default 5432.
+        passkey_signing_postgres_database: Its database name; `None` when unset.
+        passkey_signing_postgres_user: Its user name; `None` when unset.
+        passkey_signing_postgres_password: Its password; `None` when unset.
+        state_postgres_host: Host of the PS state Postgres instance (`PS_STATE_POSTGRES_HOST`),
+            separate from Passkey Signing's, with its own tables and migration tracking;
+            `None` when unset. Unlike Passkey Signing, an unset host is not "not applicable":
+            every state-store caller fails closed with `StatePostgresConnectionError`, so every
+            role-gated action denies by default.
+        state_postgres_port: Its port (`PS_STATE_POSTGRES_PORT`); 1 to 65535, default 5432.
+        state_postgres_database: Its database name; `None` when unset.
+        state_postgres_user: Its user name; `None` when unset.
+        state_postgres_password: Its password; `None` when unset.
+        authz_bootstrap_owner_subject: Token subject (`sub`) of the operator-designated first
+            system owner (`PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`); `None` when unset. Only a
+            principal whose `(sub, iss)` matches this and `authz_bootstrap_owner_issuer` is
+            granted the system-owner role by bootstrap. Required unless the local-test bypass
+            is active.
+        authz_bootstrap_owner_issuer: Token issuer (`iss`) of that principal
+            (`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`); `None` when unset.
+        authentik_api_token: PS Service's own credential for calling the identity provider's
+            invitation API on behalf of the invite-user tool (`PS_AUTHENTIK_API_TOKEN`);
+            never a caller-supplied token; `None` when unset. Required at startup together
+            with `authentik_base_url`, with no local-test-bypass exemption.
+        authentik_base_url: Base URL of the identity provider's API (`PS_AUTHENTIK_BASE_URL`);
+            `None` when unset.
+        authentik_public_url: Base of the invitee-facing enrollment link
+            (`PS_AUTHENTIK_PUBLIC_URL`); `None` when unset, in which case the API base URL is
+            used. The API call itself always uses `authentik_base_url`.
     """
 
     host: str
@@ -202,12 +183,10 @@ class ServiceConfig:
     authentik_public_url: str | None = None
 
 
-# The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
-# Merge) cannot run without, but that `load_config()` itself leaves optional
-# (see `ServiceConfig`'s docstring / B1's fix). Named once here so both the
-# request-time guard (`ingestion_orchestration._require_ingestion_config`)
-# and the Process Harness's `/ready` startup check (issue #16 follow-up) stay
-# in lockstep on exactly which three fields that is.
+# The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company Merge) cannot run
+# without, but that `load_config()` itself leaves optional (see `ServiceConfig`). Named once
+# here so both the request-time guard (`ingestion_orchestration._require_ingestion_config`)
+# and the `/ready` startup check stay in lockstep on exactly which three fields that is.
 INGESTION_REQUIRED_CONFIG_FIELDS = (
     "llm_interface_model",
     "llm_interface_embed_model",
@@ -216,7 +195,15 @@ INGESTION_REQUIRED_CONFIG_FIELDS = (
 
 
 def missing_ingestion_config_fields(config: ServiceConfig) -> list[str]:
-    """Return the `INGESTION_REQUIRED_CONFIG_FIELDS` names that are unset (`None`) on `config`."""
+    """List the ingestion-required config fields that are unset on `config`.
+
+    Args:
+        config: The resolved process configuration to inspect.
+
+    Returns:
+        The names from `INGESTION_REQUIRED_CONFIG_FIELDS` whose value on `config` is `None`, in
+        that tuple's order; empty when the ingestion pipeline's configuration is complete.
+    """
     return [name for name in INGESTION_REQUIRED_CONFIG_FIELDS if getattr(config, name) is None]
 
 
@@ -246,11 +233,10 @@ def _parse_host(raw: str) -> str:
 
 
 def _parse_graceful_shutdown_seconds(raw: str) -> int:
-    """Parse and validate `PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS`.
+    """Parse and validate `PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS` (a non-negative integer).
 
-    Not covered by a dedicated AC, but validated for consistency with the
-    host/port validation surface: a malformed value fails closed with the
-    same typed error rather than raising a raw `ValueError`.
+    A malformed value fails closed with the same typed error as the host/port checks rather
+    than raising a raw `ValueError`.
     """
     try:
         graceful_shutdown_seconds = int(raw)
@@ -305,12 +291,12 @@ def _parse_similarity_threshold(raw: str) -> float:
     Mirrors `_parse_falkordb_port`'s exact validation shape (parse, then
     range-check, raising `ServiceConfigurationError` naming the env var and
     the invalid value on either failure). Only ever called when the env var
-    is actually set — absence is not an error at this layer (B1's fix: the
+    is actually set — absence is not an error at this layer: the
     "fail closed on missing" requirement is enforced by
-    `merge_baseline_graph`'s own call site, not here — `load_config()` has
-    no way to know whether Company Merge is even going to be used in a given
-    process invocation, and every other unrelated caller of `load_config()`
-    must keep working with this env var unset).
+    `merge_baseline_graph`'s own call site, because `load_config()`
+    cannot know whether Company Merge will be used in a given
+    process, and every other caller of `load_config()`
+    must keep working with this env var unset.
     """
     try:
         threshold = float(raw)
@@ -329,7 +315,7 @@ def _parse_similarity_threshold(raw: str) -> float:
 def _parse_max_request_body_bytes(raw: str) -> int:
     """Parse and range-check `PS_SERVICE_MAX_REQUEST_BODY_BYTES`, failing closed on any bad value.
 
-    CHANGES.md OQ7: enforced by `_MaxBodySizeMiddleware` (`main.py`) against
+    The limit is enforced by `_MaxBodySizeMiddleware` (`main.py`) against
     the request's `Content-Length` header, before Starlette reads any body
     bytes. Mirrors `_parse_port`'s exact validation shape (parse, then
     range-check), but the message names this env var.
@@ -387,7 +373,7 @@ def _parse_query_row_cap(raw: str) -> int:
 def _parse_graph_drift_check_interval_seconds(raw: str) -> int:
     """Parse `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS`, failing closed on any bad value.
 
-    The pause between two passes of the Graph Write Gateway's drift check (issue #215). Zero is
+    The pause between two passes of the Graph Write Gateway's drift check. Zero is
     valid and turns the periodic check off; a negative or non-integer value is refused. Never
     required: the default is one hour.
     """
@@ -425,10 +411,10 @@ def _parse_ingestion_runs_max_in_flight(raw: str) -> int:
 def _parse_local_test_bypass(raw: str | None) -> bool:
     """Parse `PS_SERVICE_LOCAL_TEST_BYPASS`, failing closed on any unrecognized value.
 
-    Unset or empty/whitespace-only (AC-BI-001) resolves to inactive (`False`)
+    Unset or empty/whitespace-only resolves to inactive (`False`)
     rather than raising — an operator who never set the var, or set it to
     `""`, gets silence, not a crash. Only `"true"`/`"false"` (case-insensitive)
-    are recognized; anything else fails config loading closed (AC-BI-006)
+    are recognized; anything else fails config loading closed
     rather than silently defaulting, mirroring `_parse_port`'s message shape.
     """
     if raw is None or not raw.strip():
@@ -446,9 +432,9 @@ def _parse_curated_source_allow_insecure_http(raw: str | None) -> bool:
     """Parse `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP`, failing closed on any unrecognized value.
 
     Mirrors `_parse_local_test_bypass`'s exact shape: unset or empty/
-    whitespace-only resolves to `False` (TLS required by default, AC-BI-010)
+    whitespace-only resolves to `False` (TLS required by default)
     rather than raising. Only `"true"`/`"false"` (case-insensitive) are
-    recognized; anything else fails config loading closed (AC-BI-008/010).
+    recognized; anything else fails config loading closed.
     """
     if raw is None or not raw.strip():
         return False
@@ -462,14 +448,14 @@ def _parse_curated_source_allow_insecure_http(raw: str | None) -> bool:
 
 
 def _parse_curated_source_base_url(raw: str, *, allow_insecure_http: bool) -> str:
-    """Validate `PS_CURATEDSOURCE_URL` via the shared http(s)/TLS guard (D-VALIDATION).
+    """Validate `PS_CURATEDSOURCE_URL` via the shared http(s)/TLS guard.
 
     Delegates to `curated_source.source_url.validate_source_url` -- the same
-    function the runtime `set-catalog-source` MCP tool (Slice 3) validates a
+    function the runtime `set-catalog-source` MCP tool validates a
     new override URL through -- and translates its
     `CuratedSourceConfigurationError` into `ServiceConfigurationError` so
     this layer's failure type stays uniform with every other `load_config()`
-    validation failure (AC-BI-001/008/010).
+    validation failure.
     """
     try:
         return validate_source_url(raw, allow_insecure_http=allow_insecure_http)
@@ -608,7 +594,7 @@ def _parse_authentik_api_token(raw: str) -> str:
     Mirrors `_parse_passkey_signing_postgres_string`'s exact shape: rejects
     an explicitly-set empty/whitespace-only value rather than silently
     treating it as unset -- never widens to a fallback. Never includes the
-    raw value in its error message (AC-BI-004): a validation failure here
+    raw value in its error message: a validation failure here
     must not leak a partial credential into a raised exception's message.
     Only called when the env var is actually set -- absence is not an error
     at this layer; whether it is *required* is enforced by
@@ -626,9 +612,8 @@ def _parse_authentik_base_url(raw: str) -> str:
 
     Mirrors `_parse_authentik_api_token`'s exact shape: rejects an
     explicitly-set empty/whitespace-only value rather than silently treating
-    it as unset. Only checks non-empty -- URL scheme/shape validation is not
-    required by any AC for this field, unlike `curated_source_base_url`'s
-    dedicated TLS guard.
+    it as unset. Only checks non-empty -- unlike `curated_source_base_url`, no URL
+    scheme or shape validation is applied to this field.
     """
     if not raw.strip():
         message = "PS_AUTHENTIK_BASE_URL must not be empty or whitespace-only"
@@ -637,7 +622,7 @@ def _parse_authentik_base_url(raw: str) -> str:
 
 
 def _parse_authentik_public_url(raw: str) -> str:
-    """Validate `PS_AUTHENTIK_PUBLIC_URL` (issue #165, OD-1=B).
+    """Validate `PS_AUTHENTIK_PUBLIC_URL`.
 
     Same rule as `_parse_authentik_base_url`: an explicitly-set empty or
     whitespace-only value is rejected rather than treated as unset.
@@ -651,7 +636,7 @@ def _parse_authentik_public_url(raw: str) -> str:
 def _resolve_authentik_api_token() -> str | None:
     """Resolve `PS_AUTHENTIK_API_TOKEN`, validating it if set.
 
-    Factored out of `load_config()` itself (unlike every other optional
+    Factored out of `load_config()` (unlike every other optional
     credential field's inline "raw env value, parse if not `None`" shape)
     solely to keep `load_config` under this project's `PLR0915`
     max-statements budget -- calling this from inside the final
@@ -681,7 +666,7 @@ def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
     """Parse `PS_AUTH_SCOPES` into an informational-only tuple of scope names.
 
     Split on commas and whitespace, discarding empty entries -- never
-    enforced as authorization (issue #58's TASK.md: "audience check only").
+    enforced as authorization (only the token audience is checked).
     Only called when the env var is actually set; unset resolves to `()` in
     `load_config()` directly, without calling this function.
     """
@@ -689,12 +674,23 @@ def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
 
 
 def load_config() -> ServiceConfig:
-    """Resolve `PS_SERVICE_*`/`PS_LOGGING_DIR` into a `ServiceConfig`.
+    """Resolve the process environment into a validated `ServiceConfig`.
 
-    Reads the environment exactly once. Unset variables fall back to the
-    defaults matching issue #12's originally-shipped hardcoded values.
-    Raises `ServiceConfigurationError` if any resolved value is invalid,
-    before any other part of the configuration is used.
+    Reads the `PS_*` environment variables once and validates each that is set. Unset
+    variables take the field defaults documented on `ServiceConfig`; optional fields without a
+    default resolve to `None` (or an empty tuple), because requiredness is enforced by the
+    consuming component, not here. The result is immutable.
+
+    Returns:
+        The fully resolved configuration.
+
+    Raises:
+        ServiceConfigurationError: any set variable is malformed, out of range, blank where a
+            value is required, or (for the curated-content source URL) fails the shared
+            http(s)/TLS guard. Raised before any other part of the configuration is used.
+
+    Side Effects:
+        Reads `os.environ`; nothing is written.
     """
     host = _parse_host(os.environ.get("PS_SERVICE_HOST", _DEFAULT_HOST))
     port = _parse_port(os.environ.get("PS_SERVICE_PORT", str(_DEFAULT_PORT)))

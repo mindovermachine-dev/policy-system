@@ -1,9 +1,7 @@
 """Thin process entrypoint: `uv run python -m ps_service`.
 
-Per the L2 coding standard's `ps-cli` precedent ("`__main__.py` only imports
-and calls a single `main()` from the package's top-level CLI module — no
-logic lives in `__main__.py` itself"), this module contains no logic of its
-own; it only dispatches to `ps_service.main.main()`.
+This module contains no logic of its own: it only imports and calls the single `main()` of
+`ps_service.main`, which resolves configuration, builds the app and runs it under uvicorn.
 """
 
 from __future__ import annotations

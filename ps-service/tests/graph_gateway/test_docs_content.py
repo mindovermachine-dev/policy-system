@@ -1049,14 +1049,14 @@ def _tool_docstrings() -> dict[str, str]:
     }
 
 
-def test_the_four_cleanup_mcp_descriptions_say_one_gateway_group() -> None:
+def test_the_four_cleanup_mcp_descriptions_say_one_all_or_nothing_graph_write() -> None:
     descriptions = _tool_docstrings()
 
     assert set(descriptions) == set(_CLEANUP_TOOL_FUNCTIONS)
     for name, text in descriptions.items():
         flat = " ".join(text.split())
-        assert "gateway" in flat, name
-        assert "one all-or-nothing gateway group (one logged write)" in flat, name
+        assert "one all-or-nothing graph write" in flat, name
+        assert "gateway" not in flat, name
         assert "guarded statement" not in flat, name
         assert "one guarded write" not in flat, name
 

@@ -1,37 +1,34 @@
-"""FalkorDB persistence for `ps_service.policy_lifecycle`'s single-tenant graph.
+"""Reads and gateway writes behind the Policy lifecycle in the single-tenant policy graph.
 
-`find_existing_policy`/`create_policy_draft` (GH issue #134, S11): the two
-Cypher-issuing halves of `ps_service.policy_lifecycle.service.create_policy_draft`
--- `find_existing_policy` is the read-side title-collision check
-(AC-BI-022), `create_policy_draft` is the write-side Policy (+ optional
-Standard/Control children) mint. Neither is wrapped in a translated
-`PolicyLifecycleGraphUnavailableError` here -- per this module's own
-"whichever slice first wraps a lifecycle call in a named error" note below,
-that translation happens at `service.create_policy_draft`'s own call sites,
-not in this module. A FalkorDB failure from either function still surfaces
-through `redis.exceptions.RedisError`, unwrapped, exactly like
-`backfill_governance_status`.
+Reads (`find_*`, `read_*`) issue Cypher through a `GraphHandle` and return typed records. No
+statement in this module writes: every write is a Graph Write Gateway group built from primitives
+and submitted through `ps_service.policy_lifecycle.graph_submission`. `ps_service.policy_lifecycle
+.service` calls these functions and owns the lifecycle decisions, audit rows and error translation.
 
-`backfill_governance_status` (GH issue #134, D-7/S8; a gateway read-resolve-write since #211):
-the idempotent, self-healing backfill for Standard/Control's `status` property and Policy's
-`version` property. No schema/data-migration mechanism exists in this codebase
-(`docs/architecture/ps-solution-architecture.md`'s own risk-register row), so it runs at the top
-of every lifecycle read/gate call: it READS which of those properties are NULL on the Policy's tree
-and submits ONE gateway group of `MergeProperty` for exactly the nodes that need a fill (no audit
-link: a backfill has no audit row). A tree with nothing to fill submits nothing, not even the
-legacy-edge stamp, so a re-run is a no-op.
+The main operations:
 
-Own copy of the `GraphHandle`/`GraphQueryResult` Protocols + `_read_query`
-dependency-health wrapper shape already vendored independently by
-`ps_service.company_merge.graph_writer`, `ps_service.domain_mapper.graph_writer`,
-and `ps_service.ingestion.adapters.internal_seed.persist` (L2's "fully
-decoupled, no shared internal package between components" rule) -- a
-deliberate near-duplicate, not a shared import.
+- `backfill_governance_status` fills a Policy's missing `version` and its tree's missing `status`;
+  it runs at the top of every lifecycle read or gate call because no schema or data-migration
+  mechanism exists in this codebase (`docs/architecture/ps-solution-architecture.md`, risk
+  register). It reads which properties are NULL and submits one group for exactly the nodes that
+  need a fill; a tree with nothing to fill submits nothing, not even the legacy-edge stamp, so a
+  re-run is a no-op.
+- `create_policy_draft`, `create_claimed_policy_draft`, `add_standard_to_policy`,
+  `add_control_to_standard` mint draft nodes; `update_policy_fields`, `update_standard_fields`,
+  `update_control_fields` patch them; `cascade_status` and `approve_fork_repoint` apply a
+  transition.
+- `find_existing_policy`, `find_approved_prior`, `read_policy_tree`, `read_policy_tree_for_fork`,
+  `read_fork_governance`, `read_capability_governors`, `find_standard_with_parent` and
+  `find_control_with_parent` are the reads.
 
-**Reads only.** Since issue #211 no statement in this module writes: every write is a Graph Write
-Gateway group built from primitives and submitted through `policy_lifecycle.graph_submission`. A
-FalkorDB failure on a READ is still recorded in `dependency_health` (for `/ready`'s live signal) and
-re-raised as the original `redis.exceptions.RedisError`, unwrapped; a failed WRITE is the module's
+This module keeps its own copy of the `GraphHandle`/`GraphQueryResult` Protocols and the
+health-recording `_read_query` wrapper that `ps_service.company_merge.graph_writer`,
+`ps_service.domain_mapper.graph_writer` and `ps_service.ingestion.adapters.internal_seed.persist`
+also vendor independently: components share no internal package, so the near-duplicate is
+deliberate.
+
+A FalkorDB failure on a read is recorded in `dependency_health` (the live signal behind `/ready`)
+and re-raised as the original `redis.exceptions.RedisError`, unwrapped. A failed write surfaces as
 `PolicyLifecycleGraphUnavailableError` with the `FalkorDB write failed: ` prefix.
 """
 
@@ -103,37 +100,62 @@ __all__ = [
 
 
 class GraphQueryResult(Protocol):
-    """Structural stand-in for `falkordb.QueryResult`.
+    """Structural stand-in for `falkordb.QueryResult`: only the rows are used.
 
-    Only the rows are used: each read in this module takes them from `result_set`.
+    Attributes:
+        result_set: The result rows exactly as `falkordb` returns them.
     """
 
     @property
     def result_set(self) -> list[object]:
-        """Result rows exactly as returned by `falkordb`."""
+        """Return the result rows exactly as returned by `falkordb`.
+
+        Returns:
+            One list of column values per result row; empty when the statement matched nothing.
+
+        Raises:
+            Nothing: reading the rows of a completed result does not fail.
+
+        Side Effects:
+            None.
+        """
         ...
 
 
 class GraphHandle(Protocol):
-    """Structural stand-in for `falkordb.Graph`, used for reads only (not enforced by the type).
+    """Structural stand-in for `falkordb.Graph`, used by this module for reads only.
 
-    Every lifecycle write is a Graph Write Gateway group (issue #211); the static guard in
-    `tests/policy_lifecycle/test_no_graph_write_path.py` is what keeps write Cypher out.
+    Every lifecycle write is a Graph Write Gateway group; the static guard in
+    `tests/policy_lifecycle/test_no_graph_write_path.py` keeps write Cypher out of this component.
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
-        """Run Cypher `q` (optionally parameterized via `params`) and return the result."""
+        """Run Cypher `q` and return the result.
+
+        Args:
+            q: The Cypher statement; this module passes read statements only.
+            params: Query parameters bound to `$name` placeholders in `q`; `None` for none.
+
+        Returns:
+            The `GraphQueryResult` holding the statement's rows.
+
+        Raises:
+            redis.exceptions.RedisError: the FalkorDB server is unreachable or the driver fails.
+
+        Side Effects:
+            Executes `q` against the graph; for the read statements this module issues, nothing is
+            modified.
+        """
         ...
 
 
 def _read_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """The one call site every graph statement in this module goes through.
+    """Run one read statement and record FalkorDB health for `/ready`.
 
-    Mirrors every other `graph_writer`-shaped module's own `_read_query`:
-    records FalkorDB connectivity failures in `dependency_health` for
-    `/ready`'s live signal, self-healing on the next successful call.
+    A `RedisError` marks the FalkorDB dependency unhealthy and is re-raised unchanged; the next
+    successful call marks it healthy again.
     """
     try:
         result = graph.query(query, params=params)
@@ -156,32 +178,41 @@ _READ_BACKFILL_STATE = (
 def backfill_governance_status(
     graph: GraphHandle, policy_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
 ) -> None:
-    """Idempotently backfill `policy_id`'s own `version` and its tree's `status` (D-7).
+    """Fill a Policy's missing `version` and its tree's missing `status`, idempotently.
 
-    A read-resolve-write (issue #211). One read returns the Policy's `version` and `status` and the
-    `status` of every Standard and Control in its `SUPPORTED_BY`/`IMPLEMENTED_BY` tree; the fills
-    are then resolved in Python and submitted as ONE gateway group with no audit link:
+    One read returns the Policy's `version` and `status` and the `status` of every Standard and
+    Control in its `SUPPORTED_BY`/`IMPLEMENTED_BY` tree. The fills are resolved in Python and
+    submitted as ONE gateway group with no audit link (a backfill has no audit row):
 
-    1. `policy_id`'s own `version` -> `"1"`, only if currently `NULL`.
-    2. Every `Standard` whose `status` is `NULL` -> the Policy's own current `status`.
-    3. Every `Control` whose `status` is `NULL` -> the Policy's own current `status` -- always the
-       ROOT Policy's `status`, never an intermediate Standard's.
+    1. `policy_id`'s own `version` becomes `"1"`, only if currently `NULL`.
+    2. Every `Standard` whose `status` is `NULL` takes the Policy's current `status`.
+    3. Every `Control` whose `status` is `NULL` takes the Policy's current `status`, always the
+       root Policy's, never an intermediate Standard's.
 
-    A Standard/Control that already carries a non-`NULL` `status` is never touched, even if it
-    differs from the Policy's current `status` -- the guard is a one-time-fill mechanism, not a
-    continuous sync. A Policy whose own `status` is `NULL` has nothing to hand its children.
-
-    Nothing to fill (the common case) submits no group and stamps no legacy edge (AC-BI-006), and
-    never asks for the submitter: `submitter_source` is called only when there is a group to write,
-    so a read of an already-backfilled tree needs no gateway (D3).
+    A Standard or Control that already carries a non-`NULL` `status` is never touched, even if it
+    differs from the Policy's current `status`: this is a one-time fill, not a continuous sync. A
+    Policy whose own `status` is `NULL` has nothing to hand its children.
 
     Args:
-        graph: The single-tenant policy graph handle (read).
-        policy_id: The Policy whose tree is backfilled; an unknown id is a no-op.
-        submitter_source: Resolves the Graph Write Gateway; called only if a fill is needed.
+        graph: The single-tenant policy graph handle, used for the read.
+        policy_id: The Policy whose tree is backfilled; an id that matches no Policy is a no-op.
+        submitter_source: Zero-argument callable that resolves the gateway submitter. It is called
+            only when there is something to write, so reading an already-backfilled tree needs no
+            gateway.
+
+    Returns:
+        None.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the fill group failed.
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the fill group failed,
+            or a value could not be stored. Any error `submitter_source` raises propagates
+            unchanged.
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`. When a fill is needed, submits one gateway
+        group of `MergeProperty` primitives (stamping the graph's legacy edges first if this target
+        has not yet been stamped); with nothing to fill, writes and logs nothing.
     """
     result = _read_query(graph, _READ_BACKFILL_STATE, params={"policy_id": policy_id})
     rows = cast("list[list[object]]", result.result_set)
@@ -217,11 +248,11 @@ def backfill_governance_status(
 def _cascade_primitives(
     graph: GraphHandle, *, policy_id: str, target_status: str
 ) -> tuple[Primitive, ...]:
-    """A `MergeProperty status` for the Policy and every Standard/Control of its tree, as read now.
+    """Build a `MergeProperty status` for the Policy and every Standard/Control of its tree.
 
-    The tree is read at the moment of the call (the caller submits right after), so a Standard
-    added since the transition's gate read is cascaded too -- no lock, as before (AC-BI-003). A
-    Policy that is gone yields nothing, as the former statement matched nothing.
+    The tree is read at the moment of the call and the caller submits right after, so a Standard
+    added since the transition's gate read is cascaded too; no lock is taken. A Policy that no
+    longer exists yields no primitives.
     """
     record = read_policy_tree(graph, policy_id)
     if record is None:
@@ -244,57 +275,61 @@ def cascade_status(
     target_status: str,
     audit_event_id: str,
 ) -> None:
-    """Set `policy_id`'s own `status`, plus every Standard/Control in its tree, to `target_status`.
+    """Set the `status` of `policy_id` and of its whole Standard/Control tree to `target_status`.
 
-    Issue #134, S15 -- the shared "cascade to a target status" write every lifecycle transition
-    (`propose`/`approve`/`reject`/`revert`/`auto_deprecate`) needs. Since issue #211 it is ONE
-    Graph Write Gateway group of `MergeProperty status` over the tree as read just before the
-    submit (AC-BI-003): atomic like the former single statement, with no precondition and no lock.
-    The gateway skips a node already at `target_status`; a tree entirely at it logs nothing. The
-    group is linked to the `applied` audit row `audit_event_id` names.
-
-    Unlike `backfill_governance_status`'s fill of NULLs, this overwrites every `status`
-    unconditionally -- a lifecycle transition intentionally replaces whatever was there.
+    The shared write every lifecycle transition (`propose`, `approve`, `reject`, `revert`,
+    `auto_deprecate`) needs. It is ONE gateway group of `MergeProperty status` over the tree as read
+    just before the submit: atomic, with no precondition and no lock. The gateway skips a node
+    already at `target_status`, and a tree entirely at it logs nothing. Unlike the backfill's fill
+    of NULLs, this overwrites every `status` unconditionally.
 
     Args:
-        graph: The single-tenant policy graph handle (the tree read).
+        graph: The single-tenant policy graph handle, used to read the tree.
         target: The gateway target of the single-tenant policy graph.
-        policy_id: The root Policy id whose tree is being transitioned.
-        target_status: The new `status` value for the Policy and its entire Standard/Control tree
-            (e.g. `"proposed"`, `"approved"`, `"deprecated"`).
-        audit_event_id: The id of the transition's `applied` audit row.
+        policy_id: The root Policy id whose tree is transitioned.
+        target_status: The new `status` for the Policy and its whole Standard/Control tree, for
+            example `"proposed"`, `"approved"` or `"deprecated"`.
+        audit_event_id: The id of the transition's `applied` audit row; the group is linked to it.
+
+    Returns:
+        None.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+        redis.exceptions.RedisError: the tree read failed.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused the
+            group, could not reach its stores, or the group was committed but not applied.
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`. Submits one gateway group linked to
+        `audit_event_id` (stamping the graph's legacy edges first if this target has not yet been
+        stamped). Nothing is submitted when the Policy no longer exists.
     """
     primitives = _cascade_primitives(graph, policy_id=policy_id, target_status=target_status)
     submit_group(target, primitives, audit_event_id=audit_event_id)
 
 
 def find_approved_prior(graph: GraphHandle, successor_policy_id: str) -> str | None:
-    """Find an `approved` Policy that `SUPERSEDED_BY`s `successor_policy_id` (D-10, S24).
+    """Find an `approved` Policy that is `SUPERSEDED_BY` `successor_policy_id`.
 
-    A pure read, issued through the same `_read_query` health-tracking
-    wrapper as every other call in this module -- no write, ever.
-
-    No production code anywhere in issue #134 ever CREATES the
-    `SUPERSEDED_BY` edge itself: that is #136's own fork tool
-    (`supersedes_policy_id`), explicitly out of this issue's scope. This
-    function only ever traverses an edge some other mechanism (a future
-    #136 fork call, or a test fixture) already created -- `approve_policy`
-    (S17/S25) calls this after its own successor-tree cascade succeeds, to
-    decide whether an auto-deprecation cascade (AC-BI-019) is also needed.
+    A pure read. It only traverses an existing `SUPERSEDED_BY` edge; creating that edge is the fork
+    tool's job. The approval flow calls it after the successor's own tree cascade, to decide whether
+    the prior must also be auto-deprecated.
 
     Args:
         graph: The single-tenant policy graph handle.
-        successor_policy_id: The Policy id that was just (or is about to be)
-            approved -- the `SUPERSEDED_BY` edge's target.
+        successor_policy_id: The Policy id that was just, or is about to be, approved; the target of
+            the `SUPERSEDED_BY` edge.
 
     Returns:
-        The `id` of an inbound `SUPERSEDED_BY` Policy whose own `status` is
-        currently `"approved"`, or `None` if no such edge/prior exists (an
-        edge to a `draft`/`proposed` prior is deliberately not returned --
-        only an already-`approved` prior is ever auto-deprecated).
+        The `id` of an inbound `SUPERSEDED_BY` Policy whose own `status` is currently `"approved"`,
+        or `None` when no such edge or prior exists. A prior in `draft` or `proposed` is
+        deliberately not returned: only an already-approved prior is ever auto-deprecated.
+
+    Raises:
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`; nothing is written.
     """
     result = _read_query(
         graph,
@@ -311,10 +346,12 @@ def find_approved_prior(graph: GraphHandle, successor_policy_id: str) -> str | N
 
 @dataclass(frozen=True, slots=True)
 class ForkGovernance:
-    """What a fork's superseded prior currently governs (issue #185).
+    """What a fork's superseded prior currently governs.
 
-    `capability_ids` may be empty: a legacy prior with no `GOVERNED_BY`
-    edges (D-5) leaves nothing to move.
+    Attributes:
+        prior_id: The id of the Policy the fork supersedes.
+        capability_ids: The ids of the Capabilities the prior governs through `GOVERNED_BY`. May be
+            empty: a legacy prior with no `GOVERNED_BY` edges leaves nothing to move.
     """
 
     prior_id: str
@@ -322,19 +359,24 @@ class ForkGovernance:
 
 
 def read_fork_governance(graph: GraphHandle, policy_id: str) -> ForkGovernance | None:
-    """Read the prior superseded by `policy_id` and the Capabilities it governs (issue #185).
+    """Read the prior superseded by `policy_id` and the Capabilities it governs.
 
-    A pure read through the health-tracking wrapper. The prior's own status
-    is deliberately not filtered (D-5: a non-approved prior is still
-    approvable).
+    A pure read. The prior's own status is deliberately not filtered: a prior that is not approved
+    can still be superseded.
 
     Args:
         graph: The single-tenant policy graph handle.
         policy_id: The successor (fork) Policy id about to be approved.
 
     Returns:
-        `None` when no inbound `SUPERSEDED_BY` edge exists, otherwise the
-        prior's id and the ids of Capabilities it governs.
+        `None` when no inbound `SUPERSEDED_BY` edge exists, otherwise a `ForkGovernance` with the
+        prior's id and the ids of the Capabilities it governs.
+
+    Raises:
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`; nothing is written.
     """
     result = _read_query(
         graph,
@@ -362,37 +404,45 @@ def approve_fork_repoint(
     target_status: str,
     audit_event_id: str,
 ) -> bool:
-    """Move `GOVERNED_BY` edges to `policy_id` and cascade its status, as one guarded group.
+    """Move `GOVERNED_BY` edges to the approved fork and cascade its status, as one guarded group.
 
-    Issue #185 introduced the move; since issue #211 it is a gateway read-resolve-write in the
-    order of `ingestion/adapters/internal_seed/persist.py` (CHANGES M1): the graph must be caught
-    up, the log position P0 is read, then the prior's governed set is re-read and compared to
-    `capability_ids` in Python -- a set that changed since the caller's read returns `False` with
-    NOTHING logged, not even a legacy-edge stamp -- and only then are legacy edges stamped (a
-    group with no audit link; `GOVERNED_BY` edges written before the gateway have no identity to
-    delete by) and the group submitted with `ExpectedPosition(P0 + stamped)`. A write that landed
-    between the position read and the submit trips that precondition: the same `False`. The
-    position guard is coarser than the former in-statement guard (Decision 2).
+    A gateway read-resolve-write. In order: the graph must be caught up; the log position P0 is
+    read; the prior's governed set is re-read and compared with `capability_ids` in Python (a set
+    that changed since the caller's read returns `False` with NOTHING logged, not even a legacy-edge
+    stamp); then legacy edges are stamped (a group with no audit link, because `GOVERNED_BY` edges
+    written before the gateway have no identity to delete by); finally the group is submitted with
+    `ExpectedPosition(P0 + stamped)`. A write that landed between the position read and the submit
+    trips that precondition and also returns `False`. The position guard is coarser than a
+    statement-level guard: an unrelated write in that window also refuses the move.
 
-    The group deletes each `GOVERNED_BY` edge from the prior, upserts it from the same Capability
-    to the fork, and cascades `target_status` over the fork's tree, so a Capability never has zero
-    or two governors; it is linked to the `applied` audit row `audit_event_id` names.
+    The group deletes each `GOVERNED_BY` edge from the prior, upserts it from the same Capability to
+    the fork, and cascades `target_status` over the fork's tree, so a Capability never has zero or
+    two governors.
 
     Args:
-        graph: The single-tenant policy graph handle (the guard's reads).
+        graph: The single-tenant policy graph handle, used for the guard's reads.
         target: The gateway target of the single-tenant policy graph.
-        policy_id: The fork being approved (the new governor).
+        policy_id: The fork being approved, the new governor.
         prior_id: The superseded Policy that currently governs the Capabilities.
         capability_ids: The Capabilities read from `prior_id` beforehand.
         target_status: The status to cascade over the fork's tree.
-        audit_event_id: The id of the `applied` approval audit row.
+        audit_event_id: The id of the `applied` approval audit row; the group is linked to it.
 
     Returns:
-        `True` when the move and cascade were applied, `False` when the guard failed (nothing of
-        this group was written).
+        `True` when the move and cascade were applied; `False` when the guard failed (the governance
+        changed or the log moved), in which case nothing of this group was written.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+        redis.exceptions.RedisError: a guard read failed.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the graph is behind its
+            log, the log position could not be read, or the gateway refused or failed the stamp or
+            the group.
+
+    Side Effects:
+        Reads the graph and the log position and updates `dependency_health`. May submit a stamp
+        group with no audit link (it changes no data), then one gateway group linked to
+        `audit_event_id`.
+        Returns `False` without submitting the move when the guard fails.
     """
     require_caught_up(target)
     expected_position = read_log_position(target)
@@ -403,7 +453,7 @@ def approve_fork_repoint(
         or sorted(governance.capability_ids) != sorted(capability_ids)
     ):
         return False
-    stamped = ensure_stamped(target, None)  # housekeeping: no audit link, no data change (A1)
+    stamped = ensure_stamped(target, None)  # housekeeping stamp: no audit link, no data change
     fork_ref = NodeRef(label="Policy", id=policy_id)
     prior_ref = NodeRef(label="Policy", id=prior_id)
     moved = dict.fromkeys(capability_ids)
@@ -440,17 +490,18 @@ def approve_fork_repoint(
 
 @dataclass(frozen=True, slots=True)
 class ControlDraft:
-    """One Control child to mint alongside a `create_policy_draft` call (D-6).
+    """One Control child to mint alongside a `create_policy_draft` call.
 
-    `id` is already computed by the caller (`domain_mapper.identity.control_id`)
-    -- this module issues Cypher only, it never derives identity itself.
+    This module writes graph structure only; it never derives identity.
 
-    `extra_properties` (issue #136, Slice 6): additional content fields to
-    write alongside `title`/`type`/`status`, used by the supersede fork to
-    carry a forked Control's full content across (`description`,
-    `implementation_status`, etc.) -- every existing non-fork call site
-    passes nothing, so `extra_properties` defaults to `{}` and this dataclass
-    stays byte-for-byte backward compatible.
+    Attributes:
+        id: The Control id, already computed by the caller (`domain_mapper.identity.control_id`).
+        title: The Control's title.
+        control_type: The Control's `type` value, for example `"automated"` or `"manual"`.
+        extra_properties: Additional content fields written with `title`/`type`/`status`, used by a
+            supersede fork to carry a forked Control's full content across (`description`,
+            `implementation_status`, and so on). Defaults to empty. These are written first, so a
+            stray `title`, `type` or `status` among them never wins.
     """
 
     id: str
@@ -461,14 +512,14 @@ class ControlDraft:
 
 @dataclass(frozen=True, slots=True)
 class StandardDraft:
-    """One Standard child (with its own optional Control children) to mint.
+    """One Standard child, with its own optional Control children, to mint.
 
-    `id` is already computed by the caller (`domain_mapper.identity.standard_id`),
-    same convention as `ControlDraft.id`.
-
-    `extra_properties` (issue #136, Slice 6): same purpose as
-    `ControlDraft.extra_properties`, one level up -- defaults to `{}`,
-    preserving every existing non-fork call site unchanged.
+    Attributes:
+        id: The Standard id, already computed by the caller (`domain_mapper.identity.standard_id`).
+        title: The Standard's title.
+        controls: The Control children to mint under it; empty by default.
+        extra_properties: Additional content fields, with the same purpose and precedence as
+            `ControlDraft.extra_properties`, one level up. Defaults to empty.
     """
 
     id: str
@@ -478,19 +529,23 @@ class StandardDraft:
 
 
 def find_existing_policy(graph: GraphHandle, policy_id: str) -> tuple[str, str] | None:
-    """Read-check whether a Policy with `policy_id` already exists (AC-BI-022).
+    """Check whether a Policy with `policy_id` already exists.
 
-    A pure read, issued through the same `_read_query` health-tracking
-    wrapper as every write in this module -- a title-collision check must
-    still count towards `/ready`'s FalkorDB connectivity signal.
+    A pure read, so a title-collision check still counts towards `/ready`'s FalkorDB connectivity
+    signal.
 
     Args:
         graph: The single-tenant policy graph handle.
-        policy_id: The v1 `policy_id(title)` the caller is about to mint.
+        policy_id: The `policy_id(title)` the caller is about to mint.
 
     Returns:
-        `(existing_id, existing_title)` if a `Policy` node with this id
-        already exists, else `None`.
+        `(existing_id, existing_title)` when a `Policy` node with this id exists, else `None`.
+
+    Raises:
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`; nothing is written.
     """
     result = _read_query(
         graph,
@@ -507,19 +562,23 @@ def find_existing_policy(graph: GraphHandle, policy_id: str) -> tuple[str, str] 
 def read_capability_governors(
     graph: GraphHandle, capability_ids: tuple[str, ...]
 ) -> dict[str, str | None]:
-    """Read which Policy (if any) currently governs each of `capability_ids` (issue #185).
+    """Read which Policy, if any, currently governs each of `capability_ids`.
 
-    A pure read through the health-tracking wrapper. A Capability that does
-    not exist, or is a `merged` tombstone (issue #190), is absent from the
-    result; an existing but ungoverned one maps
-    to `None`.
+    A pure read. A Capability that does not exist, or is a `merged` tombstone, is absent from the
+    result; an existing but ungoverned one maps to `None`.
 
     Args:
         graph: The single-tenant policy graph handle.
-        capability_ids: The Capability ids a fresh draft wants to claim.
+        capability_ids: The Capability ids a fresh draft wants to claim; may be empty.
 
     Returns:
-        `{capability_id: governing_policy_id | None}` for every id that exists.
+        `{capability_id: governing_policy_id | None}` for every id that exists and is not merged.
+
+    Raises:
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`; nothing is written.
     """
     result = _read_query(
         graph,
@@ -548,41 +607,47 @@ def create_policy_draft(
     version: str = "1",
     audit_event_id: str,
 ) -> None:
-    """Mint a new draft Policy, plus any optional Standard/Control children, as ONE gateway group.
+    """Mint a new draft Policy, plus any Standard/Control children, as ONE gateway group.
 
-    Without a Capability claim (a claim is `create_claimed_policy_draft` until it migrates). The
+    This variant makes no Capability claim; `create_claimed_policy_draft` is the one that does. The
     group, in order, is: an `UpsertNode` for the Policy (`status="draft"`, `version`, the owner
-    pair), the optional `SUPERSEDED_BY:{prior}->{new}` edge, then for each Standard an
-    `UpsertNode` and its `SUPPORTED_BY:{policy}->{standard}` edge and for each of its Controls an
-    `UpsertNode` and its `IMPLEMENTED_BY:{standard}->{control}` edge. It is linked to the `applied`
-    audit row that `audit_event_id` names (AC-BI-008). The group is atomic: a failure leaves no
+    pair), the optional `SUPERSEDED_BY:{prior}->{new}` edge, then for each Standard an `UpsertNode`
+    and its `SUPPORTED_BY:{policy}->{standard}` edge and for each of its Controls an `UpsertNode`
+    and its `IMPLEMENTED_BY:{standard}->{control}` edge. The group is atomic: a failure leaves no
     partial draft.
 
-    Every child is written with `status="draft"` unconditionally (D-6). A child's
-    `extra_properties` (when the caller is forking, the source tree's full content minus
-    `id`/`title`/`status`) are spread BEFORE `title`/`type`/`status`, so a stray copied
-    `title`/`status`/`type` can never win. A value the gateway cannot store (a reserved key such as
-    `embedding`, an empty list) is refused before anything is written.
-
-    `supersedes_policy_id` links the prior Policy to this new one by a single Policy-level edge --
-    AC-BI-005's "no per-Standard/Control lineage edges" requirement.
+    Business Rules: every child is written with `status="draft"` unconditionally. A child's
+    `extra_properties` (when forking, the source tree's full content minus `id`/`title`/`status`)
+    are spread BEFORE `title`/`type`/`status`, so a stray copied value can never win. The supersede
+    link is a single Policy-level edge: there are no per-Standard or per-Control lineage edges. A
+    value the gateway cannot store (a reserved key such as `embedding`, an empty list) is refused
+    before anything is written.
 
     Args:
         target: The gateway target of the single-tenant policy graph.
         policy_id: The already-computed, collision-checked new Policy id.
         title: The Policy's title.
-        owner: The creating actor's `(sub, iss)`.
-        standards: Optional Standard children (each with its own optional Control children), ids
+        owner: The creating actor's `(subject, issuer)` pair.
+        standards: Optional Standard children, each with its own optional Control children; ids
             already computed by the caller.
-        supersedes_policy_id: The prior Policy id this new draft amends via `SUPERSEDED_BY`, or
+        supersedes_policy_id: The prior Policy id this draft amends through `SUPERSEDED_BY`, or
             `None` for an ordinary (non-fork) draft.
-        version: The new Policy's own `version` (string-typed, per `docs/artifacts`'s "version
-            stays a string" decision): `"1"` for an ordinary draft, or `str(int(prior_version) + 1)`
-            for a fork (computed by the caller).
-        audit_event_id: The id of the `applied` `policy.create_draft` row the group is linked to.
+        version: The new Policy's `version`, kept as a string: `"1"` for an ordinary draft, or
+            `str(int(prior_version) + 1)` for a fork (computed by the caller).
+        audit_event_id: The id of the `applied` `policy.create_draft` audit row the group is linked
+            to.
+
+    Returns:
+        None.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused the
+            group (including a value it cannot store), could not reach its stores, or the group was
+            committed but not applied.
+
+    Side Effects:
+        Submits one gateway group linked to `audit_event_id` (stamping the graph's legacy edges
+        first if this target has not yet been stamped). Nothing is written if the group is refused.
     """
     primitives = _create_primitives(
         policy_id=policy_id,
@@ -604,7 +669,7 @@ def _create_primitives(
     supersedes_policy_id: str | None,
     version: str,
 ) -> tuple[Primitive, ...]:
-    """The primitives of a create: the Policy, its optional supersede edge, then the children."""
+    """Build a create's primitives: the Policy, its optional supersede edge, then the children."""
     owner_subject, owner_issuer = owner
     policy_ref = NodeRef(label="Policy", id=policy_id)
     primitives: list[Primitive] = []
@@ -673,49 +738,55 @@ def create_claimed_policy_draft(
     capability_ids: tuple[str, ...],
     audit_event_id: str,
 ) -> bool:
-    """Mint a draft Policy that CLAIMS `capability_ids` as one guarded gateway group.
+    """Mint a draft Policy that CLAIMS `capability_ids`, as one guarded gateway group.
 
-    The guard is the one of `ingestion/adapters/internal_seed/persist.py`, in its order (CHANGES
-    M1, `graph_submission` docstring): the graph must be caught up, the log position P0 is read,
-    then `read_capability_governors` re-resolves every claimed Capability in Python (it exists, is
-    not a `merged` tombstone, and has no governing Policy) -- a claim that no longer holds returns
-    `False` here with NOTHING logged, not even a legacy-edge stamp -- and only then are the
-    graph's legacy edges stamped (a group with no audit link) and the group submitted with
-    `ExpectedPosition(P0 + stamped)`. A write that landed between the position read and the
-    submit trips that precondition: the same `False`, nothing of this group logged (a stamp group
-    ahead of it, which carries no audit link and changes no data, may stay in the log). The
-    position guard is coarser than the former in-statement guard: an UNRELATED write in that
-    window also refuses the claim (Decision 2).
+    In order: the graph must be caught up; the log position P0 is read; `read_capability_governors`
+    re-resolves every claimed Capability in Python (it exists, is not a `merged` tombstone and has
+    no governing Policy). A claim that no longer holds returns `False` with NOTHING logged, not
+    even a legacy-edge stamp. Only then are the graph's legacy edges stamped (a group with no audit
+    link) and the group submitted with `ExpectedPosition(P0 + stamped)`. A write that landed
+    between the position read and the submit trips that precondition and also returns `False`, with
+    nothing of this group logged (a stamp group ahead of it carries no audit link and changes no
+    data, and may stay in the log). The position guard is coarser than a statement-level guard: an
+    unrelated write in that window also refuses the claim.
 
-    The group holds an `UpsertNode` for the Policy, an `UpsertEdge`
-    `GOVERNED_BY:{capability}->{policy}` per Capability and the Standard/Control children as
-    `create_policy_draft` writes them; it is linked to the `applied` audit row `audit_event_id`
-    names. A claim is a fresh `version` "1" draft, never combined with a supersede fork.
+    The group holds an `UpsertNode` for the Policy, a `GOVERNED_BY:{capability}->{policy}`
+    `UpsertEdge` per Capability, and the Standard/Control children as `create_policy_draft` writes
+    them. A claim is always a fresh `version` "1" draft, never combined with a supersede fork.
 
     Args:
-        graph: The single-tenant policy graph handle (the guard's reads).
+        graph: The single-tenant policy graph handle, used for the guard's reads.
         target: The gateway target of the single-tenant policy graph.
         policy_id: The already-computed, collision-checked new Policy id.
         title: The Policy's title.
-        owner: The creating actor's `(sub, iss)`.
-        standards: Optional Standard children (each with its own optional Control children).
-        capability_ids: Capabilities the draft claims, de-duplicated, order-preserving.
-        audit_event_id: The id of the `applied` `policy.create_draft` row the group is linked to.
+        owner: The creating actor's `(subject, issuer)` pair.
+        standards: Optional Standard children, each with its own optional Control children.
+        capability_ids: The Capabilities the draft claims, de-duplicated and order-preserving.
+        audit_event_id: The id of the `applied` `policy.create_draft` audit row the group is linked
+            to.
 
     Returns:
         `True` when the draft was written; `False` when the claim no longer held (a Capability was
-        governed, merged or removed after the caller's pre-check, or the position moved) -- in which
-        case no Policy, edge, Standard or Control was written.
+        governed, merged or removed after the caller's pre-check, or the log position moved), in
+        which case no Policy, edge, Standard or Control was written.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+        redis.exceptions.RedisError: the guard read failed.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the graph is behind its
+            log, the log position could not be read, a value could not be stored, or the gateway
+            refused or failed the stamp or the group.
+
+    Side Effects:
+        Reads the graph and the log position and updates `dependency_health`. May submit a stamp
+        group with no audit link, then one gateway group linked to `audit_event_id`. Returns
+        `False` without submitting the draft when the guard fails.
     """
     require_caught_up(target)
     expected_position = read_log_position(target)
     governors = read_capability_governors(graph, capability_ids)
     if any(governors.get(capability_id, "") is not None for capability_id in capability_ids):
         return False
-    stamped = ensure_stamped(target, None)  # housekeeping: no audit link, no data change (A1)
+    stamped = ensure_stamped(target, None)  # housekeeping stamp: no audit link, no data change
     policy_ref = NodeRef(label="Policy", id=policy_id)
     primitives: list[Primitive] = list(
         _create_primitives(
@@ -751,7 +822,14 @@ def create_claimed_policy_draft(
 
 @dataclass(frozen=True, slots=True)
 class ControlRecord:
-    """One Control read back off an existing Policy's tree (issue #134, S13)."""
+    """One Control read back off an existing Policy's tree.
+
+    Attributes:
+        id: The Control id.
+        title: The Control's title.
+        status: The Control's governance status.
+        control_type: The Control's `type` value.
+    """
 
     id: str
     title: str
@@ -761,7 +839,14 @@ class ControlRecord:
 
 @dataclass(frozen=True, slots=True)
 class StandardRecord:
-    """One Standard (with its own Control children) read back off an existing Policy's tree."""
+    """One Standard, with its Control children, read back off an existing Policy's tree.
+
+    Attributes:
+        id: The Standard id.
+        title: The Standard's title.
+        status: The Standard's governance status.
+        controls: Its Control children, in read order; empty when it has none.
+    """
 
     id: str
     title: str
@@ -771,7 +856,18 @@ class StandardRecord:
 
 @dataclass(frozen=True, slots=True)
 class PolicyRecord:
-    """A Policy's own fields plus its full Standard/Control tree (issue #134, S13)."""
+    """A Policy's own fields plus its full Standard/Control tree.
+
+    Attributes:
+        id: The Policy id.
+        title: The Policy's title.
+        status: The Policy's governance status.
+        version: The Policy's version, a string.
+        owner_subject: The owner's token subject.
+        owner_issuer: The owner's token issuer; the pair `(owner_subject, owner_issuer)` identifies
+            the owner.
+        standards: Its Standard children, in read order; empty when it has none.
+    """
 
     id: str
     title: str
@@ -784,7 +880,7 @@ class PolicyRecord:
 
 @dataclass
 class _StandardAccumulator:
-    """Mutable, per-Standard accumulator used only while grouping `read_policy_tree`'s rows."""
+    """Mutable per-Standard accumulator used only while grouping `read_policy_tree`'s rows."""
 
     title: str
     status: str
@@ -792,28 +888,27 @@ class _StandardAccumulator:
 
 
 def read_policy_tree(graph: GraphHandle, policy_id: str) -> PolicyRecord | None:
-    """Read `policy_id`'s own fields plus its full Standard/Control tree (S13).
+    """Read `policy_id`'s own fields plus its full Standard/Control tree.
 
-    A pure read, issued through the same `_read_query` health-tracking
-    wrapper as every other call in this module. Callers are expected to call
-    `backfill_governance_status` first (D-7) so `version`/`status` are never
-    `NULL` by the time this read happens.
-
-    The single Cypher statement below walks the full two-hop
-    `Policy -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control` path
-    with `OPTIONAL MATCH`, so a Policy with zero Standards (or a Standard
-    with zero Controls) still returns exactly one row for the Policy itself,
-    with `NULL` Standard/Control columns -- grouped back into a nested
-    `PolicyRecord` below.
+    A pure read. Callers should run `backfill_governance_status` first so `version` and `status` are
+    never `NULL` here. One Cypher statement walks the two-hop `Policy -[:SUPPORTED_BY]-> Standard
+    -[:IMPLEMENTED_BY]-> Control` path with `OPTIONAL MATCH`, so a Policy with zero Standards (or a
+    Standard with zero Controls) still returns one row for the Policy with `NULL` Standard/Control
+    columns; the rows are grouped back into a nested `PolicyRecord`.
 
     Args:
         graph: The single-tenant policy graph handle.
         policy_id: The Policy id to read.
 
     Returns:
-        A `PolicyRecord` with its `standards` (each with their own
-        `controls`) in the order FalkorDB returned them, or `None` if no
-        `Policy` node exists with this id.
+        A `PolicyRecord` with its `standards` (each with their `controls`) in the order FalkorDB
+        returned them, or `None` when no `Policy` node has this id.
+
+    Raises:
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`; nothing is written.
     """
     result = _read_query(
         graph,
@@ -888,19 +983,17 @@ def read_policy_tree(graph: GraphHandle, policy_id: str) -> PolicyRecord | None:
 
 @dataclass(frozen=True, slots=True)
 class ForkedControlRecord:
-    """One Control's full content, read for a supersede fork (issue #136, Slice 6).
+    """One Control's full content, read for a supersede fork.
 
-    Deliberately **not** `ControlRecord` (id/title/status/control_type only,
-    G7) -- forking needs every content field (`description`,
-    `implementation_status`, `execution_frequency`, ...), not just the
-    narrow set `read_policy_tree` returns for `get-policy`'s own view.
-    `properties` is the Control node's full property map as FalkorDB's own
-    `properties()` function returns it, including `id`/`title`/`status`/
-    `type` -- the caller (`service._build_forked_standard_drafts`) strips
-    those four keys back out before reusing the rest as a new Control's
-    `extra_properties`, since a forked node always gets its own freshly
-    computed id/status and `title`/`type` are set from this record's own
-    dedicated `title` field / the caller's own `control_type`.
+    Deliberately not `ControlRecord`, which carries only id, title, status and type: forking needs
+    every content field (`description`, `implementation_status`, `execution_frequency`, ...).
+
+    Attributes:
+        title: The Control's title (empty string when the node has none).
+        properties: The Control node's full property map as FalkorDB's `properties()` returns it,
+            including `id`, `title`, `status` and `type`. The fork builder strips those four keys
+            before reusing the rest as a new Control's `extra_properties`, because a forked node
+            always gets its own freshly computed id and status.
     """
 
     title: str
@@ -909,9 +1002,15 @@ class ForkedControlRecord:
 
 @dataclass(frozen=True, slots=True)
 class ForkedStandardRecord:
-    """One Standard's full content (plus its Control children), read for a supersede fork.
+    """One Standard's full content, plus its Control children, read for a supersede fork.
 
     Same rationale as `ForkedControlRecord`, one level up.
+
+    Attributes:
+        title: The Standard's title (empty string when the node has none).
+        properties: The Standard node's full property map as FalkorDB's `properties()` returns it.
+        controls: Its Control children with their full content, in read order; empty when it has
+            none.
     """
 
     title: str
@@ -921,7 +1020,7 @@ class ForkedStandardRecord:
 
 @dataclass
 class _ForkedStandardAccumulator:
-    """Mutable, per-Standard accumulator for grouping `read_policy_tree_for_fork`'s own rows."""
+    """Mutable per-Standard accumulator for grouping `read_policy_tree_for_fork`'s rows."""
 
     title: str
     properties: Mapping[str, object]
@@ -931,40 +1030,31 @@ class _ForkedStandardAccumulator:
 def read_policy_tree_for_fork(
     graph: GraphHandle, policy_id: str
 ) -> tuple[ForkedStandardRecord, ...]:
-    """Full-content read of `policy_id`'s Standard/Control tree, for a supersede fork (Slice 6).
+    """Read the full content of `policy_id`'s Standard/Control tree, for a supersede fork.
 
-    A pure read, issued through the same `_read_query` health-tracking
-    wrapper as every other call in this module. Deliberately separate from
-    `read_policy_tree` (G7): that function's `StandardRecord`/`ControlRecord`
-    only carry `id`/`title`/`status`(+`control_type`) -- enough for
-    `get-policy`'s own view, not enough to fork real content (`description`,
-    `procedure`, `execution_frequency`, etc.) into a new draft. This
-    function's single Cypher statement walks the same
-    `Policy -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control` path
-    with `OPTIONAL MATCH` (mirrors `read_policy_tree`'s own shape), but
-    returns each node's full `properties()` map instead of a handful of
-    named columns -- `s.id`/`c.id` are returned alongside each map purely to
-    key the Python-side grouping-by-Standard accumulator on a stable scalar
-    (FalkorDB's own `properties()` map already includes `id` as an ordinary
-    property, per this schema's `MERGE (n:Label {id: $id})` convention, so
-    the separate `s.id`/`c.id` columns are redundant with the map's own `id`
-    key -- kept anyway for an unambiguous, never-`None`-when-a-node-matched
-    grouping key, matching `read_policy_tree`'s own `standard_id`/
-    `control_id`-column convention).
+    A pure read, separate from `read_policy_tree`: that function's records carry only id, title and
+    status (plus Control type), enough for a Policy view but not for forking real content
+    (`description`, `procedure`, `execution_frequency`, ...) into a new draft. The single Cypher
+    statement walks the same `SUPPORTED_BY`/`IMPLEMENTED_BY` path with `OPTIONAL MATCH` but returns
+    each node's full `properties()` map. `s.id` and `c.id` are returned alongside each map only as
+    stable scalar keys for the Python-side grouping by Standard.
 
-    Callers are expected to have already confirmed `policy_id` is
-    `"approved"` (AC-BI-011) before calling this -- this function itself
-    does not gate on status, it only reads.
+    Callers should already have confirmed that `policy_id` is `"approved"`; this function does not
+    gate on status.
 
     Args:
         graph: The single-tenant policy graph handle.
-        policy_id: The Policy id whose current Standard/Control tree is
-            being forked.
+        policy_id: The Policy id whose current Standard/Control tree is forked.
 
     Returns:
-        Every Standard under `policy_id` (each with its own Control
-        children), in the order FalkorDB returned them. A Policy with zero
-        Standards returns `()`.
+        Every Standard under `policy_id`, each with its Control children, in the order FalkorDB
+        returned them. A Policy with no Standards (or an unknown id) returns `()`.
+
+    Raises:
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`; nothing is written.
     """
     result = _read_query(
         graph,
@@ -1011,32 +1101,37 @@ def read_policy_tree_for_fork(
 def update_policy_fields(
     target: GraphWriteTarget, *, policy_id: str, properties: Mapping[str, object]
 ) -> None:
-    """PATCH a subset of an existing Policy's own content fields (issue #136, Slice 1, AC-BI-008).
+    """PATCH a subset of an existing Policy's own content fields.
 
-    An explicit `None` value in `properties` means "clear this field" (a legitimate PATCH
-    semantic, distinct from the key being absent entirely, which leaves the existing value
-    untouched -- the caller already only includes keys it means to change). Since issue #211 the
-    patch is ONE gateway group with no audit link (a draft edit writes no `audit_events` row): a
-    `MergeProperty` for every non-`None` value, then a `RemoveProperty` for every cleared key.
-    A patch that sets nothing has no merge, one that clears nothing has no remove, and a patch
-    that changes nothing logs nothing.
+    An explicit `None` value in `properties` means "clear this field"; a key that is absent leaves
+    the existing value untouched (the caller includes only keys it means to change). The patch is
+    ONE gateway group with no audit link (a draft edit writes no `audit_events` row): a
+    `MergeProperty` for every non-`None` value, then a `RemoveProperty` for every cleared key. A
+    patch that sets nothing has no merge, one that clears nothing has no remove, and a patch that
+    changes nothing logs nothing.
 
-    Property KEY NAMES are never caller-controlled strings here: `properties` is only ever
-    `mcp_interface.mcp_server._parse_patch_fields`'s already-validated output, whose keys are
-    drawn exclusively from a fixed, code-defined allow-list (`service._POLICY_PATCHABLE_FIELDS`,
-    derived from `ps_service.domain_schema`); the gateway validates each key again against its
-    identifier pattern before it reaches Cypher.
+    Property key names are never free caller strings here: `properties` is the already-validated
+    output of the MCP boundary's patch-field parser, whose keys come from a fixed, code-defined
+    allow-list derived from `ps_service.domain_schema`; the gateway validates each key again against
+    its identifier pattern before it reaches Cypher.
 
     Args:
         target: The gateway target of the single-tenant policy graph.
         policy_id: The existing Policy id to patch.
-        properties: Field name -> new value (or `None` to clear), already restricted to the
-            allowed patchable-field set by the caller.
+        properties: Field name to new value (or `None` to clear), already restricted to the allowed
+            patchable-field set by the caller.
+
+    Returns:
+        None.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused
-            the group (for example a value it cannot store), could not reach its stores, or the
-            group was committed but not applied.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused the
+            group (for example a value it cannot store), could not reach its stores, or the group
+            was committed but not applied.
+
+    Side Effects:
+        Submits one gateway group with no audit link (stamping the graph's legacy edges first if
+        this target has not yet been stamped); nothing is submitted for an empty patch.
     """
     submit_group(
         target,
@@ -1048,7 +1143,7 @@ def update_policy_fields(
 def _patch_primitives(
     label: str, node_id: str, properties: Mapping[str, object]
 ) -> tuple[Primitive, ...]:
-    """The primitives of one PATCH: a merge of the set values, then a remove of the cleared keys."""
+    """Build one PATCH's primitives: a merge of the set values, then a remove of cleared keys."""
     set_properties = {key: value for key, value in properties.items() if value is not None}
     null_keys = tuple(key for key, value in properties.items() if value is None)
     primitives: list[Primitive] = []
@@ -1068,7 +1163,7 @@ def _child_primitives(
     properties: Mapping[str, object],
     edge_type: str,
 ) -> tuple[Primitive, ...]:
-    """The primitives that mint a child under `parent`: the node, then the parent's edge to it."""
+    """Build the primitives that mint a child under `parent`: the node, then the edge to it."""
     with refuse_unstorable_values():
         return (
             UpsertNode(label=label, id=child_id, properties=dict(properties)),
@@ -1089,36 +1184,43 @@ def add_standard_to_policy(
     title: str,
     extra_properties: Mapping[str, object],
 ) -> None:
-    """Mint a new Standard under an existing draft Policy (issue #136, Slice 2, AC-BI-007).
+    """Mint a new Standard under an existing draft Policy.
 
-    Unlike `update_policy_fields`, a newly-minted node has no prior value to clear: an explicit
-    `None` in `extra_properties` (a caller passing `fields={"description": None}` to
-    `add-standard-to-draft`, say) simply means "don't set this field at all". `None`-valued keys
-    are filtered out.
+    Unlike a patch, a newly minted node has no prior value to clear: an explicit `None` in
+    `extra_properties` (for example `fields={"description": None}` from the add-standard tool) means
+    "don't set this field", and `None`-valued keys are filtered out.
 
-    `status` (governance status) is always forced to `"draft"`, unconditionally, whatever
-    `extra_properties` holds. `implementation_status` defaults to `"draft"` (AC-BI-007) unless the
-    caller supplied it (already validated against `service._STANDARD_IMPLEMENTATION_STATUS_VALUES`
-    by the MCP-boundary parser). Both `title` and `status` are set AFTER `extra_properties`'s
-    values, so neither could be overridden by a caller-supplied value (defence in depth).
+    Business Rules: `status` is always forced to `"draft"`, whatever `extra_properties` holds.
+    `implementation_status` defaults to `"draft"` unless the caller supplied it (already validated
+    at the MCP boundary). `title` and `status` are set AFTER `extra_properties`, so a
+    caller-supplied value can never override them. The Standard's id derives from its parent and
+    title (`domain_mapper.identity.standard_id`), so adding the same Standard twice under one
+    parent changes nothing the second time.
 
-    Since issue #211 this is ONE gateway group with no audit link: an `UpsertNode` for the
-    Standard, then the `UpsertEdge` `SUPPORTED_BY:{policy}->{standard}` from its parent. The
-    Standard's id derives from its parent and title (`domain_mapper.identity.standard_id`), so
-    adding the same Standard twice under one parent changes nothing the second time (AC-BI-009).
+    The write is ONE gateway group with no audit link: an `UpsertNode` for the Standard, then the
+    `UpsertEdge` `SUPPORTED_BY:{policy}->{standard}` from its parent.
 
     Args:
         target: The gateway target of the single-tenant policy graph.
-        policy_id: The existing draft Policy id to attach this Standard to.
+        policy_id: The existing draft Policy id to attach the Standard to.
         standard_id: The already-computed new Standard id
             (`domain_mapper.identity.standard_id(policy_id, title)`).
         title: The new Standard's title.
-        extra_properties: Any additional patchable content fields the caller supplied at
-            creation time (already restricted to `service._STANDARD_PATCHABLE_FIELDS` by the
-            MCP-boundary parser); `None`-valued keys are dropped, never written.
+        extra_properties: Additional patchable content fields the caller supplied at creation time,
+            already restricted to the Standard's patchable fields by the MCP boundary; `None`-valued
+            keys are dropped, never written.
+
+    Returns:
+        None.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused the
+            group (including a value it cannot store), could not reach its stores, or the group was
+            committed but not applied.
+
+    Side Effects:
+        Submits one gateway group with no audit link (stamping the graph's legacy edges first if
+        this target has not yet been stamped).
     """
     properties: dict[str, object] = {
         key: value for key, value in extra_properties.items() if value is not None
@@ -1141,16 +1243,20 @@ def add_standard_to_policy(
 
 @dataclass(frozen=True, slots=True)
 class StandardWithParent:
-    """A Standard's own status/title plus its parent Policy's owner/status (issue #136, Slice 3).
+    """A Standard's own status and title plus its parent Policy's owner and status.
 
-    TASK.md's Implementation-decisions paragraph: Standard has no
-    `owner_subject`/`owner_issuer` property of its own -- ownership is
-    derived by a one-hop query-time graph traversal to the parent Policy,
-    never a stored/denormalized field on Standard itself. This row is that
-    traversal's full result, letting the service layer build a
-    `PolicyLifecycleRuleContext` (owner pair + the STANDARD's own status,
-    the node directly being mutated -- never the parent Policy's status)
-    without a second read.
+    A Standard has no owner of its own: ownership is derived at query time by a one-hop traversal to
+    the parent Policy, never a stored field. This row is that traversal's full result, so the
+    service can build a `PolicyLifecycleRuleContext` (owner pair plus the Standard's own status,
+    the node being mutated, never the parent Policy's status) without a second read.
+
+    Attributes:
+        policy_id: The parent Policy's id.
+        policy_owner_subject: The parent Policy owner's token subject.
+        policy_owner_issuer: The parent Policy owner's token issuer.
+        policy_status: The parent Policy's status.
+        standard_status: The Standard's own status.
+        standard_title: The Standard's title.
     """
 
     policy_id: str
@@ -1162,27 +1268,25 @@ class StandardWithParent:
 
 
 def find_standard_with_parent(graph: GraphHandle, standard_id: str) -> StandardWithParent | None:
-    """One-hop transitive-ownership read for an existing Standard (issue #136, Slice 3).
+    """Read an existing Standard with its parent Policy's owner and status (one hop).
 
-    A pure read, issued through the same `_read_query` health-tracking
-    wrapper as every other call in this module. Callers are expected to
-    backfill the parent Policy's tree first (D-7) so `standard_status` is
-    never spuriously `NULL` by the time a draft-status gate inspects it --
-    this function itself does not backfill (mirrors `read_policy_tree`'s own
-    division of labor: `graph_writer` issues Cypher only, backfill-then-read
-    ordering is the service layer's job).
+    A pure read. Callers should backfill the parent Policy's tree first so `standard_status` is
+    never spuriously `NULL` when a draft-status gate inspects it; this function does not backfill.
 
     Args:
         graph: The single-tenant policy graph handle.
-        standard_id: The Standard id to read, plus its parent Policy's
-            owner/status.
+        standard_id: The Standard id to read.
 
     Returns:
-        A `StandardWithParent` row, or `None` if no `Policy
-        -[:SUPPORTED_BY]-> Standard {id: standard_id}` path exists (either
-        the Standard id is unknown, or it exists but has no parent Policy --
-        both are treated as "not found" by this function's own single
-        `MATCH`, since every real Standard always has exactly one parent).
+        A `StandardWithParent` row, or `None` when no `Policy -[:SUPPORTED_BY]-> Standard {id:
+        standard_id}` path exists (the id is unknown, or the Standard has no parent Policy; both are
+        "not found", since every real Standard has exactly one parent).
+
+    Raises:
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`; nothing is written.
     """
     result = _read_query(
         graph,
@@ -1207,23 +1311,32 @@ def find_standard_with_parent(graph: GraphHandle, standard_id: str) -> StandardW
 def update_standard_fields(
     target: GraphWriteTarget, *, standard_id: str, properties: Mapping[str, object]
 ) -> None:
-    """PATCH a subset of an existing Standard's own content fields (issue #136, Slice 3, AC-BI-008).
+    """PATCH a subset of an existing Standard's own content fields.
 
     Same split as `update_policy_fields`: one gateway group with no audit link, a `MergeProperty`
-    for every non-`None` value then a `RemoveProperty` for every cleared key; a patch that
-    changes nothing logs nothing. `properties` is only ever
-    `mcp_interface.mcp_server._parse_patch_fields`'s already-validated output, whose keys come
-    from the code-defined allow-list (`service._STANDARD_PATCHABLE_FIELDS`, derived from
+    for every non-`None` value then a `RemoveProperty` for every cleared key; an explicit `None`
+    clears a field, an absent key leaves it, and a patch that changes nothing logs nothing.
+    `properties` is the already-validated output of the MCP boundary's patch-field parser, whose
+    keys come from the code-defined allow-list of the Standard's patchable fields (derived from
     `ps_service.domain_schema`).
 
     Args:
         target: The gateway target of the single-tenant policy graph.
         standard_id: The existing Standard id to patch.
-        properties: Field name -> new value (or `None` to clear), already restricted to the
-            allowed patchable-field set by the caller.
+        properties: Field name to new value (or `None` to clear), already restricted to the allowed
+            patchable-field set by the caller.
+
+    Returns:
+        None.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused the
+            group (for example a value it cannot store), could not reach its stores, or the group
+            was committed but not applied.
+
+    Side Effects:
+        Submits one gateway group with no audit link (stamping the graph's legacy edges first if
+        this target has not yet been stamped); nothing is submitted for an empty patch.
     """
     submit_group(
         target, _patch_primitives("Standard", standard_id, properties), audit_event_id=None
@@ -1239,34 +1352,43 @@ def add_control_to_standard(
     control_type: str,
     extra_properties: Mapping[str, object],
 ) -> None:
-    """Mint a new Control under an existing draft Standard (issue #136, Slice 4, AC-BI-007).
+    """Mint a new Control under an existing draft Standard.
 
-    Mirrors `add_standard_to_policy` one level deeper (ownership and status gating for the call
-    is the service's one-hop `find_standard_with_parent`; this function issues no read).
+    Mirrors `add_standard_to_policy` one level deeper. Ownership and status gating for the call is
+    the service's concern (it uses `find_standard_with_parent`); this function issues no read.
 
-    `None`-valued keys of `extra_properties` are dropped. `status` is always forced to `"draft"`.
-    `implementation_status` defaults to `"planned"` (NOT `"draft"` like a Standard's) unless the
-    caller supplied one. `type` is always set from `control_type`, never from `extra_properties`.
-    `title`, `type` and `status` are set AFTER `extra_properties`'s values, so none could be
-    overridden by a caller-supplied value (defence in depth).
+    Business Rules: `None`-valued keys of `extra_properties` are dropped. `status` is always forced
+    to `"draft"`. `implementation_status` defaults to `"planned"` (not `"draft"` as for a Standard)
+    unless the caller supplied one. `type` is always set from `control_type`, never from
+    `extra_properties`. `title`, `type` and `status` are set AFTER `extra_properties`, so a
+    caller-supplied value can never override them.
 
-    Since issue #211 this is ONE gateway group with no audit link: an `UpsertNode` for the Control,
-    then the `UpsertEdge` `IMPLEMENTED_BY:{standard}->{control}` from its parent.
+    The write is ONE gateway group with no audit link: an `UpsertNode` for the Control, then the
+    `UpsertEdge` `IMPLEMENTED_BY:{standard}->{control}` from its parent.
 
     Args:
         target: The gateway target of the single-tenant policy graph.
-        standard_id: The existing draft Standard id to attach this Control to.
+        standard_id: The existing draft Standard id to attach the Control to.
         control_id: The already-computed new Control id
             (`domain_mapper.identity.control_id(standard_id, title)`).
         title: The new Control's title.
-        control_type: The new Control's `type` (`"automated"` or `"manual"`), already validated
-            at the MCP boundary.
-        extra_properties: Any additional patchable content fields the caller supplied at
-            creation time (already restricted to `service._CONTROL_PATCHABLE_FIELDS - {"type"}`
-            by the MCP-boundary parser); `None`-valued keys are dropped, never written.
+        control_type: The new Control's `type` (`"automated"` or `"manual"`), already validated at
+            the MCP boundary.
+        extra_properties: Additional patchable content fields the caller supplied at creation time,
+            already restricted to the Control's patchable fields other than `type` by the MCP
+            boundary; `None`-valued keys are dropped, never written.
+
+    Returns:
+        None.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused the
+            group (including a value it cannot store), could not reach its stores, or the group was
+            committed but not applied.
+
+    Side Effects:
+        Submits one gateway group with no audit link (stamping the graph's legacy edges first if
+        this target has not yet been stamped).
     """
     properties: dict[str, object] = {
         key: value for key, value in extra_properties.items() if value is not None
@@ -1290,19 +1412,22 @@ def add_control_to_standard(
 
 @dataclass(frozen=True, slots=True)
 class ControlWithParent:
-    """A Control's own status/title plus its root Policy's owner/status (issue #136, Slice 5).
+    """A Control's own status and title plus its root Policy's owner and status.
 
-    TASK.md's Implementation-decisions paragraph: `update-control-draft` is
-    the one genuinely **two-hop** transitive-ownership tool in this issue
-    (`Policy -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control`) --
-    unlike `update-standard-draft`/`add-control-to-draft` (Slices 3/4), which
-    both take a `standard_id` and only need the one-hop
-    `find_standard_with_parent` traversal. Control has no
-    `owner_subject`/`owner_issuer` property of its own, nor does its parent
-    Standard -- ownership is derived by walking all the way to the root
-    Policy. `standard_id` is carried too, even though this issue's tools
-    never need it directly, mirroring `StandardWithParent`'s own
-    "full traversal result, no second read" shape.
+    Updating a Control is the one genuinely two-hop transitive-ownership operation
+    (`Policy -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control`), unlike the Standard-level
+    operations that need one hop. Neither the Control nor its parent Standard has an owner of its
+    own: ownership is derived by walking to the root Policy. The parent Standard's id is carried
+    too, so the row is the full traversal result and needs no second read.
+
+    Attributes:
+        standard_id: The parent Standard's id.
+        policy_id: The root Policy's id.
+        policy_owner_subject: The root Policy owner's token subject.
+        policy_owner_issuer: The root Policy owner's token issuer.
+        policy_status: The root Policy's status.
+        control_status: The Control's own status.
+        control_title: The Control's title.
     """
 
     standard_id: str
@@ -1315,29 +1440,26 @@ class ControlWithParent:
 
 
 def find_control_with_parent(graph: GraphHandle, control_id: str) -> ControlWithParent | None:
-    """Two-hop transitive-ownership read for an existing Control (issue #136, Slice 5).
+    """Read an existing Control with its parent Standard and root Policy's owner and status.
 
-    A pure read, issued through the same `_read_query` health-tracking
-    wrapper as every other call in this module. Callers are expected to
-    backfill the root Policy's tree first (D-7) so `control_status` is
-    never spuriously `NULL` by the time a draft-status gate inspects it --
-    this function itself does not backfill (mirrors
-    `find_standard_with_parent`'s own division of labor: `graph_writer`
-    issues Cypher only, backfill-then-read ordering is the service layer's
-    job).
+    A pure read. Callers should backfill the root Policy's tree first so `control_status` is never
+    spuriously `NULL` when a draft-status gate inspects it; this function does not backfill.
 
     Args:
         graph: The single-tenant policy graph handle.
-        control_id: The Control id to read, plus its parent Standard id and
-            root Policy's owner/status.
+        control_id: The Control id to read.
 
     Returns:
-        A `ControlWithParent` row, or `None` if no `Policy
-        -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control {id:
-        control_id}` path exists (either the Control id is unknown, or it
-        exists but its parent chain is broken -- both are treated as "not
-        found" by this function's own single `MATCH`, since every real
-        Control always has exactly one parent Standard and one root Policy).
+        A `ControlWithParent` row, or `None` when no `Policy -[:SUPPORTED_BY]-> Standard
+        -[:IMPLEMENTED_BY]-> Control {id: control_id}` path exists (the id is unknown, or its parent
+        chain is broken; both are "not found", since every real Control has exactly one parent
+        Standard and one root Policy).
+
+    Raises:
+        redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
+
+    Side Effects:
+        Reads the graph and updates `dependency_health`; nothing is written.
     """
     result = _read_query(
         graph,
@@ -1372,18 +1494,30 @@ def find_control_with_parent(graph: GraphHandle, control_id: str) -> ControlWith
 def update_control_fields(
     target: GraphWriteTarget, *, control_id: str, properties: Mapping[str, object]
 ) -> None:
-    """PATCH a subset of an existing Control's own content fields (issue #136, Slice 5, AC-BI-008).
+    """PATCH a subset of an existing Control's own content fields.
 
-    Identical to `update_standard_fields` for a Control: one gateway group with no audit link,
-    keys from `service._CONTROL_PATCHABLE_FIELDS`.
+    Behaves like `update_standard_fields` for a Control: one gateway group with no audit link, a
+    `MergeProperty` for every non-`None` value then a `RemoveProperty` for every cleared key; an
+    explicit `None` clears a field, an absent key leaves it, and a patch that changes nothing logs
+    nothing. `properties` keys come from the code-defined allow-list of the Control's patchable
+    fields.
 
     Args:
         target: The gateway target of the single-tenant policy graph.
         control_id: The existing Control id to patch.
-        properties: Field name -> new value (or `None` to clear), already restricted to the
-            allowed patchable-field set by the caller.
+        properties: Field name to new value (or `None` to clear), already restricted to the allowed
+            patchable-field set by the caller.
+
+    Returns:
+        None.
 
     Raises:
-        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`.
+        PolicyLifecycleGraphUnavailableError: `FalkorDB write failed: ...`, the gateway refused the
+            group (for example a value it cannot store), could not reach its stores, or the group
+            was committed but not applied.
+
+    Side Effects:
+        Submits one gateway group with no audit link (stamping the graph's legacy edges first if
+        this target has not yet been stamped); nothing is submitted for an empty patch.
     """
     submit_group(target, _patch_primitives("Control", control_id, properties), audit_event_id=None)

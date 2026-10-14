@@ -1,28 +1,22 @@
-"""PostgreSQL persistence for the shared, insert-only `audit_events` table (issue #147).
+"""PostgreSQL persistence for the shared, insert-only `audit_events` table.
 
-`AuditStore` is the `Protocol` every `ps_service` component that emits audit
-events depends on -- `PsycopgAuditStore` is the real implementation. Not
-nested under any one consumer component, even though `audit_events` lives in
-the PS state Postgres instance that several components share. This
-component reuses `ps_service.persistence.connect_from_config` directly for
-its own connection lifecycle (`record_standalone`/`query`) rather than
-duplicating a parallel `PS_AUDIT_POSTGRES_*` config surface; the table
-itself is created by this component's own migration directory, applied by
-the shared `ps_service.persistence` runner.
+`AuditStore` is the `Protocol` that every `ps_service` component emitting audit events depends
+on; `PsycopgAuditStore` is the real implementation. The store is not nested under any one
+consumer component, even though `audit_events` lives in the PS state Postgres instance that
+several components share. It opens connections with `ps_service.persistence.connect_from_config`
+rather than adding a parallel configuration surface; the table is created by this component's
+own migration directory, applied by the shared `ps_service.persistence` runner.
 
-Slice 1 shipped `record` only -- the cursor-scoped write every in-transaction
-caller (Slice 2's store repoint) needs. Slice 3 added
-`record_standalone`: the denial-recording write with no surrounding
-state-changing transaction to join (access-denied / self-grant-or-revoke-
-blocked / SystemOwner-floor-violation -- these are raised in
-the calling service *before* any state-changing store method is ever
-called, so there is no open cursor for a `record` call to reuse). Slice 4
-adds `query` below: the `list-audit-events` read path -- newest-first,
-keyset-paginated, filtered.
+Three operations:
 
-Insert-only is enforced by omission, not a DB privilege/trigger (that is
-issue #151, out of scope here): `AuditStore` never defines an `UPDATE`/
-`DELETE` method at all (AC-BI-013).
+- `record`: the cursor-scoped write for callers that already hold a transaction, so the audit row
+  commits or rolls back with their state change.
+- `record_standalone`: opens its own connection and commits, for rows with no surrounding
+  state-changing transaction (denials, opening and terminal lifecycle rows).
+- `query`: newest-first, keyset-paginated, filtered read.
+
+Insert-only is enforced by omission, not by a database privilege or trigger: `AuditStore` defines
+no `UPDATE` or `DELETE` method at all.
 """
 
 from __future__ import annotations
@@ -79,22 +73,19 @@ _SELECT_AUDIT_EVENTS_COLUMNS = (
 
 
 def _encode_cursor(*, occurred_at: datetime, event_id: str) -> str:
-    """Opaque `next_cursor` value: base64 of `"{occurred_at_iso}|{id}"` (PLAN.md §3.4).
+    """Encode a keyset position as the opaque `next_cursor` (base64 of `"{occurred_at_iso}|{id}"`).
 
-    The caller (`list-audit-events`) must never document or rely on this
-    internal shape -- only that it round-trips through `query`'s own
-    `cursor` argument.
+    Callers must treat the token as opaque: it only round-trips through `query`'s `cursor`.
     """
     raw = f"{occurred_at.isoformat()}{_CURSOR_FIELD_SEPARATOR}{event_id}"
     return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
 
 
 def _decode_cursor(cursor: str) -> tuple[datetime, str]:
-    """Decode and validate a `cursor` string, raising `AuditInvalidCursorError` on any defect.
+    """Decode a `cursor` into its `(occurred_at, id)` keyset position.
 
-    Covers every malformed shape PLAN.md §3.4 names: not valid base64, the
-    wrong field count once decoded, an unparseable timestamp, or a
-    non-UUID id.
+    Raises `AuditInvalidCursorError` for any malformed shape: not valid base64, the wrong field
+    count once decoded, an unparseable timestamp, or a non-UUID id.
     """
     try:
         raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
@@ -142,15 +133,11 @@ from this dict, never interpolated into SQL; the value is bound as `details_<key
 def _build_query_conditions(
     filters: AuditQueryFilters, *, cursor_bound: tuple[datetime, str] | None, page_size: int
 ) -> tuple[list[str], dict[str, object]]:
-    """Build `query`'s dynamic `WHERE` fragments and their parameterized values.
+    """Build `query`'s `WHERE` fragments and their bound parameter values.
 
-    Data-driven (`_EQUALITY_FILTER_COLUMNS`) rather than one `if` per filter,
-    both to keep `PsycopgAuditStore.query`'s own cyclomatic complexity down
-    (ruff C901) and to avoid this function repeating the same complexity
-    itself. Every fragment is still a fixed literal string; only *which*
-    fragments are included is runtime-conditional. Every actual filter value
-    flows through the returned `params` dict, never interpolated into a
-    fragment.
+    Every fragment is a fixed literal; only which fragments are included depends on the set
+    filters. Every filter value travels in the returned `params` dict, never interpolated into a
+    fragment. A `filters.details` key outside `AUDIT_DETAILS_FILTER_KEYS` raises `KeyError`.
     """
     conditions: list[str] = []
     params: dict[str, object] = {"fetch_limit": page_size + 1}
@@ -176,14 +163,10 @@ def _build_query_conditions(
 
 
 def _row_from_record(record: Sequence[object]) -> AuditEventRow:
-    """Map one raw `psycopg` result row (fixed column order, `_SELECT_AUDIT_EVENTS_COLUMNS`).
+    """Map one raw `psycopg` result row (column order `_SELECT_AUDIT_EVENTS_COLUMNS`) to a row.
 
-    `cast()` at this one boundary mirrors the other `psycopg`-backed
-    stores' own `_row_from_record` (L2's `cast()` policy) -- every column's expected
-    Python type is fixed by `migrations/0001_audit_events.sql`'s own schema.
-    `id` is converted with `str()`, not `cast()`, since `psycopg` returns a
-    `uuid.UUID` object for a `uuid` column, mirroring
-    `ps_service.passkey_signing.store`'s own `id=str(row_id)` convention.
+    Column types are fixed by `migrations/0001_audit_events.sql`, so `cast()` at this one
+    boundary is safe. `id` is converted with `str()` because `psycopg` returns a `uuid.UUID`.
     """
     (
         row_id,
@@ -210,12 +193,11 @@ def _row_from_record(record: Sequence[object]) -> AuditEventRow:
 
 
 class AuditStore(Protocol):
-    """Persistence seam for `audit_events` rows.
+    """Persistence seam for `audit_events` rows: validated insert and filtered, paginated read.
 
-    Constructor-injected wherever it is needed (no DI framework, L2's "plain
-    constructor injection" rule) -- every consumer store (e.g. the
-    access-role store) depends on this `Protocol`, never on
-    `PsycopgAuditStore` directly, so a test can substitute an in-memory fake.
+    Constructor-injected into every component that records or reads audit events. Consumers
+    depend on this `Protocol`, never on `PsycopgAuditStore` directly, so a test can substitute
+    an in-memory fake. The interface has no update or delete method: the trail is insert-only.
     """
 
     def record(
@@ -230,27 +212,37 @@ class AuditStore(Protocol):
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
     ) -> str:
-        """Validate `details` against `action`'s registered model, then `INSERT` one row.
+        """Validate `details` against `action`'s registered model, then insert one audit row.
 
-        Returns the new row's generated `id` (a UUID string), so the caller can link other
-        writes in the same transaction to this audit row (issue #205: the graph mutation log's
-        group carries it as a foreign key).
+        The insert runs on the caller's own open cursor and transaction, never on a connection
+        this method opens, so it commits or rolls back atomically with whatever state change that
+        transaction also performs. The caller owns the commit.
 
-        Uses the CALLER's own already-open cursor/transaction, never a
-        connection this method opens itself -- so this insert commits or
-        rolls back atomically together with whatever state change `cur`'s
-        surrounding transaction is also performing (AC-BI-006/AC-BI-010).
-        Deliberately does not catch `psycopg.Error` itself (it owns no
-        transaction to roll back) -- propagates verbatim to the caller's own
-        `except psycopg.Error` block, mirroring how every
-        consumer store method already relies on its own `with
-        connect_from_config(...) as conn:` rollback-on-exception behavior.
+        Args:
+            cur: The caller's open cursor, inside the transaction the row must join.
+            actor_subject: Identity-provider subject of the acting principal.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            action: A registered, namespaced action string.
+            resource_type: The kind of resource acted on.
+            resource_id: The identifier of the resource acted on.
+            outcome: Whether the effect happened: `"applied"`, `"rejected"` or `"failed"`.
+            details: The action's `details` payload. Fields left at their `None` default are
+                omitted from the stored JSON rather than stored as `null`.
+
+        Returns:
+            The generated id (a UUID string) of the new row, so the caller can link other writes
+            in the same transaction to this audit row.
 
         Raises:
-            AuditUnknownActionError: `action` has no registered model
-                (AC-BI-005).
-            AuditInvalidDetailsError: `details` fails that model's
-                validation (AC-BI-005/AC-BI-009).
+            AuditUnknownActionError: `action` has no registered model; nothing is inserted.
+            AuditInvalidDetailsError: `details` fails that model's validation; nothing is
+                inserted.
+            AuditPersistenceError: the insert returned no row.
+            psycopg.Error: the driver failed; propagated unchanged for the caller's own
+                transaction handling, since this method owns no transaction to roll back.
+
+        Side Effects:
+            Executes one `INSERT` on `cur`; becomes durable only when the caller commits.
         """
         ...
 
@@ -265,58 +257,80 @@ class AuditStore(Protocol):
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
     ) -> None:
-        """Open its own connection/transaction, call `record`, commit (issue #147, Slice 3).
+        """Validate and insert one audit row in its own connection and transaction, then commit.
 
-        For a denial that has no surrounding state-changing transaction to
-        join (access-denied / self-grant-or-revoke-blocked /
-        SystemOwner-floor-violation, AC-BI-012's three RBAC/rule denials --
-        raised by the calling service *before* any state-changing store
-        method is ever called, so nothing else is being written and
-        there is no cursor-scoped transaction for `record` to join).
+        For rows with no surrounding state-changing transaction to join, such as a denial
+        recorded before any state change was attempted, or an opening or terminal lifecycle
+        row.
+
+        Args:
+            actor_subject: Identity-provider subject of the acting principal.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            action: A registered, namespaced action string.
+            resource_type: The kind of resource acted on.
+            resource_id: The identifier of the resource acted on.
+            outcome: Whether the effect happened: `"applied"`, `"rejected"` or `"failed"`.
+            details: The action's `details` payload, validated against the action's model.
+
+        Returns:
+            None.
 
         Raises:
-            AuditPostgresUnavailableError: the connection could not be
-                opened (AC-BI-011) -- message carries no host/port/driver
-                detail.
-            AuditPersistenceError: the connection opened but the underlying
-                `INSERT` failed.
-            AuditUnknownActionError / AuditInvalidDetailsError: as `record`.
+            AuditPostgresUnavailableError: the connection could not be opened; the message
+                carries no host, port or driver detail.
+            AuditPersistenceError: the connection opened but the insert failed.
+            AuditUnknownActionError: `action` has no registered model; nothing is inserted.
+            AuditInvalidDetailsError: `details` fails the action's model; nothing is inserted.
+
+        Side Effects:
+            Opens and closes a connection to the PS state Postgres, inserts and commits one
+            `audit_events` row, and updates the state-Postgres dependency health (unhealthy on a
+            connection or driver failure, healthy on success).
         """
         ...
 
     def query(
         self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
     ) -> AuditQueryPage:
-        """Newest-first, keyset-paginated read of `audit_events` (issue #147, Slice 4).
+        """Read one newest-first, keyset-paginated page of `audit_events`.
 
-        Orders `ORDER BY occurred_at DESC, id DESC`. `cursor` (from a prior
-        page's `next_cursor`) is an opaque token decoded server-side into a
-        `WHERE (occurred_at, id) < (...)` clause -- avoids `OFFSET`'s O(n)
-        scan cost on a table meant to grow unboundedly (insert-only, never
-        pruned in this issue's scope). `filters` fields are combined with
-        `AND`; every unset (`None`) field is omitted from the `WHERE`
-        clause entirely. Filter *validity* (unknown action/resource type,
-        `occurred_from > occurred_to`, `page_size` over the maximum) is the
-        caller's own
-        responsibility, checked before `query` is ever called (AC-BI-008) --
-        `query` itself does not re-validate `filters`.
+        Rows are ordered by `occurred_at DESC, id DESC`. Keyset pagination (rather than `OFFSET`)
+        keeps page cost flat on a table that only grows.
+
+        Business Rules:
+            Set filter fields are combined with AND; an unset field is omitted. The store does
+            not validate filter values (unknown action or resource type, `occurred_from` after
+            `occurred_to`, an oversized `page_size`): the caller must check them first.
+
+        Args:
+            filters: The filters to apply.
+            cursor: The `next_cursor` of a previous page, or `None` for the first page.
+            page_size: Maximum number of rows to return; a positive integer.
+
+        Returns:
+            An `AuditQueryPage` holding up to `page_size` rows and a `next_cursor` that is `None`
+            when no further rows exist.
 
         Raises:
-            AuditPostgresUnavailableError: the store cannot be reached
-                (AC-BI-011) -- message carries no host/port/driver detail.
-            AuditInvalidCursorError: `cursor` does not decode to a
-                well-formed `(occurred_at, id)` pair.
+            AuditInvalidCursorError: `cursor` does not decode to a well-formed
+                `(occurred_at, id)` pair.
+            AuditPostgresUnavailableError: the store cannot be reached or the read fails; the
+                message carries no host, port or driver detail.
+
+        Side Effects:
+            Opens and closes a connection to the PS state Postgres and updates the
+            state-Postgres dependency health. Writes nothing.
         """
         ...
 
 
 @runtime_checkable
 class EventIdAuditStore(Protocol):
-    """An `AuditStore` that can report the id of the row it just wrote (issue #210, A6).
+    """An audit store that can report the id of the row it just wrote.
 
-    Narrow and additive: `AuditStore` and its many fakes are unchanged. Only a caller that must
-    anchor a later write to the audit row it opened (the near-miss resolve, whose graph group
-    carries the row's id) asks for it; `PsycopgAuditStore` satisfies it.
+    Narrow capability on top of `AuditStore`, requested only by a caller that must anchor a
+    later write to the audit row that opened its operation. `PsycopgAuditStore` satisfies it.
+    The check is runtime-checkable (`isinstance`).
     """
 
     def record_standalone_with_event_id(
@@ -330,24 +344,52 @@ class EventIdAuditStore(Protocol):
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
     ) -> str:
-        """`AuditStore.record_standalone`, returning the inserted row's id (a UUID string)."""
+        """Validate and insert one audit row in its own connection and transaction, return its id.
+
+        Same contract as `AuditStore.record_standalone`, but hands back the generated id.
+
+        Args:
+            actor_subject: Identity-provider subject of the acting principal.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            action: A registered, namespaced action string.
+            resource_type: The kind of resource acted on.
+            resource_id: The identifier of the resource acted on.
+            outcome: Whether the effect happened: `"applied"`, `"rejected"` or `"failed"`.
+            details: The action's `details` payload, validated against the action's model.
+
+        Returns:
+            The generated id (a UUID string) of the inserted `audit_events` row.
+
+        Raises:
+            AuditPostgresUnavailableError: the connection could not be opened; the message
+                carries no host, port or driver detail.
+            AuditPersistenceError: the connection opened but the insert failed.
+            AuditUnknownActionError: `action` has no registered model; nothing is inserted.
+            AuditInvalidDetailsError: `details` fails the action's model; nothing is inserted.
+
+        Side Effects:
+            Opens and closes a connection to the PS state Postgres, inserts and commits one
+            `audit_events` row, and updates the state-Postgres dependency health.
+        """
         ...
 
 
 class PsycopgAuditStore:
-    """Real `AuditStore` backed by PostgreSQL via `psycopg[binary]`.
+    """`AuditStore` and `EventIdAuditStore` backed by PostgreSQL via `psycopg`.
 
-    `record` never opens its own connection (uses the caller's cursor), but
-    `record_standalone` (Slice 3) and `query` (Slice 4) do, via
-    `ps_service.persistence.connect_from_config` -- the *same* PS state
-    Postgres instance/config (`config.state_postgres_*`), reused directly
-    rather than introducing a parallel `PS_AUDIT_POSTGRES_*` config surface,
-    since `audit_events` is created by this component's own migration
-    directory in that same database (PLAN.md §3.3).
+    `record` never opens a connection (it uses the caller's cursor). `record_standalone`,
+    `record_standalone_with_event_id` and `query` open one with
+    `ps_service.persistence.connect_from_config`, using the same PS state Postgres configuration
+    (`config.state_postgres_*`) that holds `audit_events`; there is no separate audit database
+    setting.
     """
 
     def __init__(self, config: ServiceConfig) -> None:
-        """Store `config`; no connection is opened (mirrors the other stores' `__init__`)."""
+        """Keep `config` for later connections; opens none.
+
+        Args:
+            config: Service configuration whose state-Postgres settings locate `audit_events`.
+        """
         self._config = config
 
     def record(
@@ -362,14 +404,36 @@ class PsycopgAuditStore:
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
     ) -> str:
-        """Validate `details` against `action`'s registered model, then `INSERT` one row.
+        """Validate `details` against `action`'s registered model, then insert one audit row.
 
-        See `AuditStore.record`'s docstring for the full contract. Stored
-        `details` omits any field left at its `None` default (e.g.
-        a `reason_code` on the `outcome='applied'` path, per the emitting
-        component's own field docstrings) rather
-        than persisting an explicit `null` -- "absent" and "declared but
-        unset" are the same fact for this table's typed, per-action shapes.
+        The insert runs on the caller's own open cursor and transaction, so it commits or rolls
+        back with the caller's state change. Stored `details` omits any field left at its `None`
+        default instead of persisting an explicit `null`: "absent" and "declared but unset" are
+        the same fact for the table's typed per-action shapes.
+
+        Args:
+            cur: The caller's open cursor, inside the transaction the row must join.
+            actor_subject: Identity-provider subject of the acting principal.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            action: A registered, namespaced action string.
+            resource_type: The kind of resource acted on.
+            resource_id: The identifier of the resource acted on.
+            outcome: Whether the effect happened: `"applied"`, `"rejected"` or `"failed"`.
+            details: The action's `details` payload; validated, then dumped as JSON.
+
+        Returns:
+            The generated id (a UUID string) of the new row.
+
+        Raises:
+            AuditUnknownActionError: `action` has no registered model; nothing is inserted.
+            AuditInvalidDetailsError: `details` fails that model's validation; nothing is
+                inserted. The message includes the validation error text.
+            AuditPersistenceError: the insert returned no row.
+            psycopg.Error: the driver failed; propagated unchanged for the caller's transaction
+                handling.
+
+        Side Effects:
+            Executes one `INSERT` on `cur`; becomes durable only when the caller commits.
         """
         details_model = resolve_details_model(action)
         if details_model is None:
@@ -409,10 +473,32 @@ class PsycopgAuditStore:
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
     ) -> None:
-        """Open its own connection/transaction, call `record`, commit.
+        """Validate and insert one audit row in its own connection and transaction, then commit.
 
-        Delegates to `record_standalone_with_event_id` and discards the id; see
-        `AuditStore.record_standalone`'s docstring for the full contract.
+        Behaves as `record_standalone_with_event_id` and discards the returned id.
+
+        Args:
+            actor_subject: Identity-provider subject of the acting principal.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            action: A registered, namespaced action string.
+            resource_type: The kind of resource acted on.
+            resource_id: The identifier of the resource acted on.
+            outcome: Whether the effect happened: `"applied"`, `"rejected"` or `"failed"`.
+            details: The action's `details` payload, validated against the action's model.
+
+        Returns:
+            None.
+
+        Raises:
+            AuditPostgresUnavailableError: the connection could not be opened; the message
+                carries no host, port or driver detail.
+            AuditPersistenceError: the connection opened but the insert failed.
+            AuditUnknownActionError: `action` has no registered model; nothing is inserted.
+            AuditInvalidDetailsError: `details` fails the action's model; nothing is inserted.
+
+        Side Effects:
+            Opens and closes a connection to the PS state Postgres, inserts and commits one
+            `audit_events` row, and updates the state-Postgres dependency health.
         """
         self.record_standalone_with_event_id(
             actor_subject=actor_subject,
@@ -435,19 +521,38 @@ class PsycopgAuditStore:
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
     ) -> str:
-        """Open its own connection/transaction, call `record`, commit; return the row's id.
+        """Validate and insert one audit row in its own connection and transaction, return its id.
 
-        Issue #210 (A6): `record_standalone` with the `INSERT ... RETURNING id` handed back, for a
-        caller that anchors a later write to this row. See `AuditStore.record_standalone`'s
-        docstring for the full contract. Two distinct failure phases (PLAN.md §3.3): opening the
-        connection (`AuditPostgresUnavailableError`, AC-BI-011 -- the
-        message never carries `self._config`'s host/port, mirroring
-        `AuthorizationStoreUnavailableError`'s own fixed-message discipline)
-        versus the `INSERT` itself failing once a connection already exists
-        (`AuditPersistenceError`). `AuditUnknownActionError`/
-        `AuditInvalidDetailsError` from `record`'s own validation propagate
-        unchanged -- they are caller-input errors, not store-availability
-        ones, so they must not be reclassified as either audit-store error.
+        Two failure phases are kept distinct: opening the connection raises
+        `AuditPostgresUnavailableError` (fixed message, no host or port), while an `INSERT`
+        failure on an open connection raises `AuditPersistenceError`. Validation errors are
+        caller-input errors, not store-availability ones, so they propagate unchanged and are
+        never reclassified as either store error.
+
+        Args:
+            actor_subject: Identity-provider subject of the acting principal.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            action: A registered, namespaced action string.
+            resource_type: The kind of resource acted on.
+            resource_id: The identifier of the resource acted on.
+            outcome: Whether the effect happened: `"applied"`, `"rejected"` or `"failed"`.
+            details: The action's `details` payload, validated against the action's model.
+
+        Returns:
+            The generated id (a UUID string) of the inserted `audit_events` row.
+
+        Raises:
+            AuditPostgresUnavailableError: the connection could not be opened (state Postgres
+                unconfigured or unreachable).
+            AuditPersistenceError: the connection opened but the insert failed; wraps the driver
+                error.
+            AuditUnknownActionError: `action` has no registered model; nothing is inserted.
+            AuditInvalidDetailsError: `details` fails the action's model; nothing is inserted.
+
+        Side Effects:
+            Opens and closes a connection to the PS state Postgres, inserts and commits one
+            `audit_events` row, marks the state-Postgres dependency unhealthy on a connection or
+            driver failure and healthy on success.
         """
         try:
             conn = connect_from_config(self._config)
@@ -479,15 +584,33 @@ class PsycopgAuditStore:
     def query(
         self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
     ) -> AuditQueryPage:
-        """Newest-first, keyset-paginated read of `audit_events`.
+        """Read one newest-first, keyset-paginated page of `audit_events`.
 
-        See `AuditStore.query`'s docstring for the full contract. `cursor`
-        is decoded (raising `AuditInvalidCursorError`) before any connection
-        is opened -- a malformed cursor is a caller-input error, not a
-        store-availability one. Fetches `page_size + 1` rows to detect
-        whether a next page exists without a separate `COUNT` round trip;
-        the (possible) extra row is trimmed before building `next_cursor`
-        from the last row actually returned.
+        Rows are ordered by `occurred_at DESC, id DESC`. The cursor is decoded before any
+        connection is opened, because a malformed cursor is a caller-input error, not a
+        store-availability one. `page_size + 1` rows are fetched to learn whether a next page
+        exists without a `COUNT` round trip; the extra row is dropped and `next_cursor` is built
+        from the last row returned.
+
+        Args:
+            filters: Filters combined with AND; unset fields are omitted. Values are not
+                validated here.
+            cursor: The `next_cursor` of a previous page, or `None` for the first page.
+            page_size: Maximum number of rows to return; a positive integer.
+
+        Returns:
+            An `AuditQueryPage` holding up to `page_size` rows, newest first (empty when nothing
+            matches), and a `next_cursor` that is `None` on the last page.
+
+        Raises:
+            AuditInvalidCursorError: `cursor` is malformed.
+            AuditPostgresUnavailableError: the connection could not be opened or the read failed
+                with a driver error; the message carries no host, port or driver detail.
+            KeyError: `filters.details` contains a key outside `AUDIT_DETAILS_FILTER_KEYS`.
+
+        Side Effects:
+            Opens and closes a connection to the PS state Postgres and marks the state-Postgres
+            dependency unhealthy on failure and healthy on success. Writes nothing.
         """
         cursor_bound = _decode_cursor(cursor) if cursor is not None else None
         conditions, params = _build_query_conditions(
@@ -507,15 +630,10 @@ class PsycopgAuditStore:
             raise AuditPostgresUnavailableError(_AUDIT_STORE_UNAVAILABLE_MESSAGE) from exc
         try:
             with conn, conn.cursor() as cur:
-                # `select_sql` is assembled entirely from this module's own fixed
-                # literal fragments (`_SELECT_AUDIT_EVENTS_COLUMNS`, the table name,
-                # and a fixed set of possible `WHERE` fragments) -- never from
-                # caller-supplied text -- but the assembly is runtime-conditional
-                # (which fragments join in depends on which `filters` are set), so
-                # it can never statically be a `LiteralString`. `cast()` here mirrors
-                # `migration_runner.py`'s own identical `cur.execute(cast(...))`
-                # precedent (L2 `cast()` policy). Every actual value is still
-                # parameterized via `params`, never interpolated into `select_sql`.
+                # `select_sql` is assembled only from this module's fixed literal fragments,
+                # never from caller text, but which fragments join depends on the set filters,
+                # so the type checker cannot see it as a `LiteralString`. Every value is
+                # still bound through `params`, never interpolated.
                 cur.execute(cast("LiteralString", select_sql), params)
                 records = cur.fetchall()
         except psycopg.Error as exc:

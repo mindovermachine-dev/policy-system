@@ -1,4 +1,4 @@
-"""Audited invitation orchestration (issue #195).
+"""Audited invitation orchestration.
 
 `invite_user_audited` writes the `user.invite` `applied` row BEFORE the Authentik call
 (fail-closed: if the row cannot be written, Authentik is never contacted) and a `failed` row
@@ -32,11 +32,35 @@ def invite_user_audited(
     send_invitation: Callable[[ServiceConfig, str], InvitationResult] = create_invitation,
     emitter: LogEmitter | None = None,
 ) -> InvitationResult:
-    """Create an invitation for `email`, auditing it (AC-BI-011/013).
+    """Create an invitation for `email`, auditing the attempt.
+
+    Business Rules:
+        - The `applied` row is written before Authentik is contacted (fail closed): if it cannot
+          be written, no invitation is created.
+        - A failed call writes a best-effort `failed` row with the enumerated reason; failing to
+          write that row is logged and does not mask the invitation error.
+        - The audit row and logs hold only the invitee email (the log omits it); the `itoken`
+          and invite URL are never recorded.
+
+    Args:
+        config: Service configuration supplying the Authentik credential and URLs.
+        email: The invitee's email address; recorded as the audit resource id.
+        audit: The acting principal and the audit store receiving the rows.
+        send_invitation: Callable creating the invitation; defaults to `create_invitation`.
+            Tests inject a fake.
+        emitter: Log emitter for audit-failure entries; `None` uses the process default.
+
+    Returns:
+        The `InvitationResult` (`itoken` and `invite_url`) of the created invitation.
 
     Raises:
-        AuditTrailUnavailableError: the opening row could not be written; nothing was sent.
-        AuthentikInvitationError: the Authentik call failed (a `failed` row was attempted).
+        AuditTrailUnavailableError: The opening row could not be written; nothing was sent.
+        AuthentikInvitationError: The Authentik call failed; a `failed` row was attempted before
+            re-raising.
+
+    Side Effects:
+        Writes a `user.invite` audit row with outcome `applied`, creates an invitation in
+        Authentik, and on failure writes a second row with outcome `failed` and a `reason_code`.
     """
     target = AuditTarget(
         action=USER_INVITE_ACTION,

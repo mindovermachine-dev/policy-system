@@ -1,34 +1,32 @@
-"""Domain-specific exception types for `ps_service.policy_lifecycle` (issue #134).
+"""Domain exception types for `ps_service.policy_lifecycle`.
 
-One exception type per distinct failure boundary this component owns, never a
-generic `Exception`/`ValueError` (L1/L2 Error Handling) -- mirrors the shape
-of `ps_service.domain_mapper.errors`/`ps_service.authz.errors`: plain
-`Exception` subclasses (not `ps_service.api.errors.ApiError` -- that base is
-reserved for the API-boundary layer; a later slice's own `ps_service.api`
-translation, if any, wraps these). Every message is either fully fixed
-(baked into a no-argument `__init__`, guaranteeing byte-identical text at
-every raise site -- the same discipline `ps_service.mcp_interface.errors.
-McpGraphUnavailableError` applies to keep host/port/driver detail off the
-MCP boundary) or built only from values the caller already supplied/knows
-(a `policy_id`, a `title`, a `status`) -- never internal detail such as a
-host, port, or stack trace (AC-BI-015).
+One exception type per distinct failure boundary, never a bare `Exception`/`ValueError`. They are
+plain `Exception` subclasses, not `ps_service.api.errors.ApiError`, which is reserved for the API
+boundary; callers translate them. Every message is either fully fixed (baked into a no-argument
+`__init__`, so the text is byte-identical at every raise site) or built only from values the caller
+already supplied or is allowed to know (a `policy_id`, a `title`, a `status`), and never contains
+internal detail such as a host, port or stack trace.
 
-`AC-BI-008`'s access-denied case is deliberately **not** reimplemented here:
-it reuses `ps_service.api.errors.AccessDeniedError` unchanged.
+An access denial on a non-draft action reuses `ps_service.api.errors.AccessDeniedError` rather
+than a type defined here.
 """
 
 from __future__ import annotations
 
 
 class PolicyNotFoundError(Exception):
-    """No `Policy` node exists with the given id (generic 404-shaped case).
+    """No `Policy` node exists with the given id.
 
-    `policy_id` is supplied by the caller in the very request that raises
-    this, so echoing it back leaks nothing new.
+    Raised by the lifecycle service when a Policy is read, transitioned or edited by an id that
+    matches nothing. Callers should report not-found and let the user correct the id.
+
+    Attributes:
+        policy_id: The id the caller looked up. It came from the caller's own request, so echoing
+            it back leaks nothing new.
     """
 
     def __init__(self, policy_id: str) -> None:
-        """Build the message from the already-caller-known `policy_id`.
+        """Build the not-found message from the caller-supplied `policy_id`.
 
         Args:
             policy_id: The id the caller looked up; not found.
@@ -38,24 +36,28 @@ class PolicyNotFoundError(Exception):
 
 
 class PolicyDraftAccessDeniedError(Exception):
-    """A caller tried to read/act on a draft `Policy` they do not own (AC-BI-002).
+    """A caller tried to read or act on a draft `Policy` they do not own.
 
-    The message is fixed and never reveals whether the policy exists, who
-    owns it, or its current status -- distinguishing any of those would let
-    a caller use repeated calls as a visibility oracle.
+    The message is fixed and never reveals whether the Policy exists, who owns it or its current
+    status; distinguishing any of those would let a caller use repeated calls as a visibility
+    oracle. Callers should report a generic access denial.
     """
 
     def __init__(self) -> None:
-        """Fix the message so every raise site is byte-identical (AC-BI-015)."""
+        """Take no arguments and fix the message so every raise site is byte-identical."""
         super().__init__("you do not have access to this Policy")
 
 
 class PolicyTitleAlreadyExistsError(Exception):
-    """A `create-policy-draft` call's title collides with an existing Policy (AC-BI-022).
+    """A `create-policy-draft` call's title collides with an existing Policy.
 
-    Both interpolated values -- the caller-supplied `title` and the existing
-    policy's own `id` -- are already known to the caller who just attempted
-    to create that title, so naming them back is not a new leak.
+    Raised when creating a draft whose title is already used. Callers should choose another title
+    or amend the existing Policy through the supersede workflow.
+
+    Attributes:
+        title: The title the caller attempted to use.
+        existing_policy_id: The id of the Policy already using that title. Both values are known to
+            the caller who just attempted to create that title, so naming them is not a new leak.
     """
 
     def __init__(self, title: str, existing_policy_id: str) -> None:
@@ -74,19 +76,19 @@ class PolicyTitleAlreadyExistsError(Exception):
 
 
 class PolicyStandardNotFoundError(Exception):
-    """No `Standard` node exists with the given id (issue #136, Slice 3).
+    """No `Standard` node exists with the given id.
 
-    `Policy`-prefixed to match every other error in this module (7/7,
-    CHANGES.md finding #7) despite naming a Standard, not a Policy -- this
-    component's own error-naming convention groups every exception it raises
-    under one prefix rather than one per node type.
+    Named with the `Policy` prefix like every exception of this module, although it names a
+    Standard. Raised when a Standard is edited or read by an id that matches nothing; callers
+    should report not-found.
 
-    `standard_id` is supplied by the caller in the very request that raises
-    this, so echoing it back leaks nothing new.
+    Attributes:
+        standard_id: The id the caller looked up. It came from the caller's own request, so
+            echoing it back leaks nothing new.
     """
 
     def __init__(self, standard_id: str) -> None:
-        """Build the message from the already-caller-known `standard_id`.
+        """Build the not-found message from the caller-supplied `standard_id`.
 
         Args:
             standard_id: The id the caller looked up; not found.
@@ -96,18 +98,19 @@ class PolicyStandardNotFoundError(Exception):
 
 
 class PolicyControlNotFoundError(Exception):
-    """No `Control` node exists with the given id (issue #136, Slice 5).
+    """No `Control` node exists with the given id.
 
-    `Policy`-prefixed to match every other error in this module (CHANGES.md
-    finding #7), despite naming a Control -- same rationale as
-    `PolicyStandardNotFoundError`.
+    Named with the `Policy` prefix like every exception of this module, although it names a
+    Control. Raised when a Control is edited or read by an id that matches nothing; callers should
+    report not-found.
 
-    `control_id` is supplied by the caller in the very request that raises
-    this, so echoing it back leaks nothing new.
+    Attributes:
+        control_id: The id the caller looked up. It came from the caller's own request, so echoing
+            it back leaks nothing new.
     """
 
     def __init__(self, control_id: str) -> None:
-        """Build the message from the already-caller-known `control_id`.
+        """Build the not-found message from the caller-supplied `control_id`.
 
         Args:
             control_id: The id the caller looked up; not found.
@@ -117,19 +120,28 @@ class PolicyControlNotFoundError(Exception):
 
 
 class PolicyIncompleteForProposalError(Exception):
-    """A `Policy` was proposed with zero `Standard`s attached (AC-BI-013)."""
+    """A `Policy` was proposed while it has no `Standard` attached.
+
+    A Policy needs at least one Standard before it can move from draft to proposed. Callers should
+    add a Standard and propose again.
+    """
 
     def __init__(self) -> None:
-        """Fix the message so every raise site is byte-identical (AC-BI-015)."""
+        """Take no arguments and fix the message so every raise site is byte-identical."""
         super().__init__("at least one Standard is required before a Policy can be proposed")
 
 
 class PolicyInvalidStatusTransitionError(Exception):
-    """A lifecycle action was attempted from a status that does not permit it (AC-BI-023).
+    """A lifecycle action was attempted from a status that does not permit it.
 
-    `action` and `current_status`/`required_status` are all already known to
-    the caller (the action they just attempted, and the Policy's real
-    current state) -- naming them is actionable, not a leak.
+    Callers should report the current and required status so the user can pick a valid action.
+
+    Attributes:
+        action: The lifecycle action the caller attempted.
+        current_status: The Policy's actual status.
+        required_status: The status the action requires. All three values are already known to the
+            caller (the action just attempted and the Policy's real state), so naming them is
+            actionable, not a leak.
     """
 
     def __init__(self, *, action: str, current_status: str, required_status: str) -> None:
@@ -150,19 +162,26 @@ class PolicyInvalidStatusTransitionError(Exception):
 
 
 class PolicySelfApprovalBlockedError(Exception):
-    """A `Policy`'s owner attempted to approve or reject their own Policy (AC-BI-006)."""
+    """A `Policy`'s owner attempted to approve or reject their own Policy.
+
+    Approval needs a second person. Callers should ask a different approver to act.
+    """
 
     def __init__(self) -> None:
-        """Fix the message so every raise site is byte-identical (AC-BI-015)."""
+        """Take no arguments and fix the message so every raise site is byte-identical."""
         super().__init__("you cannot approve or reject a Policy you own")
 
 
 class PolicySupersedePriorNotApprovedError(Exception):
-    """`supersedes_policy_id` names a Policy that is not `approved` (issue #136, AC-BI-011).
+    """`supersedes_policy_id` names a Policy that is not `approved`.
 
-    `policy_id` and `actual_status` are both already known to the caller (the
-    id they just supplied, and the Policy's real current state) -- naming
-    them is actionable, not a leak.
+    Only an approved Policy can be forked into a superseding draft. Callers should supersede an
+    approved Policy instead.
+
+    Attributes:
+        policy_id: The `supersedes_policy_id` the caller supplied.
+        actual_status: That Policy's actual status. Both values are already known to the caller, so
+            naming them is actionable, not a leak.
     """
 
     def __init__(self, policy_id: str, actual_status: str) -> None:
@@ -181,10 +200,13 @@ class PolicySupersedePriorNotApprovedError(Exception):
 
 
 class PolicyCapabilityNotFoundError(Exception):
-    """`create-policy-draft` named Capability ids that do not exist (issue #185).
+    """`create-policy-draft` named Capability ids that do not exist.
 
-    `capability_ids` are the caller-supplied ids that were not found; echoing
-    them back leaks nothing new.
+    Callers should check the Capability ids and retry.
+
+    Attributes:
+        capability_ids: The caller-supplied ids that match no Capability; echoing them back leaks
+            nothing new.
     """
 
     def __init__(self, capability_ids: tuple[str, ...]) -> None:
@@ -201,10 +223,14 @@ class PolicyCapabilityNotFoundError(Exception):
 
 
 class PolicyCapabilityAlreadyGovernedError(Exception):
-    """`create-policy-draft` named Capability ids already governed by a Policy (issue #185).
+    """`create-policy-draft` named Capability ids already governed by a Policy.
 
-    Only the caller-supplied ids are named -- never the governing Policy's
-    id, which the caller may not be allowed to see (draft visibility).
+    Callers should amend the governing Policy through the supersede workflow instead.
+
+    Attributes:
+        capability_ids: The caller-supplied ids that already have a governing Policy. The
+            governing Policy's own id is never named, because the caller may not be allowed to see
+            it (draft visibility).
     """
 
     def __init__(self, capability_ids: tuple[str, ...]) -> None:
@@ -221,11 +247,14 @@ class PolicyCapabilityAlreadyGovernedError(Exception):
 
 
 class PolicyGovernanceConflictError(Exception):
-    """`approve-policy` found the superseded Policy's governed Capabilities changed (issue #185).
+    """`approve-policy` found that the superseded Policy's governed Capabilities changed.
 
-    The governed set read before the write no longer matched at write time,
-    so the single guarded statement wrote nothing: no edge moved and the
-    Policy's status is unchanged.
+    The governed set read before the write no longer matched at write time, so the guarded write
+    was refused: no edge moved and the Policy's status is unchanged. Callers should retry the
+    approval.
+
+    Attributes:
+        policy_id: The Policy whose approval was not applied.
     """
 
     def __init__(self, policy_id: str) -> None:
@@ -245,22 +274,26 @@ class PolicyGovernanceConflictError(Exception):
 class PolicyLifecycleGraphUnavailableError(Exception):
     """The FalkorDB-backed policy graph could not be read or written for a lifecycle call.
 
-    Covers unreachable, refused, a driver I/O failure, or invalid
-    `PS_FALKORDB_*` configuration on a read, and (issue #211) every gateway
-    failure on a write: a refused group, an unreachable graph log or graph,
-    a group committed but not yet applied. The message is deliberately
-    generic: host/port/driver/env-var detail must never cross this
-    component's boundary, mirroring `ps_service.mcp_interface.errors.
-    McpGraphUnavailableError`'s own discipline (AC-BI-024).
+    Covers an unreachable or refusing graph, a driver I/O failure or invalid `PS_FALKORDB_*`
+    configuration on a read, and every gateway failure on a write: a refused group, an unreachable
+    graph log or graph, a group committed but not yet applied. The message is deliberately generic:
+    host, port, driver and environment-variable detail never cross this component's boundary,
+    mirroring `ps_service.mcp_interface.errors.McpGraphUnavailableError`. Callers should report the
+    graph as temporarily unavailable and retry later.
 
-    With no argument the message is the fixed text below, so every read-side
-    raise site stays byte-identical (AC-BI-015). A write-side raise passes
-    `FalkorDB write failed: <sanitized gateway text>` (the gateway's texts are
-    fixed and carry no host, port or content), with the gateway error chained.
+    With no argument the message is the fixed text, so every read-side raise site is
+    byte-identical. A write-side raise passes `FalkorDB write failed: <sanitized gateway text>`
+    (the gateway's texts are fixed and carry no host, port or content) and chains the gateway
+    error as `__cause__`.
     """
 
     def __init__(self, message: str | None = None) -> None:
-        """Carry `message`, or the fixed text when none is given (AC-BI-015)."""
+        """Carry `message`, or the fixed text when none is given.
+
+        Args:
+            message: The sanitized text of a write-side failure. `None` selects the fixed
+                "the policy graph database is not reachable" text.
+        """
         super().__init__(
             "the policy graph database is not reachable" if message is None else message
         )
@@ -270,11 +303,12 @@ class StaleGroupError(Exception):
     """A guarded group was refused because the graph log moved after its guard was read.
 
     Internal to `policy_lifecycle`: raised by `graph_submission.submit_group` when the gateway
-    refuses a group's `ExpectedPosition` (`StaleGraphStateError`, chained as `__cause__`), so
-    each guarded caller (fork repoint, capability-claim create) can translate it into its own
-    named error. Not part of the component's public surface.
+    refuses a group's `ExpectedPosition` (`StaleGraphStateError`, chained as `__cause__`), so each
+    guarded caller (fork repoint, capability-claim create) can translate it into its own named
+    error. Nothing was logged for the refused group; the caller re-reads and decides again, or
+    translates it. Not part of the component's public surface.
     """
 
     def __init__(self) -> None:
-        """Carry a fixed message; nothing of the group or the graph is named."""
+        """Take no arguments and carry a fixed message; nothing of the group or graph is named."""
         super().__init__("the policy graph changed after the guard was read")

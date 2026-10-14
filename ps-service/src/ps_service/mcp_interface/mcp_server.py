@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""MCP server definition: in-process read-only Cypher access to the policy_system graph.
+"""MCP server surface of the PS Service: the shared `MCPServer` and its tool plumbing.
 
-Defines the `cypher` and `domain_concepts` tools and the
-`psdomain://concepts` resource on a single `MCPServer` instance. Calls
-ps_service.query_engine.execute_cypher_query IN-PROCESS; the write-clause
-guard and all execution live in Query Engine and are never duplicated here.
+Defines `server`, the single `MCPServer` instance on which every PS tool and the
+`psdomain://concepts` resource are registered, and the helpers all tools share: caller-identity
+resolution from the verified bearer token, role gating, graph-opener sanitising and the
+started/succeeded/failed log triad wrapped around every tool body. Read-only graph queries run
+in-process through `ps_service.query_engine.execute_cypher_query`; the write-clause guard and query
+execution live in Query Engine and are never duplicated here.
 
-This module defines the server surface only -- it binds no transport and
-no auth of its own. The Streamable HTTP transport (issue #39) is the sole
-transport and lives in the sibling `http_transport.py` module, which calls
-`server.streamable_http_app(...)` on the `server` object defined below
-from outside this file -- see `tests/mcp_interface/test_scope_guard.py`
-for the guards this keeps intact. MCP's stdio transport was removed once
-the plugin model made the HTTP endpoint the only supported client path.
+Business Rules:
+    - This module binds no transport and no authentication. The Streamable HTTP transport in the
+      sibling `http_transport` module is the only transport and arms authentication on `server` from
+      outside this file, so importing this module performs no I/O and no fail-closed check.
+    - A tool failure crosses the MCP boundary as an `error: <message>` string. Infrastructure
+      failures use fixed, detail-free wording: no host, port, driver or credential text.
 """
 
 from __future__ import annotations
@@ -63,9 +64,9 @@ from ps_service.api.errors import (
 )
 from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.ingestion_orchestration import (
-    _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  -- shared failure-reason cap; D-AUDIT-WRAPPER reuses it for `_run_mcp_action`'s own truncation, mirrors change_check_orchestration.py's own cross-module private-import convention
+    _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  -- shared failure-reason cap, reused for `_run_mcp_action`'s own truncation; mirrors change_check_orchestration.py's cross-module private-import convention
     GraphOpeners,
-    _require_ingestion_config,  # pyright: ignore[reportPrivateUsage]  -- issue #194 AC-BI-010: the identical config-completeness check, reused so the error text can never drift
+    _require_ingestion_config,  # pyright: ignore[reportPrivateUsage]  -- the identical config-completeness check, reused so the error text can never drift
     build_default_pipeline_dependencies,
     classify_ingestion_failure,
     resolve_ingestion_entry,
@@ -73,7 +74,7 @@ from ps_service.api.ingestion_orchestration import (
     run_catalog_ingestion_pipeline,
 )
 from ps_service.api.ingestion_orchestration import (
-    SHORT_NAME_PATTERN as _SHORT_NAME_PATTERN,  # shared w/ api/models.py's short_name (#146)
+    SHORT_NAME_PATTERN as _SHORT_NAME_PATTERN,  # shared with api/models.py's short_name
 )
 from ps_service.api.models import (
     CatalogInstrumentEntry,
@@ -92,8 +93,8 @@ from ps_service.api.restore_orchestration import (
     run_restoration_from_catalog_source,
 )
 from ps_service.api.routes import (
-    _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: reuse the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift, mirrors change_check_orchestration.py's own cross-module private-import convention
-    _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
+    _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- reuses the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift; mirrors change_check_orchestration.py's cross-module private-import convention
+    _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- same reuse for `check_regulations`, mirroring `_to_accepted_response` immediately above
 )
 from ps_service.api.run_status import get_stage
 from ps_service.api.stage_failure_log import stage_failure_detail
@@ -188,11 +189,11 @@ from ps_service.policy_lifecycle.errors import (
 )
 from ps_service.policy_lifecycle.graph_submission import lifecycle_submitter
 from ps_service.policy_lifecycle.service import (
-    _CONTROL_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 4: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
-    _CONTROL_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 4: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
-    _POLICY_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- issue #136 PLAN.md §1.7: declared once in service.py, imported here to avoid drift between the two layers
-    _STANDARD_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 2: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
-    _STANDARD_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 2: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
+    _CONTROL_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
+    _CONTROL_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
+    _POLICY_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- declared once in service.py, imported here to avoid drift between the two layers
+    _STANDARD_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
+    _STANDARD_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
     ControlDraftInput,
     StandardDraftInput,
 )
@@ -275,49 +276,45 @@ _DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL = "the ps-domain-concepts resource is curren
 _GRAPH_UNAVAILABLE_DETAIL = "the policy graph database is not reachable"
 _GRAPH_UNAVAILABLE_MESSAGE = f"error: {_GRAPH_UNAVAILABLE_DETAIL}"
 _UNEXPECTED_ERROR_MESSAGE = "error: an unexpected error occurred"
-# D-PREFLIGHT: verbatim reuse of ps-cli's own `handlers.py:72` message text,
-# preserved for operator familiarity across both client paths.
+# Same wording ps-cli uses for this condition, so both client paths read alike to operators.
 _LLM_INTERFACE_UNAVAILABLE_MESSAGE = "error: LLM Interface is unavailable."
 
-# D-SHORTNAME-PATTERN: must start with a letter, alnum/`_`/`-` body, 1-64 chars --
-# mirrors every existing catalog short_name ("cra", "gdpr", "nis2"). Now imported as
-# `SHORT_NAME_PATTERN` from `ps_service.api.ingestion_orchestration` (issue #146) --
-# one canonical pattern literal shared with `api/models.py`'s
-# `CatalogIngestionRequest.short_name`, aliased back to this module's original
-# private name so `ingest_regulation`'s `Field(pattern=_SHORT_NAME_PATTERN)` call
-# site needs no further edit.
+# `_SHORT_NAME_PATTERN` is `SHORT_NAME_PATTERN` from `ps_service.api.ingestion_orchestration`:
+# a letter first, then alphanumerics, `_` or `-`, 1-64 characters in all (as "cra", "gdpr" and
+# "nis2"). It is one pattern literal shared with `api/models.py`'s
+# `CatalogIngestionRequest.short_name`, so REST and MCP accept the same names.
 # Same CELEX pattern `api/models.py`'s `CatalogIngestionRequest.celex` already enforces.
 _CELEX_PATTERN = r"^3\d{4}[A-Z]\d{4}$"
-# D-INSTRUMENT-ID-STRICTNESS: same charset/length bound as ps-cli's own
-# `_INSTRUMENT_ID_PATTERN` (`ps-cli/src/ps_cli/modules/parser.py:31`) -- at least as
-# strict as `CatalogRestorationRequest.instrument_id`'s looser REST-sibling pattern
-# (`api/models.py:181-183`, no `".."` guard of its own). PLAN.md's own proposed
-# single-regex collapse (`^(?!.*\.\.)...`) does not work here: pydantic-core's regex
-# backend (the Rust `regex` crate, wired in by the MCP SDK's own `func_metadata` ->
-# `create_model` call) does not support look-around at all -- confirmed by the
-# `SchemaError: look-around... is not supported` raised at tool-registration time
-# when that pattern was tried. `_reject_path_traversal_segment` below (an
-# `AfterValidator`) supplies the `".."` rejection instead, still entirely within
-# pydantic's own schema-validation pass -- i.e. still before this tool's body ever
-# runs -- mirroring ps-cli's own two-step `_instrument_id_type` check (regex
-# fullmatch, then an explicit `".." in value` scan) rather than collapsing it.
+# Charset and length bound for a curated instrument id, the same as ps-cli's own instrument-id
+# pattern and at least as strict as `CatalogRestorationRequest.instrument_id`'s REST pattern,
+# which has no `..` guard of its own. The `..` rejection is a separate `AfterValidator`
+# (`_reject_path_traversal_segment`) rather than a look-ahead in this regex, because
+# pydantic-core's regex backend (the Rust `regex` crate) does not support look-around and raises
+# a `SchemaError` at tool-registration time. The validator still runs inside pydantic's
+# schema-validation pass, before the tool body, mirroring ps-cli's regex-then-`..` two-step check.
 _RESTORE_INSTRUMENT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
-# A deliberately permissive structural "looks like an email" check for
-# `invite_user` (issue #140, AC-BI-007) -- full RFC 5322 validation is out of
-# scope; `pydantic.EmailStr` needs the `email-validator` package, which is
-# not an installed dependency in this workspace, and adding it is unwarranted
-# scope creep for a trust-boundary check whose real validation authority is
-# Authentik itself at redemption time.
+# A deliberately permissive structural "looks like an email" check for `invite_user`. Full
+# RFC 5322 validation is out of scope: `pydantic.EmailStr` needs the `email-validator` package,
+# which is not an installed dependency, and the real validation authority is Authentik itself
+# at redemption time.
 _INVITE_EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
 def _reject_path_traversal_segment(value: str) -> str:
-    """`AfterValidator` companion to `_RESTORE_INSTRUMENT_ID_PATTERN` (D-INSTRUMENT-ID-STRICTNESS).
+    """Reject an instrument id that contains `..`.
 
-    Runs immediately after the base charset pattern matches, within the same
-    pydantic schema-validation pass the MCP SDK runs before dispatching to
-    `restore_instrument`'s body -- see `_RESTORE_INSTRUMENT_ID_PATTERN`'s own
-    comment for why this is a separate validator rather than a single regex.
+    Runs as an `AfterValidator` once `_RESTORE_INSTRUMENT_ID_PATTERN` has matched, inside pydantic's
+    schema-validation pass, so the check happens before `restore_instrument`'s body runs. It is a
+    separate validator because the regex backend cannot express the rule.
+
+    Args:
+        value: An instrument id that already matched the charset and length pattern.
+
+    Returns:
+        `value`, unchanged.
+
+    Raises:
+        ValueError: `value` contains `..`.
     """
     if ".." in value:
         msg = "instrument_id must not contain '..'"
@@ -327,22 +324,29 @@ def _reject_path_traversal_segment(value: str) -> str:
 
 @functools.cache
 def _domain_concepts_path() -> Traversable:
-    """Packaged location of ps-domain-concepts.md (issue #39, AC-BI-012).
+    """Locate the packaged `ps-domain-concepts.md` resource file.
 
-    Resolved via `importlib.resources` against this installed package, not
-    a repo-checkout-relative path -- so the resource serves correctly from
-    a wheel install with no repo checkout present, not only from an
-    editable/dev install. Lazy + cached: never touched at import.
+    Resolved with `importlib.resources` against the installed package, so it works from a wheel
+    install as well as from a checkout. Lazy and cached: nothing is touched at import time.
+
+    Returns:
+        A `Traversable` for the file inside `ps_service.mcp_interface`; its existence is not
+        checked.
     """
     return resources.files("ps_service.mcp_interface").joinpath("ps-domain-concepts.md")
 
 
 def _graph_name() -> str:
-    """The single company-graph name.
+    """Return the company graph name used by every graph-backed tool.
 
-    Reads PS_FALKORDB_GRAPH directly (config.py deliberately has no
-    falkordb_graph field -- see PLAN_REVIEWED §2 Q4). Rejects an
-    explicitly-empty value, mirroring config._parse_falkordb_host.
+    Reads `PS_FALKORDB_GRAPH` directly, defaulting to `policy_system`, because the service
+    configuration deliberately has no field for it.
+
+    Returns:
+        The graph name.
+
+    Raises:
+        McpGraphUnavailableError: The variable is set but blank.
     """
     name = os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_GRAPH_NAME)
     if not name.strip():
@@ -370,22 +374,33 @@ def handle_mcp_tool_call(
     timeout_ms: int,
     row_cap: int,
 ) -> dict[str, object] | str:
-    """HandleMcpToolCall: run `query` through Query Engine in-process.
+    """Run one read-only Cypher `query` through Query Engine in-process, as `cypher` does.
 
-    Binds a fresh run_id, then returns `{columns, rows, row_count, truncated}`
-    on success or an `error: <message>` string verbatim on a rejected,
-    unseeded-graph, or failed query.
+    Binds a fresh run id for the call, then executes the query with the given bounds. Query Engine
+    owns the write-clause guard, so this layer neither inspects nor rewrites `query`.
 
-    `principal` is an opaque caller identity string (issue #67), threaded
-    straight through to `execute_cypher_query` so it lands on the
-    `query_engine` log entry; omitted entirely when `None` (the default),
-    matching Slice 3's silent-by-default behavior end to end. This layer
-    never decides who the principal is -- see Slice 5 for where it's set.
+    Args:
+        query: Cypher text to execute; it must be read-only.
+        graph: Handle of the graph to query.
+        emitter: Log emitter forwarded to Query Engine for its log entry; `None` leaves the choice
+            to Query Engine.
+        principal: Opaque caller identity recorded on the `query_engine` log entry; the field is
+            omitted from the entry when `None`.
+        timeout_ms: Server-side execution bound in milliseconds, forwarded unchanged.
+        row_cap: Maximum number of rows returned, forwarded unchanged; `truncated` reports whether
+            it cut the result.
 
-    `timeout_ms`/`row_cap` (issue #38, D4) are required and threaded
-    straight through to `execute_cypher_query` unchanged -- this layer never
-    decides the bounds, only threads what its own caller (`cypher()`, wired
-    from `ServiceConfig`) gives it.
+    Returns:
+        `{"columns", "rows", "row_count", "truncated"}` on success (`rows` may be empty), or an
+        `error: <message>` string, verbatim from Query Engine, for a rejected write clause, an
+        unseeded graph or a failed query.
+
+    Raises:
+        LoggingLifecycleError: No log emitter is available (none given and no process default).
+
+    Side Effects:
+        Binds a run context for the call's duration. Query Engine emits one log entry carrying the
+        run id and `principal`. Nothing is written to the graph.
     """
     with bind_run_context():
         try:
@@ -408,15 +423,23 @@ def handle_mcp_tool_call(
 
 
 def _resolve_graph(config: ServiceConfig) -> GraphHandle:
-    """Acquire a GraphHandle for one tool call, given an already-resolved config.
+    """Open the company graph for one tool call, hiding connection detail from the client.
 
-    ANY failure here -- DB unreachable/refused, driver I/O in the eager
-    FalkorDB constructor or in select_graph -- is sanitised to a fixed
-    generic McpGraphUnavailableError. Host, port, driver, and env-var text
-    must not cross the MCP boundary (L2 MCP Interface Patterns; PLAN_REVIEWED
-    §2 Q6 / F-01 / F-17). `config` is resolved by the caller (`cypher()`), not
-    here, so a `ServiceConfigurationError` from `load_config()` is sanitised
-    by the caller's own try/except rather than this function's.
+    Args:
+        config: Already-resolved service configuration. The caller resolves it, so a
+            `ServiceConfigurationError` raised while loading it is sanitised by the caller.
+
+    Returns:
+        A `GraphHandle` for the graph named by `_graph_name()`.
+
+    Raises:
+        McpGraphUnavailableError: The graph name is blank, or the database is unreachable or refused
+            the connection, or the driver failed while connecting or selecting the graph. The
+            message is fixed and generic, because host, port, driver and environment-variable text
+            must not cross the MCP boundary; the original cause is chained.
+
+    Side Effects:
+        Opens a connection to FalkorDB.
     """
     try:
         return select_graph(connect_from_config(config), _graph_name())
@@ -429,19 +452,21 @@ def _resolve_graph(config: ServiceConfig) -> GraphHandle:
 
 
 def _resolve_principal(config: ServiceConfig) -> str | None:
-    """Resolve the `cypher` tool's caller identity (issue #58, AC-BI-007; issue #67).
+    """Resolve the caller identity recorded on a tool call's log entries.
 
-    A verified bearer token's `sub` always wins when one is present --
-    `get_access_token()` reads the `AccessToken` the MCP SDK's own
-    `AuthContextMiddleware` stashed on a contextvar for this request/task,
-    installed automatically by the SDK whenever `token_verifier` is set
-    (`ps_service.mcp_interface.http_transport.build_streamable_http_app`).
-    Falls back to the fixed local-test principal only when no token was
-    verified for this call AND the bypass (#67) is active -- the bypass's
-    existing, unchanged contract. Otherwise `None`, exactly as before this
-    issue (no real auth configured and no bypass: unreachable in practice,
-    since `ps_service.main.create_app` fails closed at startup in that
-    case, but this function makes no such assumption itself).
+    A verified bearer token's subject always wins: `get_access_token()` reads the token the MCP
+    SDK's authentication middleware stored for this request, which the SDK installs whenever the
+    transport has a token verifier. Without a token, the fixed local-test principal is used only
+    while the local-test bypass is active. Otherwise there is no principal; that case is unreachable
+    in practice because `ps_service.main.create_app` fails closed at startup when neither real
+    authentication nor the bypass is configured, but this function does not rely on it.
+
+    Args:
+        config: Service configuration; only `is_local_test_bypass_active` is read.
+
+    Returns:
+        The bearer token's subject (`None` if the token carries none), `LOCAL_TEST_PRINCIPAL_ID`
+        when there is no token and the bypass is active, otherwise `None`.
     """
     access_token = get_access_token()
     if access_token is not None:
@@ -452,26 +477,17 @@ def _resolve_principal(config: ServiceConfig) -> str | None:
 
 
 def _resolve_signing_actor() -> tuple[str, str] | None:
-    """Resolve `(sub, iss)` for the merge-gating flow's caller identity (issue #131, PLAN.md §2.1).
+    """Resolve the `(sub, iss)` identity a passkey-signed approval is bound to.
 
-    Narrower than `_resolve_principal`: a signed passkey approval must be
-    bound to both `sub` and `iss` (AC-BI-004/AC-BI-005), not `sub` alone --
-    mirrors `RestAuthMiddleware.__call__`'s own identical `sub`/`iss`
-    extraction from the same `AccessToken` shape (`auth/middleware.py`),
-    not a new pattern.
-
-    Deliberately does **not** fall back to `LOCAL_TEST_PRINCIPAL_ID` the way
-    `_resolve_principal` does: under the local-test bypass there is no real
-    actor identity a WebAuthn credential could ever meaningfully belong to,
-    so a pending approval must never be created for it (AC-BI-002 requires
-    "an already-authenticated caller under the existing OIDC session
-    contract" -- the bypass has no such contract). Returns `None` in that
-    case, which each caller (this module's `near_misses_resolve`/
-    `near_misses_check_approval`) treats as a fail-closed condition.
+    A signed approval is bound to both subject and issuer, not subject alone, which mirrors the
+    `sub`/`iss` extraction `RestAuthMiddleware.__call__` performs on the same `AccessToken` shape.
+    Unlike `_resolve_principal` there is deliberately no fallback to `LOCAL_TEST_PRINCIPAL_ID`:
+    under the local-test bypass no real actor exists that a WebAuthn credential could belong to, so
+    no pending approval may be created. Callers treat `None` as a fail-closed condition.
 
     Returns:
-        The verified `(sub, iss)` pair, or `None` if no verified bearer
-        token is bound to this call.
+        The verified `(sub, iss)` pair, or `None` if no verified bearer token is bound to this call,
+        the token has no subject, or its `iss` claim is not a string.
     """
     access_token = get_access_token()
     if access_token is None or access_token.subject is None:
@@ -486,42 +502,31 @@ _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: access-role management requires a real authenticated caller"
 )
 
-# PLAN.md §3.3/§4 Slice 4: the catalog-source gate's own defensive fallback for
-# a non-bypass call with no verified bearer token bound to it -- unreachable
-# in practice (`ps_service.main.create_app` fails closed at startup whenever
-# no real auth is configured and the bypass is off, mirroring
-# `_resolve_principal`'s own documented invariant), but this keeps the gate
-# fail-closed rather than passing `None` through to `require_role` should
-# that invariant ever be violated.
+# Defensive fallback for a non-bypass call with no verified bearer token bound to it. It is
+# unreachable in practice (`ps_service.main.create_app` fails closed at startup whenever no real
+# authentication is configured and the bypass is off, the invariant `_resolve_principal`
+# documents), but it keeps the gate fail-closed rather than passing `None` through to
+# `require_role` should that invariant ever be violated.
 _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: this action requires a real authenticated caller"
 )
 
 
 def _resolve_authz_actor(config: ServiceConfig) -> tuple[str, str] | None:
-    """Resolve `(sub, iss)` for the access-role management flow's caller identity (issue #133).
+    """Resolve the `(sub, iss)` identity used for role checks, role management and audit actors.
 
-    Structurally identical to `_resolve_signing_actor` above but kept as its
-    own function -- a deliberate small duplication (L1 "prefer duplication
-    over the wrong abstraction", PLAN.md §3.1): the two concepts
-    (signing-ceremony ownership identity vs. access-role identity) are
-    independently owned, and coupling them through one shared private helper
-    would mean a future change to either component's own identity-resolution
-    rules silently changes the other's behavior too.
+    Same extraction as `_resolve_signing_actor`, kept as its own function on purpose: signing
+    identity and access-role identity are owned independently, and one shared helper would let a
+    change to either's rules silently change the other's. There is deliberately no fallback to
+    `LOCAL_TEST_PRINCIPAL_ID`: access-role tools read and write real, permanent, identity-keyed
+    rows, and a synthetic bypass identity must never hold elevated access in a real store.
 
-    Deliberately does **not** fall back to `LOCAL_TEST_PRINCIPAL_ID` the way
-    `_resolve_principal` does (PLAN.md §3.3): `grant-access-role`/
-    `revoke-access-role`/`list-access-roles` write/read real, permanent,
-    identity-keyed Postgres rows, and bootstrapping the fixed bypass
-    principal string as `SystemOwner` in a real store would be actively
-    wrong -- a meaningless synthetic identity holding real elevated access.
-    `config` is accepted (unused beyond documenting this contract) so every
-    caller passes it uniformly, matching `_resolve_principal`'s own
-    signature shape.
+    Args:
+        config: Accepted so every resolver shares one signature; unused.
 
     Returns:
-        The verified `(sub, iss)` pair, or `None` if no verified bearer
-        token is bound to this call (bypass included).
+        The verified `(sub, iss)` pair, or `None` if no verified bearer token is bound to this call
+        (the bypass included), the token has no subject, or its `iss` claim is not a string.
     """
     del config
     access_token = get_access_token()
@@ -534,30 +539,22 @@ def _resolve_authz_actor(config: ServiceConfig) -> tuple[str, str] | None:
 
 
 def _resolve_policy_lifecycle_actor(config: ServiceConfig) -> tuple[str, str] | None:
-    """Resolve `(sub, iss)` for the policy-lifecycle tools' caller identity (issue #134, D-11).
+    """Resolve the `(sub, iss)` identity for the policy-lifecycle tools.
 
-    Same verified-bearer-token branch as `_resolve_signing_actor`/
-    `_resolve_authz_actor` immediately above -- but, unlike either of them,
-    DOES fall back to `(LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)`
-    when `config.is_local_test_bypass_active` and no verified bearer token
-    is bound to this call at all, mirroring `_resolve_principal`'s own
-    bypass-honoring branch instead (AC-BI-018). Unlike access-role
-    management or signing-ceremony approval identity, a Policy draft
-    created under the local-test bypass is exactly the kind of thing local,
-    unauthenticated end-to-end testing needs to be able to do -- there is no
-    real, permanent, identity-keyed store record this would corrupt the way
-    `_resolve_authz_actor`'s own docstring warns about.
+    Same verified-bearer-token branch as `_resolve_authz_actor`, but it falls back to
+    `(LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)` when no bearer token is bound and the
+    local-test bypass is active. A Policy draft created under the bypass is what local,
+    unauthenticated end-to-end testing needs, and it corrupts no real identity-keyed record. The
+    fallback applies only when no token is present at all: a present but malformed token (no
+    subject, or an `iss` that is not a string) resolves to `None` and never falls through to the
+    bypass identity.
 
-    The bypass fallback is reached ONLY when no bearer token is present at
-    all (mirrors `_resolve_principal`'s own outer branching exactly) -- a
-    *present but malformed* token (missing `sub`, or `iss` not a string)
-    still resolves to `None`, never silently falling through to the bypass
-    identity.
+    Args:
+        config: Service configuration; only `is_local_test_bypass_active` is read.
 
     Returns:
-        The verified `(sub, iss)` pair; `(LOCAL_TEST_PRINCIPAL_ID,
-        LOCAL_TEST_PRINCIPAL_ID)` if no verified bearer token is bound to
-        this call AND the local-test bypass is active; else `None`.
+        The verified `(sub, iss)` pair; the local-test pair when no token is bound and the bypass is
+        active; otherwise `None`.
     """
     access_token = get_access_token()
     if access_token is not None:
@@ -573,14 +570,20 @@ def _resolve_policy_lifecycle_actor(config: ServiceConfig) -> tuple[str, str] | 
 
 
 def _audit_context(config: ServiceConfig, actor: tuple[str, str] | None) -> AuditContext | str:
-    """Return who is acting and where the audit rows go, for one audited tool call (issue #218).
+    """Build the audit context (actor plus audit store) for one audited tool call.
 
     The single MCP definition of the actor policy, the counterpart of REST's
-    `provide_audit_context`: the verified `(sub, iss)`, or the local-test-bypass sentinel when
-    there is none and the bypass is active. A caller with neither gets
-    `_CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE` (fail-closed), which the tool returns
-    as is. `PsycopgAuditStore` opens no connection until a row is written, so a tool that needs
-    only `.actor` pays nothing for the store.
+    `provide_audit_context`. The actor is the verified `(sub, iss)`, or the local-test-bypass
+    sentinel when there is none and the bypass is active. `PsycopgAuditStore` opens no connection
+    until a row is written, so a tool that needs only `.actor` pays nothing for the store.
+
+    Args:
+        config: Service configuration; selects the audit database and the bypass state.
+        actor: Verified `(sub, iss)` from one of the resolvers, or `None` when none was bound.
+
+    Returns:
+        An `AuditContext`, or `_CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE` (fail-closed,
+        returned by the tool as is) when there is no actor and the bypass is inactive.
     """
     try:
         return AuditContext(
@@ -594,23 +597,22 @@ def _audit_context(config: ServiceConfig, actor: tuple[str, str] | None) -> Audi
 
 
 def _resolve_base_url(ctx: Context) -> str:
-    """Derive `{scheme}://{host}` from the live MCP request (PLAN.md §2.2 step 4).
+    """Derive the `{scheme}://{host}` base URL of the live MCP request, for approval links.
 
-    Mirrors `ps_service.auth.middleware._resource_metadata_url`'s own
-    "scheme + host off the live request, never hardcoded" pattern, so the
-    approval link is correct under a `kind` NodePort, a ClusterIP+Ingress,
-    and local dev alike. Reads `ctx.request_context.request` directly (the
-    Streamable HTTP transport's own raw Starlette `Request`, confirmed
-    against `mcp.server._streamable_http_modern`) rather than `ctx.headers`
-    alone, since `Context` does not expose scheme separately. Falls back to
-    a fixed placeholder when no request is bound to this call at all --
-    never reachable via the real Streamable HTTP transport; only a bare,
-    context-less test-only tool invocation hits this branch.
+    Scheme and host come off the live request rather than being hardcoded, so an approval link is
+    correct under a NodePort, a ClusterIP with Ingress and local development alike. It reads
+    `ctx.request_context.request` (the Streamable HTTP transport's raw Starlette `Request`) because
+    `Context` does not expose the scheme. `signable_link_host` rewrites a loopback IP literal to
+    `localhost`; without that a link from a local bind could not be signed. `api.routes` applies the
+    same substitution, so both transports hand out equally signable links.
 
-    `signable_link_host` then rewrites a loopback IP literal to `localhost`,
-    without which the link a local bind produces could not be signed at all
-    (issue #196) -- the same substitution `api.routes._approval_base_url`
-    applies, so both transports hand out equally signable links.
+    Args:
+        ctx: MCP request context of the current tool call.
+
+    Returns:
+        `scheme://host`. The scheme defaults to `http` when the request has none, and
+        `scheme://unknown` is returned when no request is bound or it has no host header (only a
+        bare, context-less test invocation reaches that case).
     """
     try:
         request = ctx.request_context.request
@@ -628,15 +630,23 @@ _CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
 
 
 def _require_cleanup_actor(config: ServiceConfig) -> tuple[str, str] | str:
-    """Gate every graph-cleanup tool (issue #190, AC-BI-001/002).
+    """Gate a graph-cleanup tool on an explicit `ComplianceOfficer` grant.
 
-    Returns the verified `(sub, iss)` of a caller holding an explicit
-    `ComplianceOfficer` grant, or an `error: ` string. Fail-closed by design:
-    unlike `restore_instrument`, the local-test bypass does NOT skip the check --
-    no verified bearer token means no actor means rejection (graph cleanup is a
-    privileged, accountable edit and a synthetic identity must never hold it).
-    `require_role` is exact-match for `ComplianceOfficer`, so SystemAdmin and
-    SystemOwner get no override, and a store outage denies rather than allows.
+    Fail-closed by design: unlike `restore_instrument`, the local-test bypass does not skip this
+    check. No verified bearer token means no actor, which means rejection, because graph cleanup is
+    a privileged, accountable edit that a synthetic identity must never hold. `require_role` matches
+    `ComplianceOfficer` exactly, so SystemAdmin and SystemOwner get no override, and an
+    authorization-store outage denies rather than allows.
+
+    Args:
+        config: Service configuration; selects the access-role store and its audit store.
+
+    Returns:
+        The verified `(sub, iss)` of the permitted caller, or an `error: ` string (no authenticated
+        caller, role missing, or authorization store unavailable) that the tool returns as is.
+
+    Side Effects:
+        Reads the caller's active roles from the access-role store.
     """
     actor = _resolve_authz_actor(config)
     if actor is None:
@@ -660,51 +670,41 @@ def _run_mcp_action(
     entity_id: str | None = None,
     run_id: str | None = None,
 ) -> dict[str, object] | str:
-    """Run one MCP tool body inside a run context, with a uniform audit triad.
+    """Run one MCP tool body in a run context with a uniform started/succeeded/failed log triad.
 
-    D-AUDIT-WRAPPER: the shared logging/run-id helper every action-taking MCP
-    tool (`ingest_regulation`, `check_regulations`, `near_misses_list`,
-    `near_misses_resolve`) reuses, so the started/succeeded/failed triad and
-    generic-exception safety net live in exactly one place rather than being
-    duplicated a fourth time (L2 Common DRY).
-
-    Binds a fresh run id for the call, emits a `component="mcp_interface"`
-    `outcome="started"` entry carrying `principal`, then runs `body`. A
-    `body` that returns a string beginning `"error:"` is treated as a
-    handled failure -- logged `outcome="failed"` with the (truncated) error
-    text as `reason`, and returned unchanged. A `body` that *raises* is the
-    residual, not-yet-sanitised case (D-SANITIZE-UNEXPECTED's last row): the
-    exception is converted here to the fixed, generic error string, with the
-    full `repr` logged server-side only. Any other return value is treated
-    as success, logged `outcome="succeeded"`, and returned unchanged.
+    The shared helper for every action-taking tool, so the log triad and the generic-exception
+    safety net live in exactly one place. It binds a fresh run id, emits a
+    `component="mcp_interface"` `outcome="started"` entry carrying `principal`, then runs `body`. A
+    `body` that returns a string beginning `"error:"` is a handled failure: it is logged
+    `outcome="failed"` with the (truncated) text as `reason` and returned unchanged. A `body` that
+    raises `Exception` is the residual, not-yet-sanitised case: it is converted to the fixed generic
+    error string, with the full `repr` logged server-side only. Any other return value is a success,
+    logged `outcome="succeeded"` and returned unchanged.
 
     Args:
-        action: The tool's own name (e.g. `"ingest_regulation"`), used as
-            the log entries' `action` field -- distinct per tool, unlike
-            `cypher`'s shared `_ACTION` constant.
-        principal: The caller identity `_resolve_principal` already
-            resolved; threaded onto every log entry this call emits
-            (`"unknown"` when `None`), and available to `body` via the
-            closure that constructed it.
-        body: A zero-arg callable running the tool's actual work inside the
-            bound run context (its own `run_id` is read via
-            `current_run_id()`, since binding happens here, not in `body`).
-        entity_id: The node id this call acts on (or, for a not-yet-created
-            node, its parent), carried on every one of this call's three
-            log entries (issue #136, CHANGES.md finding #9). Optional and
-            defaults to `None` -- every pre-#136 caller omits it, so
-            `LogEntry.entity_id` stays unset exactly as it did before this
-            parameter existed; zero behavior change for any tool that
-            doesn't pass it.
-        run_id: The run id to bind instead of a freshly generated uuid4
-            (issue #194). Only the background half of `start_ingestion`
-            passes it, so the worker thread's log entries carry the same id
-            as the submitting call, the `ingestion_runs` row and the live
-            stage registry. `None` (every other caller) generates a uuid4.
+        action: The tool's own name (for example `"ingest_regulation"`), used as the log entries'
+            `action` field.
+        principal: The caller identity already resolved by `_resolve_principal`; recorded on every
+            log entry (`"unknown"` when `None`).
+        body: Zero-argument callable doing the tool's work inside the bound run context; it reads
+            its run id through `current_run_id()` because binding happens here, not in `body`.
+        entity_id: Id of the node this call acts on (for a not-yet-created node, its parent),
+            carried on all three log entries. `None` leaves `LogEntry.entity_id` unset.
+        run_id: Run id to bind instead of a freshly generated uuid4, so a background worker's log
+            entries share the id of the submitting call. `None` generates a uuid4.
 
     Returns:
-        `body`'s return value unchanged on success or a handled `error:`
-        string; the fixed generic error string if `body` raised.
+        `body`'s return value unchanged on success or a handled `error:` string, or the fixed
+        generic error string if `body` raised.
+
+    Raises:
+        LoggingLifecycleError: No log emitter is available when one of the triad entries is emitted.
+        BaseException: Subclasses that are not `Exception` (such as `KeyboardInterrupt`) propagate
+            from `body`.
+
+    Side Effects:
+        Binds a run context for the call and emits two log entries (started, then succeeded or
+        failed). Running `body` has whatever effects the tool defines.
     """
     principal_extra = principal or "unknown"
     with bind_run_context(run_id) as bound_run_id:
@@ -718,7 +718,7 @@ def _run_mcp_action(
         )
         try:
             result = body()
-        except Exception as exc:  # noqa: BLE001 -- residual MCP-boundary safety net (D-SANITIZE-UNEXPECTED's last row): body() must never raise across the MCP boundary
+        except Exception as exc:  # noqa: BLE001 -- residual MCP-boundary safety net: body() must never raise across the MCP boundary
             emit_log_entry(
                 component=_COMPONENT,
                 action=action,
@@ -754,11 +754,20 @@ def _run_mcp_action(
 
 
 def _sanitize_graph_open[**P, R](opener: Callable[P, R]) -> Callable[P, R]:
-    """Wrap one graph opener so any failure sanitises to `McpGraphUnavailableError`.
+    """Wrap one graph opener so any failure becomes `McpGraphUnavailableError`.
 
-    Mirrors `_resolve_graph`'s own pattern for the `cypher` tool
-    (D-SANITIZE-UNEXPECTED). Host/port/driver detail must not cross the MCP
-    boundary from this call site either.
+    Keeps host, port and driver detail from crossing the MCP boundary, as `_resolve_graph` does for
+    the `cypher` tool.
+
+    Args:
+        opener: Callable that opens a graph or database connection.
+
+    Returns:
+        A callable with `opener`'s signature that returns `opener`'s result.
+
+    Raises:
+        McpGraphUnavailableError: Raised by the returned callable, with fixed generic detail and the
+            original error chained, when `opener` raises any `Exception`.
     """
 
     def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
@@ -773,7 +782,7 @@ def _sanitize_graph_open[**P, R](opener: Callable[P, R]) -> Callable[P, R]:
 def _sanitize_cleanup_graph_open(
     dependencies: GraphCleanupDependencies,
 ) -> GraphCleanupDependencies:
-    """Wrap the cleanup graph opener so any failure sanitises to `McpGraphUnavailableError`."""
+    """Return `dependencies` with its graph opener wrapped by `_sanitize_graph_open`."""
     return dataclasses.replace(
         dependencies,
         open_single_tenant_graph=_sanitize_graph_open(dependencies.open_single_tenant_graph),
@@ -781,15 +790,12 @@ def _sanitize_cleanup_graph_open(
 
 
 def _sanitize_pipeline_graph_opens(dependencies: PipelineDependencies) -> PipelineDependencies:
-    """Wrap all three of `dependencies.graphs`' openers (D-SANITIZE-UNEXPECTED).
+    """Return `dependencies` with its three graph openers wrapped by `_sanitize_graph_open`.
 
-    `run_catalog_ingestion_pipeline` calls `dependencies.graphs.native`/
-    `.baseline`/`.single_tenant` directly, with no try/except of its own --
-    confirmed by reading it: it opens all three graphs before
-    `_execute_catalog_stages`/`_run_stage` ever runs, so a stage failure's own
-    `PipelineStageError` sanitisation never covers this earlier step. Without
-    this wrapper, an unreachable FalkorDB here would instead reach the caller
-    as `_run_mcp_action`'s generic residual error.
+    `run_catalog_ingestion_pipeline` calls the `native`, `baseline` and `single_tenant` openers
+    directly, before any stage runs, so a stage failure's own sanitising never covers them. Without
+    this wrapper an unreachable FalkorDB would reach the caller as the generic residual error of
+    `_run_mcp_action`.
     """
     graphs = dependencies.graphs
     return dataclasses.replace(
@@ -805,15 +811,11 @@ def _sanitize_pipeline_graph_opens(dependencies: PipelineDependencies) -> Pipeli
 def _sanitize_change_check_graph_opens(
     dependencies: ChangeCheckDependencies,
 ) -> ChangeCheckDependencies:
-    """Wrap `open_single_tenant`/`open_native` and the pipeline's openers (D-SANITIZE-UNEXPECTED).
+    """Return change-check `dependencies` with every graph opener wrapped by `_sanitize_graph_open`.
 
-    `run_change_check_sweep` calls `dependencies.open_single_tenant`
-    directly, with no try/except of its own, and `_reingest_one` calls
-    `dependencies.open_native` the same way when an amendment is
-    re-ingested -- confirmed by reading `change_check_orchestration.py` in
-    full. Mirrors `_sanitize_pipeline_graph_opens`'s own shape exactly,
-    reusing the same per-opener `_sanitize_graph_open` wrapper (not
-    reinvented) rather than duplicating its try/except body a third time.
+    `run_change_check_sweep` calls `open_single_tenant` directly, and the re-ingest path calls
+    `open_native` the same way, neither with error handling of its own. Both are wrapped here, and
+    the nested pipeline dependencies go through `_sanitize_pipeline_graph_opens`.
     """
     return dataclasses.replace(
         dependencies,
@@ -826,15 +828,10 @@ def _sanitize_change_check_graph_opens(
 def _sanitize_near_miss_review_graph_opens(
     dependencies: NearMissReviewDependencies,
 ) -> NearMissReviewDependencies:
-    """Wrap `open_single_tenant_graph` (D-SANITIZE-UNEXPECTED).
+    """Return `dependencies` with `open_single_tenant_graph` wrapped by `_sanitize_graph_open`.
 
-    `run_list_near_misses`/`run_resolve_near_miss` both call
-    `dependencies.open_single_tenant_graph` directly, with no try/except of
-    their own -- confirmed by reading `near_miss_review_orchestration.py` in
-    full. Mirrors `_sanitize_pipeline_graph_opens`'s/
-    `_sanitize_change_check_graph_opens`'s own shape exactly, reusing the
-    same generic per-opener `_sanitize_graph_open` wrapper (not reinvented)
-    rather than duplicating its try/except body a third time.
+    The near-miss list and resolve orchestration call that opener directly with no error handling of
+    their own.
     """
     return dataclasses.replace(
         dependencies,
@@ -845,31 +842,28 @@ def _sanitize_near_miss_review_graph_opens(
 def _sanitize_restore_graph_opens(
     dependencies: CatalogRestoreDependencies,
 ) -> CatalogRestoreDependencies:
-    """Wrap `dependencies.open_db` (D-SANITIZE-RESTORE).
+    """Return restore `dependencies` with `open_db` wrapped by `_sanitize_graph_open`.
 
-    `run_restoration_from_catalog_source` calls `dependencies.open_db`
-    directly, with no try/except of its own -- confirmed by reading the
-    function's full body. Mirrors `_sanitize_pipeline_graph_opens`'s/
-    `_sanitize_change_check_graph_opens`'s/`_sanitize_near_miss_review_graph_opens`'s
-    own shape exactly, reusing the same generic per-opener
-    `_sanitize_graph_open` wrapper (not reinvented) rather than duplicating
-    its try/except body a fourth time. `dependencies.single_tenant_graph_name`
-    is a pure name lookup with no I/O of its own (`_default_single_tenant_graph_name`,
-    `restore_orchestration.py:400-407`) and needs no wrapping.
+    `run_restoration_from_catalog_source` calls `open_db` directly with no error handling of its
+    own. `single_tenant_graph_name` is a pure name lookup with no I/O and needs no wrapping.
     """
     return dataclasses.replace(dependencies, open_db=_sanitize_graph_open(dependencies.open_db))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class _PreparedCatalogIngestion:
-    """A validated, resolved catalog-ingestion request, ready for `run_catalog_ingestion_pipeline`.
+    """A validated, resolved catalog-ingestion request, ready for the pipeline run.
 
-    Issue #194 S1: the hand-off between `_prepare_catalog_ingestion` (the fast,
-    synchronous validation/resolution half of `_resolve_and_ingest`) and
-    `_run_prepared_catalog_ingestion` (the blocking pipeline-run half), so the
-    validation half can be shared by any tool that needs it without
-    duplicating it. `dependencies` is the same sanitized bundle the
-    single-tenant graph was opened from, reused unchanged for the run.
+    The hand-off between `_prepare_catalog_ingestion` (the fast, synchronous validation and
+    resolution half of an ingestion) and `_run_prepared_catalog_ingestion` (the blocking
+    pipeline-run half), so any tool can share the validation half without duplicating it.
+
+    Attributes:
+        entry: The catalog entry resolved for the request's CELEX and normalised short name.
+        ingestion_adapter: Adapter bound to the document fetched during resolution, or `None` when
+            resolution produced none.
+        dependencies: The sanitised pipeline dependency bundle the single-tenant graph was opened
+            from, reused unchanged for the run.
     """
 
     entry: CatalogEntry
@@ -877,8 +871,8 @@ class _PreparedCatalogIngestion:
     dependencies: PipelineDependencies
 
 
-# The exact five domain exceptions `_resolve_and_ingest` has always mapped to
-# `f"error: {exc}"` -- shared by both of its halves so the map can never drift.
+# Domain errors that `_prepare_catalog_ingestion` and `_run_prepared_catalog_ingestion` map to
+# `f"error: {exc}"`, shared by both halves so the map can never drift.
 _CATALOG_INGESTION_ERRORS = (
     CatalogIdentifierNotFoundError,
     CelexAlreadyIngestedError,
@@ -892,20 +886,31 @@ _CATALOG_INGESTION_ERRORS = (
 def _prepare_catalog_ingestion(
     celex: str, short_name: str, *, config: ServiceConfig
 ) -> _PreparedCatalogIngestion | str:
-    """Resolve the request's identity against the single-tenant graph (no pipeline run).
+    """Validate and resolve a catalog-ingestion request against the live graph, without running it.
 
-    Calls `resolve_ingestion_entry` (issue #193, AC-BI-014) -- the same shared
-    function `routes.create_ingestion` calls -- against the single-tenant graph
-    opened from this call's own sanitized dependency bundle. Identity is decided
-    by the live graph and Cellar/ELI, never by the curated catalog: the function
-    raises `CelexAlreadyIngestedError` when `celex` is already in the graph and
-    `ShortNameCollisionError` when `short_name` is already claimed by a different
-    CELEX; otherwise it resolves `celex` against Cellar/ELI under the normalized
-    `short_name` (used verbatim, never derived from the fetched title, issue #96)
-    and returns the entry plus the adapter bound to the fetched document.
-    Returns the prepared request, or the named `error:` string. Any exception
-    this function does not itself catch is the residual D-SANITIZE-UNEXPECTED
-    row, left to `_run_mcp_action`'s own safety net.
+    Calls `resolve_ingestion_entry`, the function `POST /ingestions` also calls, against the
+    single-tenant graph opened from this call's sanitised dependency bundle. Identity is decided by
+    the live graph and Cellar/ELI, never by the curated catalog: `CelexAlreadyIngestedError` when
+    `celex` is already in the graph, `ShortNameCollisionError` when `short_name` is claimed by a
+    different CELEX; otherwise `celex` is resolved against Cellar/ELI under the normalised
+    `short_name`, used verbatim and never derived from the fetched title.
+
+    Args:
+        celex: CELEX identifier of the regulation.
+        short_name: Caller-supplied short name, in any letter case.
+        config: Resolved service configuration.
+
+    Returns:
+        The prepared request, or an `error: ` string for a mapped domain error (identifier not
+        found, already ingested, short-name collision, incomplete configuration, graph write
+        unavailable, pipeline stage failure) or the fixed graph-unavailable text.
+
+    Raises:
+        Exception: Any error not in the mapped set propagates to `_run_mcp_action`, which converts
+            it to the generic error string.
+
+    Side Effects:
+        Opens graph connections and fetches the document from Cellar/ELI. Nothing is written.
     """
     try:
         dependencies = _sanitize_pipeline_graph_opens(build_default_pipeline_dependencies())
@@ -928,8 +933,11 @@ def _prepare_catalog_ingestion(
 class _FailureCapture:
     """Carries the audit `reason_code` of the branch that failed a background run.
 
-    `_run_mcp_action` only returns the `error:` text, which must never be parsed back into a
-    reason; the failing `except` arm records its class here instead (issue #195, AC-BI-010).
+    `_run_mcp_action` returns only the `error:` text, which must never be parsed back into a reason,
+    so the failing `except` arm records its classification here instead.
+
+    Attributes:
+        reason_code: Enumerated cause of the failure, or `None` until a failing branch sets it.
     """
 
     reason_code: IngestionReasonCode | None = None
@@ -944,11 +952,32 @@ def _run_prepared_catalog_ingestion(
     trigger: IngestionTrigger,
     capture: _FailureCapture | None = None,
 ) -> dict[str, object] | str:
-    """Run the pipeline for an already-prepared request, and map its exceptions.
+    """Run the pipeline for a prepared request and map its domain errors to `error:` strings.
 
-    Same exception map as `_prepare_catalog_ingestion`; the response shaping
-    (`_to_accepted_response`, looked up as a module global at call time) stays
-    outside the `try`, exactly as it always was in `_resolve_and_ingest`.
+    Uses the same error map as `_prepare_catalog_ingestion`, plus `AuditTrailUnavailableError`. The
+    response shaping (`_to_accepted_response`, looked up as a module global at call time) stays
+    outside the `try`.
+
+    Args:
+        prepared: The validated request from `_prepare_catalog_ingestion`.
+        config: Resolved service configuration.
+        principal: Caller identity; `None` is passed to the pipeline as the caller label
+            `"unknown"`.
+        run_id: Run id the pipeline and its log lines are keyed by.
+        trigger: Audit trigger recorded for the run.
+        capture: Optional collector; when given, a mapped failure stores its classified reason code
+            on it.
+
+    Returns:
+        The accepted-response dict (`run_id`, instrument id, source and per-stage summaries), or an
+        `error: ` string for a mapped domain error or the fixed graph-unavailable text.
+
+    Raises:
+        Exception: Any error not in the mapped set propagates to `_run_mcp_action`.
+
+    Side Effects:
+        Runs the ingestion pipeline: writes the compliance graph, calls Cellar/ELI and the LLM
+        Interface, and emits log entries. Sets `capture.reason_code` on a mapped failure.
     """
     try:
         outcome = run_catalog_ingestion_pipeline(
@@ -980,15 +1009,32 @@ def _resolve_and_ingest(
     run_id: str,
     audit: AuditContext,
 ) -> dict[str, object] | str:
-    """Run the audited sync ingestion (identity check + pipeline) and map its exceptions.
+    """Run the audited synchronous ingestion (identity check plus pipeline) and map its errors.
 
-    Issue #195: delegates to `run_audited_catalog_ingestion`, the shared orchestration
-    `POST /ingestions` also calls, which writes the `ingestion_run.submit` opening row first
-    (fail-closed: an unavailable audit trail is the fixed `error: ` text and nothing runs), then
-    resolves the request's identity, runs the pipeline and writes the terminal row. The sanitized
-    dependency bundle is passed through so a graph failure still maps to
-    `_GRAPH_UNAVAILABLE_MESSAGE`; every other exception map is unchanged. The response shaping
-    (`_to_accepted_response`, looked up as a module global at call time) stays outside the `try`.
+    Delegates to `run_audited_catalog_ingestion`, the orchestration `POST /ingestions` also calls.
+    It writes the `ingestion_run.submit` opening row first (fail-closed: an unavailable audit trail
+    yields the fixed `error: ` text and nothing runs), resolves the request's identity, runs the
+    pipeline and writes the terminal row. The sanitised dependency bundle makes a graph failure map
+    to `_GRAPH_UNAVAILABLE_MESSAGE`. Response shaping stays outside the `try`.
+
+    Args:
+        celex: CELEX identifier of the regulation.
+        short_name: Caller-supplied short name, in any letter case.
+        config: Resolved service configuration.
+        principal: Caller identity; `None` is passed on as the caller label `"unknown"`.
+        run_id: Run id the rows and log lines are keyed by.
+        audit: Actor and audit store for the two audit rows.
+
+    Returns:
+        The accepted-response dict, or an `error: ` string for a mapped domain error, an unavailable
+        audit trail or the fixed graph-unavailable text.
+
+    Raises:
+        Exception: Any error not in the mapped set propagates to `_run_mcp_action`.
+
+    Side Effects:
+        Writes the `ingestion_run.submit` and `ingestion_run.complete` audit rows and the pipeline's
+        graph writes.
     """
     try:
         outcome = run_audited_catalog_ingestion(
@@ -1012,37 +1058,46 @@ def ingest_regulation(
     celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
     short_name: Annotated[str, Field(pattern=_SHORT_NAME_PATTERN)],
 ) -> dict[str, object] | str:
-    """IngestRegulation: ingest one EU regulation by CELEX into the compliance graph.
+    """Ingest one EU regulation by CELEX identifier into the compliance graph and wait for it.
 
-    Runs the full external pipeline (Ingestion -> Domain Mapper -> Company
-    Merge) for `celex`, in-process, exactly like `POST /ingestions` does for
-    a `source: "catalog"` request. `short_name` is always required and is
-    normalized to upper case (so `cra` and `CRA` are the same name); the
-    ingested instrument is `<SHORT_NAME>-<version>`. Any valid CELEX is
-    resolved against Cellar/ELI and ingested under the `short_name` you give,
-    used verbatim -- nothing is derived from the fetched title, so the same
-    CELEX never forks into two differently-named graphs.
+    Runs the full pipeline (ingestion, extraction, derivation, merge) for `celex` and blocks until
+    it finishes, which can take several minutes; use `start_ingestion` to return at once and poll
+    instead. Any valid CELEX is resolved against Cellar/ELI and ingested under the `short_name` you
+    give, used verbatim and never derived from the fetched title, so the same CELEX never forks into
+    two differently named graphs. The ingested instrument is `<SHORT_NAME>-<version>`. Requires the
+    ComplianceOfficer role (skipped only under the local-test bypass).
 
-    On success, returns the same structured summary `POST /ingestions`
-    returns: `run_id`, `regulatory_instrument_id`, `source`, and one
-    `stages` entry per completed pipeline stage (ingestion, extraction,
-    derivation, merge) with its own small integer `summary`. Returns a
-    string beginning `error: ` when: `celex` is already ingested in the
-    compliance graph (under any `short_name`); `short_name` is already
-    claimed, in any letter case, by a different CELEX; `celex` does not
-    exist on Cellar/ELI; the LLM Interface dependency is currently
-    unhealthy (checked before any graph is opened or the pipeline is
-    called); the service configuration is missing an LLM/embedding model
-    or similarity threshold; the policy graph database cannot be reached;
-    a pipeline stage genuinely fails mid-run; the audit trail is temporarily
-    unavailable (nothing is run then); or (this tool's own residual safety net)
-    on any other unexpected failure.
+    Args:
+        celex: CELEX identifier of the regulation: exactly 10 characters, a `3`, a four-digit year,
+            one capital letter and four digits (for example `32024R2847`).
+        short_name: Your short name for the instrument: a letter first, then letters, digits, `_` or
+            `-`, 1-64 characters in all. Normalised to upper case, so `cra` and `CRA` are the same
+            name.
 
-    Every accepted call is audited (issue #195): an `ingestion_run.submit` row
-    (`trigger='sync_ingest'`) is written before anything runs, and one
-    `ingestion_run.complete` row records the instrument id, the counts of new
-    Obligations / new Capabilities / matched Capabilities, or an enumerated
-    failure `reason_code`. An already-ingested CELEX is audited too.
+    Returns:
+        A summary dict on success: `run_id`, `regulatory_instrument_id`, `source`, and one `stages`
+        entry per completed pipeline stage (ingestion, extraction, derivation, merge), each with a
+        small integer `summary`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the ComplianceOfficer role.
+        - `celex` is already ingested (under any `short_name`), or `short_name` is already claimed,
+          in any letter case, by a different CELEX.
+        - `celex` does not exist on Cellar/ELI.
+        - The language-model service is currently unavailable (checked before any graph is opened).
+        - The service configuration is missing an LLM or embedding model or the similarity
+          threshold.
+        - The policy graph database cannot be reached, or a pipeline stage fails mid-run.
+        - The audit trail is temporarily unavailable (nothing is run).
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Writes the instrument's nodes and edges to the compliance graph and calls Cellar/ELI and the
+        LLM Interface. Every accepted call is audited: an `ingestion_run.submit` row
+        (`trigger='sync_ingest'`) is written before anything runs, and one `ingestion_run.complete`
+        row records the instrument id and the counts of new Obligations, new Capabilities and
+        matched Capabilities, or an enumerated failure `reason_code`. An already-ingested CELEX is
+        audited too.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1080,12 +1135,22 @@ def ingest_regulation(
 def _require_compliance_officer_unless_bypass(
     config: ServiceConfig, actor: tuple[str, str] | None
 ) -> str | None:
-    """The `ComplianceOfficer` gate shared by `start_ingestion` and `get_ingestion_status`.
+    """Gate a tool on the `ComplianceOfficer` role, unless the local-test bypass is active.
 
-    Issue #194: the same checks, in the same order, as the inline gate at the top of
-    `ingest_regulation`'s body (which keeps its own copy), so every catalog-ingestion tool
-    denies a caller identically. Returns the `error:` string to hand back, or `None` when the
-    caller may proceed. Under the local-test bypass nothing is checked.
+    Applies the same checks, in the same order, as the inline gate in `ingest_regulation`'s body, so
+    every catalog-ingestion tool denies a caller identically.
+
+    Args:
+        config: Service configuration; selects the role store and the bypass state.
+        actor: Verified `(sub, iss)` of the caller, or `None` when none was bound.
+
+    Returns:
+        `None` when the caller may proceed (nothing is checked under the bypass), otherwise the
+        `error: ` string to hand back: no authenticated caller, role missing, or authorization store
+        unavailable.
+
+    Side Effects:
+        Reads the caller's active roles from the access-role store.
     """
     if config.is_local_test_bypass_active:
         return None
@@ -1105,7 +1170,7 @@ def _require_compliance_officer_unless_bypass(
 _BACKGROUND_INGESTION_ACTION = "background_ingestion_run"
 _RECONCILE_ACTION = "ingestion_run_reconcile"
 _RECONCILER_AUDIT_ACTOR = (INGESTION_RUN_RECONCILER_ACTOR, INGESTION_RUN_RECONCILER_ACTOR)
-"""Audit actor of a run completed by a status poll rather than by its own worker (OQ-7)."""
+"""Audit actor of a run completed by a status poll rather than by its own worker."""
 _INTERRUPTED_RUN_MESSAGE = (
     "error: the ingestion run was interrupted before it finished; its outcome is unknown"
 )
@@ -1139,7 +1204,7 @@ def _record_ingestion_run_outcome(
     `reason_code` is the enumerated cause of a failure (`unexpected_error` when no known branch
     recorded one); the `error:` text goes to the run row only, never to the audit row.
 
-    The write is a single-winner compare-and-swap, so a row is never terminal twice (AC-BI-008).
+    The write is a single-winner compare-and-swap, so a row is never terminal twice.
     A failed write is logged (exception class only, never host detail) and swallowed: nothing
     may escape the worker unlogged, and the row simply stays `running`.
     """
@@ -1166,7 +1231,7 @@ def _execute_background_ingestion(
     principal: str | None,
     store: IngestionRunStore,
 ) -> None:
-    """Run the prepared pipeline on the worker thread, then record its outcome (AC-BI-008/014).
+    """Run the prepared pipeline on the worker thread, then record its outcome.
 
     The pipeline call goes through `_run_mcp_action` so the run gets its own correlated
     started/succeeded/failed log lines under the submitted `run_id` and every unexpected
@@ -1188,7 +1253,7 @@ def _execute_background_ingestion(
             ),
             run_id=run_id,
         )
-    except Exception as exc:  # noqa: BLE001 -- AC-BI-014 last-resort net: the row must never stay 'running'
+    except Exception as exc:  # noqa: BLE001 -- last-resort net: the row must never stay 'running'
         _emit_best_effort_failure(
             _BACKGROUND_INGESTION_ACTION,
             run_id,
@@ -1205,7 +1270,7 @@ def _execute_background_ingestion(
 def _reconcile_orphaned_run(store: IngestionRunStore, row: IngestionRunRow) -> IngestionRunRow:
     """Mark a `running` row no in-process worker holds as failed (interrupted), then re-read it.
 
-    A declared, idempotent side effect of `get_ingestion_status` (AC-BI-014): the row is
+    A declared, idempotent side effect of `get_ingestion_status`: the row is
     `running` yet its worker is gone (its terminal write failed, or the process restarted), so
     it would otherwise be reported `running` forever. The write is a single-winner
     compare-and-swap, a no-op if the worker finished first. It never fails the poll: any store
@@ -1234,7 +1299,7 @@ def _check_ingestion_config(config: ServiceConfig) -> str | None:
 
     `start_ingestion` runs this synchronously so an incomplete configuration is reported to the
     caller exactly as `ingest_regulation` reports it (the pipeline's own first step), instead of
-    surfacing only later as a failed background run (AC-BI-010).
+    surfacing only later as a failed background run.
     """
     try:
         _require_ingestion_config(config)
@@ -1252,7 +1317,7 @@ def _submit_ingestion_run(
     actor: tuple[str, str] | None,
     store: IngestionRunStore,
 ) -> dict[str, object] | str:
-    """Record the run, start its worker thread and return at once (AC-BI-003/005).
+    """Record the run, start its worker thread and return at once.
 
     The slot is reserved atomically (duplicate `short_name` and the in-flight cap are checked
     before anything is written) and released on any failure before the worker starts, so no
@@ -1316,20 +1381,38 @@ def start_ingestion(
     celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
     short_name: Annotated[str, Field(pattern=_SHORT_NAME_PATTERN)],
 ) -> dict[str, object] | str:
-    """StartIngestion: start ingesting one EU regulation by CELEX and return at once.
+    """Start ingesting one EU regulation by CELEX identifier and return at once.
 
-    Takes exactly the inputs `ingest_regulation` takes, and runs the same fast
-    validation synchronously, but does not wait for the multi-minute pipeline
-    (Ingestion -> Domain Mapper -> Company Merge): it records the run, starts it on a
-    background thread and returns `{"run_id", "status": "running"}` immediately. Poll
-    `get_ingestion_status` with that `run_id` for the live stage and the final result.
+    Takes the inputs of `ingest_regulation` and runs the same fast pre-flight checks synchronously,
+    but does not wait for the multi-minute pipeline (ingestion, extraction, derivation, merge): it
+    records the run, starts it on a background thread and returns immediately. Poll
+    `get_ingestion_status` with the returned `run_id` for the live stage and the final result.
+    Requires the ComplianceOfficer role (skipped only under the local-test bypass).
 
-    Returns a string beginning `error: ` when the caller lacks the ComplianceOfficer role, or
-    for any pre-flight failure `ingest_regulation` reports (`short_name` mismatch or
-    collision, `celex` not found in the curated catalog or on Cellar/ELI, LLM Interface
-    unhealthy, the policy graph database unreachable), or when the run could not be recorded
-    or the run store is unavailable. A failure inside the pipeline itself is reported later,
-    by `get_ingestion_status`.
+    Args:
+        celex: CELEX identifier of the regulation: exactly 10 characters, a `3`, a four-digit year,
+            one capital letter and four digits (for example `32024R2847`).
+        short_name: Your short name for the instrument: a letter first, then letters, digits, `_` or
+            `-`, 1-64 characters in all. Normalised to upper case, so `cra` and `CRA` are the same
+            name.
+
+    Returns:
+        `{"run_id": <id>, "status": "running"}`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the ComplianceOfficer role.
+        - Any pre-flight failure `ingest_regulation` reports: `celex` already ingested, `short_name`
+          claimed by a different CELEX, `celex` not found on Cellar/ELI, LLM Interface unhealthy,
+          the service configuration incomplete, or the policy graph database unreachable.
+        - A run for the same `short_name` is already in progress, or too many runs are in flight.
+        - The run could not be recorded, or the run store is unavailable.
+        - A failure inside the pipeline itself is not reported by this call; `get_ingestion_status`
+          reports it later.
+
+    Side Effects:
+        Creates an ingestion-run record, reserves a run slot and starts a background thread. The
+        thread then runs the pipeline exactly as `ingest_regulation` does (graph writes,
+        `trigger='async_ingest'` audit rows) and records the run's terminal outcome.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1368,14 +1451,30 @@ def start_ingestion(
 def get_ingestion_status(
     run_id: Annotated[str, Field(min_length=1, max_length=64)],
 ) -> dict[str, object] | str:
-    """GetIngestionStatus: report a `start_ingestion` run's progress and final result.
+    """Report the progress and final result of a `start_ingestion` run.
 
-    Returns one fixed shape for every outcome: `run_id`, `status` (`running`, `succeeded`,
-    `failed`, or `unknown` for an id that was never submitted), `stage` (the stage a running
-    run is executing, when known), `result` (on success, the same summary `ingest_regulation`
-    returns) and `error` (on failure, the same `error: ...` text `ingest_regulation` would have
-    returned). Requires the ComplianceOfficer role, checked before any lookup. Returns a string
-    beginning `error: ` when the caller lacks the role or the run store is unavailable.
+    Requires the ComplianceOfficer role (skipped only under the local-test bypass), checked before
+    any lookup.
+
+    Args:
+        run_id: The `run_id` returned by `start_ingestion`, 1-64 characters.
+
+    Returns:
+        One fixed shape for every outcome: `run_id`; `status` (`running`, `succeeded`, `failed`, or
+        `unknown` for an id that was never submitted); `stage` (the stage a running run is
+        executing, when known, else `None`); `result` (on success, the same summary
+        `ingest_regulation` returns); and `error` (on failure, the `error: ...` text
+        `ingest_regulation` would have returned).
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the ComplianceOfficer role.
+        - The run store is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Read-only except for one idempotent repair: a run recorded as `running` that no worker in
+        the service holds (its terminal write failed, or the process restarted) is marked `failed`
+        as interrupted, with its completion audit row, so it is not reported `running` forever.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1400,7 +1499,26 @@ def get_ingestion_status(
 def _run_audited_change_check(
     config: ServiceConfig, actor: tuple[str, str] | None, run_id: str
 ) -> dict[str, object] | str:
-    """Run the `check_regulations` sweep with the caller as audit actor (issue #195)."""
+    """Run the `check_regulations` sweep with the caller as audit actor.
+
+    Args:
+        config: Resolved service configuration.
+        actor: Verified `(sub, iss)` of the caller, or `None` when none was bound.
+        run_id: Run id of the sweep.
+
+    Returns:
+        The change-check response dict, or an `error: ` string: the fixed authentication text when
+        there is no actor and no bypass, the fixed graph-unavailable text, or the message of an
+        unavailable audit trail or compliance graph write.
+
+    Raises:
+        Exception: Any other error propagates to `_run_mcp_action`.
+
+    Side Effects:
+        The sweep polls each tracked instrument's source and re-ingests detected amendments, writing
+        the graph and, per re-ingest, `ingestion_run.submit` and `ingestion_run.complete` audit
+        rows.
+    """
     audit = _audit_context(config, actor)
     if isinstance(audit, str):
         return audit
@@ -1422,36 +1540,34 @@ def _run_audited_change_check(
 
 @server.tool()
 def check_regulations() -> dict[str, object] | str:
-    """CheckRegulations: sweep every tracked regulation for detected amendments.
+    """Sweep every tracked regulation for detected amendments and re-ingest any found.
 
-    Runs the full change-check sweep in-process, exactly like `POST
-    /change-checks` does: opens the merged compliance graph, reads every
-    actively-tracked external `regulation`/`directive` instrument, polls for
-    a newer consolidated version of each, and automatically re-ingests any
-    detected amendment (D-DELEGATE). Takes zero parameters -- there is no
-    client-supplied input to validate for this tool, so AC-BI-005's
-    format-validation surface does not apply here; this is a deliberate
-    absence, not a gap.
+    Opens the merged compliance graph, reads every actively tracked external `regulation` or
+    `directive` instrument, polls for a newer consolidated version of each, and automatically
+    re-ingests any detected amendment. Takes no parameters. Requires the ComplianceOfficer role
+    (skipped only under the local-test bypass).
 
-    On success, returns the same structured summary `POST /change-checks`
-    returns: `run_id` and one `instruments` entry per tracked instrument,
-    each carrying its own `instrument_id` and `outcome` (`current`,
-    `amendment_reingested`, `poll_failed`, `not_configured`, `skipped`, or
-    `reingest_failed`), plus `detail`/`reingest_run_id` where applicable.
-    Returns a string beginning `error: ` when the LLM Interface dependency
-    is currently unhealthy (checked before any graph is opened or the sweep
-    is run), when the policy graph database cannot be reached, when the
-    audit trail cannot record a re-ingest (the sweep stops before that
-    re-ingest; earlier re-ingests of the same sweep stay recorded), or (this
-    tool's own residual safety net) on any other unexpected failure.
+    Returns:
+        A summary dict on success: `run_id` and one `instruments` entry per tracked instrument, each
+        with its `instrument_id` and an `outcome` (`current`, `amendment_reingested`, `poll_failed`,
+        `not_configured`, `skipped` or `reingest_failed`), plus `detail` and `reingest_run_id` where
+        applicable.
 
-    Audit (issue #195): every re-ingest the sweep actually runs writes an
-    `ingestion_run.submit` row (`trigger='amendment_check'`, before the
-    re-ingest) and an `ingestion_run.complete` row (instrument id and the
-    real Obligation / Capability counts from the Company Merge result, or the
-    failure `reason_code`), keyed by the re-ingest's own run id (the
-    `reingest_run_id` in the result) and attributed to the caller. Read them with
-    `list-audit-events`.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the ComplianceOfficer role.
+        - The language-model service is currently unavailable (checked before any graph is opened).
+        - The policy graph database cannot be reached.
+        - The audit trail cannot record a re-ingest. The sweep stops before that re-ingest; earlier
+          re-ingests of the same sweep stay recorded.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Every re-ingest the sweep runs writes to the compliance graph and to the audit trail: an
+        `ingestion_run.submit` row (`trigger='amendment_check'`, written before the re-ingest) and
+        an `ingestion_run.complete` row (instrument id and the real Obligation and Capability counts
+        from the merge result, or the failure `reason_code`), keyed by the re-ingest's own run id
+        (the `reingest_run_id` in the result) and attributed to the caller. Read them with
+        `list-audit-events`.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1482,27 +1598,23 @@ def check_regulations() -> dict[str, object] | str:
 
 @server.tool()
 def near_misses_list() -> dict[str, object] | str:
-    """ListNearMisses: list every unresolved near-miss pending review.
+    """List every unresolved near-miss pending review.
 
-    Runs in-process, exactly like `GET /near-misses` does: opens the merged
-    (single-tenant) compliance graph and returns every unresolved
-    `PendingReview` -- a Company Merge dedup candidate awaiting a
-    keep-separate/merge decision. Takes zero parameters. Unlike
-    `ingest_regulation`/`check_regulations`, this tool has no LLM Interface
-    dependency of its own (Company Merge's dedup pass runs only during
-    ingestion/merge, not during this read), so it does not run the
-    LLM-Interface pre-flight check those two tools do -- matching ps-cli's
-    own `handle_near_misses_list`, which never calls
-    `_assert_llm_interface_available` either.
+    A near-miss is a Company Merge deduplication candidate awaiting a keep-separate or merge
+    decision. Reads the merged compliance graph. Takes no parameters and needs no LLM Interface,
+    because deduplication runs only during ingestion and merge, never during this read.
 
-    On success, returns the same structured summary `GET /near-misses`
-    returns: a `reviews` list, one entry per unresolved review, each
-    carrying `id`, `kind`, `incoming_text`, `nearest_existing_text`, and
-    `similarity` (the two canonical node ids a review references are
-    deliberately omitted from this wire shape, matching the REST endpoint).
-    Returns a string beginning `error: ` when the policy graph database
-    cannot be reached, or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Returns:
+        A dict with a `reviews` list (empty when none are unresolved), one entry per unresolved
+        review with `id`, `kind`, `incoming_text`, `nearest_existing_text` and `similarity`
+        (0.0-1.0). The two canonical node ids a review references are deliberately omitted.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The policy graph database cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        None on the graph. The call is logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1530,11 +1642,26 @@ _MERGE_APPROVAL_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
 def _resolve_merge_pending_approval(
     review_id: str, ctx: Context, config: ServiceConfig
 ) -> dict[str, object] | str:
-    """`near_misses_resolve`'s `decision="merge"` branch (PLAN.md §2.2 steps 1-4).
+    """Handle `near_misses_resolve` with `decision="merge"` by creating a pending approval.
 
-    Split out of `near_misses_resolve`'s own body so that function's
-    `_body` closure stays within a sane branch/return count -- this is not
-    reused by any other tool.
+    Split out of the tool body to keep its branch count manageable; no other tool uses it.
+
+    Args:
+        review_id: Id of the near-miss pending review to merge.
+        ctx: MCP request context, used to derive the approval link's base URL.
+        config: Resolved service configuration.
+
+    Returns:
+        `{"pending_approval_id", "approval_url", "expires_at"}`, or an `error: ` string when the
+        caller has no real authenticated session, the review does not exist, or the graph is
+        unreachable.
+
+    Raises:
+        Exception: Any other error propagates to `_run_mcp_action`.
+
+    Side Effects:
+        Inserts one pending-approval row. The merge itself runs only after a human signs. Nothing is
+        written to the graph.
     """
     actor = _resolve_signing_actor()
     if actor is None:
@@ -1568,44 +1695,40 @@ def near_misses_resolve(
     decision: Literal["keep-separate", "merge"],
     ctx: Context,
 ) -> dict[str, object] | str:
-    """ResolveNearMiss: resolve one near-miss pending review.
+    """Resolve one near-miss pending review by keeping the two entities separate or merging them.
 
-    `decision="keep-separate"` deletes only the `PendingReview` record --
-    `winner_id`/`loser_id` stay `None` in the response, unchanged since
-    issue #35. `decision`'s `Literal` type is itself the MCP-schema-level
-    rejection of any other value, before this tool's body ever runs.
+    `decision="keep-separate"` deletes only the `PendingReview` record and leaves both entities
+    untouched. `decision="merge"` is IRREVERSIBLE once it executes: it deletes the loser node and
+    re-points every edge that referenced it onto the winner, atomically. For that reason this call
+    never executes a merge itself; it requires an authenticated caller (a caller under the
+    local-test bypass has no real actor identity and is refused) and returns a pending,
+    signed-passkey approval at once. A human must open `approval_url` in a browser and complete a
+    WebAuthn signing ceremony for the merge to run; use `near_misses_check_approval` to learn
+    whether that has happened. Needs no LLM Interface.
 
-    `decision="keep-separate"` is audited (issue #195): a `near_miss.resolve`
-    row is recorded before the write, and if that row cannot be recorded the
-    review is left untouched and an `error: ` string is returned. A merge is
-    audited when its approval is signed.
+    Args:
+        review_id: Id of the pending review, from `near_misses_list`; at least 1 character.
+        decision: `"keep-separate"` or `"merge"`; any other value is rejected before the tool runs.
+        ctx: Supplied by the MCP runtime, not by the caller.
 
-    `decision="merge"` is IRREVERSIBLE once it actually executes -- it
-    deletes the loser node and re-points every edge that referenced it onto
-    the winner, atomically -- so, since issue #131, this call never executes
-    a merge itself. Instead it requires an already-authenticated caller
-    (`ctx`'s bound `AccessToken`; a caller under the local-test bypass, which
-    has no real actor identity, is refused) and returns a pending,
-    signed-passkey approval immediately: `pending_approval_id`,
-    `approval_url` (a link a human opens in a browser to complete a WebAuthn
-    signing ceremony), and `expires_at`. No graph write happens on this
-    call at all -- `near_misses_check_approval` is the separate, resumable
-    way to learn whether that approval has since been signed. The REST
-    route `POST /near-misses/{review_id}/resolve` calls the exact same
-    underlying function for `decision="merge"`, so there is never a second,
-    parallel gating mechanism.
+    Returns:
+        For `keep-separate`: `{"review_id", "decision", "winner_id": None, "loser_id": None,
+        "pending_approval_id": None, "approval_url": None, "expires_at": None}`. For `merge`:
+        `{"pending_approval_id", "approval_url", "expires_at"}`, where `approval_url` is the link a
+        human opens to sign.
 
-    Like `near_misses_list`, this tool has no LLM Interface dependency of
-    its own and so runs no LLM-Interface pre-flight check.
+    Errors (returned as a string beginning `error: `, never raised):
+        - `review_id` does not exist or was already resolved.
+        - (`merge` only) The caller has no real authenticated session.
+        - (`keep-separate` only) The audit trail cannot record the resolve; the review is left
+          untouched.
+        - The policy graph database cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
 
-    On success, returns `{"review_id", "decision", "winner_id": None,
-    "loser_id": None}` for `decision="keep-separate"`, or
-    `{"pending_approval_id", "approval_url", "expires_at"}` for
-    `decision="merge"`. Returns a string beginning `error: ` when
-    `review_id` doesn't exist or was already resolved, when (`merge` only)
-    the caller has no real authenticated session, when the policy graph
-    database cannot be reached, or (this tool's own residual safety net) on
-    any other unexpected failure.
+    Side Effects:
+        `keep-separate` writes a `near_miss.resolve` audit row, then deletes the `PendingReview`
+        record. `merge` inserts one pending-approval record and writes nothing to the graph; the
+        merge is audited when its approval is signed.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1640,25 +1763,31 @@ def near_misses_resolve(
 def near_misses_check_approval(
     pending_approval_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
-    """CheckApproval: resumable status check for a near-miss merge's pending approval (issue #131).
+    """Check whether a near-miss merge's pending approval has been signed.
 
-    Companion to `near_misses_resolve`'s `decision="merge"` branch (PLAN.md
-    §2.3): that call never blocks waiting for a human to complete a WebAuthn
-    signing ceremony, so this is the separate, poll-again-later way to learn
-    whether it has been signed yet. **Ownership check**: only the same
-    caller who created the approval may check it -- a caller with no real
-    authenticated session, or one whose identity doesn't match the
-    approval's own, gets the identical generic not-found error a wrong id
-    gets (never distinguished, so a caller cannot learn whether an id
-    belongs to someone else).
+    `near_misses_resolve` with `decision="merge"` never waits for a human to complete the WebAuthn
+    signing ceremony, so this is the separate, poll-again-later way to learn whether it has
+    happened. Ownership check: only the caller who created the approval may check it. A caller with
+    no real authenticated session, or whose identity differs from the approval's, gets the same
+    generic not-found error as for a wrong id, so a caller cannot learn whether an id belongs to
+    someone else.
 
-    On success, returns `{"pending_approval_id", "status", "review_id",
-    "decision", "winner_id", "loser_id"}`. `status` is one of `"pending"`,
-    `"expired"` (the 15-minute window elapsed unsigned -- derived live, never
-    a separately stored status), or `"signed"`; `winner_id`/`loser_id`
-    populate only once `status == "signed"`. Returns a string beginning
-    `error: ` when no such pending approval is visible to this caller, or
-    (this tool's own residual safety net) on any other unexpected failure.
+    Args:
+        pending_approval_id: The `pending_approval_id` returned by `near_misses_resolve`; at least 1
+            character.
+
+    Returns:
+        `{"pending_approval_id", "status", "review_id", "decision", "winner_id", "loser_id",
+        "error"}`. `status` is `"pending"`, `"expired"` (the signing window elapsed unsigned;
+        derived live, never stored) or `"signed"`. `winner_id`, `loser_id` and `error` are populated
+        only once `status` is `"signed"`, otherwise they are `None`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - No such pending approval is visible to this caller.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        None; the call is read-only and logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1684,8 +1813,8 @@ def near_misses_check_approval(
     return _run_mcp_action("near_misses_check_approval", principal, _body)
 
 
-# Fixed, detail-free strings for the catalog-source tools' read failures (AC-BI-010): never
-# host, port, driver text or the (possibly credential-bearing) override URL.
+# Fixed, detail-free string for the catalog-source tools' read failures: never host, port,
+# driver text or the (possibly credential-bearing) override URL.
 _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE = (
     "error: The runtime configuration store is temporarily unavailable."
 )
@@ -1693,31 +1822,31 @@ _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE = (
 
 @server.tool(name="set-catalog-source")
 def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
-    """SetCatalogSource: override the effective curated-content source (issue #125, AC-BI-012).
+    """Override the curated-content source used for catalog listings and artifact fetches.
 
-    Validates `url` against the exact same http(s)/TLS rules startup
-    configuration uses (`ps_service.curated_source.source_url.
-    validate_source_url` -- AC-BI-008/010): only `http(s)://` schemes are
-    accepted, and a plain `http://` URL is rejected unless
-    `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP` is set for this process. On
-    success, persists `url` in the PS state database as the effective
-    curated-content source (issue #130) and writes one audit event for the
-    change in the same transaction -- no restart required -- and it takes
-    precedence over `PS_CURATEDSOURCE_URL`/the public default on every
-    subsequent `GET /catalog` and artifact fetch (AC-BI-013), until
-    `reset-catalog-source` is called.
+    Validates `url` with the same rules startup configuration applies: only `http(s)://` schemes are
+    accepted, and a plain `http://` URL is rejected unless `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP` is
+    set for the service process. The override takes effect at once, with no restart, and takes
+    precedence over `PS_CURATEDSOURCE_URL` and the public default for every later catalog listing
+    and artifact fetch until `reset-catalog-source` is called. Requires the SystemAdmin role or
+    above (skipped only under the local-test bypass).
 
-    Since issue #133, requires the caller hold `SystemAdmin` or above
-    (`ps_service.authz.service.require_role`) -- skipped entirely under the
-    local-test bypass (PLAN.md §3.3), which never sees a real actor
-    identity to check.
+    Args:
+        url: Base URL of the curated-content source; at least 1 character, `http(s)://` only.
 
-    On success, returns `{"url": <the validated url>, "source": "override"}`.
-    Returns a string beginning `error: ` when the caller lacks the required
-    access role, when `url` fails validation, when the runtime configuration
-    store cannot be reached or the write could not be applied (nothing is
-    changed), or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Returns:
+        `{"url": <the validated url>, "source": "override"}`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the required access role.
+        - `url` fails validation (the message says why).
+        - The runtime configuration store cannot be reached or the write could not be applied;
+          nothing is changed.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Persists `url` as the override in the PS state database and writes one audit event for the
+        change in the same transaction.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1749,7 +1878,7 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
             RuntimeConfigUnavailableError,
             RuntimeConfigPersistenceError,
         ) as exc:
-            # The validator's own message (unchanged from before #130) or a fixed store message.
+            # Either the validator's own message or a fixed store message.
             return f"error: {exc}"
         return {"url": url, "source": "override"}
 
@@ -1758,24 +1887,25 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
 
 @server.tool(name="reset-catalog-source")
 def reset_catalog_source() -> dict[str, object] | str:
-    """ResetCatalogSource: clear the persisted curated-content source override (AC-BI-014).
+    """Clear the persisted curated-content source override.
 
-    Takes no parameters. On success, deletes the persisted override from the PS state
-    database (a no-op if none was set) and writes one audit event in the same transaction --
-    the effective source immediately reverts to
-    `PS_CURATEDSOURCE_URL`/the public default on every subsequent
-    `GET /catalog` and artifact fetch, no restart required.
+    The effective source immediately reverts to `PS_CURATEDSOURCE_URL` or the public default for
+    every later catalog listing and artifact fetch, with no restart. Takes no parameters. Requires
+    the SystemAdmin role or above (skipped only under the local-test bypass).
 
-    Since issue #133, requires the caller hold `SystemAdmin` or above
-    (`ps_service.authz.service.require_role`) -- skipped entirely under the
-    local-test bypass (PLAN.md §3.3), which never sees a real actor
-    identity to check.
+    Returns:
+        `{"url": <the configured default url>, "source": "default"}`. Resetting when no override is
+        set changes nothing and is not an error.
 
-    On success, returns `{"url": <the env-var/default url>, "source": "default"}`.
-    Returns a string beginning `error: ` when the caller lacks the required
-    access role, when the runtime configuration store cannot be reached or the
-    write could not be applied (nothing is changed), or (this tool's own
-    residual safety net) on any other unexpected failure.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the required access role.
+        - The runtime configuration store cannot be reached or the write could not be applied;
+          nothing is changed.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Deletes the persisted override from the PS state database, if any, and writes one audit
+        event in the same transaction.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1810,24 +1940,25 @@ def reset_catalog_source() -> dict[str, object] | str:
 
 @server.tool(name="get-catalog-source")
 def get_catalog_source() -> dict[str, object] | str:
-    """GetCatalogSource: report the currently effective curated-content source (AC-BI-015).
+    """Report the currently effective curated-content source.
 
-    Takes no parameters. Checks for a persisted override in the PS state database first,
-    falling back to `PS_CURATEDSOURCE_URL`/the public default only when the store answered
-    and holds no override. Fails closed (issue #130): when the runtime configuration store
-    cannot be read this tool returns an error and never reports the default source, since
-    the operator's override may point elsewhere on purpose.
+    Looks for a persisted override in the PS state database first and falls back to
+    `PS_CURATEDSOURCE_URL` or the public default only when the store answered and holds no override.
+    It fails closed: when the store cannot be read this tool returns an error and never reports the
+    default source, because the operator's override may point elsewhere on purpose. Takes no
+    parameters. Requires the SystemAdmin role or above (skipped only under the local-test bypass).
 
-    Since issue #133, requires the caller hold `SystemAdmin` or above
-    (`ps_service.authz.service.require_role`) -- skipped entirely under the
-    local-test bypass (PLAN.md §3.3), which never sees a real actor
-    identity to check.
+    Returns:
+        `{"url": <the effective url>, "source": "override"}` when a persisted override is in effect,
+        otherwise `{"url": <the default url>, "source": "default"}`.
 
-    On success, returns `{"url": <the effective url>, "source": "override"}`
-    when a persisted override is in effect, or `{"url": ..., "source":
-    "default"}` otherwise. Returns a string beginning `error: ` when the
-    caller lacks the required access role, when the override cannot be read,
-    or (this tool's own residual safety net) on any other unexpected failure.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the required access role.
+        - The override cannot be read (the runtime configuration store is unavailable).
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        None; the call is read-only and logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1860,41 +1991,28 @@ def get_catalog_source() -> dict[str, object] | str:
 def _emit_invite_created_audit_entry(
     *, actor: tuple[str, str] | None, principal: str | None, email: str
 ) -> None:
-    """AC-BI-009's audit trail: record actor, target email, timestamp, outcome.
+    """Log the `invitations` / `invite_user` `created` entry that names the invitee's email.
 
-    `_run_mcp_action` (below) already emits the generic `component=
-    "mcp_interface"` started/succeeded/failed triad for every tool call,
-    including `invite_user` -- that already carries `principal` and a
-    `timestamp` (`LogEntry`'s default factory) on every call. AC-BI-009
-    additionally names the **target email** specifically, which that
-    generic triad's fixed `extra={"principal": ...}` shape does not carry.
-    This is a component-specific *additional* emission alongside that
-    triad, not a replacement for it -- mirrors `ps_service.authz.service`'s
-    `_maybe_log_system_owner_floor_warning` (same "extra, scoped log next
-    to the generic one" shape).
+    `_run_mcp_action` already emits the generic started/succeeded/failed triad for every tool call,
+    carrying the principal and a timestamp, but its fixed `extra` shape does not carry the target
+    email. This is an additional emission alongside that triad, in the same shape as the
+    `SystemOwner` floor warning logged by `ps_service.authz.service`. `invite_user` calls it only on
+    the success path.
 
-    Called from `invite_user`'s `_body()` only on the success path, after
-    `create_invitation` returns and before the result is returned.
-
-    PII note: `ps_service.logging.models`'s module docstring says the
-    caller owns PII hygiene in `extra` and to never place PII there. Putting
-    the invitee's email in `entity_id` (and the actor's identity in `extra`)
-    is a deliberate, scoped exception to that general guidance: AC-BI-009
-    explicitly requires the target email in this audit trail -- an
-    admin-invite audit record with no target identity would be useless.
-
-    Swallows `LoggingLifecycleError` (mirrors
-    `_maybe_log_system_owner_floor_warning`'s own `contextlib.suppress`): a
-    missing log sink must never turn an otherwise-successful invite into a
-    failed tool call.
+    Business Rules:
+        - `ps_service.logging.models` tells callers never to put PII in `extra`. Putting the
+          invitee's email in `entity_id` is a deliberate, scoped exception: an invite record with no
+          target identity would be useless.
+        - `LoggingLifecycleError` is swallowed, because a missing log sink must never turn a
+          successful invite into a failed tool call.
 
     Args:
-        actor: The verified `(sub, iss)` pair `_resolve_authz_actor` already
-            resolved for this call, or `None` under the local-test bypass.
-        principal: `_resolve_principal`'s own resolved identity, used as the
-            fallback actor label when `actor` is `None` (bypass).
-        email: The invitee's target email address -- this call's
-            `entity_id`.
+        actor: The verified `(sub, iss)` pair resolved for this call, or `None` under the bypass.
+        principal: The resolved principal, used as the actor label when `actor` is `None`.
+        email: The invitee's email address, recorded as the entry's `entity_id`.
+
+    Side Effects:
+        Emits one log entry.
     """
     with contextlib.suppress(LoggingLifecycleError):
         emit_log_entry(
@@ -1910,23 +2028,31 @@ def _emit_invite_created_audit_entry(
 def invite_user(
     email: Annotated[str, Field(min_length=3, pattern=_INVITE_EMAIL_PATTERN)],
 ) -> dict[str, object] | str:
-    """InviteUser: create a single-use Authentik enrollment invite for `email` (issue #140).
+    """Create a single-use Authentik enrollment invite for an email address.
 
-    Requires the caller hold `SystemAdmin` or above (`ps_service.authz.
-    service.require_role`) -- skipped entirely under the local-test bypass,
-    mirroring `set-catalog-source`'s exact gate (issue #133). Uses PS
-    Service's own configured `PS_AUTHENTIK_API_TOKEN` service credential --
-    never a caller-supplied token -- to call Authentik's invitation-stage
-    API.
+    Uses the service's own configured Authentik service credential, never a caller-supplied token,
+    to call Authentik's invitation-stage API. Requires the SystemAdmin role or above (skipped only
+    under the local-test bypass).
 
-    On success, returns `{"itoken": <pk>, "invite_url": <redemption URL>}`.
-    Returns a string beginning `error: ` when the caller lacks the required
-    access role, when `email` is not a plausible address (rejected at the
-    MCP schema layer, before this tool's body ever runs), when Authentik is
-    unreachable or returns a non-2xx response, when the audit trail is
-    unavailable (a `user.invite` row is written before Authentik is called; if
-    it cannot be, nothing is sent), or (this tool's own residual safety net)
-    on any other unexpected failure.
+    Args:
+        email: The invitee's email address, at least 3 characters and shaped like `name@domain.tld`.
+            Only this plausibility check is made here; Authentik is the real validation authority at
+            redemption time.
+
+    Returns:
+        `{"itoken": <invitation key>, "invite_url": <redemption URL>}`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the required access role.
+        - Authentik is unreachable or returns a non-2xx response.
+        - The audit trail is unavailable: a `user.invite` row is written before Authentik is called,
+          and if it cannot be written nothing is sent.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Creates an invitation in Authentik. Writes a `user.invite` audit row before the call, and a
+        follow-up row if the call fails. On success it also logs an `invitations` entry naming the
+        invitee's email.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1961,28 +2087,26 @@ def invite_user(
 
 @server.tool(name="get-catalog-listing")
 def get_catalog_listing() -> dict[str, object] | str:
-    """GetCatalogListing: list every curated instrument (external and internal), issue #127.
+    """List every curated instrument, external and internal, in the curated-content source.
 
-    Runs in-process, exactly like `GET /catalog` does (D-CATALOG-NO-ORCH-LAYER
-    -- there is no separate orchestration module for this route to delegate
-    to, so this tool replicates `list_curated_catalog`'s own two-call
-    sequence and response mapping inline): resolves the effective
-    curated-content source (a persisted override when one exists, else the
-    configured env-var/default -- fail closed, issue #130: when the override
-    cannot be read this tool returns an error rather than listing the
-    default source), then fetches and parses `catalog.json` from it. Takes
-    zero parameters -- there is no client-supplied input to validate, so
-    AC-BI-005's format-validation surface does not apply here, a deliberate absence mirroring
-    `check_regulations`/`near_misses_list`.
+    Resolves the effective curated-content source (a persisted override when one exists, else the
+    configured default), then fetches and parses its `catalog.json`. It fails closed: when the
+    override cannot be read this tool returns an error rather than listing the default source. Takes
+    no parameters.
 
-    On success, returns the same structured listing `GET /catalog` returns:
-    an `instruments` list, one entry per curated instrument (external and
-    internal, unfiltered), each carrying `instrument_id`, `title`,
-    `source_type`, and `jurisdiction` (`None` for an internal-source entry).
-    Returns a string beginning `error: ` when the override cannot be read,
-    when the configured curated-content source is unreachable or returns a
-    missing/malformed `catalog.json`, or (this tool's own residual safety
-    net) on any other unexpected failure.
+    Returns:
+        A dict with an `instruments` list, one entry per curated instrument, unfiltered, each with
+        `instrument_id`, `title`, `source_type` and `jurisdiction` (`None` for an internal-source
+        entry). Use an `instrument_id` with `restore_instrument`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The override cannot be read (the runtime configuration store is unavailable).
+        - The curated-content source is unreachable or returns a missing or malformed
+          `catalog.json`.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        One network fetch of `catalog.json`; nothing is written. The call is logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2020,45 +2144,54 @@ def restore_instrument(
         AfterValidator(_reject_path_traversal_segment),
     ],
 ) -> dict[str, object] | str:
-    """RestoreInstrumentFromCatalog: fetch and restore a curated instrument's artifact (#127).
+    """Restore one curated instrument from the curated-content source into the compliance graph.
 
-    Runs in-process, exactly like `POST /restorations/from-catalog` does
-    (D-RESTORE-DELEGATE): resolves `instrument_id` case-insensitively against
-    the curated catalog (issue #184, AC-BI-001 -- e.g. `cra-1.0` resolves to
-    the catalog's own `CRA-1.0`), then fetches that canonical id's
-    manifest/baseline/native artifact from the effective curated-content
-    source (a persisted override when one exists, else the configured
-    env-var/default), then restores it into the policy graph -- delegating
-    directly to `run_restoration_from_catalog_source`, the exact same
-    function the REST route calls, never reimplemented. `instrument_id` is
-    validated against the same charset/length bound ps-cli's own `restore
-    instrument` positional used, plus its explicit rejection of any `".."`
-    substring (AC-BI-005, D-INSTRUMENT-ID-STRICTNESS) -- rejected at the MCP
-    schema layer, before this tool's body ever runs.
+    Resolves `instrument_id` against the curated catalog without regard to case (`cra-1.0` resolves
+    to
+    the catalog's own `CRA-1.0`), fetches that instrument's manifest, baseline and native artifact
+    from
+    the effective curated-content source (a persisted override when one exists, else the configured
+    default), verifies the artifact, and restores it into the graph. Requires the ComplianceOfficer
+    role
+    (skipped only under the local-test bypass). The restoring caller becomes the owner of any draft
+    Policy the restore imports.
 
-    On success, returns the same structured summary ps-cli's `restore
-    instrument` used to print: `instrument_id` and one `stages` entry per
-    completed restore stage, each carrying its own `stage`/`status`
-    (AC-BI-004). Writes an `instrument.restore` audit row before the restore starts and a
-    terminal row after it (issue #195); if the opening row cannot be written nothing is
-    restored and the result is an `error: ` string. Returns a string beginning `error: ` when
-    the configured curated-content source is unreachable or the fetched artifact is
-    missing/malformed, when `instrument_id` matches more than one catalog
-    entry case-insensitively (issue #184, AC-BI-003 -- the error names every
-    colliding id and nothing is fetched), when `instrument_id` matches no
-    catalog entry in any case (issue #184, AC-BI-004 -- the error says no
-    catalog entry matches and names the closest candidate ids, and nothing
-    is fetched), when the fetched artifact fails
-    checksum/schema_version verification, when any other restore stage
-    genuinely fails (including a missing `PS_COMPANYMERGE_SIMILARITY_
-    THRESHOLD` configuration value), when the policy graph database cannot
-    be reached, or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Args:
+        instrument_id: Catalog id of the instrument, for example `CRA-1.0`; must match the allowed
+            id pattern and must not contain `..`. A value that violates either rule is rejected
+            before
+            the tool runs.
+
+    Returns:
+        A dict with `instrument_id` and a `stages` list holding one entry per completed restore
+        stage,
+        each with its own `stage` and `status`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not authenticated or lacks the required access role.
+        - The audit trail cannot record the opening row; nothing is restored.
+        - The persisted source override cannot be read, or the curated-content source is unreachable
+          or
+          returns a missing or malformed artifact.
+        - `instrument_id` matches more than one catalog entry when case is ignored (the message
+          names
+          every colliding id), or matches no entry (the message names the closest ids); nothing is
+          fetched in either case.
+        - The artifact fails checksum or `schema_version` verification, or a restore stage fails
+          (including a missing `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` setting).
+        - The policy graph database cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Fetches the catalog and the artifact over the network. Writes an `instrument.restore` audit
+        event before the restore starts and a terminal one afterwards. Writes the restored
+        instrument,
+        and any imported draft Policy owned by the caller, to the policy graph.
     """
     config = load_config()
     principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
-    # Issue #183: the restoring caller owns any imported draft Policy. Same resolution as the
+    # The restoring caller owns any imported draft Policy. Same resolution as the
     # policy-lifecycle tools (verified `(sub, iss)`, or the local-test bypass identity).
     owner = _resolve_policy_lifecycle_actor(config)
 
@@ -2108,9 +2241,8 @@ def restore_instrument(
     return _run_mcp_action("restore_instrument", principal, _body)
 
 
-# D2 (issue #139): `celex` is a plain node PROPERTY on `RegulatoryInstrument`,
-# never its node id (`{SHORT}-{VERSION}`) -- confirmed against
-# `ingestion/graph_writer.py`'s `build_native_writes` (the RegulatoryInstrument node's properties).
+# `celex` is a plain node PROPERTY on `RegulatoryInstrument`, never its node id
+# (`{SHORT}-{VERSION}`).
 # Fixed, code-owned, never string-interpolated -- `celex_ids` always flows in
 # via `params` (L2 Query Safety).
 _INGESTION_STATUS_QUERY = (
@@ -2127,49 +2259,34 @@ def check_instrument_ingestion_status(
         Field(min_length=1, max_length=25),
     ],
 ) -> dict[str, object] | str:
-    """CheckInstrumentIngestionStatus: report whether each given EU instrument is already ingested.
+    """Report whether each of the given EU instruments is already ingested into the policy graph.
 
-    For every CELEX id in `celex_ids` (1-25 items, each a well-formed EU
-    CELEX identifier -- same pattern `ingest_regulation`'s own `celex`
-    parameter uses, rejected at the MCP schema layer before this tool's body
-    ever runs if malformed or if the list is empty or too long), checks the
-    policy graph for a `RegulatoryInstrument` node carrying that CELEX as its
-    `celex` property (a plain property, distinct from that node's own
-    `{SHORT}-{VERSION}` id) and reports whether it has already been
-    ingested.
+    Batch every candidate CELEX id into one call to learn which instruments the graph already
+    tracks,
+    instead of querying them one at a time. An instrument counts as ingested when the graph holds a
+    `RegulatoryInstrument` whose `celex` property equals the id (a plain property, distinct from the
+    node's own `{SHORT}-{VERSION}` id). It needs no elevated access role; it is a plain graph read.
 
-    On success, returns `{"statuses": {<celex>: "ingested" | "not_yet_ingested"
-    | "unknown", ...}}`, one entry per requested `celex_ids` element
-    (duplicate ids collapse via dict semantics). Intended for a Compliance
-    Officer's applicability assessment: batch every candidate instrument's
-    CELEX into one call to learn which ones the graph already tracks,
-    rather than calling `cypher` once per candidate.
+    Args:
+        celex_ids: 1 to 25 CELEX ids, each exactly 10 characters matching the CELEX pattern used by
+            `ingest_regulation`. A violation is rejected before the tool runs. Duplicates collapse
+            to a
+            single entry in the result.
 
-    Issue #139, D5/S5 (AC-BI-009): a graph-availability problem never fails
-    the whole call -- unlike `cypher`/`check_regulations`/`near_misses_list`,
-    which all return a bare `error: ...` string and abort on
-    `McpGraphUnavailableError`/`QueryEngineExecutionError`. Here, every one
-    of those (plus `GraphUnseededError` and the practically-unreachable
-    `WriteClauseRejectedError`, caught for completeness since this query is
-    fixed and code-owned) instead folds every requested `celex_ids` entry to
-    `"unknown"`, per AC-BI-009's literal wording ("the artifact still
-    returns the candidate list ... rather than the whole assessment
-    failing"). This deliberately includes a totally unseeded graph
-    (`GraphUnseededError`): PLAN.md D5 reads a fresh/unseeded graph as
-    `"unknown"` rather than confidently `"not_yet_ingested"`, reasoning that
-    an unseeded graph is at least as likely to signal a real
-    provisioning/connectivity problem as a genuinely fresh company graph.
-    The call itself still completes successfully (`_run_mcp_action` logs
-    `outcome="succeeded"`, never `"failed"`) -- this degraded response is a
-    dict, never a top-level `error:` string, so it never trips
-    `_run_mcp_action`'s failed-outcome branch.
+    Returns:
+        `{"statuses": {<celex>: "ingested" | "not_yet_ingested" | "unknown", ...}}`, one entry per
+        distinct requested id. A graph problem never fails the call: when the graph cannot be
+        reached,
+        has no seeded content at all, or rejects the lookup, every requested id is reported as
+        `"unknown"` rather than `"not_yet_ingested"`, because a graph in that state more likely
+        signals
+        a provisioning or connectivity problem than a genuinely empty one.
 
-    This tool requires no elevated access role, matching `cypher`/
-    `check_regulations`/`near_misses_list` -- it is architecturally a plain
-    graph read, not an administrative write, so it sits on the same
-    un-gated `server` singleton every other tool does; per-caller bearer-
-    token authentication is still enforced uniformly by the HTTP transport
-    for every registered tool (issue #139, D6).
+    Errors (returned as a string beginning `error: `, never raised):
+        - Any unexpected failure outside the graph lookup (a fixed generic message).
+
+    Side Effects:
+        One read-only graph query; nothing is written. The call is logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2207,14 +2324,28 @@ def check_instrument_ingestion_status(
 def cypher(query: str) -> dict[str, object] | str:
     """Run a read-only, MATCH/RETURN-shaped Cypher query against the policy_system graph.
 
-    On success returns an object with `columns`, `rows`, `row_count`, and
-    `truncated` (`true` when more rows matched than the configured row cap
-    returned). Returns a string beginning `error: ` when the query contains
-    a write clause (CREATE, MERGE, DELETE, SET, REMOVE, DROP, FOREACH --
-    rejected before execution), when the graph has no seeded content at all
-    yet (distinct from a query that legitimately matches nothing, which
-    still returns the normal empty-result shape), when FalkorDB rejects the
-    query, or when the graph database cannot be reached.
+    Call `domain_concepts` first and ground every query in the labels, properties and edges it
+    lists.
+    The query runs with the configured timeout and row cap.
+
+    Args:
+        query: Cypher text. It must not contain a write clause (CREATE, MERGE, DELETE, SET, REMOVE,
+            DROP, FOREACH); such a query is rejected before execution.
+
+    Returns:
+        A dict with `columns`, `rows`, `row_count` and `truncated` (`true` when more rows matched
+        than
+        the row cap returned). A query that legitimately matches nothing returns the normal empty
+        shape.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The query contains a write clause.
+        - The graph has no seeded content at all yet.
+        - The graph database rejects or fails to execute the query.
+        - The graph database cannot be reached.
+
+    Side Effects:
+        One read-only graph query; nothing is written. The call is logged.
     """
     try:
         config = load_config()
@@ -2236,11 +2367,19 @@ def cypher(query: str) -> dict[str, object] | str:
 def domain_concepts() -> str:
     """Return the PS compliance-graph schema: node labels, properties and edges.
 
-    Call this first and ground every Cypher query in it. Takes no
-    parameters. Lists each node label with its properties (type, enum
-    values, required flag) and each edge with direction, cardinality and
-    edge-property names. Prose explanations and worked examples are not
-    included; read the `psdomain://concepts` resource for those.
+    Call this first and ground every Cypher query in it. Takes no parameters.
+
+    Returns:
+        Text listing each node label with its properties (type, enum values, required flag) and each
+        edge with direction, cardinality and edge-property names. Prose explanations and worked
+        examples
+        are not included; read the `psdomain://concepts` resource for those.
+
+    Errors:
+        None; the text is built from the schema compiled into the service.
+
+    Side Effects:
+        None.
     """
     return render_slim_schema(DOMAIN_SCHEMA)
 
@@ -2248,9 +2387,17 @@ def domain_concepts() -> str:
 def _load_domain_concepts() -> str:
     """Read the packaged ps-domain-concepts.md text.
 
-    Takes no parameters -- no client-supplied input reaches the read
-    (AC-012). Raises `McpResourceUnavailableError` (with a fixed, path-free
-    detail) if the file cannot be read.
+    Takes no parameters, so no client-supplied input reaches the file read.
+
+    Returns:
+        The full UTF-8 text of the packaged file.
+
+    Raises:
+        McpResourceUnavailableError: The file cannot be read; the message is a fixed, path-free
+        detail.
+
+    Side Effects:
+        Reads one file from the installed package.
     """
     try:
         return _domain_concepts_path().read_text(encoding="utf-8")
@@ -2266,10 +2413,22 @@ def _load_domain_concepts() -> str:
     mime_type="text/markdown",
 )
 def read_domain_concepts() -> str:
-    """GetDomainConcepts: return the full ps-domain-concepts.md text.
+    """Return the full ps-domain-concepts.md text.
 
-    Takes no parameters. If the file is unavailable, returns the
-    `error:`-prefixed fixed detail text -- no path, no cause (AC-BI-017).
+    This is the canonical PS compliance-graph vocabulary and schema, served verbatim.
+
+    Takes no parameters.
+
+    Returns:
+        The file text verbatim. If the file is unavailable, a string beginning `error: ` followed by
+        a
+        fixed detail that carries no path and no cause.
+
+    Errors:
+        None raised; an unreadable file is reported through the returned string.
+
+    Side Effects:
+        Reads one file from the installed package.
     """
     try:
         return _load_domain_concepts()
@@ -2278,7 +2437,19 @@ def read_domain_concepts() -> str:
 
 
 def _assignment_to_dict(row: AccessRoleAssignmentRow) -> dict[str, object]:
-    """Shape one `AccessRoleAssignmentRow` for `list-access-roles`'s wire response."""
+    """Shape one access-role assignment row for the `list-access-roles` response.
+
+    Args:
+        row: The assignment row read from the authorization store.
+
+    Returns:
+        A dict with `principal_subject`, `principal_issuer`, `access_role` (the role's string
+        value),
+        `granted_at` (ISO 8601 text), `granted_by_subject` and `granted_by_issuer`.
+
+    Side Effects:
+        None.
+    """
     return {
         "principal_subject": row.principal_subject,
         "principal_issuer": row.principal_issuer,
@@ -2291,24 +2462,29 @@ def _assignment_to_dict(row: AccessRoleAssignmentRow) -> dict[str, object]:
 
 @server.tool(name="list-access-roles")
 def list_access_roles() -> dict[str, object] | str:
-    """ListAccessRoles: report every principal's current AccessRole assignments (issue #133).
+    """List every principal's current access-role assignments.
 
-    Takes no parameters. The very first-ever caller, of any identity, is
-    auto-bootstrapped to `AuthenticatedUser` + `SystemOwner` (AC-BI-001)
-    before this tool's own gate is evaluated, so that one call always
-    succeeds; every later principal defaults to `AuthenticatedUser` alone
-    (AC-BI-002) and this tool then requires `SystemAdmin` or `SystemOwner`
-    to proceed (the full roster is sensitive -- a plan-original design
-    choice, not derived from any specific AC).
+    Takes no parameters. The very first caller ever, of any identity, is bootstrapped to
+    `AuthenticatedUser` plus `SystemOwner` before the access check runs, so that call always
+    succeeds.
+    Every later principal holds `AuthenticatedUser` alone by default, and this tool then requires
+    `SystemAdmin` or `SystemOwner`. Requires a real authenticated session; the local-test bypass
+    does
+    not provide one.
 
-    On success, returns `{"assignments": [{"principal_subject",
-    "principal_issuer", "access_role", "granted_at", "granted_by_subject",
-    "granted_by_issuer"}, ...], "system_owner_floor_warning": bool}`.
-    Returns a string beginning `error: ` when the caller has no real
-    authenticated session (the local-test bypass included -- access-role
-    management is never available under it), when the caller lacks the
-    required role, when the authorization store cannot be reached, or (this
-    tool's own residual safety net) on any other unexpected failure.
+    Returns:
+        `{"assignments": [{"principal_subject", "principal_issuer", "access_role", "granted_at",
+        "granted_by_subject", "granted_by_issuer"}, ...], "system_owner_floor_warning": bool}`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - The caller lacks the required role.
+        - The authorization store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the authorization store. The first-ever call also writes the bootstrap assignments and
+        their audit events. The call is logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2344,24 +2520,35 @@ def grant_access_role(
     principal_subject: Annotated[str, Field(min_length=1)],
     access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"],
 ) -> dict[str, object] | str:
-    """GrantAccessRole: grant `access_role` to `principal_subject` (issue #133).
+    """Grant an access role to a principal.
 
-    RBAC (PLAN.md §0.7, widened per CHANGES.md Appendix A; issue #145 adds
-    `ComplianceOfficer`): granting `SystemAdmin` or `SystemOwner` requires
-    the caller hold `SystemOwner`; granting `PolicyManager` or
-    `ComplianceOfficer` requires the caller hold `SystemOwner` or
-    `SystemAdmin`. A caller may never grant a role to themselves
-    (AC-BI-005).
+    Granting `SystemAdmin` or `SystemOwner` requires the caller to hold `SystemOwner`. Granting
+    `PolicyManager` or `ComplianceOfficer` requires `SystemOwner` or `SystemAdmin`. A caller may
+    never
+    grant a role to themselves. Requires a real authenticated session; the local-test bypass does
+    not
+    provide one.
 
-    On success, returns `{"principal_subject", "access_role",
-    "granted_by_subject", "system_owner_floor_warning"}`. Returns a string
-    beginning `error: ` when the caller has no real authenticated session
-    (the local-test bypass included -- access-role management is never
-    available under it), when `access_role` is not one of the four
-    grantable roles, when the caller lacks the required role, when the
-    target is the caller themselves, when the authorization store cannot be
-    reached, or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Args:
+        principal_subject: Subject (`sub`) of the principal who receives the role; at least 1
+            character.
+        access_role: One of `SystemOwner`, `SystemAdmin`, `PolicyManager` or `ComplianceOfficer`;
+            any
+            other value is rejected before the tool runs.
+
+    Returns:
+        `{"principal_subject", "access_role", "granted_by_subject", "system_owner_floor_warning"}`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - `access_role` is not grantable.
+        - The caller lacks the role the grant requires.
+        - `principal_subject` is the caller.
+        - The authorization store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Persists the assignment in the authorization store and writes an audit event.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2397,28 +2584,36 @@ def revoke_access_role(
     principal_subject: Annotated[str, Field(min_length=1)],
     access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"],
 ) -> dict[str, object] | str:
-    """RevokeAccessRole: revoke `access_role` from `principal_subject` (issue #133).
+    """Revoke an access role from a principal.
 
-    RBAC (PLAN.md §0.9, widened per CHANGES.md Appendix A): revoking
-    `SystemOwner` requires the caller hold `SystemOwner` **or**
-    `SystemAdmin` -- once a second `SystemOwner` exists (via
-    `grant-access-role`), a `SystemAdmin` can revoke one without the
-    self-revoke block ever intervening. Revoking `SystemAdmin`/
-    `PolicyManager`/`ComplianceOfficer` (issue #145 adds the latter) mirrors
-    `grant-access-role`'s own actor requirement for each role. A caller may
-    never revoke a role from themselves (AC-BI-005), checked before the
-    `SystemOwner` floor check (AC-BI-006): revoking the last remaining
-    active `SystemOwner` is rejected regardless of who the caller is.
+    Revoking `SystemOwner` requires the caller to hold `SystemOwner` or `SystemAdmin`. Revoking
+    `SystemAdmin`, `PolicyManager` or `ComplianceOfficer` requires the same role that granting it
+    requires. A caller may never revoke a role from themselves; that check runs before the floor
+    check,
+    which rejects revoking the last active `SystemOwner` whoever the caller is. Requires a real
+    authenticated session; the local-test bypass does not provide one.
 
-    On success, returns `{"principal_subject", "access_role",
-    "revoked_by_subject", "system_owner_floor_warning"}`. Returns a string
-    beginning `error: ` when the caller has no real authenticated session
-    (the local-test bypass included), when `access_role` is not one of the
-    four roles this tool manages, when the caller lacks the required role,
-    when the target is the caller themselves, when revoking `SystemOwner`
-    would leave zero active `SystemOwner`s, when the authorization store
-    cannot be reached, or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Args:
+        principal_subject: Subject (`sub`) of the principal who loses the role; at least 1
+            character.
+        access_role: One of `SystemOwner`, `SystemAdmin`, `PolicyManager` or `ComplianceOfficer`;
+            any
+            other value is rejected before the tool runs.
+
+    Returns:
+        `{"principal_subject", "access_role", "revoked_by_subject", "system_owner_floor_warning"}`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - `access_role` is not one of the four managed roles.
+        - The caller lacks the role the revocation requires.
+        - `principal_subject` is the caller.
+        - The revocation would leave zero active `SystemOwner` principals.
+        - The authorization store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Updates the assignment in the authorization store and writes an audit event.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2450,7 +2645,18 @@ def revoke_access_role(
 
 
 def _audit_event_to_dict(row: AuditEventRow) -> dict[str, object]:
-    """Shape one `AuditEventRow` for `list-audit-events`'s wire response."""
+    """Shape one audit event row for the `list-audit-events` response.
+
+    Args:
+        row: The audit event row read from the audit store.
+
+    Returns:
+        A dict with `id`, `occurred_at` (ISO 8601 text), `actor_subject`, `actor_issuer`, `action`,
+        `resource_type`, `resource_id`, `outcome` and `details`.
+
+    Side Effects:
+        None.
+    """
     return {
         "id": row.id,
         "occurred_at": row.occurred_at.isoformat(),
@@ -2472,7 +2678,7 @@ _LIST_AUDIT_EVENTS_ERRORS = (
 
 
 @server.tool(name="list-audit-events")
-def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an independent, optional query filter (AC-BI-007); collapsing them into one payload object would just move the same count behind a wrapper
+def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an independent, optional query filter; collapsing them into one payload object would just move the same count behind a wrapper
     actor_subject: Annotated[str, Field(min_length=1)] | None = None,
     actor_issuer: Annotated[str, Field(min_length=1)] | None = None,
     resource_type: Annotated[str, Field(min_length=1)] | None = None,
@@ -2484,41 +2690,44 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
     page_size: Annotated[int, Field(gt=0, le=100)] = 25,
     details: dict[str, str] | None = None,
 ) -> dict[str, object] | str:
-    """ListAuditEvents: read the shared `audit_events` audit trail, filtered and paginated.
+    """Read the shared audit trail, filtered and paginated, newest first.
 
-    Issue #147.
+    Requires `SystemOwner` or `SystemAdmin`, because the trail is at least as sensitive as the role
+    roster it partly documents, and a real authenticated session; the local-test bypass does not
+    provide one. Every parameter is optional and filters combine.
 
-    `SystemOwner`/`SystemAdmin`-gated, mirroring `list-access-roles`'s own
-    gate exactly -- the audit trail is at least as sensitive as the roster
-    it partly documents. Every parameter is optional and independently
-    combinable: `actor_subject`/`actor_issuer` narrow by who acted,
-    `resource_type`/`resource_id` by what was acted on, `action` by the
-    namespaced action string (e.g. `"access_role.grant"`), `occurred_from`/
-    `occurred_to` (ISO 8601) by a time range. Results are always newest
-    first. `cursor` (from a prior call's own `next_cursor`) advances to the
-    next page; `page_size` bounds how many events one call returns (default
-    25, maximum 100). `details` (issue #195) is an exact-match filter on the
-    business subject of a row: allowed keys are `celex` (an ingestion run's
-    submit and complete rows), `regulatory_instrument_id` (an ingestion's
-    complete row) and `instrument_id` (restore rows), e.g.
-    `{"celex": "32024R2847"}` answers "who ingested this regulation?". Any
-    other key, or an empty value, is rejected with an `error: ` response.
+    Args:
+        actor_subject: Narrow to events by this actor subject; at least 1 character.
+        actor_issuer: Narrow to events by this actor issuer; at least 1 character.
+        resource_type: Narrow to this kind of acted-on resource; at least 1 character.
+        resource_id: Narrow to this acted-on resource id; at least 1 character.
+        action: Narrow to this namespaced action string, for example `access_role.grant`; at least 1
+            character.
+        occurred_from: Only events at or after this ISO 8601 time.
+        occurred_to: Only events at or before this ISO 8601 time.
+        cursor: The `next_cursor` of a previous call, to fetch the following page; at least 1
+            character.
+        page_size: Events per page, from 1 to 100; default 25.
+        details: Exact-match filter on the business subject of a row. Allowed keys are `celex` (an
+            ingestion run's submit and complete rows), `regulatory_instrument_id` (an ingestion's
+            complete row) and `instrument_id` (restore rows), for example `{"celex": "32024R2847"}`.
+            Any other key, or an empty value, is rejected.
 
-    To allow another key: add it to `ps_service.audit.AUDIT_DETAILS_FILTER_KEYS`
-    and its fixed SQL fragment to `audit/store.py`'s `_DETAILS_FILTER_FRAGMENTS`,
-    add an expression index in a new audit migration, then update this
-    docstring, the `ps-list-audit-events` skill and the architecture docs.
+    Returns:
+        `{"events": [{"id", "occurred_at", "actor_subject", "actor_issuer", "action",
+        "resource_type",
+        "resource_id", "outcome", "details"}, ...], "next_cursor": str | None}`; `next_cursor` is
+        `None` once no further events remain.
 
-    On success, returns `{"events": [{"id", "occurred_at", "actor_subject",
-    "actor_issuer", "action", "resource_type", "resource_id", "outcome",
-    "details"}, ...], "next_cursor": str | None}` -- `next_cursor` is
-    `None` once no further events remain. Returns a string beginning
-    `error: ` when the caller has no real authenticated session (the
-    local-test bypass included -- audit-trail access is never available
-    under it), when the caller lacks the required role, when a filter,
-    `page_size`, or `cursor` is invalid, when the authorization store
-    cannot be reached, or (this tool's own residual safety net) on any
-    other unexpected failure.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - The caller lacks the required role.
+        - A filter, `page_size` or `cursor` is invalid, including a disallowed `details` key.
+        - The audit or authorization store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the audit trail; nothing is written. The call is logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2564,12 +2773,11 @@ _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
 
 
 class _MalformedPatchFieldsError(Exception):
-    """A `fields` argument to one of issue #136's draft-content tools is shaped wrong.
+    """A `fields` argument to one of the draft-content tools is shaped wrong.
 
-    Raised only by `_parse_patch_fields` -- caught once, at each PATCH/add
-    tool's own call site, and turned into an `error: ` string (mirrors
-    `_MalformedPolicyDraftStandardsError`'s own convention immediately
-    below).
+    Raised only by `_parse_patch_fields`; each draft-content tool catches it at its own call site
+    and
+    returns it as an `error: ` string.
     """
 
 
@@ -2579,34 +2787,31 @@ def _parse_patch_fields(
     allowed: frozenset[str],
     enum_checks: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
 ) -> dict[str, object]:
-    """Validate `fields` against a tool's own patchable-field allow-list (issue #136, PLAN.md §1.7).
+    """Validate `fields` against a tool's allow-list of patchable field names.
 
-    `fields=None` (the parameter omitted entirely) returns `{}` (a no-op
-    update) -- mirrors `_parse_policy_draft_standards`'s own `None`-means-
-    nothing convention. Every key must be in `allowed`; every value must be
-    `str | None` (`None` means "explicitly clear this field to null" --
-    AC-BI-008's PATCH semantic, distinct from the key being absent, which
-    leaves the existing value untouched). A key present in `enum_checks`
-    must have a value from its own allowed tuple, when the value is not
-    `None`.
+    `None` (the parameter omitted) is a no-op update and yields `{}`. Every key must be in `allowed`
+    and every value must be a string or `None`. `None` clears the field in an update tool and leaves
+    it
+    unset in a create tool; it is distinct from an absent key, which leaves any existing value
+    alone.
 
     Args:
-        fields: The tool's own raw `fields` argument, as the MCP caller
-            supplied it.
-        allowed: The fixed, code-defined set of patchable field names this
-            tool accepts.
-        enum_checks: Field name -> the tuple of values it is restricted to
-            (checked only when that field is present and non-`None`).
+        fields: The raw `fields` argument as the MCP caller supplied it, or `None`.
+        allowed: The fixed set of field names the calling tool accepts.
+        enum_checks: Field name to the tuple of values that field is restricted to; checked only
+            when
+            the field is present and not `None`.
 
     Returns:
-        `fields` unchanged (as a plain `dict`), once every key/value has
-        been validated.
+        `fields` itself once every key and value is validated, or `{}` when `fields` is `None`.
 
     Raises:
-        _MalformedPatchFieldsError: `fields` is not a dict, a key is not in
-            `allowed`, a value is neither `str` nor `None`, or an
-            `enum_checks`-restricted field's non-`None` value is not one of
-            its own allowed values.
+        _MalformedPatchFieldsError: A key is not in `allowed`, a value is neither a string nor
+        `None`,
+            or a restricted field holds a value outside its tuple.
+
+    Side Effects:
+        None.
     """
     if fields is None:
         return {}
@@ -2637,21 +2842,27 @@ _CREATE_POLICY_DRAFT_CONTROL_TYPES = ("automated", "manual")
 
 
 class _MalformedPolicyDraftStandardsError(Exception):
-    """The `create-policy-draft` `standards` argument is shaped wrong.
+    """The `standards` argument of `create-policy-draft` is shaped wrong.
 
-    Raised only by `_parse_policy_draft_standards`/its own helpers below --
-    caught once, at `create_policy_draft`'s own call site, and turned into
-    an `error: ` string (mirrors every other named-error tuple in this
-    module) rather than ever crashing the tool call. The message always
-    names the offending `standards[i]`/`standards[i].controls[j]` position
-    so a caller can locate the bad entry in a multi-item list.
+    Raised only by `_parse_policy_draft_standards` and the helpers it calls; `create_policy_draft`
+    catches it and returns it as an `error: ` string. The message names the offending
+    `standards[i]` or `standards[i].controls[j]` position so a caller can locate the bad entry.
     """
 
 
 def _require_standards_str_field(body: dict[str, object], field: str, *, where: str) -> str:
-    """Return `body[field]` if it is a non-empty string; raise otherwise.
+    """Return a required non-empty string field of one `standards` entry.
 
-    Mirrors `curated_source.catalog_client._require_str`'s own convention.
+    Args:
+        body: The `standards[i]` or `standards[i].controls[j]` object being parsed.
+        field: Name of the key to read from `body`.
+        where: Position label of `body` (for example `standards[0]`), used in the error message.
+
+    Returns:
+        The non-empty string stored under `field`.
+
+    Raises:
+        _MalformedPolicyDraftStandardsError: `field` is absent, not a string, or empty.
     """
     value = body.get(field)
     if not isinstance(value, str) or not value:
@@ -2660,7 +2871,19 @@ def _require_standards_str_field(body: dict[str, object], field: str, *, where: 
 
 
 def _parse_control_draft_input(raw: object, *, where: str) -> ControlDraftInput:
-    """Parse one `standards[i].controls[j]` entry into a `ControlDraftInput`."""
+    """Parse one `standards[i].controls[j]` entry into a `ControlDraftInput`.
+
+    Args:
+        raw: The entry as supplied by the caller.
+        where: Position label of the entry, used in error messages.
+
+    Returns:
+        A `ControlDraftInput` with the entry's `title` and its `control_type` (default `"manual"`).
+
+    Raises:
+        _MalformedPolicyDraftStandardsError: `raw` is not an object, `title` is missing or empty, or
+            `control_type` is not `"automated"` or `"manual"`.
+    """
     if not isinstance(raw, dict):
         raise _MalformedPolicyDraftStandardsError(f"{where} must be an object")
     body = cast("dict[str, object]", raw)
@@ -2674,10 +2897,19 @@ def _parse_control_draft_input(raw: object, *, where: str) -> ControlDraftInput:
 
 
 def _parse_standard_draft_input(raw: object, *, where: str) -> StandardDraftInput:
-    """Parse one `standards[i]` entry (with its own optional `controls`).
+    """Parse one `standards[i]` entry, with its optional `controls`, into a `StandardDraftInput`.
 
-    Each `controls[j]` entry is parsed by `_parse_control_draft_input` in
-    turn.
+    Args:
+        raw: The entry as supplied by the caller.
+        where: Position label of the entry, used in error messages.
+
+    Returns:
+        A `StandardDraftInput` with the entry's `title` and a tuple of parsed controls (empty when
+        `controls` is omitted).
+
+    Raises:
+        _MalformedPolicyDraftStandardsError: `raw` is not an object, `title` is missing or empty,
+            `controls` is not a list, or a control entry is malformed.
     """
     if not isinstance(raw, dict):
         raise _MalformedPolicyDraftStandardsError(f"{where} must be an object")
@@ -2696,11 +2928,16 @@ def _parse_standard_draft_input(raw: object, *, where: str) -> StandardDraftInpu
 def _parse_policy_draft_standards(
     standards: list[dict[str, object]] | None,
 ) -> tuple[StandardDraftInput, ...]:
-    """Parse `create-policy-draft`'s optional `standards` argument top to bottom.
+    """Parse the optional `standards` argument of `create-policy-draft`, top to bottom.
 
-    `None` (the parameter omitted entirely) means "no Standards" -- the
-    exact same zero-Standard draft `create-policy-draft` always produced
-    before this argument existed (backward-compatible).
+    Args:
+        standards: The list of Standard objects as supplied by the caller, or `None` when omitted.
+
+    Returns:
+        One `StandardDraftInput` per entry, in order; an empty tuple when `standards` is `None`.
+
+    Raises:
+        _MalformedPolicyDraftStandardsError: An entry, or a nested control, is malformed.
     """
     if standards is None:
         return ()
@@ -2717,70 +2954,69 @@ def create_policy_draft(
     supersedes_policy_id: Annotated[str, Field(min_length=1)] | None = None,
     capability_ids: list[Annotated[str, Field(min_length=1)]] | None = None,
 ) -> dict[str, object] | str:
-    """CreatePolicyDraft: mint a new draft Policy owned by the calling caller (issue #134/#136).
+    """Create a new draft Policy owned by the caller, or an amendment of an approved Policy.
 
-    Delegates to `ps_service.policy_lifecycle.service.create_policy_draft`
-    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
-    identity and the policy graph handle, parses `standards`, then does
-    nothing else. The new Policy is minted with `status="draft"`, owned by
-    the calling caller.
+    Requires a real authenticated session (the local-test bypass counts as one). The Policy, and
+    every
+    Standard and Control created with it, starts in `draft` status.
 
-    `standards` is optional (omit it, or pass `null`, for a title-only,
-    zero-Standard draft -- fully backward compatible). When given, it is a
-    list of objects, each `{"title": <str>, "controls": [...]}` (`controls`
-    itself optional, defaulting to `[]`); each control is `{"title": <str>,
-    "control_type": "automated" | "manual"}` (`control_type` optional,
-    defaulting to `"manual"`). Every Standard/Control minted this way is
-    unconditionally `status="draft"` (D-6), regardless of anything else in
-    the request.
+    Args:
+        title: Policy title; at least 1 character.
+        standards: Optional list of objects `{"title": <str>, "controls": [...]}` (`controls`
+            optional,
+            default `[]`); each control is `{"title": <str>, "control_type": "automated" |
+            "manual"}`
+            (`control_type` optional, default `"manual"`). Every `title` must be a non-empty string.
+            Omit it or pass `null` for a title-only draft. Ignored when `supersedes_policy_id` is
+            set.
+        supersedes_policy_id: Optional id of an `approved` Policy to amend. When omitted this
+            creates an
+            ordinary version-1 Policy whose id is derived from `title` alone, so repeating a title
+            is an
+            error. When set, it creates a successor draft whose id derives from both `title` and
+            this
+            id, with `version` one higher (still a string), a `SUPERSEDED_BY` edge from the prior
+            Policy,
+            and Standard and Control children forked as new, independently editable copies of the
+            prior
+            Policy's current children; the prior nodes are not changed. At least 1 character.
+        capability_ids: Optional ids of existing Capabilities the new Policy will govern; each at
+            least
+            1 character. The governing edges are written together with the Policy, so it governs
+            them
+            from creation, while still a draft. Duplicates are dropped, order kept. Every id must
+            name
+            an existing Capability that no Policy governs yet. Ignored when `supersedes_policy_id`
+            is
+            set: a fork's Capabilities stay with the prior Policy and move to the successor when it
+                is
+            approved.
 
-    `supersedes_policy_id` (issue #136, the amendment fork) is optional. When
-    omitted, this mints an ordinary v1 Policy: its id is derived
-    deterministically from `title` alone (`pol_{slug}_{hash}`), so calling
-    this again with the same title returns an error rather than a second
-    Policy, and `version` is `"1"`. When set to an existing `"approved"`
-    Policy's id, this instead mints a SUCCESSOR draft: the new id is derived
-    from BOTH `title` and `supersedes_policy_id`, `version` is
-    `str(int(prior_version) + 1)` (still string-typed), a single Policy-
-    level `SUPERSEDED_BY` edge links the prior Policy to the new one (no
-    per-Standard/Control lineage edges), and the new draft's Standard/
-    Control children are the prior Policy's OWN CURRENT children, forked as
-    brand-new, independently-editable nodes -- never the prior's own nodes,
-    which are never mutated by this call. **`standards` is silently ignored
-    when `supersedes_policy_id` is set** -- the fork's content always comes
-    from the prior tree, never a caller-supplied list. `supersedes_policy_id`
-    naming a Policy that does not exist, or that exists but is not currently
-    `"approved"`, is rejected with a named error; no fork is attempted.
+    Returns:
+        `{"policy_id", "title", "status", "version", "owner_subject", "standard_ids", "control_ids",
+        "superseded_policy_id", "governed_capability_ids"}`. `standard_ids` and `control_ids` list
+        every
+        created or forked child (empty for a title-only draft) and can be used in later
+        draft-editing
+        calls; `superseded_policy_id` is `null` unless this was an amendment;
+        `governed_capability_ids`
+        is empty when none are governed or on an amendment.
 
-    `capability_ids` (issue #185) is optional. On a FRESH draft (no
-    `supersedes_policy_id`) it names existing Capabilities the new Policy
-    will govern: the `GOVERNED_BY` edges are written together with the Policy
-    node, in one guarded step, so the Policy governs those Capabilities from
-    creation (while still a draft) until it is approved or removed. Duplicates
-    are dropped (order kept). Every id must name an existing Capability that
-    no Policy governs yet -- otherwise a named error is returned and nothing
-    is written. **`capability_ids` is silently ignored when
-    `supersedes_policy_id` is set**: a fork's Capabilities stay on the prior
-    Policy and move to the successor when it is approved.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - `standards` or a nested `controls` entry is malformed (not objects, a missing or empty
+          `title`, or an invalid `control_type`).
+        - `supersedes_policy_id` names no Policy, or a Policy that is not `approved`.
+        - A `capability_ids` entry names no Capability or one that is already governed; nothing is
+          written.
+        - The computed Policy id already exists.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
 
-    On success, returns `{"policy_id", "title", "status", "version",
-    "owner_subject", "standard_ids", "control_ids", "superseded_policy_id",
-    "governed_capability_ids"}` -- `governed_capability_ids` are the
-    Capabilities now governed by the draft (`[]` when none, or on a fork);
-    `standard_ids`/`control_ids` are `[]` on a title-only draft, or every
-    minted/forked child's id otherwise, immediately usable in a following
-    `update-standard-draft`/`add-control-to-draft`/`update-control-draft`
-    call; `superseded_policy_id` is `null` unless this was a fork. Returns a
-    string beginning `error: ` when the caller has no real authenticated
-    session (the local-test bypass DOES count as one here -- unlike
-    access-role management or signing-ceremony approval), when `standards`
-    (or a nested `controls` entry) is shaped wrong (not a list of objects, or
-    missing/empty a required `title`, or an invalid `control_type`), when
-    `supersedes_policy_id` names a Policy that does not exist or is not
-    `"approved"`, when a `capability_ids` entry names no Capability or one
-    that is already governed, when the computed id already collides with an
-    existing Policy, when the policy graph cannot be reached, or (this tool's own
-    residual safety net) on any other unexpected failure.
+    Side Effects:
+        Writes the Policy and its children to the policy graph in one guarded step and records an
+        audit
+        event.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2799,7 +3035,7 @@ def create_policy_draft(
             return f"error: {exc}"
         audit_store = PsycopgAuditStore(config)
         try:
-            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_create_policy_draft(
                 actor=actor,
@@ -2842,38 +3078,36 @@ def update_policy_draft(
     policy_id: Annotated[str, Field(min_length=1)],
     fields: dict[str, object] | None = None,
 ) -> dict[str, object] | str:
-    """UpdatePolicyDraft: PATCH a subset of a draft Policy's own content fields (issue #136).
+    """Change a subset of a draft Policy's content fields, leaving the rest as they are.
 
-    Delegates to `ps_service.policy_lifecycle.service.update_policy_draft`
-    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
-    identity, the policy graph handle, and the access-role store, parses
-    `fields`, then does nothing else. Uses the exact same
-    `_resolve_policy_lifecycle_actor` identity resolution as
-    `create-policy-draft`/`get-policy` (D-11): the local-test bypass DOES
-    count as a real authenticated caller here.
+    Usable only while the Policy is in `draft` status, and only by its owner or a caller holding
+    `SystemOwner` or `SystemAdmin`. Requires a real authenticated session (the local-test bypass
+    counts as one).
 
-    Only usable while `policy_id`'s own governance status is `"draft"`, and
-    only by its owner or a caller holding `SystemOwner`/`SystemAdmin`
-    (AC-BI-002/004) -- the same visibility/override rule `get-policy`
-    already applies to a Draft Policy.
+    Args:
+        policy_id: Id of the Policy to change; at least 1 character.
+        fields: Partial-update map; only the supplied keys change. Each value is a string or JSON
+            `null`, which clears the field. Allowed keys: `description`, `scope_in`, `scope_out`,
+            `normative_commitments`, `review_cadence`, `exception_pathway`, `measurable_outcomes`,
+            `capability_grouping_rationale`. `title`, `status`, `owner_subject`, `owner_issuer` and
+            `version` can never be patched. Omit it or pass `null` for a no-op update.
 
-    `fields` is a partial-update map: only the keys supplied are changed,
-    every omitted field keeps its existing value (AC-BI-008). Each value is
-    either a non-null string, or JSON `null` to explicitly clear that field.
-    Allowed keys: `description`, `scope_in`, `scope_out`,
-    `normative_commitments`, `review_cadence`, `exception_pathway`,
-    `measurable_outcomes`, `capability_grouping_rationale`. `title`,
-    `status`, `owner_subject`, `owner_issuer`, and `version` can never be
-    patched through this tool.
+    Returns:
+        `{"policy_id", "updated_fields"}`, where `updated_fields` is every key supplied in `fields`,
+        sorted.
 
-    On success, returns `{"policy_id", "updated_fields"}` (`updated_fields`
-    is every key `fields` supplied, sorted). Returns a string beginning
-    `error: ` when the caller has no real authenticated session, when
-    `fields` names an unknown key or a non-string/non-null value, when no
-    Policy exists with `policy_id`, when the caller is neither the owner nor
-    a `SystemOwner`/`SystemAdmin`, when `policy_id`'s Policy is not currently
-    `"draft"`, when the policy graph cannot be reached, or (this tool's own
-    residual safety net) on any other unexpected failure.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - `fields` names an unknown key or a value that is neither a string nor `null`.
+        - No Policy has `policy_id`.
+        - The caller is neither the owner nor a `SystemOwner` or `SystemAdmin`.
+        - The Policy is not in `draft` status.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Writes the changed fields to the policy graph; no audit event is written. May also backfill
+        a missing `version` and `status` on the Policy tree.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2892,7 +3126,7 @@ def update_policy_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
-            # Fail closed before any read or write: no gateway, no draft edit (issue #211).
+            # Fail closed before any read or write: no write path, no draft edit.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_update_policy_draft(
                 actor=actor,
@@ -2927,44 +3161,42 @@ def add_standard_to_draft(
     title: Annotated[str, Field(min_length=1)],
     fields: dict[str, object] | None = None,
 ) -> dict[str, object] | str:
-    """AddStandardToDraft: create a new Standard under a draft Policy (issue #136).
+    """Add a new Standard under a draft Policy.
 
-    Delegates to `ps_service.policy_lifecycle.service.add_standard_to_draft`
-    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
-    identity, the policy graph handle, and the access-role store, parses
-    `fields`, then does nothing else. Uses the exact same
-    `_resolve_policy_lifecycle_actor` identity resolution as
-    `create-policy-draft`/`update-policy-draft` (D-11): the local-test
-    bypass DOES count as a real authenticated caller here.
+    Usable only while the Policy is in `draft` status, and only by its owner or a caller holding
+    `SystemOwner` or `SystemAdmin`. Requires a real authenticated session (the local-test bypass
+    counts
+    as one). The Standard is linked to the Policy with `SUPPORTED_BY` and always starts in `draft`
+    governance status, whatever its `implementation_status`.
 
-    Only usable while `policy_id`'s own governance status is `"draft"`, and
-    only by its owner or a caller holding `SystemOwner`/`SystemAdmin`
-    (AC-BI-003/004) -- the same visibility/override rule `update-policy-draft`
-    already applies to the parent Policy. The new Standard is linked to
-    `policy_id` via `SUPPORTED_BY`, and is always minted with governance
-    status `"draft"`, independent of its own `implementation_status` field
-    (AC-BI-007) -- `implementation_status` defaults to `"draft"` unless
-    supplied in `fields`.
+    Args:
+        policy_id: Id of the draft Policy; at least 1 character.
+        title: Standard title; at least 1 character.
+        fields: Optional content to set at creation. Each value is a string, or JSON `null`, which
+            leaves the field unset. Allowed keys: `description`, `implementation_status`,
+            `procedure`,
+            `implementer_role`, `reviewer_role`, `applicability_boundary`, `verification_notes`,
+            `change_rationale`. `implementation_status` must be one of `draft`, `implemented`,
+            `reviewed`, `deprecated`, and defaults to `draft`. `title` and `status` cannot be set
+            here.
 
-    `fields` is optional extra content to set at creation time (same partial-
-    update value shape as `update-policy-draft`'s own `fields`): each value
-    is either a non-null string, or JSON `null` (meaning "leave this field
-    unset" -- a newly-minted node has no prior value to clear, unlike a PATCH
-    tool). Allowed keys: `description`, `implementation_status`, `procedure`,
-    `implementer_role`, `reviewer_role`, `applicability_boundary`,
-    `verification_notes`, `change_rationale`. `implementation_status`, when
-    supplied, must be one of `draft`, `implemented`, `reviewed`, `deprecated`.
-    `title` and `status` can never be set through `fields`.
+    Returns:
+        `{"standard_id", "policy_id", "title", "status"}`; `standard_id` can be used in later calls
+        immediately.
 
-    On success, returns `{"standard_id", "policy_id", "title", "status"}` --
-    `standard_id` is usable immediately in a following call (AC-BI-009).
-    Returns a string beginning `error: ` when the caller has no real
-    authenticated session, when `fields` names an unknown key, a non-string/
-    non-null value, or an invalid `implementation_status`, when no Policy
-    exists with `policy_id`, when the caller is neither the owner nor a
-    `SystemOwner`/`SystemAdmin`, when `policy_id`'s Policy is not currently
-    `"draft"`, when the policy graph cannot be reached, or (this tool's own
-    residual safety net) on any other unexpected failure.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - `fields` names an unknown key, holds a value that is neither a string nor `null`, or holds
+          an
+          invalid `implementation_status`.
+        - No Policy has `policy_id`.
+        - The caller is neither the owner nor a `SystemOwner` or `SystemAdmin`.
+        - The Policy is not in `draft` status.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Writes the Standard and its link to the policy graph; no audit event is written.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2987,7 +3219,7 @@ def add_standard_to_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
-            # Fail closed before any read or write: no gateway, no draft write (issue #211).
+            # Fail closed before any read or write: no write path, no draft write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_add_standard_to_draft(
                 actor=actor,
@@ -3024,40 +3256,41 @@ def update_standard_draft(
     standard_id: Annotated[str, Field(min_length=1)],
     fields: dict[str, object] | None = None,
 ) -> dict[str, object] | str:
-    """UpdateStandardDraft: PATCH a subset of a draft Standard's own content fields (issue #136).
+    """Change a subset of a draft Standard's content fields, leaving the rest as they are.
 
-    Delegates to `ps_service.policy_lifecycle.service.update_standard_draft`
-    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
-    identity, the policy graph handle, and the access-role store, parses
-    `fields`, then does nothing else. Uses the exact same
-    `_resolve_policy_lifecycle_actor` identity resolution as
-    `update-policy-draft`/`add-standard-to-draft` (D-11): the local-test
-    bypass DOES count as a real authenticated caller here.
+    A Standard has no owner of its own: only the owner of its parent Policy, or a caller holding
+    `SystemOwner` or `SystemAdmin`, may change it. Usable only while the Standard itself (not the
+    parent Policy) is in `draft` status. Requires a real authenticated session (the local-test
+    bypass
+    counts as one).
 
-    Ownership is derived TRANSITIVELY from `standard_id`'s parent Policy
-    (AC-BI-003) -- a Standard has no ownership field of its own; only its
-    owner or a caller holding `SystemOwner`/`SystemAdmin` may patch it, the
-    same visibility/override rule every other draft-content tool in this
-    issue applies. Only usable while `standard_id`'s own governance status
-    (not the parent Policy's) is currently `"draft"` (AC-BI-004).
+    Args:
+        standard_id: Id of the Standard to change; at least 1 character.
+        fields: Partial-update map; only the supplied keys change. Each value is a string or JSON
+            `null`, which clears the field. Allowed keys: `description`, `implementation_status`,
+            `procedure`, `implementer_role`, `reviewer_role`, `applicability_boundary`,
+            `verification_notes`, `change_rationale`. `implementation_status` must be one of
+            `draft`,
+            `implemented`, `reviewed`, `deprecated`. `title` and `status` can never be patched. Omit
+            it
+            or pass `null` for a no-op update.
 
-    `fields` is a partial-update map: only the keys supplied are changed,
-    every omitted field keeps its existing value (AC-BI-008). Each value is
-    either a non-null string, or JSON `null` to explicitly clear that field.
-    Allowed keys: `description`, `implementation_status`, `procedure`,
-    `implementer_role`, `reviewer_role`, `applicability_boundary`,
-    `verification_notes`, `change_rationale`. `implementation_status`, when
-    supplied, must be one of `draft`, `implemented`, `reviewed`, `deprecated`.
-    `title` and `status` can never be patched through this tool.
+    Returns:
+        `{"standard_id", "policy_id", "title", "status"}`.
 
-    On success, returns `{"standard_id", "policy_id", "title", "status"}`.
-    Returns a string beginning `error: ` when the caller has no real
-    authenticated session, when `fields` names an unknown key, a non-string/
-    non-null value, or an invalid `implementation_status`, when no Standard
-    exists with `standard_id`, when the caller is neither the parent Policy's
-    owner nor a `SystemOwner`/`SystemAdmin`, when `standard_id`'s Standard is
-    not currently `"draft"`, when the policy graph cannot be reached, or
-    (this tool's own residual safety net) on any other unexpected failure.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - `fields` names an unknown key, holds a value that is neither a string nor `null`, or holds
+          an
+          invalid `implementation_status`.
+        - No Standard has `standard_id`.
+        - The caller is neither the parent Policy's owner nor a `SystemOwner` or `SystemAdmin`.
+        - The Standard is not in `draft` status.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Writes the changed fields to the policy graph; no audit event is written.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3080,7 +3313,7 @@ def update_standard_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
-            # Fail closed before any read or write: no gateway, no draft write (issue #211).
+            # Fail closed before any read or write: no write path, no draft write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_update_standard_draft(
                 actor=actor,
@@ -3110,11 +3343,10 @@ _ADD_CONTROL_TO_DRAFT_ERRORS = (
     PolicyLifecycleGraphUnavailableError,
 )
 
-# CHANGES.md finding #8: `add-control-to-draft` excludes `"type"` from its
-# own `fields` allow-list -- the top-level `control_type` param is the only
-# way to set a Control's type at creation. `update-control-draft` (Slice 5)
-# keeps the full, unmodified `_CONTROL_PATCHABLE_FIELDS` (including `"type"`)
-# as the only post-creation path to change it.
+# `add-control-to-draft` excludes `"type"` from its `fields` allow-list: the top-level
+# `control_type` parameter is the only way to set a Control's type at creation, and
+# `update-control-draft` (which keeps the full `_CONTROL_PATCHABLE_FIELDS`) is the only
+# post-creation path to change it.
 _ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS = _CONTROL_PATCHABLE_FIELDS - {"type"}
 
 
@@ -3125,53 +3357,49 @@ def add_control_to_draft(
     control_type: Annotated[str, Field(min_length=1)] = "manual",
     fields: dict[str, object] | None = None,
 ) -> dict[str, object] | str:
-    """AddControlToDraft: create a new Control under a draft Standard (issue #136).
+    """Add a new Control under a draft Standard.
 
-    Delegates to `ps_service.policy_lifecycle.service.add_control_to_draft`
-    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
-    identity, the policy graph handle, and the access-role store, validates
-    `control_type`, parses `fields`, then does nothing else. Uses the exact
-    same `_resolve_policy_lifecycle_actor` identity resolution as every other
-    tool in this issue (D-11): the local-test bypass DOES count as a real
-    authenticated caller here.
+    Ownership comes from the Standard's parent Policy: only that Policy's owner, or a caller holding
+    `SystemOwner` or `SystemAdmin`, may add a Control, and only while the Standard itself (not the
+    parent Policy) is in `draft` status. Requires a real authenticated session (the local-test
+    bypass
+    counts as one). The Control is linked to the Standard with `IMPLEMENTED_BY` and always starts in
+    `draft` governance status, whatever its `implementation_status`.
 
-    Ownership is derived from `standard_id`'s parent Policy via the SAME
-    one-hop traversal `update-standard-draft` uses (PLAN.md §1.4 -- both
-    tools take a `standard_id`; only `update-control-draft`, keyed on an
-    existing `control_id`, needs a genuine two-hop traversal) -- only usable
-    while `standard_id`'s own governance status (not the parent Policy's) is
-    currently `"draft"` (AC-BI-004), and only by the parent Policy's owner or
-    a caller holding `SystemOwner`/`SystemAdmin` (AC-BI-003). The new Control
-    is linked to `standard_id` via `IMPLEMENTED_BY`, and is always minted
-    with governance status `"draft"`, independent of its own
-    `implementation_status` field (AC-BI-007) -- `implementation_status`
-    defaults to `"planned"` (NOT `"draft"` -- Control's own workflow starts
-    one step later than Standard's) unless supplied in `fields`.
+    Args:
+        standard_id: Id of the draft Standard; at least 1 character.
+        title: Control title; at least 1 character.
+        control_type: `"automated"` or `"manual"`; default `"manual"`. This is the only way to set
+            the
+            type at creation.
+        fields: Optional content to set at creation. Each value is a string, or JSON `null`, which
+            leaves the field unset. Allowed keys: `description`, `implementation_status`,
+            `execution_frequency`, `last_test_date`, `next_review_date`, `evidence_ref`,
+            `pass_fail_criteria`, `execution_method`, `evidence_plan`, `executor_role`,
+            `reviewer_role`,
+            `risk_alignment_rationale`. `implementation_status` must be one of `planned`,
+            `implemented`, `reviewed`, `deprecated`, and defaults to `planned`. `title`, `status`
+            and
+            `type` cannot be set here; `type` is rejected, use `control_type`.
 
-    `control_type` must be `"automated"` or `"manual"`. `fields` is optional
-    extra content to set at creation time (same partial-update value shape as
-    `add-standard-to-draft`'s own `fields`): each value is either a non-null
-    string, or JSON `null` (meaning "leave this field unset" -- a newly-
-    minted node has no prior value to clear). Allowed keys: `description`,
-    `implementation_status`, `execution_frequency`, `last_test_date`,
-    `next_review_date`, `evidence_ref`, `pass_fail_criteria`,
-    `execution_method`, `evidence_plan`, `executor_role`, `reviewer_role`,
-    `risk_alignment_rationale`. `implementation_status`, when supplied, must
-    be one of `planned`, `implemented`, `reviewed`, `deprecated`. `title`,
-    `status`, and `type` can never be set through `fields` -- `fields.type`
-    is rejected; use `control_type` to set the Control's type at creation.
+    Returns:
+        `{"control_id", "standard_id", "policy_id", "title", "status"}`; `control_id` can be used in
+        later calls immediately.
 
-    On success, returns `{"control_id", "standard_id", "policy_id", "title",
-    "status"}` -- `control_id` is usable immediately in a following call.
-    Returns a string beginning `error: ` when the caller has no real
-    authenticated session, when `control_type` is not `"automated"` or
-    `"manual"`, when `fields` names an unknown key (including `"type"`), a
-    non-string/non-null value, or an invalid `implementation_status`, when no
-    Standard exists with `standard_id`, when the caller is neither the parent
-    Policy's owner nor a `SystemOwner`/`SystemAdmin`, when `standard_id`'s
-    Standard is not currently `"draft"`, when the policy graph cannot be
-    reached, or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - `control_type` is not `"automated"` or `"manual"`.
+        - `fields` names an unknown key (including `type`), holds a value that is neither a string
+          nor
+          `null`, or holds an invalid `implementation_status`.
+        - No Standard has `standard_id`.
+        - The caller is neither the parent Policy's owner nor a `SystemOwner` or `SystemAdmin`.
+        - The Standard is not in `draft` status.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Writes the Control and its link to the policy graph; no audit event is written.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3196,7 +3424,7 @@ def add_control_to_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
-            # Fail closed before any read or write: no gateway, no draft write (issue #211).
+            # Fail closed before any read or write: no write path, no draft write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_add_control_to_draft(
                 actor=actor,
@@ -3235,48 +3463,43 @@ def update_control_draft(
     control_id: Annotated[str, Field(min_length=1)],
     fields: dict[str, object] | None = None,
 ) -> dict[str, object] | str:
-    """UpdateControlDraft: PATCH a subset of a draft Control's own content fields (issue #136).
+    """Change a subset of a draft Control's content fields, leaving the rest as they are.
 
-    Delegates to `ps_service.policy_lifecycle.service.update_control_draft`
-    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
-    identity, the policy graph handle, and the access-role store, parses
-    `fields`, then does nothing else. Uses the exact same
-    `_resolve_policy_lifecycle_actor` identity resolution as every other tool
-    in this issue (D-11): the local-test bypass DOES count as a real
-    authenticated caller here.
+    Ownership comes from the root Policy two levels up (Policy to Standard to Control): only that
+    Policy's owner, or a caller holding `SystemOwner` or `SystemAdmin`, may change the Control.
+    Usable
+    only while the Control itself (not its Standard or Policy) is in `draft` status. Requires a real
+    authenticated session (the local-test bypass counts as one).
 
-    Ownership is derived TRANSITIVELY from `control_id`'s root Policy, via
-    the genuinely TWO-hop `Policy -[:SUPPORTED_BY]-> Standard
-    -[:IMPLEMENTED_BY]-> Control` traversal (AC-BI-003) -- neither Control
-    nor its parent Standard has an ownership field of its own; unlike
-    `update-standard-draft`/`add-control-to-draft`, which both take a
-    `standard_id` and only need a one-hop traversal to their parent Policy.
-    Only usable while `control_id`'s own governance status (not its parent
-    Standard's or root Policy's) is currently `"draft"` (AC-BI-004).
+    Args:
+        control_id: Id of the Control to change; at least 1 character.
+        fields: Partial-update map; only the supplied keys change. Each value is a string or JSON
+            `null`, which clears the field. Allowed keys: `description`, `implementation_status`,
+            `type`, `execution_frequency`, `last_test_date`, `next_review_date`, `evidence_ref`,
+            `pass_fail_criteria`, `execution_method`, `evidence_plan`, `executor_role`,
+            `reviewer_role`,
+            `risk_alignment_rationale`. Unlike `add-control-to-draft`, `type` can be changed here,
+            and
+            this is the only way to change it after creation. `implementation_status` must be one of
+            `planned`, `implemented`, `reviewed`, `deprecated`. `title` and `status` can never be
+            patched. Omit it or pass `null` for a no-op update.
 
-    `fields` is a partial-update map: only the keys supplied are changed,
-    every omitted field keeps its existing value (AC-BI-008). Each value is
-    either a non-null string, or JSON `null` to explicitly clear that field.
-    Allowed keys: `description`, `implementation_status`, `type`,
-    `execution_frequency`, `last_test_date`, `next_review_date`,
-    `evidence_ref`, `pass_fail_criteria`, `execution_method`,
-    `evidence_plan`, `executor_role`, `reviewer_role`,
-    `risk_alignment_rationale` -- unlike `add-control-to-draft`, `type` IS
-    patchable here: this is the only post-creation path to change a
-    Control's type (CHANGES.md finding #8). `implementation_status`, when
-    supplied, must be one of `planned`, `implemented`, `reviewed`,
-    `deprecated`. `title` and `status` can never be patched through this
-    tool.
+    Returns:
+        `{"control_id", "standard_id", "policy_id", "title", "status"}`.
 
-    On success, returns `{"control_id", "standard_id", "policy_id", "title",
-    "status"}`. Returns a string beginning `error: ` when the caller has no
-    real authenticated session, when `fields` names an unknown key, a
-    non-string/non-null value, or an invalid `implementation_status`, when no
-    Control exists with `control_id`, when the caller is neither the root
-    Policy's owner nor a `SystemOwner`/`SystemAdmin`, when `control_id`'s
-    Control is not currently `"draft"`, when the policy graph cannot be
-    reached, or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - `fields` names an unknown key, holds a value that is neither a string nor `null`, or holds
+          an
+          invalid `implementation_status`.
+        - No Control has `control_id`.
+        - The caller is neither the root Policy's owner nor a `SystemOwner` or `SystemAdmin`.
+        - The Control is not in `draft` status.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Writes the changed fields to the policy graph; no audit event is written.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3299,7 +3522,7 @@ def update_control_draft(
             return f"error: {exc}"
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
-            # Fail closed before any read or write: no gateway, no draft write (issue #211).
+            # Fail closed before any read or write: no write path, no draft write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_update_control_draft(
                 actor=actor,
@@ -3332,30 +3555,33 @@ _GET_POLICY_ERRORS = (
 
 @server.tool(name="get-policy")
 def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
-    """GetPolicy: read one Policy plus its full Standard/Control tree (issue #134, S14).
+    """Read one Policy together with its full Standard and Control tree.
 
-    Delegates to `ps_service.policy_lifecycle.service.get_policy` (L2
-    "delegate, don't reimplement") -- this tool resolves the caller's
-    identity, the policy graph handle, and the access-role store, then does
-    nothing else. Uses the exact same `_resolve_policy_lifecycle_actor`
-    identity resolution as `create-policy-draft` (D-11): the local-test
-    bypass DOES count as a real authenticated caller here.
+    A `draft` Policy is visible only to its owner or a caller holding `SystemOwner` or
+    `SystemAdmin`;
+    a non-owner `PolicyManager` is refused like any other non-owner. A `proposed`, `approved` or
+    `deprecated` Policy is visible to any authenticated caller. Requires a real authenticated
+    session
+    (the local-test bypass counts as one).
 
-    A Draft Policy is visible only to its own owner or to a caller holding
-    `SystemOwner`/`SystemAdmin` (AC-BI-002) -- a non-owner `PolicyManager` is
-    rejected the same as any other non-owner, non-elevated caller. A
-    Proposed/Approved/Deprecated Policy is visible to any authenticated
-    caller, no further check.
+    Args:
+        policy_id: Id of the Policy to read; at least 1 character.
 
-    On success, returns `{"policy_id", "title", "status", "version",
-    "owner_subject", "owner_issuer", "standards"}`, where `standards` is a
-    list of `{"standard_id", "title", "status", "controls"}` (each
-    `controls` a list of `{"control_id", "title", "control_type",
-    "status"}`). Returns a string beginning `error: ` when the caller has no
-    real authenticated session, when no Policy exists with `policy_id`, when
-    the caller lacks visibility into a Draft Policy it does not own, when
-    the policy graph cannot be reached, or (this tool's own residual safety
-    net) on any other unexpected failure.
+    Returns:
+        `{"policy_id", "title", "status", "version", "owner_subject", "owner_issuer", "standards"}`,
+        where `standards` is a list of `{"standard_id", "title", "status", "controls"}` and each
+        `controls` is a list of `{"control_id", "title", "control_type", "status"}`.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - No Policy has `policy_id`.
+        - The Policy is a draft the caller neither owns nor may override.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph. When an older Policy tree is missing data this read can backfill it,
+        which writes to the graph; a tree that needs no backfill is not written.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3422,27 +3648,30 @@ _PROPOSE_POLICY_ERRORS = (
 
 @server.tool(name="propose-policy")
 def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
-    """ProposePolicy: move a Draft Policy (and its whole tree) to Proposed (issue #134, S16).
+    """Move a draft Policy and its whole tree to `proposed`.
 
-    Delegates to `ps_service.policy_lifecycle.service.propose_policy` (L2
-    "delegate, don't reimplement") -- this tool resolves the caller's
-    identity and the policy graph handle, then does nothing else. Uses the
-    exact same `_resolve_policy_lifecycle_actor` identity resolution as
-    `create-policy-draft`/`get-policy` (D-11): the local-test bypass DOES
-    count as a real authenticated caller here.
+    Only the Policy's owner may propose it, and only while it is in `draft` status with at least one
+    Standard attached. Requires a real authenticated session (the local-test bypass counts as one).
 
-    Only the Policy's own owner may propose it, and only while it is still
-    `"draft"` with at least one Standard attached -- on success, the Policy
-    and every Standard/Control in its tree move to `"proposed"` in one
-    cascading graph write.
+    Args:
+        policy_id: Id of the Policy to propose; at least 1 character.
 
-    On success, returns `{"policy_id", "status", "standard_ids",
-    "control_ids"}`. Returns a string beginning `error: ` when the caller
-    has no real authenticated session, when no Policy exists with
-    `policy_id`, when the caller does not own it, when it is not currently
-    `"draft"`, when it has zero Standards, when the policy graph cannot be
-    reached, or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Returns:
+        `{"policy_id", "status", "standard_ids", "control_ids"}`, listing every Standard and Control
+        in
+        the tree.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - No Policy has `policy_id`.
+        - The caller does not own the Policy.
+        - The Policy is not in `draft` status, or has no Standards.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Changes the status of the Policy and every Standard and Control in its tree in one cascading
+        graph write and records an audit event.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3457,7 +3686,7 @@ def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
             return f"error: {exc}"
         audit_store = PsycopgAuditStore(config)
         try:
-            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_propose_policy(
                 actor=actor,
@@ -3492,42 +3721,45 @@ _APPROVE_POLICY_ERRORS = (
 
 @server.tool(name="approve-policy")
 def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
-    """ApprovePolicy: move a Proposed Policy (and its whole tree) to Approved (issue #134, S18).
+    """Move a proposed Policy and its whole tree to `approved`.
 
-    Delegates to `ps_service.policy_lifecycle.service.approve_policy` (L2
-    "delegate, don't reimplement") -- this tool resolves the caller's
-    identity, the policy graph handle, and the access-role store, then does
-    nothing else. Uses the exact same `_resolve_policy_lifecycle_actor`
-    identity resolution as `create-policy-draft`/`get-policy`/
-    `propose-policy` (D-11): the local-test bypass DOES count as a real
-    authenticated caller here.
+    Requires the `PolicyManager` role, and the caller must not be the Policy's owner: self-approval
+    is
+    always refused, even for a `PolicyManager` who owns it. Usable only while the Policy is in
+    `proposed` status. Requires a real authenticated session (the local-test bypass counts as one).
+    When the Policy amends an approved prior Policy (created with `supersedes_policy_id`), that
+    prior
+    tree is deprecated in the same call, recorded as its own audit event. If the prior Policy
+    governs
+    Capabilities, their governing edges move to the approved Policy in the same all-or-nothing write
+    as
+    the status change.
 
-    Requires the caller hold `PolicyManager` (`ps_service.authz.service.
-    require_role`) and never the Policy's own owner (self-approval is always
-    blocked, even for a `PolicyManager` who also happens to own it) -- only
-    while the Policy is currently `"proposed"`. On success, the Policy and
-    every Standard/Control in its tree move to `"approved"` in one cascading
-    graph write; if the Policy is a fork (`create-policy-draft` with
-    `supersedes_policy_id`) of an approved prior, that prior's whole tree is
-    automatically cascaded to `"deprecated"` in the same call, as its own
-    separate audit event. When that prior governs Capabilities, their
-    `GOVERNED_BY` edges move to the approved Policy in the same single write
-    as the status change (all-or-nothing); a fork whose prior governs none
-    approves without moving edges.
+    Args:
+        policy_id: Id of the Policy to approve; at least 1 character.
 
-    On success, returns `{"policy_id", "status", "standard_ids",
-    "control_ids", "auto_deprecated_policy_id", "governed_capability_ids"}`
-    -- `auto_deprecated_policy_id` is `None` unless an auto-deprecation
-    cascade also ran; `governed_capability_ids` lists the Capabilities whose
-    governance moved (empty when none). Returns a string beginning
-    `error: ` when the caller has no real authenticated session, when no
-    Policy exists with `policy_id`, when the caller does not hold
-    `PolicyManager`, when the caller is the Policy's own owner, when it is
-    not currently `"proposed"`, when the Capabilities governed by the
-    superseded Policy changed during approval (nothing was changed; retry),
-    when the policy graph or the authorization store cannot be reached, or
-    (this tool's own residual safety net) on any
-    other unexpected failure.
+    Returns:
+        `{"policy_id", "status", "standard_ids", "control_ids", "auto_deprecated_policy_id",
+        "governed_capability_ids"}`. `auto_deprecated_policy_id` is `None` unless a prior Policy was
+        deprecated; `governed_capability_ids` lists the Capabilities whose governance moved (empty
+        when
+        none).
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - No Policy has `policy_id`.
+        - The caller does not hold `PolicyManager`, or is the Policy's owner.
+        - The Policy is not in `proposed` status.
+        - The Capabilities governed by the superseded Policy changed during approval; nothing was
+          changed, retry.
+        - The policy graph or the authorization store cannot be reached, or the write path is
+          unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Changes the status of the whole tree (and of the superseded tree, when there is one) and
+        moves
+        Capability governance in one graph write, and records audit events.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3543,7 +3775,7 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
         audit_store = PsycopgAuditStore(config)
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
-            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_approve_policy(
                 actor=actor,
@@ -3580,29 +3812,34 @@ _REJECT_POLICY_ERRORS = (
 
 @server.tool(name="reject-policy")
 def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
-    """RejectPolicy: move a Proposed Policy (and its whole tree) back to Draft (issue #134, S20).
+    """Move a proposed Policy and its whole tree back to `draft`.
 
-    Delegates to `ps_service.policy_lifecycle.service.reject_policy` (L2
-    "delegate, don't reimplement") -- this tool resolves the caller's
-    identity, the policy graph handle, and the access-role store, then does
-    nothing else. Mirrors `approve-policy`'s exact wrapper pattern (D-11):
-    the local-test bypass DOES count as a real authenticated caller here.
+    Requires the `PolicyManager` role, and the caller must not be the Policy's owner: self-rejection
+    is
+    always refused, even for a `PolicyManager` who owns it. Usable only while the Policy is in
+    `proposed` status. Unlike approval, no prior Policy is deprecated. Requires a real authenticated
+    session (the local-test bypass counts as one).
 
-    Requires the caller hold `PolicyManager` (`ps_service.authz.service.
-    require_role`) and never the Policy's own owner (self-rejection is
-    always blocked, even for a `PolicyManager` who also happens to own it)
-    -- only while the Policy is currently `"proposed"`. On success, the
-    Policy and every Standard/Control in its tree move back to `"draft"` in
-    one cascading graph write (AC-BI-005). Unlike `approve-policy`, no
-    auto-deprecation cascade ever runs here (D-10 is approve-only).
+    Args:
+        policy_id: Id of the Policy to reject; at least 1 character.
 
-    On success, returns `{"policy_id", "status", "standard_ids",
-    "control_ids"}`. Returns a string beginning `error: ` when the caller
-    has no real authenticated session, when no Policy exists with
-    `policy_id`, when the caller does not hold `PolicyManager`, when the
-    caller is the Policy's own owner, when it is not currently `"proposed"`,
-    when the policy graph or the authorization store cannot be reached, or
-    (this tool's own residual safety net) on any other unexpected failure.
+    Returns:
+        `{"policy_id", "status", "standard_ids", "control_ids"}`, listing every Standard and Control
+        in
+        the tree.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - No Policy has `policy_id`.
+        - The caller does not hold `PolicyManager`, or is the Policy's owner.
+        - The Policy is not in `proposed` status.
+        - The policy graph or the authorization store cannot be reached, or the write path is
+          unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Changes the status of the Policy and every Standard and Control in its tree in one cascading
+        graph write and records an audit event.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3618,7 +3855,7 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
         audit_store = PsycopgAuditStore(config)
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
-            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_reject_policy(
                 actor=actor,
@@ -3653,30 +3890,31 @@ _REVERT_POLICY_TO_DRAFT_ERRORS = (
 def revert_policy_to_draft(
     policy_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
-    """RevertPolicyToDraft: move a Proposed Policy (and its whole tree) back to Draft (S22).
+    """Move a proposed Policy and its whole tree back to `draft`, as its owner.
 
-    Delegates to `ps_service.policy_lifecycle.service.revert_policy_to_draft`
-    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
-    identity and the policy graph handle, then does nothing else. Uses the
-    exact same `_resolve_policy_lifecycle_actor` identity resolution as
-    `create-policy-draft`/`get-policy`/`propose-policy`/`approve-policy`/
-    `reject-policy` (D-11): the local-test bypass DOES count as a real
-    authenticated caller here.
+    Owner-only: unlike `reject-policy` there is no `PolicyManager` role check, and a `PolicyManager`
+    who is not the owner is refused like any other non-owner. Usable only while the Policy is in
+    `proposed` status. Requires a real authenticated session (the local-test bypass counts as one).
 
-    Owner-only (AC-BI-002/007): unlike `reject-policy`, this action has NO
-    `PolicyManager` RBAC gate at all -- only the Policy's own owner may
-    revert it, and only while it is currently `"proposed"`. A `PolicyManager`
-    who is not the owner is rejected exactly like any other non-owner; no
-    `access_role_store` is even constructed for this tool, mirroring
-    `propose-policy`'s own owner-only wrapper shape rather than
-    `approve-policy`/`reject-policy`'s `PolicyManager`-gated shape.
+    Args:
+        policy_id: Id of the Policy to revert; at least 1 character.
 
-    On success, returns `{"policy_id", "status", "standard_ids",
-    "control_ids"}`. Returns a string beginning `error: ` when the caller
-    has no real authenticated session, when no Policy exists with
-    `policy_id`, when the caller does not own it, when it is not currently
-    `"proposed"`, when the policy graph cannot be reached, or (this tool's
-    own residual safety net) on any other unexpected failure.
+    Returns:
+        `{"policy_id", "status", "standard_ids", "control_ids"}`, listing every Standard and Control
+        in
+        the tree.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - No Policy has `policy_id`.
+        - The caller does not own the Policy.
+        - The Policy is not in `proposed` status.
+        - The policy graph cannot be reached or its write path is unavailable.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Changes the status of the Policy and every Standard and Control in its tree in one cascading
+        graph write and records an audit event.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3691,7 +3929,7 @@ def revert_policy_to_draft(
             return f"error: {exc}"
         audit_store = PsycopgAuditStore(config)
         try:
-            # Fail closed before any read or write: no gateway, no lifecycle write (issue #211).
+            # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
             result = run_revert_policy_to_draft(
                 actor=actor,
@@ -3716,30 +3954,41 @@ def revert_policy_to_draft(
 def find_capability_merge_candidates_tool(
     min_similarity: Annotated[float | None, Field(gt=0.5, le=1.0)] = None,
 ) -> dict[str, object] | str:
-    """FindCapabilityMergeCandidates: list groups of active Capabilities that look like duplicates.
+    """List groups of active Capabilities that look like duplicates.
 
-    Compliance Officer graph cleanup (issue #190), read-only: nothing is
-    changed and no approval is created. Requires an explicit `ComplianceOfficer`
-    grant on a real authenticated session (no admin override, never available
-    under the local-test bypass).
+    This is a read-only graph cleanup aid.
 
-    `min_similarity` (greater than 0.5, at most 1.0) is the cosine similarity
-    of the Capabilities' already-cached embeddings at or above which two are
-    linked; when omitted, the configured Company Merge threshold applies, else
-    0.90. No embedding is fetched or computed by this tool.
+    Nothing is changed and no approval is created. Requires an explicit `ComplianceOfficer` grant on
+    a
+    real authenticated session (no admin override; never available under the local-test bypass).
+    Capabilities are linked when the cosine similarity of their already-cached embeddings reaches
+    the
+    threshold; no embedding is fetched or computed by this tool.
 
-    Returns `{"groups": [{"basis", "merge_case", "policies_distinct", "members":
-    [{"id", "name", "obligation_count", "governing_policy"}, ...]}, ...]}`;
-    `basis` is `"name"` when every member's name is equal after case and
-    punctuation are ignored, else `"embedding"`. `governing_policy` is
-    `{"id", "title", "status"}` or `null`; `obligation_count` is the number of
-    Obligations requiring that Capability. `merge_case` is 1 (no member governed),
-    2 (exactly one governed) or 3 (two or more governed); `policies_distinct` is
-    true when the governed members name different Policies. Returns a string
-    beginning `error: ` when the
-    caller has no real authenticated session or lacks the `ComplianceOfficer`
-    role, when the authorization store or the policy graph cannot be reached,
-    or (this tool's own residual safety net) on any other unexpected failure.
+    Args:
+        min_similarity: Similarity threshold, greater than 0.5 and at most 1.0. When omitted, the
+            configured similarity threshold applies, else 0.90.
+
+    Returns:
+        `{"groups": [{"basis", "merge_case", "policies_distinct", "members": [{"id", "name",
+        "obligation_count", "governing_policy"}, ...]}, ...]}`. `basis` is `"name"` when every
+        member's
+        name is equal once case and punctuation are ignored, else `"embedding"`. `governing_policy`
+        is
+        `{"id", "title", "status"}` or `null`; `obligation_count` is the number of Obligations
+        requiring
+        that Capability. `merge_case` is 1 (no member governed), 2 (exactly one governed) or 3 (two
+        or
+        more governed); `policies_distinct` is true when the governed members name different
+        Policies.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session or lacks the `ComplianceOfficer` role.
+        - The authorization store or the policy graph cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph and the authorization store; nothing is written. The call is logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3768,26 +4017,33 @@ def find_capability_merge_candidates_tool(
 
 @server.tool(name="find-duplicate-obligations")
 def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, object] | str:
-    """FindDuplicateObligations: list groups of duplicate Obligations under one Role.
+    """List groups of duplicate Obligations under one Role, as a read-only graph cleanup aid.
 
-    Compliance Officer graph cleanup (issue #190), read-only: nothing is
-    changed and no approval is created. Requires an explicit `ComplianceOfficer`
-    grant on a real authenticated session (no admin override, never available
-    under the local-test bypass).
+    Nothing is changed and no approval is created. Requires an explicit `ComplianceOfficer` grant on
+    a
+    real authenticated session (no admin override; never available under the local-test bypass).
+    Only
+    Obligations under the same Role are grouped, and only when their text is identical or
+    near-identical
+    once case and punctuation are ignored; the same wording under two Roles is never grouped.
 
-    Only Obligations under the same Role are grouped, and only when their text
-    is identical or near-identical once case and punctuation are ignored; the
-    same wording under two Roles is never grouped. `role_id`, when given, limits
-    the sweep to that Role.
+    Args:
+        role_id: Optional Role id; when given, the sweep covers only that Role.
 
-    Returns `{"groups": [{"role_id", "role_name", "basis", "members": [{"id",
-    "text", "requirements": [{"requirement_id", "source_ref"}, ...]}, ...]},
-    ...]}`; `basis` is `"identical_text"` or `"near_text"`. `source_ref` comes
-    from the `EXPRESSES` edge of each Requirement the Obligation satisfies.
-    Returns a string beginning `error: ` when the caller has no real
-    authenticated session or lacks the `ComplianceOfficer` role, when the
-    authorization store or the policy graph cannot be reached, or (this tool's
-    own residual safety net) on any other unexpected failure.
+    Returns:
+        `{"groups": [{"role_id", "role_name", "basis", "members": [{"id", "text", "requirements":
+        [{"requirement_id", "source_ref"}, ...]}, ...]}, ...]}`. `basis` is `"identical_text"` or
+        `"near_text"`. Each `source_ref` comes from the `EXPRESSES` edge of a Requirement the
+        Obligation
+        satisfies.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session or lacks the `ComplianceOfficer` role.
+        - The authorization store or the policy graph cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph and the authorization store; nothing is written. The call is logged.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3817,47 +4073,71 @@ def merge_capabilities_tool(
     *,
     acknowledge_governance_change: bool = False,
 ) -> dict[str, object] | str:
-    """MergeCapabilities: preview merging `absorbed_id` into `survivor_id` and request approval.
+    """Preview merging one Capability into another and request a passkey approval for the merge.
 
-    Compliance Officer graph cleanup (issue #190). Requires an explicit `ComplianceOfficer`
-    grant on a real authenticated session (no admin override, never available under the
-    local-test bypass). This call NEVER edits the graph: it returns a preview and creates
-    a pending passkey approval bound to this exact pair and to the state previewed. The
-    merge executes only when the officer opens `approval_url` in a browser and signs with a
-    passkey; `check-cleanup-approval` reports the outcome.
+    Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override;
+    never available under the local-test bypass). This call never edits the graph: it returns a
+    preview
+    and creates a pending passkey approval bound to this exact pair and to the state previewed. The
+    merge runs only when the officer opens `approval_url` in a browser and signs with a passkey;
+    `check-cleanup-approval` reports the outcome.
 
-    On execution the absorbed Capability's `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move
-    to the survivor with no duplicate edges, and the absorbed node is kept as a tombstone
-    (`status` `merged`, `MERGED_INTO` the survivor), in one all-or-nothing gateway group (one logged
-    write) that is audited first (`capability.merge`).
+    On execution the absorbed Capability's `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the
+    survivor with no duplicate edges, and the absorbed node is kept as a tombstone (`status`
+    `merged`,
+    `MERGED_INTO` the survivor). The change is one all-or-nothing graph write that is audited first
+    (`capability.merge`).
 
-    Merge case 1 (neither Capability has a governing Policy) needs nothing more. Case 2 (exactly
-    one is governed) changes which Capability that Policy governs: the first call, without
-    `acknowledge_governance_change`, returns the preview with `acknowledgment_required: true`
-    and a `message`, and creates NO approval; repeat the call with
-    `acknowledge_governance_change=true` after the Compliance Officer has explicitly accepted
-    that change, and the acknowledgment becomes part of the signed approval and the audit row
-    (`policy_case` 2). The preview's `governance` block names the policy (`id`, `title`,
-    `status`), `obligations_coverage_changed`, and the policy's governed set before and after;
-    an `approved` policy keeps its content and version. Case 3 (both governed by the SAME
-    policy) needs no acknowledgment: the absorbed capability's `GOVERNED_BY` edge is deleted and
-    the survivor's stays (`policy_case` 3). Two Capabilities governed by DIFFERENT policies are
-    rejected before any approval, with an error naming both policies and the
-    `release-capability-governance` step; when neither policy is a draft that step is not
-    available and the error states there is no completion path (a policy fork carries the whole
-    governed set).
+    Merge case 1 (neither Capability has a governing Policy) needs nothing more. Case 2 (exactly one
+    is
+    governed) changes which Capability that Policy governs: the first call, without
+    `acknowledge_governance_change`, returns the preview with `acknowledgment_required: true` and a
+    `message`, and creates no approval; repeat the call with `acknowledge_governance_change=true`
+    once
+    the officer has explicitly accepted that change, and the acknowledgment becomes part of the
+    signed
+    approval and the audit row (`policy_case` 2). The preview's `governance` block names the Policy
+    (`id`, `title`, `status`), `obligations_coverage_changed`, and the Policy's governed set before
+    and
+    after; an `approved` Policy keeps its content and version. Case 3 (both governed by the same
+    Policy)
+    needs no acknowledgment: the absorbed Capability's `GOVERNED_BY` edge is deleted and the
+    survivor's
+    stays (`policy_case` 3). Two Capabilities governed by different Policies are rejected before any
+    approval, with an error naming both Policies and the `release-capability-governance` step; when
+    neither Policy is a draft that step is unavailable and the error says there is no completion
+    path
+    (a Policy fork carries the whole governed set).
 
-    Returns `{"preview": {"survivor_id", "survivor_name", "absorbed_id", "absorbed_name",
-    "policy_case", "edges_to_move": {"requires", "covers", "mitigated_by"},
-    "duplicate_edges_collapsed", "obligations_affected", "state_digest", "governance"},
-    "pending_approval_id", "approval_url", "expires_at"}` (`governance` is `null` in case 1),
-    or, for case 2 without the acknowledgment, `{"preview", "acknowledgment_required": true,
-    "message"}`. Returns a string beginning
-    `error: ` when the caller is not an authenticated Compliance Officer, when a side
-    is the same node, does not exist, is a `merged` tombstone or is not active, when the two
-    are governed by different policies, when the policy
-    graph database cannot be reached, or (this tool's own residual safety net) on any
-    other unexpected failure. No approval is created on any error.
+    Args:
+        survivor_id: Id of the Capability that remains; at least 1 character.
+        absorbed_id: Id of the Capability merged into the survivor; at least 1 character.
+        acknowledge_governance_change: Set to `true` to accept the governance change of merge case
+            2;
+            default `false`. It has no effect on the other cases.
+        ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
+
+    Returns:
+        `{"preview": {"survivor_id", "survivor_name", "absorbed_id", "absorbed_name", "policy_case",
+        "edges_to_move": {"requires", "covers", "mitigated_by"}, "duplicate_edges_collapsed",
+        "obligations_affected", "state_digest", "governance"}, "pending_approval_id",
+        "approval_url",
+        "expires_at"}` (`governance` is `null` in case 1). For case 2 without the acknowledgment it
+        returns `{"preview", "acknowledgment_required": true, "message"}` instead.
+
+    Errors (returned as a string beginning `error: `, never raised; no approval is created on any
+    error):
+        - The caller is not an authenticated Compliance Officer.
+        - A side is the same node as the other, does not exist, is a `merged` tombstone, or is not
+          active.
+        - The two Capabilities are governed by different Policies.
+        - The policy graph database or the approval store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph and creates one pending approval row with an expiry and writes one
+        log entry; the graph is not changed.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3904,32 +4184,49 @@ def merge_obligations_tool(
     absorbed_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
 ) -> dict[str, object] | str:
-    """MergeObligations: preview merging `absorbed_id` into `survivor_id` and request approval.
+    """Preview merging one Obligation into another and request a passkey approval for the merge.
 
-    Compliance Officer graph cleanup (issue #190). Requires an explicit `ComplianceOfficer`
-    grant on a real authenticated session (no admin override, never available under the
-    local-test bypass). This call NEVER edits the graph: it returns a preview and creates a
-    pending passkey approval bound to this exact pair and to the state previewed. The merge
-    executes only when the officer opens `approval_url` in a browser and signs with a passkey;
+    Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override;
+    never available under the local-test bypass). This call never edits the graph: it returns a
+    preview
+    and creates a pending passkey approval bound to this exact pair and to the state previewed. The
+    merge runs only when the officer opens `approval_url` in a browser and signs with a passkey;
     `check-cleanup-approval` reports the outcome.
 
-    Both Obligations must be borne by the SAME Role. On execution the absorbed Obligation's
-    `SATISFIED_BY` and `REQUIRES` edges union onto the survivor (no duplicate edges), the
-    survivor keeps its single `HAS` Role edge, and the absorbed Obligation is DELETED with its
-    full node and edge snapshot held in the audit row (`obligation.merge`), all in one
-    all-or-nothing gateway group (one logged write) that is audited first. The delete leaves a
-    `MergedObligation` marker so a later ingest or restore that regenerates the absorbed
-    Obligation attaches to the survivor instead of recreating it.
+    Both Obligations must be borne by the same Role. On execution the absorbed Obligation's
+    `SATISFIED_BY` and `REQUIRES` edges are unioned onto the survivor (no duplicate edges), the
+    survivor
+    keeps its single `HAS` Role edge, and the absorbed Obligation is deleted, with its full node and
+    edge snapshot held in the audit row (`obligation.merge`). The change is one all-or-nothing graph
+    write that is audited first. The deletion leaves a `MergedObligation` marker so that a later
+    ingest
+    or restore that regenerates the absorbed Obligation attaches to the survivor instead of
+    recreating
+    it.
 
-    Returns `{"preview": {"survivor_id", "survivor_text", "absorbed_id", "absorbed_text",
-    "role_id", "role_name", "edges_to_move": {"satisfied_by", "requires"},
-    "duplicate_edges_collapsed", "requirement_source_refs": [{"requirement_id",
-    "source_ref"}], "state_digest"}, "pending_approval_id", "approval_url", "expires_at"}`.
-    Returns a string beginning `error: ` when the caller is not an authenticated Compliance
-    Officer, when a side is the same node or does not exist, when the two Obligations are
-    under different Roles, when the policy graph database cannot be reached, or (this tool's
-    own residual safety net) on any other unexpected failure. No approval is created on any
-    error.
+    Args:
+        survivor_id: Id of the Obligation that remains; at least 1 character.
+        absorbed_id: Id of the Obligation merged into the survivor; at least 1 character.
+        ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
+
+    Returns:
+        `{"preview": {"survivor_id", "survivor_text", "absorbed_id", "absorbed_text", "role_id",
+        "role_name", "edges_to_move": {"satisfied_by", "requires"}, "duplicate_edges_collapsed",
+        "requirement_source_refs": [{"requirement_id", "source_ref"}], "state_digest"},
+        "pending_approval_id", "approval_url", "expires_at"}`.
+
+    Errors (returned as a string beginning `error: `, never raised; no approval is created on any
+    error):
+        - The caller is not an authenticated Compliance Officer.
+        - A side is the same node as the other or does not exist.
+        - The two Obligations are under different Roles.
+        - The policy graph database or the approval store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph and creates one pending approval row with an expiry and writes one
+        log entry; the graph is not changed.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3968,30 +4265,51 @@ def release_capability_governance_tool(
     capability_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
 ) -> dict[str, object] | str:
-    """ReleaseCapabilityGovernance: preview releasing a Capability from its draft policy.
+    """Preview releasing a Capability from its draft Policy and request a passkey approval.
 
-    Compliance Officer graph cleanup (issue #190). Requires an explicit `ComplianceOfficer`
-    grant on a real authenticated session (no admin override, never available under the
-    local-test bypass). This call NEVER edits the graph: it returns a preview and creates a
-    pending passkey approval bound to this capability, its governing policy and the state
-    previewed. The release executes only when the officer opens `approval_url` in a browser
-    and signs with a passkey; `check-cleanup-approval` reports the outcome.
+    Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override;
+    never available under the local-test bypass). This call never edits the graph: it returns a
+    preview
+    and creates a pending passkey approval bound to this Capability, its governing Policy and the
+    state
+    previewed. The release runs only when the officer opens `approval_url` in a browser and signs
+    with a
+    passkey; `check-cleanup-approval` reports the outcome.
 
-    Only a Capability governed by a `draft` Policy can be released: on execution its single
-    `GOVERNED_BY` edge to that Policy is deleted (the Capability and the Policy stay, the
-    Capability becomes ungoverned) in one all-or-nothing gateway group (one logged write) that is
-    audited first (`capability.release_governance`, with a before/after snapshot). A `proposed`
-    Policy is rejected with a pointer to `revert-policy-to-draft`; an `approved` or `deprecated`
-    Policy is rejected with a pointer to the policy lifecycle, stating plainly that a fork carries
-    the whole governed set and so does not by itself free the Capability.
+    Only a Capability governed by a `draft` Policy can be released. On execution its single
+    `GOVERNED_BY`
+    edge to that Policy is deleted: the Capability and the Policy stay and the Capability becomes
+    ungoverned. The change is one all-or-nothing graph write that is audited first
+    (`capability.release_governance`, with a before and after snapshot). A `proposed` Policy is
+    rejected
+    with a pointer to `revert-policy-to-draft`; an `approved` or `deprecated` Policy is rejected
+    with a
+    pointer to the Policy lifecycle, stating that a fork carries the whole governed set and so does
+    not
+    by itself free the Capability.
 
-    Returns `{"preview": {"capability_id", "capability_name", "policy_id", "policy_title",
-    "policy_status", "governed_set_before", "governed_set_after", "state_digest"},
-    "pending_approval_id", "approval_url", "expires_at"}`. Returns a string beginning
-    `error: ` when the caller is not an authenticated Compliance Officer, the Capability does
-    not exist, is a `merged` tombstone or not active, is not governed, or its governing policy
-    is not a draft, when the policy graph database cannot be reached, or (this tool's own
-    residual safety net) on any other unexpected failure. No approval is created on any error.
+    Args:
+        capability_id: Id of the Capability to release; at least 1 character.
+        ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
+
+    Returns:
+        `{"preview": {"capability_id", "capability_name", "policy_id", "policy_title",
+        "policy_status",
+        "governed_set_before", "governed_set_after", "state_digest"}, "pending_approval_id",
+        "approval_url", "expires_at"}`.
+
+    Errors (returned as a string beginning `error: `, never raised; no approval is created on any
+    error):
+        - The caller is not an authenticated Compliance Officer.
+        - The Capability does not exist, is a `merged` tombstone, is not active, or is not governed.
+        - Its governing Policy is not a draft.
+        - The policy graph database or the approval store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph and creates one pending approval row with an expiry and writes one
+        log entry; the graph is not changed.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -4032,44 +4350,71 @@ def unmerge_tool(
     merged_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
 ) -> dict[str, object] | str:
-    """Unmerge: preview reversing a Compliance Officer merge and request approval (issue #190).
+    """Preview reversing a Compliance Officer merge and request a passkey approval for the reversal.
 
     Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
-    override, never available under the local-test bypass). `merged_id` is the id that was
-    absorbed by `merge-capabilities` (a `merged` Capability tombstone) or by `merge-obligations`
-    (a deleted Obligation). The merge is found in the audit trail (`capability.merge` or
-    `obligation.merge`): the newest `applied` row not followed by a `failed` row for the same
-    approval. This call NEVER edits the graph: it returns a preview and creates a pending passkey
-    approval bound to the merge it reverses and to the state previewed. The unmerge executes only
+    override;
+    never available under the local-test bypass). The merge is found in the audit trail
+    (`capability.merge` or `obligation.merge`): the newest `applied` row not followed by a `failed`
+    row
+    for the same approval. This call never edits the graph: it returns a preview and creates a
+    pending
+    passkey approval bound to the merge it reverses and to the state previewed. The unmerge runs
+    only
     when the officer opens `approval_url` in a browser and signs with a passkey;
-    `check-cleanup-approval` reports the outcome.
+    `check-cleanup-approval`
+    reports the outcome.
 
-    Capability merge: the tombstone returns to `active` with its `MERGED_INTO` edge removed and
-    exactly the edges the merge moved off it are restored from the audit snapshot (the survivor
-    keeps any edge it already had before the merge). Edges added to the survivor since the merge
-    stay in place and are listed as `survivor_added_edges`.
+    Capability merge: the tombstone returns to `active` with its `MERGED_INTO` edge removed, and
+    exactly
+    the edges the merge moved off it are restored from the audit snapshot (the survivor keeps any
+    edge it
+    already had before the merge). Edges added to the survivor since the merge stay in place and are
+    listed as `survivor_added_edges`.
 
-    Obligation merge: the deleted Obligation is recreated under its original id with its
-    properties, its `HAS` edge from the Role and exactly its `SATISFIED_BY` and `REQUIRES` edges
-    from the audit snapshot, and its `MergedObligation` marker is removed. The survivor's edges are
-    never removed (a union cannot be attributed): edges added since the merge are listed as
-    `survivor_added_edges` and those that may have come from the absorbed Obligation as
-    `survivor_edges_possibly_from_merge` (they may originate from the merge).
+    Obligation merge: the deleted Obligation is recreated under its original id with its properties,
+    its
+    `HAS` edge from the Role and exactly its `SATISFIED_BY` and `REQUIRES` edges from the audit
+    snapshot,
+    and its `MergedObligation` marker is removed. The survivor's edges are never removed, because a
+    union
+    cannot be attributed: edges added since the merge are listed as `survivor_added_edges`, and
+    those
+    that may have come from the absorbed Obligation as `survivor_edges_possibly_from_merge`.
 
-    Either way the write is one all-or-nothing gateway group (one logged write) that is audited
-    first (`capability.unmerge` or `obligation.unmerge`, with a before/after snapshot).
+    Either way the change is one all-or-nothing graph write that is audited first
+    (`capability.unmerge`
+    or `obligation.unmerge`, with a before and after snapshot).
 
-    Returns `{"preview": {"kind": "capability" | "obligation", "merged_id", "survivor_id",
-    "merge_approval_id", "edges_to_restore", "survivor_added_edges", "state_digest", ...},
-    "pending_approval_id", "approval_url", "expires_at"}`; a capability preview also carries
-    `merged_name`, `survivor_name` and `edges_removed_from_survivor`, an obligation preview
-    `merged_text`, `survivor_text`, `role_id`, `survivor_edges_possibly_from_merge` and `note`.
-    Returns a string beginning `error: ` when the caller is not an authenticated Compliance
-    Officer, no merge of the id is in the audit trail, the merge cannot be reversed because of a
-    conflict (the survivor was merged away or re-pointed, its governance changed, a restored
-    edge's endpoint is gone, the Obligation exists again; each is explained), the audit trail or
-    the policy graph database cannot be reached, or (this tool's own residual safety net) on any
-    other unexpected failure. No approval is created on any error.
+    Args:
+        merged_id: Id absorbed by `merge-capabilities` (a `merged` Capability tombstone) or by
+            `merge-obligations` (a deleted Obligation); at least 1 character.
+        ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
+
+    Returns:
+        `{"preview": {"kind": "capability" | "obligation", "merged_id", "survivor_id",
+        "merge_approval_id", "edges_to_restore", "survivor_added_edges", "state_digest", ...},
+        "pending_approval_id", "approval_url", "expires_at"}`. A capability preview also carries
+        `merged_name`, `survivor_name` and `edges_removed_from_survivor`; an obligation preview
+        carries
+        `merged_text`, `survivor_text`, `role_id`, `survivor_edges_possibly_from_merge` and `note`.
+
+    Errors (returned as a string beginning `error: `, never raised; no approval is created on any
+    error):
+        - The caller is not an authenticated Compliance Officer.
+        - No merge of the id is in the audit trail.
+        - The merge cannot be reversed because of a conflict (the survivor was merged away or
+          re-pointed,
+          its governance changed, a restored edge's endpoint is gone, or the Obligation exists
+          again);
+          the message explains which.
+        - The audit trail, the policy graph database or the approval store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the audit trail and the policy graph and creates one pending approval row with an
+        expiry;
+        the graph is not changed.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -4114,32 +4459,48 @@ _CLEANUP_APPROVAL_UNSETTLED_MESSAGE = (
 def check_cleanup_approval_tool(
     pending_approval_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
-    """CheckCleanupApproval: status and outcome of a graph-cleanup passkey approval (issue #190).
+    """Report the status and outcome of a graph-cleanup passkey approval.
 
     Companion to `merge-capabilities`, `merge-obligations`, `release-capability-governance` and
-    `unmerge`:
-    the passkey ceremony happens in a browser, so this is the way to learn whether the approval
+    `unmerge`: the passkey ceremony happens in a browser, so this is how to learn whether the
+    approval
     was signed and what the edit did. Requires an explicit `ComplianceOfficer` grant. Only the
-    officer who created the approval can see it; any other caller, or an unknown id, gets the
-    same not-found error.
+    officer
+    who created the approval can see it; any other caller, or an unknown id, gets the same not-found
+    error.
 
-    `status` is `pending`, `expired` (the window elapsed unsigned, derived live) or `signed`.
-    `outcome` is `null` until the signed approval has run, then either the result
-    (`{"survivor_id", "absorbed_id", "merged": true}` for either merge tool,
-    `{"capability_id", "policy_id", "released": true}` for a release,
-    `{"merged_id", "survivor_id", "unmerged": true, "survivor_added_edges"}` for an unmerge
-    of either kind),
-    `{"error": <message>}`, or `{"reconciled": "applied"}`. A signed approval whose outcome
-    was never recorded is checked against the graph once it is more than five minutes past
-    its expiry and settled: if the
-    edit is present the outcome becomes `reconciled`; if not, a `failed` audit row is
-    recorded and the outcome becomes an error. An `applied` audit row followed by a `failed`
-    row for the same approval id means no edit occurred.
+    Args:
+        pending_approval_id: The `pending_approval_id` returned by the tool that created the
+            approval;
+            at least 1 character.
 
-    Returns `{"pending_approval_id", "status", "tool_name", "outcome"}`, or a string beginning
-    `error: ` when the caller is not an authenticated Compliance Officer, no such approval is
-    visible to the caller, settling it was not possible right now, or (this tool's own
-    residual safety net) on any other unexpected failure.
+    Returns:
+        `{"pending_approval_id", "status", "tool_name", "outcome"}`. `status` is `pending`,
+        `expired`
+        (the window elapsed unsigned, derived live) or `signed`. `outcome` is `null` until the
+        signed
+        approval has run, then one of: the result (`{"survivor_id", "absorbed_id", "merged": true}`
+        for
+        either merge tool, `{"capability_id", "policy_id", "released": true}` for a release,
+        `{"merged_id", "survivor_id", "unmerged": true, "survivor_added_edges"}` for an unmerge of
+        either
+        kind), `{"error": <message>}`, or `{"reconciled": "applied"}`. An `applied` audit row
+        followed by
+        a `failed` row for the same approval id means no edit occurred.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller is not an authenticated Compliance Officer.
+        - No such approval is visible to the caller.
+        - The approval status could not be settled right now (the graph or audit trail is
+          unreachable).
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        A signed approval whose outcome was never recorded is checked against the graph once it is
+        more
+        than five minutes past its expiry, and settled: if the edit is present the outcome becomes
+        `reconciled`; if not, a `failed` audit row is written and the outcome becomes an error.
+        Otherwise nothing is written.
     """
     config = load_config()
     principal = _resolve_principal(config)

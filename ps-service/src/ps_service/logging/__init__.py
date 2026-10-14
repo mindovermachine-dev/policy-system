@@ -1,4 +1,11 @@
-"""Public API for ps_service.logging: BindRunContext and EmitLogEntry."""
+"""Public API for `ps_service.logging`.
+
+Purpose: structured, non-blocking JSON-lines logging with run correlation. `bind_run_context`
+and `current_run_id` correlate log entries across a call chain; `emit_log_entry` records an
+entry without blocking the caller; `configure` installs the process-wide emitter. The
+exports also include the emitter, its configuration and sink protocols, the `LogEntry`
+record and the two error types.
+"""
 
 from ps_service.logging.emitter import (
     EmitterConfig,

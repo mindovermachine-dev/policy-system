@@ -1,4 +1,4 @@
-"""Audit lifecycle primitives shared by every emitting component (issue #195).
+"""Audit lifecycle primitives shared by every emitting component.
 
 Conventions (the audit trail's row-shape contract):
 
@@ -81,7 +81,13 @@ _UNAVAILABLE_MESSAGE = (
 
 @dataclass(frozen=True, slots=True)
 class AuditContext:
-    """Who is acting and where their audit rows go: one value passed through orchestration."""
+    """Who is acting and where their audit rows go: one value passed through orchestration.
+
+    Attributes:
+        actor: The `(subject, issuer)` pair every row is attributed to, as returned by
+            `resolve_audit_actor`.
+        store: The `AuditStore` the rows are written to.
+    """
 
     actor: tuple[str, str]
     store: AuditStore
@@ -89,10 +95,15 @@ class AuditContext:
 
 @dataclass(frozen=True, slots=True)
 class AuditTarget:
-    """What a row is about: the registered `action` and the `resource` acted on.
+    """What a row is about: the registered `action` and the resource acted on.
 
-    `log_resource_id=False` keeps `resource_id` out of failure log lines (set it when the id is
-    personal data, e.g. an invitee email: the audit row records it, the log must not).
+    Attributes:
+        action: A registered, namespaced audit action string.
+        resource_type: The kind of resource acted on (a registered resource type).
+        resource_id: The identifier of the resource acted on; never a secret.
+        log_resource_id: Whether `resource_id` may appear in failure log lines. Set it to
+            `False` when the id is personal data (for example an invitee email): the audit row
+            records it, the log must not. Defaults to `True`.
     """
 
     action: str
@@ -109,6 +120,7 @@ def _log_failure(
     error: Exception,
     emitter: LogEmitter | None,
 ) -> None:
+    """Log an audit-write failure (error class name only); ignore a logging-lifecycle error."""
     with contextlib.suppress(LoggingLifecycleError):
         emit_log_entry(
             component=component,
@@ -128,11 +140,31 @@ def record_opening_row(
     details: Mapping[str, object],
     emitter: LogEmitter | None = None,
 ) -> None:
-    """Write the `applied` opening row; FAIL-CLOSED (AC-BI-011).
+    """Write the `applied` opening row of an operation; FAIL-CLOSED.
+
+    Call this before the operation's effect. If the row cannot be written the operation must not
+    run, so every effect has an audit row that precedes it.
+
+    Args:
+        audit: The acting principal and the store to write to.
+        target: The registered action and the resource acted on.
+        component: Component name stamped on the failure log entry if the write fails.
+        details: The action's `details` payload; validated against the action's registered
+            model by the store. Must not contain secrets, free-text errors or stack traces.
+        emitter: Log emitter for the failure log entry; `None` uses the process default.
+
+    Returns:
+        None.
 
     Raises:
-        AuditTrailUnavailableError: the row could not be written; the caller must not run the
+        AuditTrailUnavailableError: the store is unreachable, the insert failed, the action is
+            not registered or `details` fails its model. The caller must not run the
             operation. The store error is chained as `__cause__`.
+
+    Side Effects:
+        Inserts one `audit_events` row with `outcome='applied'` in its own transaction. On
+        failure, emits one `failed` log entry carrying the audit action and the error class name
+        (and `target.resource_id` unless `target.log_resource_id` is `False`).
     """
     try:
         audit.store.record_standalone(
@@ -163,16 +195,34 @@ def record_opening_row_with_event_id(
     details: Mapping[str, object],
     emitter: LogEmitter | None = None,
 ) -> str:
-    """Write the `applied` opening row as :func:`record_opening_row` does and return its id.
+    """Write the `applied` opening row of an operation and return the new row's id; FAIL-CLOSED.
 
-    For an operation whose graph write is anchored to the audit row that opened it (issue #210:
-    the near-miss resolve's group carries the row's event id). Same FAIL-CLOSED policy.
+    Use it for an operation whose graph write is anchored to the audit row that opened it: the
+    returned id is stored with the write so the two can be correlated.
+
+    Args:
+        audit: The acting principal and the store to write to. `audit.store` must be an
+            `EventIdAuditStore`.
+        target: The registered action and the resource acted on.
+        component: Component name stamped on the failure log entry if the write fails.
+        details: The action's `details` payload; validated against the action's registered
+            model by the store. Must not contain secrets, free-text errors or stack traces.
+        emitter: Log emitter for the failure log entry; `None` uses the process default.
+
+    Returns:
+        The generated id (a UUID string) of the inserted `audit_events` row.
 
     Raises:
-        AuditTrailUnavailableError: the row could not be written; the caller must not run the
+        AuditTrailUnavailableError: the store is unreachable, the insert failed, the action is
+            not registered or `details` fails its model. The caller must not run the
             operation. The store error is chained as `__cause__`.
         TypeError: `audit.store` cannot report the id of the row it wrote (a wiring error, not an
             outage).
+
+    Side Effects:
+        Inserts one `audit_events` row with `outcome='applied'` in its own transaction. On
+        failure, emits one `failed` log entry carrying the audit action and the error class name
+        (and `target.resource_id` unless `target.log_resource_id` is `False`).
     """
     store = audit.store
     if not isinstance(store, EventIdAuditStore):
@@ -208,10 +258,31 @@ def record_follow_up_row(
     details: Mapping[str, object],
     emitter: LogEmitter | None = None,
 ) -> bool:
-    """Write a terminal or follow-up row; BEST-EFFORT (AC-BI-015). Never raises.
+    """Write a terminal or follow-up row after an operation's effect; BEST-EFFORT.
+
+    A failure to write is logged and swallowed, so the caller's result is never changed by an
+    audit outage.
+
+    Args:
+        audit: The acting principal and the store to write to.
+        target: The registered action and the resource acted on.
+        component: Component name stamped on the failure log entry if the write fails.
+        outcome: Whether the effect happened: `"applied"`, `"rejected"` or `"failed"`.
+        details: The action's `details` payload; validated against the action's registered
+            model by the store. Must not contain secrets, free-text errors or stack traces.
+        emitter: Log emitter for the failure log entry; `None` uses the process default.
 
     Returns:
-        True when the row was written; False when the store failed (logged with the bound run id).
+        `True` when the row was written; `False` when the store failed (logged).
+
+    Raises:
+        Nothing from the audit store: store, unknown-action and invalid-details errors are
+        caught and reported as `False`.
+
+    Side Effects:
+        Inserts one `audit_events` row with the given `outcome` in its own transaction. On
+        failure, emits one `failed` log entry carrying the audit action and the error class name
+        (and `target.resource_id` unless `target.log_resource_id` is `False`).
     """
     try:
         audit.store.record_standalone(

@@ -1,29 +1,15 @@
-"""The Policy proposal-lifecycle ABAC rules (issue #134, PLAN.md D-2/D-3).
+"""ABAC rules that gate the Policy proposal lifecycle (propose, approve, reject, revert, edit).
 
-`PolicyLifecycleRuleContext` and its three rules live here, not in
-`ps_service.authz.rules` -- `ps_service.authz` owns only the generic
-`AccessRule`/`AccessRuleResult` machinery and its own two grant/revoke rules
-(untouched by this issue). This mirrors the existing precedent of
-independently-owned components vendoring their own domain-specific pieces on
-top of shared infrastructure.
+`PolicyLifecycleRuleContext` carries the facts of one lifecycle call, and the three rule functions
+(`require_status`, `require_owner`, `block_self_approval`) each turn it into an `AccessRuleResult`.
+They live here, not in `ps_service.authz.rules`, because `ps_service.authz` owns only the generic
+`AccessRule`/`AccessRuleResult` machinery and its own grant/revoke rules; this component supplies
+its domain-specific rules on top of that shared machinery.
 
-`action`'s Literal is the CHANGES.md-widened version (finding 6, Appendix A):
-it includes `"read"` alongside PLAN.md's original
-`"propose"/"approve"/"reject"/"revert"`, so `ps_service.policy_lifecycle
-.service.get_policy` (a later slice) can construct a context for its
-`require_owner` visibility check without a value that fits no real action.
-Neither `require_status` nor `block_self_approval` is ever called with
-`action="read"` -- `require_status`'s per-action status lookup only ever
-receives one of the four transition actions.
-
-Issue #136 (Slice 1, PLAN.md §1.2) widens `action` a second time, adding
-`"edit"` -- the six draft-content PATCH/add tools' own status-gate action,
-paired with `_REQUIRED_STATUS_BY_ACTION["edit"] = "draft"` below. Every one
-of those six tools builds a `PolicyLifecycleRuleContext` with
-`action="edit"` for both `require_owner` (owner-or-elevated-role gate) and
-`require_status` (must currently be `"draft"`) -- `require_owner` needed no
-change at all (it is already action-agnostic); `require_status` picks up
-the new action for free via `_REQUIRED_STATUS_BY_ACTION`'s own dict lookup.
+The context's `action` includes `"read"` so a read-visibility check can build a context for
+`require_owner` without a value that fits no real action; `require_status` and
+`block_self_approval` are never called with `"read"`. It also includes `"edit"`, the action of the
+draft-content edit tools, which `require_status` maps to the required status `"draft"`.
 """
 
 from __future__ import annotations
@@ -49,10 +35,13 @@ _REQUIRED_STATUS_BY_ACTION = {
 class PolicyLifecycleRuleContext:
     """The facts one policy-lifecycle `AccessRule` needs to decide an action.
 
-    `actor`/`owner` are `(subject, issuer)` pairs, matching
-    `ps_service.authz.rules.AccessRuleContext.actor`/`.target`'s own
-    convention -- same subject with a different issuer is a different person
-    (AC-BI-017).
+    Attributes:
+        actor: The caller as a `(subject, issuer)` pair, the convention of
+            `ps_service.authz.rules.AccessRuleContext.actor`; the same subject under a different
+            issuer is a different person.
+        owner: The Policy's owner as a `(subject, issuer)` pair, compared whole against `actor`.
+        action: The lifecycle action being attempted; `"read"` is used only for visibility checks.
+        current_status: The Policy's current status.
     """
 
     actor: tuple[str, str]
@@ -62,19 +51,19 @@ class PolicyLifecycleRuleContext:
 
 
 def require_status(ctx: PolicyLifecycleRuleContext) -> AccessRuleResult:
-    """AC-BI-023: an action may only proceed from its own required status.
+    """Allow an action only when the Policy is in the status that action requires.
 
-    `propose` requires `draft`; `approve`/`reject`/`revert` each require
-    `proposed`. `deprecated` is never any action's required status, so it
-    always fails this check -- deprecated's terminal nature needs no separate
-    special case.
+    Business Rules: `propose` and `edit` require `draft`; `approve`, `reject` and `revert` require
+    `proposed`. `deprecated` and `approved` are never any action's required status, so they always
+    fail; an action with no required status (`read`) also fails.
 
     Args:
-        ctx: The lifecycle call's facts.
+        ctx: The lifecycle call's facts; `ctx.action` selects the required status and
+            `ctx.current_status` is compared against it.
 
     Returns:
-        `AccessRuleResult(allowed=False, ...)` when `ctx.current_status`
-        does not match the status required for `ctx.action`, else
+        `AccessRuleResult(allowed=False, reason="cannot <action> a Policy in status '<status>'")`
+        when `ctx.current_status` differs from the required status, else
         `AccessRuleResult(allowed=True, reason=None)`.
     """
     required_status = _REQUIRED_STATUS_BY_ACTION.get(ctx.action)
@@ -87,15 +76,17 @@ def require_status(ctx: PolicyLifecycleRuleContext) -> AccessRuleResult:
 
 
 def require_owner(ctx: PolicyLifecycleRuleContext) -> AccessRuleResult:
-    """AC-BI-003/AC-BI-007: only the Policy's owner may `propose`/`revert` it.
+    """Allow an action only when the caller is the Policy's owner.
+
+    Used for `propose`, `revert`, the draft edits and read visibility of a draft.
 
     Args:
-        ctx: The lifecycle call's facts.
+        ctx: The lifecycle call's facts; `ctx.actor` and `ctx.owner` are compared as the full
+            `(subject, issuer)` pair.
 
     Returns:
-        `AccessRuleResult(allowed=True, reason=None)` when `ctx.actor ==
-        ctx.owner` (compared as the full `(sub, iss)` pair), else
-        `AccessRuleResult(allowed=False, ...)`.
+        `AccessRuleResult(allowed=True, reason=None)` when `ctx.actor == ctx.owner`, else
+        `AccessRuleResult(allowed=False, reason="only the Policy's owner may do this")`.
     """
     if ctx.actor == ctx.owner:
         return AccessRuleResult(allowed=True, reason=None)
@@ -103,17 +94,18 @@ def require_owner(ctx: PolicyLifecycleRuleContext) -> AccessRuleResult:
 
 
 def block_self_approval(ctx: PolicyLifecycleRuleContext) -> AccessRuleResult:
-    """AC-BI-006: a caller may never approve or reject a Policy they own.
+    """Refuse a caller who tries to approve or reject a Policy they own.
 
-    AC-BI-017 falls out for free from tuple equality: the same subject under
-    a different issuer is a different person, so it is not blocked here.
+    Business Rules: the comparison is on the whole `(subject, issuer)` pair, so the same subject
+    under a different issuer is a different person and is not blocked.
 
     Args:
-        ctx: The lifecycle call's facts.
+        ctx: The lifecycle call's facts; `ctx.actor` and `ctx.owner` are compared as the full
+            `(subject, issuer)` pair.
 
     Returns:
-        `AccessRuleResult(allowed=False, ...)` when `ctx.actor == ctx.owner`,
-        else `AccessRuleResult(allowed=True, reason=None)`.
+        `AccessRuleResult(allowed=False, reason="you cannot approve or reject a Policy you own")`
+        when `ctx.actor == ctx.owner`, else `AccessRuleResult(allowed=True, reason=None)`.
     """
     if ctx.actor == ctx.owner:
         return AccessRuleResult(

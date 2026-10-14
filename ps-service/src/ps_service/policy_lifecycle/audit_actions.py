@@ -1,15 +1,11 @@
-"""Typed `details` models for the `policy.*` audit actions (issue #134).
+"""Typed `details` models for the `policy.*` audit actions.
 
-Registers each model with `ps_service.audit.models.register_audit_action` at
-import time -- the same "module import triggers registration" idiom
-`ps_service.authz.audit_actions` already uses for its four `access_role.*`
-actions.
+Registers each model with `ps_service.audit.models.register_audit_action` at import time, the same
+"module import triggers registration" idiom `ps_service.authz.audit_actions` uses for its
+`access_role.*` actions, and registers the `policy` audit resource type.
 
-Nothing imports this module yet (mirrors `ps_service.authz.audit_actions`'s
-own note about its own Slice 1/Slice 2 split): the component that actually
-emits `policy.*` audit events (a later slice's `ps_service.policy_lifecycle.
-service`) is responsible for importing this module so registration happens
-before any event is recorded.
+The component that emits `policy.*` audit events (`ps_service.policy_lifecycle.service`) imports
+this module so registration happens before any event is recorded.
 """
 
 from __future__ import annotations
@@ -24,23 +20,21 @@ from ps_service.audit.models import (
 
 
 class PolicyCreateDraftDetails(AuditDetails):
-    """`policy.create_draft`.
+    """Details of a `policy.create_draft` audit event (creation of a draft Policy or a fork).
 
-    `outcome='applied'`: `reason_code` is absent. `outcome='rejected'` or
-    `'failed'` (AC-BI-022's title-collision rejection; issue #185's
-    Capability-claim rejections and lost race): `reason_code` is populated.
-
-    `capability_ids` (issue #185): the Capabilities a fresh draft claims via
-    `GOVERNED_BY` at creation. An `applied` event carries the intended ids; a
-    `failed` event for a lost claim race carries `()` because nothing was
-    claimed. An `applied` event followed by a `failed` event for the same
-    resource therefore means the ids did not move. Always `()` for a fork.
-
-    `supersedes_policy_id` (issue #136, Slice 6, TASK.md's own
-    Implementation-decisions paragraph): added directly to this existing
-    model rather than a new/separate details model. Present-but-`None` on an
-    ordinary (non-fork) draft; populated with the superseded Policy's id when
-    `create-policy-draft` was called with `supersedes_policy_id` set.
+    Attributes:
+        affected_node_ids: Ids of the nodes the call created or would have created.
+        to_status: Always `"draft"`.
+        reason_code: Absent for `outcome='applied'`. For `outcome='rejected'` or `'failed'` it names
+            the cause: a title collision, an unknown Capability, or a Capability that already has
+            a governing Policy (including a lost claim race).
+        supersedes_policy_id: `None` for an ordinary draft; the superseded Policy's id when the
+            draft is a fork of an approved Policy.
+        capability_ids: The Capabilities a fresh draft claims through `GOVERNED_BY` at creation. An
+            `applied` event carries the intended ids; a `failed` event for a lost claim race
+            carries `()` because nothing was claimed. An `applied` event followed by a `failed`
+            event for the same resource therefore means the ids did not move. Always `()` for a
+            fork.
     """
 
     affected_node_ids: tuple[str, ...]
@@ -54,22 +48,23 @@ class PolicyCreateDraftDetails(AuditDetails):
 
 
 class PolicyTransitionDetails(AuditDetails):
-    """`policy.propose`/`.approve`/`.reject`/`.revert`/`.auto_deprecate`.
+    """Details of a `policy.propose`/`.approve`/`.reject`/`.revert`/`.auto_deprecate` audit event.
 
-    One shared model for all 5 transition actions -- mirroring how
-    `ps_service.authz.audit_actions.AccessRoleRevokeDetails` already covers
-    its action with a single, open `reason_code` enum rather than one class
-    per rejection reason. `outcome='applied'`: `reason_code` is absent.
-    `outcome='rejected'`: `reason_code` is populated with the specific
-    reason the transition did not happen.
+    One model covers all five transition actions, with a single open `reason_code` enum rather than
+    one class per rejection reason.
 
-    `capability_ids` (issue #185): on `policy.approve` of a fork, the
-    Capabilities whose `GOVERNED_BY` edge moves from the superseded Policy to
-    the approved one; `()` for every other transition. `reason_code=
-    "governance_conflict"` (`outcome='failed'`) means the governed set changed
-    between read and write, so nothing moved and the `failed` event carries
-    `capability_ids=()` -- an `applied` event followed by a `failed` event for
-    the same resource means the ids did not move.
+    Attributes:
+        affected_node_ids: Ids of the nodes the transition changed or would have changed.
+        from_status: The Policy's status before the transition.
+        to_status: The status the transition moves (or would move) the Policy to.
+        reason_code: Absent for `outcome='applied'`. For `outcome='rejected'` or `'failed'` it names
+            why the transition did not happen (access denied, self-approval blocked, invalid
+            status, incomplete for proposal, governance conflict).
+        capability_ids: On `policy.approve` of a fork, the Capabilities whose `GOVERNED_BY` edge
+            moves from the superseded Policy to the approved one; `()` for every other transition.
+            With `reason_code="governance_conflict"` (`outcome='failed'`) the governed set changed
+            between read and write, so nothing moved and the event carries `()`; an `applied`
+            event followed by a `failed` event for the same resource means the ids did not move.
     """
 
     affected_node_ids: tuple[str, ...]

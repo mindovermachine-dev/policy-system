@@ -1,4 +1,4 @@
-"""Privileged SQL migration runner for owner-protected tables (issue #205).
+"""Privileged SQL migration runner for owner-protected tables.
 
 The ordinary runner (`ps_service.persistence.migration_runner`) connects as the `ps_state`
 application role, so every table it creates is owned by that role -- and a table owner can
@@ -74,6 +74,15 @@ _SELECT_CONTROLS_TABLE = (
 
 def render_migration_sql(sql_text: str, *, owner_role: str, app_role: str) -> str:
     """Substitute the role tokens of a migration file with quoted identifiers.
+
+    Args:
+        sql_text: Raw text of a migration file, possibly containing `@@OWNER_ROLE@@` and
+            `@@APP_ROLE@@`.
+        owner_role: Name of the non-login owner role.
+        app_role: Name of the application role.
+
+    Returns:
+        The text with every role token replaced by the corresponding quoted identifier.
 
     Raises:
         StatePostgresProvisioningError: the file contains a `@@NAME@@` token other
@@ -192,19 +201,43 @@ def apply_privileged_migrations(
     Ensures the NOLOGIN `owner_role` exists, refuses if `app_role` is a member of it, makes sure
     `ps_schema_migrations` exists and is owned by `app_role`, then applies each pending file:
     role tokens rendered, statements and the tracking row committed in one transaction. Returns
-    the filenames applied this call (empty on a repeat run). Emits one
-    `persistence`/`apply_privileged_migrations` log entry per call naming `<component>/<file>`
-    entries and role names.
+    the filenames applied this call (empty on a repeat run).
 
     The role and tracking-table setup and each pending file run under the same migration
     advisory lock as the ordinary runner (`MIGRATION_LOCK_KEY`), with the tracking table
     re-checked inside it, so a service starting at the same time cannot interleave; the wait is
     bounded by `lock_timeout_seconds`.
 
+    Args:
+        admin_conn: Open connection authenticated with the admin credential.
+        sources: Component migration directories, processed in list order.
+        owner_role: Name of the non-login role that must own the protected objects; created
+            when absent.
+        app_role: Name of the application role; must differ from, and not be a member of,
+            `owner_role`.
+        emitter: Log emitter for the run's outcome entry; `None` uses the process emitter, and
+            logging is skipped when none is configured.
+        lock_timeout_seconds: Longest wait for the migration lock.
+
+    Returns:
+        The filenames (without component) applied this call, in application order; empty when
+        nothing was pending.
+
     Raises:
-        StatePostgresProvisioningError: a precondition failed (see the helpers above).
+        StatePostgresProvisioningError: `owner_role` exists and can log in; `app_role` is, or is
+            a member of, `owner_role`; `ps_schema_migrations` is not owned by `app_role`; the
+            connection may not switch to `app_role`; or a file has an unknown role token.
         StatePostgresMigrationLockError: the migration lock was not granted in time.
         StatePostgresMigrationApplyError: a file's SQL failed; names the component and file.
+        psycopg.Error: a role, ownership or tracking query failed (propagated).
+        OSError: a migration file could not be read.
+
+    Side Effects:
+        May create the owner role and `ps_schema_migrations`, executes each pending file's SQL
+        and records it (one committed transaction per file), and emits one
+        `persistence`/`apply_privileged_migrations` log entry naming `<component>/<file>`
+        entries and role names, with outcome `failure` when a file failed to apply and
+        `success` otherwise.
     """
     applied: list[str] = []
     already_applied_count = 0
@@ -331,11 +364,28 @@ def verify_privileged_migrations_applied(
     Every migration file of every source must have a tracking row, every `required_tables`
     entry (schema-qualified) must exist, and the connected role must neither own a table nor be a
     member of its owner, so a deployment whose tables are owned by `ps_state` also fails closed.
-    Nothing is created or changed. Emits one `persistence`/`verify_privileged_migrations` entry.
+    Nothing is created or changed.
+
+    Args:
+        conn: Open connection authenticated as the application role.
+        sources: Component migration directories whose files must all be recorded.
+        required_tables: Schema-qualified names of tables that must exist and not be
+            controlled by the connected role.
+        emitter: Log emitter for the outcome entry; `None` uses the process emitter, and
+            logging is skipped when none is configured.
+
+    Returns:
+        None; returning normally means every check passed.
 
     Raises:
         GraphLogMigrationMissingError: a check failed; names the first missing migration
             (`<component>/<filename>`) and a fixed reason, never a host, SQL or driver text.
+        StatePostgresProvisioningError: `sources` contain no migration files at all.
+        psycopg.Error: a catalog query failed (propagated).
+
+    Side Effects:
+        Emits one `persistence`/`verify_privileged_migrations` log entry (`success` or
+        `failure`); performs read-only queries.
     """
     try:
         _require_migrations_recorded(conn, sources=sources)

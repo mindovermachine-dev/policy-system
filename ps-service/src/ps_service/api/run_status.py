@@ -1,26 +1,20 @@
 """Process-wide registry of each in-flight ingestion run's currently-executing stage.
 
-Fed by :mod:`ps_service.api.ingestion_orchestration`'s pipeline sequencer
-(``_execute_catalog_stages`` records the stage about to run;
-``run_catalog_ingestion_pipeline`` clears the entry once the run ends, success
-or failure) so a best-effort progress poller can read "what is this run doing
-right now" without any queue, websocket, or external store (AC-BI-008).
+Purpose: let a best-effort progress poller answer "what is this run doing right now"
+without a queue, websocket or external store. The ingestion pipeline sequencer records the
+stage about to run and clears the entry when the run ends, whether it succeeded or failed.
 
-Mirrors ``ps_service.dependency_health.registry``'s exact shape: a module-level
-``dict`` guarded by a ``threading.Lock``, plain get/set/clear functions, and a
-``reset_for_tests()`` for test isolation.
+The registry is a module-level ``dict[str, str]`` keyed by ``run_id`` and guarded by a
+``threading.Lock``; it has plain get/set/clear functions and ``reset_for_tests()`` for test
+isolation.
 
-**No per-``run_id`` ownership check, by design.** This registry is a plain
-``dict[str, str]`` keyed by ``run_id``, with no token or handle returned by
-``set_stage`` that ``clear_stage`` must present back. If two concurrent runs
-are ever given the *same* ``run_id``, their ``set_stage``/``clear_stage``
-calls interleave on one key: whichever call lands last wins, and whichever
-run finishes first clears the key out from under the other's still-in-flight
-run. This is a deliberately accepted, best-effort tradeoff (see PLAN.md's D4
-"Known limitation" note for issue #61), not a bug to fix here -- a colliding
-``run_id`` degrades progress *display* only, it never changes a run's final
-result, because this registry is read only by an optional progress poller,
-never by the pipeline itself.
+Business Rules:
+    There is no per-``run_id`` ownership check. ``set_stage`` returns no token that
+    ``clear_stage`` must present. If two concurrent runs ever share a ``run_id``, their calls
+    interleave on one key: the last call wins, and whichever run finishes first clears the key
+    while the other is still running. This best-effort trade-off only degrades the progress
+    display. It never changes a run's result, because only an optional progress poller reads
+    the registry and the pipeline never does.
 """
 
 from __future__ import annotations
@@ -32,32 +26,63 @@ _stage: dict[str, str] = {}  # run_id -> currently-executing stage name
 
 
 def set_stage(run_id: str, stage: str) -> None:
-    """Record that ``run_id`` is currently executing ``stage``.
+    """Record that a run is currently executing a pipeline stage.
 
-    Overwrites any previously recorded stage for ``run_id``. Last-writer-wins
-    if two runs ever share a ``run_id`` -- see the module docstring.
+    Args:
+        run_id: Identifier of the ingestion run; any string, used as the registry key.
+        stage: Name of the stage the run is about to execute (for example ``"ingestion"``).
+            Not validated.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Overwrites any stage already recorded for ``run_id`` in the process-wide registry. If
+        two runs share a ``run_id`` the last writer wins.
     """
     with _lock:
         _stage[run_id] = stage
 
 
 def get_stage(run_id: str) -> str | None:
-    """The stage currently recorded for ``run_id``, or ``None`` if unknown."""
+    """Read the stage currently recorded for a run.
+
+    Args:
+        run_id: Identifier of the ingestion run to look up.
+
+    Returns:
+        The stage name last recorded for ``run_id``, or ``None`` if no stage is recorded (the
+        run never started, has finished, or was cleared).
+    """
     with _lock:
         return _stage.get(run_id)
 
 
 def clear_stage(run_id: str) -> None:
-    """Remove ``run_id``'s recorded stage, if any.
+    """Remove the stage recorded for a run.
 
-    A no-op if ``run_id`` has no recorded entry (e.g. already cleared, or
-    never set).
+    Args:
+        run_id: Identifier of the ingestion run whose entry is removed.
+
+    Returns:
+        None. Clearing a ``run_id`` with no recorded entry (already cleared or never set) is
+        a no-op, not an error.
+
+    Side Effects:
+        Deletes the entry for ``run_id`` from the process-wide registry.
     """
     with _lock:
         _stage.pop(run_id, None)
 
 
 def reset_for_tests() -> None:
-    """Clear all recorded state so each test starts with no runs in flight."""
+    """Clear every recorded stage so a test starts with no runs in flight.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Empties the process-wide registry for all run ids.
+    """
     with _lock:
         _stage.clear()

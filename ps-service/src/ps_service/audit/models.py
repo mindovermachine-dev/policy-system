@@ -1,24 +1,15 @@
-"""Typed `details` models and the extensible per-action/resource-type registries (issue #147).
+"""Typed `details` models and the extensible action and resource-type registries for audit rows.
 
-`AuditDetails` is the base Pydantic type every action's typed `details`
-payload subclasses; `register_audit_action`/`resolve_details_model` form a
-plain module-level registry, not a closed enum, so a new action can be
-registered later from another module entirely -- e.g. #134's policy-lifecycle
-actions, #136's supersede-fork action, #140's `user.invite` action -- without
-ever editing this file (the access-role component registers its four `access_role.*`
-actions the same way). Mirrors
-`ps_service.mcp_interface.mcp_server`'s own "module import triggers
-registration" idiom for `@server.tool()`.
+`AuditDetails` is the base Pydantic type that every action's typed `details` payload subclasses.
+`register_audit_action` and `resolve_details_model` form a plain module-level registry, not a
+closed enum, so any component can register its own actions at import time without editing this
+module. `register_audit_resource_type` and `is_known_resource_type` apply the same contract to
+the `resource_type` values that audit queries may filter on.
 
-`register_audit_resource_type`/`is_known_resource_type` (Slice 4) are the
-same extensibility contract applied to `list-audit-events`'s `resource_type`
-filter (AC-BI-008's "unknown resource type" rejection needs some
-registered/known set to check against).
-
-`AuditEventRow`/`AuditQueryFilters`/`AuditQueryPage` (Slice 4) are the shapes
-`AuditStore.query` accepts/returns -- plain frozen dataclasses, not
-pydantic, mirroring the other `ps_service` components' own "plain frozen
-dataclass, not LLM/API-boundary Pydantic" convention.
+`AuditEventRow`, `AuditQueryFilters` and `AuditQueryPage` are the shapes that
+`AuditStore.query` accepts and returns: plain frozen dataclasses, not Pydantic models, because
+they never cross the LLM or HTTP boundary directly. `AUDIT_DETAILS_FILTER_KEYS` is the allow-list
+of `details` keys that queries may filter on.
 """
 
 from __future__ import annotations
@@ -35,12 +26,14 @@ if TYPE_CHECKING:
 
 
 class AuditDetails(BaseModel):
-    """Base type for every action's typed `details` payload (AC-BI-009).
+    """Base type for every action's typed `details` payload.
 
-    Every subclass sets `model_config = ConfigDict(extra="forbid")` (already
-    set here, inherited by every subclass) so `details` can only ever
-    contain fields the model declares -- the validation control behind
-    AC-BI-009's "details can only contain declared, typed fields."
+    Subclass it once per audit action and declare each permitted `details` field with a type.
+
+    Business Rules:
+        `model_config` forbids extra fields and is inherited by every subclass, so `details`
+        can only contain fields the model declares. Validation fails on an undeclared field
+        and on a missing required one.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -53,14 +46,21 @@ _RESOURCE_TYPES: set[str] = set()
 def register_audit_action(action: str, details_model: type[AuditDetails]) -> None:
     """Register `details_model` as the one typed shape `action`'s `details` must match.
 
-    Called once, at import time, by the component that emits `action` (the
-    access-role component's own audit-actions module; future components
-    register their own the same way) -- a plain module-level dict, never a closed
-    enum, so a new action never requires editing this module.
+    Call once, at import time, from the component that emits `action`. The registry is a plain
+    module-level dict, never a closed enum, so a new action never requires editing this module.
+
+    Args:
+        action: The namespaced action string recorded in `audit_events.action`
+            (for example `"user.invite"`). Must not already be registered.
+        details_model: The `AuditDetails` subclass that validates and shapes `details` for
+            this action.
 
     Raises:
-        ValueError: `action` is already registered -- defends against two
-            components silently colliding on one namespaced action string.
+        ValueError: `action` is already registered. This stops two components from silently
+            colliding on one action string.
+
+    Side Effects:
+        Adds `action` to the process-wide action registry.
     """
     if action in _ACTION_DETAILS_REGISTRY:
         message = f"audit action {action!r} is already registered"
@@ -69,35 +69,64 @@ def register_audit_action(action: str, details_model: type[AuditDetails]) -> Non
 
 
 def resolve_details_model(action: str) -> type[AuditDetails] | None:
-    """Return the typed `details` model registered for `action`, or `None` if unregistered."""
+    """Return the typed `details` model registered for `action`.
+
+    Args:
+        action: The namespaced action string to look up.
+
+    Returns:
+        The `AuditDetails` subclass registered for `action`, or `None` if the action has not
+        been registered.
+    """
     return _ACTION_DETAILS_REGISTRY.get(action)
 
 
 def register_audit_resource_type(resource_type: str) -> None:
-    """Register `resource_type` as a name `list-audit-events` may filter on (AC-BI-008).
+    """Register `resource_type` as a name that audit queries may filter on.
 
-    Same extensibility contract as `register_audit_action` -- a plain
-    module-level set, never a closed enum, so a new resource type never
-    requires editing this module. Unlike `register_audit_action`, silently
-    accepts re-registering the same name (multiple actions from the same
-    component may share one resource type, e.g. the four `access_role.*` actions
-    all use `"principal"` -- there is nothing to
-    defend against by rejecting that).
+    Same extensibility contract as `register_audit_action`: a plain module-level set, never a
+    closed enum, so a new resource type never requires editing this module.
+
+    Args:
+        resource_type: The resource-type name recorded in `audit_events.resource_type`.
+
+    Business Rules:
+        Unlike `register_audit_action`, re-registering the same name is accepted silently,
+        because several actions from one component may share a resource type.
+
+    Side Effects:
+        Adds `resource_type` to the process-wide resource-type set.
     """
     _RESOURCE_TYPES.add(resource_type)
 
 
 def is_known_resource_type(resource_type: str) -> bool:
-    """Whether `resource_type` has been registered via `register_audit_resource_type`."""
+    """Report whether `resource_type` has been registered with `register_audit_resource_type`.
+
+    Args:
+        resource_type: The resource-type name to check.
+
+    Returns:
+        `True` if the name is registered, `False` otherwise.
+    """
     return resource_type in _RESOURCE_TYPES
 
 
 @dataclass(frozen=True, slots=True)
 class AuditEventRow:
-    """One `audit_events` row, as returned by `AuditStore.query` (issue #147, Slice 4).
+    """One `audit_events` row, as returned by `AuditStore.query`.
 
-    Mirrors the other `ps_service` components' own "plain frozen
-    dataclass, not LLM/API-boundary Pydantic" convention.
+    Attributes:
+        id: The row's generated UUID, as a string.
+        occurred_at: When the row was written (timestamp with time zone).
+        actor_subject: The acting principal's identity-provider subject.
+        actor_issuer: The identity-provider issuer of `actor_subject`.
+        action: The registered, namespaced action string.
+        resource_type: The kind of resource acted on.
+        resource_id: The identifier of the resource acted on.
+        outcome: Whether the effect happened: `"applied"`, `"rejected"` or `"failed"`.
+        details: The action's validated `details` payload; fields left unset when recorded are
+            absent.
     """
 
     id: str
@@ -116,12 +145,12 @@ AUDIT_DETAILS_FILTER_KEYS: Final[tuple[str, ...]] = (
     "regulatory_instrument_id",
     "instrument_id",
 )
-"""The only `details` keys `list-audit-events` may filter on (exact match, AC-BI-018).
+"""The only `details` keys that audit queries may filter on (exact match).
 
 How to add an allow-listed key:
 
 1. Append it to this tuple.
-2. Add an expression index `((details ->> '<key>'))` in a NEW migration file under
+2. Add an expression index `((details ->> '<key>'))` in a new migration file under
    `audit/migrations/` (never edit an applied one) and add its fixed SQL fragment to
    `_DETAILS_FILTER_FRAGMENTS` in `audit/store.py` (the caller's key is never interpolated).
 3. Make sure every action that should be searchable by it declares a field of that exact
@@ -132,11 +161,22 @@ How to add an allow-listed key:
 
 @dataclass(frozen=True, slots=True)
 class AuditQueryFilters:
-    """Every filter `list-audit-events` accepts (AC-BI-007), all optional/combinable.
+    """Every filter an audit query accepts; all optional and combined with AND.
 
-    `details` is an exact-match filter on the top-level string fields of `audit_events.details`;
-    its keys must be members of `AUDIT_DETAILS_FILTER_KEYS` (validated by the service before
-    any query).
+    A field left at `None` is omitted from the query. The store does not validate filter
+    values: the caller must check them before querying.
+
+    Attributes:
+        actor_subject: Exact match on the actor's subject.
+        actor_issuer: Exact match on the actor's issuer.
+        resource_type: Exact match on the resource type; should be a registered one.
+        resource_id: Exact match on the resource identifier.
+        action: Exact match on the action string; should be a registered one.
+        occurred_from: Inclusive lower bound on `occurred_at`.
+        occurred_to: Inclusive upper bound on `occurred_at`; must not precede `occurred_from`.
+        details: Exact-match filter on top-level string fields of `audit_events.details`. Keys
+            must be members of `AUDIT_DETAILS_FILTER_KEYS`; an unknown key raises `KeyError`
+            in the store.
     """
 
     actor_subject: str | None = None
@@ -151,7 +191,13 @@ class AuditQueryFilters:
 
 @dataclass(frozen=True, slots=True)
 class AuditQueryPage:
-    """One page of `AuditStore.query`'s result: newest-first rows plus the next cursor."""
+    """One page of `AuditStore.query` results.
+
+    Attributes:
+        events: The page's rows, newest first; empty when nothing matches.
+        next_cursor: Opaque token to pass as `cursor` to fetch the following page, or `None`
+            when this is the last page.
+    """
 
     events: tuple[AuditEventRow, ...]
     next_cursor: str | None

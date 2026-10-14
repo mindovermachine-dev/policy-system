@@ -1,4 +1,4 @@
-"""Typed key registry for runtime configuration (issue #130).
+"""Typed key registry for runtime configuration.
 
 Each runtime-mutable config value is declared once, in code, as a `RuntimeConfigKey`: its
 name, its value type, a validator, and an `audit_value` projection that decides what of the
@@ -8,8 +8,8 @@ Adding a config value therefore costs one `register_runtime_config_key` call, no
 storage pattern.
 
 `define_runtime_config_key` keeps the authoring side typed (`value_type: type[T]`,
-`validate: (T, ServiceConfig) -> T`) and erases `T` at registration, mirroring
-`ps_service.audit.models`'s plain module-level registry.
+`validate: (T, ServiceConfig) -> T`) and erases `T` at registration, using a
+plain module-level registry.
 """
 
 from __future__ import annotations
@@ -37,7 +37,17 @@ _TYPE_MISMATCH_MESSAGE = "runtime config key {name!r} was given a value of the w
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfigKey:
-    """One registered runtime config key (type-erased; see `define_runtime_config_key`)."""
+    """One registered runtime config key, with its type erased.
+
+    Build instances with `define_runtime_config_key`, which keeps the authoring side typed.
+
+    Attributes:
+        name: Unique key name; also the `runtime_config.key` value and the audit `resource_id`.
+        parse: Strict type check of a raw value (a stored jsonb value or a caller's input).
+        validate: The key's own validator, called only on an already type-checked value.
+        project: What of a validated value may be written to an audit row's `details`.
+        validation_errors: Extra exception types `validate` may raise to reject a value.
+    """
 
     name: str
     parse: Callable[[object], object]
@@ -58,7 +68,10 @@ def define_runtime_config_key[T](
     audit_value: Callable[[T], AuditScalar],
     validation_errors: tuple[type[Exception], ...] = (),
 ) -> RuntimeConfigKey:
-    """Build a `RuntimeConfigKey` from a typed validator and audit projection.
+    """Build a type-erased `RuntimeConfigKey` from a typed validator and audit projection.
+
+    The returned key's `parse` checks a raw value strictly against `value_type`; its
+    `validate` and `project` wrap the supplied callables.
 
     Args:
         name: The key's unique name, also its `runtime_config.key` value and audit `resource_id`.
@@ -68,6 +81,14 @@ def define_runtime_config_key[T](
         audit_value: Projects a validated value to the scalar recorded in audit `details`
             (e.g. a URL with credentials and query removed). Never called on unvalidated data.
         validation_errors: Exception types, beyond `ValueError`, that `validate` raises.
+
+    Returns:
+        The `RuntimeConfigKey`; it is not registered until `register_runtime_config_key` is
+        called with it.
+
+    Raises:
+        pydantic.PydanticSchemaGenerationError: `value_type` is a type pydantic cannot build
+            a schema for.
     """
     adapter = TypeAdapter(value_type)
 
@@ -93,10 +114,21 @@ _REGISTRY: dict[str, RuntimeConfigKey] = {}
 
 
 def register_runtime_config_key(key: RuntimeConfigKey) -> None:
-    """Register `key`; called once, at import time, by the component that owns the value.
+    """Add `key` to the process-wide registry.
+
+    Called once, at import time, by the component that owns the value.
+
+    Args:
+        key: The key to register; `key.name` must not already be registered.
+
+    Returns:
+        None.
 
     Raises:
-        ValueError: `key.name` is already registered (same idiom as `register_audit_action`).
+        ValueError: `key.name` is already registered.
+
+    Side Effects:
+        Mutates the module-level registry; the key stays registered for the process lifetime.
     """
     if key.name in _REGISTRY:
         message = f"runtime config key {key.name!r} is already registered"
@@ -105,12 +137,25 @@ def register_runtime_config_key(key: RuntimeConfigKey) -> None:
 
 
 def resolve_runtime_config_key(name: str) -> RuntimeConfigKey | None:
-    """Return the key registered under `name`, or `None` if unregistered."""
+    """Look up a registered key without failing for an unknown name.
+
+    Args:
+        name: Key name to look up.
+
+    Returns:
+        The `RuntimeConfigKey` registered under `name`, or `None` if there is none.
+    """
     return _REGISTRY.get(name)
 
 
 def require_runtime_config_key(name: str) -> RuntimeConfigKey:
-    """Return the key registered under `name`.
+    """Look up a registered key, failing for an unknown name.
+
+    Args:
+        name: Key name to look up.
+
+    Returns:
+        The `RuntimeConfigKey` registered under `name`.
 
     Raises:
         RuntimeConfigUnknownKeyError: `name` is not registered.
@@ -125,10 +170,18 @@ def require_runtime_config_key(name: str) -> RuntimeConfigKey:
 def prepare_runtime_config_value(
     config: ServiceConfig, key: RuntimeConfigKey, raw: object
 ) -> object:
-    """Type-check `raw` for `key`, then run the key's validator; return the validated value.
+    """Type-check `raw` for `key`, then run the key's validator.
 
     The one path every value takes before it is written, and again when a stored row is read
     back (so a hand-edited row cannot smuggle a wrong shape or a value the validator rejects).
+
+    Args:
+        config: Process configuration handed to the key's validator.
+        key: The registered key whose type check and validator apply.
+        raw: The candidate value: a caller's input or a stored jsonb value.
+
+    Returns:
+        The validated, possibly normalised, value.
 
     Raises:
         RuntimeConfigInvalidValueError: `raw` is the wrong type or the validator rejected it.

@@ -1,12 +1,12 @@
-"""ps_service.policy_lifecycle -- package front door (issue #134).
+"""Policy lifecycle component: Policy/Standard/Control governance for the compliance graph.
 
-Policy/Standard/Control proposal lifecycle (draft -> proposed -> approved ->
-deprecated). Domain path: `ps.service.policylifecycle`
+Owns the proposal lifecycle of a Policy and its Standards and Controls (draft -> proposed ->
+approved -> deprecated), the rules that gate each transition, the typed audit details recorded for
+it, and the graph reads and gateway writes behind it. Domain path: `ps.service.policylifecycle`
 (`docs/architecture/ps-service-container-architecture.md`).
 
-Empty skeleton (Slice 2, PLAN.md §0.3/§3 S2) -- re-exports are added as this
-component's public surface (rules, service, errors, audit actions,
-graph_writer) lands in later slices.
+The package re-exports nothing; callers import the submodules they need (`service`, `rules`,
+`errors`, `audit_actions`, `graph_writer`, `graph_submission`).
 """
 
 from __future__ import annotations

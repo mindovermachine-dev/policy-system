@@ -1,17 +1,15 @@
-"""ps_service.llm_interface.structured_completion — the RouteStructuredCompletion action.
+"""Schema-constrained completion routing for `ps_service.llm_interface`.
 
-Slice 2 adds the provider-capability fail-fast check
-(`litellm.utils.supports_response_schema`, bound into this module's namespace so
-tests can monkeypatch it deterministically — see PLAN.md §3.1) and the
-`pydantic.ValidationError` -> `LlmResponseSchemaError` translation in
-`_parse_structured_response`. The capability check is wrapped defensively: any
-exception from `supports_response_schema` itself is treated as "unsupported"
-rather than propagating a bare exception (CHANGES.md FLAW-1).
+Purpose: `route_structured_completion` asks the provider for a reply that conforms to a
+Pydantic model and returns it parsed. It fails fast when the model cannot enforce response
+schemas, and separates a non-conforming reply (a data-shape failure) from a provider failure.
 
-Documented divergence from `route_completion`: `route_completion` emits no log
-entry on its empty-choices/empty-content branch, but AC-BI-015 requires an
-entry on every branch here, so the `LlmProviderError` shape-check branch in
-`_parse_structured_response` also logs `outcome="error"`.
+The provider-capability check uses `litellm.utils.supports_response_schema`, imported into
+this module's namespace so tests can replace it. Any exception from that check is treated as
+"unsupported" rather than escaping.
+
+Unlike `route_completion`, every failure branch here is logged, including an empty or
+malformed reply, which is logged with outcome `error`.
 """
 
 from __future__ import annotations
@@ -51,11 +49,45 @@ def route_structured_completion[T: BaseModel](
     call_completion: StructuredCompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> StructuredCompletionResult[T]:
-    """RouteStructuredCompletion: route a chat completion shaped by `response_model`."""
+    """Send a chat conversation and return the reply parsed into `response_model`.
+
+    Args:
+        messages: Conversation so far, oldest first. Each `ChatMessage` already enforces a
+            valid role and non-empty content; the list itself should be non-empty.
+        model: Provider-qualified model identifier. It must support provider-enforced
+            response schemas.
+        response_model: Pydantic model class the reply must conform to; its JSON schema is
+            sent to the provider.
+        timeout: Maximum seconds to wait for the provider; must be positive. Defaults to 60.
+        call_completion: Transport to call instead of LiteLLM, for tests or alternative
+            providers. None selects `default_structured_completion_caller`.
+        emitter: Log emitter for the call's log entry. None uses the process default emitter.
+
+    Returns:
+        A `StructuredCompletionResult` holding the validated `response_model` instance and
+        the model id the provider reported serving (falling back to `model` when none).
+
+    Raises:
+        LlmProviderError: The model does not support response schemas (or checking support
+            raised), the provider call failed (`openai.OpenAIError` from the transport, kept
+            as `__cause__`), or the response had no choices or empty text.
+        LlmResponseSchemaError: The reply text was not valid JSON or did not conform to
+            `response_model`. The message omits the reply text; it is reachable only through
+            `__cause__`.
+        LoggingLifecycleError: `emitter` is None and no process default emitter has been
+            configured (raised while logging the outcome).
+
+    Side Effects:
+        Makes one network call to the LLM Provider, except when the model is unsupported.
+        Marks the `llm_interface` dependency unhealthy on a provider error and healthy once a
+        response arrives (a non-conforming reply still counts as reachable). Emits one log
+        entry with outcome `success`, `error`, `unsupported` or `schema_mismatch`, carrying
+        the model id and duration and never message or reply content.
+    """
     started = time.perf_counter()
-    # FLAW-1: the real `supports_response_schema` only guards its own `get_llm_provider`
-    # call; a fallback branch further in is unguarded, so treat any exception from the
-    # check itself as "unsupported" rather than let a bare exception escape here.
+    # The real `supports_response_schema` only guards its own provider lookup; a fallback
+    # branch further in is unguarded, so any exception from the check itself is treated as
+    # "unsupported" rather than letting a bare exception escape.
     try:
         unsupported = not supports_response_schema(model)
     except Exception:  # noqa: BLE001
@@ -100,9 +132,18 @@ def _parse_structured_response[T: BaseModel](
 ) -> T:
     """Validate the provider's first-choice content against `response_model`.
 
-    Raises `LlmProviderError` for an unexpected/empty shape (parity with
-    `_to_completion_result`), and `LlmResponseSchemaError` when the content is not
-    valid JSON or does not conform.
+    Args:
+        response: The provider's non-streaming chat response.
+        response_model: Pydantic model class the content must conform to.
+        model: Requested model id, used in error messages.
+
+    Returns:
+        The validated `response_model` instance.
+
+    Raises:
+        LlmProviderError: The response has no choices, or the first choice's text is empty.
+        LlmResponseSchemaError: The content is not valid JSON or does not conform to
+            `response_model`; the validation error is kept as `__cause__`.
     """
     if not response.choices:
         raise LlmProviderError(f"provider returned no choices for model {model!r}")

@@ -1,65 +1,23 @@
-"""REST-boundary glue for the near-miss review workflow (issue #35, PLAN.md §3.1).
+"""REST-boundary glue for the near-miss review workflow.
 
-Mirrors `restore_orchestration.py`'s/`ingestion_orchestration.py`'s shape: an
-injection seam (:class:`NearMissReviewDependencies`) and
-:func:`build_default_near_miss_review_dependencies`, which wires the real
-`ps_service.company_merge.pending_review` functions via **function-local**
-imports so that importing `ps_service.main` never transitively loads
-`ps_service.company_merge` at module load (M6 / the Process Harness
-decoupling guarantee).
+A near miss is a pair of similar entities that Company Merge left separate and queued as a
+`PendingReview` for a human decision. This module serves the two operations behind the REST
+routes: listing the unresolved reviews, and resolving one as `keep-separate` or `merge`.
 
-CHANGES.md M1 (repair resolution, supersedes PLAN.md's original
-`open_db`/`single_tenant_graph_name` pair): `RestoreDependencies`
-(`restore_orchestration.py:87-92`) was confirmed *not* the right template --
-it hands the route a raw `FalkorDB` connection plus a graph name, with graph
-selection happening somewhere else not shown in that file. The actually
-correct, closer precedent is `ingestion_orchestration.py:1012-1020`'s
-`_open_single_tenant_graph(config) -> GraphHandle`, which already does the
-full `connect_from_config` -> `select_graph` -> named single-tenant graph
-round trip. `_open_single_tenant_graph` below is a byte-for-byte copy of
-that function (own private copy, not a shared import -- mirrors
-`falkordb_client.py`/`graph_writer.py`'s own "own copy, not shared import"
-module-docstring convention).
+It provides the injection seam :class:`NearMissReviewDependencies`, the production wiring
+:func:`build_default_near_miss_review_dependencies`, and the entry points
+:func:`run_list_near_misses` and :func:`run_resolve_near_miss`.
 
-Slice 3 (AC-BI-004, the not-found half of AC-BI-008, the `keep-separate`
-half of AC-BI-009) adds `resolve_review` to this bundle and
-`run_resolve_near_miss`, the `POST /near-misses/{review_id}/resolve` entry
-point. `pending_review.resolve_review` returns `None` (not a raised
-exception) when `review_id` doesn't exist or was already resolved -- this
-module is where that `None` is translated into the API-boundary
-`PendingReviewNotFoundError` (`api/errors.py`), exactly like
-`RestoreArtifactRejectedError`'s own "API-boundary translation of a
-lower-layer condition" pattern: `ps_service.company_merge` never imports
-from `ps_service.api` (M6 layering is one-directional).
+The production wiring imports `ps_service.company_merge` function-locally, so importing
+`ps_service.main` never loads Company Merge at module load. Only the graph opener is
+substitutable through the factory (see :func:`build_default_near_miss_review_graph_opener`):
+the review listing and resolution logic is always the real `pending_review` code, so tests
+replace the FalkorDB boundary and never the business rules above it.
 
-Slice 4 (AC-BI-005/006/007, AC-BI-008/009 completed) widens both to add
-`decision="merge"`. `pending_review.resolve_review` raises
-`company_merge.errors.StalePendingReviewError` (not `None`) when the merge
-branch's existence check (CHANGES.md H2) finds `incoming_id` or
-`nearest_existing_id` no longer resolves to a real node -- this module
-catches that specific, lightweight, dependency-free exception type
-(`ps_service.company_merge.errors` is safe to import at module level here,
-mirroring `restore_orchestration.py`'s own `ps_service.restore.errors`
-precedent -- unlike `pending_review.py` itself, it is never function-local)
-and translates it into `PendingReviewNotFoundError` with H2's dedicated
-stale-reference message, before any merge write has happened.
-
-issue #163 Slice D narrowed :func:`build_default_near_miss_review_dependencies`'s
-own DI seam, mirroring `ingestion_orchestration.build_default_pipeline_dependencies`'s
-own Slice C narrowing exactly: `open_single_tenant_graph` (the true FalkorDB
-leaf boundary) is the *only* substitutable parameter now -- `list_pending_reviews`/
-`resolve_review` (real Company Merge business logic) are always the real,
-shipped `pending_review` functions, with no way for a caller to substitute
-fakes for them through this factory's own signature any more. Before this
-change, MCP-layer tests replaced this factory's entire return value
-wholesale, faking real Company Merge dedup-resolution logic in the name of
-substituting only the FalkorDB boundary beneath it -- the same
-"factory bundles boundary+business-logic together" violation
-`mcp_interface_part1.md`'s/`mcp_interface_part2.md`'s DOMINANT FINDING
-flagged repo-wide (`.orchestrator/tracker/issue-163/AUDIT_RAW/`). See
-:func:`build_default_near_miss_review_graph_opener` below, the new
-approved-mock-boundary entry (`docs/coding-standards/approved-mock-boundaries.yaml`)
-tests substitute instead.
+Lower-layer outcomes are translated into API errors here, because `ps_service.company_merge`
+never imports `ps_service.api`: `pending_review.resolve_review` returning `None` (unknown or
+already resolved review) and `StalePendingReviewError` (a merge whose incoming or existing
+node no longer exists) both become :class:`PendingReviewNotFoundError`, before any merge write.
 """
 
 from __future__ import annotations
@@ -107,7 +65,19 @@ _COMPONENT = "near_miss_review"
 
 @dataclass(frozen=True, slots=True)
 class NearMissReviewDependencies:
-    """Everything the near-miss review routes need that is not per-request."""
+    """Everything the near-miss review entry points need that is not per-request.
+
+    Attributes:
+        open_single_tenant_graph: Opens the single-tenant `policy_system` graph for a resolved
+            service configuration. May raise a Redis error when FalkorDB is unreachable.
+        list_pending_reviews: Returns every unresolved `PendingReviewRecord` in the graph.
+        resolve_review: Resolves one review by id with `"keep-separate"` or `"merge"`, writing
+            through the given write target. Returns the `ResolveOutcome`, or `None` when the id is
+            unknown or already resolved; raises `StalePendingReviewError` when a merge references a
+            node that no longer exists.
+        get_pending_review: Returns the `PendingReviewRecord` with the given id, or `None` when no
+            unresolved review has it.
+    """
 
     open_single_tenant_graph: Callable[[ServiceConfig], GraphHandle]
     list_pending_reviews: Callable[[GraphHandle], tuple[PendingReviewRecord, ...]]
@@ -119,12 +89,10 @@ class NearMissReviewDependencies:
 
 
 def _to_pending_review_entry(record: PendingReviewRecord) -> PendingReviewEntry:
-    """Map one `PendingReviewRecord` to the `GET /near-misses` wire entry (AC-BI-003).
+    """Map one `PendingReviewRecord` to the wire entry of the near-miss listing.
 
-    `id`/`kind`/`incoming_text`/`nearest_existing_text`/`similarity` only --
-    `incoming_id`/`nearest_existing_id` are deliberately omitted from the
-    wire response (PLAN.md §3.2: AC-BI-003 only requires the review's OWN
-    id, incoming text, existing text, and similarity score).
+    Only the review id, kind, both texts and the similarity are exposed; the internal
+    `incoming_id` and `nearest_existing_id` node ids are deliberately omitted.
     """
     return PendingReviewEntry(
         id=record.id,
@@ -138,17 +106,19 @@ def _to_pending_review_entry(record: PendingReviewRecord) -> PendingReviewEntry:
 def run_list_near_misses(
     *, config: ServiceConfig, dependencies: NearMissReviewDependencies
 ) -> PendingReviewListResponse:
-    """Return every unresolved `PendingReview` as a `PendingReviewListResponse` (AC-BI-003).
+    """Return every unresolved `PendingReview` as a `PendingReviewListResponse`.
 
     Args:
-        config: The resolved service configuration (injected).
-        dependencies: The near-miss review dependency bundle (injected;
-            overridden in tests).
+        config: The resolved service configuration, used to open the graph.
+        dependencies: The near-miss review dependency bundle that supplies the graph opener and
+            the review listing.
 
     Returns:
-        A :class:`PendingReviewListResponse` carrying one entry per
-        unresolved `PendingReview` node, in the order
-        `pending_review.list_pending_reviews` returned them.
+        A :class:`PendingReviewListResponse` with one entry per unresolved review, in the order
+        `list_pending_reviews` returned them; an empty `reviews` list when none are pending.
+
+    Raises:
+        redis.exceptions.RedisError: The graph is unreachable. Nothing is written.
     """
     graph = dependencies.open_single_tenant_graph(config)
     records = dependencies.list_pending_reviews(graph)
@@ -156,7 +126,7 @@ def run_list_near_misses(
 
 
 def _to_resolve_response(outcome: ResolveOutcome) -> ResolveReviewResponse:
-    """Map a `ResolveOutcome` to the `POST /near-misses/{review_id}/resolve` success body."""
+    """Map a `ResolveOutcome` to the success body of the resolve route."""
     return ResolveReviewResponse(
         review_id=outcome.review_id,
         decision=outcome.decision,
@@ -166,7 +136,7 @@ def _to_resolve_response(outcome: ResolveOutcome) -> ResolveReviewResponse:
 
 
 def _failure_reason(exc: Exception) -> NearMissResolveReason:
-    """Map a failed resolution to the enumerated audit `reason_code` (never the message)."""
+    """Map a failed resolution to the enumerated audit `reason_code`, never the message."""
     if isinstance(exc, PendingReviewNotFoundError):
         # A stale merge is translated to this API error with the stale signal as its cause.
         return (
@@ -190,7 +160,10 @@ def _emit_resolve_log(
     reason: NearMissResolveReason | None,
     emitter: LogEmitter | None,
 ) -> None:
-    """One semantic entry per resolution so the log and the audit trail agree (ids only)."""
+    """Emit one semantic log entry per resolution so the log and the audit trail agree (ids only).
+
+    A logging lifecycle failure is swallowed: it never fails the resolution.
+    """
     extra: dict[str, object] = {"decision": decision}
     if approval_id is not None:
         extra["approval_id"] = approval_id
@@ -219,63 +192,56 @@ def run_resolve_near_miss(
     approval_id: str | None = None,
     emitter: LogEmitter | None = None,
 ) -> ResolveReviewResponse:
-    """Resolve one `PendingReview` (issue #35, `POST /near-misses/{review_id}/resolve`).
+    """Resolve one `PendingReview` by keeping the pair separate or merging it.
 
-    AC-BI-004: `decision="keep-separate"` deletes only the `PendingReview`
-    record, nothing else. AC-BI-005/006/007: `decision="merge"` re-points
-    every edge referencing the loser canonical node onto the
-    deterministically-chosen winner, deletes the loser, and deletes the
-    `PendingReview` record, all as one atomic write.
-
-    Audit (issue #195, AC-BI-012/011): after the review is found and before any write, a
-    `near_miss.resolve` `applied` row is recorded (fail-closed: if it cannot be written nothing is
-    resolved and `AuditTrailUnavailableError` propagates). If the resolution then fails, a
-    best-effort `failed` row with an enumerated `reason_code` follows and the original exception is
-    re-raised unchanged. An unknown review writes no row (nothing to audit, D-G). `audit.actor` is
-    the principal who performed the operation (for a passkey-approved merge, the approver, with
-    `approval_id` set).
-
-    AC-BI-008 (not-found half, both decisions): raises
-    `PendingReviewNotFoundError` (-> HTTP 404) when `review_id` doesn't
-    exist or was already resolved -- the API-boundary translation of
-    `pending_review.resolve_review`'s `None` return (see module docstring);
-    no write happens on this path. For `decision="merge"` specifically,
-    also raises `PendingReviewNotFoundError` (same status, a dedicated
-    "stale" message) when `pending_review.resolve_review` raises
-    `StalePendingReviewError` -- the review exists but the incoming/existing
-    canonical node it references no longer does (already resolved by a
-    prior merge); no merge write happens on this path either (CHANGES.md
-    H2).
+    `decision="keep-separate"` deletes only the `PendingReview` record. `decision="merge"`
+    re-points every edge referencing the loser canonical node onto the deterministically chosen
+    winner, deletes the loser and deletes the `PendingReview` record, all as one atomic write
+    through the Graph Write Gateway.
 
     Args:
-        review_id: The `PendingReview` id to resolve (path parameter).
-        decision: How to resolve it -- `"keep-separate"` or `"merge"`.
-        config: The resolved service configuration (injected).
-        dependencies: The near-miss review dependency bundle (injected;
-            overridden in tests).
-        audit: Who is acting and where their audit rows go.
-        approval_id: The signed approval authorising a merge, recorded in the audit details.
-        emitter: Optional log emitter override (tests).
+        review_id: The `PendingReview` id to resolve (the route's path parameter).
+        decision: `"keep-separate"` or `"merge"`.
+        config: The resolved service configuration, used to open the graph and find the gateway.
+        dependencies: The near-miss review dependency bundle that supplies the graph opener, the
+            review lookup and the resolution.
+        audit: The acting principal and the destination of the audit rows. For a
+            passkey-approved merge the actor is the approver.
+        approval_id: The signed approval that authorised a merge; recorded in the audit details
+            and the log entry. `None` when there is no approval.
+        emitter: Log emitter override; `None` uses the process default.
 
     Returns:
-        A :class:`ResolveReviewResponse` naming the resolved review and
-        decision (`winner_id`/`loser_id` populated for `"merge"` only).
+        A :class:`ResolveReviewResponse` naming the resolved review and the decision;
+        `winner_id` and `loser_id` are populated for `"merge"` only.
 
     Raises:
-        PendingReviewNotFoundError: `review_id` doesn't exist, was already
-            resolved, or (merge only) references a node a prior merge
-            already deleted.
-        GraphWriteUnavailableError: no Graph Write Gateway is installed (HTTP 503); checked after
+        PendingReviewNotFoundError: `review_id` does not exist or was already resolved; or, for
+            a merge, it references a node that a prior merge already deleted (stale review, with
+            its own message). No write happens on either path, and an unknown review writes no
+            audit row.
+        GraphWriteUnavailableError: No Graph Write Gateway is installed (HTTP 503). Checked after
             the not-found check and before the opening audit row, so nothing was audited or
             resolved.
-        AuditTrailUnavailableError: the opening audit row could not be written; nothing was
+        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
             resolved.
+        CompanyMergePersistenceError: The graph write failed; the failure is audited and the
+            exception is re-raised unchanged.
+        redis.exceptions.RedisError: The graph is unreachable (when opening it or while
+            resolving); when it occurs during resolution the failure is audited and re-raised.
+
+    Side Effects:
+        After the review is found and before any write, records a `near_miss.resolve` audit row
+        with outcome `applied` (fail-closed). Writes the resolution to the graph through the
+        gateway, grouped under that audit row's event id. If the resolution then fails, records a
+        best-effort `failed` audit row carrying an enumerated `reason_code` and re-raises the
+        original exception. Emits one log entry (`resolve_near_miss`) with the outcome.
     """
     graph = dependencies.open_single_tenant_graph(config)
     record = dependencies.get_pending_review(graph, review_id)
     if record is None:
         raise PendingReviewNotFoundError(f"no unresolved PendingReview with id {review_id!r}")
-    # Issue #210: the resolution is written through the Graph Write Gateway, so with none installed
+    # The resolution is written through the Graph Write Gateway, so with none installed
     # it fails closed here -- after the not-found check (an unknown review is still a 404) and
     # before the opening audit row (nothing is audited for a resolution that cannot run).
     write_access = graph_write_access(config)
@@ -289,7 +255,7 @@ def run_resolve_near_miss(
     }
     if approval_id is not None:
         details["approval_id"] = approval_id
-    # The opening row's id anchors the resolution's graph group to the audit trail (issue #210).
+    # The opening row's id anchors the resolution's graph group to the audit trail.
     audit_event_id = record_opening_row_with_event_id(
         audit, target, component=_COMPONENT, details=details, emitter=emitter
     )
@@ -329,11 +295,11 @@ def run_resolve_near_miss(
 
 
 def _graph_write_target(gateway: GroupSubmitter, audit_event_id: str) -> GraphWriteTarget:
-    """Where the resolution's group goes: `policy_system`, under the opening row's audit event."""
+    """Build the write target: the `policy_system` graph, under the opening audit event."""
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         single_tenant_graph_name,
     )
-    from ps_service.company_merge.graph_submission import (  # noqa: PLC0415 -- M6, as above
+    from ps_service.company_merge.graph_submission import (  # noqa: PLC0415 -- function-local, as above
         GraphWriteTarget,
     )
 
@@ -347,7 +313,14 @@ def _resolve_or_raise_not_found(
     decision: Literal["keep-separate", "merge"],
     write_target: GraphWriteTarget,
 ) -> ResolveReviewResponse:
-    """Run `resolve_review`, translating its not-found/stale signals into API errors."""
+    """Run `resolve_review`, translating its not-found and stale signals into API errors.
+
+    Raises:
+        PendingReviewNotFoundError: `resolve_review` returned `None` (unknown or already resolved
+            review), or raised `StalePendingReviewError` (the merge's incoming or existing node no
+            longer exists; the stale error is chained as the cause).
+        CompanyMergePersistenceError: Propagated when the graph write fails.
+    """
     try:
         outcome = dependencies.resolve_review(graph, review_id, decision, write_target)
     except StalePendingReviewError as exc:
@@ -360,15 +333,17 @@ def _resolve_or_raise_not_found(
     return _to_resolve_response(outcome)
 
 
-# --- default wiring (M6 -- every company_merge import below is function-local) ---
+# --- default wiring (every company_merge import below is function-local) ---
 
 
 def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
-    """Open the single-tenant (``policy_system``) graph.
+    """Open the single-tenant (`policy_system`) graph from the service configuration.
 
-    Byte-for-byte copy of `ingestion_orchestration._open_single_tenant_graph`
-    (CHANGES.md M1) -- an independent copy, not a shared import, mirroring
-    this component's established "own copy per module" convention.
+    The import is function-local so `ps_service.main` stays independent of Company Merge at
+    import time.
+
+    Raises:
+        redis.exceptions.RedisError: FalkorDB cannot be reached.
     """
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         connect_from_config,
@@ -380,31 +355,17 @@ def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
 
 
 def build_default_near_miss_review_graph_opener() -> Callable[[ServiceConfig], GraphHandle]:
-    """Return the real single-tenant graph opener.
+    """Return the production single-tenant graph opener.
 
-    The *only* moving part `build_default_near_miss_review_dependencies` lets a
-    caller substitute (issue #163 Slice D) -- the true infra boundary (one
-    FalkorDB client construction, `_open_single_tenant_graph`), never the real
-    `list_pending_reviews`/`resolve_review` business logic sitting on top of
-    it. Extracted to its own top-level function (rather than inlined in
-    `build_default_near_miss_review_dependencies`) specifically so it is its
-    own, independently addressable module-level name: a caller-side
-    `monkeypatch.setattr("ps_service.api.near_miss_review_orchestration.
-    build_default_near_miss_review_graph_opener", ...)` substitutes the
-    opener alone, while `build_default_near_miss_review_dependencies` itself
-    -- called with no arguments -- still resolves this name at call time
-    (ordinary Python late-binding for a bare module-level call, mirroring
-    `ingestion_orchestration.build_default_graph_openers`'s own
-    issue #163 Slice C precedent) and so picks up the substitution
-    automatically, with zero change to its own call sites.
-    `docs/coding-standards/approved-mock-boundaries.yaml` lists this function
-    itself as the approved boundary -- not
-    `build_default_near_miss_review_dependencies`, which stays off that list
-    since it still bundles real business logic alongside this boundary.
+    This is the only part of the default dependencies a caller may substitute: the true
+    infrastructure boundary (one FalkorDB client construction), never the review listing and
+    resolution logic above it. It is a top-level function so it is addressable on its own: patching
+    this name replaces the opener alone, and
+    :func:`build_default_near_miss_review_dependencies` resolves it at call time and picks the
+    substitute up.
 
     Returns:
-        `_open_single_tenant_graph`, bound to the production single-tenant
-        FalkorDB graph opener.
+        The function that opens the `policy_system` graph for a service configuration.
     """
     return _open_single_tenant_graph
 
@@ -414,32 +375,17 @@ def build_default_near_miss_review_dependencies(
 ) -> NearMissReviewDependencies:
     """Wire the real `pending_review` functions into a `NearMissReviewDependencies`.
 
-    `ps_service.company_merge.pending_review` is imported **function-locally**
-    so that importing `ps_service.main` never transitively loads
-    `ps_service.company_merge` at module load (M6) -- mirrors
-    `build_default_restore_dependencies`/`build_default_pipeline_dependencies`
-    exactly.
-
-    issue #163 Slice D narrowed this factory's own DI seam:
-    `open_single_tenant_graph` is the *only* substitutable parameter. There
-    is deliberately no `list_pending_reviews`/`resolve_review` parameter any
-    more -- both are always the real, shipped `pending_review` functions,
-    unconditionally, with no way for a caller (test or otherwise) to
-    substitute fake business logic through this function's own signature.
-    `open_single_tenant_graph=None` (the default -- every production caller,
-    unchanged) resolves `build_default_near_miss_review_graph_opener()` at
-    call time, so a `monkeypatch.setattr` of *that* function (see its own
-    docstring) is picked up automatically even though this factory itself
-    is never patched.
+    `ps_service.company_merge.pending_review` is imported function-locally so importing
+    `ps_service.main` never loads Company Merge at module load. The review listing, lookup and
+    resolution are always the real functions; only the graph opener can be substituted.
 
     Args:
-        open_single_tenant_graph: The single-tenant graph opener to use, or
-            `None` (every production caller) to use the real one.
+        open_single_tenant_graph: The graph opener to use. `None` (the production default)
+            uses the one returned by :func:`build_default_near_miss_review_graph_opener`.
 
     Returns:
-        A :class:`NearMissReviewDependencies` bound to the production
-        `list_pending_reviews`/`resolve_review` and the given (or real)
-        single-tenant-graph opener.
+        A :class:`NearMissReviewDependencies` bound to the production `list_pending_reviews`,
+        `resolve_review` and `get_pending_review`, and to the given (or default) graph opener.
     """
     from ps_service.company_merge.pending_review import (  # noqa: PLC0415 -- function-local
         get_pending_review,

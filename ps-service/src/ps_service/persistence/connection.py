@@ -1,4 +1,4 @@
-"""PS state Postgres connection helper and connectivity probe (issue #130).
+"""PS state Postgres connection helper and connectivity probe.
 
 Shared by every component that persists to the PS state Postgres
 (`ps_service.audit`, `ps_service.authz`); none of them owns the connection
@@ -23,12 +23,25 @@ if TYPE_CHECKING:
 def connect_from_config(config: ServiceConfig) -> psycopg.Connection[TupleRow]:
     """Open a fresh `psycopg` connection from `config.state_postgres_*`.
 
-    Mirrors `ps_service.passkey_signing.store.connect_from_config`'s
-    per-call-connection idiom, with one deliberate divergence (PLAN.md
-    §0.11): raises `StatePostgresConnectionError` immediately when
-    `config.state_postgres_host` is `None`, without attempting a doomed
-    `psycopg.connect(host=None, ...)` call -- every state-store caller must
+    Each call opens its own connection; the caller owns it and must close it. When
+    `config.state_postgres_host` is `None` it raises immediately instead of attempting a
+    doomed `psycopg.connect(host=None, ...)` call, because every state-store caller must
     fail closed rather than silently no-op.
+
+    Args:
+        config: Process configuration; supplies host, port, database, user and password of
+            the PS state Postgres. `state_postgres_host` must not be `None`.
+
+    Returns:
+        An open connection with the default tuple row factory.
+
+    Raises:
+        StatePostgresConnectionError: `config.state_postgres_host` is `None`.
+        psycopg.OperationalError: the instance is configured but the connection fails
+            (propagated from `psycopg.connect`).
+
+    Side Effects:
+        Opens one network connection to the PS state Postgres.
     """
     if config.state_postgres_host is None:
         raise StatePostgresConnectionError(
@@ -45,19 +58,26 @@ def connect_from_config(config: ServiceConfig) -> psycopg.Connection[TupleRow]:
 
 
 def check_connectivity_from_config(config: ServiceConfig) -> None:
-    """Probe the PS state Postgres instance.
+    """Probe the PS state Postgres instance with a `SELECT 1` round trip.
 
-    Unlike `ps_service.passkey_signing.store.check_connectivity_from_config`
-    (a no-op when unconfigured), an unconfigured PS state Postgres is treated
-    as unreachable too (PLAN.md §0.11/§2.2): every role-gated action must
-    fail closed when this store cannot be reached, so "unconfigured" is not
-    a healthy "not applicable" state here -- it is the store being down.
+    An unconfigured PS state Postgres is treated as unreachable too: every role-gated action
+    must fail closed when this store cannot be reached, so "unconfigured" is not a healthy
+    "not applicable" state here -- it is the store being down.
+
+    Args:
+        config: Process configuration supplying the PS state Postgres coordinates.
+
+    Returns:
+        None; returning normally means the round trip succeeded.
 
     Raises:
-        StatePostgresConnectionError: unconfigured, or configured but
-            unreachable (connection failure or the round-trip query itself
-            fails); the outcome is also recorded in
-            `ps_service.dependency_health`.
+        StatePostgresConnectionError: unconfigured, or configured but unreachable (connection
+            failure or the round-trip query itself fails). A driver failure is chained via
+            `from`.
+
+    Side Effects:
+        Opens and closes one connection, and records the outcome in
+        `ps_service.dependency_health` (healthy on success, unhealthy on failure).
     """
     try:
         with connect_from_config(config) as conn, conn.cursor() as cur:

@@ -1,8 +1,8 @@
-"""ps_service.query_engine -- package front door.
+"""Query Engine: read-only Cypher execution against the compliance graph.
 
-Re-exports the public surface per PLAN_REVIEWED.md §2.5, now that
-`cypher_query.py` (Batch 3) has landed alongside `models.py`/`errors.py`
-(Batch 1).
+Re-exports the public surface: `execute_cypher_query` (guards, bounds and runs a read-only
+query), its `QueryResult` envelope, and the three errors it raises
+(`WriteClauseRejectedError`, `GraphUnseededError`, `QueryEngineExecutionError`).
 """
 
 from __future__ import annotations

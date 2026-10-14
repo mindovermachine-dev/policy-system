@@ -1,11 +1,9 @@
-"""ps_service.passkey_signing core types (issue #131, PLAN.md §1.1).
+"""Row types returned by the passkey-signing stores.
 
-`PendingApprovalRow` mirrors the `pending_approvals` table column-for-column.
-A plain frozen dataclass, not a Pydantic model: this shape never crosses a
-REST/MCP request/response boundary directly today -- it is
-`PendingApprovalStore`'s own return type. Mirrors `ps_service.company_merge.
-models`'s own "plain frozen dataclass, not LLM-boundary Pydantic" convention
-(that module's docstring).
+`PendingApprovalRow` mirrors the `pending_approvals` table and `SigningCredentialRow` mirrors the
+`signing_credentials` table, column for column. Both are plain frozen dataclasses rather than
+Pydantic models: they are the stores' own return types and never cross a REST or MCP request or
+response boundary directly.
 """
 
 from __future__ import annotations
@@ -20,14 +18,28 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class PendingApprovalRow:
-    """One row of the `pending_approvals` table (PLAN.md §1.1).
+    """One privileged action awaiting, or having received, its approver's passkey signature.
 
-    `code_hash`/`nonce` are raw bytes (`sha256` digest / `secrets.token_bytes`
-    output respectively) -- the raw, unhashed capability code itself is never
-    part of this shape (L1 "Never log secrets, tokens"); it is returned
-    alongside a freshly-created row only by
-    `PendingApprovalStore.create_pending_approval`, as a separate return
-    value, never persisted.
+    The raw capability code is never part of this shape: only its hash is stored. The code is
+    returned once, separately, by `PendingApprovalStore.create_pending_approval` and is never
+    persisted.
+
+    Attributes:
+        id: Unique approval id; the `{id}` segment of the approval link.
+        code_hash: SHA-256 digest of the capability code (raw bytes).
+        tool_name: Name of the privileged tool the approval authorises.
+        normalized_args: The tool's arguments in canonical form; they are bound into the
+            signing challenge.
+        actor_subject: Identity subject of the principal who must sign.
+        actor_issuer: Identity issuer of that principal.
+        nonce: Random bytes (`secrets.token_bytes`) that make the signing challenge unique
+            per approval.
+        display_summary: Human-readable description of the action shown to the approver.
+        status: `pending` until a verified signature consumes the approval, then `signed`.
+        outcome: Result of running the action after signing (winner and loser ids, an
+            `error` message, or an executor's result); `None` until recorded.
+        created_at: When the approval was created (timezone-aware).
+        expires_at: When the approval stops being usable (timezone-aware).
     """
 
     id: str
@@ -46,14 +58,26 @@ class PendingApprovalRow:
 
 @dataclass(frozen=True, slots=True)
 class SigningCredentialRow:
-    """One row of the `signing_credentials` table (PLAN.md §1.2, issue #131 Slice 2).
+    """One WebAuthn authenticator an actor has enrolled with this service's signing relying party.
 
-    One row per WebAuthn authenticator an actor has enrolled with PS
-    Service's own transaction-signing relying party (never Authentik's
-    login-time WebAuthn, PLAN.md §0.3). `public_key` is the COSE public key
-    (`credential_public_key` from `webauthn.verify_registration_response`'s
-    result) -- no private key, no biometric data, no attestation blob is
-    ever part of this shape (AC-BI-007).
+    The relying party is the service's own, separate from the identity provider's login-time
+    WebAuthn. Only public material is held: no private key, biometric data or attestation blob
+    is part of this shape.
+
+    Attributes:
+        id: Unique row id.
+        actor_subject: Identity subject of the principal who owns the credential.
+        actor_issuer: Identity issuer of that principal.
+        credential_id: The authenticator's credential id (raw bytes); unique across rows.
+        public_key: The COSE public key from the verified registration (raw bytes).
+        sign_count: Last signature counter reported by the authenticator; a later assertion
+            must report a higher value.
+        created_at: When the credential was enrolled (timezone-aware).
+        rp_id: The WebAuthn relying-party id (host without port) the credential was enrolled
+            under. A credential only works for the `rp_id` that created it, so this scopes
+            enrolment checks and allowed credentials to the host the browser is on. `None` for a
+            row stored before the column existed: its host is unprovable, so it is never offered
+            for signing and never counts as enrolment.
     """
 
     id: str
@@ -64,10 +88,4 @@ class SigningCredentialRow:
     sign_count: int
     created_at: datetime
     rp_id: str | None = None
-    """The WebAuthn `rp_id` this credential was enrolled under (issue #196).
-
-    A credential only works for the RP id that created it, so this scopes
-    `needs_enrollment`/`allowCredentials` to the host the browser is actually
-    on. `None` for a row written before the column existed: unprovable, so
-    never offered and never enrollment-suppressing (AC-BI-015).
-    """
+    """The relying-party id the credential was enrolled under; `None` when unknown."""

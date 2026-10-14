@@ -1,4 +1,4 @@
-"""ps_service.llm_interface.completion — the RouteCompletion action."""
+"""Chat completion routing for `ps_service.llm_interface`: `route_completion`."""
 
 from __future__ import annotations
 
@@ -29,7 +29,34 @@ def route_completion(
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> CompletionResult:
-    """RouteCompletion: route a chat completion to the configured LLM Provider via LiteLLM."""
+    """Send a chat conversation to the configured LLM Provider and return the reply text.
+
+    Args:
+        messages: Conversation so far, oldest first. Each `ChatMessage` already enforces a
+            valid role and non-empty content; the list itself should be non-empty.
+        model: Provider-qualified model identifier, for example `"azure/<deployment>"`.
+        timeout: Maximum seconds to wait for the provider; must be positive. Defaults to 60.
+        call_completion: Transport to call instead of LiteLLM, for tests or alternative
+            providers. None selects `default_completion_caller`.
+        emitter: Log emitter for the call's log entry. None uses the process default emitter.
+
+    Returns:
+        A `CompletionResult` holding the first choice's text and the model id the provider
+        reported serving (falling back to `model` when the provider reports none).
+
+    Raises:
+        LlmProviderError: The provider call failed (`openai.OpenAIError` from the transport,
+            kept as `__cause__`), or the response had no choices or empty text.
+        LoggingLifecycleError: `emitter` is None and no process default emitter has been
+            configured (raised while logging the outcome).
+
+    Side Effects:
+        Makes one network call to the LLM Provider. Marks the `llm_interface` dependency
+        unhealthy on a provider error and healthy otherwise (an empty or malformed response
+        still counts as reachable). Emits one log entry (`success` or `error`) carrying the
+        model id and duration, never message content; an empty or malformed response raises
+        without a log entry.
+    """
     caller = call_completion if call_completion is not None else default_completion_caller
     payload = [{"role": m.role, "content": m.content} for m in messages]
     started = time.perf_counter()
@@ -52,9 +79,17 @@ def route_completion(
 
 
 def _to_completion_result(response: ModelResponse, *, model: str) -> CompletionResult:
-    """Build a `CompletionResult` from a provider `ModelResponse`.
+    """Build a `CompletionResult` from a provider response.
 
-    Raises `LlmProviderError` for an unexpected/empty shape.
+    Args:
+        response: The provider's non-streaming chat response.
+        model: Requested model id, used when the response does not name the served model.
+
+    Returns:
+        A `CompletionResult` with the first choice's text and the served model id.
+
+    Raises:
+        LlmProviderError: The response has no choices, or the first choice's text is empty.
     """
     if not response.choices:
         raise LlmProviderError(f"provider returned no choices for model {model!r}")

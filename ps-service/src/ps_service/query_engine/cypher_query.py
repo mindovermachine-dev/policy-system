@@ -1,53 +1,19 @@
-"""`ExecuteCypherQuery` -- the guard/execution core.
+"""`execute_cypher_query`: the guard and execution core of the Query Engine.
 
-Batch 3 / Increments 3-5 scope (PLAN_REVIEWED.md §5): the write-clause guard
-(`is_write_clause`, `_WRITE_CLAUSE_REJECTION_MESSAGE`) and `execute_cypher_query`'s
-AC-001 success-path shape mapping and AC-002 rejection behavior, plus wrapping
-any `graph.query` failure as `QueryEngineExecutionError`.
+A query passes three gates before its result is returned: a textual write-clause guard
+(`is_write_clause`) that rejects mutating Cypher before any graph call, a cheap `count(n)`
+seed check that raises `GraphUnseededError` for a graph with no content (so an unseeded graph
+is distinguishable from a seeded graph's legitimate zero-row answer), and the caller's own
+query, run with a server-side timeout. Rows are then cut to the caller's row cap in Python,
+after the database has returned them, never by a `LIMIT` clause or FalkorDB's instance-wide
+`RESULTSET_SIZE` setting (which would affect other components sharing the instance);
+`QueryResult.truncated` is the only signal that more rows existed.
 
-Batch 4 / Increment 6 (PLAN_REVIEWED.md §2.4, §4 AC-004): structured logging
-is wired in via `_log`, called on every branch (rejected/failed/succeeded).
-Mirrors `ps_service/llm_interface/completion.py`'s `route_completion` shape
-(a single infra call, try/except, `outcome=`, `duration_ms` via
-`time.perf_counter()`) -- deliberately deviating from that precedent's own
-`extra={"model": ...}` by never logging the raw query text: an arbitrary
-caller-supplied Cypher query can embed values that may carry PII (L1:
-"never log secrets, tokens, or personally identifiable information").
-`_log`'s `extra` therefore carries only `row_count`, and only on success.
-
-Batch 8 (PLAN.md D11, AC-BI-013/AC-BI-014/AC-BI-015): `_is_graph_seeded`
-issues one cheap, generic, label-agnostic `count(n)` read -- ordered after
-the (cheap, no-I/O) write-clause guard above and before the caller's own
-query is ever sent to FalkorDB -- so a totally unseeded graph raises
-`GraphUnseededError` (a new `outcome="unseeded"` log branch) instead of
-running the caller's query at all. A seeded graph's own legitimate
-zero-row answer is unaffected: it still reaches the normal
-`{columns, rows: [], row_count: 0}` shape via the existing success path
-below.
-
-Issue #38, Slice 2 (PLAN.md §4 S2, D1/D2): `execute_cypher_query` now
-requires `timeout_ms`/`row_cap` keyword-only arguments (D4 -- no default,
-so a caller that forgets to pass them fails loudly rather than silently
-reintroducing an unbounded query). `timeout_ms` is forwarded as
-`graph.query(query, timeout=timeout_ms)`'s native `timeout=` kwarg on the
-caller's own query only -- never on `_is_graph_seeded`'s own separate,
-fixed, cheap `graph.query` call (D1). FalkorDB has no dedicated timeout
-exception type (PLAN.md §2.5), so `_classify_execution_failure` inspects
-the raised exception's own message for a timeout-shaped substring to pick
-`outcome="timeout"` vs. `outcome="failed"` on the log entry -- the
-classification never changes what is raised back to the caller (D2).
-`row_cap` is accepted here but not yet load-bearing -- Slice 3 adds the
-post-hoc Python-side truncation.
-
-Issue #38, Slice 3 (PLAN.md §4 S3, D1): once `graph.query()` returns
-successfully, `rows` is sliced to `rows[:row_cap]` in pure Python --
-strictly *after* FalkorDB has already computed and returned every row, and
-never via a `LIMIT` clause or FalkorDB's global `GRAPH.CONFIG SET
-RESULTSET_SIZE` (AC-BI-007 -- instance-wide, would affect other components
-sharing the same FalkorDB instance). `row_count` reflects the post-slice
-(returned) count; `QueryResult.truncated` is the only signal that more rows
-existed (AC-BI-006). A query that times out or otherwise raises never
-reaches this step at all.
+Every call logs one structured entry (`rejected`, `unseeded`, `failed`, `timeout` or
+`succeeded`) carrying the bound run id, the duration and, on success, the row count. The raw
+query text is never logged: an arbitrary caller-supplied query can embed values that carry
+personal data. FalkorDB has no dedicated timeout exception, so a failure whose message contains
+"timed out" is logged as `timeout`; the exception raised to the caller is the same either way.
 """
 
 from __future__ import annotations
@@ -72,7 +38,7 @@ _COMPONENT = "query_engine"
 _ACTION = "execute_cypher_query"
 
 # Cypher clauses that mutate the graph. Best-effort textual guard, not a
-# security boundary. Single-sourced here; not duplicated anywhere else.
+# security boundary (the read-only graph handle is). Single-sourced here.
 _WRITE_CLAUSE = re.compile(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|FOREACH)\b", re.IGNORECASE)
 
 _WRITE_CLAUSE_REJECTION_MESSAGE = (
@@ -80,24 +46,28 @@ _WRITE_CLAUSE_REJECTION_MESSAGE = (
     "(CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH). Not executed."
 )  # returned to the caller verbatim, prefixed with "error: "
 
-# D11: one cheap, generic, label-agnostic read -- no label appears in this
-# query at all, so L2 Query Safety's label-interpolation allow-list rule
-# does not apply here.
+# One cheap, generic, label-agnostic read: no label appears in this query at all, so the
+# label-interpolation allow-list rule does not apply here.
 _SEED_CHECK_QUERY = "MATCH (n) RETURN count(n) AS c LIMIT 1"
 
 _GRAPH_UNSEEDED_DETAIL = "the policy graph has no seeded content yet"
 # returned to the caller verbatim, prefixed with "error: " -- a fixed,
-# sanitized string carrying no host/port/path detail (AC-BI-015), mirroring
-# mcp_interface.mcp_server._GRAPH_UNAVAILABLE_DETAIL's convention.
+# sanitized string carrying no host/port/path detail.
 
 
 def is_write_clause(query: str) -> bool:
-    """Return True if `query` contains a write clause.
+    """Report whether `query` contains a Cypher write clause.
 
-    Single source of truth for the AC-002 check -- the boundary every
-    caller goes through, including `mcp_interface`'s in-process
-    `handle_mcp_tool_call`. One call site (`execute_cypher_query`);
-    exported, not duplicated as a second regex.
+    The single textual write check, used by `execute_cypher_query` for every caller. It is a
+    best-effort guard: it matches the keywords CREATE, MERGE, DELETE, SET, REMOVE, DROP and
+    FOREACH case-insensitively as whole words anywhere in the text, so it can also reject a
+    read query that merely contains such a word (for example in a string literal).
+
+    Args:
+        query: Cypher query text.
+
+    Returns:
+        `True` when a write keyword is present, otherwise `False`.
     """
     return bool(_WRITE_CLAUSE.search(query))
 
@@ -107,9 +77,9 @@ def _is_graph_seeded(graph: GraphHandle) -> bool:
 
     Issues `_SEED_CHECK_QUERY` -- one cheap, generic, label-agnostic read --
     so `execute_cypher_query` can raise `GraphUnseededError` before the
-    caller's own query is ever sent to FalkorDB (D11). An empty result set
+    caller's own query is ever sent to FalkorDB. An empty result set
     is treated as unseeded defensively; a real `count(n)` aggregate always
-    returns exactly one row.
+    returns exactly one row. Any exception from `graph.query` propagates.
     """
     result = graph.query(_SEED_CHECK_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -122,7 +92,7 @@ def _is_graph_seeded(graph: GraphHandle) -> bool:
 def _classify_execution_failure(exc: Exception) -> Literal["timeout", "failed"]:
     """Classify a `graph.query` failure as `"timeout"` or `"failed"` for logging only.
 
-    D2: FalkorDB gives no dedicated timeout exception type, so this is a
+    FalkorDB gives no dedicated timeout exception type, so this is a
     best-effort message-substring check (`"timed out"`, case-insensitive)
     against the exception's own server-emitted text -- never the caller's
     query text. Only ever changes the log entry's `outcome`; the exception
@@ -157,17 +127,13 @@ class _EdgeLike(Protocol):
 def _to_jsonable(value: object) -> object:
     """Recursively convert a raw FalkorDB result value into a JSON-serializable shape.
 
-    A freehand `RETURN r`/`RETURN r, rel` (whole node/relationship, not a
-    projected property) is a normal, expected shape for genuinely ad hoc
-    Cypher (see `ps-qna`'s freehand-retrieval design) -- `graph.query` hands
-    those back as raw `falkordb.Node`/`Edge` driver objects, neither of which
-    the MCP SDK's tool-result encoder can serialize. Confirmed empirically:
-    an un-converted `Node` in a returned row raised `ToolError: Unable to
-    serialize unknown type: <class 'falkordb.node.Node'>` all the way out to
-    the caller, bypassing `handle_mcp_tool_call`'s own `error: ...` string
-    contract entirely. Lists (e.g. a returned path's node/edge sequence) are
-    converted element-wise; every other value (str, int, float, bool, None,
-    already-plain dict) passes through unchanged.
+    A freehand `RETURN r`/`RETURN r, rel` (whole node/relationship, not a projected property)
+    is a normal shape for ad hoc Cypher; `graph.query` hands those back as raw driver
+    node/edge objects, which a JSON tool-result encoder cannot serialize. A node becomes a dict
+    with `id`, `labels` and `properties`; an edge a dict with `id`, `relation`, `properties`
+    and its converted `src_node`/`dest_node`. Lists (for example a path's node/edge sequence)
+    are converted element-wise; every other value (str, int, float, bool, None, plain dict)
+    passes through unchanged.
     """
     if isinstance(value, _NodeLike):
         return {
@@ -198,56 +164,44 @@ def execute_cypher_query(
     row_cap: int,
     params: dict[str, object] | None = None,
 ) -> QueryResult:
-    """ExecuteCypherQuery: execute a read-only Cypher query against `graph`.
+    """Execute a read-only Cypher query against `graph` and return a bounded result.
 
-    Rejects any query containing a write clause by raising
-    `WriteClauseRejectedError` BEFORE `graph.query` is ever called (AC-002),
-    via the shared `is_write_clause` helper.
+    The query is rejected if it contains a write clause (see `is_write_clause`); a graph with
+    no content at all is reported as unseeded instead of running the query, so it is
+    distinguishable from a seeded graph's own legitimate zero-row answer. Rows are cut to
+    `row_cap` in Python after the database has returned them, never via a `LIMIT` clause or
+    FalkorDB's instance-wide `RESULTSET_SIZE` setting.
 
-    Otherwise, checks `_is_graph_seeded(graph)` -- one cheap `count(n)` read
-    -- and raises `GraphUnseededError` if the graph has no content at all,
-    BEFORE the caller's own query is ever sent (D11, AC-BI-013/AC-BI-014).
-    This makes a totally unseeded graph distinguishable from a seeded
-    graph's own legitimate zero-row answer, which still reaches the normal
-    success shape below unaffected.
+    Args:
+        query: Cypher query text. Must not contain a write keyword.
+        graph: Read-only graph handle to run against.
+        emitter: Log emitter for the outcome entry; `None` uses the process default emitter.
+        principal: Opaque caller identity attached to the log entry on every outcome; omitted
+            from the entry when `None`. This layer never decides who the principal is.
+        timeout_ms: Server-side time limit in milliseconds for the caller's query only (not
+            the seed check). Required, so a caller cannot run an unbounded query by omission.
+        row_cap: Maximum number of rows returned; rows beyond it are dropped.
+        params: Values bound to the query's `$name` parameters, passed to the database's
+            native `params` argument. Callers with client-supplied values must use this
+            instead of interpolating into `query`. `None` binds nothing.
 
-    Any exception from the seed check or from `graph.query` itself is
-    caught and re-raised as `QueryEngineExecutionError`, preserving the
-    original message verbatim.
+    Returns:
+        A `QueryResult` with column names, at most `row_cap` JSON-serializable rows,
+        `row_count` of the returned rows and `truncated` set when rows were dropped.
 
-    With a `run_id` bound via `bind_run_context`, emits one structured log
-    entry per call, `outcome="succeeded"`/`"rejected"`/`"unseeded"`/
-    `"failed"`, carrying the bound `run_id` (AC-004). Never logs the raw
-    query text -- see the module docstring.
+    Raises:
+        WriteClauseRejectedError: `query` contains a write clause; nothing was sent to the
+            graph.
+        GraphUnseededError: the graph has no nodes; the caller's query was not run.
+        QueryEngineExecutionError: the seed check or the query raised (including a server-side
+            timeout); the message is the original exception's text and the cause is chained.
+        LoggingLifecycleError: no `emitter` was given and no default emitter is configured.
 
-    `principal` is an opaque caller identity string (issue #67), attached to
-    the log entry when given (on every branch, not only success) and omitted
-    entirely when `None` (the default) -- groundwork for AC-BI-008; this
-    layer never decides who the principal is, it only threads what it's
-    given.
-
-    `timeout_ms` (issue #38, AC-BI-004) is forwarded to `graph.query` as its
-    native `timeout=` kwarg for the caller's own query, so FalkorDB aborts
-    the query server-side once it runs longer than this many milliseconds
-    (D1) -- required, no default, so a caller can never accidentally run an
-    unbounded query by omission. A timeout-shaped failure is still wrapped
-    as `QueryEngineExecutionError` like any other failure (AC-BI-005), but
-    logged with `outcome="timeout"` instead of `outcome="failed"` (D2,
-    AC-BI-009). `row_cap` (issue #38, AC-BI-006/AC-BI-007) bounds the number
-    of rows returned: once `graph.query` returns successfully, `rows` is
-    sliced to its first `row_cap` entries in pure Python -- never via a
-    `LIMIT` clause or FalkorDB's global `RESULTSET_SIZE` config -- and
-    `QueryResult.truncated` reports whether that slice actually shortened
-    the result.
-
-    `params` (issue #139, D2/D3) threads straight through to `graph.query`'s
-    own native `params=` kwarg -- the single parameterization channel every
-    caller with client-supplied values (e.g. `check_instrument_ingestion_status`'s
-    `celex_ids`) must use instead of string-interpolating into `query`
-    (L2 Query Safety: "Parameterize Cypher queries: pass values via
-    `params={...}`"). Omitted entirely (`None`, the default) for a caller
-    with no values to bind, e.g. `cypher`'s own freehand queries --
-    unaffected, fully backward compatible with every existing call site.
+    Side Effects:
+        Sends one seed-check read and, if seeded, the caller's read to the graph, and emits one
+        log entry with outcome `succeeded`, `rejected`, `unseeded`, `failed` or `timeout`,
+        carrying the bound run id, duration, `principal` and (on success) the row count. The
+        query text is never logged.
     """
     started = time.perf_counter()
     if is_write_clause(query):
@@ -297,19 +251,15 @@ def _log(
     row_count: int | None = None,
     principal: str | None = None,
 ) -> None:
-    """Emit one `LogEntry` for a completed `execute_cypher_query` call.
+    """Emit one log entry for a completed `execute_cypher_query` call.
 
-    Never logs the query text -- `extra` carries only `row_count` (success
-    only) and `principal` (issue #67, any branch), each added only when not
-    `None` (S1/§0.5 PII-safety deviation from `route_completion`'s own
-    `extra={"model": ...}` precedent). `run_id` is never passed explicitly,
-    so `emit_log_entry` auto-bakes the currently bound run context -- the
-    mechanism AC-004 relies on.
+    Never logs the query text: `extra` carries only `row_count` (success only) and `principal`
+    (any outcome), each added only when not `None`. `run_id` is never passed explicitly, so
+    `emit_log_entry` bakes in the currently bound run context.
 
-    `outcome` is always one of a small closed vocabulary:
-    `"succeeded"`/`"rejected"`/`"unseeded"`/`"failed"`/`"timeout"` (issue
-    #38, AC-BI-009) -- never free text, and never the raw exception message
-    that `_classify_execution_failure` inspected to pick `"timeout"`.
+    `outcome` is always one of a small closed vocabulary: `"succeeded"`, `"rejected"`,
+    `"unseeded"`, `"failed"` or `"timeout"` -- never free text, and never the raw exception
+    message that `_classify_execution_failure` inspected to pick `"timeout"`.
     """
     duration_ms = (time.perf_counter() - started) * 1000
     extra: dict[str, object] = {}

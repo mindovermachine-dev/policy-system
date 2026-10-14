@@ -1,4 +1,11 @@
-"""Public API for ps_service.llm_interface (completion, structured completion, embedding)."""
+"""Public API for `ps_service.llm_interface`.
+
+Purpose: the single gateway through which PS Service calls its configured LLM Provider
+(via LiteLLM) for chat completion, schema-constrained completion and embedding, with
+health recording and structured logging applied uniformly. It exports the three routing
+functions, the startup readiness probe, the injectable transport seams and their defaults,
+the request/result records and the two error types.
+"""
 
 from ps_service.llm_interface.client import (
     CompletionCaller,

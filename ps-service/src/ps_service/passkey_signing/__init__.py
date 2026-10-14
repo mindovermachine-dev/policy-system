@@ -1,19 +1,22 @@
-"""ps_service.passkey_signing -- package front door (issue #131).
+"""Passkey signing: WebAuthn-signed approval of privileged actions, with its own Postgres stores.
 
-PS Service's own, independent WebAuthn relying party for transaction-signing
-(distinct from Authentik's login-time WebAuthn, PLAN.md §0.3), plus its own
-PostgreSQL-backed store for pending-approval records and enrolled signing
-credentials. Domain path: `ps.service.passkeysigning`
-(`docs/architecture/ps-service-container-architecture.md`).
+The service acts as its own WebAuthn relying party for transaction signing, separate from the
+identity provider's login-time WebAuthn. A privileged action is parked as a pending approval; the
+approver signs it with a passkey in a companion browser; only then does the action run. Domain
+path: `ps.service.passkeysigning` (`docs/architecture/ps-service-container-architecture.md`).
 
-This slice ships the data layer only: `PendingApprovalRow`/
-`PendingApprovalStore`/`PsycopgPendingApprovalStore` and the hand-rolled
-migration runner. The WebAuthn relying party and the MCP/REST tool wiring
-land in later slices (PLAN.md §4).
+Public surface re-exported here:
+    Row types: `PendingApprovalRow`, `SigningCredentialRow`.
+    Stores: `PendingApprovalStore` and `SigningCredentialStore` (the protocols callers depend
+        on) and their Postgres implementations `PsycopgPendingApprovalStore` and
+        `PsycopgSigningCredentialStore`.
+    Connection helpers: `connect_from_config` opens a fresh connection from the service
+        configuration; `check_connectivity_from_config` probes it for readiness.
+    Errors: `PendingApprovalPersistenceError`, `SigningCredentialPersistenceError`,
+        `PasskeySigningPostgresConnectionError`, `MigrationApplyError`.
 
-Re-exports the store front door and its domain-specific errors, matching the
-`ps_service.curated_source`/`ps_service.restore` package front doors' own
-re-export convention.
+The HTTP ceremony lives in `ps_service.passkey_signing.router`, the WebAuthn helpers in
+`webauthn_rp`, and the executor registries in `executors`; none of those is re-exported here.
 """
 
 from __future__ import annotations

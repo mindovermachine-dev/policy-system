@@ -1,11 +1,12 @@
-"""Process-wide entry point for the Logging component's public actions.
+"""Process-wide entry point for emitting log entries.
 
-`bind_run_context`/`current_run_id` live in run_context.py directly (no
-process state needed). This module owns the one piece of process-wide state
-the component has: the default `LogEmitter` that `configure()` installs (L2:
-"a process-wide default emitter is acceptable as infrastructure, but every
-test must be able to substitute its own `LogEmitter`" — which `emit_log_entry`'s
-`emitter=` parameter provides).
+Purpose: own the one piece of process-wide state in the logging component, the default
+`LogEmitter` that `configure()` installs, and expose `emit_log_entry` to write through it.
+A process-wide default is acceptable infrastructure, and every test can substitute its own
+emitter through `emit_log_entry`'s `emitter` parameter. Run-id binding needs no process state
+and lives in `ps_service.logging.run_context`.
+
+Thread safety: the default emitter reference is guarded by a lock.
 """
 
 from __future__ import annotations
@@ -25,30 +26,42 @@ from ps_service.logging.run_context import current_run_id
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-_LOGGING_DIR_ENV_VAR = "PS_LOGGING_DIR"  # L2 env naming: PS_<COMPONENT>_<SETTING>
+_LOGGING_DIR_ENV_VAR = "PS_LOGGING_DIR"
 _DEFAULT_LOG_DIRNAME = "logs"
 _DEFAULT_LOG_FILENAME = "ps-service.jsonl"
 
-_lock = threading.Lock()  # guards _default_emitter and _atexit_registered (M13 fix)
+_lock = threading.Lock()  # guards _default_emitter and _atexit_registered
 _default_emitter: LogEmitter | None = None
 _atexit_registered = False
 
 
 def resolve_default_log_path(*, repo_root: Path | None = None) -> Path:
-    """Resolve the default EmitLogEntry sink (AC#5, D3, M12 fix).
+    """Resolve the default log file path and create its directory.
 
-    `PS_LOGGING_DIR` overrides the *directory*; the filename is always the
-    fixed default `ps-service.jsonl` (M12: PLAN.md defined no default
-    filename). Creates the directory eagerly — fail-fast (L1) — because this
-    function is only called from `configure()`'s process-default path, a
-    legitimate startup boundary; it is NOT used by `LogEmitter`/`emitter.py`
-    directly, which must stay silent-fallback-on-failure for an arbitrary
-    injected path (AC#6 — see emitter.py `_append_line`). Also enforces that
-    the resolved file stays inside the resolved directory (M12's
-    "containment guard"): with today's fixed filename constant this can
-    never actually trip, but it is the second validation layer L1 mandates
-    for file paths, guarding the invariant if the filename is ever made
-    configurable.
+    The directory is `PS_LOGGING_DIR` when that variable is set and non-empty (with `~`
+    expanded), otherwise a `logs` directory under the repository root. The file name is
+    always `ps-service.jsonl`. The directory is created eagerly so a misconfiguration fails
+    at startup; `LogEmitter` itself never calls this function and instead falls back silently
+    when an injected path cannot be written. The function also checks that the resolved file
+    stays inside the resolved directory. With the fixed file name this cannot fail today; it
+    guards the invariant if the name is ever made configurable.
+
+    Args:
+        repo_root: Directory to treat as the repository root for the default `logs`
+            location. None searches upward from this module for the nearest ancestor holding
+            a `.git` directory. Ignored when `PS_LOGGING_DIR` is set.
+
+    Returns:
+        The absolute, resolved path of the log file.
+
+    Raises:
+        LoggingConfigurationError: No repository root could be found (only when `repo_root`
+            is None), the log directory cannot be created, or the resolved file path escapes
+            the directory.
+
+    Side Effects:
+        Reads the `PS_LOGGING_DIR` environment variable and creates the log directory
+        (including parents) if absent.
     """
     base = repo_root if repo_root is not None else _find_repo_root(Path(__file__))
     override = os.environ.get(_LOGGING_DIR_ENV_VAR)
@@ -70,7 +83,17 @@ def resolve_default_log_path(*, repo_root: Path | None = None) -> Path:
 
 
 def _find_repo_root(start: Path) -> Path:
-    """Walk upward from `start` to the nearest ancestor containing a `.git` directory."""
+    """Find the nearest ancestor of `start` (or `start` itself) containing a `.git` directory.
+
+    Args:
+        start: Path to begin the upward search from.
+
+    Returns:
+        The first directory on the way up that contains a `.git` directory.
+
+    Raises:
+        LoggingConfigurationError: No such ancestor exists.
+    """
     for candidate in (start, *start.parents):
         if (candidate / ".git").is_dir():
             return candidate
@@ -85,19 +108,35 @@ def configure(
     fallback: TextSink | None = None,
     mirror_failures_to_stderr: bool = False,
 ) -> LogEmitter:
-    """Repoint the process-wide default emitter, stopping the previous one after install.
+    """Install a new process-wide default emitter and stop the previous one.
 
-    `log_path=None` resolves the default via `resolve_default_log_path()`
-    (AC#5). Registers an `atexit` drain hook exactly once per process (D9),
-    so any entries still queued at normal interpreter exit are flushed.
-    **Residual limitation, accepted for this walking skeleton (M7):** a hard
-    kill (`SIGKILL`, `os._exit`, a segfault) bypasses `atexit` entirely — no
-    daemon thread can survive that — so entries queued at that instant are
-    lost. Multi-process/durable delivery is explicitly "under exploration"
-    in the architecture doc and out of scope here.
+    The new emitter is installed before the previous one is stopped, so entries emitted
+    meanwhile go to the new one. An `atexit` hook that flushes the default emitter is
+    registered once per process, so entries still queued at normal interpreter exit are
+    written. Known limitation: a hard kill (`SIGKILL`, `os._exit`, a crash) bypasses `atexit`
+    and loses entries queued at that instant; durable or multi-process delivery is not
+    provided.
 
-    `mirror_failures_to_stderr=True` also writes every `outcome == "failed"` entry to stderr
-    (issue #227), so a failure cause is visible to `kubectl logs`.
+    Args:
+        log_path: File to append JSON lines to. None resolves the default through
+            `resolve_default_log_path()`.
+        fallback: Sink that receives a line the emitter cannot write to the log file. None
+            resolves `sys.stderr` at failure time.
+        mirror_failures_to_stderr: When True, every entry whose outcome is `"failed"` is also
+            written to the fallback sink (stderr by default), so a failure cause is visible
+            in container logs even though the log file is not.
+
+    Returns:
+        The newly installed `LogEmitter`.
+
+    Raises:
+        LoggingConfigurationError: `log_path` is None and the default path cannot be resolved
+            or its directory cannot be created.
+
+    Side Effects:
+        Starts a daemon writer thread for the new emitter, replaces the process default,
+        registers the `atexit` hook on first call, and stops the previous emitter (draining
+        its queue and waiting up to its stop timeout). May create the default log directory.
     """
     global _default_emitter, _atexit_registered  # noqa: PLW0603 — module-level default emitter is the documented facade singleton (see module docstring)
     resolved_path = log_path if log_path is not None else resolve_default_log_path()
@@ -120,7 +159,14 @@ def configure(
 
 
 def _drain_default_emitter_at_exit() -> None:
-    """`atexit` hook (D9): best-effort flush of the default emitter's queue."""
+    """Flush the default emitter's queue at interpreter exit, on a best-effort basis.
+
+    Does nothing when no default emitter is installed. A flush timeout is swallowed because
+    the interpreter is shutting down and nothing further can be done.
+
+    Side Effects:
+        Blocks up to five seconds while the writer thread drains queued entries.
+    """
     with _lock:
         emitter = _default_emitter
     if emitter is not None:
@@ -131,15 +177,20 @@ def _drain_default_emitter_at_exit() -> None:
 
 
 def reset_for_tests() -> None:
-    """Stop and clear the default emitter, and re-arm the atexit guard, so each test starts fresh.
+    """Stop and clear the default emitter and re-arm the `atexit` registration guard.
 
-    Resetting `_atexit_registered` alongside `_default_emitter` is required,
-    not optional: leaving it `True` across tests silently defeats the
-    per-process once-only `atexit.register` guarantee `configure()` documents
-    for the *next* real `configure()` call in the suite, which would then
-    observe the guard already set and skip registering — exactly what
-    `test_atexit_drain_hook_registered_once_when_configure_called_multiple_times`
-    (a from-clean-start assertion) needs `reset_for_tests()` to undo.
+    Intended for test isolation. The guard must be re-armed together with the emitter:
+    leaving it set would make the next `configure()` skip registering the `atexit` hook, so
+    the once-per-process registration that `configure()` documents could not be observed from
+    a clean start.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Clears the process default emitter and stops the previous one (draining its queue and
+        waiting up to its stop timeout). A later `configure()` registers the `atexit` hook
+        again.
     """
     global _default_emitter, _atexit_registered  # noqa: PLW0603 — mirrors configure()'s module-level singleton reset (see module docstring)
     with _lock:
@@ -160,20 +211,36 @@ def emit_log_entry(
     extra: Mapping[str, object] | None = None,
     emitter: LogEmitter | None = None,
 ) -> None:
-    """Build a `LogEntry` and enqueue it on `emitter` (or the process default).
+    """Build a log entry and enqueue it for asynchronous writing.
 
-    Bakes the *current* bound run_id (`run_context.current_run_id()`) if
-    `run_id` is not explicitly given — AC#1's propagation mechanism: this
-    read happens here, on the caller's thread, at enqueue time, never inside
-    the writer thread (see emitter.py's module docstring).
+    The call does not block on I/O: it only enqueues the entry, and a write or serialization
+    failure is handled inside the emitter's writer thread, never raised here. When `run_id`
+    is not given, the run id bound on the calling thread at this moment is recorded; it is
+    read here, not later in the writer thread, so it reflects the caller's context.
 
-    Non-blocking (AC#4): builds the entry and calls `LogEmitter.emit`, which
-    only enqueues — no file I/O on this thread. Never raises to the caller
-    for a write/serialize failure (AC#6): that is handled entirely inside
-    the writer thread. Raises `LoggingLifecycleError` only for the caller's
-    own wiring misuse — no `emitter` given and no default `configure()`d —
-    which is a programming error to surface immediately, not a runtime write
-    failure to swallow.
+    Args:
+        component: Name of the emitting component; required.
+        action: Name of the operation being logged; required.
+        entity_id: One entity id, a tuple of entity ids, or None.
+        outcome: Result label such as `"success"` or `"failed"`, or None. With an emitter
+            configured to mirror failures, `"failed"` is also written to stderr.
+        duration_ms: Elapsed time in milliseconds, or None.
+        run_id: Explicit correlation id. None records the currently bound run id, if any.
+        extra: Additional key/value pairs to record. Keys that collide with a convention field
+            name are dropped when written. Never include secrets or personal data. None or an
+            empty mapping records none.
+        emitter: Emitter to enqueue on. None uses the process default installed by
+            `configure()`.
+
+    Returns:
+        None.
+
+    Raises:
+        LoggingLifecycleError: `emitter` is None and no default emitter has been configured.
+            This is a wiring error surfaced immediately, not a write failure.
+
+    Side Effects:
+        Enqueues one entry on the emitter; the file write happens later on the writer thread.
     """
     if emitter is not None:
         target: LogEmitter | None = emitter

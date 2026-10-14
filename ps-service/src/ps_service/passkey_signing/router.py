@@ -1,41 +1,40 @@
-"""Companion-browser signing ceremony router (issue #131, PLAN.md §3, CHANGES.md F2).
+"""Companion-browser signing ceremony: the `/approvals/{id}` routes and their router factory.
 
-``build_passkey_signing_router`` mirrors ``build_api_router``'s own factory
-convention (``ps_service.api.routes``) -- ``ps_service.main.create_app``
-mounts the returned ``APIRouter`` on the same app, alongside the REST API
-router, via ``app.include_router``. Every route here sits under
-``ps_service.auth.middleware``'s ``_APPROVALS_PREFIX`` exemption
-(PLAN.md §0.5): unauthenticated at the bearer-token layer by design, with the
-per-approval opaque ``code`` (never carried in the URL path -- only ever in
-the client's request body or, before that, the link's URL *fragment*,
-CHANGES.md F2) as the sole per-request authorization, verified inside this
-router.
+A privileged action (for example resolving a near-miss as a merge) is not executed when it is
+requested. The requester receives a link to a pending approval; the approver opens it in a
+companion browser, enrols a passkey if none exists for that host, and signs the action with a
+WebAuthn assertion. Only a verified assertion causes the action to run.
 
-Slice 3 adds the signing ceremony (``.../sign/options``, ``.../sign/verify``):
-for an actor who already has an enrolled credential, a verified WebAuthn
-assertion causes the near-miss merge to actually execute
-(``ps_service.api.near_miss_review_orchestration.run_resolve_near_miss``,
-called for real, for the first time in this whole feature -- PLAN.md §0's
-"delegate, don't reimplement" rule) -- see ``post_sign_verify`` below.
+Routes (all under `/approvals`):
+    GET  /{id}                -- fixed HTML shell that drives the ceremony from the browser.
+    POST /{id}/summary        -- verify the code; return the display summary and whether the
+                                 approver must enrol a passkey first.
+    POST /{id}/enroll/options -- WebAuthn registration options.
+    POST /{id}/enroll/verify  -- verify a registration response; store the new credential.
+    POST /{id}/sign/options   -- WebAuthn authentication options.
+    POST /{id}/sign/verify    -- verify the assertion, consume the approval, run the action.
 
-Slice 4 (PLAN.md §4) adds no new routes -- it hardens every route above via
-``passkey_signing.error_handlers``: every rejection this router can produce
-(unknown id, wrong/tampered code, expired, already-consumed, wrong-actor
-credential, a lost ``mark_signed`` CAS race, a malformed WebAuthn payload, or
-a genuine WebAuthn library verification failure) now raises the identical
-``PendingApprovalInvalidOrExpiredError`` via ``error_handlers.reject``/
-``reject_on_webauthn_failure``, which also records *why*, server-side only,
-via ``emit_log_entry`` -- closing the one gap Slice 3 flagged (a raw
-``webauthn`` verification failure previously fell through to the app-wide
-generic 500 handler uncaught).
+Authorization: the routes sit under the bearer-token exemption for `/approvals`
+(`ps_service.auth.middleware`), so the only per-request credential is the opaque approval `code`.
+The code travels only in the request body, and before that in the link's URL fragment, never in
+the URL path or query; every POST route verifies it against the stored hash.
 
-Issue #195 audits the signed merge as ``near_miss.resolve`` (approver as actor, ``approval_id``
-in the details). The single-use approval is consumed (``mark_signed`` precedes the merge) even
-when the opening audit row cannot be written: the merge then does not run, nothing is audited as
-applied, the stored outcome is ``_AUDIT_UNAVAILABLE_MESSAGE`` and the user must request a new
-approval. There is deliberately no pre-check of the AUDIT row: one written before ``mark_signed``
-would be orphaned if the CAS were lost. The graph write gateway, which writes nothing, is checked
-before ``mark_signed`` (issue #210), so a missing gateway is a 503 that leaves the approval pending.
+Rejection: every failure a caller can cause (unknown id, wrong code, expired or already-consumed
+approval, unknown or wrong-actor credential, lost consumption race, malformed or invalid
+WebAuthn payload) raises the identical `PendingApprovalInvalidOrExpiredError`, so the response
+never reveals why. The real reason is logged server-side only.
+
+Audit: the signed near-miss merge is audited as `near_miss.resolve` with the approver as actor
+and the approval id in the details. The single-use approval is consumed (`mark_signed` precedes
+the merge) even when the opening audit row cannot be written; the merge then does not run,
+nothing is audited as applied, the stored outcome is `_AUDIT_UNAVAILABLE_MESSAGE` and the
+approver must request a new approval. No audit row is written before `mark_signed`, because it
+would be orphaned if the consumption race were lost. The graph write gateway is checked before
+`mark_signed`, so a missing gateway answers 503 and leaves the approval pending.
+
+Exports:
+    build_passkey_signing_router: builds the `APIRouter` that `ps_service.main.create_app`
+        mounts alongside the REST API router.
 """
 
 from __future__ import annotations
@@ -102,30 +101,54 @@ __all__ = ["build_passkey_signing_router"]
 def provide_signing_credential_store(
     config: Annotated[ServiceConfig, Depends(get_service_config)],
 ) -> SigningCredentialStore:
-    """Return the production `SigningCredentialStore` (issue #131 Slice 2).
+    """Provide the signing-credential store that the ceremony routes read and write.
 
-    A plain provider (not a generator), overridable in tests via
-    `app.dependency_overrides` with a fake store -- mirrors
-    `api.dependencies.provide_pending_approval_store` exactly.
+    A plain provider (not a generator), overridable through `app.dependency_overrides`.
+
+    Args:
+        config: The running service's configuration (injected from the application state);
+            supplies the Postgres connection settings.
+
+    Returns:
+        A `PsycopgSigningCredentialStore` bound to `config`. It opens no connection until one
+        of its methods is called, so building one per request is cheap.
     """
     return PsycopgSigningCredentialStore(config)
 
 
 class _ApprovalCodeRequest(BaseModel):
-    """Body shared by every `/approvals/{id}/*` POST route (CHANGES.md F2): just the code."""
+    """Request body of the POST routes that carry only the approval code.
+
+    Attributes:
+        code: The opaque capability code from the approval link; compared against the stored
+            hash. Required.
+    """
 
     code: str
 
 
 class _EnrollVerifyRequest(BaseModel):
-    """Body for `POST /approvals/{id}/enroll/verify` (CHANGES.md F2)."""
+    """Request body of `POST /approvals/{id}/enroll/verify`.
+
+    Attributes:
+        code: The opaque capability code from the approval link. Required.
+        credential: The JSON form of the browser's WebAuthn registration response
+            (`navigator.credentials.create()`). Required; validated by the WebAuthn library.
+    """
 
     code: str
     credential: dict[str, object]
 
 
 class _SignVerifyRequest(BaseModel):
-    """Body for `POST /approvals/{id}/sign/verify` (CHANGES.md F2, issue #131 Slice 3)."""
+    """Request body of `POST /approvals/{id}/sign/verify`.
+
+    Attributes:
+        code: The opaque capability code from the approval link. Required.
+        credential: The JSON form of the browser's WebAuthn assertion
+            (`navigator.credentials.get()`), including `rawId`. Required; validated by the
+            WebAuthn library.
+    """
 
     code: str
     credential: dict[str, object]
@@ -138,29 +161,29 @@ def _verify_code(
     code: str,
     action: str,
 ) -> PendingApprovalRow:
-    """Look up `pending_approval_id`, verify `code` against `code_hash`, and apply F3's guard.
+    """Load a pending approval and check its code, status and expiry, rejecting generically.
 
-    Raises the identical `PendingApprovalInvalidOrExpiredError` for an
-    unknown id, a wrong code, and an expired/consumed approval -- the three
-    are never distinguished in the *response* (AC-BI-015). Issue #131 Slice
-    4: each distinct condition is still recorded, server-side only, via
-    `error_handlers.reject` -- the response staying generic never means the
-    reason is simply lost.
+    Every failure raises the identical `PendingApprovalInvalidOrExpiredError`, so the response
+    never distinguishes an unknown id, a wrong code and an expired or consumed approval; each
+    condition is logged server-side by `reject`.
 
     Args:
         store: The pending-approval store to read from.
-        pending_approval_id: The `id` path segment (never the secret).
-        code: The capability code from the request body (CHANGES.md F2 --
-            never the URL path).
-        action: This route's own short name, threaded through to `reject`
-            for server-side log correlation (issue #131 Slice 4).
+        pending_approval_id: The approval id from the URL path (never the secret).
+        code: The capability code from the request body; compared in constant time against
+            the stored SHA-256 hash.
+        action: The calling route's short name, used as the log `action` field.
 
     Returns:
-        The verified, still-pending, unexpired row.
+        The verified row: status `pending` and not yet expired.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: id unknown, code wrong, or the
-            row is no longer pending/has expired.
+        PendingApprovalInvalidOrExpiredError: the id is unknown, the code does not match, or
+            the row is already signed or has expired.
+        PendingApprovalPersistenceError: reading the approval from Postgres failed.
+
+    Side Effects:
+        Emits one failed-outcome log entry (via `reject`) per rejection.
     """
     row = store.get_by_id(pending_approval_id)
     if row is None:
@@ -175,15 +198,14 @@ def _verify_code(
     try:
         _require_pending_and_unexpired(row)
     except PendingApprovalInvalidOrExpiredError:
-        # `_require_pending_and_unexpired` (service.py, Slice 2) is the one
-        # place that *decides* pending/unexpired -- this `if` never competes
-        # with that decision, it only labels it for the server-side log.
+        # `_require_pending_and_unexpired` alone decides pending/unexpired; this branch
+        # only labels the decision for the server-side log.
         reason = "already_signed" if row.status != "pending" else "expired"
         reject(action=action, pending_approval_id=pending_approval_id, reason=reason)
     return row
 
 
-# --- GET /approvals/{id} -- generic companion-browser shell (CHANGES.md F2) --------
+# --- GET /approvals/{id}: generic companion-browser shell ---------------------------
 
 _SHELL_HTML = """\
 <!doctype html>
@@ -329,22 +351,21 @@ _SHELL_HTML = """\
 
 
 async def get_approval_shell(pending_approval_id: str) -> HTMLResponse:
-    """Render the generic companion-browser shell (CHANGES.md F2).
+    """Serve the HTML page that runs the approval ceremony in the approver's browser.
 
-    Byte-identical regardless of whether `pending_approval_id` is pending,
-    expired, already signed, or entirely unknown -- this handler never even
-    looks the row up, so there is no server-side state that could leak into
-    the markup (AC-BI-015). The page's own client-side JS reads `code` from
-    `window.location.hash` (never sent to any server in a `Referer` header
-    by spec; the `Referrer-Policy` header below is defense-in-depth) and
-    `pending_approval_id` from `window.location.pathname`, then drives the
-    real ceremony via the POST routes below.
+    The page is byte-identical whether the approval is pending, expired, already signed or
+    unknown: the handler never looks the approval up, so no server-side state can leak into
+    the markup. The page's script reads the approval code from the URL fragment (browsers
+    never send a fragment to a server) and the id from the URL path, then calls the POST
+    routes to enrol a passkey if needed and sign.
 
     Args:
-        pending_approval_id: The `id` path segment (unused -- see above).
+        pending_approval_id: The approval id from the URL path. Accepted for routing and
+            ignored.
 
     Returns:
-        The fixed HTML shell, with `Referrer-Policy: no-referrer`.
+        An HTML response with the fixed page and the header `Referrer-Policy: no-referrer`.
+        It is always HTTP 200.
     """
     del pending_approval_id
     return HTMLResponse(content=_SHELL_HTML, headers={"Referrer-Policy": "no-referrer"})
@@ -357,28 +378,32 @@ async def post_approval_summary(
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     credential_store: Annotated[SigningCredentialStore, Depends(provide_signing_credential_store)],
 ) -> dict[str, object]:
-    """Verify the code and return the WYSIWYS summary (CHANGES.md F2).
+    """Verify the approval code and return what the approver is being asked to sign.
 
-    The first call the companion-browser page's own JS makes, after reading
-    `code` from `location.hash` -- this is where the opaque capability code
-    is actually consumed for the first time server-side.
+    This is the first call the approval page makes. `needs_enrollment` is answered per host
+    (the request's WebAuthn `rp_id`), not per actor alone: a credential enrolled on another
+    host cannot sign here, so it must not count as already enrolled.
 
     Args:
-        pending_approval_id: The `id` path segment.
-        request_body: `{"code": str}`.
-        http_request: The raw request, for `rp_id` derivation --
-            `needs_enrollment` is answered per host, not per actor alone
-            (issue #196).
-        store: The pending-approval store (injected; overridden in tests).
-        credential_store: The signing-credential store (injected; overridden
-            in tests).
+        pending_approval_id: The approval id from the URL path.
+        request_body: JSON body `{"code": str}` with the approval code.
+        http_request: The incoming request; its host determines the `rp_id`.
+        store: Pending-approval store (injected).
+        credential_store: Signing-credential store (injected).
 
     Returns:
-        `{"status", "display_summary", "needs_enrollment"}`.
+        A dict with `status` (the approval status, `pending`), `display_summary` (the
+        human-readable description of the action to sign) and `needs_enrollment` (true when
+        the approver has no passkey enrolled for this host).
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: id unknown, code wrong, or
-            expired/consumed (HTTP 404, generic body, AC-BI-015).
+        PendingApprovalInvalidOrExpiredError: the id is unknown, the code is wrong, or the
+            approval is expired or already signed (HTTP 404, generic body).
+        PendingApprovalPersistenceError: reading the approval failed.
+        SigningCredentialPersistenceError: looking up the approver's credentials failed.
+
+    Side Effects:
+        None beyond a failed-outcome log entry on rejection; nothing is written.
     """
     row = _verify_code(
         store=store,
@@ -386,9 +411,8 @@ async def post_approval_summary(
         code=request_body.code,
         action="approval_summary",
     )
-    # Scoped to this request's own `rp_id` (issue #196): a credential enrolled
-    # on another host cannot sign here, so it must not report this actor as
-    # already enrolled and strand them with no way to enroll again.
+    # Scoped to this request's `rp_id`: a credential enrolled on another host cannot sign
+    # here, and counting it would strand the actor with no way to enrol again.
     rp_id, _origin = rp_id_and_origin(http_request)
     needs_enrollment = not credential_store.has_any_for_actor(
         actor_subject=row.actor_subject, actor_issuer=row.actor_issuer, rp_id=rp_id
@@ -406,26 +430,29 @@ async def post_enroll_options(
     http_request: Request,
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
 ) -> dict[str, object]:
-    """Generate WebAuthn registration ("create") options (PLAN.md §3, issue #131 Slice 2).
+    """Generate the WebAuthn registration options for enrolling a passkey.
 
-    Verifies the code and F3's pending/unexpired guard before generating
-    anything (never reaches `webauthn.generate_registration_options` for a
-    stale or already-consumed approval).
+    The code, status and expiry are checked before any options are generated, so a stale or
+    already-consumed approval never reaches the WebAuthn library. The user identity in the
+    options is the approval's actor, and the challenge is derived from the approval row.
 
     Args:
-        pending_approval_id: The `id` path segment.
-        request_body: `{"code": str}`.
-        http_request: The raw request, for `rp_id`/`origin` derivation
-            (`webauthn_rp.rp_id_and_origin`).
-        store: The pending-approval store (injected; overridden in tests).
+        pending_approval_id: The approval id from the URL path.
+        request_body: JSON body `{"code": str}` with the approval code.
+        http_request: The incoming request; its host and scheme determine the WebAuthn
+            `rp_id` and origin.
+        store: Pending-approval store (injected).
 
     Returns:
-        The `PublicKeyCredentialCreationOptions`, JSON-shaped
-        (`webauthn.options_to_json`'s own encoding).
+        The WebAuthn `PublicKeyCredentialCreationOptions` as a JSON object.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: id unknown, code wrong, or
-            expired/consumed (HTTP 404, generic body, AC-BI-015).
+        PendingApprovalInvalidOrExpiredError: the id is unknown, the code is wrong, or the
+            approval is expired or already signed (HTTP 404, generic body).
+        PendingApprovalPersistenceError: reading the approval failed.
+
+    Side Effects:
+        None beyond a failed-outcome log entry on rejection; nothing is written.
     """
     row = _verify_code(
         store=store,
@@ -444,33 +471,35 @@ async def post_enroll_verify(
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     credential_store: Annotated[SigningCredentialStore, Depends(provide_signing_credential_store)],
 ) -> dict[str, object]:
-    """Verify a WebAuthn registration response and persist the new credential.
+    """Verify a WebAuthn registration response and store the new passkey for the approver.
 
-    Re-verifies the code and F3's guard independently of `/enroll/options`
-    (CHANGES.md F3: "codes/expiry can't be trusted to still hold between the
-    two calls") -- before calling
-    `webauthn.verify_registration_response`. On success, inserts a
-    `signing_credentials` row for this approval's `(actor_subject,
-    actor_issuer)` (AC-BI-001/AC-BI-003).
+    The code, status and expiry are re-checked here rather than trusted from the earlier
+    options call, because either may have changed in between. The credential is stored for
+    the approval's actor under the request's `rp_id`.
 
     Args:
-        pending_approval_id: The `id` path segment.
-        request_body: `{"code": str, "credential": <RegistrationCredential JSON>}`.
-        http_request: The raw request, for `rp_id`/`origin` derivation.
-        store: The pending-approval store (injected; overridden in tests).
-        credential_store: The signing-credential store (injected; overridden
-            in tests).
+        pending_approval_id: The approval id from the URL path.
+        request_body: JSON body `{"code": str, "credential": {...}}` with the approval code
+            and the browser's WebAuthn registration response.
+        http_request: The incoming request; its host and scheme determine the WebAuthn
+            `rp_id` and origin the response is verified against.
+        store: Pending-approval store (injected).
+        credential_store: Signing-credential store (injected).
 
     Returns:
         `{"status": "enrolled"}`.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: id unknown, code wrong,
-            expired/consumed, a malformed WebAuthn payload, or a genuine
-            WebAuthn verification failure (HTTP 404, generic body,
-            AC-BI-015 -- issue #131 Slice 4: `verify_registration` failures
-            are now mapped here too, never left to the app-wide generic 500
-            handler).
+        PendingApprovalInvalidOrExpiredError: the id is unknown, the code is wrong, the
+            approval is expired or already signed, the credential payload is malformed, or
+            WebAuthn verification fails (HTTP 404, generic body).
+        PendingApprovalPersistenceError: reading the approval failed.
+        SigningCredentialPersistenceError: storing the credential failed.
+
+    Side Effects:
+        Inserts one row into the signing-credential table (credential id, public key, sign
+        count, actor, `rp_id`) and logs a failed-outcome entry on rejection. The approval
+        itself stays pending.
     """
     row = _verify_code(
         store=store,
@@ -496,7 +525,7 @@ async def post_enroll_verify(
     return {"status": "enrolled"}
 
 
-# --- POST /approvals/{id}/sign/* -- signing ceremony (issue #131 Slice 3) ----------
+# --- POST /approvals/{id}/sign/*: signing ceremony ----------------------------------
 
 
 async def post_sign_options(
@@ -506,30 +535,32 @@ async def post_sign_options(
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     credential_store: Annotated[SigningCredentialStore, Depends(provide_signing_credential_store)],
 ) -> dict[str, object]:
-    """Generate WebAuthn authentication ("get") options (PLAN.md §3, issue #131 Slice 3).
+    """Generate the WebAuthn authentication options for signing the approval.
 
-    Verifies the code and F3's pending/unexpired guard (via `_verify_code`)
-    before generating anything. The challenge is recomputed fresh from the
-    row's own stored fields (`_compute_sign_challenge`, AC-BI-004/AC-BI-011)
-    -- never a separately stored value -- and `allow_credentials` is built
-    from every `signing_credentials` row already enrolled for this
-    approval's own actor.
+    The code, status and expiry are checked first. The challenge is recomputed from the
+    approval's tool name, arguments, actor and nonce rather than stored, so it binds the
+    signature to exactly the action being approved. The allowed credentials are the
+    approver's passkeys enrolled under this request's `rp_id`.
 
     Args:
-        pending_approval_id: The `id` path segment.
-        request_body: `{"code": str}`.
-        http_request: The raw request, for `rp_id`/`origin` derivation.
-        store: The pending-approval store (injected; overridden in tests).
-        credential_store: The signing-credential store (injected; overridden
-            in tests).
+        pending_approval_id: The approval id from the URL path.
+        request_body: JSON body `{"code": str}` with the approval code.
+        http_request: The incoming request; its host and scheme determine the WebAuthn
+            `rp_id` and origin.
+        store: Pending-approval store (injected).
+        credential_store: Signing-credential store (injected).
 
     Returns:
-        The `PublicKeyCredentialRequestOptions`, JSON-shaped
-        (`webauthn.options_to_json`'s own encoding).
+        The WebAuthn `PublicKeyCredentialRequestOptions` as a JSON object.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: id unknown, code wrong, or
-            expired/consumed (HTTP 404, generic body, AC-BI-015).
+        PendingApprovalInvalidOrExpiredError: the id is unknown, the code is wrong, or the
+            approval is expired or already signed (HTTP 404, generic body).
+        PendingApprovalPersistenceError: reading the approval failed.
+        SigningCredentialPersistenceError: listing the approver's credentials failed.
+
+    Side Effects:
+        None beyond a failed-outcome log entry on rejection; nothing is written.
     """
     row = _verify_code(
         store=store,
@@ -538,8 +569,8 @@ async def post_sign_options(
         action="sign_options",
     )
     challenge = _compute_sign_challenge(row)
-    # Only this host's own credentials: advertising one enrolled elsewhere
-    # leaves the authenticator with nothing to match (issue #196).
+    # Only this host's credentials: advertising one enrolled elsewhere leaves the
+    # authenticator with nothing to match.
     sign_rp_id, _origin = rp_id_and_origin(http_request)
     allow_credentials = credential_store.list_for_actor(
         actor_subject=row.actor_subject, actor_issuer=row.actor_issuer, rp_id=sign_rp_id
@@ -556,24 +587,28 @@ def _resolve_credential_for_signing(
     row: PendingApprovalRow,
     credential_payload: dict[str, object],
 ) -> SigningCredentialRow:
-    """Resolve the assertion's `rawId` to an enrolled credential, enforcing AC-BI-005.
+    """Resolve the assertion's `rawId` to an enrolled credential owned by the approval's actor.
 
-    The resolved credential's `(actor_subject, actor_issuer)` must match the
-    pending approval's own -- checked here, explicitly, *before*
-    `verify_authentication_response` is ever called (PLAN.md §3): a
-    credential belonging to a different actor must never even reach the
-    cryptographic verification step. A missing/malformed `rawId` and a
-    wrong-actor credential are both the identical generic error
-    (AC-BI-015) -- never distinguished from each other or from any other
-    `.../sign/*` failure mode.
+    The ownership check runs before cryptographic verification, so a credential belonging to
+    another actor never reaches the WebAuthn library.
+
+    Args:
+        credential_store: Signing-credential store to look the credential up in.
+        row: The pending approval being signed; its actor is the required owner.
+        credential_payload: The assertion JSON from the request; `rawId` must be a base64url
+            string.
+
+    Returns:
+        The enrolled credential whose id equals `rawId` and whose actor equals the row's.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: `rawId` is missing/malformed,
-            no such credential is enrolled, or it belongs to a different
-            actor than this pending approval. Issue #131 Slice 4: each of
-            these three conditions is recorded, server-side only, via
-            `error_handlers.reject`, distinguishable from one another in the
-            log even though the response is identical.
+        PendingApprovalInvalidOrExpiredError: `rawId` is missing or not base64url, no such
+            credential is enrolled, or it belongs to a different actor. Each condition is
+            logged with its own reason; the response is identical.
+        SigningCredentialPersistenceError: the credential lookup failed.
+
+    Side Effects:
+        Emits one failed-outcome log entry per rejection.
     """
     raw_id_value = credential_payload.get("rawId")
     if not isinstance(raw_id_value, str):
@@ -582,7 +617,7 @@ def _resolve_credential_for_signing(
         )
     try:
         raw_id = base64url_to_bytes(raw_id_value)
-    except Exception as exc:  # noqa: BLE001 -- base64url_to_bytes' own failure modes are not documented/typed; any failure here maps to the same generic rejection (AC-BI-015), with the real exception logged server-side by `reject`
+    except Exception as exc:  # noqa: BLE001 -- base64url_to_bytes' failure modes are untyped; any failure maps to the same generic rejection, with the real exception logged server-side by `reject`
         reject(
             action="sign_verify",
             pending_approval_id=row.id,
@@ -610,11 +645,10 @@ _AUDIT_UNAVAILABLE_MESSAGE = (
 
 
 def _log_merge_failure(*, pending_approval_id: str, review_id: str | None, reason: str) -> None:
-    """Record why a signed merge did nothing (AC-BI-006).
+    """Log a failed-outcome entry saying why a signed merge did nothing.
 
-    `extra` carries the approval id, the review id when the row had one, and
-    the reason -- never the `code`, the credential or any passkey material
-    (AC-BI-001).
+    The entry carries the approval id, the review id when the row has one, and `reason`; it
+    never carries the code, the credential or any passkey material.
     """
     extra: dict[str, object] = {"pending_approval_id": pending_approval_id, "reason": reason}
     if review_id is not None:
@@ -632,24 +666,34 @@ def _execute_merge_and_record_outcome(
     config: ServiceConfig,
     audit_store: AuditStore,
 ) -> dict[str, object]:
-    """Run the real merge and persist its outcome onto the now-`'signed'` row.
+    """Run the near-miss merge for a signed approval and store its outcome on the row.
 
-    Issue #195: the merge is audited as `near_miss.resolve` with the APPROVER (the approval row's
-    actor, whose credential just signed) as actor and `approval_id=row.id`; the `applied` row
-    precedes the write. If that opening row cannot be written the merge does not run and the
-    stored outcome is the fixed `_AUDIT_UNAVAILABLE_MESSAGE`. The single-use approval is consumed
-    either way (`mark_signed` precedes this call; there is deliberately no pre-check of the audit
-    row, because one written before `mark_signed` would be orphaned if the CAS were lost), so the
-    user must request a new approval. A missing gateway never gets here: `post_sign_verify`
-    checks it before `mark_signed` (issue #210).
+    Called only after `mark_signed` has committed, so the signature stays consumed whatever
+    the merge does. The merge is performed by `run_resolve_near_miss`, audited as
+    `near_miss.resolve` with the approver (the approval's actor) as actor and the approval id
+    in the details; its opening `applied` audit row precedes the write. No failure of the
+    merge is re-raised: each is logged and stored as a fixed safe error message.
 
-    Only ever called after `store.mark_signed` has already committed
-    (PLAN.md §3: "post-signature merge-execution" -- the signature's
-    validity is never contingent on the merge write's own success). Delegates
-    to `run_resolve_near_miss` for the actual write (PLAN.md §0's "delegate,
-    don't reimplement" rule) -- a `PendingReviewNotFoundError` for a
-    since-gone-stale reference is caught here and recorded as a safe error
-    message, never re-raised (the signature must stay consumed regardless).
+    Args:
+        row: The signed approval; `normalized_args["review_id"]` names the review to merge.
+        store: Pending-approval store; receives the outcome.
+        near_miss_dependencies: The near-miss review dependency bundle used by the merge.
+        config: The resolved service configuration.
+        audit_store: Store receiving the merge's `near_miss.resolve` audit rows.
+
+    Returns:
+        The stored outcome: `{"winner_id", "loser_id"}` on success, otherwise
+        `{"error": <fixed message>}`. The message is a missing-`review_id` notice, the
+        audit-unavailable notice (the merge did not run) or a generic failed notice (the
+        review is gone, or any other failure).
+
+    Raises:
+        PendingApprovalPersistenceError: storing the outcome failed.
+
+    Side Effects:
+        Merges the near-miss entities in the graph and writes audit rows through
+        `run_resolve_near_miss` on success; writes the outcome to the approval row; emits a
+        failed-outcome log entry for every non-success path.
     """
     review_id = row.normalized_args.get("review_id")
     if not isinstance(review_id, str):
@@ -674,11 +718,10 @@ def _execute_merge_and_record_outcome(
         )
         outcome = {"error": _AUDIT_UNAVAILABLE_MESSAGE}
     except PendingReviewNotFoundError as exc:
-        # The response and stored outcome stay generic; without this the
-        # reason a signed merge did nothing is recorded nowhere.
+        # The response and stored outcome stay generic; the log is the only record of the reason.
         _log_merge_failure(pending_approval_id=row.id, review_id=review_id, reason=str(exc))
         outcome = {"error": _MERGE_FAILED_MESSAGE}
-    except Exception as exc:  # noqa: BLE001 -- the signature is already consumed by now, so letting a `CompanyMergePersistenceError`/`redis.RedisError`/`CompanyMergeConfigurationError`/`IndexError` escape would store no outcome, log nothing, and 500 the caller into the shell's "this approval link is no longer valid" (AC-BI-012). Not silent: `_log_merge_failure` records the real exception server-side.
+    except Exception as exc:  # noqa: BLE001 -- the signature is already consumed, so letting a persistence, Redis, configuration or index error escape would store no outcome, log nothing, and 500 the caller into the shell's "this approval link is no longer valid". Not silent: `_log_merge_failure` records the real exception server-side.
         _log_merge_failure(pending_approval_id=row.id, review_id=review_id, reason=repr(exc))
         outcome = {"error": _MERGE_FAILED_MESSAGE}
     else:
@@ -696,11 +739,27 @@ _EXECUTOR_FAILED_MESSAGE = (
 def _run_registered_executor_and_record_outcome(
     *, row: PendingApprovalRow, store: PendingApprovalStore, config: ServiceConfig
 ) -> dict[str, object]:
-    """Run the executor registered for `row.tool_name` and persist its outcome (issue #190).
+    """Run the executor registered for the approval's tool and store its outcome on the row.
 
-    The signature is already consumed. An unregistered `tool_name`, or an executor that
-    raises, stores one generic safe error -- the real reason is logged server-side only and
-    nothing is retried.
+    The signature is already consumed. An unregistered tool name, or an executor that raises,
+    stores one generic safe error; the real reason is logged server-side only and nothing is
+    retried.
+
+    Args:
+        row: The signed approval; `tool_name` selects the executor.
+        store: Pending-approval store; receives the outcome.
+        config: The resolved service configuration, passed to the executor.
+
+    Returns:
+        The executor's outcome dict, or `{"error": <fixed message>}` when no executor is
+        registered or the executor raised.
+
+    Raises:
+        PendingApprovalPersistenceError: storing the outcome failed.
+
+    Side Effects:
+        Whatever the executor does; writes the outcome to the approval row; emits a
+        failed-outcome log entry when no executor exists or it raised.
     """
     executor = resolve_approval_executor(row.tool_name)
     outcome: dict[str, object] = {"error": _EXECUTOR_FAILED_MESSAGE}
@@ -737,49 +796,51 @@ async def post_sign_verify(
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     audit_store: Annotated[AuditStore, Depends(provide_audit_store)],
 ) -> dict[str, object]:
-    """Verify a WebAuthn assertion and, on success, execute the merge (issue #131 Slice 3).
+    """Verify the approver's WebAuthn assertion and, if valid, run the approved action.
 
-    Order (PLAN.md §3): (1) `_verify_code` -- code + F3's pending/unexpired
-    guard, before any WebAuthn library call; (2) recompute the expected
-    challenge fresh (never trust a client-supplied one); (3) resolve the
-    assertion's credential and enforce AC-BI-005's actor-identity binding,
-    *before* calling `verify_authentication_response`; (4) verify the
-    assertion; (5) atomically flip `status` `'pending'` -> `'signed'`
-    (`store.mark_signed`, AC-BI-012/013) -- a lost race/already-consumed row
-    returns the identical generic "no longer valid" error, never attempting
-    the merge; (6) bump the credential's `sign_count`; (7) only now, execute
-    the real merge and record its outcome.
+    Steps, in order: (1) check the code, status and expiry; (2) recompute the expected
+    challenge from the approval (a client-supplied challenge is never trusted); (3) resolve
+    the asserted credential and require that it belongs to the approval's actor; (4) verify
+    the assertion cryptographically; (5) for a near-miss merge, require a graph write gateway
+    before consuming the approval; (6) atomically flip the approval from `pending` to
+    `signed`, so it can be used once; (7) persist the credential's new sign count; (8) run the
+    action (the near-miss merge, or the executor registered for the approval's tool) and store
+    its outcome. A failed action does not undo the signature.
 
     Args:
-        pending_approval_id: The `id` path segment.
-        request_body: `{"code": str, "credential": <AuthenticationCredential JSON>}`.
-        http_request: The raw request, for `rp_id`/`origin` derivation.
-        store: The pending-approval store (injected; overridden in tests).
-        credential_store: The signing-credential store (injected; overridden
-            in tests).
-        near_miss_dependencies: The near-miss review dependency bundle
-            (injected; overridden in tests) -- the exact same bundle
-            `near_misses_resolve`'s merge branch and
-            `POST /near-misses/{review_id}/resolve` use.
+        pending_approval_id: The approval id from the URL path.
+        request_body: JSON body `{"code": str, "credential": {...}}` with the approval code
+            and the browser's WebAuthn assertion.
+        http_request: The incoming request; its host and scheme determine the WebAuthn
+            `rp_id` and origin the assertion is verified against.
+        store: Pending-approval store (injected).
+        credential_store: Signing-credential store (injected).
+        near_miss_dependencies: The near-miss review dependency bundle (injected) used when
+            the approval is a near-miss merge.
         config: The resolved service configuration (injected).
-        audit_store: Where the merge's `near_miss.resolve` audit rows go (injected; overridden in
-            tests).
+        audit_store: Store receiving the merge's `near_miss.resolve` audit rows (injected).
 
     Returns:
-        `{"status": "signed", "winner_id", "loser_id"}` on a successful
-        merge, or `{"status": "signed", "error": <safe message>}` if the
-        signature was valid but the merge itself could not be completed
-        (a since-gone-stale reference) -- the signature is consumed either
-        way.
+        `{"status": "signed", ...outcome}`. The outcome is `winner_id` and `loser_id` after a
+        successful merge, the executor's result for other tools, or `{"error": <fixed message>}`
+        when the signature was valid but the action did not complete. The signature is consumed
+        in every case; the approver must then request a new approval.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: id unknown, code wrong,
-            expired/consumed, the assertion's credential is unknown or
-            belongs to a different actor (AC-BI-005), a malformed WebAuthn
-            payload, a genuine WebAuthn verification failure, or the atomic
-            CAS lost a race (HTTP 404, generic body, AC-BI-015 -- issue #131
-            Slice 4: every one of these conditions is now mapped here, none
-            left to the app-wide generic 500 handler).
+        PendingApprovalInvalidOrExpiredError: the id is unknown, the code is wrong, the
+            approval is expired or already signed, the credential is unknown or belongs to
+            another actor, the payload is malformed, WebAuthn verification fails, or another
+            request consumed the approval first (HTTP 404, generic body).
+        GraphWriteUnavailableError: a near-miss merge was approved but no graph write gateway
+            is installed (HTTP 503). The approval stays pending and can be retried.
+        PendingApprovalPersistenceError: reading the approval, consuming it or storing the
+            outcome failed.
+        SigningCredentialPersistenceError: reading or updating the credential failed.
+
+    Side Effects:
+        Marks the approval signed, updates the credential's sign count, runs the approved
+        action (graph merge and audit rows for a near-miss merge), stores the action outcome on
+        the approval row, and logs a failed-outcome entry for each rejection or failed action.
     """
     row = _verify_code(
         store=store,
@@ -791,12 +852,9 @@ async def post_sign_verify(
     credential = _resolve_credential_for_signing(
         credential_store=credential_store, row=row, credential_payload=request_body.credential
     )
-    # Issue #131 Slice 4: a cryptographic verification failure (tampered
-    # challenge, wrong origin, bad signature, non-monotonic sign_count) or a
-    # malformed/garbage credential payload is caught here and mapped to the
-    # identical generic rejection every other `.../sign/*`/`.../enroll/*`
-    # failure mode already returns -- never left to the app-wide generic 500
-    # handler (`error_handlers.reject_on_webauthn_failure`).
+    # A verification failure (tampered challenge, wrong origin, bad signature, non-monotonic
+    # sign_count) or a garbage payload maps to the same generic rejection as every other
+    # failure, instead of reaching the app-wide 500 handler.
     with reject_on_webauthn_failure(action="sign_verify", pending_approval_id=pending_approval_id):
         verified = verify_authentication(
             request=http_request,
@@ -807,13 +865,13 @@ async def post_sign_verify(
         )
 
     if row.tool_name == _NEAR_MISS_TOOL_NAME:
-        # Issue #210: the merge writes through the Graph Write Gateway. Check it BEFORE the
-        # single-use approval is consumed, so a missing gateway is a 503 the same approval can
-        # retry, not a burned approval. Side-effect free; no audit row exists yet.
+        # The merge writes through the graph write gateway. Check it BEFORE the single-use
+        # approval is consumed, so a missing gateway is a 503 the same approval can retry,
+        # not a burned approval. Side-effect free; no audit row exists yet.
         graph_write_access(config)
     if not store.mark_signed(pending_approval_id):
-        # Lost the atomic CAS race, or the row was consumed/expired between
-        # `_verify_code`'s check and here -- never attempt the merge.
+        # Lost the atomic compare-and-set, or the row was consumed or expired after the
+        # earlier check: never run the action.
         reject(
             action="sign_verify",
             pending_approval_id=pending_approval_id,
@@ -837,13 +895,18 @@ async def post_sign_verify(
 
 
 def build_passkey_signing_router() -> APIRouter:
-    """Build the companion-browser signing-ceremony `APIRouter` (issue #131 Slices 2-3).
+    """Build the router that serves the companion-browser signing ceremony.
+
+    The caller mounts it with `app.include_router`; the bearer-token middleware exempts the
+    `/approvals` prefix, so each route authorizes itself with the approval code.
 
     Returns:
-        An `APIRouter` exposing `GET /approvals/{id}`,
-        `POST /approvals/{id}/summary`, `POST /approvals/{id}/enroll/options`,
-        `POST /approvals/{id}/enroll/verify`, `POST /approvals/{id}/sign/options`,
-        and `POST /approvals/{id}/sign/verify` (CHANGES.md F2's route table).
+        A new `APIRouter` with prefix `/approvals` exposing `GET /{pending_approval_id}`
+        (HTML shell) and `POST /{pending_approval_id}/summary`, `/enroll/options`,
+        `/enroll/verify`, `/sign/options` and `/sign/verify`.
+
+    Side Effects:
+        None; it only registers routes on the new router.
     """
     router = APIRouter(prefix="/approvals")
     router.add_api_route(

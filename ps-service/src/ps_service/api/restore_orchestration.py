@@ -1,35 +1,21 @@
-"""REST-boundary glue for ``POST /restorations`` (D5, PLAN.md §0.7).
+"""REST-boundary glue for restoring curated instruments.
 
-Mirrors ``ingestion_orchestration.py``'s shape: an injection seam
-(:class:`RestoreDependencies`, mirroring :class:`PipelineDependencies`) and
-:func:`build_default_restore_dependencies`, which wires the real
-``ps_service.restore.restore_instrument`` orchestration via a **function-local**
-import so that importing ``ps_service.main`` never transitively loads
-``ps_service.restore``/``ps_service.company_merge`` at module load (M6 / the
-Process Harness decoupling guarantee).
+Serves ``POST /restorations`` and ``POST /restorations/from-catalog``. Two entry points share
+one failure translation. :func:`run_restoration` restores an uploaded artifact;
+:func:`run_restoration_from_catalog_source` fetches the artifact from the curated-content source
+first. Each decodes or fetches the artifact, runs the injected restore routine between an
+``instrument.restore`` opening audit row and a terminal row, and translates the routine's domain
+errors into the two API errors the error handlers know how to shape:
 
-:func:`run_restoration` is the thin wrapper the ``POST /restorations`` route
-calls: it decodes the request body into a ``RestoreArtifact``, calls the
-injected restore stage, and translates ``ps_service.restore``'s domain
-exceptions into the two API-boundary error types ``error_handlers`` knows how
-to shape --
+* a checksum or schema-version verification failure becomes ``RestoreArtifactRejectedError``
+  (422);
+* any other failure becomes ``RestoreStageFailedError`` (502) naming the failing stage. A missing
+  Graph Write Gateway is not translated: ``GraphWriteUnavailableError`` (503) passes through.
 
-* ``ArtifactIntegrityError`` / ``ArtifactSchemaVersionMismatchError`` (D9/D10,
-  checksum/schema_version verification failures) -> :class:`~ps_service.api.
-  errors.RestoreArtifactRejectedError` (422);
-* anything else the delegate raises (``ArtifactContentRejectedError``,
-  ``RestoreConcurrencyConflictError``, or an unexpected failure) ->
-  :class:`~ps_service.api.errors.RestoreStageFailedError` (502), naming the
-  failing stage.
-
-No ``ps_service.restore``/``ps_service.company_merge`` type ever crosses into
-this module's own runtime import graph except via the one function-local
-import site (mirrors ``ingestion_orchestration.py``'s "no falkordb import
-ever crosses into ps_service.api" convention for the pipeline components).
-``ps_service.restore.errors``/``ps_service.restore.models`` are safe to import
-at module level here -- unlike ``ps_service.restore.restore_instrument``,
-neither imports ``ps_service.company_merge`` (verified: both are plain
-dataclass/exception modules with no heavy dependency of their own).
+The dependency bundles (:class:`RestoreDependencies`, :class:`CatalogRestoreDependencies`) are the
+injection seam, and the ``build_default_*`` factories wire production. The factories import the
+restore routine and Company Merge inside the function, so importing the application module never
+loads them; they load on first use at request time.
 """
 
 from __future__ import annotations
@@ -108,7 +94,11 @@ _GRAPH_WRITE_STAGE = "graph_write"
 
 
 class RestoreStage(Protocol):
-    """Call shape of ``ps_service.restore.restore_instrument.restore_instrument``."""
+    """Callable contract for the restore routine that ``POST /restorations`` runs.
+
+    Production binds it to ``restore_instrument``; tests substitute a fake. The keyword-only call
+    shape is fixed so the wrapper can pass the same arguments to either.
+    """
 
     def __call__(  # noqa: PLR0913 -- mirrors restore_instrument's keyword-only call shape
         self,
@@ -123,13 +113,61 @@ class RestoreStage(Protocol):
         emitter: LogEmitter | None = None,
         owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
-        """Restore one curated instrument's artifact end to end."""
+        """Restore one curated instrument's artifact end to end.
+
+        Args:
+            artifact: The decoded artifact: manifest and the baseline and native blobs.
+            db: Read-only handle on the graph database, used to read the single-tenant graph.
+            single_tenant_graph_name: Name of the single-tenant (merged) graph; non-empty.
+            similarity_threshold: Minimum Capability embedding similarity for convergence, in 0 to
+                1.
+            actor: The requesting client host, recorded as the caller in audit log entries.
+            open_gateway: Returns the Graph Write Gateway, or raises when the service has none. The
+                routine calls it only after the artifact verified.
+            audit_event_id: Id of the opening ``instrument.restore`` audit row; every log group of
+                the restore carries it.
+            emitter: Log emitter, or ``None`` for the process default.
+            owner: The restoring caller's verified ``(sub, iss)`` pair, or ``None`` when there is
+                none.
+
+        Returns:
+            A ``RestoreOutcome`` with the instrument id and the stages that ran. A failed restore
+            raises instead of returning.
+
+        Raises:
+            ArtifactIntegrityError: A blob does not match its manifest checksum.
+            ArtifactSchemaVersionMismatchError: The manifest schema version is not the one this
+                service supports.
+            ArtifactContentRejectedError: A graph in the artifact violates its allow-list or cannot
+                be stored.
+            RestoreOwnerRequiredError: The artifact carries Policy content and ``owner`` is
+                ``None``.
+            RestoreConcurrencyConflictError: The single-tenant graph kept changing on every attempt.
+            RestoreGroupRejectedError: The gateway refused the write group; nothing was logged.
+            RestoreGraphWriteFailedError: The write log or the graph database failed; the restore
+                did not complete.
+            RestoreApplyPendingError: The write was committed to the log and is applied on recovery.
+            GraphWriteUnavailableError: ``open_gateway`` found no Graph Write Gateway.
+
+        Side Effects:
+            Emits ``started`` and then ``succeeded`` or ``failed`` log entries, reads the
+            single-tenant graph, and on success replaces the instrument's native and baseline graphs
+            and merges the single-tenant graph through the gateway as one logged group.
+        """
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class RestoreDependencies:
-    """Everything :func:`run_restoration` needs that is not per-request."""
+    """Per-process collaborators of :func:`run_restoration`, injectable for tests.
+
+    Attributes:
+        open_db: Opens the read-only graph database handle for a service configuration.
+        single_tenant_graph_name: Returns the single-tenant graph name for a service configuration.
+        restore: The restore routine that verifies and writes the artifact.
+        graph_write_access: Returns the Graph Write Gateway access for a service configuration; it
+            raises ``GraphWriteUnavailableError`` when the service has none.
+    """
 
     open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
     single_tenant_graph_name: Callable[[ServiceConfig], str]
@@ -138,15 +176,11 @@ class RestoreDependencies:
 
 
 class CatalogRestoreStage(Protocol):
-    """Call shape of ``restore_instrument`` when invoked with a resolved ``source`` (D-AUDIT).
+    """Callable contract for the restore routine on the restore-from-catalog path.
 
-    A strict superset of :class:`RestoreStage`'s call shape (the same
-    callable, ``ps_service.restore.restore_instrument.restore_instrument``,
-    satisfies both Protocols structurally) -- kept separate from
-    ``RestoreStage`` rather than widening it in place, so
-    ``RestoreDependencies``'s existing shape (and every test constructing
-    one) is untouched by issue #125 (AC-BI-005: the upload path is
-    unaffected).
+    The same routine as :class:`RestoreStage` with one extra optional ``source`` argument that
+    records which curated-content source the artifact came from. It is a separate contract so the
+    upload path does not have to accept ``source``.
     """
 
     def __call__(  # noqa: PLR0913 -- mirrors restore_instrument's keyword-only call shape
@@ -163,21 +197,71 @@ class CatalogRestoreStage(Protocol):
         source: str | None = None,
         owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
-        """Restore one curated instrument's artifact end to end, recording ``source``."""
+        """Restore one curated instrument's artifact end to end, recording its ``source``.
+
+        Args:
+            artifact: The artifact fetched from the curated-content source.
+            db: Read-only handle on the graph database, used to read the single-tenant graph.
+            single_tenant_graph_name: Name of the single-tenant (merged) graph; non-empty.
+            similarity_threshold: Minimum Capability embedding similarity for convergence, in 0 to
+                1.
+            actor: The requesting client host, recorded as the caller in audit log entries.
+            open_gateway: Returns the Graph Write Gateway, or raises when the service has none. The
+                routine calls it only after the artifact verified.
+            audit_event_id: Id of the opening ``instrument.restore`` audit row; every log group of
+                the restore carries it.
+            emitter: Log emitter, or ``None`` for the process default.
+            source: Base URL of the curated-content source, added to every audit log entry; ``None``
+                adds none.
+            owner: The restoring caller's verified ``(sub, iss)`` pair, or ``None`` when there is
+                none.
+
+        Returns:
+            A ``RestoreOutcome`` with the instrument id and the stages that ran. A failed restore
+            raises instead of returning.
+
+        Raises:
+            ArtifactIntegrityError: A blob does not match its manifest checksum.
+            ArtifactSchemaVersionMismatchError: The manifest schema version is not the one this
+                service supports.
+            ArtifactContentRejectedError: A graph in the artifact violates its allow-list or cannot
+                be stored.
+            RestoreOwnerRequiredError: The artifact carries Policy content and ``owner`` is
+                ``None``.
+            RestoreConcurrencyConflictError: The single-tenant graph kept changing on every attempt.
+            RestoreGroupRejectedError: The gateway refused the write group; nothing was logged.
+            RestoreGraphWriteFailedError: The write log or the graph database failed; the restore
+                did not complete.
+            RestoreApplyPendingError: The write was committed to the log and is applied on recovery.
+            GraphWriteUnavailableError: ``open_gateway`` found no Graph Write Gateway.
+
+        Side Effects:
+            Emits ``started`` and then ``succeeded`` or ``failed`` log entries, reads the
+            single-tenant graph, and on success replaces the instrument's native and baseline graphs
+            and merges the single-tenant graph through the gateway as one logged group.
+        """
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class CatalogRestoreDependencies:
-    """Everything :func:`run_restoration_from_catalog_source` needs that is not per-request.
+    """Per-process collaborators of :func:`run_restoration_from_catalog_source`.
 
-    Composes the curated-content fetch step (``fetch_artifact``) alongside
-    the same restore-step shape :class:`RestoreDependencies` uses
-    (``open_db``/``single_tenant_graph_name``/``restore``) -- declared as its
-    own fields rather than nesting a :class:`RestoreDependencies` instance,
-    so a test can override just the fetch step or just the restore step
-    independently, mirroring every other ``*Dependencies`` bundle in this
-    package.
+    The fetch steps sit beside the same restore-step fields :class:`RestoreDependencies` holds. They
+    are separate fields, not a nested bundle, so a test can replace the fetch step or the restore
+    step on its own.
+
+    Attributes:
+        fetch_artifact: Fetches an instrument's manifest and blobs from a curated-content source.
+        fetch_catalog: Fetches the source's catalog listing, used to resolve the requested id.
+        resolve_effective_source: Returns the curated-content source to use for a configuration: the
+            persisted override when one exists, else the configured default. It raises
+            ``RuntimeConfigError`` when the override cannot be read.
+        open_db: Opens the read-only graph database handle for a service configuration.
+        single_tenant_graph_name: Returns the single-tenant graph name for a service configuration.
+        restore: The restore routine that verifies and writes the artifact.
+        graph_write_access: Returns the Graph Write Gateway access for a service configuration; it
+            raises ``GraphWriteUnavailableError`` when the service has none.
     """
 
     fetch_artifact: FetchArtifactCall
@@ -191,23 +275,20 @@ class CatalogRestoreDependencies:
 
 @dataclass(frozen=True, slots=True)
 class CatalogRestoreInfra:
-    """The true infra boundaries substitutable via the restore-from-catalog factory.
+    """The external boundaries a caller may substitute when building catalog-restore dependencies.
 
-    :func:`build_default_restore_from_catalog_dependencies` lets a caller substitute exactly
-    these four (issue #163 Slice E; ``fetch_catalog`` added by issue #184) -- never ``restore``
-    itself.
+    :func:`build_default_restore_from_catalog_dependencies` accepts exactly these four, and never
+    the restore routine itself, so a substitution replaces I/O without replacing restore logic. The
+    single-tenant graph name is left out because it is a pure lookup with no I/O.
 
-    Bundles ``fetch_artifact`` (the curated-content HTTP fetch), ``fetch_catalog`` (the
-    curated-catalog-listing HTTP fetch, used to resolve a requested instrument id
-    case-insensitively before the artifact fetch), ``resolve_effective_source`` (the
-    runtime-config-override-then-config-fallback resolution, fail closed), and ``open_db`` (the
-    FalkorDB client construction) -- mirrors ``ingestion_orchestration.GraphOpeners``'s own
-    "bundle every true infra boundary a factory has under one approved accessor" shape,
-    generalised here to a mixed HTTP+FalkorDB set of boundaries rather than ``GraphOpeners``'s
-    pure-FalkorDB set. ``single_tenant_graph_name`` is deliberately excluded -- a pure,
-    I/O-free name lookup no test has ever needed to vary, mirroring
-    ``build_default_near_miss_review_dependencies``'s own precedent of leaving a
-    no-substitution-need field out of its narrowed accessor entirely.
+    Attributes:
+        fetch_artifact: Fetches an instrument's manifest and blobs over HTTP from a curated-content
+            source.
+        fetch_catalog: Fetches the source's catalog listing over HTTP, used to resolve the requested
+            instrument id case-insensitively before the artifact fetch.
+        resolve_effective_source: Resolves the persisted source override, else the configured
+            default. It fails closed when the override cannot be read.
+        open_db: Opens the read-only graph database handle for a service configuration.
     """
 
     fetch_artifact: FetchArtifactCall
@@ -220,12 +301,7 @@ class CatalogRestoreInfra:
 
 
 def _to_instrument_manifest(payload: RestorationManifestPayload) -> InstrumentManifest:
-    """Convert the request body's nested manifest payload to an ``InstrumentManifest``.
-
-    Field-for-field, no renaming -- :class:`~ps_service.api.models.
-    RestorationManifestPayload` is a Pydantic mirror of this dataclass's own
-    fields (D1/D12).
-    """
+    """Copy the request body's manifest payload field for field into an ``InstrumentManifest``."""
     return InstrumentManifest(
         instrument_id=payload.instrument_id,
         celex=payload.celex,
@@ -245,9 +321,8 @@ def _to_restore_artifact(request_body: RestorationRequest) -> RestoreArtifact:
     """Decode the request body's base64 blobs into a ``RestoreArtifact``.
 
     Raises:
-        RestoreArtifactRejectedError: Either blob is not valid base64 -- a
-            malformed artifact is rejected the same way a checksum/
-            schema_version failure is (422), before any FalkorDB call.
+        RestoreArtifactRejectedError: Either blob is not valid base64. The artifact is rejected like
+            a checksum or schema-version failure (422), before any graph call.
     """
     try:
         baseline_blob = base64.b64decode(request_body.baseline_blob_base64, validate=True)
@@ -266,13 +341,13 @@ def _to_restore_artifact(request_body: RestorationRequest) -> RestoreArtifact:
 
 
 def _require_similarity_threshold(config: ServiceConfig) -> float:
-    """Return the resolved similarity threshold, or raise if it is unset.
+    """Return the configured Company Merge similarity threshold, or fail if it is unset.
 
-    Restore's offline dedup replay (D6) needs the same
-    ``PS_COMPANYMERGE_SIMILARITY_THRESHOLD`` value live ingestion's merge
-    stage requires. Raised before the delegate is ever called -- named stage
-    ``"configuration"`` since this is not a delegate failure, but the same
-    502/failing-stage shape a delegate failure would produce.
+    The restore replays convergence with the same threshold that live ingestion uses. The failure is
+    reported as stage ``configuration`` and is raised before the restore routine runs.
+
+    Raises:
+        RestoreStageFailedError: The threshold setting is missing (502, stage ``configuration``).
     """
     threshold = config.company_merge_similarity_threshold
     if threshold is None:
@@ -289,21 +364,26 @@ def _require_similarity_threshold(config: ServiceConfig) -> float:
 def _classify_restore_failure(
     exc: Exception, *, instrument_id: str, actor: str, emitter: LogEmitter | None
 ) -> RestoreStageFailedError:
-    """Classify a non-integrity/schema-version delegate failure into a ``RestoreStageFailedError``.
+    """Turn an unexpected restore failure into a ``RestoreStageFailedError`` naming its stage.
 
-    Unlike ``ingestion_orchestration._classify_stage_failure``, the delegate
-    (``restore_instrument``) has no per-stage granularity to report -- D8's
-    whole staged-write sequence is one function, not four named stages -- so
-    the stage name is derived from the exception's own class name (matched,
-    not imported, so this module never needs a module-level dependency on
-    ``ps_service.restore.errors``'s less-common types beyond the two already
-    imported for the 422 path).
+    The restore routine is one step, so the stage is derived from the exception's class name:
+    ``content_validation``, ``concurrency``, ``graph_write``, or ``restore`` for any other class.
+    When the exception is safe to show, the client reason is its scrubbed ``"<Type>: <message>"``
+    text, truncated to a fixed length. Otherwise the client reason is only ``"<stage> failed"``, and
+    the exception's class, message and traceback are logged server side with the instrument id and
+    caller so the real cause stays recoverable.
 
-    When the exception is NOT safe to surface (so the client only sees
-    ``"<stage> failed"``), its class, message and traceback are emitted
-    server-side with the instrument id and caller (issue #183, AC-BI-012) --
-    otherwise the real cause is unrecoverable from the service logs. The
-    client message is unchanged (AC-BI-013).
+    Args:
+        exc: The exception raised by the restore routine.
+        instrument_id: The instrument being restored, recorded on the failure log entry.
+        actor: The requesting client host, recorded as the caller on the failure log entry.
+        emitter: Log emitter, or ``None`` for the process default.
+
+    Returns:
+        The error to raise, carrying the stage and the client-safe reason.
+
+    Side Effects:
+        Emits one ``failed`` log entry when the exception is not safe to show.
     """
     exc_type_name = type(exc).__name__
     stage = {
@@ -338,7 +418,7 @@ def _classify_restore_failure(
 
 
 def _to_accepted_response(outcome: RestoreOutcome) -> RestorationAcceptedResponse:
-    """Map a ``RestoreOutcome`` to the ``POST /restorations`` success body."""
+    """Build the restore success body, one ``succeeded`` entry per stage the restore ran."""
     return RestorationAcceptedResponse(
         instrument_id=outcome.instrument_id,
         stages=[
@@ -348,21 +428,21 @@ def _to_accepted_response(outcome: RestoreOutcome) -> RestorationAcceptedRespons
 
 
 class _RestoreInfra(Protocol):
-    """The two graph-handle accessors both dependency bundles share."""
+    """The graph-handle accessors shared by both restore dependency bundles."""
 
     @property
     def open_db(self) -> Callable[[ServiceConfig], ReadOnlyDatabase]:
-        """Open the FalkorDB connection for the config."""
+        """Open the read-only graph database handle for the configuration."""
         ...
 
     @property
     def single_tenant_graph_name(self) -> Callable[[ServiceConfig], str]:
-        """Return the single-tenant graph name for the config."""
+        """Return the single-tenant graph name for the configuration."""
         ...
 
     @property
     def graph_write_access(self) -> Callable[[ServiceConfig], GraphWriteAccess]:
-        """Return the Graph Write Gateway access for the config (fails closed with none)."""
+        """Return the Graph Write Gateway access for the configuration; raise if there is none."""
         ...
 
 
@@ -376,14 +456,39 @@ def _perform_restore(
     invoke: Callable[[float, ReadOnlyDatabase, str, Callable[[], object], str], RestoreOutcome],
     emitter: LogEmitter | None,
 ) -> RestorationAcceptedResponse:
-    """Run the restore delegate (via ``invoke``) and translate its failures to API errors.
+    """Run the restore routine through ``invoke`` and translate its failures into API errors.
 
-    Shared by the upload and catalog paths (the artifact differs, the failure translation does
-    not). ``invoke`` receives ``(similarity_threshold, db, single_tenant_graph_name,
-    open_gateway, audit_event_id)`` and calls the path's own delegate shape. ``open_gateway``
-    resolves the process's Graph Write Gateway lazily, inside the delegate and after the
-    artifact verified, so a corrupt artifact is still a 422 when no gateway is installed; with
-    none installed the request fails closed (503, ``GraphWriteUnavailableError``).
+    Shared by the upload and catalog paths: the artifact differs, the failure translation does not.
+    ``invoke`` receives ``(similarity_threshold, db, single_tenant_graph_name, open_gateway,
+    audit_event_id)`` and calls the path's own restore routine. ``open_gateway`` looks up the
+    gateway lazily, inside the routine and after the artifact verified, so a corrupt artifact is
+    still rejected with 422 when no gateway is installed.
+
+    Args:
+        instrument_id: The instrument being restored, used in failure logging.
+        config: The resolved service configuration.
+        actor: The requesting client host.
+        dependencies: Source of the database handle, graph name and gateway access.
+        audit_event_id: Id of the opening audit row, handed to the restore routine.
+        invoke: Calls the restore routine with the values above.
+        emitter: Log emitter, or ``None`` for the process default.
+
+    Returns:
+        A :class:`RestorationAcceptedResponse` naming the completed stages.
+
+    Raises:
+        RestoreStageFailedError: The similarity threshold is unset, or the routine failed for any
+            reason other than those below (502).
+        RestoreArtifactRejectedError: The artifact fails checksum or schema-version verification
+            (422).
+        GraphWriteUnavailableError: The gateway lookup found no gateway (503); passed through
+            unchanged.
+        Exception: An error from opening the database handle or resolving the graph name propagates
+            unchanged.
+
+    Side Effects:
+        Opens the database handle, runs the restore routine (graph writes through the gateway), and
+        emits a failure log entry for an unsafe-to-show error.
     """
     threshold = _require_similarity_threshold(config)
     db = dependencies.open_db(config)
@@ -405,7 +510,7 @@ def _perform_restore(
     return _to_accepted_response(outcome)
 
 
-# --- audit (issue #195) ---------------------------------------------------
+# --- audit rows -----------------------------------------------------------
 
 
 def _audited_restore(
@@ -416,17 +521,35 @@ def _audited_restore(
     emitter: LogEmitter | None,
     restore: Callable[[str], RestorationAcceptedResponse],
 ) -> RestorationAcceptedResponse:
-    """Run ``restore`` between an ``instrument.restore`` opening row and a terminal row.
+    """Run ``restore`` between an ``instrument.restore`` opening audit row and a terminal row.
 
-    The opening row (``applied``, ``status=started``) is FAIL-CLOSED: if it cannot be written the
-    restore does not start and ``AuditTrailUnavailableError`` propagates (AC-BI-011). Its event id
-    is handed to ``restore``: it anchors every log group of the restore (issue #214, D-5). The
-    terminal row is BEST-EFFORT: ``succeeded`` (``applied``), ``rejected`` (the gateway refused the
-    group), ``committed_apply_pending`` (``applied``: committed to the graph log, applied on
-    recovery) or ``failed`` (``failed``, enumerated ``reason_code``); a write failure is logged
-    with the instrument id and run id and never changes the restore's result or error
-    (AC-BI-015). ``resource_id`` is the canonical instrument id. A run id is bound for the call
-    when none is, so those failure logs always carry one.
+    The opening row (``applied``, status ``started``) is fail-closed: when it cannot be written the
+    restore does not start. Its event id is handed to ``restore`` and anchors every log group of the
+    restore. The terminal row is best effort: ``succeeded`` (outcome ``applied``), ``rejected`` (the
+    gateway refused the group), ``committed_apply_pending`` (outcome ``applied``; committed to the
+    graph log and applied on recovery) or ``failed`` with an enumerated reason code. A terminal-row
+    write failure is logged with the instrument and run id and never changes the restore's result or
+    error. A run id is bound for the call when none is bound, so those log entries always carry one.
+
+    Args:
+        instrument_id: The canonical instrument id; the audit rows' resource id.
+        source: Where the artifact came from, ``"catalog"`` or ``"upload"``; recorded in the
+            details.
+        audit: The acting principal and audit store the rows are written to.
+        emitter: Log emitter, or ``None`` for the process default.
+        restore: Runs the restore, given the opening row's event id.
+
+    Returns:
+        The response ``restore`` returned.
+
+    Raises:
+        AuditTrailUnavailableError: The opening row could not be written; ``restore`` did not run.
+        Exception: Any error ``restore`` raises propagates unchanged after the terminal row is
+            attempted.
+
+    Side Effects:
+        Writes the opening and terminal audit rows and binds a run id for the call when none is
+        bound.
     """
     target = AuditTarget(INSTRUMENT_RESTORE_ACTION, INSTRUMENT_RESOURCE_TYPE, instrument_id)
     base = {"instrument_id": instrument_id, "source": source}
@@ -479,40 +602,43 @@ def run_restoration(
     owner: tuple[str, str] | None = None,
     emitter: LogEmitter | None = None,
 ) -> RestorationAcceptedResponse:
-    """Restore one curated instrument's artifact via the injected delegate.
+    """Restore one curated instrument from an uploaded artifact, with audit rows.
 
-    Audit (issue #195): once the body decodes, an ``instrument.restore`` opening row
-    (``source="upload"``) is written before the restore starts (fail-closed) and a terminal row
-    after it (best-effort), sharing :func:`_audited_restore` with the catalog path. A body that
-    cannot be decoded is rejected before any restore starts and writes no row.
+    Decodes the request body into an artifact, then runs the injected restore routine between an
+    ``instrument.restore`` opening audit row (``source="upload"``) and a terminal row. The opening
+    row is fail-closed and the terminal row best effort. A body that cannot be decoded is rejected
+    before any audit row is written. Failures from the routine are translated into API errors.
 
     Args:
-        request_body: The ``POST /restorations`` request body.
+        request_body: The upload request: instrument id, manifest, and base64-encoded baseline and
+            native blobs.
         config: The resolved service configuration.
-        actor: The requesting client host (mirrors ``ingestion_orchestration
-            .run_catalog_ingestion_pipeline``'s ``caller`` derivation).
-        dependencies: The injected restore dependency bundle (the production
-            bundle in production; a fake in fast tests).
-        owner: The restoring caller's verified ``(sub, iss)`` pair (issue #183),
-            which becomes the owner of any imported draft Policy; ``None`` when
-            no verified identity exists, in which case an artifact carrying
-            Policy content is refused.
-        audit: Who is acting and where the ``instrument.restore`` audit rows go.
-        emitter: Optional log emitter for the server-side failure-detail entry.
+        actor: The requesting client host, recorded as the caller.
+        dependencies: The restore collaborators (database opener, graph-name lookup, restore
+            routine, gateway access).
+        audit: The acting principal and audit store the ``instrument.restore`` rows are written to.
+        owner: The restoring caller's verified ``(sub, iss)`` pair. It owns any imported draft
+            Policy; ``None`` when there is no verified caller, in which case an artifact with Policy
+            content is refused.
+        emitter: Log emitter for the server-side failure entry, or ``None`` for the process default.
 
     Returns:
-        A :class:`RestorationAcceptedResponse` naming the completed stages.
+        A :class:`RestorationAcceptedResponse` naming the instrument and the completed stages.
 
     Raises:
         AuditTrailUnavailableError: The opening audit row could not be written; nothing was
             restored.
-        RestoreArtifactRejectedError: The artifact is malformed, or fails
-            checksum (D9) / schema_version (D10) verification (422).
-        GraphWriteUnavailableError: The artifact verified but the process has no Graph Write
-            Gateway (503); nothing was written. The opening audit row closes ``failed``.
-        RestoreStageFailedError: Any other failure, including a missing
-            similarity-threshold configuration value (502); a gateway refusal, an unreachable
-            store or a commit not yet applied is stage ``graph_write``.
+        RestoreArtifactRejectedError: A blob is not valid base64, or the artifact fails checksum or
+            schema-version verification (422).
+        GraphWriteUnavailableError: The artifact verified but the service has no Graph Write Gateway
+            (503); nothing was written. The terminal audit row records a failure.
+        RestoreStageFailedError: Any other failure, including an unset similarity-threshold setting
+            (502). A gateway refusal, an unreachable store or a commit not yet applied is stage
+            ``graph_write``.
+
+    Side Effects:
+        Writes the opening and terminal ``instrument.restore`` audit rows and, on success, replaces
+        the instrument's graphs through the Graph Write Gateway. Emits log entries.
     """
     artifact = _to_restore_artifact(request_body)
 
@@ -555,77 +681,58 @@ def run_restoration_from_catalog_source(
     owner: tuple[str, str] | None = None,
     emitter: LogEmitter | None = None,
 ) -> RestorationAcceptedResponse:
-    """Fetch and restore one curated instrument's artifact from the curated-content source.
+    """Fetch one curated instrument's artifact from the curated-content source and restore it.
 
-    Issue #125, ``POST /restorations/from-catalog`` (D-NEW-ROUTE) --
-    restores via the same delegate :func:`run_restoration` (the upload
-    path) uses. Since Slice 3, the source fetched from is the *effective*
-    curated-content source: a persisted override (a ``runtime_config`` row, issue #130) when
-    one exists, else ``config.curated_source_base_url``, resolved on every call via
-    ``dependencies.resolve_effective_source`` (AC-BI-013) before
-    ``dependencies.fetch_artifact`` is called -- an override read failure fails the request
-    closed (``CatalogSourceOverrideUnavailableError``, AC-BI-010) rather than falling back
-    to ``config.curated_source_base_url``. Before the artifact fetch, ``request_body.
-    instrument_id`` is resolved case-insensitively against ``dependencies.fetch_catalog``'s
-    own listing (issue #184, AC-BI-001) via :func:`~ps_service.curated_source.
-    instrument_lookup.resolve_canonical_instrument_id`, and the canonical (catalog-cased) id
-    is used for both the artifact fetch and every downstream audit entry (AC-BI-006) -- a
-    ``catalog.json``-fetch failure surfaces through the same ``CuratedSourceUnavailableError``
-    path as an artifact-fetch failure always has (AC-BI-005). The fetched artifact is passed to the
-    injected ``restore`` delegate unmodified -- the exact same D9 checksum /
-    D10 schema_version verification :func:`run_restoration` relies on runs
-    first and unconditionally inside that one shared delegate (never
-    duplicated here), so a fetched-but-corrupted or version-mismatched
-    artifact is rejected exactly like an uploaded one (AC-BI-007/009, mirrors
-    #66). The resolved effective source URL is passed through as ``source``
-    so the restore's own audit log entries carry it (AC-BI-011, mirrors #66
-    AC-BI-016) -- distinct from :func:`run_restoration`, whose call site
-    never passes ``source`` at all, keeping the upload path's audit log shape
-    byte-identical (D-AUDIT).
+    The source is the effective one: the persisted override when it exists, else
+    ``config.curated_source_base_url``, resolved on every call. An unreadable override fails the
+    request closed rather than falling back to the default. The requested id is matched
+    case-insensitively against the source's catalog listing, and the canonical (catalog-cased) id is
+    used for the artifact fetch and for every audit row. The fetched artifact is handed to the same
+    restore routine as an upload, which verifies checksums and schema version first, so a corrupted
+    or version-mismatched artifact is rejected exactly like an uploaded one. The source URL is
+    passed to the routine so its log entries record it.
+
+    An unknown, ambiguous or unfetchable id writes no audit row. Once the artifact is fetched, an
+    ``instrument.restore`` opening row (``source="catalog"``) is written before the restore starts
+    (fail-closed) and a terminal row after it (best effort).
 
     Args:
-        request_body: The ``POST /restorations/from-catalog`` request body
-            (just the instrument id to fetch).
-        config: The resolved service configuration -- names the effective
-            curated-content source URL to fetch from.
-        actor: The requesting client host (mirrors ``run_restoration``'s own
-            ``actor`` derivation).
-        dependencies: The injected fetch-and-restore dependency bundle (the
-            production bundle in production; a fake in fast tests).
-        owner: The restoring caller's verified ``(sub, iss)`` pair (issue #183),
-            the owner of any imported draft Policy; ``None`` when no verified
-            identity exists.
-        audit: Who is acting and where the ``instrument.restore`` audit rows go (issue #195).
-            After the canonical id is resolved and the artifact fetched, an opening row is
-            written (fail-closed) before the restore starts and a terminal row after it
-            (best-effort); an unknown, ambiguous or unfetchable id writes no row.
-        emitter: Optional log emitter for the server-side failure-detail entry.
+        request_body: The request: the instrument id to fetch, in any letter case.
+        config: The resolved service configuration; supplies the default source URL.
+        actor: The requesting client host, recorded as the caller.
+        dependencies: The fetch-and-restore collaborators.
+        audit: The acting principal and audit store the ``instrument.restore`` rows are written to.
+        owner: The restoring caller's verified ``(sub, iss)`` pair. It owns any imported draft
+            Policy; ``None`` when there is no verified caller.
+        emitter: Log emitter for the server-side failure entry, or ``None`` for the process default.
 
     Returns:
-        A :class:`RestorationAcceptedResponse` naming the completed stages.
+        A :class:`RestorationAcceptedResponse` naming the canonical instrument id and the completed
+        stages.
 
     Raises:
-        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
-            restored (issue #195).
-        CatalogSourceOverrideUnavailableError: The override could not be read (AC-BI-010) --
-            503, nothing fetched or restored.
-        CuratedSourceUnavailableError: The configured source is unreachable,
-            or the fetched artifact is missing/malformed (AC-BI-004/006) --
-            502, naming the source and instrument.
-        RestoreInstrumentIdAmbiguousError: ``request_body.instrument_id`` matches more
-            than one catalog entry case-insensitively (issue #184, AC-BI-003) -- 409,
-            naming the requested id and every colliding canonical id; nothing is
+        CatalogSourceOverrideUnavailableError: The source override could not be read (503); nothing
+            was fetched or restored.
+        CuratedSourceUnavailableError: The source is unreachable, or the catalog listing or artifact
+            is missing or malformed (502).
+        RestoreInstrumentIdAmbiguousError: The id matches more than one catalog entry
+            case-insensitively (409); nothing was fetched.
+        RestoreInstrumentIdNotFoundError: The id matches no catalog entry (404); nothing was
             fetched.
-        RestoreInstrumentIdNotFoundError: ``request_body.instrument_id`` matches no
-            catalog entry in any case (issue #184, AC-BI-004) -- 404, naming the
-            requested id and the closest candidate ids; nothing is fetched.
-        RestoreArtifactRejectedError: The fetched artifact fails checksum
-            (D9) / schema_version (D10) verification (422, AC-BI-007/009).
-        GraphWriteUnavailableError: The artifact verified but the process has no Graph Write
-            Gateway (503); nothing was written.
-        RestoreStageFailedError: Any other restore failure, including a
-            missing similarity-threshold configuration value (502); a gateway refusal, an
-            unreachable store or a commit not yet applied is stage ``graph_write``.
+        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
+            restored.
+        RestoreArtifactRejectedError: The fetched artifact fails checksum or schema-version
+            verification (422).
+        GraphWriteUnavailableError: The artifact verified but the service has no Graph Write Gateway
+            (503); nothing was written.
+        RestoreStageFailedError: Any other failure, including an unset similarity-threshold setting
+            (502). A gateway refusal, an unreachable store or a commit not yet applied is stage
+            ``graph_write``.
+
+    Side Effects:
+        Reads the persisted source override, makes HTTP requests to the source, writes the opening
+        and terminal ``instrument.restore`` audit rows and, on success, replaces the instrument's
+        graphs through the Graph Write Gateway. Emits log entries.
     """
     try:
         effective_source = dependencies.resolve_effective_source(config)
@@ -673,11 +780,11 @@ def run_restoration_from_catalog_source(
     )
 
 
-# --- default wiring (M6 -- every restore/company_merge import below is function-local) ---
+# --- default wiring (restore and company_merge imports below are function-local) ---
 
 
 def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
-    """Open the real FalkorDB connection for ``config``."""
+    """Open the production graph database connection for ``config``."""
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         connect_from_config,
     )
@@ -686,7 +793,7 @@ def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
 
 
 def _default_single_tenant_graph_name(config: ServiceConfig) -> str:
-    """Return the single-tenant (``policy_system``) graph name."""
+    """Return the single-tenant graph name; ``config`` is accepted but unused."""
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         single_tenant_graph_name,
     )
@@ -696,17 +803,14 @@ def _default_single_tenant_graph_name(config: ServiceConfig) -> str:
 
 
 def build_default_restore_dependencies() -> RestoreDependencies:
-    """Wire the real ``restore_instrument`` orchestration into a ``RestoreDependencies``.
+    """Build the production :class:`RestoreDependencies`.
 
-    ``restore_instrument`` is imported **function-locally** (here, and in the
-    opener helpers above) so that importing ``ps_service.main`` never
-    transitively loads ``ps_service.restore``/``ps_service.company_merge`` at
-    module load (M6 / the Process Harness decoupling guarantee) -- mirrors
-    ``ingestion_orchestration.build_default_pipeline_dependencies`` exactly.
+    The restore routine and Company Merge are imported inside the function, so importing the
+    application module never loads them; they load on first use at request time.
 
     Returns:
-        A :class:`RestoreDependencies` bound to the production restore
-        orchestration and the real FalkorDB connection/graph-name helpers.
+        A :class:`RestoreDependencies` bound to the production restore routine, graph database
+        connection, graph-name lookup and Graph Write Gateway access.
     """
     from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- function-local
         restore_instrument,
@@ -721,42 +825,27 @@ def build_default_restore_dependencies() -> RestoreDependencies:
 
 
 def _default_resolve_effective_source(config: ServiceConfig) -> EffectiveCatalogSource:
-    """Resolve the effective curated-content source (issue #125, AC-BI-013; #130, AC-BI-010).
+    """Resolve the effective curated-content source from the PS state database.
 
-    Reads the override from the PS state Postgres's ``runtime_config`` table -- no FalkorDB
-    involved. A failed read raises (fail closed) rather than falling back to the default.
+    Reads the source override from the runtime-config table; the graph database is not involved. A
+    failed read raises ``RuntimeConfigError`` instead of falling back to the default source.
     """
     store = PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config))
     return resolve_effective_source(config, store=store)
 
 
 def build_default_restore_from_catalog_infra() -> CatalogRestoreInfra:
-    """Return the real artifact fetch, catalog fetch, source resolution, and FalkorDB opener.
+    """Build the production external boundaries of the restore-from-catalog path.
 
-    The *only* moving parts :func:`build_default_restore_from_catalog_dependencies` lets a
-    caller substitute (issue #163 Slice E; ``fetch_catalog`` added by issue #184) -- four true
-    infra boundaries, never the real ``restore_instrument`` business logic sitting on top of
-    them. Extracted to its own
-    top-level function (rather than inlined in
-    :func:`build_default_restore_from_catalog_dependencies`) specifically so it is its own,
-    independently addressable module-level name: a caller-side ``monkeypatch.setattr(
-    "ps_service.api.restore_orchestration.build_default_restore_from_catalog_infra", ...)``
-    substitutes the fetch/resolve/open_db boundary alone, while
-    :func:`build_default_restore_from_catalog_dependencies` itself -- called with no
-    arguments, exactly as every production caller (`mcp_server.py`'s one call site) already
-    does -- still resolves this name at call time (ordinary Python late-binding for a bare
-    module-level call, mirroring ``ingestion_orchestration.build_default_graph_openers``'s/
-    ``near_miss_review_orchestration.build_default_near_miss_review_graph_opener``'s own
-    issue #163 Slice C/D precedent) and so picks up the substitution automatically, with zero
-    change to its own call sites. ``docs/coding-standards/approved-mock-boundaries.yaml``
-    lists this function itself as the approved boundary -- not
-    ``build_default_restore_from_catalog_dependencies``, which stays off that list since it
-    still bundles real business logic (``restore``) alongside this boundary.
+    Returns the four boundaries a caller may substitute: the artifact fetch, the catalog fetch, the
+    effective-source resolution and the graph database opener. It is its own module-level function
+    so a test can replace exactly these boundaries by patching this name;
+    :func:`build_default_restore_from_catalog_dependencies` looks the name up at call time and picks
+    the replacement up. The restore routine itself is never part of this bundle.
 
     Returns:
-        A :class:`CatalogRestoreInfra` bound to the production curated-content fetch step,
-        the production curated-catalog fetch step, the production `resolve_effective_source`
-        (issue #125, Slice 3), and the production FalkorDB connection opener.
+        A :class:`CatalogRestoreInfra` bound to the production curated-content fetch, catalog fetch,
+        effective-source resolution and graph database connection.
     """
     return CatalogRestoreInfra(
         fetch_artifact=fetch_artifact,
@@ -769,35 +858,19 @@ def build_default_restore_from_catalog_infra() -> CatalogRestoreInfra:
 def build_default_restore_from_catalog_dependencies(
     *, infra: CatalogRestoreInfra | None = None
 ) -> CatalogRestoreDependencies:
-    """Wire the real fetch-and-restore path into a ``CatalogRestoreDependencies``.
+    """Build the production :class:`CatalogRestoreDependencies`.
 
-    ``restore_instrument`` is imported **function-locally**, exactly like
-    :func:`build_default_restore_dependencies` (M6 -- ``ps_service.main``
-    never transitively loads ``ps_service.restore``/``ps_service.
-    company_merge`` at module load).
-
-    issue #163 Slice E narrowed this factory's own DI seam: ``infra`` is the *only*
-    substitutable parameter. There is deliberately no ``restore`` parameter any more --
-    ``restore`` is always the real, shipped ``ps_service.restore.restore_instrument.
-    restore_instrument``, unconditionally, with no way for a caller (test or otherwise) to
-    substitute fake business logic through this function's own signature. Before this
-    change, a caller could -- and every ``mcp_interface`` unit test covering this tool did --
-    replace this factory's *entire* return value wholesale, faking real restore business
-    logic in the name of substituting only the fetch/FalkorDB boundary beneath it (the
-    "delegate, don't reimplement" violation L2's MCP Interface Patterns section warns
-    against; see ``.orchestrator/tracker/issue-163/AUDIT_RAW/mcp_interface_part2.md``'s
-    DOMINANT FINDING). ``infra=None`` (the default -- every production caller, unchanged)
-    resolves :func:`build_default_restore_from_catalog_infra` at call time, so a
-    ``monkeypatch.setattr`` of *that* function (see its own docstring) is picked up
-    automatically even though this factory itself is never patched.
+    The restore routine is always the real ``restore_instrument``; only the external boundaries in
+    ``infra`` can be substituted. The routine is imported inside the function, so importing the
+    application module never loads it.
 
     Args:
-        infra: The fetch/effective-source/FalkorDB boundary bundle to use, or ``None``
-            (every production caller) to use the real one.
+        infra: The external boundaries to use, or ``None`` for the production ones from
+            :func:`build_default_restore_from_catalog_infra`, resolved at call time.
 
     Returns:
-        A :class:`CatalogRestoreDependencies` bound to the production restore entry point,
-        the production graph-name helper, and the given (or real) infra bundle.
+        A :class:`CatalogRestoreDependencies` bound to the production restore routine and graph-name
+        lookup, and to ``infra``'s boundaries.
     """
     from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- function-local
         restore_instrument,

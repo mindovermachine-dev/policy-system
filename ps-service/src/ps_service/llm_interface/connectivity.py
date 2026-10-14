@@ -1,10 +1,8 @@
-"""ps_service.llm_interface.connectivity — the startup readiness probe.
+"""Startup readiness probe for the LLM Provider.
 
-Unlike `falkordb_client.check_connectivity`'s cheap `list_graphs()` round-trip,
-there is no free "ping" for an LLM Provider — `check_connectivity` here makes
-one minimal real `route_completion` call and one minimal real `route_embedding`
-call, which is why `main.py` only calls it once at startup, not on every
-`/ready` poll (see issue #22).
+Unlike a database connectivity check, an LLM Provider has no free ping, so the probe makes
+one minimal real completion call and one minimal real embedding call. That cost is why the
+service runs it once at startup rather than on every readiness poll.
 """
 
 from __future__ import annotations
@@ -26,16 +24,30 @@ _PING_MESSAGE = "ping"
 def check_connectivity(config: ServiceConfig) -> None:
     """Confirm the configured LLM Provider is reachable for both completion and embedding.
 
-    LLM Interface is a hard-required dependency regardless of `ServiceConfig`'s own optionality
-    for `llm_interface_model`/`llm_interface_embed_model` (both `str | None`, unset in
-    configurations that never call this function) — raises `LlmProviderError` if either model is
-    unconfigured, without ever making a real call, distinct from a configured-but-unreachable
-    model.
+    The LLM Interface is a required dependency of the running service, although the
+    configuration leaves both model settings optional because some configurations never call
+    this probe. An unset model is reported as a configuration error before any provider call
+    is made, which distinguishes it from a configured model that is unreachable.
 
-    `route_completion`/`route_embedding` already record the outcome in
-    `ps_service.dependency_health` themselves on every call (this probe included), so a real
-    subsequent failure/success during normal operation continues to update the same live signal
-    this startup check seeds.
+    Args:
+        config: Service configuration. `llm_interface_model` (chat model) and
+            `llm_interface_embed_model` (embedding model) must both be set.
+
+    Returns:
+        None. Returning normally means both probe calls succeeded.
+
+    Raises:
+        LlmProviderError: A model setting is unset (message names the environment variable;
+            no provider call is made), or a probe call failed with a provider error or an
+            empty or malformed response.
+        LoggingLifecycleError: No log emitter is configured for the process (raised while
+            logging a probe call's outcome).
+
+    Side Effects:
+        Marks the `llm_interface` dependency unhealthy when a model is unset. Otherwise makes
+        one real completion call (message `"ping"`) and one real embedding call (text
+        `"ping"`); each call updates the dependency's health and writes a log entry, so later
+        calls in normal operation keep the same live signal current.
     """
     if config.llm_interface_model is None:
         error = LlmProviderError("PS_LLMINTERFACE_MODEL is not configured")

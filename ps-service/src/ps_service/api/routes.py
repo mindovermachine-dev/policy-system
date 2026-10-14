@@ -1,8 +1,9 @@
-"""``APIRouter`` factory for the PS Service REST API.
+"""``APIRouter`` factory and route handlers for the PS Service REST API.
 
-``build_api_router`` mirrors ``create_app`` being a factory (no module-level
-singleton router). ``create_app`` includes the returned router via
-``app.include_router``.
+Each handler is thin wiring: it derives the caller from the request, delegates to an
+orchestration function, and shapes the response model. Domain failures surface as API errors that
+the application's error handlers map to HTTP statuses. ``build_api_router`` is a factory, so no
+module-level router exists; the application includes the returned router once.
 """
 
 from __future__ import annotations
@@ -109,7 +110,17 @@ if TYPE_CHECKING:
 
 
 def _to_accepted_response(run_id: str, outcome: IngestionOutcome) -> IngestionAcceptedResponse:
-    """Map an :class:`IngestionOutcome` to the ``POST /ingestions`` success body."""
+    """Build the ``POST /ingestions`` success body from a finished ingestion.
+
+    Args:
+        run_id: The correlation id reported back to the caller.
+        outcome: The ingestion result: instrument id, source, ``fresh`` or ``already_ingested``
+            outcome, and the ordered stage reports.
+
+    Returns:
+        An :class:`IngestionAcceptedResponse` with one ``succeeded`` stage entry per stage report;
+        ``stages`` is empty when the instrument was already ingested.
+    """
     return IngestionAcceptedResponse(
         run_id=run_id,
         regulatory_instrument_id=outcome.regulatory_instrument_id,
@@ -133,78 +144,81 @@ async def create_ingestion(  # noqa: PLR0913, PLR0917 -- FastAPI dependency inje
     system_audit: Annotated[SystemAuditRecorder, Depends(provide_system_audit_recorder)],
     principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> IngestionAcceptedResponse:
-    """Trigger the in-process ingestion pipeline for one ``POST /ingestions`` request.
+    """Ingest one regulatory instrument and report the per-stage outcome (``POST /ingestions``).
 
-    A ``source: "catalog"`` request runs the full external pipeline (Ingestion ->
-    Domain Mapper -> Company Merge) for the named CELEX, off the event loop via
-    ``run_in_threadpool``, and returns the per-stage outcome (AC-BI-002) --
-    unless the resolved identifier already has a fully-merged
-    ``RegulatoryInstrument`` (issue #135), in which case Domain Mapper and
-    Company Merge are skipped entirely and the response reports
-    ``outcome="already_ingested"`` with an empty ``stages`` list. This
-    ``source: "catalog"`` path is gated behind
-    ``require_access_role(AccessRole.COMPLIANCE_OFFICER)`` (issue #145), checked
-    inline -- off the event loop, via ``run_in_threadpool`` -- immediately after
-    the ``source == "internal"`` branch has already returned, before any
-    Cellar/catalog pipeline dispatch begins; an unprivileged or unauthenticated
-    caller gets a 403 (``AccessDeniedError``) with no pipeline call made. The
-    catalog path then calls ``run_audited_catalog_ingestion`` (issue #195), which writes an
-    ``ingestion_run.submit`` row first (503 if the audit trail is unavailable; nothing runs),
-    calls ``resolve_ingestion_entry`` (issue #193) -- the same
-    shared function the ``ingest_regulation`` MCP tool calls. It rejects a
-    ``short_name`` already claimed by a different CELEX in the live graph, then
-    resolves *every* CELEX -- curated or not, the catalog is never consulted --
-    through Cellar/ELI under the request's own ``short_name``, used verbatim, before
-    the pipeline runs. A CELEX Cellar does not know 404s, a resolved CELEX runs the
-    pipeline, and the document is fetched at most once for the whole request
-    (AC-BI-006). A stage failure -- including a Cellar/ELI outage during resolution --
-    surfaces as a 502 naming the failing stage
-    (AC-BI-007/008). A ``source: "internal"`` request carries the intake
-    document's content directly in the body (issue #91 -- no server-side path
-    resolution) and runs the internal-seed pipeline (issue #54, S2): today,
-    one ``internal_ingestion`` stage that parses, validates, mints, and
-    persists the submission into ``{short}_baseline``/``{short}_native``.
-    The internal path has no role gate (AC-BI-011, out of scope for issue #145), but a
-    document that carries a Policy needs a verified caller (issue #227): the imported tree is
-    created as a draft owned by that caller, so an unauthenticated request is refused with 401
-    ``owner_required`` before any stage runs.
+    The request body selects the source. Both sources run synchronously and the call returns only
+    when the run has finished. Pipeline work runs off the event loop.
+
+    ``source: "catalog"`` ingests the CELEX named in the request. The caller must hold the
+    ``ComplianceOfficer`` access role. The role is checked before any pipeline work starts, so an
+    unauthenticated or unprivileged caller gets 403 and nothing runs. An ``ingestion_run.submit``
+    audit row is written first; if it cannot be written nothing runs. The request's ``short_name``
+    is rejected when a different CELEX in the graph already claims it. The CELEX is then resolved
+    through Cellar/ELI under that ``short_name`` (used verbatim), and the document is fetched at
+    most once per request. The Ingestion, Domain Mapper and Company Merge stages then run in order.
+    A CELEX already present in the graph is rejected with 409. If the pipeline finds the instrument
+    already fully merged it skips Domain Mapper and Company Merge and returns
+    ``outcome="already_ingested"`` with an empty ``stages`` list.
+
+    ``source: "internal"`` ingests an intake document carried in the request body. It needs no
+    access role, runs one ``internal_ingestion`` stage that parses, validates and persists the
+    document into the instrument's baseline and native graphs, and writes through the Graph Write
+    Gateway. A document that carries a Policy needs a verified caller, because the imported Policy
+    tree becomes a draft owned by that caller; without one the request is refused with 401 before
+    any stage runs.
 
     Args:
-        request_body: The ``source``-discriminated request body.
-        http_request: The raw request, for the caller host (M4) and for the
-            ``ComplianceOfficer`` gate on the catalog path (issue #145).
-        run_id: The request-scoped, server-minted run id (injected); used as
-            the effective correlation id only when the request body doesn't
-            supply its own (catalog requests only -- see ``effective_run_id``).
+        request_body: The request body, discriminated by ``source``: ``"catalog"`` with a CELEX,
+            ``short_name`` and optional ``run_id``, or ``"internal"`` with the document content.
+        http_request: The raw request; supplies the client host recorded as the caller and the
+            identity for the ``ComplianceOfficer`` check on the catalog path.
+        run_id: The server-minted run id for this request (injected). Used as the run's correlation
+            id unless a catalog request supplies its own ``run_id``.
         config: The resolved service configuration (injected).
-        dependencies: The pipeline dependency bundle (injected; overridden in tests).
-        audit: Who is acting and where the ``ingestion_run`` audit rows go (injected;
+        dependencies: The pipeline collaborators: graph openers, stage runners and adapters
+            (injected).
+        audit: The acting principal and audit store for the ``ingestion_run`` rows (injected;
             catalog path only).
-        gateway: The Graph Write Gateway, or ``None`` when the service has none (injected;
-            internal path only).
-        system_audit: Records the system audit row the internal path's graph groups are logged
-            under (injected; internal path only).
-        principal: The verified caller, or ``None`` under the local-test bypass (injected);
-            the owner of an imported Policy tree (internal path only).
+        gateway: The Graph Write Gateway, or ``None`` when the service has none (injected; internal
+            path only).
+        system_audit: Records the system audit row the internal path's graph groups are logged under
+            (injected; internal path only).
+        principal: The verified caller, or ``None`` when no verified identity exists, such as under
+            the local-test bypass (injected). Owner of an imported Policy tree (internal path only).
 
     Returns:
-        An :class:`IngestionAcceptedResponse` with the run id and per-stage outcomes.
+        An :class:`IngestionAcceptedResponse` with the effective run id, the instrument id, the
+        source, the outcome (``fresh`` or ``already_ingested``) and one entry per executed stage.
+        ``stages`` is empty for ``already_ingested``.
 
     Raises:
-        InternalIngestOwnerRequiredError: The internal document carries a Policy and there is
-            no verified caller (401; issue #227).
-        AccessDeniedError: The caller (catalog path only) lacks
-            ``ComplianceOfficer`` (403; issue #145).
-        CatalogIdentifierNotFoundError: The CELEX does not exist on Cellar/ELI (404).
-        ShortNameCollisionError: The request's ``short_name`` is already claimed by
-            a different CELEX in the graph (409).
-        InternalSeedValidationError: The internal request's document fails
-            structural or shape validation (422).
-        PipelineStageError: A pipeline stage raised (502).
-        AuditTrailUnavailableError: The ``ingestion_run.submit`` row could not be written; nothing
-            ran (503; issue #195, catalog path; issue #208, internal path's system row).
-        GraphWriteUnavailableError: The internal path found no Graph Write Gateway; nothing ran
-            (503; issue #208).
+        InternalIngestOwnerRequiredError: The internal document carries a Policy and there is no
+            verified caller (401).
+        AccessDeniedError: Catalog path only; no verified caller, or the caller lacks the
+            ``ComplianceOfficer`` role (403).
+        AuthorizationStoreUnavailableError: Catalog path only; the authorization store could not be
+            read to check the role (503).
+        AuditTrailUnavailableError: The opening audit row could not be written (503); nothing ran.
+            Catalog path: the ``ingestion_run.submit`` row. Internal path: the system audit row.
+        CatalogIdentifierNotFoundError: Catalog path only; the CELEX does not exist on Cellar/ELI
+            (404).
+        CelexAlreadyIngestedError: Catalog path only; the CELEX is already in the graph (409).
+        ShortNameCollisionError: Catalog path only; the ``short_name`` is already claimed by a
+            different CELEX (409).
+        IngestionConfigIncompleteError: The pipeline configuration is incomplete (503).
+        InternalSeedValidationError: Internal path only; the document fails structural or shape
+            validation (422).
+        GraphWriteUnavailableError: Internal path only; the service has no Graph Write Gateway
+            (503); nothing ran.
+        PipelineStageError: A pipeline stage, or the identity and pre-flight reads, failed (502).
+            The error names the failing stage.
+
+    Side Effects:
+        Catalog path: writes an ``ingestion_run.submit`` audit row and a terminal
+        ``ingestion_run.complete`` row, fetches the document from Cellar/ELI, and writes the
+        ingested instrument to the graph. Internal path: writes the document into the instrument's
+        graphs through the Graph Write Gateway, records a system audit row, and emits run log
+        entries.
     """
     caller = http_request.client.host if http_request.client else "unknown"
     if request_body.source == "internal":
@@ -242,53 +256,37 @@ async def list_curated_catalog(
     ],
     principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> CuratedCatalogResponse:
-    """Return every curated instrument (external and internal), AC-BI-011.
+    """List every curated instrument, external and internal (``GET /catalog``).
 
-    This is **not** CELEX-filtered -- it reflects the full ``catalog.json``
-    listing so ``ps-cli catalog list`` sees internal-source instruments too.
-    Since issue #125, the listing is fetched at runtime from the *effective*
-    curated-content source: a persisted override (issue #130: a ``runtime_config`` row in the
-    PS state Postgres) when one exists, else ``config.curated_source_base_url``
-    (default: the public Policy System GitHub repo, AC-BI-001; overridable with no code change,
-    AC-BI-002), resolved on every call via the injected
-    ``dependencies.resolve_effective_source`` (AC-BI-013) before fetching via
-    ``dependencies.fetch_catalog`` (AC-BI-003) -- no longer read from the
-    build-time-packaged ``catalog.json`` copy. Both calls are blocking and
-    dispatched off the event loop via ``run_in_threadpool``, mirroring
-    ``create_change_check``'s own async/blocking-call pattern. Depends on no
-    FalkorDB/LLM fixture at all -- a ``TestClient`` call against an app with
-    neither wired still succeeds (AC-BI-011's "no LLM provider configured").
-    Fails closed when the override cannot be read (issue #130, AC-BI-010, D-FAILCLOSED,
-    ``ps_service.curated_source.resolve.resolve_effective_source``): the request is not
-    served from ``config.curated_source_base_url`` in its place.
-
-    ``principal`` (issue #58, AC-BI-005) is the representative route this
-    plan proves the ``get_principal`` dependency against end to end: the
-    verified caller identity ``RestAuthMiddleware`` bound to this request, or
-    ``None`` under the local-test bypass (#67). This endpoint has no
-    identity-scoped behavior of its own, so the value is accepted but
-    otherwise unused here -- the dependency is equally importable by any
-    other route that does need it.
+    The listing is not filtered by CELEX, so internal-source instruments appear too. It is fetched
+    on every call from the effective curated-content source: the persisted source override when one
+    exists, otherwise ``config.curated_source_base_url``. Both lookups are blocking and run off the
+    event loop. The call needs no graph or LLM provider.
 
     Args:
-        config: The resolved service configuration (injected) -- names the
-            effective curated-content source URL to fetch from.
-        dependencies: The curated-catalog dependency bundle (injected;
-            overridden in tests with a fake HTTP transport).
-        principal: The request's verified identity, injected by
-            :func:`ps_service.api.dependencies.get_principal`.
+        config: The resolved service configuration (injected); supplies the default curated-content
+            source URL.
+        dependencies: The curated-catalog collaborators that resolve the effective source and fetch
+            its listing (injected).
+        principal: The verified caller, or ``None`` when no verified identity exists (injected).
+            Accepted but unused: the listing is the same for every caller.
 
     Returns:
-        A :class:`CuratedCatalogResponse` listing every curated entry.
+        A :class:`CuratedCatalogResponse` with one entry per curated instrument (instrument id,
+        title, source type, jurisdiction). An empty ``instruments`` list means the source lists
+        none.
 
     Raises:
-        CatalogSourceOverrideUnavailableError: The override could not be read (AC-BI-010) --
-            HTTP 503, never a silent fallback to the env-var/default source.
-        CuratedSourceUnavailableError: The configured source is unreachable,
-            or its response is missing/malformed (AC-BI-006) -- HTTP 502,
-            never a silent fallback to stale data.
+        CatalogSourceOverrideUnavailableError: The source override could not be read (503). The
+            request is never served from the default source in its place.
+        CuratedSourceUnavailableError: The effective source is unreachable, or its response is
+            missing or malformed (502). Stale data is never served.
+
+    Side Effects:
+        Reads the persisted source override from the PS state database and makes one HTTP request to
+        the curated-content source. Nothing is written.
     """
-    del principal  # unused on this representative route; see docstring above
+    del principal  # accepted for the dependency, not used: the listing is the same for all callers
     try:
         effective_source = await run_in_threadpool(dependencies.resolve_effective_source, config)
     except RuntimeConfigError as exc:
@@ -313,10 +311,9 @@ async def list_curated_catalog(
 def _restore_owner(principal: Principal | None) -> tuple[str, str] | None:
     """Return the restoring caller's ``(sub, iss)`` pair, or ``None`` with no verified identity.
 
-    Issue #183: the owner of any draft Policy a restore imports. Only a verified
-    principal is ever used -- there is no synthetic fallback on this surface, so an
-    internal restore without a verified caller is refused rather than creating an
-    ownerless draft.
+    The pair owns any draft Policy that an internal restore or ingestion imports. There is no
+    synthetic fallback on this surface: a request without a verified caller yields ``None``, and an
+    artifact that carries Policy content is then refused rather than imported without an owner.
     """
     return (principal.sub, principal.iss) if principal is not None else None
 
@@ -329,34 +326,42 @@ async def create_restoration(
     audit: Annotated[AuditContext, Depends(provide_audit_context)],
     principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> RestorationAcceptedResponse:
-    """Restore one curated instrument's artifact (D5, ``POST /restorations``).
+    """Restore one curated instrument from an uploaded artifact (``POST /restorations``).
 
-    Issue #145: gated at the route level behind ``require_access_role(AccessRole.
-    COMPLIANCE_OFFICER)`` (a caller lacking that role, including a ``SystemAdmin``/
-    ``SystemOwner`` with no explicit grant, is denied before this function ever
-    runs -- no change to this function's own body). Thin route wiring over
-    ``restore_orchestration.run_restoration`` -- a
-    checksum/schema_version rejection surfaces as 422
-    (``RestoreArtifactRejectedError``), any other restore failure as 502
-    naming the failing stage (``RestoreStageFailedError``).
+    The caller must hold the ``ComplianceOfficer`` access role; the route rejects any other caller,
+    including a ``SystemAdmin`` or ``SystemOwner`` without an explicit grant, before this handler
+    runs. The request carries the instrument manifest and the baseline and native graph blobs,
+    base64-encoded. The handler decodes them, verifies the checksums and schema version, and
+    restores the instrument into the graph. An artifact that carries Policy content is imported as a
+    draft owned by the caller and is refused when there is no verified caller.
 
     Args:
-        request_body: The artifact plus its manifest (base64-encoded blobs).
-        http_request: The raw request, for the caller host (mirrors
-            ``create_ingestion``'s own ``caller`` derivation).
+        request_body: The instrument manifest and the base64-encoded baseline and native blobs.
+        http_request: The raw request; supplies the client host recorded as the acting caller.
         config: The resolved service configuration (injected).
-        dependencies: The restore dependency bundle (injected; overridden in tests).
-        audit: Who is acting and where the ``instrument.restore`` audit rows go (injected,
-            issue #195).
-        principal: The verified caller (injected); becomes the owner of any imported
-            draft Policy (issue #183). ``None`` when no verified identity exists.
+        dependencies: The restore collaborators: graph opener, graph-name lookup, restore routine
+            and Graph Write Gateway access (injected).
+        audit: The acting principal and audit store for the ``instrument.restore`` rows (injected).
+        principal: The verified caller, or ``None`` when no verified identity exists (injected).
+            Owner of any imported draft Policy.
 
     Returns:
-        A :class:`RestorationAcceptedResponse` naming the completed stages.
+        A :class:`RestorationAcceptedResponse` with the instrument id and one ``succeeded`` entry
+        per completed restore stage.
 
     Raises:
-        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
-            restored (HTTP 503).
+        AuditTrailUnavailableError: The opening audit row could not be written (503); nothing was
+            restored.
+        RestoreArtifactRejectedError: A blob is not valid base64, or the artifact fails checksum or
+            schema-version verification (422).
+        GraphWriteUnavailableError: The artifact verified but the service has no Graph Write Gateway
+            (503); nothing was written.
+        RestoreStageFailedError: Any other restore failure, including a missing similarity-threshold
+            setting (502). The error names the failing stage.
+
+    Side Effects:
+        Writes an ``instrument.restore`` opening audit row and a terminal row, and writes the
+        restored instrument and its graphs through the Graph Write Gateway.
     """
     caller = http_request.client.host if http_request.client else "unknown"
     return run_restoration(
@@ -379,42 +384,52 @@ async def create_restoration_from_catalog(
     audit: Annotated[AuditContext, Depends(provide_audit_context)],
     principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> RestorationAcceptedResponse:
-    """Fetch and restore one curated instrument's artifact from the curated-content source.
+    """Fetch one curated instrument from the curated-content source and restore it.
 
-    Issue #125, ``POST /restorations/from-catalog`` -- an additive sibling to
-    ``POST /restorations`` (D-NEW-ROUTE): the upload path
-    (``create_restoration``) is entirely unaffected by this route. Issue #145:
-    gated at the route level behind ``require_access_role(AccessRole.
-    COMPLIANCE_OFFICER)`` (a caller lacking that role, including a ``SystemAdmin``/
-    ``SystemOwner`` with no explicit grant, is denied before this function ever
-    runs -- no change to this function's own body). Thin route
-    wiring over ``restore_orchestration.run_restoration_from_catalog_source``:
-    an unreachable source or a missing/malformed fetched artifact surfaces as
-    502 (``CuratedSourceUnavailableError``, AC-BI-004/006); a checksum/
-    schema_version rejection surfaces as 422
-    (``RestoreArtifactRejectedError``, AC-BI-007/009, mirrors #66); any other
-    restore failure surfaces as 502 naming the failing stage
-    (``RestoreStageFailedError``).
+    ``POST /restorations/from-catalog``. The caller must hold the ``ComplianceOfficer`` access role;
+    the route rejects any other caller, including a ``SystemAdmin`` or ``SystemOwner`` without an
+    explicit grant, before this handler runs. The requested instrument id is matched
+    case-insensitively against the effective source's catalog listing, then the artifact is fetched
+    and restored exactly as an uploaded artifact is: checksums and schema version are verified
+    first. An artifact that carries Policy content is imported as a draft owned by the caller and is
+    refused when there is no verified caller.
 
     Args:
-        request_body: The curated instrument id to fetch and restore.
-        http_request: The raw request, for the caller host (mirrors
-            ``create_restoration``'s own ``caller`` derivation).
-        config: The resolved service configuration (injected) -- names the
-            effective curated-content source URL to fetch from.
-        dependencies: The fetch-and-restore dependency bundle (injected;
-            overridden in tests).
-        audit: Who is acting and where the ``instrument.restore`` audit rows go (injected,
-            issue #195).
-        principal: The verified caller (injected); becomes the owner of any imported
-            draft Policy (issue #183). ``None`` when no verified identity exists.
+        request_body: The curated instrument id to fetch and restore (any letter case).
+        http_request: The raw request; supplies the client host recorded as the acting caller.
+        config: The resolved service configuration (injected); supplies the default curated-content
+            source URL.
+        dependencies: The fetch-and-restore collaborators: catalog and artifact fetchers, source
+            resolver, graph opener and restore routine (injected).
+        audit: The acting principal and audit store for the ``instrument.restore`` rows (injected).
+        principal: The verified caller, or ``None`` when no verified identity exists (injected).
+            Owner of any imported draft Policy.
 
     Returns:
-        A :class:`RestorationAcceptedResponse` naming the completed stages.
+        A :class:`RestorationAcceptedResponse` with the canonical instrument id and one
+        ``succeeded`` entry per completed restore stage.
 
     Raises:
-        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
-            restored (HTTP 503).
+        AuditTrailUnavailableError: The opening audit row could not be written (503); nothing was
+            restored.
+        CatalogSourceOverrideUnavailableError: The source override could not be read (503); nothing
+            was fetched.
+        CuratedSourceUnavailableError: The source is unreachable, or the catalog listing or artifact
+            is missing or malformed (502).
+        RestoreInstrumentIdAmbiguousError: The id matches more than one catalog entry
+            case-insensitively (409).
+        RestoreInstrumentIdNotFoundError: The id matches no catalog entry (404).
+        RestoreArtifactRejectedError: The fetched artifact fails checksum or schema-version
+            verification (422).
+        GraphWriteUnavailableError: The artifact verified but the service has no Graph Write Gateway
+            (503); nothing was written.
+        RestoreStageFailedError: Any other restore failure, including a missing similarity-threshold
+            setting (502). The error names the failing stage.
+
+    Side Effects:
+        Makes HTTP requests to the curated-content source, reads the persisted source override,
+        writes an ``instrument.restore`` opening audit row and a terminal row, and writes the
+        restored instrument and its graphs through the Graph Write Gateway.
     """
     caller = http_request.client.host if http_request.client else "unknown"
     return run_restoration_from_catalog_source(
@@ -433,35 +448,53 @@ async def create_export(
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     dependencies: Annotated[ExportDependencies, Depends(provide_export_dependencies)],
 ) -> ExportAcceptedResponse:
-    """Export one already-ingested curated instrument (issue #71, ``POST /exports``).
+    """Export one ingested curated instrument as a portable artifact (``POST /exports``).
 
-    Issue #145: gated at the route level behind ``require_access_role(AccessRole.
-    COMPLIANCE_OFFICER)`` (a caller lacking that role, including a ``SystemAdmin``/
-    ``SystemOwner`` with no explicit grant, is denied before this function ever
-    runs -- no change to this function's own body). Thin route wiring over
-    ``export_orchestration.run_export`` -- an unknown
-    or malformed ``instrument_id`` surfaces as 404
-    (``ExportInstrumentNotFoundError``), a missing embedding model config as
-    503 (``ExportConfigIncompleteError``), and any other export failure as
-    502 naming the failing stage (``ExportStageFailedError``).
+    The caller must hold the ``ComplianceOfficer`` access role; the route rejects any other caller,
+    including a ``SystemAdmin`` or ``SystemOwner`` without an explicit grant, before this handler
+    runs. The export reads the instrument's baseline and native graphs, backfills missing embeddings
+    through the Graph Write Gateway, and packages both graphs with a manifest, in the form ``POST
+    /restorations`` accepts.
 
     Args:
         request_body: The instrument id to export.
-        http_request: The raw request, for the caller host (mirrors
-            ``create_restoration``'s own ``caller`` derivation).
+        http_request: The raw request; supplies the client host recorded as the acting caller.
         config: The resolved service configuration (injected).
-        dependencies: The export dependency bundle (injected; overridden in tests).
+        dependencies: The export collaborators: graph reader and export routine (injected).
 
     Returns:
-        An :class:`ExportAcceptedResponse` carrying the manifest and both
-        base64-encoded graph blobs.
+        An :class:`ExportAcceptedResponse` carrying the manifest and the base64-encoded baseline and
+        native graph blobs.
+
+    Raises:
+        ExportInstrumentNotFoundError: The instrument id is malformed or names no ingested
+            instrument (404).
+        ExportConfigIncompleteError: The embedding model is not configured (503).
+        GraphWriteUnavailableError: The service has no Graph Write Gateway (503); nothing was opened
+            or written.
+        AuditTrailUnavailableError: The ``export.instrument`` audit row could not be written (503);
+            nothing was computed or written.
+        ExportStageFailedError: Any other export failure (502). The error names the failing stage.
+
+    Side Effects:
+        Writes an ``export.instrument`` audit row, writes embedding backfills through the Graph
+        Write Gateway, emits ``started`` and terminal log entries, and uses a temporary scratch
+        directory that is removed afterwards.
     """
     caller = http_request.client.host if http_request.client else "unknown"
     return run_export(request_body, config=config, actor=caller, dependencies=dependencies)
 
 
 def _to_change_check_response(result: ChangeCheckResult) -> ChangeCheckResponse:
-    """Map a ``ChangeCheckResult`` to the ``POST /change-checks`` success body."""
+    """Build the ``POST /change-checks`` success body from a finished sweep.
+
+    Args:
+        result: The sweep result: the run id and one outcome per tracked instrument.
+
+    Returns:
+        A :class:`ChangeCheckResponse` with the run id and one entry per tracked instrument, in the
+        sweep's order.
+    """
     return ChangeCheckResponse(
         run_id=result.run_id,
         instruments=[
@@ -482,33 +515,42 @@ async def create_change_check(
     dependencies: Annotated[ChangeCheckDependencies, Depends(provide_change_check_dependencies)],
     audit: Annotated[AuditContext, Depends(provide_audit_context)],
 ) -> ChangeCheckResponse:
-    """Sweep every tracked instrument for amendments and re-ingest any found.
+    """Check every tracked instrument for amendments and re-ingest any that changed.
 
-    Issue #145: gated at the route level behind ``require_access_role(AccessRole.
-    COMPLIANCE_OFFICER)`` (a caller lacking that role, including a ``SystemAdmin``/
-    ``SystemOwner`` with no explicit grant, is denied before this function ever
-    runs -- no change to this function's own body). Delegates to
-    ``change_check_orchestration.run_change_check_sweep`` (D2's
-    algorithm, PLAN.md §4): opens the merged ``policy_system`` graph, reads
-    the tracked-instrument set once, polls for amendments, and reports one
-    outcome per tracked instrument -- ``current``/``poll_failed``/
-    ``not_configured`` (Slice 2) and, for a detected amendment,
-    ``amendment_reingested``/``reingest_failed`` (Slice 3, D2-D7's
-    ``_reingest_one`` call contract). ``skipped`` (the national-transposition
-    guard, D10) is still a structural gap until Slice 4 wires it.
+    ``POST /change-checks``. The caller must hold the ``ComplianceOfficer`` access role; the route
+    rejects any other caller, including a ``SystemAdmin`` or ``SystemOwner`` without an explicit
+    grant, before this handler runs. The sweep reads the set of tracked instruments once, polls the
+    source for an amendment to each, and re-ingests those that changed. The sweep is blocking and
+    runs off the event loop.
+
+    Per-instrument outcomes are ``current`` (no amendment), ``poll_failed`` (the source could not be
+    polled), ``not_configured`` (the instrument has no amendment-poll configuration),
+    ``amendment_reingested``, ``reingest_failed`` and ``skipped`` (the instrument cannot be
+    re-ingested, such as a national transposition). A failed re-ingest does not stop the sweep.
 
     Args:
-        run_id: The request-scoped run id (injected by ``provide_run_id``).
+        run_id: The server-minted run id for this request (injected); carried on every log entry of
+            the sweep.
         config: The resolved service configuration (injected).
-        dependencies: The change-check dependency bundle (injected;
-            overridden in tests).
-        audit: The verified principal and audit store (issue #195): each re-ingest the
-            sweep runs is audited as an ``ingestion_run`` pair with this actor; an
-            unwritable opening row aborts the sweep with HTTP 503.
+        dependencies: The change-check collaborators: graph openers, amendment poller and re-ingest
+            routine (injected).
+        audit: The acting principal and audit store (injected). Each re-ingest that runs is audited
+            as an ``ingestion_run`` submit and complete pair attributed to this principal.
 
     Returns:
-        A :class:`ChangeCheckResponse` with the run id and each tracked
-        instrument's outcome.
+        A :class:`ChangeCheckResponse` with the run id and one entry per tracked instrument. An
+        empty ``instruments`` list means no instrument is tracked.
+
+    Raises:
+        GraphWriteUnavailableError: The service has no Graph Write Gateway (503); nothing was opened
+            or written.
+        AuditTrailUnavailableError: An opening audit row for a re-ingest could not be written (503).
+            The sweep stops before that instrument; earlier re-ingests stay recorded but their
+            outcomes are not returned.
+
+    Side Effects:
+        Polls the amendment source, re-ingests changed instruments into the graph, writes
+        ``ingestion_run`` audit rows, and emits sweep and per-instrument log entries.
     """
     result = await run_in_threadpool(
         run_change_check_sweep,
@@ -526,35 +568,32 @@ async def list_near_misses(
         NearMissReviewDependencies, Depends(provide_near_miss_review_dependencies)
     ],
 ) -> PendingReviewListResponse:
-    """Return every unresolved `PendingReview` (issue #35, `GET /near-misses`, AC-BI-003).
+    """List every unresolved near-miss review (``GET /near-misses``).
 
-    Thin route wiring over ``near_miss_review_orchestration.run_list_near_misses``
-    -- opens the single-tenant graph and reads back every unresolved
-    `PendingReview` node, mirroring ``create_restoration``'s "call the
-    orchestration function directly (not ``run_in_threadpool``)" pattern:
-    this is a fast, bounded Cypher read, not a multi-minute pipeline.
+    A near-miss review is a pending Company Merge decision: two entities similar enough that a
+    person must choose to keep them separate or merge them. The read is a fast, bounded graph query
+    and runs directly on the event loop.
 
     Args:
         config: The resolved service configuration (injected).
-        dependencies: The near-miss review dependency bundle (injected;
-            overridden in tests).
+        dependencies: The near-miss review collaborators: graph opener and review reader (injected).
 
     Returns:
-        A :class:`PendingReviewListResponse` carrying one entry per
-        unresolved `PendingReview` node.
+        A :class:`PendingReviewListResponse` with one entry per unresolved review. An empty list
+        means nothing awaits a decision.
+
+    Side Effects:
+        Reads the graph. Nothing is written.
     """
     return run_list_near_misses(config=config, dependencies=dependencies)
 
 
 def _approval_base_url(request: Request) -> str:
-    """Derive `{scheme}://{host}` for a pending approval's link (CHANGES.md F2).
+    """Return the ``{scheme}://{host}`` prefix for a pending approval's link.
 
-    Mirrors `ps_service.auth.middleware._resource_metadata_url`'s own
-    "scheme + host off the live request, never hardcoded" pattern, so the
-    link works correctly under a local dev bind, a `kind` NodePort, and a
-    prod ClusterIP+Ingress alike. `signable_link_host` then rewrites a
-    loopback IP literal to `localhost`, without which the link a local bind
-    produces could not be signed at all (issue #196).
+    Scheme and host come from the live request, never from configuration, so the link works under a
+    local bind, a NodePort and an ingress alike. A loopback IP literal host is rewritten to
+    ``localhost``, because a link on a bare loopback address cannot be signed in a browser.
     """
     return f"{request.url.scheme}://{signable_link_host(request.url.netloc)}"
 
@@ -571,52 +610,49 @@ async def resolve_near_miss(
     principal: Annotated[Principal | None, Depends(get_principal)],
     audit: Annotated[AuditContext, Depends(provide_audit_context)],
 ) -> ResolveReviewResponse:
-    """Resolve one `PendingReview` (issue #35, `POST /near-misses/{review_id}/resolve`).
+    """Resolve one near-miss review by keeping the entities separate or merging them.
 
-    `decision="keep-separate"` (AC-BI-004) is unaffected by issue #131: it
-    deletes only the `PendingReview` record, exactly as before -- thin route
-    wiring over `near_miss_review_orchestration.run_resolve_near_miss`,
-    unchanged. A `review_id` that doesn't exist or was already resolved
-    raises `PendingReviewNotFoundError` (-> HTTP 404, AC-BI-008); no graph
-    write happens on that path.
+    ``POST /near-misses/{review_id}/resolve``.
 
-    `decision="merge"` (issue #131, CHANGES.md F1) no longer executes the
-    merge synchronously: it requires a real, verified `principal` (fails
-    closed with HTTP 401 -- `MergeApprovalRequiresAuthenticatedCallerError`
-    -- before any Postgres or FalkorDB write, for an unauthenticated caller
-    or one under the local-test bypass) and calls
-    `passkey_signing.service.create_merge_pending_approval` -- the exact same
-    function the MCP `near_misses_resolve` tool's own merge branch calls, so
-    there is never a second, parallel gating mechanism (F1's own fix). The
-    response carries `pending_approval_id`/`approval_url`/`expires_at`
-    instead of `winner_id`/`loser_id`, which stay `None` until that approval
-    is actually signed (a later slice).
+    ``decision="keep-separate"`` deletes only the review record, writing an audit row first.
+
+    ``decision="merge"`` does not merge synchronously. It requires a verified caller and creates a
+    pending passkey approval. The merge itself runs only after that approval is signed, in a
+    separate step, and is audited then. The response carries ``pending_approval_id``,
+    ``approval_url`` and ``expires_at``; ``winner_id`` and ``loser_id`` stay empty. A caller with no
+    verified identity is refused before anything is written.
 
     Args:
-        review_id: The `PendingReview` id to resolve (path parameter).
-        request_body: The resolve decision.
-        http_request: The raw request, for the approval link's `{base_url}`
-            (merge only).
+        review_id: The review to resolve (path parameter).
+        request_body: The decision, ``"keep-separate"`` or ``"merge"``.
+        http_request: The raw request; supplies the scheme and host for the approval link (merge
+            only).
         config: The resolved service configuration (injected).
-        dependencies: The near-miss review dependency bundle (injected;
-            overridden in tests).
-        store: The pending-approval store (injected; overridden in tests).
-        principal: The request's verified identity, or `None` under the
-            local-test bypass (injected).
-        audit: Who is acting and where the `near_miss.resolve` audit rows go (injected;
-            `keep-separate` only: a merge is audited when its approval is signed).
+        dependencies: The near-miss review collaborators: graph opener and review reader/resolver
+            (injected).
+        store: The pending-approval store the merge approval is persisted in (injected).
+        principal: The verified caller, or ``None`` when no verified identity exists (injected).
+            Required for ``merge``; becomes the approval's requester.
+        audit: The acting principal and audit store for the ``near_miss.resolve`` rows (injected;
+            used by ``keep-separate`` only).
 
     Returns:
-        A :class:`ResolveReviewResponse` naming the resolved review and
-        decision.
+        A :class:`ResolveReviewResponse` naming the review and decision. For ``merge`` it also
+        carries the pending approval id, link and expiry.
 
     Raises:
-        AuditTrailUnavailableError: `decision="keep-separate"` and the opening audit row could
-            not be written; nothing was resolved (HTTP 503).
-        MergeApprovalRequiresAuthenticatedCallerError: `decision="merge"`
-            with no real, verified `principal` (HTTP 401).
-        PendingReviewNotFoundError: `review_id` doesn't exist or was
-            already resolved (HTTP 404).
+        MergeApprovalRequiresAuthenticatedCallerError: ``decision="merge"`` and no verified caller
+            (401). Nothing is written.
+        PendingReviewNotFoundError: The review does not exist or was already resolved (404).
+        GraphWriteUnavailableError: ``keep-separate`` and the service has no Graph Write Gateway
+            (503); nothing was audited or resolved.
+        AuditTrailUnavailableError: ``keep-separate`` and the opening audit row could not be written
+            (503); nothing was resolved.
+
+    Side Effects:
+        ``keep-separate``: writes a ``near_miss.resolve`` audit row and deletes the review record
+        through the Graph Write Gateway. ``merge``: inserts one pending-approval row in the PS state
+        database; the graph and audit trail are unchanged.
     """
     if request_body.decision == "keep-separate":
         return run_resolve_near_miss(
@@ -652,28 +688,30 @@ async def check_merge_pending_approval(
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     principal: Annotated[Principal | None, Depends(get_principal)],
 ) -> PendingApprovalStatusResponse:
-    """Resumable status check for a merge's pending approval (issue #131, CHANGES.md F1).
+    """Report the status of a merge's pending approval (``GET /near-misses/approvals/{id}``).
 
-    Uses the identical store-backed lookup-plus-ownership-check logic the
-    MCP `near_misses_check_approval` tool uses
-    (`passkey_signing.service.check_pending_approval`) -- an unknown id and
-    an id belonging to a different caller are never distinguished (both
-    raise the same `PendingApprovalNotFoundError`, AC-BI-015's leak-nothing
-    rule).
+    Lets a caller resume after a merge was requested. The status is ``pending``, ``expired`` or
+    ``signed``. An unknown id, an id that belongs to another caller and a request with no verified
+    caller are indistinguishable, so the response reveals nothing about approvals the caller does
+    not own.
 
     Args:
-        pending_approval_id: The pending approval id to look up (path parameter).
-        store: The pending-approval store (injected; overridden in tests).
-        principal: The request's verified identity, or `None` under the
-            local-test bypass (injected).
+        pending_approval_id: The pending approval id returned by the merge request (path parameter).
+        store: The pending-approval store to read from (injected).
+        principal: The verified caller, or ``None`` when no verified identity exists (injected). The
+            approval must belong to this caller.
 
     Returns:
-        A :class:`PendingApprovalStatusResponse` for the caller's own
-        pending approval.
+        A :class:`PendingApprovalStatusResponse` with the approval id, its status, the review and
+        decision it covers, and, once signed, the merge's ``winner_id`` and ``loser_id``. ``error``
+        holds the failure detail when the signed merge failed.
 
     Raises:
-        PendingApprovalNotFoundError: `pending_approval_id` is unknown, or
-            belongs to a different caller (HTTP 404).
+        PendingApprovalNotFoundError: The id is unknown, belongs to a different caller, or there is
+            no verified caller (404).
+
+    Side Effects:
+        Reads the pending-approval store. Nothing is written.
     """
     actor = (principal.sub, principal.iss) if principal is not None else None
     status = check_pending_approval(
@@ -693,30 +731,34 @@ async def check_merge_pending_approval(
 
 
 async def get_ingestion_status(run_id: str) -> IngestionStatusResponse:
-    """Return ``run_id``'s currently-executing pipeline stage, best-effort.
+    """Report the pipeline stage currently executing for a run (``GET /ingestions/{run_id}``).
 
-    Always 200, including for an unknown, already-completed, or
-    not-yet-started ``run_id`` (``stage: null``) -- a best-effort live-progress
-    read over ``ps_service.api.run_status``, not authoritative resource
-    retrieval (AC-BI-008, D4). ``IngestionAcceptedResponse`` is unaffected by
-    this endpoint (AC-BI-011).
+    A best-effort live-progress read, not a record lookup. It always answers 200, including for a
+    run id that is unknown, already finished or not yet started; in those cases ``stage`` is empty.
 
     Args:
         run_id: The run id to look up (path parameter).
 
     Returns:
-        An :class:`IngestionStatusResponse` carrying ``run_id`` and the
-        currently-recorded stage, or ``None`` if none is recorded.
+        An :class:`IngestionStatusResponse` with ``run_id`` and the stage currently recorded for it,
+        or ``None`` when no stage is recorded.
     """
     return IngestionStatusResponse(run_id=run_id, stage=get_stage(run_id))
 
 
 def build_api_router() -> APIRouter:
-    """Build the PS Service REST ``APIRouter``.
+    """Build the REST ``APIRouter`` that serves the PS Service API.
+
+    A fresh router is returned on every call, so each application instance owns its own routes.
+    Routes: ``GET /catalog``, ``POST /ingestions``, ``GET /ingestions/{run_id}``, ``POST
+    /restorations``, ``POST /restorations/from-catalog``, ``POST /exports``, ``POST
+    /change-checks``, ``GET /near-misses``, ``POST /near-misses/{review_id}/resolve`` and ``GET
+    /near-misses/approvals/{pending_approval_id}``. The restore, export and change-check routes
+    require the ``ComplianceOfficer`` access role through a route-level dependency; the catalog
+    ingestion path checks the same role inside its handler.
 
     Returns:
-        An ``APIRouter`` exposing ``GET /catalog``, ``POST /ingestions``,
-        and ``GET /ingestions/{run_id}``.
+        An ``APIRouter`` holding all of the routes above, ready for ``include_router``.
     """
     router = APIRouter()
     router.add_api_route("/catalog", list_curated_catalog, methods=["GET"])

@@ -1,19 +1,16 @@
-"""Invitations: PS Service's own Authentik invitation-stage integration (issue #140).
+"""Invitations: PS Service's own Authentik invitation-stage integration.
 
-Owns the one responsibility of creating Authentik invitations on behalf of
-the `invite_user` MCP tool, using PS Service's own configured service
-credential (`PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`) -- never a
-caller-supplied token. Named for what this component does (create
-invitations), not the vendor it calls -- see
-`docs/architecture/ps-solution-architecture.md`'s `ps.service.invitations`
-Component-table row.
+Owns the one responsibility of creating Authentik invitations on behalf of the `invite_user` MCP
+tool, using PS Service's own configured service credential
+(`PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`) -- never a caller-supplied token. Named for
+what the component does (create invitations), not the vendor it calls; see the
+`ps.service.invitations` row of the Component table in
+`docs/architecture/ps-solution-architecture.md`.
 
-Re-exports `create_invitation`/`InvitationResult`/`AuthentikTransport`
-(`ps_service.invitations.client`), `require_authentik_credential_configured`
-(`ps_service.invitations.startup`), and this component's domain-specific
-errors (`ps_service.invitations.errors`), matching every other component
-package's own front-door re-export convention (e.g.
-`ps_service.curated_source`, `ps_service.query_engine`).
+Re-exports the audited orchestration (`invite_user_audited`), the raw call (`create_invitation`,
+`InvitationResult`, `AuthentikTransport`), the audit action (`USER_INVITE_ACTION`,
+`UserInviteDetails`), the startup check (`require_authentik_credential_configured`) and the
+component's errors, following the front-door convention of every other component package.
 """
 
 from __future__ import annotations

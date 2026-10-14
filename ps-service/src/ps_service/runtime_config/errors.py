@@ -1,7 +1,7 @@
-"""Domain-specific exception types for `ps_service.runtime_config` (issue #130).
+"""Domain-specific exception types for `ps_service.runtime_config`.
 
 One exception type per distinct failure boundary this component owns, never a generic
-`Exception`/`ValueError` (L1/L2 Error Handling). Every type derives from
+`Exception`/`ValueError`. Every type derives from
 `RuntimeConfigError` so a read path that must fail closed on *any* config problem can
 catch one base type.
 
@@ -15,19 +15,28 @@ from __future__ import annotations
 
 
 class RuntimeConfigError(Exception):
-    """Base type of every `ps_service.runtime_config` error."""
+    """Base type of every `ps_service.runtime_config` error.
+
+    Catch this type where a read path must fail closed on any runtime-configuration problem.
+    """
 
 
 class RuntimeConfigUnknownKeyError(RuntimeConfigError):
-    """The named key is not in the registry (AC-BI-005); raised before any connection or write."""
+    """The named key is not in the registry.
+
+    Raised before any database connection is opened or row written. The caller supplied a key
+    name that no component registered; correct the name rather than retry.
+    """
 
 
 class RuntimeConfigInvalidValueError(RuntimeConfigError):
-    """A value failed its key's type check or validator (AC-BI-005).
+    """A value failed its key's type check or validator.
 
-    Raised before any write on `set`, and on `get` when a stored row no longer validates
+    Raised before any write on `set`, and on `get` when a stored row fails validation
     (a hand-edited row never reaches a caller). The message is the validator's own reason,
-    or a fixed sentence for a type mismatch -- never the offending value itself.
+    or a fixed sentence for a type mismatch -- never the offending value itself. For a
+    supplied value the caller should send a corrected one; for a stored row the key must be
+    reset or overwritten with a valid value.
     """
 
 
@@ -36,23 +45,34 @@ PERSISTENCE_MESSAGE = "The runtime configuration write failed and was not applie
 
 
 class RuntimeConfigUnavailableError(RuntimeConfigError):
-    """The PS state Postgres could not be reached or read (AC-BI-010).
+    """The PS state Postgres could not be reached or read.
 
-    Fixed, detail-free message.
+    Fixed, detail-free message. The caller fails closed and may retry later; the driver error
+    is chained via `from`.
     """
 
     def __init__(self, message: str = UNAVAILABLE_MESSAGE) -> None:
-        """Default to the one fixed message; never build it from driver or connection text."""
+        """Build the error with a fixed message.
+
+        Args:
+            message: Text of the error; defaults to the fixed `UNAVAILABLE_MESSAGE`. Callers
+                must not build it from host, port or driver text.
+        """
         super().__init__(message)
 
 
 class RuntimeConfigPersistenceError(RuntimeConfigError):
-    """A `set`/`reset` write or its `audit_events` insert failed (AC-BI-011).
+    """A `set`/`reset` write or its `audit_events` insert failed.
 
     Raised after the transaction was rolled back, so neither the state change nor the audit
     row was applied. Fixed, detail-free message; the driver error is chained via `from`.
     """
 
     def __init__(self, message: str = PERSISTENCE_MESSAGE) -> None:
-        """Default to the one fixed message; never build it from driver text."""
+        """Build the error with a fixed message.
+
+        Args:
+            message: Text of the error; defaults to the fixed `PERSISTENCE_MESSAGE`. Callers
+                must not build it from driver text.
+        """
         super().__init__(message)

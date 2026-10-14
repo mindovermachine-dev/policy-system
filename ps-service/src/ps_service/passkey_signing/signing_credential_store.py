@@ -1,10 +1,10 @@
-"""PostgreSQL persistence for `signing_credentials` (issue #131, PLAN.md §1.2).
+"""PostgreSQL persistence for `signing_credentials`, the enrolled passkeys of approvers.
 
-`SigningCredentialStore` is the `Protocol` the companion-browser router
-(`passkey_signing.router`) depends on -- `PsycopgSigningCredentialStore` is
-the real implementation. Mirrors `ps_service.passkey_signing.store`'s exact
-connection strategy: one short-lived `psycopg.connect(...)` per call, opened
-via the same `connect_from_config`, closed via `with`, no pool.
+`SigningCredentialStore` is the `Protocol` that the companion-browser router
+(`passkey_signing.router`) depends on; `PsycopgSigningCredentialStore` is the real implementation.
+Connection strategy matches `ps_service.passkey_signing.store`: one short-lived `psycopg`
+connection per call, opened by that module's `connect_from_config` and closed by a `with` block,
+no pool. Driver failures surface as `SigningCredentialPersistenceError`.
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ if TYPE_CHECKING:
 
 
 class SigningCredentialStore(Protocol):
-    """Persistence seam for `signing_credentials` rows.
+    """Persistence seam for `signing_credentials` rows: enroll, list, look up and update a passkey.
 
-    Constructor-injected wherever it is needed (no DI framework, L2's "plain
-    constructor injection" rule), mirroring `PendingApprovalStore`'s own
-    shape exactly.
+    Constructor-injected into the ceremony router, which depends on this `Protocol` and never on
+    `PsycopgSigningCredentialStore` directly, so a test can substitute an in-memory fake. Every
+    method raises `SigningCredentialPersistenceError` when the Postgres call fails.
     """
 
     def create_signing_credential(
@@ -42,11 +42,27 @@ class SigningCredentialStore(Protocol):
         sign_count: int,
         rp_id: str | None,
     ) -> SigningCredentialRow:
-        """Insert a newly-enrolled credential; return the created row.
+        """Insert a newly enrolled credential and return the created row.
 
-        `rp_id` is the relying-party id the enrollment ceremony actually ran
-        under, so the credential can later be matched to the host presenting
-        the approval link (issue #196).
+        Args:
+            actor_subject: Identity-provider subject of the approver who enrolled it.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            credential_id: The authenticator's credential id (raw bytes).
+            public_key: The credential's public key, as returned by registration verification.
+            sign_count: The authenticator's initial signature counter.
+            rp_id: The WebAuthn relying-party id the enrollment ceremony ran under, so the
+                credential can later be matched to the host presenting the approval link; `None`
+                records no binding.
+
+        Returns:
+            The stored `SigningCredentialRow` with its generated id and creation time.
+
+        Raises:
+            SigningCredentialPersistenceError: the insert failed, the connection could not be
+                opened, or no row was returned. Nothing is stored.
+
+        Side Effects:
+            Opens a connection, inserts and commits one `signing_credentials` row.
         """
         ...
 
@@ -55,36 +71,91 @@ class SigningCredentialStore(Protocol):
     ) -> tuple[SigningCredentialRow, ...]:
         """Return this actor's credentials enrolled under `rp_id`.
 
-        Scoped to one `rp_id` (issue #196): a credential enrolled elsewhere
-        cannot produce an assertion here, so advertising it in
-        `allowCredentials` only yields an unexplained browser-side failure.
+        Scoped to one `rp_id`: a credential enrolled under another relying party cannot produce an
+        assertion here, so advertising it in `allowCredentials` would only cause an unexplained
+        browser-side failure. Rows with no recorded `rp_id` never match.
+
+        Args:
+            actor_subject: Identity-provider subject of the approver.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            rp_id: The relying-party id of the host presenting the approval link.
+
+        Returns:
+            The matching `SigningCredentialRow`s; empty when the actor has none under `rp_id`.
+
+        Raises:
+            SigningCredentialPersistenceError: the lookup failed or the connection could not be
+                opened.
+
+        Side Effects:
+            Opens a connection and reads rows; writes nothing.
         """
         ...
 
     def has_any_for_actor(self, *, actor_subject: str, actor_issuer: str, rp_id: str) -> bool:
         """Return whether at least one credential is enrolled for this actor under `rp_id`.
 
-        Backs `POST /approvals/{id}/summary`'s `needs_enrollment` field
-        (CHANGES.md F2) and AC-BI-003's "opening a pending approval guides
-        them through one-time self-serve enrollment" branch -- which must
-        trigger again on a host this actor has not enrolled on (issue #196).
+        Backs the approval summary's `needs_enrollment` flag, so an approver who opens the link on
+        a host they have not enrolled on is guided through enrollment again.
+
+        Args:
+            actor_subject: Identity-provider subject of the approver.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            rp_id: The relying-party id of the host presenting the approval link.
+
+        Returns:
+            `True` if the actor has at least one credential under `rp_id`, `False` otherwise.
+
+        Raises:
+            SigningCredentialPersistenceError: the lookup failed or the connection could not be
+                opened.
+
+        Side Effects:
+            Opens a connection and reads rows; writes nothing.
         """
         ...
 
     def get_by_credential_id(self, credential_id: bytes) -> SigningCredentialRow | None:
-        """Return the row whose `credential_id` matches, or `None` if none exists.
+        """Return the credential row with this credential id.
 
-        Issue #131 Slice 3: backs `.../sign/verify`'s actor-identity binding
-        check (AC-BI-005) -- the credential resolved by the assertion's own
+        Backs the signing verification's identity binding: the credential named by the assertion's
         `rawId` must belong to the pending approval's own actor.
+
+        Args:
+            credential_id: The authenticator's credential id (raw bytes).
+
+        Returns:
+            The matching `SigningCredentialRow`, or `None` if no credential has that id.
+
+        Raises:
+            SigningCredentialPersistenceError: the lookup failed or the connection could not be
+                opened.
+
+        Side Effects:
+            Opens a connection and reads one row; writes nothing.
         """
         ...
 
     def update_sign_count(self, *, credential_id: bytes, sign_count: int) -> None:
-        """Persist the authenticator's latest reported `sign_count`.
+        """Persist the authenticator's latest reported signature counter.
 
-        Called after a successful `webauthn.verify_authentication_response`
-        (issue #131 Slice 3, PLAN.md §3 step (b)).
+        Call after a successful WebAuthn authentication verification, so the next assertion is
+        checked against the new counter (cloned-authenticator detection).
+
+        Args:
+            credential_id: The authenticator's credential id (raw bytes).
+            sign_count: The counter value reported by the authenticator's latest assertion.
+
+        Returns:
+            None.
+
+        Raises:
+            SigningCredentialPersistenceError: the update failed or the connection could not be
+                opened.
+
+        Side Effects:
+            Opens a connection, updates and commits the `sign_count` column. An unknown
+            credential id updates nothing and raises nothing.
         """
         ...
 
@@ -108,9 +179,8 @@ RETURNING id, actor_subject, actor_issuer, credential_id, public_key, sign_count
 _SELECT_COLUMNS = (
     "id, actor_subject, actor_issuer, credential_id, public_key, sign_count, created_at, rp_id"
 )
-# `rp_id = %(rp_id)s` excludes a NULL `rp_id` on its own (SQL three-valued
-# logic), which is exactly the wanted behaviour for a row predating the column
-# (AC-BI-015) -- no explicit IS NOT NULL needed.
+# `rp_id = %(rp_id)s` excludes a NULL `rp_id` on its own (SQL three-valued logic), which is the
+# wanted behaviour for a credential enrolled before relying-party ids were recorded.
 _SELECT_BY_ACTOR = (
     f"SELECT {_SELECT_COLUMNS} FROM signing_credentials "  # noqa: S608 - fixed literal, no interpolated user input
     "WHERE actor_subject = %(actor_subject)s AND actor_issuer = %(actor_issuer)s "
@@ -127,10 +197,10 @@ WHERE credential_id = %(credential_id)s
 
 
 def _row_from_record(record: Sequence[object]) -> SigningCredentialRow:
-    """Map one raw `psycopg` result row (fixed column order, see `_SELECT_COLUMNS`) to a row.
+    """Map one raw `psycopg` result row (column order `_SELECT_COLUMNS`) to a credential row.
 
-    `cast()` is unavoidable at exactly this one boundary, mirroring
-    `store._row_from_record`'s own documented rationale (L2 cast() policy).
+    `cast()` is needed at this single boundary because a tuple-row result has no per-column
+    static type.
     """
     (
         row_id,
@@ -155,15 +225,18 @@ def _row_from_record(record: Sequence[object]) -> SigningCredentialRow:
 
 
 class PsycopgSigningCredentialStore:
-    """Real `SigningCredentialStore` backed by PostgreSQL via `psycopg[binary]` (PLAN.md §0.6).
+    """`SigningCredentialStore` backed by PostgreSQL via `psycopg`.
 
-    Every method opens, uses, and closes its own connection -- no pool, no
-    cached connection held across calls, mirroring
-    `PsycopgPendingApprovalStore` exactly.
+    Every method opens, uses and closes its own connection (no pool, no connection held across
+    calls) and raises `SigningCredentialPersistenceError` on any driver failure.
     """
 
     def __init__(self, config: ServiceConfig) -> None:
-        """Store `config`; no connection is opened until a method is called."""
+        """Keep `config` for later connections; opens none.
+
+        Args:
+            config: Service configuration holding the `passkey_signing_postgres_*` settings.
+        """
         self._config = config
 
     def create_signing_credential(
@@ -176,7 +249,27 @@ class PsycopgSigningCredentialStore:
         sign_count: int,
         rp_id: str | None,
     ) -> SigningCredentialRow:
-        """Insert a newly-enrolled credential; return the created row."""
+        """Insert a newly enrolled credential and return the created row.
+
+        Args:
+            actor_subject: Identity-provider subject of the approver who enrolled it.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            credential_id: The authenticator's credential id (raw bytes).
+            public_key: The credential's public key, as returned by registration verification.
+            sign_count: The authenticator's initial signature counter.
+            rp_id: The WebAuthn relying-party id the enrollment ran under; `None` records no
+                binding.
+
+        Returns:
+            The stored `SigningCredentialRow` with its generated id and creation time.
+
+        Raises:
+            SigningCredentialPersistenceError: the insert failed, the connection could not be
+                opened, or no row was returned. Nothing is stored.
+
+        Side Effects:
+            Opens a connection, inserts and commits one `signing_credentials` row.
+        """
         try:
             with connect_from_config(self._config) as conn, conn.cursor() as cur:
                 cur.execute(
@@ -204,7 +297,25 @@ class PsycopgSigningCredentialStore:
     def list_for_actor(
         self, *, actor_subject: str, actor_issuer: str, rp_id: str
     ) -> tuple[SigningCredentialRow, ...]:
-        """Return this actor's credentials enrolled under `rp_id`."""
+        """Return this actor's credentials enrolled under `rp_id`.
+
+        Rows with no recorded `rp_id` never match.
+
+        Args:
+            actor_subject: Identity-provider subject of the approver.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            rp_id: The relying-party id of the host presenting the approval link.
+
+        Returns:
+            The matching `SigningCredentialRow`s; empty when the actor has none under `rp_id`.
+
+        Raises:
+            SigningCredentialPersistenceError: the lookup failed or the connection could not be
+                opened.
+
+        Side Effects:
+            Opens a connection and reads rows; writes nothing.
+        """
         try:
             with connect_from_config(self._config) as conn, conn.cursor() as cur:
                 cur.execute(
@@ -223,13 +334,43 @@ class PsycopgSigningCredentialStore:
         return tuple(_row_from_record(record) for record in records)
 
     def has_any_for_actor(self, *, actor_subject: str, actor_issuer: str, rp_id: str) -> bool:
-        """Return whether at least one credential is enrolled for this actor under `rp_id`."""
+        """Return whether at least one credential is enrolled for this actor under `rp_id`.
+
+        Args:
+            actor_subject: Identity-provider subject of the approver.
+            actor_issuer: Identity-provider issuer of `actor_subject`.
+            rp_id: The relying-party id of the host presenting the approval link.
+
+        Returns:
+            `True` if the actor has at least one credential under `rp_id`, `False` otherwise.
+
+        Raises:
+            SigningCredentialPersistenceError: the lookup failed or the connection could not be
+                opened.
+
+        Side Effects:
+            Opens a connection and reads rows; writes nothing.
+        """
         return bool(
             self.list_for_actor(actor_subject=actor_subject, actor_issuer=actor_issuer, rp_id=rp_id)
         )
 
     def get_by_credential_id(self, credential_id: bytes) -> SigningCredentialRow | None:
-        """Return the row whose `credential_id` matches, or `None` if none exists."""
+        """Return the credential row with this credential id.
+
+        Args:
+            credential_id: The authenticator's credential id (raw bytes).
+
+        Returns:
+            The matching `SigningCredentialRow`, or `None` if no credential has that id.
+
+        Raises:
+            SigningCredentialPersistenceError: the lookup failed or the connection could not be
+                opened.
+
+        Side Effects:
+            Opens a connection and reads one row; writes nothing.
+        """
         try:
             with connect_from_config(self._config) as conn, conn.cursor() as cur:
                 cur.execute(_SELECT_BY_CREDENTIAL_ID, {"credential_id": credential_id})
@@ -241,7 +382,23 @@ class PsycopgSigningCredentialStore:
         return _row_from_record(record) if record is not None else None
 
     def update_sign_count(self, *, credential_id: bytes, sign_count: int) -> None:
-        """Persist the authenticator's latest reported `sign_count`."""
+        """Persist the authenticator's latest reported signature counter.
+
+        Args:
+            credential_id: The authenticator's credential id (raw bytes).
+            sign_count: The counter value reported by the authenticator's latest assertion.
+
+        Returns:
+            None.
+
+        Raises:
+            SigningCredentialPersistenceError: the update failed or the connection could not be
+                opened.
+
+        Side Effects:
+            Opens a connection, updates and commits the `sign_count` column. An unknown
+            credential id updates nothing and raises nothing.
+        """
         try:
             with connect_from_config(self._config) as conn, conn.cursor() as cur:
                 cur.execute(

@@ -1,4 +1,4 @@
-"""ps_service.llm_interface.embedding — the RouteEmbedding action."""
+"""Embedding routing for `ps_service.llm_interface`: `route_embedding`."""
 
 from __future__ import annotations
 
@@ -29,7 +29,33 @@ def route_embedding(
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> EmbeddingResult:
-    """RouteEmbedding: route an embedding request to the configured LLM Provider via LiteLLM."""
+    """Embed one text with the configured LLM Provider and return its vector.
+
+    Args:
+        text: The text to embed; must be non-empty.
+        model: Provider-qualified embedding model identifier.
+        timeout: Maximum seconds to wait for the provider; must be positive. Defaults to 60.
+        call_embedding: Transport to call instead of LiteLLM, for tests or alternative
+            providers. None selects `default_embedding_caller`.
+        emitter: Log emitter for the call's log entry. None uses the process default emitter.
+
+    Returns:
+        An `EmbeddingResult` holding the vector and the model id the provider reported
+        serving (falling back to `model` when the provider reports none).
+
+    Raises:
+        LlmProviderError: The provider call failed (`openai.OpenAIError` from the transport,
+            kept as `__cause__`), or the response had no embedding data or an empty vector.
+        LoggingLifecycleError: `emitter` is None and no process default emitter has been
+            configured (raised while logging the outcome).
+
+    Side Effects:
+        Makes one network call to the LLM Provider. Marks the `llm_interface` dependency
+        unhealthy on a provider error and healthy otherwise (an empty or malformed response
+        still counts as reachable). Emits one log entry (`success` or `error`) carrying the
+        model id and duration, never the text; an empty or malformed response raises without
+        a log entry.
+    """
     caller = call_embedding if call_embedding is not None else default_embedding_caller
     started = time.perf_counter()
     try:
@@ -47,13 +73,20 @@ def route_embedding(
 
 
 def _to_embedding_result(response: EmbeddingResponse, *, model: str) -> EmbeddingResult:
-    """Build an `EmbeddingResult` from a provider `EmbeddingResponse`.
+    """Build an `EmbeddingResult` from a provider response.
 
-    Raises `LlmProviderError` for an unexpected/empty shape.
+    Args:
+        response: The provider's embedding response.
+        model: Requested model id, used when the response does not name the served model.
+
+    Returns:
+        An `EmbeddingResult` with the first vector and the served model id.
+
+    Raises:
+        LlmProviderError: The response has no embedding data, or the first vector is empty.
     """
-    # litellm's `EmbeddingResponse.data` is an untyped `list`; at this one boundary its
-    # runtime shape is a list of dicts each carrying an `"embedding"` float list (dict
-    # access — verified empirically, not attribute access).
+    # litellm's `EmbeddingResponse.data` is an untyped `list`; at runtime it is a list of
+    # dicts, each carrying an `"embedding"` float list, read by key rather than attribute.
     data = cast("list[dict[str, list[float]]]", response.data)
     if not data:
         raise LlmProviderError(f"provider returned no embedding data for model {model!r}")

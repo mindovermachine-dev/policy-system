@@ -1,50 +1,46 @@
-"""Domain-specific exception types for `ps_service.passkey_signing` (issue #131).
+"""Exceptions raised by the passkey-signing component.
 
-One exception type per distinct failure boundary this component owns, never
-a generic `Exception`/`ValueError` (L1/L2 Error Handling) -- mirrors the
-shape of every other `ps_service` component's `errors.py` module (e.g.
-`ps_service.curated_source.errors`, `ps_service.query_engine.errors`).
+One type per failure boundary the component owns, so callers never see a raw driver exception
+cross its boundary and never need to catch a bare `Exception`. Each type's docstring says when it
+is raised and what the caller can do.
 """
 
 from __future__ import annotations
 
 
 class PendingApprovalPersistenceError(Exception):
-    """A read or write against the `pending_approvals` Postgres store failed.
+    """A read or write against the `pending_approvals` Postgres table failed.
 
-    Raised by :class:`ps_service.passkey_signing.store.PsycopgPendingApprovalStore`
-    when the underlying `psycopg` call raises -- wraps the driver-level
-    `psycopg.Error` into a domain-specific type, mirroring
-    `RuntimeConfigPersistenceError`'s/`CompanyMergePersistenceError`'s
-    own "wrap the driver exception" convention. Callers never see a raw
-    `psycopg` exception cross this component's boundary.
+    Raised by `PsycopgPendingApprovalStore` when the underlying `psycopg` call raises, or when
+    an insert unexpectedly returns no row. The driver error is chained as `__cause__`. The
+    caller cannot recover the operation; the approval request fails and may be retried once
+    Postgres is healthy.
     """
 
 
 class PasskeySigningPostgresConnectionError(Exception):
-    """The Passkey Signing Postgres instance is unreachable.
+    """The passkey-signing Postgres instance is configured but unreachable.
 
-    Raised by :func:`ps_service.passkey_signing.store.check_connectivity_from_config`
-    (the startup/dependency-health probe) when `connect_from_config` or a
-    minimal round-trip query fails -- mirrors `ps_service.ingestion.
-    falkordb_client.FalkorDBConnectionError`'s exact shape.
+    Raised by `check_connectivity_from_config` (the startup and readiness probe) when opening a
+    connection or the `SELECT 1` round trip fails. The message names the host and port; the
+    driver error is chained as `__cause__`. The operator should check that Postgres is running
+    and reachable with the configured credentials.
     """
 
 
 class MigrationApplyError(Exception):
     """A `.sql` migration file under `passkey_signing/migrations/` failed to apply.
 
-    Raised by :func:`ps_service.passkey_signing.migration_runner.apply_pending_migrations`;
-    wraps the underlying `psycopg.Error`. The failing migration's filename is
-    named in the message so an operator can find and fix it directly.
+    Raised by `apply_pending_migrations`. The failing file's name is in the message, and the
+    underlying `psycopg.Error` is chained as `__cause__`. The file's transaction is rolled
+    back, so the operator can fix the migration and run it again.
     """
 
 
 class SigningCredentialPersistenceError(Exception):
-    """A read or write against the `signing_credentials` Postgres store failed.
+    """A read or write against the `signing_credentials` Postgres table failed.
 
-    Raised by :class:`ps_service.passkey_signing.signing_credential_store.
-    PsycopgSigningCredentialStore` when the underlying `psycopg` call raises --
-    mirrors `PendingApprovalPersistenceError`'s own "wrap the driver
-    exception" convention exactly (issue #131 Slice 2).
+    Raised by `PsycopgSigningCredentialStore` when the underlying `psycopg` call raises, or when
+    an insert unexpectedly returns no row. The driver error is chained as `__cause__`. The
+    caller cannot recover the operation; it may be retried once Postgres is healthy.
     """

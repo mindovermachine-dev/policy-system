@@ -1,7 +1,7 @@
-"""Domain-specific exception types for `ps_service.persistence` (issue #130).
+"""Domain-specific exception types for `ps_service.persistence`.
 
 One exception type per distinct failure boundary this component owns, never
-a generic `Exception`/`ValueError` (L1/L2 Error Handling).
+a generic `Exception`/`ValueError`.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ MissingMigrationReason = Literal[
 
 
 class StatePostgresConnectionError(Exception):
-    """The PS state Postgres instance is unreachable, or unconfigured (PLAN.md §0.11).
+    """The PS state Postgres instance is unreachable, or unconfigured.
 
     Raised by :func:`ps_service.persistence.connection.connect_from_config`
     immediately when `config.state_postgres_host` is `None` (never a doomed
@@ -25,8 +25,8 @@ class StatePostgresConnectionError(Exception):
     `ps_service.passkey_signing.store.check_connectivity_from_config`'s own
     "no-op when unset" contract, every state-store caller must fail closed --
     an unconfigured store means every role-gated action is permanently
-    rejected for everyone, the correct, conservative, deny-by-default outcome
-    (AC-BI-011).
+    rejected for everyone, the correct, conservative, deny-by-default outcome.
+    The caller should fail closed and may retry once the store is configured or reachable.
     """
 
 
@@ -52,7 +52,7 @@ class StatePostgresMigrationLockError(StatePostgresMigrationApplyError):
 
 
 class StatePostgresProvisioningError(Exception):
-    """The privileged provisioning path cannot proceed, or its inputs are unusable (issue #205).
+    """The privileged provisioning path cannot proceed, or its inputs are unusable.
 
     Raised by :mod:`ps_service.persistence.privileged_migration_runner` and
     `ps_service.graph_gateway.provision` for a precondition that would defeat the
@@ -65,18 +65,28 @@ class StatePostgresProvisioningError(Exception):
 
 
 class GraphLogMigrationMissingError(StatePostgresProvisioningError):
-    """The privileged `graph_gateway` migration is not in place, so startup must fail closed (#205).
+    """The privileged `graph_gateway` migration is not in place, so startup must fail closed.
 
     Raised by
     :func:`ps_service.persistence.privileged_migration_runner.verify_privileged_migrations_applied`
     when the migration is not recorded, a table it creates is missing, or the application role
     owns (or is a member of the owner of) an immutable table. The message is fixed text naming
     the migration as `<component>/<filename>` and the remedy; it never carries a host, SQL or
-    driver text. `missing_migration` and `reason` are the same two facts for structured logging.
+    driver text.
+
+    Attributes:
+        missing_migration: The migration as `<component>/<filename>`.
+        reason: Why the check failed, one of `MissingMigrationReason`; both attributes carry
+            the facts of the message in a form suitable for structured logging.
     """
 
     def __init__(self, missing_migration: str, *, reason: MissingMigrationReason) -> None:
-        """Build the fixed message for `missing_migration` (`<component>/<filename>`)."""
+        """Build the fixed message and keep the structured facts.
+
+        Args:
+            missing_migration: The migration as `<component>/<filename>`.
+            reason: Why the check failed; one of the `MissingMigrationReason` values.
+        """
         super().__init__(
             f"privileged migration {missing_migration} is not in place ({reason}); run "
             "`python -m ps_service.graph_gateway.provision` with the admin credential"

@@ -1,11 +1,10 @@
-"""Process-startup resolution of the RBAC bootstrap-owner identity (issue #144).
+"""Process-startup check of the access-role bootstrap-owner configuration.
 
-`require_bootstrap_owner_configured` is called synchronously inside
-`create_app(config)`'s own body (see `ps_service.main`), immediately after
-`resolve_auth_context(config)` -- mirrors `ps_service.auth.startup`'s own
-role exactly (PLAN.md §2 Slice 1 D-2): a config-completeness fact that
-cannot change for the life of the process belongs in the synchronous
-constructor path, so it fails before `create_app` ever returns an app.
+`require_bootstrap_owner_configured` is called synchronously inside `create_app(config)`
+(see `ps_service.main`), immediately after `resolve_auth_context(config)`, in the same role
+as `ps_service.auth.startup`: a configuration fact that cannot change for the life of the
+process is checked in the synchronous constructor path, so the process fails before
+`create_app` returns an application.
 """
 
 from __future__ import annotations
@@ -21,11 +20,7 @@ _LOCAL_TEST_BYPASS_VAR = "PS_SERVICE_LOCAL_TEST_BYPASS"
 
 
 def _format_missing_bootstrap_owner_config_message(missing: list[str]) -> str:
-    """Build AC-BI-001's exact message shape: name the missing var(s) and the bypass alternative.
-
-    Mirrors `ps_service.auth.startup._format_missing_auth_config_message`'s
-    exact shape.
-    """
+    """Build the configuration-error message naming the unset variables and the bypass option."""
     joined = " and ".join(missing)
     verb = "is" if len(missing) == 1 else "are"
     return (
@@ -36,21 +31,30 @@ def _format_missing_bootstrap_owner_config_message(missing: list[str]) -> str:
 
 
 def require_bootstrap_owner_configured(config: ServiceConfig) -> None:
-    """Fail closed unless the RBAC bootstrap-owner identity is configured (AC-BI-001/AC-BI-002).
+    """Fail closed unless the access-role bootstrap-owner identity is configured.
 
-    - Local-test bypass (issue #67) active: returns immediately, no check.
-      Every MCP call site that can reach `bootstrap_first_owner` already
-      refuses the bypass principal outright before calling into
-      `authz.service` -- bootstrap is structurally unreachable under bypass
-      both before and after this fix, so requiring this config under bypass
-      would be dead-weight friction inconsistent with bypass's own purpose
-      (frictionless local/dev). Mirrors `resolve_auth_context`'s own
-      bypass-first check exactly.
-    - Bypass inactive and either `authz_bootstrap_owner_subject` or
-      `authz_bootstrap_owner_issuer` is `None`: raises
-      `AccessRoleBootstrapConfigurationError` naming exactly which var(s)
-      are unset and the bypass alternative (AC-BI-001).
-    - Bypass inactive and both are set: returns `None` (AC-BI-002).
+    The first principal to authenticate against an empty assignment store becomes
+    `SystemOwner` only if it matches the configured bootstrap-owner identity, so a missing
+    identity would leave the system with no way to obtain an owner.
+
+    Under the local-test bypass the check is skipped: every MCP call site that can reach
+    `bootstrap_first_owner` refuses the bypass principal before calling into
+    `ps_service.authz.service`, so bootstrap is unreachable under the bypass and requiring
+    the configuration there would only add friction to local evaluation.
+
+    Args:
+        config: The service configuration. `is_local_test_bypass_active`,
+            `authz_bootstrap_owner_subject` and `authz_bootstrap_owner_issuer` are read;
+            the two identity fields are `None` when unset.
+
+    Returns:
+        None. Returning normally means the bypass is active, or both identity fields are
+        set.
+
+    Raises:
+        AccessRoleBootstrapConfigurationError: the bypass is inactive and the bootstrap
+            owner subject, issuer or both are unset. The message names exactly the unset
+            variables and the bypass alternative.
     """
     if config.is_local_test_bypass_active:
         return

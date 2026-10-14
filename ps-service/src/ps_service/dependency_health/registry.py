@@ -1,22 +1,21 @@
-"""Process-wide registry of whether each real external dependency was reachable on its last call.
+"""Process-wide registry of whether each external dependency was reachable on its last call.
 
-Covers FalkorDB, the LLM Interface, Cellar/ELI, (issue #131) Passkey
-Signing's own Postgres instance, and (issues #130/#133) the PS state
-Postgres instance, and (issue #207) the startup replay of the graph mutation log
-(`GRAPH_REPLAY`, unhealthy from before the first request until the replay ends; unlike the
-others it is set by the replay's own task, not by a call site). Fed by the same call sites
-that already handle each dependency's exceptions for their own purposes
-(`falkordb_client.check_connectivity`, `graph_writer`'s `graph.query()` calls,
-`llm_interface.completion`/`embedding`, `cellar_eli.fetch_xhtml`,
-`passkey_signing.store.check_connectivity_from_config`,
-`persistence.check_connectivity_from_config`) — this module adds no probing
-of its own, it only records outcomes those call sites already observe.
+Purpose: let the readiness endpoint report current reachability of FalkorDB, the LLM
+Interface, Cellar/ELI, the Passkey Signing Postgres, the PS state Postgres and the startup
+graph replay without any extra probing. The module adds no probes of its own; it records the
+outcomes that call sites (graph writes, LLM calls, Cellar/ELI fetches, Postgres connectivity
+checks) already observe while handling each dependency's exceptions.
 
-Mirrors `ps_service.logging.facade`'s process-wide-singleton-plus-`reset_for_tests`
-shape rather than living on `app.state`: most callers here (graph_writer,
-llm_interface, the Cellar/ELI adapter) run outside any FastAPI request/app
-context and have no `app.state` to write into. `main.py` reads this registry via
-`all_healthy()` for `/ready`; it does not own it.
+`GRAPH_REPLAY` differs from the other names: it is unhealthy from before the first request
+until the startup replay of the graph mutation log ends, and is set by the replay's own task
+rather than by a call site.
+
+The registry is a process-wide singleton rather than request-scoped application state,
+because most callers (graph writer, LLM Interface, Cellar/ELI adapter) run outside any web
+request and have no application state to write into. The service entry point reads it through
+`all_healthy()` for `/ready` and does not own it.
+
+Thread safety: all reads and writes are guarded by one lock.
 """
 
 from __future__ import annotations
@@ -39,35 +38,84 @@ _unhealthy: dict[str, str] = {}  # dependency name -> last error message; absent
 
 
 def mark_healthy(dependency: str) -> None:
-    """Record that `dependency`'s most recent call succeeded."""
+    """Record that a dependency's most recent call succeeded.
+
+    Args:
+        dependency: Registry name of the dependency (one of the module's name constants,
+            for example `FALKORDB`). Any string is accepted; it is not validated.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Removes any recorded failure for `dependency` from the process-wide registry.
+        Marking a dependency that has no recorded failure is a no-op.
+    """
     with _lock:
         _unhealthy.pop(dependency, None)
 
 
 def mark_unhealthy(dependency: str, *, error: Exception) -> None:
-    """Record that `dependency`'s most recent call failed."""
+    """Record that a dependency's most recent call failed.
+
+    Args:
+        dependency: Registry name of the dependency (one of the module's name constants,
+            for example `LLM_INTERFACE`). Any string is accepted; it is not validated.
+        error: The exception the failed call raised. Only its string form is kept.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Stores `str(error)` as the dependency's last error in the process-wide registry,
+        replacing any earlier recorded error for the same dependency.
+    """
     with _lock:
         _unhealthy[dependency] = str(error)
 
 
 def is_healthy(dependency: str) -> bool:
-    """Whether `dependency`'s most recent recorded call succeeded.
+    """Report whether a dependency's most recent recorded call succeeded.
 
-    A dependency with no recorded call yet is considered healthy — by the
-    time `main.py`'s startup gate can ever report ready, its own startup
-    probe has already recorded an outcome for all three, so this default
-    only matters before any check has run at all.
+    A dependency with no recorded failure is considered healthy. This default only matters
+    before any check has run, because the service's startup probes record an outcome for each
+    dependency before the readiness endpoint can report ready.
+
+    Args:
+        dependency: Registry name of the dependency (one of the module's name constants).
+
+    Returns:
+        True when no failure is currently recorded for `dependency` (including a name that
+        was never recorded), False when its most recent recorded outcome was a failure.
     """
     with _lock:
         return dependency not in _unhealthy
 
 
 def all_healthy(dependencies: Iterable[str]) -> bool:
-    """Whether every named dependency's most recent recorded call succeeded."""
+    """Report whether every named dependency's most recent recorded call succeeded.
+
+    Args:
+        dependencies: Registry names to check. May be empty.
+
+    Returns:
+        True when each named dependency is healthy per `is_healthy`, and also when
+        `dependencies` is empty; False when at least one has a recorded failure.
+    """
     return all(is_healthy(dependency) for dependency in dependencies)
 
 
 def reset_for_tests() -> None:
-    """Clear all recorded state so each test starts with every dependency healthy."""
+    """Clear all recorded state so every dependency reads as healthy again.
+
+    Intended for test isolation: call it in test setup or teardown so one test's recorded
+    failures do not leak into the next.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Empties the process-wide registry of recorded failures.
+    """
     with _lock:
         _unhealthy.clear()

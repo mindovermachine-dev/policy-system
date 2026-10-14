@@ -1,12 +1,10 @@
-"""Process-startup resolution of OIDC auth configuration (issue #58).
+"""Process-startup resolution of OIDC auth configuration.
 
-`resolve_auth_context` is called synchronously inside `create_app(config)`'s
-own body (see `ps_service.main`), not inside the async `lifespan()` closure
--- `RestAuthMiddleware` (a later slice) is added via `app.add_middleware`
-at `create_app` build time and must have a concrete `AuthContext` (or
-`None`, for the local-test bypass) the moment the app exists, since a pure
-ASGI middleware runs per-request regardless of whether `lifespan` was ever
-entered.
+`resolve_auth_context` is called synchronously inside `create_app(config)`'s body (see
+`ps_service.main`), not inside the async `lifespan()` closure: `RestAuthMiddleware` is added at
+`create_app` build time and must have a concrete `AuthContext` (or `None`, for the local-test
+bypass) the moment the app exists, since the middleware runs per request whether or not
+`lifespan` was ever entered.
 """
 
 from __future__ import annotations
@@ -29,7 +27,7 @@ _LOCAL_TEST_BYPASS_VAR = "PS_SERVICE_LOCAL_TEST_BYPASS"
 
 
 def _format_missing_auth_config_message(missing: list[str]) -> str:
-    """Build AC-BI-002's exact message shape: name the missing var(s) and the bypass alternative."""
+    """Build the startup error message naming the missing variable(s) and the bypass alternative."""
     joined = " and ".join(missing)
     verb = "is" if len(missing) == 1 else "are"
     return (
@@ -41,26 +39,37 @@ def _format_missing_auth_config_message(missing: list[str]) -> str:
 def resolve_auth_context(
     config: ServiceConfig, *, transport: DiscoveryTransport = urllib.request.urlopen
 ) -> AuthContext | None:
-    """Resolve `config` into an `AuthContext`, or raise, or return `None` for the bypass.
+    """Resolve `config` into the process-lifetime `AuthContext`, failing closed when it cannot.
 
-    - Local-test bypass (issue #67) active: returns `None` unconditionally
-      -- no auth configured, matching #67's existing contract, regardless
-      of whether `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` happen to be set. Never
-      a "vacuous" `AuthContext`.
-    - Bypass inactive and either `PS_AUTH_ISSUER` or `PS_AUTH_AUDIENCE` is
-      unset: raises `AuthConfigurationError` naming exactly which
-      variable(s) are missing and `PS_SERVICE_LOCAL_TEST_BYPASS` as the
-      local-only alternative (issue #58, AC-BI-002).
-    - Bypass inactive and both are set: fetches
-      `<issuer>/.well-known/openid-configuration` (AC-BI-001) via
-      `fetch_discovery_document`, whose `transport` is injectable here (DI
-      seam, defaults to the real `urllib.request.urlopen`) purely so tests
-      can substitute a fake transport -- `ps_service.main.create_app` never
-      passes a non-default `transport`. Raises `AuthDiscoveryError` naming
-      the issuer if the fetch fails, `jwks_uri` is absent, or the issuer
-      advertises no algorithm this component's asymmetric allow-list
-      recognizes (AC-BI-009's discovery-time half, computed once here --
-      per-token enforcement of the allow-list is a later slice's job).
+    Business Rules:
+        - Local-test bypass active: returns `None` regardless of whether the issuer and audience
+          are set; never a vacuous `AuthContext`.
+        - Bypass inactive and the issuer or audience is unset: raises, naming exactly which
+          variable(s) are missing and the bypass as the local-only alternative.
+        - Bypass inactive and both set: fetches the issuer's OIDC discovery document, requires a
+          non-empty `jwks_uri`, and computes the asymmetric-algorithm allow-list from the
+          advertised algorithms (non-string entries are ignored); an empty allow-list is a
+          failure.
+
+    Args:
+        config: The service configuration; reads `is_local_test_bypass_active`, `auth_issuer`,
+            `auth_audience`, `auth_cli_client_id` and `auth_scopes`.
+        transport: HTTP transport for the discovery fetch; defaults to the real
+            `urllib.request.urlopen` and is overridden only by tests.
+
+    Returns:
+        The resolved `AuthContext`, or `None` when the local-test bypass is active (no
+        authentication is configured).
+
+    Raises:
+        AuthConfigurationError: The bypass is inactive and the issuer or audience is unset.
+        AuthDiscoveryError: The discovery fetch failed (the cause is chained), `jwks_uri` is
+            missing or empty, or the issuer advertises no supported asymmetric algorithm. The
+            message names the issuer.
+
+    Side Effects:
+        One outbound HTTP GET to the issuer's discovery endpoint when the bypass is inactive and
+        configuration is complete; none otherwise.
     """
     if config.is_local_test_bypass_active:
         return None
@@ -92,9 +101,8 @@ def resolve_auth_context(
     alg_values_raw: object = document.get("id_token_signing_alg_values_supported")
     alg_values: list[str] = []
     if isinstance(alg_values_raw, list):
-        # `isinstance(alg_values_raw, list)` narrows `object` to `list[Unknown]` (no runtime
-        # type-arg info) rather than `list[object]`; this cast restates the element type the
-        # `isinstance(value, str)` filter below already enforces at runtime.
+        # `isinstance` narrows `object` to `list[Unknown]`; the cast restates the element type
+        # that the `isinstance(value, str)` filter below enforces at runtime.
         untyped_alg_values = cast("list[object]", alg_values_raw)
         alg_values = [value for value in untyped_alg_values if isinstance(value, str)]
     allowed_algorithms = compute_allowed_algorithms(alg_values)

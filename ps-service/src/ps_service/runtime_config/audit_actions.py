@@ -1,8 +1,8 @@
-"""Typed `details` models for the two `runtime_config.*` audit actions (issue #130).
+"""Typed `details` models for the two `runtime_config.*` audit actions.
 
 Registers each model with `ps_service.audit.models.register_audit_action` at import time
-(the same "module import triggers registration" idiom `ps_service.authz.audit_actions` uses),
-through `audit`'s public registry only -- `audit` has no config-specific hook.
+(the "module import triggers registration" idiom), through `audit`'s public registry only --
+`audit` has no config-specific hook.
 
 `old_value`/`new_value` are scalars only: they hold the key's own `audit_value` projection of
 a validated value, so a secret or an unvalidated blob cannot reach `details` (the models
@@ -16,7 +16,17 @@ from ps_service.audit import AuditDetails, register_audit_action, register_audit
 
 
 class RuntimeConfigSetDetails(AuditDetails):
-    """`runtime_config.set` -- always `outcome='applied'` (a rejected value writes no row)."""
+    """`details` of a `runtime_config.set` audit row; always recorded with `outcome='applied'`.
+
+    A rejected value writes no row, so there is no rejected variant.
+
+    Attributes:
+        key: Registered name of the config key that was set.
+        old_value: Audit projection of the previous value; `None` (omitted from the row) when
+            the key had no previous value.
+        new_value: Audit projection of the value that was stored; a scalar only (`str`, `int`
+            or `bool`), never an unvalidated blob.
+    """
 
     key: str
     old_value: str | int | bool | None = None
@@ -24,7 +34,15 @@ class RuntimeConfigSetDetails(AuditDetails):
 
 
 class RuntimeConfigResetDetails(AuditDetails):
-    """`runtime_config.reset` -- always `outcome='applied'`, also for a key with no row."""
+    """`details` of a `runtime_config.reset` audit row; always recorded with `outcome='applied'`.
+
+    The row is written also when the key had no stored value.
+
+    Attributes:
+        key: Registered name of the config key that was reset.
+        old_value: Audit projection of the value that was removed; `None` (omitted from the
+            row) when the key had no stored value.
+    """
 
     key: str
     old_value: str | int | bool | None = None

@@ -1,10 +1,9 @@
-"""ps_service.logging record shape — what a log entry *is*. No I/O, no context.
+"""Record shape for `ps_service.logging`: what a log entry is. No I/O, no context.
 
-`LogEntry` is the single source of truth for AC#3's field convention
-(component, action, entity_id(s), outcome, duration_ms) plus plumbing
-(run_id, timestamp, extra). It is a convention, not an enforced schema (arch
-decision) — `extra` is the caller's escape hatch for anything else; the
-caller owns PII hygiene there (never place secrets/PII in any field).
+`LogEntry` is the single definition of the field convention (component, action, entity id(s),
+outcome, duration in milliseconds) plus run id, timestamp and `extra`. It is a convention,
+not an enforced schema: `extra` carries anything else, and the caller owns keeping secrets
+and personal data out of every field.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from time import time
 
-# D1: entity_id(s) — a single id, a tuple of ids, or absent. Emitted as-is.
+# A single entity id, a tuple of ids, or absent; emitted as-is.
 type EntityId = str | tuple[str, ...] | None
 
 _RESERVED_KEYS = frozenset(
@@ -23,7 +22,21 @@ _RESERVED_KEYS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class LogEntry:
-    """One structured, JSON-serializable log event (a convention, not a schema)."""
+    """One structured, JSON-serializable log event (a convention, not a schema).
+
+    Attributes:
+        component: Name of the emitting component; required.
+        action: Name of the operation being logged; required.
+        run_id: Correlation id of the run the entry belongs to, or None when no run is bound.
+        entity_id: One entity id, a tuple of entity ids, or None. Emitted as given.
+        outcome: Result label such as `"success"` or `"failed"`, or None.
+        duration_ms: Elapsed time in milliseconds, or None.
+        timestamp: Seconds since the Unix epoch; defaults to the time of construction.
+        extra: Additional key/value pairs, kept as an immutable tuple of pairs. Keys that
+            collide with a convention field name are dropped when rendering. Values must be
+            JSON-serializable to be written normally; never place secrets or personal data
+            here.
+    """
 
     component: str
     action: str
@@ -32,30 +45,33 @@ class LogEntry:
     outcome: str | None = None
     duration_ms: float | None = None
     timestamp: float = field(default_factory=time)
-    # Immutable pairs, not a dict (M14 fix): a frozen dataclass with a
-    # mutable-dict default is only reassignment-frozen, not
-    # mutation-frozen — a caller could still `entry.extra["x"] = 1`. The
-    # facade's public `emit_log_entry(extra: Mapping[str, object] | None)`
-    # converts once at the boundary via `tuple(extra.items())`.
+    # Immutable pairs, not a dict: a frozen dataclass holding a dict is only
+    # reassignment-frozen, so a caller could still mutate `entry.extra["x"]`.
+    # `emit_log_entry` converts its mapping argument once at the boundary.
     extra: tuple[tuple[str, object], ...] = field(default_factory=tuple)
 
     def to_json_line(self) -> str:
-        r"""Render this entry as one JSON object, one line, terminated by '\\n'.
+        r"""Render this entry as one JSON object on one line, terminated by a newline.
 
-        D2: a convention field whose value is `None` is omitted, not emitted
-        as `null`. B1 fix: `entity_id` is included exactly like every other
-        populated field below — there is no unconditional `.pop()` after it
-        is added (PLAN.md's bug: the comprehension already dropped nulls,
-        then a stray `pop("entity_id", None)` deleted it unconditionally
-        even when set). M10 fix: an `extra` key colliding with a convention
-        field name is dropped, not merged over it — the convention value
-        always wins, deterministically.
+        Business Rules:
+            An optional convention field (`run_id`, `entity_id`, `outcome`, `duration_ms`)
+            whose value is None is omitted rather than emitted as `null`. `component`,
+            `action` and `timestamp` are always present. An `extra` key that collides with a
+            convention field name is dropped, so the convention value always wins. Keys are
+            sorted and non-ASCII text is kept unescaped.
+
+        Returns:
+            The JSON text followed by a single `"\n"`.
+
+        Raises:
+            TypeError: A value in `extra` (or an `entity_id` element) is not JSON-serializable.
+            ValueError: The entry contains a circular reference.
         """
         payload: dict[str, object] = {"component": self.component, "action": self.action}
         if self.run_id is not None:
             payload["run_id"] = self.run_id
         if self.entity_id is not None:
-            payload["entity_id"] = self.entity_id  # str or tuple[str, ...] — emitted as-is (D1)
+            payload["entity_id"] = self.entity_id  # str or tuple[str, ...], emitted as given
         if self.outcome is not None:
             payload["outcome"] = self.outcome
         if self.duration_ms is not None:

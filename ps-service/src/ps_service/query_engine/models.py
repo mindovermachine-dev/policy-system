@@ -1,15 +1,6 @@
-"""Core types for `ps_service.query_engine` -- `execute_cypher_query`'s return shape.
+"""Core types for `ps_service.query_engine`: the return shape of `execute_cypher_query`.
 
-Per PLAN_REVIEWED.md §2.1: a single generic envelope, not per-entity
-Pydantic models, matching the shape the existing `tools/graph-query/
-mcp_server.py` prototype already returns.
-
-Issue #38, Slice 3 (PLAN.md §4 S3, D1): `QueryResult` gains `truncated: bool`,
-required with no default so every construction site must state it explicitly
-(mirrors this dataclass's existing no-defaults convention for
-`columns`/`rows`/`row_count`) -- `True` when `execute_cypher_query`'s
-post-hoc Python-side row-cap slice actually shortened the result, `False`
-otherwise.
+A single generic envelope rather than per-entity models, because the queries are ad hoc.
 """
 
 from __future__ import annotations
@@ -19,11 +10,19 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class QueryResult:
-    """ExecuteCypherQuery's success envelope.
+    """Success envelope of `execute_cypher_query`.
 
-    L2's mandated shape (`QueryResult(columns, rows, row_count)`), matching
-    the existing `tools/graph-query/mcp_server.py` prototype's return shape,
-    extended with `truncated` (issue #38, AC-BI-006).
+    Immutable. Every field is required so each construction site states the truncation flag.
+
+    Attributes:
+        columns: Column names of the result, in `RETURN` order; empty when the query returned
+            no header.
+        rows: Result rows, each a list of JSON-serializable cell values aligned with `columns`;
+            at most the caller's `row_cap` rows. Empty for a seeded graph with no match.
+        row_count: Number of rows in `rows` (after truncation), not the number the database
+            produced.
+        truncated: `True` when the row cap shortened the result, so more rows existed;
+            `False` otherwise.
     """
 
     columns: list[str]

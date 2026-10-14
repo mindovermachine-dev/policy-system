@@ -1,4 +1,4 @@
-"""ps_service.persistence -- PS state Postgres connection and migration runner (issue #130).
+"""PS state Postgres connection helper, connectivity probe and migration runner.
 
 Domain path: `ps.service.persistence`
 (`docs/architecture/ps-solution-architecture.md`). Owns the shared PS state

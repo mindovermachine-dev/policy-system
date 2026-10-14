@@ -1,18 +1,16 @@
-"""Correlation-id binding/unbinding for a call chain — the BindRunContext action (AC#1, AC#2).
+"""Run-id (correlation id) binding for a call chain.
 
-Reads/writes the `run_id` ContextVar only; no file I/O, no queue — this
-module knows nothing about `emitter.py`.
+Purpose: let log entries emitted anywhere in a call chain carry the same `run_id`. The module
+reads and writes only the `run_id` context variable; it does no file I/O and knows nothing
+about the emitter.
 
-Propagation boundary (G2, M5): a `contextvars` binding is visible to
-everything deeper on the *same* thread/task's call stack, including a
-`concurrent.futures.ThreadPoolExecutor` submission or an `asyncio.create_task`
-(both fork/copy the caller's context at spawn time). It does NOT propagate to
-a raw `threading.Thread` (each new OS thread starts with an empty context,
-verified G2) — work handed to a raw thread must call `bind_run_context` again
-inside that thread if it needs a run_id. A pooled worker that reuses a thread
-across tasks relies on `bind_run_context`'s `finally` restore (below) to
-avoid leaking one task's run_id into the next task scheduled on the same
-worker.
+Propagation boundary: a binding is visible to everything deeper on the same thread or task,
+including work submitted to a `concurrent.futures.ThreadPoolExecutor` or started with
+`asyncio.create_task` (both copy the caller's context at spawn time). It does not propagate to
+a raw `threading.Thread`, whose context starts empty; work handed to a raw thread must call
+`bind_run_context` again inside that thread if it needs a run id. A pooled worker that reuses
+a thread across tasks relies on `bind_run_context` restoring the previous value on exit, so
+one task's run id does not leak into the next.
 """
 
 from __future__ import annotations
@@ -31,17 +29,31 @@ _RUN_ID_KEY: str = "run_id"
 
 @contextmanager
 def bind_run_context(run_id: str | None = None) -> Generator[str]:
-    """Bind `run_id` (generating a uuid4 if omitted) for the current call chain.
+    """Bind a run id for the current call chain for the duration of a `with` block.
 
-    G1 fix (M4): structlog 26.1.0's `unbind_contextvars` DELETES the key from
-    the current context rather than restoring an outer binding — a naive
-    "unbind on exit" loses an outer `bind_run_context` call after a nested
-    inner one exits. This implementation captures whatever run_id (if any)
-    was already bound on entry and restores it — or unbinds cleanly if there
-    was none — on exit (token-style capture/restore), so nested binds are
-    correct: `with bind_run_context("A"): with bind_run_context("B"): ...`
-    leaves `current_run_id() == "A"` after the inner block exits, and `None`
-    after the outer block exits too.
+    On entry the run id already bound (if any) is captured; on exit it is restored, or the
+    binding is removed cleanly when there was none. Nested binds are therefore correct:
+    after `with bind_run_context("A"): with bind_run_context("B"): ...` the inner exit leaves
+    `current_run_id() == "A"`, and the outer exit leaves `None`. Restoration happens even when
+    the block raises.
+
+    Args:
+        run_id: The correlation id to bind. None generates a random UUID4 string. An empty
+            string is bound as given.
+
+    Yields:
+        The run id bound inside the block: `run_id` when given, otherwise the generated one.
+
+    Side Effects:
+        Sets the `run_id` context variable for the current thread or task, and restores the
+        prior value on exit.
+
+    Example:
+        >>> with bind_run_context("run-1") as active:
+        ...     current_run_id() == active == "run-1"
+        True
+        >>> current_run_id() is None
+        True
     """
     active = run_id if run_id is not None else str(uuid.uuid4())
     prior = current_run_id()
@@ -56,6 +68,10 @@ def bind_run_context(run_id: str | None = None) -> Generator[str]:
 
 
 def current_run_id() -> str | None:
-    """Return the run_id bound in the *current* thread/task context, else None."""
+    """Return the run id bound in the current thread or task context.
+
+    Returns:
+        The bound run id, or None when none is bound (or the bound value is not a string).
+    """
     value = ctxvars.get_contextvars().get(_RUN_ID_KEY)
     return value if isinstance(value, str) else None

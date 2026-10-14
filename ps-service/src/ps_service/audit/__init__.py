@@ -1,29 +1,31 @@
-"""ps_service.audit -- package front door (issue #147).
+"""ps_service.audit -- the shared, insert-only audit trail.
 
-Shared, insert-only audit trail for every PS Service component that needs to
-record who did what to what, and when. Domain path: `ps.service.audit`
-(`docs/architecture/ps-solution-architecture.md`).
+Records who did what to what, and when, for every PS Service component that needs it. Domain
+path: `ps.service.audit` (`docs/architecture/ps-solution-architecture.md`).
 
-Deliberately a standalone component, not nested under any one consumer, even
-though `audit_events` lives in the PS state Postgres instance that several
-components share: #134 (policy lifecycle), #136 (supersede-fork), and #140
-(`user.invite`) are not access-control concerns, and each registers its own
-typed `details` models against this component's extensible action registry
-rather than editing this package.
+The component is deliberately standalone, not nested under any one consumer, even though
+`audit_events` lives in the PS state Postgres instance that several components share: audit is
+not an access-control concern, and each emitting component registers its own typed `details`
+model against this component's extensible action registry instead of editing this package.
 
-This slice (Slice 1, PLAN.md/CHANGES.md Appendix A1) ships the `audit_events`
-schema, the `AuditDetails` base type, the extensible action registry, and
-`AuditStore.record` -- the cursor-scoped write a later slice's in-transaction
-callers (#133's `store.py`, repointed in Slice 2) will use. Nothing in
-`ps_service` calls this package yet.
+Public surface, re-exported here:
 
-Emission convention (issue #195): see :mod:`ps_service.audit.emit` for the outcome-vs-lifecycle
-rule, the row shape per action, the failure policy (opening row fail-closed, terminal row
-best-effort), the actor semantics and the `resource_id` convention.
+- Store: `AuditStore` (Protocol), `EventIdAuditStore` (Protocol for stores that report the id of
+  the row they wrote) and `PsycopgAuditStore` (PostgreSQL implementation).
+- Models and registries: `AuditDetails`, `AuditEventRow`, `AuditQueryFilters`, `AuditQueryPage`,
+  `register_audit_action`, `resolve_details_model`, `register_audit_resource_type`,
+  `is_known_resource_type`, `AUDIT_DETAILS_FILTER_KEYS`.
+- Emission helpers: `AuditContext`, `AuditTarget`, `record_opening_row`,
+  `record_opening_row_with_event_id`, `record_follow_up_row`; the row-shape contract (outcome vs
+  lifecycle, fail-closed opening row, best-effort terminal row, actor semantics, `resource_id`
+  convention) is documented in the `ps_service.audit.emit` module docstring.
+- Attribution: `resolve_audit_actor`, `LOCAL_TEST_BYPASS_AUDIT_ACTOR`.
+- Errors: `AuditActorUnresolvedError`, `AuditInvalidCursorError`, `AuditInvalidDetailsError`,
+  `AuditPersistenceError`, `AuditPostgresUnavailableError`, `AuditTrailUnavailableError`,
+  `AuditUnknownActionError`.
+- `MIGRATIONS_DIR`: the component's own migration directory.
 
-Re-exports the store/model front door and its domain-specific errors,
-matching `ps_service.passkey_signing`'s own package
-front-door convention.
+Insert-only is enforced by omission: the store interface defines no `UPDATE` or `DELETE`.
 """
 
 from __future__ import annotations

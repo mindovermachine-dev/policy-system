@@ -1,4 +1,4 @@
-"""ps_service.runtime_config -- runtime-mutable configuration store (issue #130).
+"""Runtime-mutable configuration store for the PS Service.
 
 Domain path: `ps.service.runtimeconfig`
 (`docs/architecture/ps-solution-architecture.md`). Persists runtime-mutable config values

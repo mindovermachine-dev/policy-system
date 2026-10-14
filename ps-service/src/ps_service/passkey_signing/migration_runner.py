@@ -1,12 +1,10 @@
-"""Hand-rolled, dependency-free SQL migration runner (PLAN.md §0.6, issue #131).
+"""Dependency-free SQL migration runner for the passkey-signing Postgres tables.
 
-No ORM/Alembic (PLAN.md §0.6's own rationale: two small tables, no
-foreign-key evolution complexity an ORM would meaningfully help with).
-Applies every `.sql` file under `passkey_signing/migrations/` not yet
-recorded in a `schema_migrations` tracking table, in filename order, each
-inside its own transaction -- a second run applies nothing new (idempotent).
-Wired into `create_app`'s `lifespan` startup (`ps_service.main`), gated so it
-only runs when `config.passkey_signing_postgres_host` is configured.
+Applies every `.sql` file under `passkey_signing/migrations/` that is not yet recorded in a
+`schema_migrations` tracking table, in filename order, each inside its own transaction, so a
+second run applies nothing new (idempotent). There is no ORM or migration framework because the
+schema is a few small tables without evolving foreign keys. The composition root (`ps_service.main`)
+runs it at application startup, only when `config.passkey_signing_postgres_host` is configured.
 """
 
 from __future__ import annotations
@@ -40,9 +38,8 @@ _RECORD_APPLIED = "INSERT INTO schema_migrations (filename) VALUES (%(filename)s
 def _discover_migration_files() -> list[Path]:
     """Return every `*.sql` file under `migrations/`, sorted by filename.
 
-    Filename order is the whole ordering contract (PLAN.md §0.6) --
-    `NNNN_description.sql` sorts correctly as plain strings as long as `NNNN`
-    stays zero-padded and never exceeds four digits.
+    Filename order is the whole ordering contract: `NNNN_description.sql` sorts correctly as
+    plain strings as long as `NNNN` stays zero-padded and never exceeds four digits.
     """
     return sorted(_MIGRATIONS_DIR.glob("*.sql"))
 
@@ -50,13 +47,10 @@ def _discover_migration_files() -> list[Path]:
 def _split_statements(sql: str) -> Sequence[str]:
     """Split a migration file's SQL text into individual statements.
 
-    `psycopg` (v3) always uses PostgreSQL's extended query protocol, which
-    rejects more than one command in a single `execute()` call ("cannot
-    insert multiple commands into a prepared statement") -- unlike
-    `psycopg2`'s simple-query-protocol default. Splitting on `;` is safe for
-    this component's own hand-written DDL migrations (no string literals or
-    dollar-quoted bodies contain a literal `;` today); revisit this if a
-    future migration ever needs one.
+    `psycopg` (v3) uses PostgreSQL's extended query protocol, which rejects more than one command
+    in a single `execute()` call. Splitting on `;` is safe for this component's hand-written DDL
+    migrations only while no string literal or dollar-quoted body contains a literal `;`; a
+    migration that needs one requires a smarter splitter.
     """
     return [statement.strip() for statement in sql.split(";") if statement.strip()]
 
@@ -64,16 +58,27 @@ def _split_statements(sql: str) -> Sequence[str]:
 def apply_pending_migrations(conn: psycopg.Connection[TupleRow]) -> list[str]:
     """Apply every not-yet-recorded `.sql` migration file, in filename order.
 
-    Returns the filenames actually applied this call (empty on a repeat run
-    against an already-up-to-date database -- the idempotency this function
-    must guarantee). Each file's statements plus its `schema_migrations`
-    bookkeeping row are committed together in one transaction, so a
-    mid-file failure never leaves a migration half-applied-but-unrecorded.
+    Each file's statements plus its `schema_migrations` bookkeeping row are committed together in
+    one transaction, so a mid-file failure never leaves a migration half-applied but unrecorded.
+
+    Args:
+        conn: An open connection to the passkey-signing Postgres database. The caller owns it
+            and closes it.
+
+    Returns:
+        Filenames applied by this call, in order. Empty on a repeat run against an up-to-date
+        database.
 
     Raises:
-        MigrationApplyError: a migration file's SQL failed to apply --
-            names the failing filename; the underlying `psycopg.Error` is
-            chained via `from exc`.
+        MigrationApplyError: a migration file's SQL failed to apply. Names the failing filename;
+            the underlying `psycopg.Error` is chained as `__cause__`. Files applied earlier in the
+            call stay committed; the failing file is rolled back.
+        psycopg.Error: creating the tracking table or reading it failed.
+
+    Side Effects:
+        Creates `schema_migrations` if absent, executes each pending file's DDL and inserts one
+        `schema_migrations` row per applied file, committing after each; rolls back the failing
+        file's transaction.
     """
     with conn.cursor() as cur:
         cur.execute(_CREATE_TRACKING_TABLE)
@@ -91,11 +96,9 @@ def apply_pending_migrations(conn: psycopg.Connection[TupleRow]) -> list[str]:
         try:
             with conn.cursor() as cur:
                 for statement in _split_statements(sql):
-                    # `statement` is dynamically split from a hand-authored, trusted
-                    # migration file (never user input) -- `cast()` is unavoidable
-                    # here because `psycopg`'s `execute()` typing requires
-                    # `LiteralString` for its query argument, which a runtime
-                    # `str.split()` result can never statically be (L2 cast() policy).
+                    # `statement` comes from a hand-authored migration file, never user input;
+                    # `cast()` is needed because `execute()` is typed to take a `LiteralString`,
+                    # which a runtime split result cannot be statically.
                     cur.execute(cast("LiteralString", statement))
                 cur.execute(_RECORD_APPLIED, {"filename": migration_file.name})
             conn.commit()

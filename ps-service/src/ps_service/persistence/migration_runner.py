@@ -1,10 +1,9 @@
-"""Hand-rolled, dependency-free SQL migration runner for the PS state Postgres (issue #130, #133).
+"""Hand-rolled, dependency-free SQL migration runner for the PS state Postgres.
 
-A structural copy of `ps_service.passkey_signing.migration_runner`'s pattern
--- own `ps_schema_migrations` tracking table, keyed `(component, filename)`
-(deliberately not the bare `schema_migrations` name passkey_signing's own
-runner creates, so the two runners can never silently collide even if an
-operator ever points both at the same physical Postgres instance/database).
+Tracks applied files in its own `ps_schema_migrations` table, keyed `(component, filename)`
+(deliberately not the bare `schema_migrations` name `ps_service.passkey_signing`'s own
+runner uses, so the two runners can never silently collide even if an operator points both
+at the same physical Postgres instance/database).
 
 The runner is component-agnostic: the composition root (`ps_service.main`)
 passes explicit `MigrationSource(component, directory)` entries, so this
@@ -21,8 +20,8 @@ Never edit, renumber or delete an applied migration file: add a new,
 higher-numbered file instead. The runner records each applied file by `(component, filename)`
 and never re-runs or re-checks it, so an edited applied file silently
 diverges from every database that already ran it. Before the first
-deployment (issue #130) the history was collapsed to one baseline file per
-component; after it, that freedom is gone.
+deployment the history may be collapsed to one baseline file per component; after it,
+that freedom is gone.
 """
 
 from __future__ import annotations
@@ -55,7 +54,13 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class MigrationSource:
-    """One component's migration directory, as named by the composition root."""
+    """One component's migration directory, as named by the composition root.
+
+    Attributes:
+        component: Component name recorded with each applied file; with the filename it
+            forms the tracking-table key.
+        directory: Directory holding the component's `NNNN_description.sql` files.
+    """
 
     component: str
     directory: Path
@@ -100,6 +105,12 @@ def discover_migration_files(directory: Path) -> list[Path]:
     Filename order is the whole ordering contract -- `NNNN_description.sql`
     sorts correctly as plain strings as long as `NNNN` stays zero-padded and
     never exceeds four digits.
+
+    Args:
+        directory: Directory to scan (non-recursive).
+
+    Returns:
+        The `*.sql` paths in filename order; empty when there are none.
     """
     return sorted(directory.glob("*.sql"))
 
@@ -114,6 +125,12 @@ def split_statements(sql: str) -> Sequence[str]:
     contains a literal `;`. A dollar-quoted body (`$$ ... $$` or `$tag$ ... $tag$`,
     as used by a PL/pgSQL trigger function) is kept whole, so its inner `;`
     never splits the statement.
+
+    Args:
+        sql: The full text of one migration file.
+
+    Returns:
+        The non-empty statements, stripped, in file order, without their terminating `;`.
     """
     statements: list[str] = []
     statement_start = 0
@@ -160,9 +177,21 @@ def acquire_migration_lock(
     transaction. The wait is bounded by `lock_timeout`, which is reset to the session default as
     soon as the lock is held so later DDL lock waits behave as before.
 
+    Args:
+        conn: Open connection whose current transaction takes the lock.
+        timeout_seconds: Longest wait for the lock; rounded to whole milliseconds, at least 1.
+        subject: What the caller is doing, named in the error message.
+
+    Returns:
+        None; returning means the lock is held until the transaction ends.
+
     Raises:
         StatePostgresMigrationLockError: the lock was not granted within `timeout_seconds`
             (`subject` names what was being done; the transaction is rolled back).
+
+    Side Effects:
+        Starts a transaction if none is open, takes the advisory lock, and rolls the
+        transaction back on timeout.
     """
     milliseconds = max(1, round(timeout_seconds * 1000))
     try:
@@ -182,9 +211,19 @@ def set_local_role(conn: psycopg.Connection[TupleRow], role: str) -> None:
     Must be the first statement of the transaction it applies to. The switch ends with the
     transaction, so it never leaks to later work on the same connection.
 
+    Args:
+        conn: Open connection; the switch applies to its current transaction.
+        role: Name of the database role to switch to.
+
+    Returns:
+        None.
+
     Raises:
         StatePostgresProvisioningError: the connecting role may not switch to `role` (names the
             role only, never driver text); the aborted transaction is rolled back first.
+
+    Side Effects:
+        Issues `SET LOCAL ROLE`; on refusal rolls the transaction back.
     """
     try:
         with conn.cursor() as cur:
@@ -206,6 +245,25 @@ def ensure_tracking_table(
     Concurrent `CREATE TABLE IF NOT EXISTS` can itself fail, so creation takes the migration
     lock; the common case (the table exists) never waits for it. With `run_as_role` the table is
     created under that role (so it owns the table), the switch preceding the lock.
+
+    Args:
+        conn: Open connection.
+        lock_timeout_seconds: Longest wait for the migration lock when the table must be
+            created.
+        run_as_role: Role to create the table as; `None` creates it as the connecting role.
+
+    Returns:
+        None; the table exists on return.
+
+    Raises:
+        StatePostgresProvisioningError: `run_as_role` is set and the connection may not switch
+            to it.
+        StatePostgresMigrationLockError: the lock was not granted in time.
+        psycopg.Error: the existence check or the `CREATE TABLE` failed (propagated).
+
+    Side Effects:
+        May create `ps_schema_migrations` and commits the transaction that did; ends any open
+        transaction otherwise.
     """
     with conn.cursor() as cur:
         cur.execute(_SELECT_TRACKING_TABLE_EXISTS)
@@ -224,7 +282,18 @@ def ensure_tracking_table(
 
 
 def is_migration_applied(conn: psycopg.Connection[TupleRow], key: dict[str, str]) -> bool:
-    """Whether the tracking table has a row for `key` (rows are never un-applied)."""
+    """Report whether the tracking table has a row for `key` (rows are never un-applied).
+
+    Args:
+        conn: Open connection; the table must exist.
+        key: Mapping with `component` and `filename` entries identifying the migration file.
+
+    Returns:
+        `True` when the file is recorded as applied, otherwise `False`.
+
+    Raises:
+        psycopg.Error: the query failed (propagated).
+    """
     with conn.cursor() as cur:
         cur.execute(SELECT_ALREADY_APPLIED, key)
         return cur.fetchone() is not None
@@ -246,12 +315,26 @@ def apply_migration_file(
     `run_as_role` the transaction first switches to that role (before the lock), so the objects
     the statements create are owned by it.
 
+    Args:
+        conn: Open connection.
+        key: Mapping with `component` and `filename` entries identifying the file.
+        statements: The file's SQL statements, in order (see `split_statements`).
+        lock_timeout_seconds: Longest wait for the migration lock.
+        run_as_role: Role to create objects as; `None` uses the connecting role.
+
+    Returns:
+        `True` when the file was applied and recorded, `False` when it was already recorded.
+
     Raises:
         StatePostgresProvisioningError: `run_as_role` is set and the connection may not switch
             to it.
         StatePostgresMigrationLockError: the lock was not granted in time.
         StatePostgresMigrationApplyError: a statement failed; the underlying `psycopg.Error` is
             chained via `from exc` and the transaction is rolled back.
+
+    Side Effects:
+        Runs the statements and inserts one `ps_schema_migrations` row in one transaction,
+        committed on success and rolled back on failure.
     """
     name = f"migration {key['component']}/{key['filename']}"
     if run_as_role is not None:
@@ -287,14 +370,9 @@ def apply_pending_migrations(
 ) -> list[str]:
     """Apply every not-yet-recorded `.sql` migration file of every source, in list order.
 
-    Returns the filenames actually applied this call (empty on a repeat run
-    against an already-up-to-date database -- the idempotency this function
-    must guarantee). Emits one `persistence`/`apply_migrations` log entry per
-    call (`success` or `failure`) naming the `<component>/<filename>` files
-    applied and the count already applied; `emitter` defaults to the process
-    emitter. Each file's statements plus its `ps_schema_migrations`
-    bookkeeping row are committed together in one transaction, so a
-    mid-file failure never leaves a migration half-applied-but-unrecorded.
+    A repeat run against an up-to-date database applies nothing (idempotent). Each file's
+    statements plus its `ps_schema_migrations` bookkeeping row are committed together in one
+    transaction, so a mid-file failure never leaves a migration half-applied-but-unrecorded.
 
     Concurrent runners (the service and the provisioning command) are serialized per pending
     file by `MIGRATION_LOCK_KEY` and re-check the tracking table inside the lock; a runner with
@@ -306,6 +384,18 @@ def apply_pending_migrations(
     `SET LOCAL ROLE <role>` -- so the application role owns every table, exactly as when it
     applied the migrations itself. The provisioning command uses it.
 
+    Args:
+        conn: Open connection used for every transaction of the run.
+        sources: Component migration directories, processed in list order.
+        emitter: Log emitter for the run's outcome entry; `None` uses the process emitter, and
+            logging is skipped when none is configured.
+        lock_timeout_seconds: Longest wait for the migration lock per pending file.
+        run_as_role: Role to run each transaction as; `None` runs as the connecting role.
+
+    Returns:
+        The filenames (without component) actually applied this call, in application order;
+        empty when nothing was pending.
+
     Raises:
         StatePostgresProvisioningError: `run_as_role` is set and the connection may not switch
             to it.
@@ -314,6 +404,14 @@ def apply_pending_migrations(
         StatePostgresMigrationApplyError: a migration file's SQL failed to
             apply -- names the failing component and filename; the
             underlying `psycopg.Error` is chained via `from exc`.
+        psycopg.Error: the tracking-table setup or an applied-check query failed (propagated).
+        OSError: a migration file could not be read.
+
+    Side Effects:
+        Creates `ps_schema_migrations` if absent, executes each pending file's SQL and records
+        it (one committed transaction per file), and emits one `persistence`/`apply_migrations`
+        log entry (`success` or `failure`) naming the `<component>/<filename>` files applied
+        and the count already applied.
     """
     applied: list[str] = []
     already_applied_count = 0

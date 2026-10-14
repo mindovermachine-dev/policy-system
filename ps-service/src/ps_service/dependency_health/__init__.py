@@ -1,9 +1,13 @@
-"""Public API for ps_service.dependency_health.
+"""Public API for `ps_service.dependency_health`.
 
-A process-wide live-health registry for FalkorDB, LLM Interface, Cellar/ELI,
-and Passkey Signing Postgres, fed by their own real-traffic exception
-handling so PS Service's `/ready` can reflect current reachability without
-any extra polling cost.
+Purpose: a process-wide live-health registry for the external dependencies PS Service
+relies on (FalkorDB, the LLM Interface, Cellar/ELI, the Passkey Signing Postgres, the PS
+state Postgres and the startup graph replay). Callers record the outcome of calls they
+already make, so the `/ready` endpoint can report current reachability without any extra
+polling cost.
+
+Exports: the dependency-name constants, `mark_healthy`, `mark_unhealthy`, `is_healthy`,
+`all_healthy` and `reset_for_tests`.
 """
 
 from ps_service.dependency_health.registry import (

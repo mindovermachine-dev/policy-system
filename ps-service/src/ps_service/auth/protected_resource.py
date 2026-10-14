@@ -1,21 +1,16 @@
-"""RFC 9728 OAuth 2.0 Protected Resource Metadata endpoint (issue #58, Slice 8, AC-BI-010).
+"""RFC 9728 OAuth 2.0 Protected Resource Metadata routes.
 
-Publishes `GET /.well-known/oauth-protected-resource`, the exact URL
-`RestAuthMiddleware`'s own `WWW-Authenticate: Bearer resource_metadata="..."`
-header (Slice 3, `ps_service.auth.middleware._resource_metadata_url`) already
-points at. Registered directly on `app` alongside `/health`/`/ready`
-(`ps_service/main.py`) via `app.add_api_route`, not through
-`build_api_router()` -- a bare discovery document, not a business-logic route.
+Publishes `GET /.well-known/oauth-protected-resource`, the URL the `WWW-Authenticate:
+Bearer resource_metadata="..."` header of `RestAuthMiddleware` points at, plus the path-specific
+form for the MCP endpoint. Both are registered directly on the application by
+`ps_service.main.create_app`, not through the business-logic API router.
 
-Deliberately unauthenticated: `RestAuthMiddleware`'s `_EXEMPT_PREFIX =
-"/.well-known/"` (Slice 3) already covers this exact path, so no separate
-opt-out is needed here -- reachability with no `Authorization` header is a
-property of the middleware's allow-list, not of this module.
+Deliberately unauthenticated: `RestAuthMiddleware` exempts everything under `/.well-known/`, so
+reachability without an `Authorization` header is a property of that allow-list, not of this
+module.
 
-Never registered inside the MCP mount (`/mcp`): `AuthSettings.resource_server_url`
-is left `None` when arming the MCP SDK's auth (Slice 5, PLAN.md §0.1), so the
-SDK never auto-registers a competing protected-resource route under `/mcp` --
-this module's route is the only one that exists, at the top level only.
+Never registered inside the MCP mount (`/mcp`): the MCP SDK's auth is armed without a
+`resource_server_url`, so the SDK never adds a competing protected-resource route there.
 """
 
 from __future__ import annotations
@@ -32,6 +27,11 @@ MCP_RESOURCE_PATH = "mcp"
 
 
 def _build_metadata(request: Request, resource: str) -> ProtectedResourceMetadata:
+    """Build the metadata document for `resource` from the application's `AuthContext`.
+
+    With no `AuthContext` (local-test bypass) the issuer and scope lists are empty and the CLI
+    client id is `None`.
+    """
     auth_context = request.app.state.auth_context
     if auth_context is None:
         return ProtectedResourceMetadata(
@@ -49,32 +49,34 @@ def _build_metadata(request: Request, resource: str) -> ProtectedResourceMetadat
 
 
 def _origin(request: Request) -> str:
+    """Return `scheme://host` as the client addressed the service (the `Host` header wins)."""
     host = request.headers.get("host", request.url.netloc)
     return f"{request.url.scheme}://{host}"
 
 
 def protected_resource_metadata(request: Request) -> ProtectedResourceMetadata:
-    """Build the RFC 9728 protected-resource-metadata document for this request.
+    """Return the RFC 9728 protected-resource metadata for authenticating to this service.
 
-    `resource` is derived from the live request (scheme + host), never
-    hardcoded, mirroring `RestAuthMiddleware._resource_metadata_url`'s exact
-    convention -- correct under a local dev bind, a `kind` NodePort, and a
-    prod ClusterIP+Ingress alike (behind the Ingress the scheme is `https`
-    because `main()` runs uvicorn with the proxy's forwarded headers trusted).
-
-    When the local-test bypass (#67) is active, `request.app.state.auth_context`
-    is `None` -- there is no issuer to report, so `authorization_servers`/
-    `scopes_supported` degrade to empty lists rather than 404/500ing (this is
-    a deliberate, documented degenerate case, not an oversight). `ps_cli_client_id`
-    is always passed through as `None` in that branch too, which
-    `response_model_exclude_none=True` on this route's registration
-    (`ps_service/main.py`) then omits entirely from the response body.
+    `resource` is derived from the live request (scheme + host), never hardcoded, so it is correct
+    under a local bind, a NodePort, and behind a TLS-terminating ingress alike. The document
+    names the OIDC issuer as the authorization server and lists the advertised scopes. When the
+    service runs in the local-test bypass there is no issuer, so the server and scope lists are
+    empty rather than the call failing.
 
     Args:
-        request: The incoming request (FastAPI injects it).
+        request: The incoming request; the service's authentication configuration is read from
+            its application state.
 
     Returns:
-        The RFC 9728 metadata document for this PS Service instance.
+        The metadata document: `resource` (this service's origin), `authorization_servers`,
+        `scopes_supported` and, only when configured, `ps_cli_client_id` (omitted from the
+        response body when unset).
+
+    Raises:
+        Nothing: the document is built from configuration and never fails.
+
+    Side Effects:
+        None; read-only and unauthenticated.
     """
     return _build_metadata(request, _origin(request))
 
@@ -82,7 +84,7 @@ def protected_resource_metadata(request: Request) -> ProtectedResourceMetadata:
 def protected_resource_metadata_for_path(
     request: Request, resource_path: str
 ) -> ProtectedResourceMetadata:
-    """Build the path-specific RFC 9728 document for the MCP endpoint (issue #237).
+    """Return the path-specific RFC 9728 metadata document for the MCP endpoint.
 
     RFC 9728 inserts the resource's path after `/.well-known/oauth-protected-resource`, so a
     client given the MCP URL `https://<host>/mcp/` asks for
@@ -91,14 +93,20 @@ def protected_resource_metadata_for_path(
     the route never reflects arbitrary client-chosen paths into `resource`.
 
     Args:
-        request: The incoming request (FastAPI injects it).
-        resource_path: The path after the well-known prefix, without the leading slash.
+        request: The incoming request; the service's authentication configuration is read from
+            its application state.
+        resource_path: The path after the well-known prefix, without the leading slash; a
+            trailing slash is accepted and echoed into `resource`.
 
     Returns:
-        The metadata document whose `resource` is the MCP URL as the client addressed it.
+        The metadata document whose `resource` is the MCP URL as the client addressed it, with
+        the same other fields as `protected_resource_metadata`.
 
     Raises:
         HTTPException: 404 when `resource_path` is not the MCP mount.
+
+    Side Effects:
+        None; read-only and unauthenticated.
     """
     if resource_path.rstrip("/") != MCP_RESOURCE_PATH:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")

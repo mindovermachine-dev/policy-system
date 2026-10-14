@@ -1,31 +1,17 @@
-"""Shared, sanitized error-mapping layer for `passkey_signing.router` (issue #131 Slice 4).
+"""Generic rejection of `/approvals/{id}/*` failures, with the real reason logged server-side.
 
-Mirrors two existing conventions rather than inventing a third:
-`ps_service.api.error_handlers`'s own "one generic body shape, real detail
-never in the response" discipline (PLAN.md §4 Slice 4), and
-`mcp_interface.mcp_server`'s `_run_mcp_action` `outcome="failed"` logging
-convention (`component`/`action`/`outcome`/`extra` via `emit_log_entry`) --
-applied here to `passkey_signing.router`'s handlers instead of an MCP tool
-body.
+Every rejection the signing-ceremony router can produce collapses to the identical
+`PendingApprovalInvalidOrExpiredError` (HTTP 404, the fixed "This approval link is no longer
+valid." body): an unknown approval id, a wrong or tampered code, an expired or already-consumed
+approval, an unknown or wrong-actor credential, a lost consumption race, a malformed WebAuthn
+payload, and a WebAuthn library verification failure (bad signature, wrong relying-party id or
+origin, non-monotonic sign count). The response never carries the reason, so a caller cannot
+learn which condition failed.
 
-Every `/approvals/{id}/*` rejection this router can produce -- an unknown
-`pending_approval_id`, a wrong/tampered `code`, an expired approval, an
-already-consumed (`status != "pending"`) approval, a wrong-actor or unknown
-signing credential, a lost `mark_signed` CAS race, a malformed/garbage
-WebAuthn payload, and a genuine WebAuthn library verification failure (bad
-signature, wrong RP id/origin, non-monotonic `sign_count`) -- collapses to
-the identical `PendingApprovalInvalidOrExpiredError` (HTTP 404, the fixed
-"This approval link is no longer valid." body, already registered in
-`ps_service.api.error_handlers`, AC-BI-015). `reject` is the single place
-that both raises it and records *why*, server-side only, via
-`emit_log_entry` -- the response body itself never carries that detail.
-
-Before this module existed (Slice 3), a genuine `webauthn` library
-verification failure was left to propagate uncaught to the app-wide generic
-`Exception` handler (HTTP 500) -- still a sanitized body, but a different
-shape and status than every other rejection this router produces, and with
-no server-side record of *why* verification failed.
-`reject_on_webauthn_failure` closes that gap.
+`reject` raises that error and logs the reason with `emit_log_entry` (component
+`passkey_signing`, outcome `failed`). `reject_on_webauthn_failure` turns any WebAuthn library
+exception raised inside a block into a `reject`, so a verification failure is never left to the
+application-wide generic 500 handler.
 """
 
 from __future__ import annotations
@@ -47,26 +33,26 @@ _COMPONENT = "passkey_signing"
 
 
 def reject(*, action: str, pending_approval_id: str, reason: str) -> NoReturn:
-    """Log `reason` server-side only, then raise the router's one generic rejection.
+    """Log `reason` server-side only, then raise the one generic rejection.
 
-    Every `/approvals/{id}/*` handler that decides to reject a request calls
-    this instead of raising `PendingApprovalInvalidOrExpiredError` directly,
-    so the *reason* for the rejection is never simply discarded -- it is
-    always available server-side (via the process's own log sink), even
-    though the HTTP response never carries it (AC-BI-015).
+    Handlers call this instead of raising `PendingApprovalInvalidOrExpiredError` directly, so
+    the reason for a rejection is always recorded in the process log even though the HTTP
+    response never carries it.
 
     Args:
-        action: The route's own short name (e.g. `"sign_verify"`), mirrors
-            `_run_mcp_action`'s `action` field -- distinct per route.
-        pending_approval_id: The `id` path segment (never the secret `code`,
-            and never any WebAuthn credential material).
-        reason: A short, stable, server-side-only reason (e.g. `"expired"`,
-            `"code_mismatch"`) or a `repr(exc)` for a genuine library
-            exception -- never surfaced to the caller.
+        action: The calling route's short name (for example `"sign_verify"`); logged as the
+            entry's `action`. Must not be empty.
+        pending_approval_id: The approval id from the URL path. Never the secret code and
+            never WebAuthn credential material.
+        reason: A short, stable explanation (for example `"expired"` or `"code_mismatch"`),
+            or the `repr` of a library exception. Logged only; never shown to the caller.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: always -- this function never
-            returns normally.
+        PendingApprovalInvalidOrExpiredError: always; the function never returns.
+
+    Side Effects:
+        Emits one log entry (component `passkey_signing`, outcome `failed`) whose `extra`
+        holds `pending_approval_id` and `reason`.
     """
     emit_log_entry(
         component=_COMPONENT,
@@ -79,30 +65,27 @@ def reject(*, action: str, pending_approval_id: str, reason: str) -> NoReturn:
 
 @contextmanager
 def reject_on_webauthn_failure(*, action: str, pending_approval_id: str) -> Generator[None]:
-    """Map any `webauthn` library exception raised inside the block to `reject`.
+    """Turn any WebAuthn library failure raised inside the block into the generic rejection.
 
-    Catches `webauthn.helpers.exceptions.WebAuthnException` -- the common base
-    class for every failure the `webauthn==3.0.1` package itself raises,
-    including a tampered/mismatched challenge, a bad signature, a wrong RP
-    id/origin, a non-monotonic `sign_count`, and a malformed/garbage
-    credential payload (`InvalidJSONStructure` -- confirmed empirically
-    against the installed package: a plain dict missing required keys, or a
-    non-JSON string, raises this, never a bare `KeyError`/`TypeError`/
-    `json.JSONDecodeError` that could slip past this one `except` clause).
+    Catches `webauthn.helpers.exceptions.WebAuthnException`, the base class of every failure
+    the `webauthn` package raises: a mismatched challenge, a bad signature, a wrong relying-party
+    id or origin, a non-monotonic sign count, and a malformed credential payload
+    (`InvalidJSONStructure`). Other exceptions propagate unchanged.
 
     Args:
-        action: The route's own short name, threaded through to `reject`.
-        pending_approval_id: The `id` path segment, threaded through to
-            `reject`.
+        action: The calling route's short name, passed to `reject`.
+        pending_approval_id: The approval id from the URL path, passed to `reject`.
 
     Yields:
-        Control, for the caller to run exactly one `webauthn.verify_*`
-        call inside.
+        Control to the caller, which should run exactly one `webauthn.verify_*` call inside
+        the block.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: if the wrapped block raised a
-            `WebAuthnException` -- the real exception's `repr()` is logged
-            server-side only (via `reject`), never in the response.
+        PendingApprovalInvalidOrExpiredError: the block raised a `WebAuthnException`; its
+            `repr` is logged server-side by `reject` and never appears in the response.
+
+    Side Effects:
+        On a caught exception, emits one failed-outcome log entry via `reject`.
     """
     try:
         yield

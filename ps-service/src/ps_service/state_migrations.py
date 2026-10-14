@@ -1,4 +1,4 @@
-"""The one list of PS state Postgres migration sources (issue #205 follow-up).
+"""The one list of PS state Postgres migration sources.
 
 Service startup (`ps_service.main`) and the operator provisioning command
 (`python -m ps_service.graph_gateway.provision`) must apply the same ordinary component
@@ -9,6 +9,10 @@ migrations in the same order, so the list is declared once, here, at composition
 application role). `GRAPH_GATEWAY_MIGRATION_SOURCE` is owner-protected and is applied only by
 the privileged runner with the admin credential. `passkey_signing` is intentionally absent: it
 lives in its own database.
+
+Attributes:
+    ORDINARY_STATE_MIGRATION_SOURCES: The ordinary component migration sources, in apply order.
+    GRAPH_GATEWAY_MIGRATION_SOURCE: The owner-protected graph log migration source.
 """
 
 from __future__ import annotations

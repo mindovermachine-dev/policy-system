@@ -1,12 +1,14 @@
 """FastAPI exception handlers for the PS Service REST API.
 
 Every 4xx/5xx body this API returns is minted here, in one shape
-(``{"error": {"code", "message", "failing_stage"}, "run_id": ...}`` — AC-BI-009,
-AC-BI-010). Messages from a whitelisted set of domain-level exception types are
-surfaced verbatim after path/host scrubbing; every other exception collapses to a
-generic message, with the real detail written, scrubbed, to the operator log only. No
-stack trace, filesystem path, repo/home directory, ``host:port`` token, or URL
-ever reaches a response body.
+(``{"error": {"code", "message", "failing_stage"}, "run_id": ...}``). Messages from a
+whitelisted set of domain-level exception types are surfaced verbatim after path/host
+scrubbing; every other exception collapses to a generic message, with the real detail
+written, scrubbed, to the operator log only. No stack trace, filesystem path, repo/home
+directory, ``host:port`` token, or URL ever reaches a response body.
+
+Public entry points: ``register_exception_handlers`` installs every handler on an app, and
+``is_safe_verbatim`` tells whether an exception's message may be shown to a caller.
 """
 
 from __future__ import annotations
@@ -60,7 +62,7 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger(__name__)
 
-# --- text scrubbing (AC-BI-009 / PLAN_REVIEWED.md §1.1 M5) --------------------
+# --- text scrubbing ----------------------------------------------------------
 
 _REPO_ROOT: str = str(Path(__file__).resolve().parents[4])
 _HOME_DIR: str = str(Path.home())
@@ -83,15 +85,17 @@ _REASON_MAX_LEN = 300
 def _scrub_text(text: str) -> str:
     """Strip filesystem paths, the repo/home dirs, ``host:port`` tokens, and URLs.
 
-    Applied to every message surfaced to a caller. Regexes are bounded (a single
-    character-class quantifier each — no nested quantifiers, no catastrophic
-    backtracking).
+    Applied to every message surfaced to a caller or written to the operator log, so a detail
+    string cannot reveal where the service runs. Regexes are bounded (a single character-class
+    quantifier each, no nested quantifiers) so no input causes catastrophic backtracking.
 
     Args:
-        text: The raw message.
+        text: The raw message; any string, including empty.
 
     Returns:
-        The message with each leak-shaped span replaced by a fixed placeholder.
+        The message with each repo-root, home-directory, URL, ``host:port``, absolute-path,
+        ``~`` and ``$HOME`` span replaced by a fixed ``[redacted-...]`` placeholder. Text with
+        no such span is returned unchanged.
     """
     scrubbed = _REPO_ROOT_RE.sub(_PATH_PLACEHOLDER, text)
     scrubbed = _HOME_DIR_RE.sub(_PATH_PLACEHOLDER, scrubbed)
@@ -102,7 +106,7 @@ def _scrub_text(text: str) -> str:
     return _ENV_HOME_RE.sub(_PATH_PLACEHOLDER, scrubbed)
 
 
-# --- safe-verbatim whitelist (PLAN_REVIEWED.md §1.1 M5) ----------------------
+# --- safe-verbatim whitelist -------------------------------------------------
 
 _SAFE_VERBATIM: tuple[type[Exception], ...] = (
     AuditTrailUnavailableError,
@@ -142,9 +146,9 @@ _SAFE_VERBATIM_NAMES: frozenset[str] = frozenset(
         "DomainMapperExtractionError",
         "DomainMapperDerivationError",
         "CompanyMergeConfigurationError",
-        "ArtifactContentRejectedError",  # ps_service.restore (GH #104) -- by name, never imported
-        "GovernanceOwnerRequiredError",  # ps_service.company_merge (#227) -- by name
-        "RestoreOwnerRequiredError",  # ps_service.restore (issue #183) -- by name, never imported
+        "ArtifactContentRejectedError",  # ps_service.restore -- by name, never imported
+        "GovernanceOwnerRequiredError",  # ps_service.company_merge -- by name
+        "RestoreOwnerRequiredError",  # ps_service.restore -- by name, never imported
     }
 )
 """Whitelisted domain-error class names, matched by name so this module never
@@ -156,18 +160,22 @@ no-transitive-pipeline-import guarantee)."""
 def is_safe_verbatim(exc: BaseException) -> bool:
     """Return whether ``str(exc)`` may be surfaced to the caller (after scrubbing).
 
-    True for the API-boundary types in :data:`_SAFE_VERBATIM` and, matched by
-    class name, the whitelisted Domain Mapper / Company Merge / Restore domain
-    errors.
-    Everything else is treated as potentially detail-leaking. Used both here and
-    by the orchestration's ``_run_stage`` when building a ``PipelineStageError``
-    reason.
+    Domain-level messages are safe to show; anything else (driver, network, library errors)
+    can embed addresses, paths or credentials and is treated as detail-leaking. Used by the
+    verbatim handlers here and by the ingestion orchestration when it builds the reason of a
+    ``PipelineStageError``.
+
+    Business Rules:
+        True for the API-boundary types in the whitelist and, matched by class name, for the
+        whitelisted Domain Mapper, Company Merge, Ingestion and Restore domain errors. Matching
+        by name keeps this module from importing those packages. Everything else is False.
 
     Args:
         exc: The exception to classify.
 
     Returns:
-        ``True`` if the exception's message is domain-level and caller-safe.
+        ``True`` if the exception's message is domain-level and caller-safe, else ``False``.
+        Never raises.
     """
     return isinstance(exc, _SAFE_VERBATIM) or type(exc).__name__ in _SAFE_VERBATIM_NAMES
 
@@ -193,7 +201,8 @@ def _error_body(
         code: A stable machine-readable error code.
         message: A caller-safe, already-scrubbed message.
         run_id: The request's run id, or ``None`` if none was bound.
-        failing_stage: The failing pipeline stage, for ``PipelineStageError`` only.
+        failing_stage: The failing pipeline stage, set only for stage-failure errors; ``None``
+            otherwise.
 
     Returns:
         ``{"error": {"code", "message", "failing_stage"}, "run_id": ...}``.
@@ -342,7 +351,11 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
 def _make_verbatim_handler(
     code: str, status_code: int
 ) -> Callable[[Request, Exception], Awaitable[JSONResponse]]:
-    """Build a handler that surfaces a whitelisted error's scrubbed message."""
+    """Build an exception handler returning ``code`` and ``status_code`` for one error type.
+
+    The handler shows the scrubbed ``str(exc)`` when ``is_safe_verbatim`` accepts it, else the
+    generic internal-error message under the same code and status.
+    """
 
     async def _handler(request: Request, exc: Exception) -> JSONResponse:
         message = _scrub_text(str(exc)) if is_safe_verbatim(exc) else _GENERIC_500_MESSAGE
@@ -355,7 +368,12 @@ def _make_verbatim_handler(
 
 
 async def _handle_pipeline_stage_error(request: Request, exc: Exception) -> JSONResponse:
-    """Shape a ``PipelineStageError`` body: HTTP 502, naming the failing stage (AC-BI-008)."""
+    """Shape a ``PipelineStageError`` body: HTTP 502, naming the failing stage.
+
+    The message is the scrubbed stage reason cut to 300 characters. If ``exc`` is not a
+    ``PipelineStageError`` (not expected: registered for that type only) a generic 500 is
+    returned.
+    """
     run_id = _bound_run_id(request)
     if not isinstance(exc, PipelineStageError):  # defensive — registered for this type only
         return _json(
@@ -374,7 +392,12 @@ async def _handle_pipeline_stage_error(request: Request, exc: Exception) -> JSON
 
 
 async def _handle_restore_stage_failed_error(request: Request, exc: Exception) -> JSONResponse:
-    """Shape a ``RestoreStageFailedError`` body: HTTP 502, naming the failing stage (AC-BI-008)."""
+    """Shape a ``RestoreStageFailedError`` body: HTTP 502, naming the failing stage.
+
+    The message is the scrubbed stage reason cut to 300 characters. If ``exc`` is not a
+    ``RestoreStageFailedError`` (not expected: registered for that type only) a generic 500 is
+    returned.
+    """
     run_id = _bound_run_id(request)
     if not isinstance(exc, RestoreStageFailedError):  # defensive — registered for this type only
         return _json(
@@ -393,7 +416,12 @@ async def _handle_restore_stage_failed_error(request: Request, exc: Exception) -
 
 
 async def _handle_export_stage_failed_error(request: Request, exc: Exception) -> JSONResponse:
-    """Shape an ``ExportStageFailedError`` body: HTTP 502, naming the failing stage (PLAN.md D6)."""
+    """Shape an ``ExportStageFailedError`` body: HTTP 502, naming the failing stage.
+
+    The message is the scrubbed stage reason cut to 300 characters. If ``exc`` is not an
+    ``ExportStageFailedError`` (not expected: registered for that type only) a generic 500 is
+    returned.
+    """
     run_id = _bound_run_id(request)
     if not isinstance(exc, ExportStageFailedError):  # defensive — registered for this type only
         return _json(
@@ -423,7 +451,7 @@ async def _handle_request_validation_error(request: Request, exc: Exception) -> 
 
 
 async def _handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
-    """Catch-all: HTTP 500, generic message, no detail in the body (AC-BI-009).
+    """Catch-all: HTTP 500, generic message, no detail in the body.
 
     The cause is logged here, not upstream: one ``failed`` entry (component ``api``, action
     ``unhandled_request_error``) with the request's ``run_id`` (null when none is bound), the
@@ -458,33 +486,40 @@ async def _handle_unexpected_exception(request: Request, exc: Exception) -> JSON
 def register_exception_handlers(app: FastAPI) -> None:
     """Register every ``ps_service.api`` exception handler on ``app``.
 
-    Called from ``ps_service.main.create_app``. Registers one handler per
-    whitelisted ``ApiError`` subclass, one for ``PipelineStageError`` (502), one
-    for ``RestoreStageFailedError`` (502), one for ``ExportStageFailedError``
-    (502), one for ``RequestValidationError`` (422), and a catch-all
-    ``Exception`` handler (generic 500). Status map:
-    ``AccessDeniedError`` 403, ``AuthorizationStoreUnavailableError`` 503,
-    ``AuditTrailUnavailableError`` 503 (issue #195: the opening audit row could not be written),
-    ``CatalogIdentifierNotFoundError`` 404, ``CatalogSourceOverrideUnavailableError`` 503,
-    ``InternalSeedValidationError`` 422,
-    ``IngestionConfigIncompleteError`` 503, ``GraphWriteUnavailableError`` 503 (issue #208: no
-    graph write gateway, so the write fails closed),
-    ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,
-    ``PendingReviewNotFoundError`` 404, ``ExportInstrumentNotFoundError`` 404,
-    ``ExportConfigIncompleteError`` 503, ``CuratedSourceUnavailableError`` 502,
-    ``MergeApprovalRequiresAuthenticatedCallerError`` 401,
-    ``PendingApprovalNotFoundError`` 404,
-    ``PendingApprovalInvalidOrExpiredError`` 404,
-    ``PipelineStageError`` 502, ``RestoreStageFailedError`` 502,
-    ``ExportStageFailedError`` 502, ``RequestValidationError`` 422,
-    ``ShortNameCollisionError`` 409,
-    ``CelexAlreadyIngestedError`` 409,
-    ``RestoreInstrumentIdAmbiguousError`` 409,
-    ``RestoreInstrumentIdNotFoundError`` 404,
-    everything else 500.
+    Called once from ``ps_service.main.create_app`` so that every error leaves the API in the
+    single error-body shape with a scrubbed message.
+
+    Status map (error type, HTTP status):
+
+    * 400: ``InvalidAccessRoleError``, ``InvalidAuditQueryFilterError``.
+    * 401: ``MergeApprovalRequiresAuthenticatedCallerError``, ``InternalIngestOwnerRequiredError``.
+    * 403: ``AccessDeniedError``, ``SelfGrantOrRevokeBlockedError``,
+      ``SystemOwnerFloorViolationError``.
+    * 404: ``CatalogIdentifierNotFoundError``, ``PendingReviewNotFoundError``,
+      ``ExportInstrumentNotFoundError``, ``PendingApprovalNotFoundError``,
+      ``PendingApprovalInvalidOrExpiredError``, ``RestoreInstrumentIdNotFoundError``.
+    * 409: ``ShortNameCollisionError``, ``CelexAlreadyIngestedError``,
+      ``RestoreInstrumentIdAmbiguousError``.
+    * 413: ``RequestBodyTooLargeError``.
+    * 422: ``InternalSeedValidationError``, ``RestoreArtifactRejectedError``,
+      ``RequestValidationError`` (generic message, no field detail).
+    * 502: ``PipelineStageError``, ``RestoreStageFailedError``, ``ExportStageFailedError``
+      (each naming the failing stage), ``CuratedSourceUnavailableError``.
+    * 503: ``AuditTrailUnavailableError`` (the opening audit row could not be written),
+      ``AuthorizationStoreUnavailableError``, ``CatalogSourceOverrideUnavailableError``,
+      ``IngestionConfigIncompleteError``, ``GraphWriteUnavailableError`` (no graph write
+      gateway, so the write fails closed), ``ExportConfigIncompleteError``.
+    * 500: every other exception, with a generic message.
 
     Args:
         app: The FastAPI application to register handlers on.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Adds the exception handlers to ``app``, replacing any handler already registered for the
+        same exception type.
     """
     for exc_type, code, status_code in _API_ERROR_SPECS:
         app.add_exception_handler(exc_type, _make_verbatim_handler(code, status_code))
