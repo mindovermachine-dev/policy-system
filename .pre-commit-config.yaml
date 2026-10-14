@@ -46,6 +46,13 @@ repos:
         language: system
         pass_filenames: true
         files: ^(ps-service|ps-cli)/tests/.*\.py$
+      - id: docstring-provenance
+        name: docstring provenance (no AC ids, issue refs or planning-doc refs in code text)
+        entry: uv run python scripts/check_docstring_provenance.py --changed-since HEAD
+        language: system
+        types: [python]
+        pass_filenames: false # diffs against HEAD itself; pre-commit still skips it when no .py is staged
+        exclude: (^|/)(spikes|\.venv|node_modules|\.orchestrator)/
       - id: domain-schema-freshness
         name: domain schema freshness (generated docs and intake schema)
         entry: uv run python -m ps_service.domain_schema check

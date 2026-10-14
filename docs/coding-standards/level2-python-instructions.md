@@ -3,7 +3,7 @@
 
 **Technology:** Python 3.14, uv workspace
 **Tech Version:** python@3.14
-**Last Reviewed:** 2026-08-22
+**Last Reviewed:** 2026-10-14
 
 ---
 
@@ -61,8 +61,44 @@
 - Max cyclomatic complexity: 8 (`ruff`'s `mccabe` check), per L1's Cyclomatic Complexity principle — enforced via `[tool.ruff.lint.mccabe] max-complexity = 8`; `[tool.ruff.lint.pylint] max-args = 8` matches it.
 - Absolute imports only, no relative imports (`[tool.ruff.lint.flake8-tidy-imports] ban-relative-imports = "all"`) — clearer with the `src/` layout's nested packages.
 - DRY: don't duplicate logic across modules — extract a shared function/class within the same package once a pattern repeats a third time.
-- Docstrings required on public functions/classes and anything crossing a component boundary; a one-line summary is enough unless the behavior is non-obvious (the MCP tool-docstring rule under ps-service is a stricter special case of this, not a separate rule). Enforced by `pydocstyle` (`google` convention); tests and `tools/` are exempted from docstring rules via `per-file-ignores` — but `tools/` and `docs/**.py` are still type-checked by basedpyright.
+- Docstrings required on public functions/classes and anything crossing a component boundary, written against the L1 Documentation rubric and its mandatory subset (see Documentation below); the MCP tool-docstring rule under ps-service is a stricter special case of the Documentation rubric, not a separate rule. Presence is enforced by `pydocstyle` (`google` convention); tests and `tools/` are exempted from docstring rules via `per-file-ignores` — but `tools/` and `docs/**.py` are still type-checked by basedpyright.
 - Scope: config is workspace-wide from the root `pyproject.toml`, applied uniformly to `ps-service`, `ps-cli`, `tools/`, and `docs/**.py`. `spikes/` (nested git repo) and `ps-question-skill/` contain no `.py` today and are excluded; bring them into scope when they gain Python code.
+
+### Documentation
+
+Google-style docstrings (`pydocstyle` convention `google`) carry the L1 Documentation rubric. The no-provenance rule applies to every docstring, comment and test text. Ruff does not check that `Args`, `Returns` or `Raises` are present, so these sections are reviewed against the rubric rather than lint-enforced.
+
+| Rubric row     | Python form                                                                  |
+| -------------- | ---------------------------------------------------------------------------- |
+| Purpose        | Opening paragraph after the summary line                                     |
+| Summary        | First line of the docstring                                                  |
+| Parameters     | `Args` section (one entry per parameter)                                     |
+| Return Value   | `Returns` (or `Yields`) section                                              |
+| Exceptions     | `Raises` section                                                             |
+| Side Effects   | Prose paragraph naming each state change, I/O or external call               |
+| Business Rules | Prose paragraph naming the enforced domain rules                             |
+| Examples       | `Example` section with a doctest-style snippet                               |
+| Accuracy       | Sections match the current signature and behavior                            |
+| Readability    | Plain wording; no filler                                                     |
+
+```python
+def apply_discount(total: Decimal, rate: Decimal) -> Decimal:
+    """Reduce an invoice total by a percentage discount.
+
+    Used when a customer holds an active discount agreement. Discounts never
+    take a total below zero. Writes nothing and calls no external service.
+
+    Args:
+        total: Invoice total in the invoice currency, zero or greater.
+        rate: Discount as a fraction between 0 and 1 inclusive.
+
+    Returns:
+        The discounted total, never negative.
+
+    Raises:
+        ValueError: If `rate` is outside 0 to 1.
+    """
+```
 
 ### Types Handling
 
@@ -103,12 +139,12 @@
 - Parameterize Cypher queries: pass values via `params={...}`, never interpolate them into the query string — follow the existing precedent in `tools/graph-ingestion/merge_capabilities.py`'s `graph.query(query, params={"id": ...})`.
 - The one exception is labels/relationship types, which Cypher cannot parameterize (see `load_graph.py`'s `f"MATCH (n:{label})"`) — validate against the allow-list of known schema labels (`docs/artifacts/ps-domain-concepts.md`) before interpolating; never interpolate a raw user- or LLM-supplied string there.
 - The write-clause regex guard (`query_engine/cypher_query.py`'s `_WRITE_CLAUSE`) is defense-in-depth, not the boundary — the real boundary is the FalkorDB connection's own privileges: the read-only query surface (Query Engine, MCP Interface) must connect as a database user/role restricted to read-only operations.
-- Bound query cost: both a query execution timeout and a result-size cap are enforced in the read-only query surface (Query Engine / MCP Interface) (issue #38) — the timeout via `graph.query`'s native `timeout=` kwarg (FalkorDB aborts server-side), the row cap via caller-side Python truncation of the returned rows (never FalkorDB's global `RESULTSET_SIZE`/`GRAPH.CONFIG SET`, which is instance-wide).
+- Bound query cost: both a query execution timeout and a result-size cap are enforced in the read-only query surface (Query Engine / MCP Interface) — the timeout via `graph.query`'s native `timeout=` kwarg (FalkorDB aborts server-side), the row cap via caller-side Python truncation of the returned rows (never FalkorDB's global `RESULTSET_SIZE`/`GRAPH.CONFIG SET`, which is instance-wide).
 
 ### API Patterns
 
 - REST framework: **FastAPI** — chosen for its native Pydantic integration (already mandated above for REST/MCP request/response payloads), async support matching the rest of `ps-service`, and auto-generated OpenAPI docs.
-- Routing, middleware, and dependency-injection conventions for `ps_service/api/` (established in issue #51):
+- Routing, middleware, and dependency-injection conventions for `ps_service/api/`:
   - **Routing**: one `APIRouter` per concern, built by a `build_*_router()` factory (no module-level singleton router — mirrors `create_app` being a factory), included via `app.include_router(...)` inside `create_app`. `main.py`'s own `/health`/`/ready` keep `app.add_api_route` — they predate the router and carry no request models.
   - **Config injection**: `create_app` sets `app.state.config = config`; routes depend on `get_service_config(request) -> ServiceConfig`, which returns `request.app.state.config`. No closure over `create_app`, no module global.
   - **Collaborator injection**: the pipeline stage/adapter/graph-opener bundle is a provider dependency (`provide_pipeline_dependencies`) overridden in tests via `app.dependency_overrides` — the idiomatic FastAPI seam, never monkeypatching.
@@ -175,16 +211,16 @@ These patterns are adapted from the proven shape of the `gh-tt` CLI (a separate,
   - `check` — sweep for state changes (e.g. `check regulations`).
   - `config` — manage named contexts. The one exception group: it does not nest `config <verb> <resource>`, instead mirroring kubectl's own `kubectl config` subcommands, whose leaves are verb-noun compounds (`set-context`/`use-context`/`get-contexts`).
 - **This vocabulary is expected to grow.** When implementing a new command, prefer a `<verb> <resource>` shape consistent with the existing groups above over inventing a new top-level group or a bespoke spelling:
-  - When implementing #71 (export), prefer `ps-cli export instrument <instrument_id>`.
-  - When implementing #72 (catalog add/remove), prefer `ps-cli add catalog-entry <path>` / `ps-cli remove catalog-entry <instrument_id>`.
-  - When implementing #77 (kgraph list), prefer `ps-cli get instruments` — a distinct resource from `get catalog`: `catalog` reads the local curated-content repo, `instruments` would read live FalkorDB state via PS Service.
-  - When implementing #35 (near-misses list/resolve), prefer `ps-cli get near-misses` / `ps-cli resolve near-miss <id> --decision=merge|keep-separate`.
-  - None of #71/#72/#77/#35's commands exist today — this is guidance for whoever implements them, not a claim of current behavior.
+  - When implementing an export command, prefer `ps-cli export instrument <instrument_id>`.
+  - When implementing catalog add/remove, prefer `ps-cli add catalog-entry <path>` / `ps-cli remove catalog-entry <instrument_id>`.
+  - When implementing a knowledge-graph instrument listing, prefer `ps-cli get instruments` — a distinct resource from `get catalog`: `catalog` reads the local curated-content repo, `instruments` would read live FalkorDB state via PS Service.
+  - When implementing near-miss list/resolve, prefer `ps-cli get near-misses` / `ps-cli resolve near-miss <id> --decision=merge|keep-separate`.
+  - None of these commands exist today — this is guidance for whoever implements them, not a claim of current behavior.
 
 ### Error Handling
 
 - **Single user-facing error type**: user-facing errors (invalid state, missing precondition, bad input) are raised as one `PsCliError` exception via an `assert_contract(*, contract: bool, msg: str, hint: str | None = None)` helper — not the many domain-specific exception types used in `ps-service`. `PsCliError` is caught in one `try/except` around command dispatch in `main()`; format as `❌ {msg}` (plus `💡 {hint}` on its own line, if given) to stderr, then `sys.exit(1)`. Success falls through to an explicit `sys.exit(0)`.
-- **Three-way exit-code split at the dispatch boundary** (issue #122, a deliberate, narrow exception to the general "let bugs crash" principle below — confirmed for `run()`'s single dispatch boundary specifically, not a blanket reversal): the same `try/except` also catches `KeyboardInterrupt` (the operator cancelled — this is not a bug — print a short cancellation line to stderr, `sys.exit(130)`, matching the POSIX SIGINT convention) and, separately, any other `Exception` (an unhandled bug — print `{type(exc).__name__}: {exc}` to stderr, `sys.exit(2)`). `BaseException` subtypes other than `KeyboardInterrupt` (e.g. `SystemExit`, from argparse's own `--help`/a parse error) are not caught here and propagate unaffected.
+- **Three-way exit-code split at the dispatch boundary** (a deliberate, narrow exception to the general "let bugs crash" principle below — confirmed for `run()`'s single dispatch boundary specifically, not a blanket reversal): the same `try/except` also catches `KeyboardInterrupt` (the operator cancelled — this is not a bug — print a short cancellation line to stderr, `sys.exit(130)`, matching the POSIX SIGINT convention) and, separately, any other `Exception` (an unhandled bug — print `{type(exc).__name__}: {exc}` to stderr, `sys.exit(2)`). `BaseException` subtypes other than `KeyboardInterrupt` (e.g. `SystemExit`, from argparse's own `--help`/a parse error) are not caught here and propagate unaffected.
 - **Let bugs crash — everywhere else**: outside that one dispatch boundary, exceptions that are not `PsCliError` are bugs, not user errors — do not catch them into a generic error message. Let them propagate with a full traceback. Standard Python tracebacks don't print local variable values, so this is safe by default — but if enhanced/pretty-traceback tooling (e.g. `rich`, anything that dumps locals) is ever added, it must not be enabled where a local could hold a secret (an API key or token passed as a function argument).
 - Under `-v`/`--verbose`: for `PsCliError`, print the failure site (`🔦 @ {file}:{line}`, the innermost frame of the caught error's traceback) after the formatted message — a lightweight diagnostic short of a full traceback. For the unexpected-`Exception` branch above, print the *full* traceback instead — the one-line pointer isn't enough to diagnose a genuine bug, and unlike the general case this path's default output is already summarized, not silent.
 
@@ -206,5 +242,5 @@ These patterns are adapted from the proven shape of the `gh-tt` CLI (a separate,
 
 Not yet coding patterns — each needs a decision before the area it touches ships, tracked here instead of as asides inside the topic sections above.
 
-- **API rate limiting**: Authentication is decided and implemented (issue #58: generic OIDC bearer-token validation via `ps_service/auth/`, shared by both REST middleware and MCP Interface's `MCPServer(token_verifier=...)` hook; the #67 local-test bypass remains the loopback-only exception). Rate limiting for a network-reachable deployment remains genuinely open and is not addressed by issue #58.
+- **API rate limiting**: Authentication is decided and implemented (generic OIDC bearer-token validation via `ps_service/auth/`, shared by both REST middleware and MCP Interface's `MCPServer(token_verifier=...)` hook; the local-test bypass remains the loopback-only exception). Rate limiting for a network-reachable deployment remains genuinely open and is not addressed by authentication.
 - **PII handling**: ingested content may contain PII (this system explicitly models GDPR). Needs a product/legal decision on retention/logging limits and third-party LLM data-processing terms before ingesting real business data.

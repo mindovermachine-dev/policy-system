@@ -95,3 +95,26 @@ They are enforced during code implementation and impact assessment.
 ## Cyclomatic complexity
 
 - Keep it as low as possible and never more than 8
+
+## Documentation
+
+- Document every public function, class and module boundary so a reader can use it without reading its body.
+- No provenance. Code text (docstrings, comments and test text) never cites acceptance-criteria identifiers, issue or pull request numbers, plan, spike, handoff or tracker documents, or narrates history ("added for", "previously", "replaces"). Readers cannot open those references and the text goes stale; that context belongs in the tracker and in commit messages.
+- Score each docstring against the rubric below. Each row is scored 0 (absent), 1 (present but incomplete or vague) or 2 (complete and precise).
+
+| Criterion      | Requirement               | What a score of 2 means                                                                  |
+| -------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
+| Purpose        | Mandatory                 | States what the unit is for and why it exists, in domain terms.                          |
+| Summary        | If applicable             | A leading line that stands alone as a description.                                       |
+| Parameters     | Mandatory                 | Each input: meaning, units, allowed values and constraints.                              |
+| Return Value   | Mandatory                 | What is returned, its shape, and what the empty or absent case means.                    |
+| Exceptions     | Mandatory when applicable | Each error raised and the condition that triggers it.                                    |
+| Side Effects   | Mandatory when applicable | Every state change, I/O and external call the unit performs.                             |
+| Business Rules | If applicable             | The domain rules and invariants the unit enforces.                                       |
+| Examples       | If applicable             | A short usage example whose output is correct.                                           |
+| Accuracy       | If applicable             | Every statement matches the current behavior of the code.                                |
+| Readability    | If applicable             | Plain wording, short sentences, no filler; cheap for a human or an LLM to read.          |
+
+- This rubric is guidance for authors and reviewers, not a hard gate: a low score is a review finding, not an automatic failure. The no-provenance rule is the exception and is checked mechanically.
+- Summary, Accuracy and Readability have no fixed floor; apply them where they help the reader.
+- Tests are documented by their names. Only the no-provenance rule applies to tests; the Parameters and Return Value rows do not apply.
