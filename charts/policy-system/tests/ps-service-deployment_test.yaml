@@ -279,18 +279,18 @@ tests:
 
   - it: authentikHostname+authentikHostAliasIP set (no ollama) renders the exact hostAliases entry
     set:
-      psService.authentikHostname: authentik.local
+      psService.authentikHostname: authentik.test
       psService.authentikHostAliasIP: 172.18.0.2
     asserts:
       - equal:
           path: spec.template.spec.hostAliases
           value:
             - ip: "172.18.0.2"
-              hostnames: ["authentik.local"]
+              hostnames: ["authentik.test"]
 
   - it: authentikHostname set without authentikHostAliasIP renders no hostAliases entry for it
     set:
-      psService.authentikHostname: authentik.local
+      psService.authentikHostname: authentik.test
     asserts:
       - notExists:
           path: spec.template.spec.hostAliases
@@ -306,7 +306,7 @@ tests:
     set:
       llm.provider: ollama
       psService.ollamaHostGatewayIP: 10.88.0.1
-      psService.authentikHostname: authentik.local
+      psService.authentikHostname: authentik.test
       psService.authentikHostAliasIP: 172.18.0.2
     asserts:
       - equal:
@@ -315,7 +315,28 @@ tests:
             - ip: "10.88.0.1"
               hostnames: ["host.containers.internal"]
             - ip: "172.18.0.2"
-              hostnames: ["authentik.local"]
+              hostnames: ["authentik.test"]
+
+  - it: the evaluator hostname wiring renders authentik.test and no .local name (issue #239)
+    set:
+      psService.authentikHostname: authentik.test
+      psService.authentikHostAliasIP: 172.18.0.2
+      psService.auth.issuer: https://authentik.test:30443/application/o/ps-cli/
+      psService.auth.audience: ps-cli
+      psService.authentik.baseUrl: https://authentik.test:30443
+    asserts:
+      - equal:
+          path: spec.template.spec.hostAliases[0].hostnames[0]
+          value: authentik.test
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_ISSUER")].value
+          value: https://authentik.test:30443/application/o/ps-cli/
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_ISSUER")].value
+          pattern: '\.local\b'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHENTIK_BASE_URL")].value
+          pattern: '\.local\b'
 
   # --- S8: ports, probes, security context ---
 

@@ -90,6 +90,7 @@ case "$line" in
     printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n' "${args[3]}"
     ;;
   "apply -f -")
+    [[ -z "${PS_TEST_APPLY_FAIL:-}" ]] || { echo 'error: apply failed' >&2; exit 1; }
     cat >> "$PS_TEST_KUBECTL_APPLIED"
     printf 'secret/applied configured\n'
     ;;

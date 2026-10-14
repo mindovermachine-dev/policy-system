@@ -10,8 +10,9 @@
 #   --owner-email  The first SystemOwner. Prompted for when omitted. The address is both the
 #                  Authentik username and the OIDC `sub` PS Service expects, so the deploy sets
 #                  the owner identity in one pass.
-#   --hostname     The name Authentik is served under (default authentik.local). It must resolve
-#                  to this machine on every machine that logs in (/etc/hosts).
+#   --hostname     The name Authentik is served under (default authentik.test). It must resolve
+#                  to this machine on every machine that logs in (/etc/hosts). Names ending in
+#                  .local are rejected: Claude Code cannot resolve them.
 #   --apply-host-setup
 #                  Run the two sudo steps this machine needs when they are not already done
 #                  (map the hostname to 127.0.0.1 and ::1 in /etc/hosts; trust the local CA in the
@@ -63,7 +64,7 @@ readonly USAGE
 
 readonly HELM_RELEASE_NAME="policy-system"
 readonly DEFAULT_CHART_REF="oci://ghcr.io/mindovermachine-dev/charts/policy-system"
-readonly DEFAULT_HOSTNAME="authentik.local"
+readonly DEFAULT_HOSTNAME="authentik.test"
 readonly LLM_SECRET_NAME="policy-system-llm-credentials"
 readonly TLS_SECRET_NAME="policy-system-local-tls"
 readonly API_TOKEN_SECRET_NAME="policy-system-authentik-api-token"
@@ -96,6 +97,9 @@ apply_host_setup=false
 needs_hosts=false
 needs_trust=false
 ps_cli_context_ready=false
+# Read by lib/authentik-owner.sh: true when the hostname changed on an existing install, because
+# the owner's passkeys are bound to the old name and are unusable (see announce_upgrade_host_steps).
+OWNER_IGNORE_EXISTING_DEVICES=false
 
 # parse_args <args...>: sets OWNER_EMAIL/hostname_arg/SKIP_OWNER_PROMPT from the flags.
 parse_args() {
@@ -126,6 +130,23 @@ parse_args() {
     esac
     shift
   done
+  reject_local_suffix_hostname
+}
+
+# reject_local_suffix_hostname: hard-stops (before any tool check or cluster call) on a --hostname
+# ending in .local (case-insensitive, trailing dot allowed). Claude Code treats .local as mDNS and
+# fails with ENOTFOUND even when /etc/hosts maps the name, so the evaluator could never sign in.
+reject_local_suffix_hostname() {
+  local lowered
+  lowered="$(printf '%s' "$hostname_arg" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
+    *.local | *.local.)
+      print_error 'Invalid --hostname "%s": it ends in .local. Claude Code cannot resolve .local names (it treats them as mDNS and fails with ENOTFOUND, even when /etc/hosts maps them), so you could not sign in. Fix: use another name, such as %s (the default), and re-run.\n' \
+        "$hostname_arg" "$DEFAULT_HOSTNAME"
+      exit "$EXIT_USAGE"
+      ;;
+    *) ;;
+  esac
 }
 
 log_step() {
@@ -191,6 +212,47 @@ detect_node_ip() {
       "$node"
     exit "$EXIT_FAILURE"
   fi
+}
+
+# announce_upgrade_host_steps <host> <ca.pem>: when an existing release was installed for a
+# DIFFERENT hostname, prints (stderr, informational only: no sudo, no prompt, no mutation) what
+# this machine and the evaluator still need, BEFORE the first cluster change. Passkeys are bound to
+# the hostname (WebAuthn RP ID), so it also makes provision_owner issue a fresh enrolment link even
+# though the old passkey is still listed. No output and no flag for a fresh install, an unchanged
+# hostname, or a release that recorded no hostname.
+announce_upgrade_host_steps() {
+  local host="$1" ca="$2" installed mapping
+  helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1 || return 0
+  installed="$(helm get values "$HELM_RELEASE_NAME" -o json 2>/dev/null \
+    | jq -r '.psService.authentikHostname // empty' 2>/dev/null || true)"
+  [[ -n "$installed" && "$installed" != "$host" ]] || return 0
+  OWNER_IGNORE_EXISTING_DEVICES=true
+  # The command block below is shown to the user verbatim: its $ must not expand here.
+  # shellcheck disable=SC2016
+  {
+    printf '\nThis evaluator was installed for %s; switching to %s.\n' "$installed" "$host"
+    printf 'Before the cluster changes, this machine still needs:\n'
+    while IFS= read -r mapping; do
+      printf "  echo '%s' | sudo tee -a %s\n" "$mapping" "$(hosts_file)"
+    done < <(missing_host_mappings "$host")
+    if [[ ! -f "$ca" ]] || ! ca_is_trusted "$ca"; then
+      printf '  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s\n' "$ca"
+    fi
+    printf '(or re-run with --apply-host-setup to have the script do the sudo steps)\n\n'
+    printf 'Passkeys are bound to the hostname, so the owner registers a new passkey: the script\n'
+    printf 'issues a fresh enrolment link even though the old passkey is still listed.\n'
+    printf 'LAN colleagues must change their hosts line to <your-LAN-IP> %s and register a new passkey.\n\n' "$host"
+    printf 'After the script finishes and BEFORE the owner signs in, clear the role assignments\n'
+    printf 'recorded under the old issuer (evaluator only, never a production install):\n'
+    printf '  POD=$(kubectl get pod -l app.kubernetes.io/component=ps-postgres -o jsonpath=%s)\n' \
+      "'{.items[0].metadata.name}'"
+    printf '  STATE_PW=$(kubectl get secret policy-system-ps-postgres-state-credentials \\\n'
+    printf "    -o jsonpath='{.data.PS_STATE_POSTGRES_PASSWORD}' | base64 -d)\n"
+    printf '  kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state -d ps_state \\\n'
+    printf '    -c "DELETE FROM access_role_assignments;"\n'
+    printf 'Do not open the enrolment link before running this command.\n'
+    printf 'Details: %s#upgrading-an-existing-install\n\n' "$INSTALL_GUIDE"
+  } >&2
 }
 
 # release_values_json <host> <issuer> <checksum>: prints the complete set of user values this
@@ -291,8 +353,8 @@ host_maps_to() {
 }
 
 # missing_host_mappings <host>: prints one hosts-file line per loopback address that does not yet
-# map <host>. Both families are needed: a `.local` name with no IPv6 entry makes macOS multicast
-# an mDNS query for the AAAA record and wait 5 seconds on every lookup (issue #224).
+# map <host>. Both families are mapped so a resolver that tries ::1 first still reaches the
+# NodePort on this machine.
 missing_host_mappings() {
   local address
   for address in 127.0.0.1 ::1; do
@@ -414,6 +476,7 @@ main() {
   require_llm_secret
   prompt_owner_email || exit "$EXIT_FAILURE"
   detect_node_ip
+  announce_upgrade_host_steps "$hostname_arg" "$(local_tls_state_dir)/ca.pem"
 
   trap stop_authentik_port_forward EXIT
 

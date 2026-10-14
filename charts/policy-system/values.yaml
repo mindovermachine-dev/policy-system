@@ -121,6 +121,7 @@ psService:
   # A human/ps-cli client on the evaluator's own machine adds the same hostname to their own
   # /etc/hosts pointing at 127.0.0.1; a colleague on the same LAN points it at the
   # evaluator's laptop's LAN IP instead. See docs/artifacts/installation-guide.md.
+  # The evaluator script uses authentik.test; names ending in .local do not work with Claude Code.
   authentikHostname: ""
   authentikHostAliasIP: ""
 

@@ -184,6 +184,18 @@ tests:
           path: data["authentik-blueprint.yaml"]
           pattern: "web_certificate"
 
+  - it: ps-cli redirect URIs carry no hostname, so a hostname change needs no blueprint edit (issue #239)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "https://claude\\.ai/api/mcp/auth_callback"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "\\^http://\\(localhost\\|127"
+      - notMatchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "authentik\\.(local|test)"
+
   - it: authentik disabled (default) renders no blueprint ConfigMap
     set:
       authentik.enabled: false

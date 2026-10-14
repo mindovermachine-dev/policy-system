@@ -58,7 +58,7 @@ split, because Authentik's `aud` claim is always the bare OAuth2 Provider
 
 | Value | Resolves to | Where it comes from |
 | --- | --- | --- |
-| `psService.auth.issuer` | Production: `https://<hostname>/auth/application/o/ps-cli/`. Evaluator: `https://<hostname>:30443/application/o/ps-cli/` (default hostname `authentik.local`) | Production: `<hostname>` is PS Service's own resolved public DNS-label hostname (the same one its own Ingress uses); `/auth` is the path prefix Authentik's Ingress is mounted at (not a second hostname — see `docs/architecture/customer-azure-deployment.md`'s [Authentik](../architecture/customer-azure-deployment.md#authentik) section for why). Evaluator: the name given to `deploy-ps-eval.sh --hostname` and Authentik's HTTPS NodePort `30443` (the issuer includes the port), no path prefix. `/application/o/ps-cli/` is Authentik's own fixed issuer-path shape, filled by the blueprint's Application `slug`. |
+| `psService.auth.issuer` | Production: `https://<hostname>/auth/application/o/ps-cli/`. Evaluator: `https://<hostname>:30443/application/o/ps-cli/` (default hostname `authentik.test`) | Production: `<hostname>` is PS Service's own resolved public DNS-label hostname (the same one its own Ingress uses); `/auth` is the path prefix Authentik's Ingress is mounted at (not a second hostname — see `docs/architecture/customer-azure-deployment.md`'s [Authentik](../architecture/customer-azure-deployment.md#authentik) section for why). Evaluator: the name given to `deploy-ps-eval.sh --hostname` and Authentik's HTTPS NodePort `30443` (the issuer includes the port), no path prefix. A `.local` hostname is rejected by `deploy-ps-eval.sh` because Claude Code cannot resolve it. `/application/o/ps-cli/` is Authentik's own fixed issuer-path shape, filled by the blueprint's Application `slug`. |
 | `psService.auth.audience` | `ps-cli` | The blueprint's fixed OAuth2 Provider `client_id` literal. |
 | `psService.auth.cliClientId` | `ps-cli` | The same literal — Authentik has no separate public-client registration to distinguish. |
 | `psService.auth.scopes` | `openid profile email offline_access` | The blueprint's own explicit `property_mappings` on the Provider. `offline_access` is included deliberately: a blueprint-created Provider gets **no** scope mappings by default, and PS-Cli's device flow always requests `offline_access` for its refresh token — omitting it here would silently drop that scope from every login. |
@@ -84,6 +84,9 @@ The `ps-cli` provider is a public client (no client secret) and allows three gra
 
 - `https://claude.ai/api/mcp/auth_callback` (strict match), the Claude connector callback.
 - `^http://(localhost|127\.0\.0\.1):[0-9]+/callback$` (regex match), the Claude Code loopback callback on any port.
+
+Both URIs carry no hostname, so changing `--hostname` needs no blueprint edit
+(`charts/policy-system/files/authentik-blueprint.yaml`, `redirect_uris`).
 
 Claude connects with `client_id` `ps-cli` alone. Dynamic client registration stays disabled, and
 the blueprint has no setting for it. It could not serve Claude anyway: Claude registers without

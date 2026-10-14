@@ -321,7 +321,7 @@ Options:
 | Option | Meaning |
 | --- | --- |
 | `--owner-email <address>` | The owner's email. Skips the prompt. The address is the Authentik username and the OIDC `sub` that PS Service expects. |
-| `--hostname <name>` | The name that serves Authentik. Default: `authentik.local`. Every machine that logs in must resolve this name to this machine. |
+| `--hostname <name>` | The name that serves Authentik. Default: `authentik.test`. Every machine that logs in must resolve this name to this machine. Names ending in `.local` are rejected: Claude Code cannot resolve them. |
 | `--apply-host-setup` | Runs the missing host steps through `sudo`. The steps are: map the hostname to `127.0.0.1` in `/etc/hosts`, and (macOS) trust the local CA in the system keychain. Without this option, an interactive run asks first. A `--yes` run only prints the commands. If both steps are already done, nothing happens. |
 | `--yes` | Never prompts. You must then give `--owner-email`. |
 
@@ -427,8 +427,7 @@ three parts below in order.
 
 For the passkey page to open, this machine must do both of these:
 
-- Resolve `authentik.local` to `127.0.0.1` and `::1`. Without the IPv6 line, macOS waits 5
-  seconds on every lookup of a `.local` name, and `ps-cli auth login` pauses for about 10.
+- Resolve `authentik.test` to `127.0.0.1` and `::1`.
 - Trust the local CA. The CA file is `~/.config/policy-system/eval-tls/ca.pem`, or the same
   file under `PS_EVAL_STATE_DIR`.
 
@@ -440,8 +439,8 @@ The script checks both. Then one of these happens:
 - **You declined, or a `sudo` step failed.** Run the commands that the output lists:
 
 ```bash
-echo '127.0.0.1 authentik.local' | sudo tee -a /etc/hosts
-echo '::1 authentik.local' | sudo tee -a /etc/hosts
+echo '127.0.0.1 authentik.test' | sudo tee -a /etc/hosts
+echo '::1 authentik.test' | sudo tee -a /etc/hosts
 ```
 
 ```bash
@@ -525,7 +524,7 @@ Two things are different:
    on the laptop.
 
    ```
-   192.168.1.42 authentik.local
+   192.168.1.42 authentik.test
    ```
 
 2. **Copy the CA certificate from the evaluator machine.**
@@ -646,7 +645,7 @@ the local network on purpose. This table shows what is reachable and by whom:
 **To reach the Authentik admin UI:**
 
 1. Open `https://<hostname>:30443/if/admin/` in a browser that trusts the CA. The default is
-   `https://authentik.local:30443/if/admin/`.
+   `https://authentik.test:30443/if/admin/`.
 2. Sign in as the owner.
 
 The admin UI uses the same HTTPS listener as everything else. You do not need a port-forward.
@@ -974,8 +973,8 @@ deployment has a public hostname (see [What is exposed (production)](#what-is-ex
 
 | Surface | Public deployment | Non-public deployment | Status |
 | --- | --- | --- | --- |
-| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (#168, Claude Code 2.1.236). Non-public: Expected (inferred from #167, not run). |
-| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (#171, Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (#172 descoped it). Login in the Desktop Code tab: Expected, not yet verified. |
+| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (#168, Claude Code 2.1.236). Non-public: Expected (inferred from #167, not run); evaluator on `authentik.test`: verification pending (#239). |
+| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (#171, Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (#172 descoped it). Login in the Desktop Code tab: Expected, not yet verified; evaluator on `authentik.test`: verification pending (#239). |
 | Claude Desktop Chat and Cowork | Works as a manually added custom connector (URL plus Client ID `ps-cli`): GO (#172), needs #237 | Does not work (needs public PS Service and Authentik) | Expected for everything beyond the #172 login result. |
 | claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested by #167 or #168). |
 
@@ -1052,7 +1051,7 @@ Authentik device flow.
 
 `<issuer>` is the value of `psService.auth.issuer`:
 
-- Evaluator: `https://authentik.local:30443/application/o/ps-cli/` (it uses your `--hostname`).
+- Evaluator: `https://authentik.test:30443/application/o/ps-cli/` (it uses your `--hostname`).
 - Production: `https://<label>.<region>.cloudapp.azure.com/auth/application/o/ps-cli/`.
 
 On the evaluator, add `--cacert` with the path to the local CA to each `curl` command.
@@ -1133,6 +1132,103 @@ again.
 **Cluster with the old plain-HTTP port mapping:** you must recreate it in all cases. See the
 warning in [step 4](#4-create-the-local-cluster).
 
+### Moving an existing evaluator off a .local hostname
+
+**Applies to:** evaluators installed with a hostname ending in `.local` (the former default).
+
+Claude Code cannot resolve `.local` names. It fails with `ENOTFOUND`,
+even when `/etc/hosts` maps the name. The default is now `authentik.test`, and
+`deploy-ps-eval.sh` rejects any `--hostname` that ends in `.local`. The hostname is also the
+issuer and the WebAuthn relying-party ID, so moving an install changes all three. The steps:
+
+1. Pull the release that contains this change.
+2. Run `scripts/deploy-ps-eval.sh --owner-email <same email>`. Before it touches the cluster, it
+   prints what this machine still needs and the reset command in step 5. Read it first.
+3. Edit the hosts file: remove the `<old-name>.local` lines and add `127.0.0.1 authentik.test` and
+   `::1 authentik.test`. The script's `--apply-host-setup` does this with `sudo`. The local CA is
+   reused, so there is no new trust step unless the CA is not yet trusted.
+4. The script then does the rest in one pass:
+   - It regenerates the leaf certificate for the new name and keeps the CA.
+   - It runs one `helm upgrade` that moves the issuer, the bootstrap owner's issuer, the Authentik
+     base URL and the `hostAliases` entry for PS Service.
+   - It restarts the Authentik pods, because the certificate checksum changed.
+   - The `ps-cli` redirect URIs and the audience (`ps-cli`) do not change. The redirect URIs hold
+     no hostname.
+5. Clear the role assignments recorded under the old issuer. Run this after the script finishes
+   (PS Service is up on the new issuer) and **before the owner signs in**. The script prints the
+   same block:
+
+   ```bash
+   POD=$(kubectl get pod -l app.kubernetes.io/component=ps-postgres -o jsonpath='{.items[0].metadata.name}')
+   STATE_PW=$(kubectl get secret policy-system-ps-postgres-state-credentials \
+     -o jsonpath='{.data.PS_STATE_POSTGRES_PASSWORD}' | base64 -d)
+   kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state -d ps_state \
+     -c "DELETE FROM access_role_assignments;"
+   ```
+
+   - The bootstrap grants SystemOwner only while the table is empty. A grant recorded under the
+     old issuer would otherwise block it.
+   - After the reset, the first role-gated call by the configured owner grants SystemOwner under
+     the new issuer.
+   - The reset also deletes invitees' grants. Their issuer changed too. They re-enrol and are
+     granted again.
+   - Do not open the enrolment link before this step.
+   - If someone other than the owner calls first, the bootstrap grants nothing and the table stays
+     empty, so the step is safe to retry.
+   - Evaluator only. Never run it against a production install.
+6. Register a new passkey with the link the script prints. Passkeys are bound to the hostname, so
+   the old one no longer works. After a hostname change the script issues a fresh enrolment link
+   even though the old passkey is still listed. After signing in, the owner may delete the dead
+   passkey from the user settings page.
+7. Each LAN colleague changes their hosts line to `<laptop-LAN-IP> authentik.test`, keeps the same
+   CA file, and registers a new passkey (invitation or recovery link).
+8. Everyone using `ps-cli` runs `ps-cli auth login` again. The stored tokens belong to the old
+   issuer.
+
+Verification of this procedure on a live cluster is tracked in
+[#239](https://github.com/mindovermachine-dev/policy-system/issues/239). Until it is recorded
+there, treat the steps as unverified.
+
+### Recording verification evidence
+
+The evaluator on `authentik.test` has not yet been run from Claude Code, Claude Desktop or
+`ps-cli`. A person must run the checks below on a machine with those tools and record the result.
+Nothing in this guide may claim a verified result for this change until that is done.
+
+1. Deploy a fresh evaluator with the default options (`scripts/deploy-ps-eval.sh`).
+2. Claude Code CLI: add the plugin, run `/mcp` and complete the OAuth login for `ps-mcp`. Read the
+   `mcp-logs` output for `plugin:ps-plugin:ps-mcp` and copy the "Successfully connected" line. Run
+   `claude --version`.
+3. Claude Desktop, Code tab: do the same login. Record the Desktop app version and the bundled
+   Claude Code version.
+4. Run `ps-cli auth login` and record the result.
+5. Upgrade rehearsal: take an evaluator installed under a `.local` name, follow
+   [Moving an existing evaluator off a .local hostname](#moving-an-existing-evaluator-off-a-local-hostname),
+   and record whether the owner got an enrolment link, registered a new passkey, and still holds
+   `SystemOwner`. Prove `SystemOwner` with an owner-only call and record the command and result.
+6. Fill in the template below and post it as a comment on
+   [#239](https://github.com/mindovermachine-dev/policy-system/issues/239).
+
+```text
+GH #239 verification evidence (post as a comment)
+Date / operator:
+Evaluator hostname:               authentik.test
+1. Claude Code CLI version (claude --version):
+2. mcp-logs line "Successfully connected" for plugin:ps-plugin:ps-mcp:
+3. Claude Desktop version / bundled Claude Code version:
+4. Desktop Code tab: ps-mcp OAuth result:
+5. ps-cli auth login result:
+6. Upgrade rehearsal: owner enrolment link issued (yes/no), new passkey registered (yes/no),
+   SystemOwner confirmed by an owner-only call (command and result):
+```
+
+**Manual follow-up after the evidence is posted.** A maintainer then edits the
+[surface table](#which-claude-surfaces-reach-your-deployment). In each of the CLI row and the
+Desktop row, replace the pending sentence with the verified result and cite the issue and the
+recorded versions (Claude Code version for the CLI row; Desktop app version and bundled Claude
+Code version for the Desktop row). Also change the Desktop non-public status from "Expected" to
+"Verified". Do not make these edits without the posted evidence.
+
 **Graph mutation log.** Upgrading to a version with the graph mutation log also runs a
 provisioning Job that applies the ordinary `ps_state` migrations and creates the owner-protected
 `graph_log` tables in `ps_state`. The Postgres init script cannot do this on an existing cluster. The upgrade command must pass
@@ -1153,6 +1249,8 @@ before you rely on a claim for a real deployment.
   - A second user invited and enrolled.
   - Owner re-run recovery.
   - Certificate refresh without a manual restart.
+  - This run used an earlier hostname. Re-verification on `authentik.test` is tracked in
+    [#239](https://github.com/mindovermachine-dev/policy-system/issues/239).
 - **A second machine on the LAN: simulated, not tried on physical hardware.**
   - A separate container with the CA in its trust store reached Authentik over HTTPS through
     the `0.0.0.0:30443` mapping of the host.

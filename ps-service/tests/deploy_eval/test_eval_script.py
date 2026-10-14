@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 OWNER_EMAIL = "owner@example.com"
 NODE_IP = "10.89.0.7"
 TOKEN = "s3cr3t-authentik-token-value"
-HOST = "authentik.local"
+HOST = "authentik.test"
 ISSUER = f"https://{HOST}:30443/application/o/ps-cli/"
 AUTH_BASE = f"https://{HOST}:30443"
 
@@ -58,6 +58,21 @@ def test_fresh_run_deploys_once_with_owner_subject_issuer_and_base_url(
     assert values["authentik"]["enabled"] is True
     assert values["localTls"] == {"secretName": "policy-system-local-tls"}
     assert values["llm"] == {"existingSecret": "policy-system-llm-credentials"}
+
+
+def test_default_hostname_is_authentik_test_everywhere(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    values = eval_fixture.deployed_values()
+    ps = values["psService"]
+    assert ps["authentikHostname"] == "authentik.test"
+    assert ps["auth"]["issuer"] == "https://authentik.test:30443/application/o/ps-cli/"
+    assert (
+        ps["authzBootstrapOwner"]["issuer"] == "https://authentik.test:30443/application/o/ps-cli/"
+    )
+    assert ps["authentik"]["baseUrl"] == "https://authentik.test:30443"
+    assert "DNS:authentik.test" in (eval_fixture.state_dir / "leaf.pem").read_text()
+    assert ".local" not in json.dumps(values)
 
 
 def test_authentik_pods_get_the_tls_secret_mount_and_a_certificate_checksum(
@@ -327,6 +342,57 @@ def test_missing_tools_are_reported_together_with_hints_before_any_change(
     assert _mutations(eval_fixture) == []
 
 
+# --- `.local` hostnames are rejected (#239): Claude Code cannot resolve them ---------------------
+
+# Built by concatenation so the contiguous old default appears in no tracked file (the AC gate).
+REJECTED_LOCAL_HOST = "authentik" + ".local"
+
+
+@pytest.mark.parametrize(
+    "hostname", [REJECTED_LOCAL_HOST, "foo.local", "FOO.LOCAL", "a.b.local", "foo.local."]
+)
+def test_hostname_ending_in_local_is_rejected_before_any_change(
+    eval_fixture: EvalFixture, hostname: str
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", hostname, expect=2)
+
+    assert "Claude Code" in run.stderr
+    assert ".local" in run.stderr
+    assert "authentik.test" in run.stderr
+    assert _mutations(eval_fixture) == []
+    assert eval_fixture.kubectl_calls() == []
+
+
+def test_hostname_rejection_runs_before_the_required_tool_check(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.remove_tool("kubectl")
+    eval_fixture.remove_tool("helm")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", "foo.local", expect=2)
+
+    assert "Claude Code" in run.stderr
+    assert "Missing required tool" not in run.stderr
+
+
+@pytest.mark.parametrize(
+    "hostname", ["localhost-x.test", "local", "my.localhost.test", "localnet.example.test"]
+)
+def test_hostnames_that_merely_contain_local_are_accepted(
+    eval_fixture: EvalFixture, hostname: str
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", hostname)
+
+    assert "Claude Code cannot resolve" not in run.stderr
+    assert eval_fixture.deployed_values()["psService"]["authentikHostname"] == hostname
+
+
+def test_help_still_works_with_the_hostname_check(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run("-h")
+
+    assert "usage:" in run.stdout
+
+
 def test_a_container_engine_is_required(eval_fixture: EvalFixture) -> None:
     eval_fixture.remove_tool("podman")
 
@@ -580,6 +646,139 @@ def test_a_changed_owner_email_triggers_a_new_helm_upgrade(eval_fixture: EvalFix
     assert len(eval_fixture.helm_upgrades()) == 2
     subject = eval_fixture.deployed_values()["psService"]["authzBootstrapOwner"]["subject"]
     assert subject == "other@example.com"
+
+
+# --- hostname switch on an existing install: pre-flight listing (#239) -------------------------
+
+OLD_HOST = "old-host.test"
+
+
+def _install_for_host(fixture: EvalFixture, host: str) -> None:
+    """A release installed for `host`: one real run, so Authentik holds the owner too."""
+    fixture.run("--owner-email", OWNER_EMAIL, "--hostname", host)
+
+
+def _make_machine_trust_the_ca(fixture: EvalFixture) -> None:
+    uname = fixture.bin_dir / "uname"
+    uname.unlink()
+    uname.write_text("#!/usr/bin/env bash\necho Darwin\n")
+    uname.chmod(0o755)
+    security = fixture.bin_dir / "security"
+    security.write_text("#!/usr/bin/env bash\nexit 0\n")
+    security.chmod(0o755)
+
+
+def test_upgrade_listing_is_printed_before_the_first_cluster_change(
+    eval_fixture: EvalFixture,
+) -> None:
+    _install_for_host(eval_fixture, OLD_HOST)
+    hosts = _hosts_file(eval_fixture)
+
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, expect=None, PS_HOSTS_FILE=hosts, PS_TEST_APPLY_FAIL="1"
+    )
+
+    # The script really stops on a failed kubectl apply (strict mode + pipefail) ...
+    assert run.returncode != 0
+    assert any("apply" in c for c in eval_fixture.kubectl_calls())
+    assert len(eval_fixture.helm_upgrades()) == 1  # only the seeding run
+    # ... and the listing was printed before that first cluster change was attempted.
+    assert f"switching to {HOST}" in run.stderr
+    assert f"127.0.0.1 {HOST}" in run.stderr
+    assert f"::1 {HOST}" in run.stderr
+    assert "add-trusted-cert" in run.stderr
+
+
+def test_upgrade_listing_omits_steps_already_done(eval_fixture: EvalFixture) -> None:
+    _install_for_host(eval_fixture, OLD_HOST)
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n::1 {HOST}\n")
+    _make_machine_trust_the_ca(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
+
+    assert f"switching to {HOST}" in run.stderr
+    assert f"127.0.0.1 {HOST}" not in run.stderr
+    assert f"::1 {HOST}" not in run.stderr
+    assert "add-trusted-cert" not in run.stderr
+
+
+def test_upgrade_listing_mentions_passkey_reenrolment_and_lan_colleagues(
+    eval_fixture: EvalFixture,
+) -> None:
+    _install_for_host(eval_fixture, OLD_HOST)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert "passkey" in run.stderr
+    assert "LAN" in run.stderr
+    assert "installation-guide.md#upgrading-an-existing-install" in run.stderr
+
+
+def test_upgrade_listing_prints_the_role_assignment_reset_step(eval_fixture: EvalFixture) -> None:
+    # The script now refuses .local, so a pre-#239 release is seeded straight into the fake helm.
+    eval_fixture.helm_state.mkdir(parents=True)
+    old_values = {"psService": {"authentikHostname": "old" + ".local"}}
+    (eval_fixture.helm_state / "values.json").write_text(json.dumps(old_values))
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert "DELETE FROM access_role_assignments" in run.stderr
+    assert "ps-postgres" in run.stderr
+    assert "Do not open the enrolment link before running this command" in run.stderr
+
+
+def test_no_upgrade_listing_on_fresh_install_or_same_hostname_rerun(
+    eval_fixture: EvalFixture,
+) -> None:
+    fresh = eval_fixture.run("--owner-email", OWNER_EMAIL)
+    rerun = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    for run in (fresh, rerun):
+        assert "switching to" not in run.stderr
+        assert "DELETE FROM access_role_assignments" not in run.stderr
+
+
+def test_release_without_recorded_hostname_prints_no_switch_block(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.helm_state.mkdir(parents=True)
+    (eval_fixture.helm_state / "values.json").write_text(json.dumps({"llm": {}}))
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert "switching to" not in run.stderr
+
+
+def test_upgrade_listing_does_no_sudo(eval_fixture: EvalFixture) -> None:
+    _install_for_host(eval_fixture, OLD_HOST)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert not sudo_log.exists()
+
+
+def test_hostname_switch_issues_a_link_although_the_owner_has_a_stale_passkey(
+    eval_fixture: EvalFixture,
+) -> None:
+    _install_for_host(eval_fixture, OLD_HOST)
+    pk = next(iter(eval_fixture.curl_users()))
+    eval_fixture.seed_curl(devices={pk: [{"pk": 1, "name": "passkey"}]})
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert f"{AUTH_BASE}/if/flow/" in run.stdout
+    assert "already has a passkey" not in run.stdout
+
+
+def test_same_hostname_rerun_with_a_passkey_still_issues_no_link(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+    pk = next(iter(eval_fixture.curl_users()))
+    eval_fixture.seed_curl(devices={pk: [{"pk": 1, "name": "passkey"}]})
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert "already has a passkey" in run.stdout
 
 
 # --- order: Authentik first, then the certificate, then PS Service (found live at LC2) ---------

@@ -24,7 +24,7 @@ EXIT_FAILURE=1
 print_error() {{ local f="$1"; shift; printf "$f" "$@" >&2; }}
 source "{LIB}/authentik-owner.sh"
 source "{LIB}/local-tls.sh"
-AUTHENTIK_API_BASE="https://authentik.local:30443"
+AUTHENTIK_API_BASE="https://authentik.test:30443"
 AUTHENTIK_LINK_BASE="$AUTHENTIK_API_BASE"
 AUTHENTIK_CURL_ARGS=(--cacert /tmp/ca.pem)
 AUTHENTIK_API_TOKEN="$PS_TEST_TOKEN"
@@ -43,7 +43,7 @@ def _seed_state_dir(harness: LibHarness, leaf_body: str) -> None:
 
 def _refresh(harness: LibHarness) -> tuple[int, str, str]:
     proc = harness.run(
-        PRELUDE + "refresh_authentik_cert_if_differs authentik.local 30443 /tmp/ca.pem 127.0.0.1"
+        PRELUDE + "refresh_authentik_cert_if_differs authentik.test 30443 /tmp/ca.pem 127.0.0.1"
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -165,7 +165,7 @@ def test_served_fingerprint_is_empty_not_fatal_when_nothing_answers_under_set_e(
 
     proc = lib_harness.run(
         PRELUDE.replace("set -uo pipefail", "set -euo pipefail")
-        + 'have="$(served_fingerprint authentik.local 30443 /tmp/ca.pem 127.0.0.1)"\n'
+        + 'have="$(served_fingerprint authentik.test 30443 /tmp/ca.pem 127.0.0.1)"\n'
         + 'echo "survived=[$have]"'
     )
 

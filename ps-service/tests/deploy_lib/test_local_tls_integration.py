@@ -34,7 +34,7 @@ source "{LIB}/local-tls.sh"
 _OPENSSL_TIMEOUT_SECONDS = 30
 
 
-def _ensure(harness: LibHarness, host: str = "authentik.local", **env: str) -> None:
+def _ensure(harness: LibHarness, host: str = "authentik.test", **env: str) -> None:
     proc = harness.run(PRELUDE + f'ensure_local_leaf "{host}"', **env)
     assert proc.returncode == 0, proc.stderr
 
@@ -72,7 +72,7 @@ def test_leaf_has_ski_aki_san_and_server_auth_and_verifies_against_the_ca(
     text = _text(state / "leaf.pem")
     assert "Subject Key Identifier" in text
     assert "Authority Key Identifier" in text
-    assert "DNS:authentik.local" in text
+    assert "DNS:authentik.test" in text
     assert "TLS Web Server Authentication" in text
     assert "CA:FALSE" in text
     verify = subprocess.run(  # noqa: S603 - fixed argv, test-owned files
@@ -129,7 +129,7 @@ def test_strict_default_client_verifies_the_leaf_with_only_the_local_ca(
         context = ssl.create_default_context(cafile=str(state / "ca.pem"))
         with (
             socket.create_connection(("127.0.0.1", server.port), timeout=5) as raw,
-            context.wrap_socket(raw, server_hostname="authentik.local") as tls,
+            context.wrap_socket(raw, server_hostname="authentik.test") as tls,
         ):
             assert tls.version() is not None
     finally:
@@ -144,7 +144,7 @@ def test_served_fingerprint_equals_the_leaf_fingerprint(lib_harness: LibHarness)
         proc = lib_harness.run(
             PRELUDE
             + 'want="$(leaf_fingerprint)"; '
-            + f'have="$(served_fingerprint authentik.local {server.port} '
+            + f'have="$(served_fingerprint authentik.test {server.port} '
             + f'"{state}/ca.pem" 127.0.0.1)"; '
             + '[[ -n "$want" && "$want" == "$have" ]]'
         )
@@ -169,11 +169,28 @@ def test_hostname_change_regenerates_the_leaf_but_keeps_the_ca(lib_harness: LibH
     state = _state(lib_harness)
     ca, leaf = (state / "ca.pem").read_bytes(), (state / "leaf.pem").read_bytes()
 
-    _ensure(lib_harness, host="other.local")
+    _ensure(lib_harness, host="other.test")
 
     assert (state / "ca.pem").read_bytes() == ca
     assert (state / "leaf.pem").read_bytes() != leaf
-    assert "DNS:other.local" in _text(state / "leaf.pem")
+    assert "DNS:other.test" in _text(state / "leaf.pem")
+
+
+def test_switching_from_a_dot_local_host_to_authentik_test_reissues_the_san_and_keeps_the_ca(
+    lib_harness: LibHarness,
+) -> None:
+    old_host = "old-evaluator" + ".local"
+    _ensure(lib_harness, host=old_host)
+    state = _state(lib_harness)
+    ca = (state / "ca.pem").read_bytes()
+    assert f"DNS:{old_host}" in _text(state / "leaf.pem")
+
+    _ensure(lib_harness, host="authentik.test")
+
+    leaf_text = _text(state / "leaf.pem")
+    assert "DNS:authentik.test" in leaf_text
+    assert old_host not in leaf_text
+    assert (state / "ca.pem").read_bytes() == ca
 
 
 def test_leaf_close_to_expiry_is_regenerated(lib_harness: LibHarness) -> None:
@@ -187,7 +204,7 @@ def test_leaf_close_to_expiry_is_regenerated(lib_harness: LibHarness) -> None:
 
 
 def test_private_keys_are_owner_only_and_never_printed(lib_harness: LibHarness) -> None:
-    proc = lib_harness.run(PRELUDE + 'ensure_local_leaf "authentik.local"')
+    proc = lib_harness.run(PRELUDE + 'ensure_local_leaf "authentik.test"')
 
     state = _state(lib_harness)
     assert proc.returncode == 0

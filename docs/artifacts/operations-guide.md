@@ -115,6 +115,9 @@ email as before:
   then makes Authentik serve the new certificate by re-applying its certificate blueprint, with no
   manual restart, and restarts PS Service only if it had to. Browsers already trust the same CA,
   so nothing changes for users; a CA that expires is not renewed automatically.
+- **Hostname change** (for example away from a `.local` name, which Claude Code cannot resolve):
+  see [Installation Guide: Moving an existing evaluator off a .local
+  hostname](./installation-guide.md#moving-an-existing-evaluator-off-a-local-hostname).
 - **The Authentik bootstrap token does not rotate.** Authentik applies `AUTHENTIK_BOOTSTRAP_TOKEN`
   once per tenant, so changing the chart-generated Secret later does not change the token Authentik
   holds; the script then stops with "Authentik rejected the shared API token" before creating
@@ -125,7 +128,7 @@ email as before:
 
 In the evaluator profile the admin UI is on the same HTTPS listener as the login pages, reachable
 from any machine that can reach this laptop's port `30443` — by design. Open
-`https://authentik.local:30443/if/admin/` (your `--hostname`) in a browser that trusts the local
+`https://authentik.test:30443/if/admin/` (your `--hostname`) in a browser that trusts the local
 CA and sign in as the owner. To keep it to your own machine, block port `30443` from the LAN in the
 host firewall. See [Installation Guide: What is exposed
 (evaluator)](./installation-guide.md#what-is-exposed-evaluator).

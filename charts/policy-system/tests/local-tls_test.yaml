@@ -130,16 +130,16 @@ tests:
   - it: authentik hostname and alias behaviour is unchanged by localTls
     template: ps-service-deployment.yaml
     set:
-      psService.authentikHostname: authentik.local
+      psService.authentikHostname: authentik.test
       psService.authentikHostAliasIP: 10.0.0.5
-      psService.authentik.baseUrl: https://authentik.local:30443
+      psService.authentik.baseUrl: https://authentik.test:30443
     asserts:
       - equal:
           path: spec.template.spec.hostAliases[0].hostnames[0]
-          value: authentik.local
+          value: authentik.test
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHENTIK_BASE_URL")].value
-          value: https://authentik.local:30443
+          value: https://authentik.test:30443
 
   - it: with localTls.secretName unset none of the PS Service TLS wiring renders
     template: ps-service-deployment.yaml

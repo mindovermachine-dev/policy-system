@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from conftest import LibHarness
 
 EMAIL = "owner@example.com"
-HOST = "https://authentik.local:30443"
+HOST = "https://authentik.test:30443"
 
 PRELUDE = f"""
 set -uo pipefail
@@ -29,7 +29,7 @@ print_error() {{ local f="$1"; shift; printf "$f" "$@" >&2; }}
 source "$PS_TEST_LIB_DIR/authentik-owner.sh"
 AUTHENTIK_API_BASE="${{AUTHENTIK_API_BASE:-{HOST}}}"
 AUTHENTIK_LINK_BASE="${{AUTHENTIK_LINK_BASE:-{HOST}}}"
-AUTHENTIK_CURL_ARGS=(--cacert /tmp/ca.pem --resolve authentik.local:30443:127.0.0.1)
+AUTHENTIK_CURL_ARGS=(--cacert /tmp/ca.pem --resolve authentik.test:30443:127.0.0.1)
 AUTHENTIK_API_TOKEN="$PS_TEST_TOKEN"
 """
 
@@ -186,6 +186,18 @@ def test_rerun_with_an_enrolled_device_issues_no_link(lib_harness: LibHarness) -
     assert not any("/recovery/" in u for u in lib_harness.curl_urls())
     assert "already" in proc.stdout.lower()
     assert "flow_token" not in proc.stdout
+
+
+def test_rerun_with_an_enrolled_device_and_ignore_flag_issues_a_link(
+    lib_harness: LibHarness,
+) -> None:
+    lib_harness.seed_curl(users={"7": EXISTING_USER}, devices={"7": [{"pk": 1, "name": "key"}]})
+
+    proc = _provision(lib_harness, OWNER_IGNORE_EXISTING_DEVICES="true")
+
+    assert proc.returncode == 0, proc.stderr
+    assert any("/recovery/" in u for u in lib_harness.curl_urls())
+    assert f"{HOST}/if/flow/" in proc.stdout
 
 
 def test_device_check_uses_the_per_user_endpoint_not_the_unfiltered_webauthn_list(

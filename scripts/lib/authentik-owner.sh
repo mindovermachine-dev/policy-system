@@ -14,6 +14,8 @@
 #   AUTHENTIK_CURL_ARGS  optional array of extra curl args (--cacert, --resolve ...); never -k
 #   AUTHENTIK_API_TOKEN  the shared token; set by read_bootstrap_token, never printed, never
 #                        placed in argv (handed to curl on stdin via `--config -`)
+# Optional: OWNER_IGNORE_EXISTING_DEVICES=true (set when the WebAuthn RP ID changed, so existing
+# devices are unusable) makes provision_owner issue a link even when devices exist.
 # and the caller's print_error/EXIT_FAILURE convention (a fallback print_error is defined here
 # when the caller has none). Functions return non-zero rather than exiting; every
 # state-changing API call happens only after input validation and the token preflight, and a
@@ -375,7 +377,7 @@ provision_owner() {
     rollback_owner_user
     return 1
   fi
-  if [[ "$OWNER_DEVICE_COUNT" -gt 0 ]]; then
+  if [[ "$OWNER_DEVICE_COUNT" -gt 0 && "${OWNER_IGNORE_EXISTING_DEVICES:-false}" != "true" ]]; then
     OWNER_STATE="already-enrolled"
     return 0
   fi
