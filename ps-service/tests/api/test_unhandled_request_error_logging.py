@@ -147,24 +147,58 @@ def test_response_stays_generic_when_logging_is_on(mirrored_logging: Path) -> No
         assert leaked not in response.text
 
 
+_SECRET_MESSAGE = (
+    "Authorization: Bearer abc.def.ghi api_key=sk-123456 "
+    "GET https://secret.internal/graph?x=1 host redis:6379 at /var/lib/ps/data.db"
+)
+_LEAK_MARKERS = ("abc.def.ghi", "sk-123456", "secret.internal", "redis:6379", "data.db")
+
+
+def _leaked_markers(sink: str) -> list[str]:
+    """The sensitive fragments of ``_SECRET_MESSAGE`` that appear verbatim in ``sink``."""
+    return [marker for marker in _LEAK_MARKERS if marker in sink]
+
+
+def _assert_scrubbed(sink: str) -> None:
+    """``sink`` holds one scrubbed entry and none of the sensitive fragments."""
+    assert _leaked_markers(sink) == []
+    [entry] = _entries(sink)
+    detail = str(entry["detail"])
+    assert detail.strip()
+    assert "[redacted-secret]" in detail
+
+
 def test_secrets_urls_hosts_and_paths_are_not_logged_verbatim(
     mirrored_logging: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Characterization guard: detail reuses ``stage_failure_detail`` (scrubbed, capped)."""
-    message = (
-        "Authorization: Bearer abc.def.ghi api_key=sk-123456 "
-        "GET https://secret.internal/graph?x=1 host redis:6379 at /var/lib/ps/data.db"
-    )
-    _boom_client(message, with_run_id=True).get("/boom")
+    _boom_client(_SECRET_MESSAGE, with_run_id=True).get("/boom")
     facade.reset_for_tests()
 
     for sink in (mirrored_logging.read_text(encoding="utf-8"), capsys.readouterr().err):
-        for leaked in ("abc.def.ghi", "sk-123456", "secret.internal", "6379", "data.db"):
-            assert leaked not in sink
-        [entry] = _entries(sink)
-        detail = str(entry["detail"])
-        assert detail.strip()
-        assert "[redacted-secret]" in detail
+        _assert_scrubbed(sink)
+
+
+def test_leak_guard_ignores_digits_inside_the_logged_timestamp() -> None:
+    """A timestamp whose digits contain the port number is not mistaken for a leaked host."""
+    timestamp = 1791986064.6379395
+    sink = json.dumps(
+        {
+            "timestamp": timestamp,
+            "action": _ACTION,
+            "detail": "connect to [redacted-secret] failed",
+        }
+    )
+
+    assert "6379" in sink
+    _assert_scrubbed(sink)
+
+
+def test_leak_guard_detects_a_verbatim_host_and_port() -> None:
+    """The guard flags the host and port as injected, so a real leak still fails the tests."""
+    sink = json.dumps({"action": _ACTION, "detail": "connect to redis:6379 failed"})
+
+    assert _leaked_markers(sink) == ["redis:6379"]
 
 
 def test_detail_is_capped_at_300_characters(mirrored_logging: Path) -> None:
