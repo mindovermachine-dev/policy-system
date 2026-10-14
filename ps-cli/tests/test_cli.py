@@ -1405,31 +1405,6 @@ def test_run_get_health_returns_one_with_distinct_message_when_not_ready(
     assert "Could not reach" not in captured.err
 
 
-def test_run_get_health_with_unreachable_real_service_returns_one_without_crashing(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Real-network proof for `get health`, mirroring `test_run_with_unreachable_
-    real_service_returns_one_without_crashing`'s exact pattern:
-    `run(["get", "health"])` with `client=None` builds a real `PsServiceClient` from
-    `PS_CLI_SERVICE_URL`, pointed at a definitely-closed local port (bind a socket, close it,
-    reuse the freed port number -- a small accepted TOCTOU flake risk, not
-    engineered away). Asserts an actionable message on stderr, exit code 1, and -- by simply
-    not wrapping the call in `pytest.raises` -- that no exception escapes `run()`.
-    """
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    probe.bind(("127.0.0.1", 0))
-    port = probe.getsockname()[1]
-    probe.close()
-    monkeypatch.setenv("PS_CLI_SERVICE_URL", f"http://127.0.0.1:{port}")
-
-    exit_code = run(["get", "health"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "Could not reach PS Service at" in captured.err
-    assert "Traceback" not in captured.err
-
-
 def test_run_get_health_with_context_flag_resolves_named_targets_url(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

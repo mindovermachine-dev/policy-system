@@ -166,5 +166,6 @@ def test_an_obligation_merge_row_is_located_as_an_obligation_with_its_typed_deta
     located = locate_effective_merge(store, merged_id="obl_a")
 
     assert located.kind == "obligation"
+    assert located.approval_id == "ap-obl"
     assert isinstance(located.details, ObligationMergeDetails)
     assert located.details.role_id == "role_1"

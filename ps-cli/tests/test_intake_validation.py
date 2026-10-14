@@ -121,6 +121,7 @@ def test_rejects_seed_missing_required_property(tmp_path: Path) -> None:
         validate_local_seed_file(seed_path)
 
     assert "source_type" in excinfo.value.msg
+    assert "'nodes/0/properties: " in excinfo.value.msg
 
 
 def test_validate_local_seed_file_rejects_unknown_top_level_field(tmp_path: Path) -> None:
@@ -129,8 +130,11 @@ def test_validate_local_seed_file_rejects_unknown_top_level_field(tmp_path: Path
     document["graph_name"] = "policy_system"
     seed_path = _write_seed_file(tmp_path, document)
 
-    with pytest.raises(PsCliError):
+    with pytest.raises(PsCliError) as excinfo:
         validate_local_seed_file(seed_path)
+
+    assert "'<document root>: " in excinfo.value.msg
+    assert "graph_name" in excinfo.value.msg
 
 
 def test_validate_local_seed_file_raises_when_file_missing(tmp_path: Path) -> None:
@@ -141,6 +145,7 @@ def test_validate_local_seed_file_raises_when_file_missing(tmp_path: Path) -> No
         validate_local_seed_file(missing_path)
 
     assert "not found" in excinfo.value.msg
+    assert excinfo.value.hint == "check the path and try again"
 
 
 def test_validate_local_seed_file_raises_on_malformed_json(tmp_path: Path) -> None:
@@ -152,3 +157,14 @@ def test_validate_local_seed_file_raises_on_malformed_json(tmp_path: Path) -> No
         validate_local_seed_file(seed_path)
 
     assert "not valid JSON" in excinfo.value.msg
+
+
+def test_validate_local_seed_file_raises_when_root_is_not_an_object(tmp_path: Path) -> None:
+    """A valid JSON file whose root is not an object raises `PsCliError` naming the root type."""
+    seed_path = tmp_path / "seed.json"
+    seed_path.write_text("[1, 2]", encoding="utf-8")
+
+    with pytest.raises(PsCliError) as excinfo:
+        validate_local_seed_file(seed_path)
+
+    assert "must contain a JSON object at its root, got list" in excinfo.value.msg

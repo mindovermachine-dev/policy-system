@@ -8,6 +8,7 @@ exercise `"read"` themselves (only the read path consumes it).
 
 from __future__ import annotations
 
+from ps_service.authz.rules import AccessRuleResult
 from ps_service.policy_lifecycle.rules import (
     PolicyLifecycleRuleContext,
     block_self_approval,
@@ -35,7 +36,9 @@ def test_require_status_rejects_approve_on_draft() -> None:
         actor=_ACTOR, owner=_ACTOR, action="approve", current_status="draft"
     )
     result = require_status(ctx)
-    assert not result.allowed
+    assert result == AccessRuleResult(
+        allowed=False, reason="cannot approve a Policy in status 'draft'"
+    )
 
 
 def test_require_status_rejects_every_action_on_deprecated() -> None:
@@ -43,7 +46,9 @@ def test_require_status_rejects_every_action_on_deprecated() -> None:
         ctx = PolicyLifecycleRuleContext(
             actor=_ACTOR, owner=_ACTOR, action=action, current_status="deprecated"
         )
-        assert not require_status(ctx).allowed
+        assert require_status(ctx) == AccessRuleResult(
+            allowed=False, reason=f"cannot {action} a Policy in status 'deprecated'"
+        )
 
 
 def test_require_status_allows_edit_on_draft() -> None:
@@ -76,7 +81,9 @@ def test_require_owner_rejects_differing_subject() -> None:
     ctx = PolicyLifecycleRuleContext(
         actor=_ACTOR, owner=_OTHER_SUBJECT, action="propose", current_status="draft"
     )
-    assert not require_owner(ctx).allowed
+    assert require_owner(ctx) == AccessRuleResult(
+        allowed=False, reason="only the Policy's owner may do this"
+    )
 
 
 def test_require_owner_rejects_matching_subject_differing_issuer() -> None:
@@ -86,7 +93,9 @@ def test_require_owner_rejects_matching_subject_differing_issuer() -> None:
         action="propose",
         current_status="draft",
     )
-    assert not require_owner(ctx).allowed
+    assert require_owner(ctx) == AccessRuleResult(
+        allowed=False, reason="only the Policy's owner may do this"
+    )
 
 
 # --- block_self_approval -----------------------------------------------------
@@ -96,7 +105,9 @@ def test_block_self_approval_rejects_when_actor_equals_owner() -> None:
     ctx = PolicyLifecycleRuleContext(
         actor=_ACTOR, owner=_OWNER_SAME_ISSUER, action="approve", current_status="proposed"
     )
-    assert not block_self_approval(ctx).allowed
+    assert block_self_approval(ctx) == AccessRuleResult(
+        allowed=False, reason="you cannot approve or reject a Policy you own"
+    )
 
 
 def test_block_self_approval_allows_same_subject_differing_issuer() -> None:

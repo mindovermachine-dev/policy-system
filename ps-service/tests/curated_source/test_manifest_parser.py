@@ -63,13 +63,31 @@ def test_parse_manifest_json_raises_curated_source_fetch_error_on_non_json_body(
 
 
 def test_parse_manifest_json_raises_curated_source_fetch_error_when_body_is_not_an_object() -> None:
-    with pytest.raises(CuratedSourceFetchError):
+    with pytest.raises(CuratedSourceFetchError) as excinfo:
         parse_manifest_json(json.dumps(["not", "an", "object"]).encode("utf-8"), url=_URL)
 
+    assert _URL in str(excinfo.value)
 
-def test_parse_manifest_json_raises_curated_source_fetch_error_when_a_field_is_missing() -> None:
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "instrument_id",
+        "title",
+        "short_name",
+        "version",
+        "source_type",
+        "schema_version",
+        "exported_at",
+        "baseline_sha256",
+        "native_sha256",
+    ],
+)
+def test_parse_manifest_json_raises_curated_source_fetch_error_when_a_field_is_missing(
+    missing_field: str,
+) -> None:
     incomplete = dict(_VALID_MANIFEST)
-    del incomplete["schema_version"]
+    del incomplete[missing_field]
 
     with pytest.raises(CuratedSourceFetchError) as excinfo:
         parse_manifest_json(json.dumps(incomplete).encode("utf-8"), url=_URL)
@@ -83,13 +101,20 @@ def test_parse_manifest_json_raises_curated_source_fetch_error_for_unrecognized_
     bad = dict(_VALID_MANIFEST)
     bad["source_type"] = "not-a-real-source-type"
 
-    with pytest.raises(CuratedSourceFetchError):
+    with pytest.raises(CuratedSourceFetchError) as excinfo:
         parse_manifest_json(json.dumps(bad).encode("utf-8"), url=_URL)
 
+    assert _URL in str(excinfo.value)
 
-def test_parse_manifest_json_raises_curated_source_fetch_error_for_wrong_field_type() -> None:
+
+@pytest.mark.parametrize("field", ["baseline_sha256", "celex", "jurisdiction"])
+def test_parse_manifest_json_raises_curated_source_fetch_error_for_wrong_field_type(
+    field: str,
+) -> None:
     bad = dict(_VALID_MANIFEST)
-    bad["baseline_sha256"] = 12345
+    bad[field] = 12345
 
-    with pytest.raises(CuratedSourceFetchError):
+    with pytest.raises(CuratedSourceFetchError) as excinfo:
         parse_manifest_json(json.dumps(bad).encode("utf-8"), url=_URL)
+
+    assert _URL in str(excinfo.value)

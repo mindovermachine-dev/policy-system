@@ -92,6 +92,19 @@ def _project(  # pyright: ignore[reportUnusedFunction]  # pytest fixture, resolv
             ["-m", "falkordb_live", "-n", "2"], True, id="explicit-n-overrides-the-serial-force"
         ),
         pytest.param(["-m", "falkordb_live", "-n0"], False, id="explicit-n0-stays-serial"),
+        pytest.param(
+            ["-m", "falkordb_live", "-n2"], True, id="explicit-n-with-attached-value-stays-parallel"
+        ),
+        pytest.param(
+            ["-m", "falkordb_live", "--numprocesses=2"],
+            True,
+            id="explicit-long-form-stays-parallel",
+        ),
+        pytest.param(
+            ["-m", "falkordb_live and not integration"],
+            False,
+            id="compound-expression-selecting-one-live-group-serial",
+        ),
         pytest.param(["-n0"], False, id="explicit-n0-without-marker-is-serial"),
         pytest.param(
             ["-m", "not falkordb_live"], False, id="expression-selecting-another-live-group-serial"

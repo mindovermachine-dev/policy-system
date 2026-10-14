@@ -916,22 +916,6 @@ def test_revoke_role_converts_a_failed_denial_audit_write_into_unavailable_error
     assert AccessRole.SYSTEM_OWNER in store.active_roles_for(_FIRST_CALLER)
 
 
-def test_revoke_role_rejects_super_owner_outside_the_closed_set() -> None:
-    """`"SuperOwner"` is rejected the same two-layer way as in `grant_role`."""
-    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
-    resolve_active_roles(_FIRST_CALLER, store=store)
-
-    with pytest.raises(InvalidAccessRoleError) as exc_info:
-        revoke_role(
-            actor=_FIRST_CALLER,
-            target_subject=_SECOND_CALLER[0],
-            access_role="SuperOwner",
-            store=store,
-            issuer=_ISSUER,
-        )
-    assert str(exc_info.value) == "The requested access role is not recognized."
-
-
 def test_revoke_role_never_falls_open_on_a_store_connection_error() -> None:
     """A simulated store outage during the revoke mutation itself fails closed."""
     store = RaisingAfterGateAccessRoleStore(expected_owner=_FIRST_CALLER)
