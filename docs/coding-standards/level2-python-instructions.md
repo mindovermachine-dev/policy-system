@@ -163,6 +163,14 @@ def apply_discount(total: Decimal, rate: Decimal) -> Decimal:
 - Both endpoints are localhost-only and unauthenticated, matching the posture already established for `ps_service/api/` in Open Decisions below.
 - Readiness state is process-local (e.g. a module-level flag set inside `lifespan`) — valid under the current single-worker assumption; revisit if `ps_service/api/` ever runs multi-worker (same open item already flagged for Logging's multi-process write safety).
 
+### Logging Conventions
+
+- Service code logs only through `ps_service.logging.emit_log_entry`; there is no level concept. A `print` or a stdlib `logging` call in service code is reserved for startup and command-line entry points that run before the facade is configured, and for the facade's own last-resort fallback.
+- Current field set: `component`, `action`, `outcome`, optional `entity_id`, `duration_ms`, `run_id` (bound by `bind_run_context`) and a Unix-epoch timestamp; anything else goes in `extra`. `ps_service/logging/models.py` is the single definition.
+- Current outcome labels are not a closed set. `failed` is the only label mirrored to stderr, so it is the ERROR-equivalent: use it for unexpected failures only, never for an expected user condition. Prefer `succeeded` and `failed`.
+- Target state, not current behaviour: a closed outcome vocabulary, and no user identifiers in operator logs.
+- Never log secrets, tokens, prompts, policy text, user identifiers or raw exception text. Log the exception class name, or pass the exception through `stage_failure_detail` when the text is needed.
+
 ### MCP Interface Patterns
 
 - **Delegate, don't reimplement**: an MCP tool function is a thin wrapper over existing engine logic — e.g. `mcp_server.py`'s `cypher` tool calls `ps_service.query_engine.execute_cypher_query` in-process rather than reimplementing query execution or the write-clause guard, which live only in `ps_service.query_engine.cypher_query`. Validation and guards live in exactly one place; the MCP layer never duplicates them.
