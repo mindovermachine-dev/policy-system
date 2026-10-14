@@ -114,11 +114,8 @@ inventory:
     command: uv run python scripts/check_mock_boundaries.py ps-service/tests ps-cli/tests
 
   - id: docstring-provenance
-    name: Check docstrings and comments carry no provenance (lines changed vs trunk)
-    command: |
-      git fetch --quiet --no-tags origin main:refs/remotes/origin/main || exit 2
-      if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then git fetch --quiet --no-tags --unshallow || exit 2; fi
-      uv run python scripts/check_docstring_provenance.py --changed-since origin/main
+    name: Check docstrings and comments carry no provenance
+    command: uv run python scripts/check_docstring_provenance.py --tracked
 
   - id: pip-audit
     name: Audit locked dependencies for known CVEs

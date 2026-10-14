@@ -17,7 +17,8 @@ Modes:
     paths: explicit files or directories (recursive); every finding is reported.
     --changed-since REF: files that differ from the merge base of REF and HEAD, including
         staged, unstaged and untracked files; only findings on added lines are reported.
-    --tracked: every file tracked by git; every finding is reported.
+    --tracked: every file tracked by git; every finding is reported. CI runs this mode over
+        the whole tree; the pre-commit hook runs --changed-since HEAD on the lines being changed.
 
 Exit codes: 0 clean, 1 at least one finding, 2 usage or environment error (including an
 unparsable file or an unresolvable git reference).

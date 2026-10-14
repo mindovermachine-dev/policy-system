@@ -196,11 +196,14 @@ def test_hook_entry_ignores_untouched_legacy_violation(hook_repo: Path, shim_dir
 # --- CI gate ----------------------------------------------------------------------------------
 
 
-def test_insitu_declares_docstring_provenance_check_in_changed_mode() -> None:
+def test_insitu_declares_docstring_provenance_check_over_every_tracked_file() -> None:
     command = _insitu_check()["command"]
 
     assert "scripts/check_docstring_provenance.py" in command
-    assert "--changed-since origin/main" in command
+    assert "--tracked" in command
+    assert "--changed-since" not in command
+    for fetch_step in ("git fetch", "unshallow", "is-shallow-repository"):
+        assert fetch_step not in command
 
 
 def test_insitu_trunk_worthy_includes_docstring_provenance() -> None:
@@ -211,79 +214,39 @@ def test_insitu_check_not_in_fix_all_wave() -> None:
     assert HOOK_ID not in _wave("fix-all")["checks"]
 
 
-def test_insitu_command_is_changed_mode_not_tracked_mode_until_legacy_is_cleaned() -> None:
-    """Pins the state the later repo-wide switch replaces: changed-lines mode, not full scan."""
-    command = _insitu_check()["command"]
-
-    assert "--tracked" not in command
-    assert "--changed-since" in command
-
-
 @pytest.fixture
-def ci_clone(tmp_path: Path) -> Path:
-    """A depth-1 clone of a feature branch whose base branch lives only in a local bare origin."""
-    work = tmp_path / "work"
-    work.mkdir()
-    _git(work, "init", "-q", "-b", "main")
-    _write(work / "legacy.py", VIOLATING)
-    _git(work, "add", "-A")
-    _git(work, "commit", "-q", "-m", "base")
-    origin = tmp_path / "origin.git"
-    _git(tmp_path, "clone", "-q", "--bare", str(work), str(origin))
-    _git(work, "checkout", "-q", "-b", "feature")
-    _write(work / "new.py", CLEAN)
-    _git(work, "add", "-A")
-    _git(work, "commit", "-q", "-m", "feature one")
-    _write(work / "new.py", CLEAN + "\n\nVALUE = 1\n")
-    _git(work, "commit", "-q", "-a", "-m", "feature two")
-    _git(work, "push", "-q", str(origin), "feature")
-    clone = tmp_path / "clone"
-    _git(
-        tmp_path,
-        "clone",
-        "-q",
-        "--depth",
-        "1",
-        "--branch",
-        "feature",
-        f"file://{origin}",
-        str(clone),
-    )
-    _install_script(clone)
-    assert _git(clone, "rev-parse", "--is-shallow-repository").strip() == "true"
-    return clone
+def ci_repo(tmp_path: Path) -> Path:
+    """A repository with one clean tracked file and the script installed."""
+    repo = tmp_path / "ci_repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _install_script(repo)
+    _write(repo / "pkg" / "mod.py", CLEAN)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    return repo
 
 
-def _run_ci(clone: Path, shim: Path) -> subprocess.CompletedProcess[str]:
+def _run_ci(repo: Path, shim: Path) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     assert bash is not None
-    return _run([bash, "-e", "-c", _insitu_check()["command"]], clone, _env(shim), check=False)
+    return _run([bash, "-e", "-c", _insitu_check()["command"]], repo, _env(shim), check=False)
 
 
-def test_insitu_command_in_shallow_clone_passes_for_clean_branch(
-    ci_clone: Path, shim_dir: Path
-) -> None:
-    result = _run_ci(ci_clone, shim_dir)
+def test_insitu_command_passes_for_clean_tracked_tree(ci_repo: Path, shim_dir: Path) -> None:
+    result = _run_ci(ci_repo, shim_dir)
 
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_insitu_command_in_shallow_clone_fails_for_added_violation(
-    ci_clone: Path, shim_dir: Path
+def test_insitu_command_fails_for_violation_in_a_tracked_file_untouched_by_the_branch(
+    ci_repo: Path, shim_dir: Path
 ) -> None:
-    _write(ci_clone / "new.py", CLEAN + "\n\n# tracked in issue 12\n")
+    _write(ci_repo / "legacy.py", VIOLATING)
+    _git(ci_repo, "add", "-A")
+    _git(ci_repo, "commit", "-q", "-m", "violation already on trunk")
 
-    result = _run_ci(ci_clone, shim_dir)
+    result = _run_ci(ci_repo, shim_dir)
 
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "new.py:" in result.stdout
-
-
-def test_insitu_command_in_shallow_clone_exits_2_when_origin_is_unreachable(
-    ci_clone: Path, shim_dir: Path, tmp_path: Path
-) -> None:
-    shutil.rmtree(tmp_path / "origin.git")
-
-    result = _run_ci(ci_clone, shim_dir)
-
-    assert result.returncode == 2, result.stdout + result.stderr
+    assert "legacy.py:" in result.stdout
