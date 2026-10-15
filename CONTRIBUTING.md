@@ -14,6 +14,7 @@ Thank you for considering contributing to this project!
   - [What gets synced](#what-gets-synced)
   - [Push races self-heal](#push-races-self-heal)
 - [Reporting Issues](#reporting-issues)
+  - [Triage and backlog order](#triage-and-backlog-order)
 - [Discussions](#discussions)
 
 ## Workflow
@@ -24,7 +25,10 @@ checks pass. No fork and no manual Pull Request in the common case.
 
 The workflow is as follows:
 
-1. Start work on an issue -- this creates and checks out an issue branch:
+1. Pick the next issue according to the
+   [triage policy](docs/policy/triage-policy.md) (see
+   [Triage and backlog order](#triage-and-backlog-order)), then start work on it
+   -- this creates and checks out an issue branch:
 
    ```bash
    gh tt workon -i <issue-number>
@@ -268,6 +272,30 @@ retried, force-pushed, or fixed by hand.
 ## Reporting Issues
 
 Please use the `.github/ISSUE_TEMPLATE/standard-mom.md` issue template and make sure to provide high quality acceptance criteria.
+
+### Triage and backlog order
+
+Every issue is triaged and worked on according to the
+[triage policy](docs/policy/triage-policy.md). In short:
+
+- **Classify when you create the issue.** Give it exactly one Group label
+  (`group:1`, `group:2a`, `group:2b`, `group:3`), one Priority label (`P0`-`P3`:
+  how many customers are affected) and one Severity label (`S0`-`S3`: how bad it
+  is for them). If you can't, label it `needs-triage`. The issue type stays in
+  the conventional-commit title prefix; there are no type labels.
+- **Work in group order.** Group 1 (operational: S0-S2 impact in production)
+  before Group 2 (repeating manual work, technical debt and hygiene) before
+  Group 3 (new features). Within a group: severe-and-widespread first, then
+  Severity, then Priority.
+- **Never pick up a `needs-triage` issue.** Triage it first.
+- **Blocked is only for a good reason** (an external party, a linked issue or a
+  scheduled window). Label it `blocked` and say in a comment what it is waiting on.
+- **Debt you knowingly create while building a feature** is filed as a Group 2
+  issue before the feature is done.
+- **Feature work ahead of open Group 1/2 work** needs an `override` approved by
+  the primary maintainer and recorded on the issue.
+
+The policy has the full definitions, edge cases and the reasoning behind each rule.
 
 ## Discussions
 
