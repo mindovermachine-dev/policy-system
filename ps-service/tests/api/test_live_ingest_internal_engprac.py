@@ -33,6 +33,7 @@ import pytest
 from authz._fakes import FakeAccessRoleStore
 from fastapi.testclient import TestClient
 
+from api._fakes import install_compliance_officer_grant
 from api._live_config import live_app_config
 from ps_service.api.dependencies import get_principal
 from ps_service.api.graph_write_access import install_graph_write_gateway
@@ -146,6 +147,7 @@ def ingest_env(
         if name in db.list_graphs():
             db.select_graph(name).delete()
     facade.configure(log_path=tmp_path / "ingest.jsonl")
+    install_compliance_officer_grant(monkeypatch, granted=True)  # the route is role-gated
     app = create_app(config)
     app.dependency_overrides[get_principal] = lambda: Principal(sub=_OWNER[0], iss=_OWNER[1])
     # Every pipeline stage writes through the Graph Write Gateway. `TestClient` is not

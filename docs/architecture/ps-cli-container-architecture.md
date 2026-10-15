@@ -280,7 +280,7 @@ None — transport component.
 |---|---|---|---|---|---|---|---|---|---|---|
 | CheckHealth | Read PS Service liveness status and version | No | n/a | None | Status string and version | None | PS Service | < 40s | Yes | Connection, timeout and TLS failures become operator-facing errors with a hint |
 | CheckReadiness | Read PS Service readiness and the unhealthy dependencies | No | n/a | None | Readiness status and dependency names | None | PS Service | < 40s | Yes | As above |
-| SubmitIngestion | Send an intake document to `POST /ingestions` | Yes when credentials exist | As enforced by PS Service | A validated document | Run id, instrument id and stage outcomes | Ingestion run on PS Service | PS Service | Up to 30 minutes | No | A structured error body or 401 becomes an operator-facing error |
+| SubmitIngestion | Send an intake document to `POST /ingestions` | Yes when credentials exist | As enforced by PS Service | A validated document | Run id, instrument id and stage outcomes | Ingestion run on PS Service | PS Service | Up to 30 minutes | No | A structured error body (including 403 when the caller lacks `ComplianceOfficer`) or 401 becomes an operator-facing error |
 | RequestExport | Request an instrument's artifact from `POST /exports` | Yes when credentials exist | As enforced by PS Service | An ingested instrument id | Manifest and base64 blobs | None on PS Service | PS Service | Up to 30 minutes | Yes | As above |
 
 ---

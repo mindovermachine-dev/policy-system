@@ -1,9 +1,9 @@
-"""``POST /ingestions`` (internal) refuses a governance-bearing seed with no verified caller.
+"""The owner guard for a governance-bearing internal seed.
 
-An imported Policy tree is created ``draft`` and owned by the ingesting
-caller, so a seed that carries a Policy and arrives without a verified identity is refused at
-the door (401 ``owner_required``) before any stage, audit row, or graph write. A seed with no
-Policy is not gated.
+An imported Policy tree is created ``draft`` and owned by the ingesting caller, so the pipeline
+refuses a seed that carries a Policy when it is given no owner, before any stage, audit row or
+graph write. Over HTTP the role gate rejects a caller without a verified identity first, so the
+guard is exercised at the orchestration function.
 """
 
 from __future__ import annotations
@@ -16,9 +16,11 @@ import pytest
 from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig
 
-from api._fakes import build_fake_pipeline_dependencies
+from api._fakes import build_fake_pipeline_dependencies, install_compliance_officer_caller
 from api._gateway_fakes import RecordingSystemAudit, override_gateway
-from ps_service.api.dependencies import get_principal, provide_pipeline_dependencies
+from ps_service.api.dependencies import provide_pipeline_dependencies
+from ps_service.api.errors import InternalIngestOwnerRequiredError
+from ps_service.api.ingestion_orchestration import run_internal_ingestion_pipeline
 from ps_service.auth.models import Principal
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
@@ -33,22 +35,6 @@ _SEED_PATH = (
     / "engineering-practices-seed.json"
 )
 _REAL_SEED: dict[str, object] = json.loads(_SEED_PATH.read_text(encoding="utf-8"))
-_INSTRUMENT_ONLY_SEED: dict[str, object] = {
-    "nodes": [
-        {
-            "label": "RegulatoryInstrument",
-            "id": "TESTREG-1.0",
-            "properties": {
-                "title": "Test Regulation",
-                "source_type": "internal",
-                "effective_date": "2026-01-01",
-                "version": "1.0",
-                "status": "active",
-            },
-        }
-    ],
-    "edges": [],
-}
 
 
 def _noop_emit(**_kwargs: object) -> None:
@@ -86,44 +72,38 @@ def _config() -> ServiceConfig:
     )
 
 
-def test_ownerless_policy_bearing_seed_is_refused_with_401_before_anything_runs(
+def test_policy_bearing_seed_without_an_owner_is_refused_before_any_stage_runs(
     rig: GatewayRig,
 ) -> None:
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     system_audit = RecordingSystemAudit(rig)
-    app = create_app(_config())
-    app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake.dependencies
-    override_gateway(app, rig, system_audit)
-    client = TestClient(app, raise_server_exceptions=False)
 
-    response = client.post("/ingestions", json={"source": "internal", "content": _REAL_SEED})
+    with pytest.raises(InternalIngestOwnerRequiredError):
+        run_internal_ingestion_pipeline(
+            _REAL_SEED,
+            config=_config(),
+            run_id="run-owner-guard",
+            caller="127.0.0.1",
+            dependencies=fake.dependencies,
+            gateway=rig.gateway,
+            system_audit=system_audit,
+            owner=None,
+        )
 
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "owner_required"
     assert fake.recorder.order == []
     assert rig.store.events == []
     assert system_audit.rows == []
 
 
-def test_seed_without_a_policy_is_not_gated_when_ownerless(rig: GatewayRig) -> None:
-    fake = build_fake_pipeline_dependencies(internal_rid="TESTREG-1.0")
-    app = create_app(_config())
-    app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake.dependencies
-    override_gateway(app, rig, RecordingSystemAudit(rig))
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.post(
-        "/ingestions", json={"source": "internal", "content": _INSTRUMENT_ONLY_SEED}
-    )
-
-    assert response.status_code == 200
-
-
-def test_policy_bearing_seed_with_a_verified_caller_is_accepted(rig: GatewayRig) -> None:
+def test_policy_bearing_seed_with_a_verified_caller_is_accepted(
+    rig: GatewayRig, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     app = create_app(_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake.dependencies
-    app.dependency_overrides[get_principal] = lambda: Principal(sub="owner-1", iss="https://idp")
+    install_compliance_officer_caller(
+        monkeypatch, app, principal=Principal(sub="owner-1", iss="https://idp")
+    )
     override_gateway(app, rig, RecordingSystemAudit(rig))
     client = TestClient(app, raise_server_exceptions=False)
 

@@ -116,9 +116,11 @@ class InternalIngestOwnerRequiredError(ApiError):
     """A `POST /ingestions` internal seed carries a Policy but the caller is not verified.
 
     An imported Policy tree is created `draft` and owned by the ingesting caller; an ownerless
-    draft would be unreachable by the propose and edit flow, so the request is refused before any
-    stage, audit row or graph write. The caller should authenticate. Handled as HTTP 401
-    (`owner_required`); `str(exc)` is a fixed, domain-level message.
+    draft would be unreachable by the propose and edit flow, so the pipeline refuses a
+    Policy-bearing seed given no owner before any stage, audit row or graph write. Over
+    `POST /ingestions` the `ComplianceOfficer` gate rejects an unverified caller first, so this is
+    a defence-in-depth guard. Handled as HTTP 401 (`owner_required`) if it ever surfaces;
+    `str(exc)` is a fixed, domain-level message.
     """
 
 

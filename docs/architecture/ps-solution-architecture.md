@@ -224,8 +224,8 @@ Container Architecture documents exist for PS Service ([`ps-service-container-ar
 
 | User Role | Accessible Containers/Services |
 |-----------|-------------------------------|
-| Compliance Officers | PS Service via PS Question Skill (read-only query), the `ps-ingest-regulation` skill over MCP (select and ingest external regulations) and the `ps-graph-cleanup` skill over MCP (merge duplicate graph nodes) |
-| Policy Managers | PS Service via ps-cli (ingest internal regulations from a local intake document) and Policy Editor (create/edit/approve policies/standards — under exploration) |
+| Compliance Officers | PS Service via PS Question Skill (read-only query), ps-cli (ingest internal regulations from a local intake document), the `ps-ingest-regulation` skill over MCP (select and ingest external regulations) and the `ps-graph-cleanup` skill over MCP (merge duplicate graph nodes) |
+| Policy Managers | Policy Editor (create/edit/approve policies/standards — under exploration) |
 | Legal Counsel | PS Service via PS Question Skill (read-only query) |
 | Security Architects | PS Service via PS Question Skill (read-only query) |
 | Risk Managers | PS Service via PS Question Skill (read-only query) |

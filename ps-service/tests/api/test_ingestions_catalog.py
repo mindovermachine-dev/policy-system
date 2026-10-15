@@ -4,7 +4,8 @@ Drives the route with ``TestClient`` and an
 ``app.dependency_overrides`` fake ``PipelineDependencies`` (``tests/api/_fakes.py``)
 so request validation, catalog lookup, the pipeline hand-off, and error mapping
 are exercised without a real graph, adapter, or LLM. The ``source: "internal"``
-path is covered separately, in ``tests/api/test_ingestions_internal.py``.
+path is covered separately, in ``tests/api/test_ingestions_internal.py``. Every test runs as a
+caller holding ``ComplianceOfficer``, the role both sources require.
 
 Covers: the pipeline runs and reports its stages, an unknown CELEX is a 404 and a
 malformed body a 422 (both before any stage), a stage failure is a 502 naming the
@@ -148,13 +149,9 @@ def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytes
 ) -> None:
     """Every test below drives a caller holding `ComplianceOfficer` by default.
 
-    The ``source: "catalog"`` path of `POST /ingestions` is now gated behind
-    `require_access_role` (inline, only on this non-internal branch --
-    `test_ingestions_internal.py` needs no such fixture and is entirely
-    untouched by this change). `require_access_role` has no local-test-bypass
-    carve-out. The dedicated denial-proof tests below
-    re-monkeypatch this away for their own scenario (the same `monkeypatch`
-    fixture instance, so the later call simply wins).
+    `POST /ingestions` is gated by `require_access_role` as a route-level dependency, which has
+    no local-test-bypass carve-out. The dedicated denial tests below re-monkeypatch this away
+    for their own scenario (the same `monkeypatch` fixture instance, so the later call wins).
     """
     install_compliance_officer_grant(monkeypatch, granted=True)
 
@@ -1029,7 +1026,7 @@ def test_curated_celex_is_resolved_via_cellar_like_any_other_celex(
     assert fake.recorder.order == ["ingestion", "extraction", "derivation", "merge"]
 
 
-# --- ComplianceOfficer gate, catalog path only -------------------------
+# --- ComplianceOfficer gate -------------------------
 
 
 def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:

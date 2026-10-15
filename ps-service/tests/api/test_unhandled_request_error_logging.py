@@ -211,9 +211,12 @@ def test_detail_is_capped_at_300_characters(mirrored_logging: Path) -> None:
 
 
 def test_pre_stage_failure_via_real_app_is_logged_and_mirrored(
-    mirrored_logging: Path, capsys: pytest.CaptureFixture[str]
+    mirrored_logging: Path,
+    capsys: pytest.CaptureFixture[str],
+    grant_compliance_officer: None,
 ) -> None:
-    """A failure before any pipeline stage (the issue's outage) is logged under the run_id."""
+    """A failure before any pipeline stage is logged under the run_id."""
+    del grant_compliance_officer  # the role gate must pass for the request to reach the handler
 
     def _boom() -> None:
         raise _BoomError("graph exploded")

@@ -183,9 +183,8 @@ instance's FalkorDB and LLM interface configured. It reports the resolved
 identifier was already fully ingested, it instead reports that immediately
 with no pipeline stages run; or, it reports a specific named error if
 something fails. Requires `ComplianceOfficer`; see [Role
-System](#role-system). This applies to catalog/CELEX ingestion only —
-`ps-cli ingest document` (internal-document ingestion, below) has no such
-requirement.
+System](#role-system). `ps-cli ingest document` (internal-document
+ingestion, below) requires `ComplianceOfficer` too.
 
 ---
 
@@ -458,7 +457,7 @@ Beyond that baseline, PS Service enforces four additional roles:
 | `SystemOwner` | Automatically, once — the first authenticated caller whose identity (`sub` + `iss`) matches the one the operator configured at deploy time (`psService.authzBootstrapOwner`; the deploy scripts set it to the owner's email), not simply whoever calls first: any other caller who reaches an empty instance first is granted nothing. Never grantable afterward; exactly one exists for the life of a real deployment. See [SystemOwner bootstrap](./installation-guide.md#systemowner-bootstrap) for how an operator claims it. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
 | `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, and `list-audit-events`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
-| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is not gated by this role, but a document that carries a Policy needs a signed-in user, see [Running commands](#running-commands)), and the MCP tools `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
+| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (either `source`), and the MCP tools `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |
 
 Two safety rules apply to every grant or revoke, regardless of role:
@@ -504,7 +503,7 @@ Global flags, usable before or after any subcommand:
 | Command | Arguments | Description |
 | --- | --- | --- |
 | `ps-cli get health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness depends on FalkorDB, PS state Postgres and the startup graph replay — an unhealthy LLM Interface or Cellar/ELI is still named when present, but does not by itself make the target unready. |
-| `ps-cli ingest document <document_path>` | `document_path` — a local `.json` file path; `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. |
+| `ps-cli ingest document <document_path>` | `document_path` — a local `.json` file path; `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. Requires `ComplianceOfficer`. |
 | `ps-cli export instrument <instrument_id> [destination]` | `instrument_id` — the already-ingested instrument's id (e.g. `CRA-1.0`); `destination` — optional local directory, defaults to the current directory | Export an already-ingested instrument's baseline/native/manifest files to a local destination. |
 | `ps-cli auth login` | — | Log in to the current context via OIDC device-flow (see [Credential storage](#credential-storage)). |
 | `ps-cli auth status` | — | Verify the current context's stored credential by refreshing it, and show its login status (context, issuer). Exits non-zero unless the credential works: not logged in, credential not usable, cannot verify (IdP or PS Service unreachable) and credential store inaccessible are each reported separately. |
@@ -631,9 +630,9 @@ ingest a regulation from EUR-Lex](#find-and-ingest-a-regulation-from-eur-lex).)
 
 The Policy, Standard and Control nodes in the document are imported as `draft`
 whatever `status` they carry, and each Policy is owned by you (the signed-in user), exactly as
-when you restore a curated internal instrument. A document that carries a Policy needs a
-signed-in user: without one the command fails with HTTP 401 `owner_required` and nothing is
-written. Nodes that already exist (for example a Policy since approved) are not changed by a
+when you restore a curated internal instrument. The command needs a
+signed-in user holding `ComplianceOfficer`: without a signed-in user or without the role it fails
+with HTTP 403 and nothing is written. Nodes that already exist (for example a Policy since approved) are not changed by a
 re-ingest. The merge stage summary reports how many Policies, Standards and Controls were
 imported as drafts and how many authored statuses were overridden. Take the drafts through
 the Policy Lifecycle to approve them.

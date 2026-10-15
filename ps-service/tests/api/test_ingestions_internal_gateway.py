@@ -34,6 +34,8 @@ from ps_service.main import create_app
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+pytestmark = pytest.mark.usefixtures("grant_compliance_officer")
+
 _SEED_NODES: list[dict[str, object]] = [
     {
         "label": "RegulatoryInstrument",

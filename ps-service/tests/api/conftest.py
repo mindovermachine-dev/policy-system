@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
-from api._fakes import install_default_cellar_stub_unless_live
+from api._fakes import install_compliance_officer_grant, install_default_cellar_stub_unless_live
 from api._gateway_fakes import ProcessGateway, process_gateway_installed
 from ps_service.config import ServiceConfig
 from ps_service.logging import facade
@@ -82,6 +82,12 @@ def mirrored_logging(tmp_path: Path) -> Iterator[Path]:
     finally:
         facade.reset_for_tests()
         facade._atexit_registered = saved  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture
+def grant_compliance_officer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the role gate see a verified caller holding ``ComplianceOfficer``."""
+    install_compliance_officer_grant(monkeypatch, granted=True)
 
 
 @pytest.fixture

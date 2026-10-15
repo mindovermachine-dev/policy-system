@@ -492,7 +492,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     Status map (error type, HTTP status):
 
     * 400: ``InvalidAccessRoleError``, ``InvalidAuditQueryFilterError``.
-    * 401: ``MergeApprovalRequiresAuthenticatedCallerError``, ``InternalIngestOwnerRequiredError``.
+    * 401: ``MergeApprovalRequiresAuthenticatedCallerError``; ``InternalIngestOwnerRequiredError``
+      when the orchestration is given no owner for a Policy-bearing seed.
     * 403: ``AccessDeniedError``, ``SelfGrantOrRevokeBlockedError``,
       ``SystemOwnerFloorViolationError``.
     * 404: ``CatalogIdentifierNotFoundError``, ``PendingReviewNotFoundError``,

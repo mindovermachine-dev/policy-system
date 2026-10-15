@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
     from api._fakes import MakeEmitter
 
+pytestmark = pytest.mark.usefixtures("grant_compliance_officer")
+
 _SEED: dict[str, object] = json.loads(
     (
         Path(__file__).resolve().parents[3]

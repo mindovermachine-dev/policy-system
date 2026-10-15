@@ -31,6 +31,7 @@ from starlette.requests import (
 
 from ps_service.api import dependencies
 from ps_service.api.change_check_orchestration import ChangeCheckDependencies
+from ps_service.api.dependencies import get_principal as _declared_get_principal
 from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.ingestion_orchestration import (
     _CELEX_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage] -- query-text dispatch key
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import pytest
+    from fastapi import FastAPI
 
     from ps_service.api.catalog import CatalogEntry, CuratedInstrumentEntry
     from ps_service.api.change_check_orchestration import TriggerReingestionCall
@@ -1396,6 +1398,33 @@ def install_compliance_officer_grant(
     # detroit-exception: called as a raw function inside require_access_role's own closure
     monkeypatch.setattr(dependencies, "get_principal", _get_principal)
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _store_factory)
+
+
+def install_compliance_officer_caller(
+    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
+    *,
+    principal: Principal | None = None,
+) -> Principal:
+    """Present a verified caller holding ``ComplianceOfficer`` to both principal seams of ``app``.
+
+    ``require_access_role`` calls ``get_principal`` as a plain function, so the grant patches the
+    module attribute; a handler's ``Depends(get_principal)`` parameter is resolved by FastAPI and
+    only ``app.dependency_overrides`` reaches it. Both are set to the same principal so a route
+    that gates on the role and also uses the caller as an owner sees one consistent identity.
+
+    Args:
+        monkeypatch: The test's ``pytest.MonkeyPatch`` fixture.
+        app: The application whose declared ``get_principal`` dependency is overridden.
+        principal: The caller to present; defaults to :func:`compliance_officer_principal`.
+
+    Returns:
+        The principal presented to both seams.
+    """
+    caller = principal if principal is not None else compliance_officer_principal()
+    install_compliance_officer_grant(monkeypatch, granted=True)
+    app.dependency_overrides[_declared_get_principal] = lambda: caller
+    return caller
 
 
 def _no_principal(request: Request) -> None:

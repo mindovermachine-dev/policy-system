@@ -79,6 +79,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from fastapi.testclient import TestClient
 
+from api._fakes import install_compliance_officer_grant
 from api._live_config import live_app_config
 from ps_service.api.dependencies import get_principal
 from ps_service.api.graph_write_access import install_graph_write_gateway
@@ -262,6 +263,7 @@ def capstone(
 
     facade.configure(log_path=tmp_path_factory.mktemp("api_internal_capstone") / "capstone.jsonl")
 
+    install_compliance_officer_grant(monkeypatch, granted=True)  # the route is role-gated
     app = create_app(config)
     # Every pipeline stage writes through the Graph Write Gateway. `TestClient` is not
     # entered, so the app lifespan never installs it: install the real one (PS state Postgres and

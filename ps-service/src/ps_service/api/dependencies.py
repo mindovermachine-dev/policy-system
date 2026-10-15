@@ -122,9 +122,9 @@ def require_access_role(role: AccessRole) -> Callable[[Request], None]:
     """Build a FastAPI dependency that enforces a minimum access role on the caller.
 
     It calls the same `ps_service.authz.service.require_role` as the gated MCP tools, so both
-    surfaces share one authorization mechanism. No REST route currently uses it; it is a
-    directly callable dependency factory, shaped like :func:`get_principal` and
-    :func:`get_service_config`.
+    surfaces share one authorization mechanism. The restore, export, change-check and
+    ingestion REST routes use it as a route-level dependency; it is also a directly callable
+    dependency factory, shaped like :func:`get_principal` and :func:`get_service_config`.
 
     Args:
         role: The minimum `AccessRole` a caller must hold. `SystemOwner` also satisfies a

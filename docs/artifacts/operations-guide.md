@@ -532,16 +532,16 @@ this guide:
 
 An internal instrument carries a Policy/Standard/Control tree. Restoring a curated
 internal instrument and ingesting an internal document (`ps-cli ingest document`, or
-`POST /ingestions` with `source: "internal"`) import that tree the same way, through one
-shared step:
+`POST /ingestions` with `source: "internal"`; each requires `ComplianceOfficer`) import that
+tree the same way, through one shared step:
 
 - **Always `draft`.** Every Policy, Standard and Control is written `draft` with its
   authored properties, whatever `status` the artifact or document carried. Only the Policy
   Lifecycle (propose, approve) moves it on. The authored `status` is informational.
 - **Owned by the importer.** Each Policy is owned by the verified identity of the caller who
-  restored or ingested it. A document that carries a Policy therefore requires a signed-in
-  caller: without one, `POST /ingestions` answers 401 `owner_required` and nothing is
-  written. A document with no Policy (or an external regulation) needs no owner.
+  restored or ingested it. The caller must hold `ComplianceOfficer` and a verified identity:
+  without them `POST /ingestions` answers 403 and nothing is written. A document with no
+  Policy (or an external regulation) is owned by no one but still needs the role.
 - **Never merged into existing policies.** Imported nodes are created only if absent
   (their ids derive from their content). A node that already exists, including one since
   approved, is left untouched when the same content is imported again. A Policy with a
@@ -908,8 +908,8 @@ The cause is in the server-side log:
   tokens, `key`/`token`/`secret`/`password` values, URLs, host:port pairs and file paths
   removed, cut to 300 characters. It is meant to name the cause without leaking secrets;
   if it is too thin, reproduce the call against a test instance.
-- Failures the service names itself (such as `owner_required`, a 401 for a Policy-bearing
-  document with no signed-in caller) are returned in the response and do not produce a
+- Failures the service names itself (such as `access_denied`, a 403 for a caller lacking
+  the required role) are returned in the response and do not produce a
   detail entry.
 - **An MCP tool that fails unexpectedly** (the caller sees `error: an unexpected error
   occurred`) logs one entry with `component` `mcp_interface`, `action` set to the MCP tool name

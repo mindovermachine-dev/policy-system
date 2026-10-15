@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from company_merge._gateway_fakes import POLICY_SYSTEM, RigReadHandle
@@ -20,11 +20,17 @@ from company_merge._seed_merge_graphs import BaselineGraphReader, OneHotEmbeddin
 from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig, close_all_rigs
 
-from api._fakes import build_fake_pipeline_dependencies
+from api._fakes import (
+    build_fake_pipeline_dependencies,
+    install_compliance_officer_caller,
+    install_compliance_officer_grant,
+    install_no_principal,
+)
 from api._gateway_fakes import RecordingSystemAudit, override_gateway
 from ps_service.api.dependencies import get_principal, provide_pipeline_dependencies
 from ps_service.api.ingestion_orchestration import GraphOpeners, run_internal_ingestion_pipeline
 from ps_service.auth.models import Principal
+from ps_service.authz.models import AccessRole
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.config import ServiceConfig
@@ -39,7 +45,10 @@ from ps_service.main import create_app
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from api._fakes import MakeEmitter
+    from fastapi import FastAPI
+    from httpx2 import Response
+
+    from api._fakes import FakePipeline, MakeEmitter
     from ps_service.api.ingestion_orchestration import GraphHandle, PipelineDependencies
     from ps_service.company_merge.governance_import import GovernanceImport
     from ps_service.company_merge.models import MergeResult
@@ -65,6 +74,11 @@ _ENVELOPE_CONTRACT: dict[str, object] = json.loads(
         / "ingest-internal-envelope.json"
     ).read_text(encoding="utf-8")
 )
+
+
+pytestmark = pytest.mark.usefixtures("grant_compliance_officer")
+
+_DENIED_MESSAGE = "You do not have the required access role for this action."
 
 
 def _noop_emit(**_kwargs: object) -> None:
@@ -108,13 +122,17 @@ def _close_gateway_rigs() -> Iterator[None]:  # pyright: ignore[reportUnusedFunc
     close_all_rigs()
 
 
-def _client_with_fake(fake_deps: PipelineDependencies, rig: GatewayRig | None = None) -> TestClient:
+def _client_with_fake(
+    fake_deps: PipelineDependencies,
+    rig: GatewayRig | None = None,
+    system_audit: RecordingSystemAudit | None = None,
+) -> TestClient:
     """A ``TestClient`` whose pipeline dependencies are ``fake_deps``, over a gateway rig."""
     rig = rig or GatewayRig()  # the internal route fails closed without a gateway
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
     app.dependency_overrides[get_principal] = lambda: Principal(sub="owner-1", iss="https://idp")
-    override_gateway(app, rig, RecordingSystemAudit(rig))
+    override_gateway(app, rig, system_audit or RecordingSystemAudit(rig))
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -466,3 +484,169 @@ def test_internal_ingestion_stage_failure_aborts_before_merge_and_names_stage() 
     assert body["error"]["failing_stage"] == "internal_ingestion"
     assert body["error"]["message"]
     assert fake.recorder.order == ["internal_ingestion"]
+
+
+class _RunLogRecorder:
+    """Records every run-log entry the internal pipeline emits."""
+
+    def __init__(self) -> None:
+        self.entries: list[dict[str, object]] = []
+
+    def __call__(self, **kwargs: object) -> None:
+        self.entries.append(kwargs)
+
+
+def _post_internal_seed(client: TestClient) -> Response:
+    """Post the Policy-bearing engineering-practices seed as an internal ingestion."""
+    return client.post(
+        "/ingestions",
+        json={
+            "source": _ENVELOPE_CONTRACT["source"],
+            _ENVELOPE_CONTRACT["content_field_name"]: _REAL_SEED_DOCUMENT,
+        },
+    )
+
+
+def _assert_denied_and_nothing_happened(
+    response: Response,
+    *,
+    fake: FakePipeline,
+    rig: GatewayRig,
+    system_audit: RecordingSystemAudit,
+    run_log: _RunLogRecorder,
+) -> None:
+    """Assert a 403 access_denied and that no stage, write, audit row or log entry occurred."""
+    assert response.status_code == 403
+    error = response.json()["error"]
+    assert error["code"] == "access_denied"
+    assert error["message"] == _DENIED_MESSAGE
+    assert fake.recorder.order == []
+    assert rig.store.events == []
+    assert system_audit.rows == []
+    assert run_log.entries == []
+
+
+@pytest.fixture
+def run_log(monkeypatch: pytest.MonkeyPatch) -> _RunLogRecorder:
+    """Replace the Logging boundary with a recorder of the entries emitted."""
+    recorder = _RunLogRecorder()
+    # detroit-exception: process-wide atexit logging facade, not a business fake
+    monkeypatch.setattr("ps_service.api.ingestion_orchestration.emit_log_entry", recorder)
+    return recorder
+
+
+def test_internal_ingest_without_compliance_officer_is_denied_with_403_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, run_log: _RunLogRecorder
+) -> None:
+    """An authenticated caller holding no elevated role is refused before any work starts."""
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    rig = GatewayRig()
+    system_audit = RecordingSystemAudit(rig)
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies, rig, system_audit)
+
+    response = _post_internal_seed(client)
+
+    _assert_denied_and_nothing_happened(
+        response, fake=fake, rig=rig, system_audit=system_audit, run_log=run_log
+    )
+
+
+def test_internal_ingest_with_no_principal_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch, run_log: _RunLogRecorder
+) -> None:
+    """A request with no verified caller at all is refused before any work starts."""
+    install_no_principal(monkeypatch)
+    rig = GatewayRig()
+    system_audit = RecordingSystemAudit(rig)
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies, rig, system_audit)
+
+    response = _post_internal_seed(client)
+
+    _assert_denied_and_nothing_happened(
+        response, fake=fake, rig=rig, system_audit=system_audit, run_log=run_log
+    )
+
+
+def test_internal_ingest_with_system_admin_but_no_compliance_officer_grant_is_denied(
+    monkeypatch: pytest.MonkeyPatch, run_log: _RunLogRecorder
+) -> None:
+    """``SystemAdmin`` alone does not satisfy the ``ComplianceOfficer`` requirement."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
+    )
+    rig = GatewayRig()
+    system_audit = RecordingSystemAudit(rig)
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies, rig, system_audit)
+
+    response = _post_internal_seed(client)
+
+    _assert_denied_and_nothing_happened(
+        response, fake=fake, rig=rig, system_audit=system_audit, run_log=run_log
+    )
+
+
+def test_internal_ingest_with_schema_invalid_body_and_no_role_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The role check precedes body validation, so an unprivileged caller learns no schema."""
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post("/ingestions", json={"source": "internal"})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+
+
+def test_internal_ingest_denial_body_has_the_shared_error_shape_and_leaks_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal uses the shared error envelope and names no document or internal detail."""
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies)
+
+    response = _post_internal_seed(client)
+
+    assert response.status_code == 403
+    body = response.json()
+    assert set(body) == {"error", "run_id"}
+    assert set(body["error"]) == {"code", "message", "failing_stage"}
+    assert body["error"]["failing_stage"] is None
+    for internal_detail in (
+        "ENGPRAC",
+        "MATCH",
+        "cypher",
+        "_baseline",
+        "_native",
+        "access_role",
+        "Traceback",
+    ):
+        assert internal_detail not in response.text
+
+
+def test_internal_ingest_with_compliance_officer_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified ``ComplianceOfficer`` runs a Policy-bearing seed through the pipeline."""
+    rig = GatewayRig()
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies, rig)
+    install_compliance_officer_caller(
+        monkeypatch,
+        cast("FastAPI", client.app),
+        principal=Principal(sub="owner-1", iss="https://idp"),
+    )
+
+    response = _post_internal_seed(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"]
+    assert body["source"] == "internal"
+    assert [stage["stage"] for stage in body["stages"]] == ["internal_ingestion", "merge"]
+    assert fake.recorder.order == ["internal_ingestion", "merge"]

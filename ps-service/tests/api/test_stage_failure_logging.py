@@ -29,6 +29,8 @@ from ps_service.main import create_app
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+pytestmark = pytest.mark.usefixtures("grant_compliance_officer")
+
 _SEED: dict[str, object] = json.loads(
     (
         Path(__file__).resolve().parents[3]

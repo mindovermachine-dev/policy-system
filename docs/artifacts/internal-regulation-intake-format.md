@@ -75,7 +75,7 @@ partial file is ever accepted.
 |---|---|
 | `RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`, `Capability`, `Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath` | `DEFINES`, `EXPRESSES`, `HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`, `IMPLEMENTED_BY`, `COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY` |
 
-Everything under `Policy`, `Standard` and `Control` is imported as a `draft` tree owned by the user who ingests the file, and ingesting a file that contains a Policy requires a signed-in user. Existing nodes, including approved ones, are never changed by re-ingesting. See the [User Guide](./user-guide.md#running-commands).
+Everything under `Policy`, `Standard` and `Control` is imported as a `draft` tree owned by the user who ingests the file, and ingesting a file requires a signed-in user holding the `ComplianceOfficer` access role. Existing nodes, including approved ones, are never changed by re-ingesting. See the [User Guide](./user-guide.md#running-commands).
 
 `Policy`, `Standard`, and `Control` are **authored by you**, not derived — see the
 [`Policy`](#policy), [`Standard`](#standard), and [`Control`](#control) node references and the

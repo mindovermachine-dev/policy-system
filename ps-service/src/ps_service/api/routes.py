@@ -149,9 +149,12 @@ async def create_ingestion(  # noqa: PLR0913, PLR0917 -- FastAPI dependency inje
     The request body selects the source. Both sources run synchronously and the call returns only
     when the run has finished. Pipeline work runs off the event loop.
 
-    ``source: "catalog"`` ingests the CELEX named in the request. The caller must hold the
-    ``ComplianceOfficer`` access role. The role is checked before any pipeline work starts, so an
-    unauthenticated or unprivileged caller gets 403 and nothing runs. An ``ingestion_run.submit``
+    The caller must hold the ``ComplianceOfficer`` access role for either source; the route rejects
+    any other caller, including a ``SystemAdmin`` or ``SystemOwner`` without an explicit grant, and
+    a request with no verified caller, with 403 before this handler runs, so nothing is written
+    and no stage starts.
+
+    ``source: "catalog"`` ingests the CELEX named in the request. An ``ingestion_run.submit``
     audit row is written first; if it cannot be written nothing runs. The request's ``short_name``
     is rejected when a different CELEX in the graph already claims it. The CELEX is then resolved
     through Cellar/ELI under that ``short_name`` (used verbatim), and the document is fetched at
@@ -160,18 +163,17 @@ async def create_ingestion(  # noqa: PLR0913, PLR0917 -- FastAPI dependency inje
     already fully merged it skips Domain Mapper and Company Merge and returns
     ``outcome="already_ingested"`` with an empty ``stages`` list.
 
-    ``source: "internal"`` ingests an intake document carried in the request body. It needs no
-    access role, runs one ``internal_ingestion`` stage that parses, validates and persists the
+    ``source: "internal"`` ingests an intake document carried in the request body. It runs one
+    ``internal_ingestion`` stage that parses, validates and persists the
     document into the instrument's baseline and native graphs, and writes through the Graph Write
     Gateway. A document that carries a Policy needs a verified caller, because the imported Policy
-    tree becomes a draft owned by that caller; without one the request is refused with 401 before
-    any stage runs.
+    tree becomes a draft owned by that caller; the pipeline refuses an ownerless Policy-bearing
+    document before any stage runs.
 
     Args:
         request_body: The request body, discriminated by ``source``: ``"catalog"`` with a CELEX,
             ``short_name`` and optional ``run_id``, or ``"internal"`` with the document content.
-        http_request: The raw request; supplies the client host recorded as the caller and the
-            identity for the ``ComplianceOfficer`` check on the catalog path.
+        http_request: The raw request; supplies the client host recorded as the caller.
         run_id: The server-minted run id for this request (injected). Used as the run's correlation
             id unless a catalog request supplies its own ``run_id``.
         config: The resolved service configuration (injected).
@@ -192,12 +194,8 @@ async def create_ingestion(  # noqa: PLR0913, PLR0917 -- FastAPI dependency inje
         ``stages`` is empty for ``already_ingested``.
 
     Raises:
-        InternalIngestOwnerRequiredError: The internal document carries a Policy and there is no
-            verified caller (401).
-        AccessDeniedError: Catalog path only; no verified caller, or the caller lacks the
-            ``ComplianceOfficer`` role (403).
-        AuthorizationStoreUnavailableError: Catalog path only; the authorization store could not be
-            read to check the role (503).
+        InternalIngestOwnerRequiredError: The internal document carries a Policy and the caller
+            identity is missing; the role gate normally rejects such a caller first (401).
         AuditTrailUnavailableError: The opening audit row could not be written (503); nothing ran.
             Catalog path: the ``ingestion_run.submit`` row. Internal path: the system audit row.
         CatalogIdentifierNotFoundError: Catalog path only; the CELEX does not exist on Cellar/ELI
@@ -234,7 +232,6 @@ async def create_ingestion(  # noqa: PLR0913, PLR0917 -- FastAPI dependency inje
             owner=_restore_owner(principal),
         )
         return _to_accepted_response(run_id, outcome)
-    await run_in_threadpool(require_access_role(AccessRole.COMPLIANCE_OFFICER), http_request)
     effective_run_id = request_body.run_id or run_id
     outcome = await run_in_threadpool(
         run_audited_catalog_ingestion,
@@ -753,9 +750,9 @@ def build_api_router() -> APIRouter:
     Routes: ``GET /catalog``, ``POST /ingestions``, ``GET /ingestions/{run_id}``, ``POST
     /restorations``, ``POST /restorations/from-catalog``, ``POST /exports``, ``POST
     /change-checks``, ``GET /near-misses``, ``POST /near-misses/{review_id}/resolve`` and ``GET
-    /near-misses/approvals/{pending_approval_id}``. The restore, export and change-check routes
-    require the ``ComplianceOfficer`` access role through a route-level dependency; the catalog
-    ingestion path checks the same role inside its handler.
+    /near-misses/approvals/{pending_approval_id}``. The ingestion (either source), restore, export
+    and change-check routes require the ``ComplianceOfficer`` access role through a route-level
+    dependency.
 
     Returns:
         An ``APIRouter`` holding all of the routes above, ready for ``include_router``.
@@ -767,6 +764,7 @@ def build_api_router() -> APIRouter:
         create_ingestion,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
     )
     router.add_api_route("/ingestions/{run_id}", get_ingestion_status, methods=["GET"])
     router.add_api_route(
