@@ -2327,6 +2327,8 @@ def cypher(query: str) -> dict[str, object] | str:
     Call `domain_concepts` first and ground every query in the labels, properties and edges it
     lists.
     The query runs with the configured timeout and row cap.
+    Policy, Standard and Control content is visible in every status, `draft` included, so filter
+    on `status` when only approved content is wanted.
 
     Args:
         query: Cypher text. It must not contain a write clause (CREATE, MERGE, DELETE, SET, REMOVE,
@@ -3548,7 +3550,6 @@ def update_control_draft(
 _GET_POLICY_ERRORS = (
     GraphWriteUnavailableError,
     PolicyNotFoundError,
-    PolicyDraftAccessDeniedError,
     PolicyLifecycleGraphUnavailableError,
 )
 
@@ -3557,12 +3558,9 @@ _GET_POLICY_ERRORS = (
 def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
     """Read one Policy together with its full Standard and Control tree.
 
-    A `draft` Policy is visible only to its owner or a caller holding `SystemOwner` or
-    `SystemAdmin`;
-    a non-owner `PolicyManager` is refused like any other non-owner. A `proposed`, `approved` or
-    `deprecated` Policy is visible to any authenticated caller. Requires a real authenticated
-    session
-    (the local-test bypass counts as one).
+    A Policy is visible to any authenticated caller in every status, `draft` included, so a draft
+    can appear beside approved content; check `status` before treating a Policy as in force.
+    Requires a real authenticated session (the local-test bypass counts as one).
 
     Args:
         policy_id: Id of the Policy to read; at least 1 character.
@@ -3575,7 +3573,6 @@ def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, obje
     Errors (returned as a string beginning `error: `, never raised):
         - The caller has no real authenticated session.
         - No Policy has `policy_id`.
-        - The Policy is a draft the caller neither owns nor may override.
         - The policy graph cannot be reached or its write path is unavailable.
         - Any other unexpected failure (a fixed generic message).
 
@@ -3594,13 +3591,10 @@ def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, obje
             graph = _resolve_graph(config)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
             result = run_get_policy(
-                actor=actor,
                 policy_id=policy_id,
                 graph=graph,
-                access_role_store=access_role_store,
                 # Resolved only if a backfill must be written (a read of a backfilled tree needs
                 # no gateway).
                 submitter_source=lambda: lifecycle_submitter(graph_write_access(config).gateway),

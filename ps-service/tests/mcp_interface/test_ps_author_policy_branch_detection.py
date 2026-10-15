@@ -391,6 +391,16 @@ def _call_get_policy(policy_id: str) -> CallToolResult:
     return result
 
 
+def _call_update_policy_draft(policy_id: str, fields: dict[str, object]) -> CallToolResult:
+    result = asyncio.run(
+        mcp_server.server.call_tool(
+            "update-policy-draft", {"policy_id": policy_id, "fields": fields}
+        )
+    )
+    assert isinstance(result, CallToolResult)
+    return result
+
+
 def _call_create_policy_draft(
     *,
     title: str,
@@ -567,9 +577,12 @@ def test_scenario_4_governing_draft_not_caller_owned_reports_access_denied(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         get_result = _call_get_policy(_DRAFT_POLICY_ID)
+        edit_result = _call_update_policy_draft(_DRAFT_POLICY_ID, {"scope_in": "all data"})
 
     assert get_result.is_error is False
-    assert _text(get_result) == "error: you do not have access to this Policy"
+    assert json.loads(_text(get_result))["owner_subject"] == _OTHER_SUBJECT
+    assert edit_result.is_error is False
+    assert _text(edit_result) == "error: you do not have access to this Policy"
     # not forkable either (only an approved prior can be forked) --
     # block and report, never a competing `create-policy-draft` call.
     assert handle.write_queries == []
@@ -774,9 +787,11 @@ def test_scenario_7b_unowned_draft_fork_is_access_denied_and_not_re_forked(
     _call_cypher(_capability_governed_by_query(_CAPABILITY_NAME))
     with _verified_actor(sub=_ACTOR_SUBJECT):
         get_result = _call_get_policy(_FORK_POLICY_ID)
+        edit_result = _call_update_policy_draft(_FORK_POLICY_ID, {"scope_in": "all data"})
 
     # Skill state `superseded_by_unowned_draft`: stop, no create-policy-draft.
-    assert _text(get_result) == "error: you do not have access to this Policy"
+    assert json.loads(_text(get_result))["owner_subject"] == _OTHER_SUBJECT
+    assert _text(edit_result) == "error: you do not have access to this Policy"
     assert handle.write_queries == []
 
 

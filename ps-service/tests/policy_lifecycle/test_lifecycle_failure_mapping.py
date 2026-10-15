@@ -342,10 +342,8 @@ def _edit(kind: str) -> Callable[[LifecycleRig], object]:
 
 def _backfill(rig: LifecycleRig) -> object:
     return get_policy(
-        actor=_OWNER,
         policy_id="pol_x",
         graph=rig.read,
-        access_role_store=FakeAccessRoleStore(),
         submitter_source=lambda: rig.gateway,
     )
 

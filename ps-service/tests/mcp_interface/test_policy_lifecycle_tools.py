@@ -916,7 +916,6 @@ def _call_get_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:
 def test_get_policy_owner_reads_own_draft_successfully(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
     _install_graph(monkeypatch, _TreeFakeGraph(_draft_fixture()))
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_get_policy()
@@ -929,14 +928,9 @@ def test_get_policy_owner_reads_own_draft_successfully(monkeypatch: pytest.Monke
     assert body["standards"] == []
 
 
-def test_get_policy_system_owner_reads_anyones_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_policy_non_owner_reads_a_draft(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
     _install_graph(monkeypatch, _TreeFakeGraph(_draft_fixture()))
-    store = FakeAccessRoleStore()
-    store.grant(
-        actor=_GRANTER, target=(_OTHER_SUBJECT, _ACTOR_ISSUER), access_role=AccessRole.SYSTEM_OWNER
-    )
-    _install_access_role_store(monkeypatch, store)
 
     with _verified_actor(sub=_OTHER_SUBJECT):
         result = _call_get_policy()
@@ -944,55 +938,8 @@ def test_get_policy_system_owner_reads_anyones_draft(monkeypatch: pytest.MonkeyP
     assert result.is_error is False
     body = json.loads(_text(result))
     assert body["policy_id"] == _EXISTING_POLICY_ID
-
-
-def test_get_policy_system_admin_reads_anyones_draft(monkeypatch: pytest.MonkeyPatch) -> None:
-    configure()
-    _install_graph(monkeypatch, _TreeFakeGraph(_draft_fixture()))
-    store = FakeAccessRoleStore()
-    store.grant(
-        actor=_GRANTER, target=(_OTHER_SUBJECT, _ACTOR_ISSUER), access_role=AccessRole.SYSTEM_ADMIN
-    )
-    _install_access_role_store(monkeypatch, store)
-
-    with _verified_actor(sub=_OTHER_SUBJECT):
-        result = _call_get_policy()
-
-    assert result.is_error is False
-    body = json.loads(_text(result))
-    assert body["policy_id"] == _EXISTING_POLICY_ID
-
-
-def test_get_policy_non_owner_policy_manager_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    configure()
-    _install_graph(monkeypatch, _TreeFakeGraph(_draft_fixture()))
-    store = FakeAccessRoleStore()
-    store.grant(
-        actor=_GRANTER,
-        target=(_OTHER_SUBJECT, _ACTOR_ISSUER),
-        access_role=AccessRole.POLICY_MANAGER,
-    )
-    _install_access_role_store(monkeypatch, store)
-
-    with _verified_actor(sub=_OTHER_SUBJECT):
-        result = _call_get_policy()
-
-    assert result.is_error is False
-    assert _text(result) == "error: you do not have access to this Policy"
-
-
-def test_get_policy_non_owner_authenticated_user_is_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    configure()
-    _install_graph(monkeypatch, _TreeFakeGraph(_draft_fixture()))
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    with _verified_actor(sub=_OTHER_SUBJECT):
-        result = _call_get_policy()
-
-    assert result.is_error is False
-    assert _text(result) == "error: you do not have access to this Policy"
+    assert body["status"] == "draft"
+    assert body["owner_subject"] == _ACTOR_SUBJECT
 
 
 @pytest.mark.parametrize("status", ["proposed", "approved", "deprecated"])
@@ -1009,7 +956,6 @@ def test_get_policy_non_draft_policy_readable_by_any_authenticated_caller(
         owner_issuer=_ACTOR_ISSUER,
     )
     _install_graph(monkeypatch, _TreeFakeGraph(policy))
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_OTHER_SUBJECT):
         result = _call_get_policy()
@@ -1024,7 +970,6 @@ def test_get_policy_nonexistent_policy_returns_not_found_error(
 ) -> None:
     configure()
     _install_graph(monkeypatch, _TreeFakeGraph(None))
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_get_policy(policy_id="pol_missing")
@@ -1072,7 +1017,6 @@ def test_get_policy_with_standards_and_controls_returns_full_nested_tree(
     )
     configure()
     _install_graph(monkeypatch, _TreeFakeGraph(policy))
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_get_policy()

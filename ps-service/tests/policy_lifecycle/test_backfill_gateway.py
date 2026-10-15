@@ -14,9 +14,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
-from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors `test_service.py`'s cross-package import convention
-    FakeAccessRoleStore,
-)
 
 from policy_lifecycle._gateway_fakes import SeedControl, SeedStandard
 from ps_service.api.errors import GraphWriteUnavailableError
@@ -63,10 +60,8 @@ def _read(rig: LifecycleRig, *, source: object | None = None) -> PolicyView:
         return rig.gateway
 
     return get_policy(
-        actor=_OWNER,
         policy_id=_POLICY,
         graph=rig.read,
-        access_role_store=FakeAccessRoleStore(),
         submitter_source=_gateway if source is None else source,  # pyright: ignore[reportArgumentType]
     )
 

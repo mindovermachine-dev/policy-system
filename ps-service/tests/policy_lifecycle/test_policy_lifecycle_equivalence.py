@@ -345,10 +345,8 @@ def test_a_backfill_leaves_the_graph_the_frozen_legacy_backfill_left(
     )
 
     get_policy(
-        actor=_OWNER,
         policy_id=_POLICY,
         graph=lifecycle_rig.read,
-        access_role_store=FakeAccessRoleStore(),
         submitter_source=lambda: lifecycle_rig.gateway,
     )
 
@@ -862,10 +860,8 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
     _propose(rig, new_id)
     _approve(rig, new_id)
     get_policy(
-        actor=_OWNER,
         policy_id=new_id,
         graph=rig.read,
-        access_role_store=roles,
         submitter_source=lambda: rig.gateway,
     )
 
@@ -954,10 +950,8 @@ def test_a_second_pass_changes_nothing_and_logs_nothing(
             )
         else:
             get_policy(
-                actor=_OWNER,
                 policy_id=_POLICY,
                 graph=lifecycle_rig.read,
-                access_role_store=roles,
                 submitter_source=lambda: lifecycle_rig.gateway,
             )
 

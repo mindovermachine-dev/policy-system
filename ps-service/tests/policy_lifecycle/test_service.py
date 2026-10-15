@@ -219,13 +219,10 @@ def test_owner_reads_own_draft_successfully_with_full_tree(lifecycle_rig: Lifecy
         ),
     )
     graph = _rig_graph(lifecycle_rig, policy)
-    store = FakeAccessRoleStore()
 
     result = get_policy(
-        actor=_OWNER,
         policy_id="pol_x",
         graph=graph,
-        access_role_store=store,
         submitter_source=lambda: lifecycle_rig.gateway,
     )
 
@@ -241,65 +238,18 @@ def test_owner_reads_own_draft_successfully_with_full_tree(lifecycle_rig: Lifecy
     assert standard.controls[0].control_type == "automated"
 
 
-def test_system_owner_reads_anyones_draft(lifecycle_rig: LifecycleRig) -> None:
+def test_non_owner_reads_a_draft(lifecycle_rig: LifecycleRig) -> None:
     graph = _rig_graph(lifecycle_rig, _draft_policy())
-    store = FakeAccessRoleStore()
-    store.grant(actor=_GRANTER, target=_OTHER, access_role=AccessRole.SYSTEM_OWNER)
 
     result = get_policy(
-        actor=_OTHER,
         policy_id="pol_x",
         graph=graph,
-        access_role_store=store,
         submitter_source=lambda: lifecycle_rig.gateway,
     )
 
     assert result.policy_id == "pol_x"
-
-
-def test_system_admin_reads_anyones_draft(lifecycle_rig: LifecycleRig) -> None:
-    graph = _rig_graph(lifecycle_rig, _draft_policy())
-    store = FakeAccessRoleStore()
-    store.grant(actor=_GRANTER, target=_OTHER, access_role=AccessRole.SYSTEM_ADMIN)
-
-    result = get_policy(
-        actor=_OTHER,
-        policy_id="pol_x",
-        graph=graph,
-        access_role_store=store,
-        submitter_source=lambda: lifecycle_rig.gateway,
-    )
-
-    assert result.policy_id == "pol_x"
-
-
-def test_non_owner_policy_manager_is_rejected(lifecycle_rig: LifecycleRig) -> None:
-    graph = _rig_graph(lifecycle_rig, _draft_policy())
-    store = FakeAccessRoleStore()
-    store.grant(actor=_GRANTER, target=_OTHER, access_role=AccessRole.POLICY_MANAGER)
-
-    with pytest.raises(PolicyDraftAccessDeniedError):
-        get_policy(
-            actor=_OTHER,
-            policy_id="pol_x",
-            graph=graph,
-            access_role_store=store,
-            submitter_source=lambda: lifecycle_rig.gateway,
-        )
-
-
-def test_non_owner_authenticated_user_is_rejected(lifecycle_rig: LifecycleRig) -> None:
-    graph = _rig_graph(lifecycle_rig, _draft_policy())
-    store = FakeAccessRoleStore()
-
-    with pytest.raises(PolicyDraftAccessDeniedError):
-        get_policy(
-            actor=_OTHER,
-            policy_id="pol_x",
-            graph=graph,
-            access_role_store=store,
-            submitter_source=lambda: lifecycle_rig.gateway,
-        )
+    assert result.status == "draft"
+    assert result.owner_subject == _OWNER[0]
 
 
 @pytest.mark.parametrize("status", ["proposed", "approved", "deprecated"])
@@ -310,13 +260,10 @@ def test_non_draft_policy_is_readable_by_any_authenticated_caller(
         lifecycle_rig,
         _PolicyFixture(id="pol_y", title="Y", status=status, version="1", owner=_OWNER),
     )
-    store = FakeAccessRoleStore()
 
     result = get_policy(
-        actor=_OTHER,
         policy_id="pol_y",
         graph=graph,
-        access_role_store=store,
         submitter_source=lambda: lifecycle_rig.gateway,
     )
 
@@ -325,14 +272,11 @@ def test_non_draft_policy_is_readable_by_any_authenticated_caller(
 
 def test_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig) -> None:
     graph = _rig_graph(lifecycle_rig, None)
-    store = FakeAccessRoleStore()
 
     with pytest.raises(PolicyNotFoundError):
         get_policy(
-            actor=_OWNER,
             policy_id="pol_missing",
             graph=graph,
-            access_role_store=store,
             submitter_source=lambda: lifecycle_rig.gateway,
         )
 

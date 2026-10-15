@@ -809,30 +809,23 @@ def _to_policy_view(record: graph_writer.PolicyRecord) -> PolicyView:
 
 def get_policy(
     *,
-    actor: tuple[str, str],
     policy_id: str,
     graph: GraphHandle,
-    access_role_store: AccessRoleStore,
     submitter_source: Callable[[], LifecycleSubmitter],
 ) -> PolicyView:
-    """Read a Policy and its full Standard and Control tree, enforcing draft visibility.
+    """Read a Policy and its full Standard and Control tree.
 
     A Policy minted before `version` and the Standard/Control `status` properties existed is
-    backfilled first, so the visibility check never sees a missing status.
+    backfilled first, so the read never sees a missing status.
 
     Business Rules:
-        - A Policy that is `proposed`, `approved` or `deprecated` is readable by any
-          authenticated caller.
-        - A `draft` Policy is readable only by its owner, or by a caller holding `SystemOwner` or
-          `SystemAdmin`. A non-owner `PolicyManager` is refused like any other caller.
+        - A Policy is readable in every status, `draft` included. Authentication is checked by the
+          caller; this function applies no per-Policy visibility rule.
         - Reads write no audit event.
 
     Args:
-        actor: The reading caller's verified `(sub, iss)` identity.
         policy_id: Id of the Policy to read.
         graph: The single-tenant policy graph handle.
-        access_role_store: Where `actor`'s active roles are resolved from; consulted only when
-            the Policy is a draft and `actor` is not its owner.
         submitter_source: Returns the Graph Write Gateway for the backfill; called only when some
             node of the tree needs a fill, so reading an already backfilled Policy needs no gateway.
 
@@ -841,13 +834,9 @@ def get_policy(
 
     Raises:
         PolicyNotFoundError: no Policy has `policy_id`.
-        PolicyDraftAccessDeniedError: the Policy is a draft and `actor` is neither its owner nor a
-            `SystemOwner`/`SystemAdmin`.
         PolicyLifecycleGraphUnavailableError: a needed backfill write failed
             (`FalkorDB write failed: ...`).
         redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated
-            from role resolution).
 
     Side Effects:
         May backfill missing `version` and `status` properties through the gateway. Otherwise
@@ -857,21 +846,6 @@ def get_policy(
     record = graph_writer.read_policy_tree(graph, policy_id)
     if record is None:
         raise PolicyNotFoundError(policy_id)
-
-    if record.status == "draft":
-        owner = (record.owner_subject, record.owner_issuer)
-        context = PolicyLifecycleRuleContext(
-            actor=actor,
-            owner=owner,
-            action="read",
-            current_status=cast("PolicyStatus", record.status),
-        )
-        is_owner = require_owner(context).allowed
-        if not is_owner:
-            active_roles = resolve_active_roles(actor, store=access_role_store)
-            if not (active_roles & _DRAFT_VISIBILITY_OVERRIDE_ROLES):
-                raise PolicyDraftAccessDeniedError
-
     return _to_policy_view(record)
 
 
