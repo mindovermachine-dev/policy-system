@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import email.message
 import json
-import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
@@ -148,12 +147,14 @@ def test_create_invitation_body_expires_is_tz_aware_iso_within_5s_of_now_plus_30
 
 
 def test_create_invitation_computes_expires_per_call_not_shared_across_invites() -> None:
+    # Each expiry is checked only against the readings taken around its own call. Comparing the two
+    # expiries with each other would depend on the wall clock being monotonic between the calls,
+    # which the OS does not guarantee (NTP / VM time sync can step it back).
     transport = _RecordingTransport(json.dumps({"pk": "abc123"}).encode())
 
     before_1 = datetime.now(UTC)
     create_invitation(_config(), _EMAIL, transport=transport)
     after_1 = datetime.now(UTC)
-    time.sleep(0.05)
     before_2 = datetime.now(UTC)
     create_invitation(_config(), _EMAIL, transport=transport)
     after_2 = datetime.now(UTC)
@@ -162,7 +163,6 @@ def test_create_invitation_computes_expires_per_call_not_shared_across_invites()
     expires_2 = _expires_of(transport.requests[1])
     assert before_1 + _TTL <= expires_1 <= after_1 + _TTL
     assert before_2 + _TTL <= expires_2 <= after_2 + _TTL
-    assert expires_2 > expires_1
 
 
 def test_create_invitation_docstring_lists_expires_in_request_body() -> None:

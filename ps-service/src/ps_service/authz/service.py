@@ -47,8 +47,8 @@ from ps_service.persistence import StatePostgresConnectionError
 if TYPE_CHECKING:
     from typing import Literal
 
-    from ps_service.audit.models import AuditQueryFilters, AuditQueryPage
-    from ps_service.audit.store import AuditStore
+    from ps_service.audit.models import AuditChainVerification, AuditQueryFilters, AuditQueryPage
+    from ps_service.audit.store import AuditChainVerifier, AuditStore
     from ps_service.authz.models import AccessRoleAssignmentRow
     from ps_service.authz.store import AccessRoleStore
 
@@ -663,5 +663,41 @@ def list_audit_events(
         return audit_store.query(filters=filters, cursor=cursor, page_size=page_size)
     except AuditInvalidCursorError as exc:
         raise InvalidAuditQueryFilterError(_INVALID_AUDIT_CURSOR_FILTER_MESSAGE) from exc
+    except (AuditPostgresUnavailableError, AuditPersistenceError) as exc:
+        raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
+
+
+def verify_audit_log(
+    principal: tuple[str, str],
+    *,
+    access_role_store: AccessRoleStore,
+    audit_store: AuditChainVerifier,
+) -> AuditChainVerification:
+    """Recompute the audit hash chain and report whether it is intact.
+
+    The caller must hold `SystemAdmin` or above; the role check runs before the audit store is
+    touched, so a caller without the role triggers no verification at all.
+
+    Args:
+        principal: The caller's verified `(sub, iss)` identity.
+        access_role_store: The store used to resolve the caller's roles.
+        audit_store: The store whose chain is verified.
+
+    Returns:
+        An `AuditChainVerification`: intact, or the first (lowest-sequence) break.
+
+    Raises:
+        AccessDeniedError: the principal does not hold `SystemAdmin` or above.
+        AuthorizationStoreUnavailableError: the role store raised
+            `StatePostgresConnectionError` or `AccessRoleAssignmentPersistenceError`, or the
+            audit store raised `AuditPostgresUnavailableError` or `AuditPersistenceError`.
+
+    Side Effects:
+        Those of `require_role` (possible first-owner bootstrap). The verification itself is
+        read-only.
+    """
+    require_role(principal, minimum=AccessRole.SYSTEM_ADMIN, store=access_role_store)
+    try:
+        return audit_store.verify_integrity()
     except (AuditPostgresUnavailableError, AuditPersistenceError) as exc:
         raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc

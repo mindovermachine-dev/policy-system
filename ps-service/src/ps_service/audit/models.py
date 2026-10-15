@@ -203,8 +203,55 @@ class AuditQueryPage:
     next_cursor: str | None
 
 
+type AuditChainBreakKind = Literal[
+    "sequence_gap", "prev_hash_mismatch", "row_hash_mismatch", "head_mismatch"
+]
+"""How the audit hash chain failed at its first break (see `AuditChainBreak.kind`)."""
+
+
+@dataclass(frozen=True, slots=True)
+class AuditChainBreak:
+    """The first place the audit hash chain fails verification.
+
+    Attributes:
+        kind: `sequence_gap` (a row is missing or the chain does not start at 1),
+            `prev_hash_mismatch` (a row does not link to its predecessor), `row_hash_mismatch`
+            (a row's content no longer matches its stored hash) or `head_mismatch` (every row
+            verifies but the chain head names a different last row: the tail was removed).
+        chain_seq: The broken row's chain sequence; `None` for `head_mismatch`.
+        event_id: The broken row's id, as a string; `None` for `head_mismatch`.
+        occurred_at: The broken row's `occurred_at`; `None` for `head_mismatch` and for a row
+            whose time was rewritten to an infinite value.
+    """
+
+    kind: AuditChainBreakKind
+    chain_seq: int | None
+    event_id: str | None
+    occurred_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class AuditChainVerification:
+    """The result of `AuditStore.verify_integrity`.
+
+    Attributes:
+        intact: `True` when the whole chain recomputes and the head matches its last row.
+        rows_checked: How many audit rows the verification walked.
+        head_chain_seq: The sequence the chain head records as the last row written.
+        first_break: The lowest-sequence failure, or `None` when `intact`.
+    """
+
+    intact: bool
+    rows_checked: int
+    head_chain_seq: int
+    first_break: AuditChainBreak | None
+
+
 __all__ = [
     "AUDIT_DETAILS_FILTER_KEYS",
+    "AuditChainBreak",
+    "AuditChainBreakKind",
+    "AuditChainVerification",
     "AuditDetails",
     "AuditEventRow",
     "AuditQueryFilters",

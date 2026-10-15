@@ -15,6 +15,7 @@ One of the client types users use to access Policy System is Agent Skills. The f
 - ps-policy-lifecycle. This skill creates a draft Policy, reads a Policy's full Standard and Control tree, and moves a Policy through its governance lifecycle (propose, approve, reject, revert to draft).
 - ps-manage-access-roles. This skill lists, grants and revokes access roles (SystemOwner, SystemAdmin, PolicyManager) for a principal, and surfaces the SystemOwner floor warning.
 - ps-list-audit-events. This skill reads the shared audit trail (who did what, to what, and when), filtered by actor, resource, action or time range and paginated newest first. It is restricted to SystemOwner and SystemAdmin and is read-only.
+- ps-verify-audit-log. This skill checks that the shared audit trail has not been altered, deleted from or truncated, by recomputing its hash chain, and reports the first broken row if there is one. It is restricted to SystemOwner and SystemAdmin and is read-only.
 - ps-invite-user. This skill invites a new user by creating a single-use Authentik enrollment invite. It is restricted to SystemAdmin and above.
 
 ## Development of Policy System Skills

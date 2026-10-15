@@ -32,6 +32,8 @@ from ps_service.runtime_config import PsycopgRuntimeConfigStore, RuntimeConfigUn
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from persistence.provisioned_postgres import Provisioned
+
 pytestmark = pytest.mark.postgres_live
 
 # Mirrors the source list `ps_service.main` passes to the runner at startup.
@@ -51,7 +53,7 @@ def _store(config: ServiceConfig) -> PsycopgRuntimeConfigStore:
 
 
 @pytest.fixture
-def config() -> Iterator[ServiceConfig]:
+def config(state_postgres_env: Provisioned) -> Iterator[ServiceConfig]:
     """A migrated real config; the shared override row is reset again afterwards."""
     real = load_config()
     assert real.state_postgres_host is not None, (
@@ -127,7 +129,7 @@ def test_set_and_reset_audit_rows_never_carry_url_credentials_or_query(
 
     with connect_from_config(config) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT details::text FROM audit_events WHERE resource_id = %(key)s "
+            "SELECT details::text FROM audit_log.audit_events WHERE resource_id = %(key)s "
             "AND actor_subject = %(actor)s ORDER BY occurred_at DESC, id DESC LIMIT 2",
             {"key": CATALOG_SOURCE_KEY, "actor": _ACTOR[0]},
         )

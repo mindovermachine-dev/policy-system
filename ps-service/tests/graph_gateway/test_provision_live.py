@@ -119,7 +119,7 @@ def test_second_provisioning_run_applies_nothing(fresh_provisioned: Provisioned)
     migrate_state_database(fresh_provisioned)
     provision_graph_log(fresh_provisioned)
 
-    assert provision_graph_log(fresh_provisioned) == ProvisionResult([], [])
+    assert provision_graph_log(fresh_provisioned) == ProvisionResult([], [], [])
 
 
 def test_provisioning_keeps_the_migration_tracking_table_owned_by_the_state_role(
@@ -266,8 +266,9 @@ def test_state_role_can_insert_and_select_on_immutable_tables_and_update_only_ap
     with provisioned_graph_log.as_state() as conn:
         audit_event_id = _scalar(
             conn,
-            "INSERT INTO audit_events (actor_subject, actor_issuer, action, resource_type, "
-            "resource_id, outcome) VALUES ('a', 'i', 'x', 'graph', %s, 'applied') RETURNING id",
+            "INSERT INTO audit_log.audit_events (actor_subject, actor_issuer, action, "
+            "resource_type, resource_id, outcome) "
+            "VALUES ('a', 'i', 'x', 'graph', %s, 'applied') RETURNING id",
             graph,
         )
         conn.execute(
@@ -601,9 +602,13 @@ def test_upgrade_existing_deployment_keeps_ps_state_rows_and_gains_same_ownershi
     provision_graph_log(fresh_provisioned)
 
     with fresh_provisioned.as_state() as conn:
-        assert _scalar(conn, "SELECT count(*) FROM audit_events") == before
+        assert _scalar(conn, "SELECT count(*) FROM audit_log.audit_events") == before
         assert (
-            _scalar(conn, "SELECT count(*) FROM audit_events WHERE actor_subject = 'legacy'") == 1
+            _scalar(
+                conn,
+                "SELECT count(*) FROM audit_log.audit_events WHERE actor_subject = 'legacy'",
+            )
+            == 1
         )
     assert _privilege_snapshot(fresh_provisioned) == _privilege_snapshot(provisioned_graph_log)
 

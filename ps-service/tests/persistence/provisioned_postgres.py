@@ -5,6 +5,12 @@ Postgres image) against the scratch server named by `PS_TEST_POSTGRES_SUPERUSER_
 database and role names per call so live tests never collide. Used by
 `test_database_isolation_live.py` and the `graph_gateway` live tests.
 
+Fixtures for tests that run the stores through `load_config()` (the ambient `PS_STATE_POSTGRES_*`
+variables): `provisioned_state` brings a module's cluster to the final state the service runs
+against (ordinary migrations applied first, as a started service would, then the privileged
+`graph_gateway` and `audit_integrity` migrations, so `audit_events` lives in `audit_log`), and
+`state_postgres_env` points the ambient variables at that cluster for one test.
+
 Needs `PS_TEST_POSTGRES_SUPERUSER_DSN` (a superuser DSN of a scratch server, e.g.
 `postgresql://postgres@127.0.0.1:54329/postgres`) and `psql` on `PATH`.
 """
@@ -230,3 +236,53 @@ def provisioned_graph_log(provisioned: Provisioned) -> Provisioned:
     """Provide the module's cluster brought up by the provisioning CLI alone (no prelude)."""
     provision_graph_log(provisioned)
     return provisioned
+
+
+@pytest.fixture(scope="module")
+def provisioned_state(provisioned: Provisioned) -> Provisioned:
+    """Provide the module's cluster as a started service then the provisioning command leave it.
+
+    The service applies the ordinary migrations first (`audit_events` still in `public`), then
+    the provisioning command applies the privileged ones (the table moves to `audit_log`).
+    """
+    migrate_state_database(provisioned)
+    provision_graph_log(provisioned)
+    return provisioned
+
+
+def _point_ambient_state_env_at(prov: Provisioned, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set the ambient `PS_STATE_POSTGRES_*` variables to `prov`'s `ps_state` role."""
+    monkeypatch.setenv("PS_STATE_POSTGRES_HOST", prov.host)
+    monkeypatch.setenv("PS_STATE_POSTGRES_PORT", str(prov.port))
+    monkeypatch.setenv("PS_STATE_POSTGRES_DATABASE", prov.state_db)
+    monkeypatch.setenv("PS_STATE_POSTGRES_USER", prov.state_user)
+    monkeypatch.setenv("PS_STATE_POSTGRES_PASSWORD", prov.state_password)
+
+
+@pytest.fixture
+def state_postgres_env(
+    provisioned_state: Provisioned, monkeypatch: pytest.MonkeyPatch
+) -> Provisioned:
+    """Point the ambient `PS_STATE_POSTGRES_*` variables at the module's provisioned cluster.
+
+    Lets a test that builds its configuration with `load_config()` run unchanged against the
+    final database layout, whatever the ambient environment holds. The cluster is shared by the
+    module, and `audit_events` can never be emptied, so such a test keys its rows on unique ids.
+    """
+    _point_ambient_state_env_at(provisioned_state, monkeypatch)
+    return provisioned_state
+
+
+@pytest.fixture
+def fresh_state_postgres_env(
+    fresh_provisioned: Provisioned, monkeypatch: pytest.MonkeyPatch
+) -> Provisioned:
+    """Point the ambient variables at a brand-new, fully provisioned cluster for one test.
+
+    For a test that asserts on audit rows by action or other non-unique keys: the audit table is
+    insert-only, so an empty one needs a cluster of its own.
+    """
+    migrate_state_database(fresh_provisioned)
+    provision_graph_log(fresh_provisioned)
+    _point_ambient_state_env_at(fresh_provisioned, monkeypatch)
+    return fresh_provisioned

@@ -22,8 +22,8 @@ from psycopg import sql
 
 from ps_service.graph_gateway import GRAPH_LOG_TABLES, MIGRATIONS_DIR
 from ps_service.persistence import (
-    GraphLogMigrationMissingError,
     MigrationSource,
+    PrivilegedMigrationMissingError,
     connect_from_config,
 )
 from ps_service.persistence.privileged_migration_runner import (
@@ -88,7 +88,7 @@ def test_startup_check_fails_closed_naming_graph_gateway_0001_when_the_migration
 ) -> None:
     migrate_state_database(fresh_provisioned)
 
-    with pytest.raises(GraphLogMigrationMissingError) as raised:
+    with pytest.raises(PrivilegedMigrationMissingError) as raised:
         _verify_as_state_role(fresh_provisioned)
 
     assert raised.value.missing_migration == _MIGRATION
@@ -103,7 +103,7 @@ def test_startup_check_never_creates_the_immutable_tables_itself(
 ) -> None:
     migrate_state_database(fresh_provisioned)
 
-    with pytest.raises(GraphLogMigrationMissingError):
+    with pytest.raises(PrivilegedMigrationMissingError):
         _verify_as_state_role(fresh_provisioned)
 
     assert not _graph_log_schema_exists(fresh_provisioned)
@@ -112,7 +112,7 @@ def test_startup_check_never_creates_the_immutable_tables_itself(
 def test_startup_check_fails_closed_when_the_tracking_table_does_not_exist_yet(
     fresh_provisioned: Provisioned,
 ) -> None:
-    with pytest.raises(GraphLogMigrationMissingError) as raised:
+    with pytest.raises(PrivilegedMigrationMissingError) as raised:
         _verify_as_state_role(fresh_provisioned)
 
     assert raised.value.missing_migration == _MIGRATION
@@ -126,7 +126,7 @@ def test_startup_check_fails_closed_when_tracking_row_exists_but_a_table_was_dro
     with fresh_provisioned.superuser_connect(fresh_provisioned.state_db) as admin:
         admin.execute("DROP TABLE graph_log.checkpoints")
 
-    with pytest.raises(GraphLogMigrationMissingError) as raised:
+    with pytest.raises(PrivilegedMigrationMissingError) as raised:
         _verify_as_state_role(fresh_provisioned)
 
     assert raised.value.missing_migration == _MIGRATION
@@ -144,7 +144,7 @@ def test_startup_check_fails_closed_when_the_state_role_owns_an_immutable_table(
             )
         )
 
-    with pytest.raises(GraphLogMigrationMissingError) as raised:
+    with pytest.raises(PrivilegedMigrationMissingError) as raised:
         _verify_as_state_role(fresh_provisioned)
 
     assert raised.value.reason == "state_role_controls_table"
@@ -162,7 +162,7 @@ def test_startup_check_fails_closed_when_the_state_role_is_a_member_of_the_owner
             )
         )
 
-    with pytest.raises(GraphLogMigrationMissingError) as raised:
+    with pytest.raises(PrivilegedMigrationMissingError) as raised:
         _verify_as_state_role(fresh_provisioned)
 
     assert raised.value.reason == "state_role_controls_table"
@@ -194,7 +194,7 @@ def test_startup_check_emits_one_failure_entry_naming_the_migration_and_no_conne
     emitter, log_path = make_emitter()
     migrate_state_database(fresh_provisioned)
 
-    with pytest.raises(GraphLogMigrationMissingError):
+    with pytest.raises(PrivilegedMigrationMissingError):
         _verify_as_state_role(fresh_provisioned, emitter)
     emitter.flush()
 

@@ -6,23 +6,19 @@ is read back through `authz.service.list_audit_events` by action, actor and reso
 
 from __future__ import annotations
 
-import uuid
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
 
-from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.audit import AuditContext, AuditQueryFilters, PsycopgAuditStore
 from ps_service.authz.service import list_audit_events
 from ps_service.config import ServiceConfig, load_config
 from ps_service.invitations.client import InvitationResult
 from ps_service.invitations.service import invite_user_audited
-from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-    from typing import LiteralString
+    from persistence.provisioned_postgres import Provisioned
 
 _OWNER = ("owner-sub", "https://issuer.example.com/")
 _ACTOR = ("admin-sub", "https://issuer.example.com/")
@@ -30,24 +26,11 @@ _EMAIL = "live-target@example.com"
 
 
 @pytest.fixture(name="live_config")
-def _live_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[ServiceConfig]:  # pyright: ignore[reportUnusedFunction]  # used by name
-    """The real config pinned (via `PGOPTIONS`) to a throwaway schema with the audit migration."""
+def _live_config(state_postgres_env: Provisioned) -> ServiceConfig:  # pyright: ignore[reportUnusedFunction]  # used by name
+    """The real config, aimed at a scratch cluster provisioned to the final layout."""
     config = load_config()
-    assert config.state_postgres_host is not None, (
-        "postgres_live requires PS_STATE_POSTGRES_HOST to be set"
-    )
-    schema = f"invitations_test_{uuid.uuid4().hex}"
-    with connect_from_config(config) as conn:
-        conn.execute(cast("LiteralString", f'CREATE SCHEMA "{schema}"'))
-    monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")
-    with connect_from_config(config) as conn:
-        apply_pending_migrations(conn, sources=[MigrationSource("audit", AUDIT_MIGRATIONS_DIR)])
-    try:
-        yield config
-    finally:
-        monkeypatch.delenv("PGOPTIONS")
-        with connect_from_config(config) as conn:
-            conn.execute(cast("LiteralString", f'DROP SCHEMA "{schema}" CASCADE'))
+    assert config.state_postgres_host == state_postgres_env.host
+    return config
 
 
 def _send(config: ServiceConfig, email: str) -> InvitationResult:

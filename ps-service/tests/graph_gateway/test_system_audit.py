@@ -91,7 +91,7 @@ def test_inserts_one_row_with_the_system_actor_and_returns_its_id() -> None:
     assert audit_event_id == str(connection.row_id)
     assert connection.committed
     ((query, params),) = connection.statements
-    assert query.lstrip().startswith("INSERT INTO audit_events")
+    assert query.lstrip().startswith("INSERT INTO audit_log.audit_events")
     assert params["actor_subject"] == SYSTEM_ACTOR_SUBJECT == "system:ingestion"
     assert params["actor_issuer"] == SYSTEM_ACTOR_ISSUER == "system"
     assert (params["action"], params["resource_type"], params["resource_id"]) == (

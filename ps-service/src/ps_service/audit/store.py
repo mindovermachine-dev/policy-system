@@ -7,22 +7,30 @@ several components share. It opens connections with `ps_service.persistence.conn
 rather than adding a parallel configuration surface; the table is created by this component's
 own migration directory, applied by the shared `ps_service.persistence` runner.
 
-Three operations:
+Four operations:
 
 - `record`: the cursor-scoped write for callers that already hold a transaction, so the audit row
   commits or rolls back with their state change.
 - `record_standalone`: opens its own connection and commits, for rows with no surrounding
   state-changing transaction (denials, opening and terminal lifecycle rows).
 - `query`: newest-first, keyset-paginated, filtered read.
+- `verify_integrity`: recomputes the whole hash chain inside the database
+  (`audit_log.verify_chain()`, in a read-only REPEATABLE READ snapshot) and reports the first
+  break. It reads only.
 
-Insert-only is enforced by omission, not by a database privilege or trigger: `AuditStore` defines
-no `UPDATE` or `DELETE` method at all.
+The table is `audit_log.audit_events`: it lives in the owner-protected `audit_log` schema (moved
+there by the privileged `audit_integrity` migration, applied by the provisioning command), where
+the application role holds `SELECT` and `INSERT` only. Postgres therefore refuses any `UPDATE`,
+`DELETE`, `TRUNCATE` or row lock from that role, and insert-only triggers (enabled even in
+replica mode) refuse them for the owner role. `AuditStore` also defines no `UPDATE` or `DELETE`
+method at all.
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
@@ -38,8 +46,16 @@ from ps_service.audit.errors import (
     AuditPostgresUnavailableError,
     AuditUnknownActionError,
 )
-from ps_service.audit.models import AuditEventRow, AuditQueryPage, resolve_details_model
+from ps_service.audit.models import (
+    AuditChainBreak,
+    AuditChainVerification,
+    AuditEventRow,
+    AuditQueryPage,
+    resolve_details_model,
+)
 from ps_service.dependency_health import STATE_POSTGRES, mark_healthy, mark_unhealthy
+from ps_service.logging.errors import LoggingLifecycleError
+from ps_service.logging.facade import emit_log_entry
 from ps_service.persistence import StatePostgresConnectionError, connect_from_config
 
 if TYPE_CHECKING:
@@ -48,7 +64,7 @@ if TYPE_CHECKING:
 
     from psycopg.rows import TupleRow
 
-    from ps_service.audit.models import AuditQueryFilters
+    from ps_service.audit.models import AuditChainBreakKind, AuditQueryFilters
     from ps_service.config import ServiceConfig
 
 _AUDIT_STORE_UNAVAILABLE_MESSAGE = "The audit store is temporarily unavailable."
@@ -57,7 +73,7 @@ _CURSOR_FIELD_SEPARATOR = "|"
 _CURSOR_FIELD_COUNT = 2  # "{occurred_at_iso}|{id}" -- exactly two `|`-separated fields
 
 _INSERT_AUDIT_EVENT = """
-INSERT INTO audit_events (
+INSERT INTO audit_log.audit_events (
     actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
 ) VALUES (
     %(actor_subject)s, %(actor_issuer)s, %(action)s, %(resource_type)s, %(resource_id)s,
@@ -65,6 +81,11 @@ INSERT INTO audit_events (
 )
 RETURNING id
 """
+
+_VERIFY_CHAIN_SQL = (
+    "SELECT intact, rows_checked, head_chain_seq, break_kind, broken_chain_seq, broken_id, "
+    "broken_occurred_at FROM audit_log.verify_chain()"
+)
 
 _SELECT_AUDIT_EVENTS_COLUMNS = (
     "id, occurred_at, actor_subject, actor_issuer, action, resource_type, resource_id, "
@@ -192,6 +213,87 @@ def _row_from_record(record: Sequence[object]) -> AuditEventRow:
     )
 
 
+def _verification_from_record(record: Sequence[object]) -> AuditChainVerification:
+    """Map the one row of `audit_log.verify_chain()` to an `AuditChainVerification`.
+
+    The column types are fixed by the privileged migration, so `cast()` at this one boundary is
+    safe. The broken row's `id` is converted with `str()` because `psycopg` returns a
+    `uuid.UUID`.
+    """
+    (
+        intact,
+        rows_checked,
+        head_chain_seq,
+        break_kind,
+        broken_chain_seq,
+        broken_id,
+        broken_occurred_at,
+    ) = record
+    first_break = (
+        None
+        if break_kind is None
+        else AuditChainBreak(
+            kind=cast("AuditChainBreakKind", break_kind),
+            chain_seq=cast("int | None", broken_chain_seq),
+            event_id=None if broken_id is None else str(broken_id),
+            occurred_at=cast("datetime | None", broken_occurred_at),
+        )
+    )
+    return AuditChainVerification(
+        intact=cast("bool", intact),
+        rows_checked=cast("int", rows_checked),
+        head_chain_seq=cast("int", head_chain_seq),
+        first_break=first_break,
+    )
+
+
+def _log_verification(verification: AuditChainVerification) -> None:
+    """Log the outcome of a verification: `succeeded` when intact, `failed` when it is not.
+
+    A break carries only its kind and sequence (or the head sequence), never a row id, an actor
+    or `details`: the log is operational telemetry, and a failed outcome is the one that reaches
+    stderr, which is the intent for a security event.
+    """
+    first_break = verification.first_break
+    with contextlib.suppress(LoggingLifecycleError):
+        if first_break is None:
+            emit_log_entry(
+                component="audit",
+                action="verify_integrity",
+                outcome="succeeded",
+                extra={
+                    "rows_checked": verification.rows_checked,
+                    "head_chain_seq": verification.head_chain_seq,
+                },
+            )
+            return
+        emit_log_entry(
+            component="audit",
+            action="verify_integrity",
+            outcome="failed",
+            extra={
+                "break_kind": first_break.kind,
+                "broken_chain_seq": (
+                    verification.head_chain_seq
+                    if first_break.chain_seq is None
+                    else first_break.chain_seq
+                ),
+                "rows_checked": verification.rows_checked,
+            },
+        )
+
+
+def _log_verify_unavailable(error: Exception) -> None:
+    """Log that a verification could not run (error class name only, never driver text)."""
+    with contextlib.suppress(LoggingLifecycleError):
+        emit_log_entry(
+            component="audit",
+            action="verify_integrity",
+            outcome="failed",
+            extra={"reason": type(error).__name__},
+        )
+
+
 class AuditStore(Protocol):
     """Persistence seam for `audit_events` rows: validated insert and filtered, paginated read.
 
@@ -217,6 +319,12 @@ class AuditStore(Protocol):
         The insert runs on the caller's own open cursor and transaction, never on a connection
         this method opens, so it commits or rolls back atomically with whatever state change that
         transaction also performs. The caller owns the commit.
+
+        Lock ordering: the insert locks the audit chain head until the caller's transaction ends,
+        so every call must be the last statement before the caller's commit, after any advisory
+        or row lock the transaction takes. The chain head is then the last lock in a global
+        order and is never held while waiting for another one, so no deadlock cycle runs through
+        it.
 
         Args:
             cur: The caller's open cursor, inside the transaction the row must join.
@@ -324,6 +432,35 @@ class AuditStore(Protocol):
         ...
 
 
+class AuditChainVerifier(Protocol):
+    """Persistence seam for verifying the audit hash chain (a separate, read-only capability).
+
+    Kept apart from `AuditStore` so that the many components that only record audit events do
+    not have to implement a verification they never call. `PsycopgAuditStore` implements both.
+    """
+
+    def verify_integrity(self) -> AuditChainVerification:
+        """Recompute the whole audit hash chain in the database and report its state.
+
+        The check runs `audit_log.verify_chain()` in one read-only REPEATABLE READ snapshot, so
+        the rows and the chain head are read at the same instant even while writers continue.
+        Cost grows linearly with the number of audit rows (one pass, no pagination).
+
+        Returns:
+            An `AuditChainVerification`: intact, or the first (lowest-sequence) break.
+
+        Raises:
+            AuditPostgresUnavailableError: the store cannot be reached or the check fails with
+                a driver error; the message carries no host, port or driver detail.
+
+        Side Effects:
+            Opens and closes a connection to the PS state Postgres, updates the state-Postgres
+            dependency health, and emits one `audit` / `verify_integrity` log entry. Writes
+            nothing to the database.
+        """
+        ...
+
+
 @runtime_checkable
 class EventIdAuditStore(Protocol):
     """An audit store that can report the id of the row it just wrote.
@@ -410,6 +547,13 @@ class PsycopgAuditStore:
         back with the caller's state change. Stored `details` omits any field left at its `None`
         default instead of persisting an explicit `null`: "absent" and "declared but unset" are
         the same fact for the table's typed per-action shapes.
+
+        Lock ordering: the database's chain trigger locks the audit chain head on this insert and
+        holds that lock until the caller's transaction ends. Call this as the last statement
+        before the caller's commit, after any advisory or row lock the transaction takes, so the
+        chain head is the last lock in a global order and cannot be part of a deadlock cycle. A
+        stalled or failing chain trigger surfaces as the driver's `psycopg.Error` (for example
+        `QueryCanceled` or `LockNotAvailable`), unwrapped.
 
         Args:
             cur: The caller's open cursor, inside the transaction the row must join.
@@ -619,7 +763,7 @@ class PsycopgAuditStore:
 
         where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         select_sql = (
-            f"SELECT {_SELECT_AUDIT_EVENTS_COLUMNS} FROM audit_events{where_clause} "  # noqa: S608 - fixed literal columns/table/conditions, every value parameterized via `params`
+            f"SELECT {_SELECT_AUDIT_EVENTS_COLUMNS} FROM audit_log.audit_events{where_clause} "  # noqa: S608 - fixed literal columns/table/conditions, every value parameterized via `params`
             "ORDER BY occurred_at DESC, id DESC LIMIT %(fetch_limit)s"
         )
 
@@ -651,5 +795,51 @@ class PsycopgAuditStore:
         )
         return AuditQueryPage(events=events, next_cursor=next_cursor)
 
+    def verify_integrity(self) -> AuditChainVerification:
+        """Recompute the whole audit hash chain in the database and report its state.
 
-__all__ = ["AuditStore", "PsycopgAuditStore"]
+        Opens its own connection, sets `REPEATABLE READ` and read-only before any statement and
+        runs `audit_log.verify_chain()` once. The function raises if it is run at a weaker
+        isolation level, so a caller cannot get a torn read.
+
+        Returns:
+            An `AuditChainVerification`: intact, or the first (lowest-sequence) break.
+
+        Raises:
+            AuditPostgresUnavailableError: the connection could not be opened or the check
+                failed with a driver error; the message carries no host, port or driver detail.
+
+        Side Effects:
+            Opens and closes a connection, marks the state-Postgres dependency unhealthy on
+            failure and healthy on success, and logs one `audit` / `verify_integrity` entry
+            (`succeeded` when intact; `failed` with the break kind and sequence, never a row id
+            or content, when the chain is broken or the check could not run).
+        """
+        try:
+            conn = connect_from_config(self._config)
+        except (StatePostgresConnectionError, psycopg.Error) as exc:
+            mark_unhealthy(STATE_POSTGRES, error=exc)
+            _log_verify_unavailable(exc)
+            raise AuditPostgresUnavailableError(_AUDIT_STORE_UNAVAILABLE_MESSAGE) from exc
+        try:
+            with conn:
+                conn.autocommit = False
+                conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+                conn.read_only = True
+                with conn.cursor() as cur:
+                    cur.execute(_VERIFY_CHAIN_SQL)
+                    record = cur.fetchone()
+        except psycopg.Error as exc:
+            mark_unhealthy(STATE_POSTGRES, error=exc)
+            _log_verify_unavailable(exc)
+            raise AuditPostgresUnavailableError(_AUDIT_STORE_UNAVAILABLE_MESSAGE) from exc
+        mark_healthy(STATE_POSTGRES)
+        if record is None:  # pragma: no cover -- the function always returns exactly one row
+            _log_verify_unavailable(RuntimeError("verify_chain returned no row"))
+            raise AuditPostgresUnavailableError(_AUDIT_STORE_UNAVAILABLE_MESSAGE)
+        verification = _verification_from_record(record)
+        _log_verification(verification)
+        return verification
+
+
+__all__ = ["AuditChainVerifier", "AuditStore", "PsycopgAuditStore"]

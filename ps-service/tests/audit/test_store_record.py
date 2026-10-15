@@ -7,12 +7,14 @@ whether an error genuinely precedes any `cur.execute` call, can only be
 proven end-to-end against a real Postgres instance plus a cursor spy.
 
 Deselected by default (tier gating) -- run explicitly with
-`uv run pytest -m postgres_live` against a reachable `PS_STATE_POSTGRES_*`
-instance.
+`uv run pytest -m postgres_live`. Each test points `PS_STATE_POSTGRES_*` at a scratch cluster
+provisioned to the final layout (`state_postgres_env`, needs `PS_TEST_POSTGRES_SUPERUSER_DSN`);
+the audit table is insert-only, so tests key their rows on unique ids instead of clearing it.
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -63,23 +65,26 @@ def _require_configured_postgres() -> None:
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_with_valid_details_inserts_exactly_one_row_with_correct_fields() -> None:
     """A valid `record` call INSERTs one row, readable back with every field intact."""
     _require_configured_postgres()
     config = load_config()
     store: AuditStore = PsycopgAuditStore(config)
+    target = (
+        f"test-target-subject-{uuid.uuid4().hex}"  # rows can never be deleted: key on a unique id
+    )
 
     with connect_from_config(config) as conn:
         apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM audit_events")  # isolate this test from prior runs' rows
             store.record(
                 cur,
                 actor_subject="test-actor-subject",
                 actor_issuer="https://issuer.example.com/",
                 action="access_role.grant",
                 resource_type="principal",
-                resource_id="test-target-subject",
+                resource_id=target,
                 outcome="applied",
                 details={"access_role": "SystemAdmin"},
             )
@@ -88,7 +93,8 @@ def test_record_with_valid_details_inserts_exactly_one_row_with_correct_fields()
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT actor_subject, actor_issuer, action, resource_type, resource_id, "
-                "outcome, details FROM audit_events"
+                "outcome, details FROM audit_log.audit_events WHERE resource_id = %s",
+                (target,),
             )
             rows = cur.fetchall()
 
@@ -98,12 +104,13 @@ def test_record_with_valid_details_inserts_exactly_one_row_with_correct_fields()
     assert actor_issuer == "https://issuer.example.com/"
     assert action == "access_role.grant"
     assert resource_type == "principal"
-    assert resource_id == "test-target-subject"
+    assert resource_id == target
     assert outcome == "applied"
     assert details == {"access_role": "SystemAdmin"}
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_returns_the_new_audit_event_id() -> None:
     """`record` returns the generated row id, usable to link other writes to the audit row."""
     _require_configured_postgres()
@@ -123,7 +130,9 @@ def test_record_returns_the_new_audit_event_id() -> None:
                 outcome="applied",
                 details={"access_role": "SystemAdmin"},
             )
-            cur.execute("SELECT id::text, action FROM audit_events WHERE id = %s", (event_id,))
+            cur.execute(
+                "SELECT id::text, action FROM audit_log.audit_events WHERE id = %s", (event_id,)
+            )
             row = cur.fetchone()
         conn.rollback()
 
@@ -132,6 +141,7 @@ def test_record_returns_the_new_audit_event_id() -> None:
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_standalone_with_event_id_returns_the_id_of_the_committed_row() -> None:
     """The id returned names the row the standalone transaction committed."""
     _require_configured_postgres()
@@ -151,11 +161,12 @@ def test_record_standalone_with_event_id_returns_the_id_of_the_committed_row() -
     )
 
     with connect_from_config(config) as conn, conn.cursor() as cur:
-        cur.execute("SELECT resource_id FROM audit_events WHERE id = %s", (event_id,))
+        cur.execute("SELECT resource_id FROM audit_log.audit_events WHERE id = %s", (event_id,))
         assert cur.fetchone() == ("test-target-subject-event-id",)
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_with_unregistered_action_raises_before_any_insert() -> None:
     """An unregistered `action` raises `AuditUnknownActionError` and never calls `cur.execute`."""
     _require_configured_postgres()
@@ -183,6 +194,7 @@ def test_record_with_unregistered_action_raises_before_any_insert() -> None:
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_with_undeclared_extra_field_in_details_raises_before_any_insert() -> None:
     """A `details` payload with an extra, undeclared field raises `AuditInvalidDetailsError`."""
     _require_configured_postgres()
@@ -210,6 +222,7 @@ def test_record_with_undeclared_extra_field_in_details_raises_before_any_insert(
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_with_details_missing_a_required_field_raises_before_any_insert() -> None:
     """A `details` payload missing a required declared field raises `AuditInvalidDetailsError`."""
     _require_configured_postgres()
@@ -237,8 +250,9 @@ def test_record_with_details_missing_a_required_field_raises_before_any_insert()
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_a_rolled_back_transaction_after_record_leaves_no_partial_row() -> None:
-    """A caller that rolls back after `record` leaves the table exactly as it was before.
+    """A caller that rolls back after `record` leaves no row for the key it wrote.
 
     `record` never commits or rolls back its own transaction (store-level
     application of the rollback principle) -- proves the surrounding
@@ -249,12 +263,12 @@ def test_a_rolled_back_transaction_after_record_leaves_no_partial_row() -> None:
     _require_configured_postgres()
     config = load_config()
     store: AuditStore = PsycopgAuditStore(config)
+    target = (
+        f"test-target-subject-{uuid.uuid4().hex}"  # rows can never be deleted: key on a unique id
+    )
 
     with connect_from_config(config) as conn:
         apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM audit_events")
-        conn.commit()
 
         with conn.cursor() as cur:
             store.record(
@@ -263,7 +277,7 @@ def test_a_rolled_back_transaction_after_record_leaves_no_partial_row() -> None:
                 actor_issuer="https://issuer.example.com/",
                 action="access_role.grant",
                 resource_type="principal",
-                resource_id="test-target-subject",
+                resource_id=target,
                 outcome="applied",
                 details={"access_role": "SystemAdmin"},
             )
@@ -273,7 +287,9 @@ def test_a_rolled_back_transaction_after_record_leaves_no_partial_row() -> None:
         conn.rollback()
 
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM audit_events")
+            cur.execute(
+                "SELECT count(*) FROM audit_log.audit_events WHERE resource_id = %s", (target,)
+            )
             record = cur.fetchone()
 
     assert record is not None

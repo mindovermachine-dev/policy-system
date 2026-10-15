@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
     from typing import Literal, LiteralString
 
+    from persistence.provisioned_postgres import Provisioned
     from psycopg.rows import TupleRow
 
     from ps_service.ingestion_runs import IngestionRunStore
@@ -61,7 +62,7 @@ def _config(*, host: str | None, port: int = 5432) -> ServiceConfig:
 
 @pytest.fixture(name="live_config")
 def _live_config_on_isolated_schema(  # pyright: ignore[reportUnusedFunction]  # pytest fixture used by name in the live tests and the store fixture
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, state_postgres_env: Provisioned
 ) -> Iterator[ServiceConfig]:
     """The real config, with every connection pinned to a throwaway schema with migrations applied.
 
@@ -267,7 +268,7 @@ def _audit_rows(
     with connect_from_config(config) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT actor_subject, actor_issuer, action, resource_type, outcome, details "
-            "FROM audit_events WHERE resource_id = %(run_id)s ORDER BY occurred_at, id",
+            "FROM audit_log.audit_events WHERE resource_id = %(run_id)s ORDER BY occurred_at, id",
             {"run_id": run_id},
         )
         return [
@@ -300,6 +301,7 @@ class _RaisingAuditStore(RecordingAuditStore):
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_create_run_writes_one_submit_audit_row_in_the_same_transaction(
     live_config: ServiceConfig,
 ) -> None:
@@ -328,6 +330,7 @@ def test_create_run_writes_one_submit_audit_row_in_the_same_transaction(
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_each_run_has_exactly_one_submit_and_one_complete_row(
     live_config: ServiceConfig,
 ) -> None:
@@ -344,6 +347,7 @@ def test_each_run_has_exactly_one_submit_and_one_complete_row(
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_complete_run_writes_one_complete_audit_row_and_a_lost_race_writes_none(
     live_config: ServiceConfig,
 ) -> None:
@@ -382,6 +386,7 @@ def test_complete_run_writes_one_complete_audit_row_and_a_lost_race_writes_none(
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_a_failed_completion_is_audited_as_failed_with_a_reason_code_and_no_error_text(
     live_config: ServiceConfig,
 ) -> None:
@@ -412,6 +417,7 @@ def test_a_failed_completion_is_audited_as_failed_with_a_reason_code_and_no_erro
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_an_audit_actor_override_is_the_actor_recorded_on_the_completion_row(
     live_config: ServiceConfig,
 ) -> None:
@@ -441,6 +447,7 @@ def test_an_audit_actor_override_is_the_actor_recorded_on_the_completion_row(
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_a_failing_submit_audit_write_rolls_back_the_run_row(
     live_config: ServiceConfig,
 ) -> None:
@@ -457,6 +464,7 @@ def test_a_failing_submit_audit_write_rolls_back_the_run_row(
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_a_failing_complete_audit_write_leaves_the_run_running(
     live_config: ServiceConfig,
 ) -> None:
@@ -478,6 +486,7 @@ def test_a_failing_complete_audit_write_leaves_the_run_running(
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_the_audit_rows_are_readable_through_the_list_audit_events_query_path(
     live_config: ServiceConfig,
 ) -> None:

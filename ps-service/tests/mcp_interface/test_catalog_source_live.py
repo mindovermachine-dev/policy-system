@@ -39,6 +39,8 @@ from ps_service.runtime_config import PsycopgRuntimeConfigStore
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from persistence.provisioned_postgres import Provisioned
+
 pytestmark = pytest.mark.postgres_live
 
 # Mirrors the source list `ps_service.main` passes to the runner at startup.
@@ -54,7 +56,7 @@ _ACTOR = ("live-test-actor", _ISSUER)
 
 
 @pytest.fixture
-def config() -> Iterator[ServiceConfig]:
+def config(state_postgres_env: Provisioned) -> Iterator[ServiceConfig]:
     """A migrated real config; the shared override row is reset again afterwards."""
     real = load_config()
     assert real.state_postgres_host is not None, (
@@ -117,7 +119,7 @@ def test_set_catalog_source_tool_writes_audit_row_readable_via_list_audit_events
 def _sentinel_audit_row_count(config: ServiceConfig, action: str) -> int:
     with connect_from_config(config) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT count(*) FROM audit_events WHERE resource_id = %(key)s "
+            "SELECT count(*) FROM audit_log.audit_events WHERE resource_id = %(key)s "
             "AND actor_subject = 'system:local-test-bypass' AND action = %(action)s",
             {"key": CATALOG_SOURCE_KEY, "action": action},
         )

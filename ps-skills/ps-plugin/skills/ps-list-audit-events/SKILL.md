@@ -26,6 +26,9 @@ independently combinable, and `details` narrows by the business subject of a
 row, and `cursor`/`page_size` control paging through
 however many pages the caller wants to walk.
 
+To check that the trail itself has not been altered, deleted from or truncated
+(rather than to read what it says), use `ps-verify-audit-log`.
+
 **Deliverable:** the matching `events` for the requested filters/page,
 newest-first, plus whether a further page remains (`next_cursor`) — or the
 specific named error state on failure.

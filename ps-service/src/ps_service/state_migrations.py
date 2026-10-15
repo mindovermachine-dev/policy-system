@@ -6,18 +6,21 @@ migrations in the same order, so the list is declared once, here, at composition
 `ps_service.persistence` deliberately never imports a component package.
 
 `ORDINARY_STATE_MIGRATION_SOURCES` are applied by the ordinary runner (as the `ps_state`
-application role). `GRAPH_GATEWAY_MIGRATION_SOURCE` is owner-protected and is applied only by
-the privileged runner with the admin credential. `passkey_signing` is intentionally absent: it
-lives in its own database.
+application role). `GRAPH_GATEWAY_MIGRATION_SOURCE` and `AUDIT_INTEGRITY_MIGRATION_SOURCE` are
+owner-protected and are applied only by the privileged runner with the admin credential, in that
+order (the audit migration moves the table that the graph log's first migration references).
+`passkey_signing` is intentionally absent: it lives in its own database.
 
 Attributes:
     ORDINARY_STATE_MIGRATION_SOURCES: The ordinary component migration sources, in apply order.
     GRAPH_GATEWAY_MIGRATION_SOURCE: The owner-protected graph log migration source.
+    AUDIT_INTEGRITY_MIGRATION_SOURCE: The owner-protected audit integrity migration source.
 """
 
 from __future__ import annotations
 
 from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
+from ps_service.audit import PRIVILEGED_MIGRATIONS_DIR as AUDIT_PRIVILEGED_MIGRATIONS_DIR
 from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.graph_gateway import MIGRATIONS_DIR as GRAPH_GATEWAY_MIGRATIONS_DIR
 from ps_service.ingestion_runs import MIGRATIONS_DIR as INGESTION_RUNS_MIGRATIONS_DIR
@@ -34,3 +37,8 @@ ORDINARY_STATE_MIGRATION_SOURCES: tuple[MigrationSource, ...] = (
 
 GRAPH_GATEWAY_MIGRATION_SOURCE = MigrationSource("graph_gateway", GRAPH_GATEWAY_MIGRATIONS_DIR)
 """The owner-protected graph log migration (privileged runner only)."""
+
+AUDIT_INTEGRITY_MIGRATION_SOURCE = MigrationSource(
+    "audit_integrity", AUDIT_PRIVILEGED_MIGRATIONS_DIR
+)
+"""The owner-protected audit integrity migration (privileged runner only, after graph_gateway)."""

@@ -269,8 +269,8 @@ ps-invite-user skill."_
 Show me the most recent access-role changes.
 ```
 
-The `ps-list-audit-events` skill reads PS Service's shared `audit_events`
-trail through the same MCP connector, filterable by actor, resource, action,
+The `ps-list-audit-events` skill reads PS Service's shared audit
+trail (`audit_log.audit_events`) through the same MCP connector, filterable by actor, resource, action,
 or time range, and paginated newest-first. It is a plain read (no
 confirmation needed) but requires `SystemAdmin` or above; see
 [Role System](#role-system).
@@ -303,6 +303,27 @@ leaves none.
 
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-list-audit-events skill."_
+
+#### Verify the audit log
+
+```text
+Check that the audit log has not been tampered with.
+```
+
+The `ps-verify-audit-log` skill calls the `verify-audit-log` tool, which takes
+no arguments. It recomputes the hash chain that links every audit row to the
+one before it and compares the last row with the recorded head. It is a plain
+read that writes nothing, and it requires `SystemOwner` or `SystemAdmin` and a
+real authenticated session. An intact result reports `rows_checked` and
+`head_chain_seq`. A break is reported with its kind (`row_hash_mismatch`,
+`prev_hash_mismatch`, `sequence_gap` or `head_mismatch`) and, except for
+`head_mismatch`, the row's `chain_seq`, id and time; treat it as a security
+finding and tell your operator. The check is tamper-evident, not tamper-proof:
+a database superuser who rewrites the whole chain and its head consistently is
+not detected. For the operator's side, see the
+[Audit log integrity](./operations-guide.md#audit-log-integrity) section of the
+Operations Guide. If the skill does not engage on its own, ask for it by name:
+_"Use the ps-verify-audit-log skill."_
 
 ### Clean up duplicate graph nodes
 
@@ -455,7 +476,7 @@ Beyond that baseline, PS Service enforces four additional roles:
 | Role | How it's granted | What it currently gates |
 | --- | --- | --- |
 | `SystemOwner` | Automatically, once — the first authenticated caller whose identity (`sub` + `iss`) matches the one the operator configured at deploy time (`psService.authzBootstrapOwner`; the deploy scripts set it to the owner's email), not simply whoever calls first: any other caller who reaches an empty instance first is granted nothing. Never grantable afterward; exactly one exists for the life of a real deployment. See [SystemOwner bootstrap](./installation-guide.md#systemowner-bootstrap) for how an operator claims it. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
-| `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, and `list-audit-events`. |
+| `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, `list-audit-events`, and `verify-audit-log`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
 | `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (either `source`), and the MCP tools `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |

@@ -120,7 +120,7 @@ def _audit_rows(
     with connect_from_config(config) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT actor_subject, actor_issuer, action, resource_type, outcome, details "
-            "FROM audit_events WHERE resource_id = %(key)s ORDER BY occurred_at, id",
+            "FROM audit_log.audit_events WHERE resource_id = %(key)s ORDER BY occurred_at, id",
             {"key": key},
         )
         rows: list[tuple[str, str, str, str, str, dict[str, object]]] = []
@@ -148,7 +148,7 @@ class _RaisingAuditStore(RecordingAuditStore):
         raise psycopg.errors.OperationalError("simulated audit_events insert failure")
 
 
-pytestmark = pytest.mark.postgres_live
+pytestmark = [pytest.mark.postgres_live, pytest.mark.usefixtures("state_postgres_env")]
 
 
 def test_set_then_get_round_trips_value() -> None:

@@ -733,6 +733,13 @@
         "type": "object"
       },
       "name": "update-standard-draft"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "verify-audit-log"
     }
   ],
   "openapi": {

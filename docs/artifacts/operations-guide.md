@@ -15,6 +15,7 @@
 - [Production operations](#production-operations)
   - [Updating to the latest version](#updating-to-the-latest-version-1)
   - [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log)
+  - [Audit log integrity](#audit-log-integrity)
   - [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph)
   - [Owner recovery and the Authentik admin UI](#owner-recovery-and-the-authentik-admin-ui)
   - [Rotate the API key later](#rotate-the-api-key-later)
@@ -274,6 +275,19 @@ Job, not by the script:
    together). The column is additive: the new `ps-service` pod refuses to start until the Job has
    recorded the file, and rolling back to the previous image leaves the column in place and
    harmless.
+   The Job applies the privileged migrations in a fixed order: `graph_gateway` first, then
+   `audit_integrity` (`0001_audit_log_insert_only_hash_chain.sql`). The order matters:
+   `graph_gateway/0001` creates a foreign key from `graph_log.groups` to `audit_events`, so the
+   table must still exist under its old name when that file runs; `audit_integrity` then moves it
+   into the `audit_log` schema and the reference follows the table. `audit_integrity` runs in a
+   single transaction: it moves `audit_events` into `audit_log`, adds the hash-chain columns,
+   chains every row written before this release (in `occurred_at, id` order), installs the
+   insert-only triggers and the integrity functions, and sets the final privileges. If any
+   statement fails, none of it takes effect. It holds an `ACCESS EXCLUSIVE` lock on `audit_events`
+   until it commits, so audit reads and writes wait for that time (a 100,000-row history took
+   about 5 seconds in testing; a long history takes proportionally longer). It gives up after 30
+   seconds if it cannot get the lock, fails with a named error and leaves the audit table where it
+   was; the Job then retries.
 2. [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) and `scripts/deploy-ps-prod.sh` pass
    `--wait --wait-for-jobs`, so a Job that exhausts its retries fails the upgrade with a Helm
    error naming the Job; it does not hang. An upgrade run by hand must pass the same two flags
@@ -337,11 +351,79 @@ Service refuses to start.
 `ps_state_graph_owner` and the grants. The [Restore](#restore) brings them back as they were, and
 the provisioning Job runs again on the restored data with the admin credential.
 
-**What this does not protect.** The `ps_state` role still owns the `ps_state` database (and the
-`public` schema, including `audit_events`). It can therefore `DROP DATABASE` from another
-connection or drop `public` objects; the log tables are protected from alteration by that role,
-not the database containing them. Making `audit_events` insert-only is #151, and moving database
-ownership is outside this change. Do not describe the log as undroppable.
+**What this does not protect.** The `ps_state` role still owns the `ps_state` database and the
+`public` schema. It can therefore `DROP DATABASE` from another connection or drop `public`
+objects; the `graph_log` and `audit_log` tables are protected from alteration by that role, not
+the database containing them. `audit_events` now lives in the `audit_log` schema, owned by the
+same non-login owner role as `graph_log`; `ps_state` can only `SELECT` and `INSERT` there and
+cannot update, delete or truncate a row, so those statements fail with a permission error. The
+audit trail is tamper-evident, not tamper-proof: a database superuser (the `postgres_admin`
+account, or anyone who can reach the owner role or the database owner) can alter rows, and a
+consistent rewrite of the whole chain and its head is not detected, because there is no key and no
+external anchor. Moving database ownership is outside this change. Do not describe the log as
+undroppable, and do not describe the audit trail as tamper-proof. See
+[Audit log integrity](#audit-log-integrity).
+
+**Rollback and rolling updates.** Moving `audit_events` is not reversible by the previous image.
+That image reads and writes `public.audit_events` and has no knowledge of `audit_log`; there is no
+compatibility view and no `search_path` bridge (both were considered and rejected, because a
+view or a role-level `search_path` that lets the application role resolve the old name would
+weaken the very protection this change adds). After the Job has run, an old `ps-service` pod
+(during a rolling update, or after `helm rollback`) fails every audit read and write with
+`relation "audit_events" does not exist`, and the actions that record an audit row fail with it.
+Roll forward instead. If you must roll back the image, restore the pre-upgrade [Backup](#backup)
+(see [Restore](#restore)). Take a backup before upgrading.
+
+**Future audit migrations.** Any ordinary audit migration added later must schema-qualify the
+table as `audit_log.audit_events`; an unqualified name no longer finds it.
+
+### Audit log integrity
+
+**Applies to:** every release that includes the `audit_integrity` migration.
+
+Each row in `audit_log.audit_events` carries a sequence number (`chain_seq`), the hash of the
+previous row (`prev_row_hash`) and its own hash (`row_hash`), computed by the database in the same
+transaction as the insert; the newest link is also recorded in a one-row head table
+(`audit_log.audit_chain_head`). Triggers, enabled even in replica mode, reject `UPDATE`, `DELETE`
+and `TRUNCATE` for the owner role as well. Any writer, including a raw `INSERT` as `ps_state`, is
+chained.
+
+**What it proves.** Recomputing the chain shows whether any recorded row was changed, deleted,
+reordered or truncated since it was written. It is tamper-evident only. It does not stop a
+database superuser (`postgres_admin`, or anyone with superuser or owner-role access, or full
+compromise of the database) from altering the data, and a superuser who rewrites the entire
+chain and the head consistently is not detected. The hash has no secret key and there is no
+external anchor. Superuser and full-database compromise are out of scope.
+
+**Run the check.** Call the MCP tool `verify-audit-log` (it takes no arguments), or ask the
+`ps-verify-audit-log` skill in the Policy System Plugin. The caller must be a `SystemOwner` or
+`SystemAdmin` with a real authenticated session; the local-test bypass is refused. The check is
+read-only, runs in one consistent snapshot and is safe while the service is writing. It reads
+every row, so run it off-peak on a very large trail.
+
+**Read the result.**
+
+| Result | Meaning |
+| --- | --- |
+| `intact: true`, `first_break: null`, with `rows_checked` and `head_chain_seq` | Every row recomputes to its stored hash, the sequence has no gap, and the last row matches the recorded head. |
+| `intact: false`, `first_break.kind = row_hash_mismatch` | The content or time of the row at `chain_seq` (with its `id` and `occurred_at`) was altered. `occurred_at` is null when the time was rewritten to a value with no timestamp. |
+| `prev_hash_mismatch` | The link to the previous row at `chain_seq` was rewritten. |
+| `sequence_gap` | A row is missing; `chain_seq` is the first row after the gap (or the trail does not start at 1). |
+| `head_mismatch` | Every present row verifies but the head names a different last row: the newest rows were removed. There is no row id or time. |
+
+Only the lowest-numbered break is reported; later rows may also be affected. A failed check
+(`authorization_store_unavailable`, `access_denied` or an unreachable service) is not a verdict
+on the data.
+
+**If the check reports a break.** Treat it as a security incident. Preserve the database and its
+logs as they are and do not run anything that writes to the audit table. Compare the row counts
+with the last [Backup](#backup) using `scripts/verify-backup-restore.sh counts`
+(`audit_events` is counted from `audit_log.audit_events`), and restore an earlier backup to
+compare the rows around `chain_seq`.
+
+**Backup and restore.** The physical [Backup](#backup) includes the `audit_log` schema, the owner
+role and the chain, so a [Restore](#restore) brings the trail back with its hashes. Run
+`verify-audit-log` after a restore.
 
 ### Graph replay at startup and a gated graph
 
@@ -576,12 +658,12 @@ PVC) hosting two databases, each with its own role and its own credentials Secre
 
 | Database | Role | Holds | Password Secret (key) |
 | --- | --- | --- | --- |
-| `ps_state` | `ps_state` | `access_role_assignments`, `audit_events` (the permanent, insert-only audit trail), `runtime_config` (runtime-mutable settings, including the curated-catalog source override), `ingestion_runs` (status and result of each MCP-submitted ingestion run), the `graph_log` schema (the insert-only graph mutation log: `groups`, `entries`, `payloads`, `checkpoints`, `applied_markers`, owned by the non-login role `ps_state_graph_owner`), and the `ps_schema_migrations` tracking table (the `graph_gateway` component is tracked there too, but applied by the admin-credential provisioning Job, not by PS Service) | `policy-system-ps-postgres-state-credentials` (`PS_STATE_POSTGRES_PASSWORD`) |
+| `ps_state` | `ps_state` | `access_role_assignments`, `runtime_config` (runtime-mutable settings, including the curated-catalog source override), `ingestion_runs` (status and result of each MCP-submitted ingestion run), the `graph_log` schema (the insert-only graph mutation log: `groups`, `entries`, `payloads`, `checkpoints`, `applied_markers`, owned by the non-login role `ps_state_graph_owner`), the `audit_log` schema (`audit_events`, the permanent insert-only audit trail with its hash chain, and `audit_chain_head`; also owned by `ps_state_graph_owner`, with `ps_state` limited to `SELECT` and `INSERT`), and the `ps_schema_migrations` tracking table (the `graph_gateway` and `audit_integrity` components are tracked there too, but applied by the admin-credential provisioning Job, not by PS Service) | `policy-system-ps-postgres-state-credentials` (`PS_STATE_POSTGRES_PASSWORD`) |
 | `ps_signing` | `ps_signing` | Passkey Signing data (`pending_approvals`, `signing_credentials`) and its own `schema_migrations` tracking table | `policy-system-ps-postgres-signing-credentials` (`PS_PASSKEYSIGNING_POSTGRES_PASSWORD`) |
 
 The provisioning Job creates the public `ps_state` tables, executing as `ps_state` (`SET ROLE`),
 so `ps_state` owns them; PS Service at startup applies only migrations newer than the Job's
-image. The `graph_log` tables are owned by `ps_state_graph_owner` instead.
+image. The `graph_log` and `audit_log` tables are owned by `ps_state_graph_owner` instead.
 
 PS Service reads its connection settings from `PS_STATE_POSTGRES_*` and
 `PS_PASSKEYSIGNING_POSTGRES_*`, which the chart wires into the pod. Each role can connect only
@@ -615,7 +697,7 @@ against the live database.
 
 `scripts/verify-backup-restore.sh backup [--out-dir DIR]` runs the same command, writes
 `ps-postgres-<UTC timestamp>.tar` into `DIR`, performs the checks below, prints the file path
-and logs the row counts of `audit_events`, `access_role_assignments` and `graph_log.entries`
+and logs the row counts of `audit_events` (read from `audit_log.audit_events`), `access_role_assignments` and `graph_log.entries`
 before and after. It refuses a context that is not `kind-*` unless `--allow-context <ctx>`
 names it.
 

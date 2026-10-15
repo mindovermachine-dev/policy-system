@@ -27,8 +27,11 @@ import pytest
 from ingestion.live_native import live_baseline_graphs, live_native_graphs
 from persistence.provisioned_postgres import (  # pytest discovers these by name
     fresh_provisioned,
+    fresh_state_postgres_env,
     provisioned,
     provisioned_graph_log,
+    provisioned_state,
+    state_postgres_env,
 )
 
 from ps_service.dependency_health import (
@@ -110,10 +113,13 @@ def read_lines():
 
 __all__ = [
     "fresh_provisioned",
+    "fresh_state_postgres_env",
     "live_baseline_graphs",
     "live_native_graphs",
     "provisioned",
     "provisioned_graph_log",
+    "provisioned_state",
+    "state_postgres_env",
 ]
 
 

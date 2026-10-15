@@ -9,7 +9,10 @@ from __future__ import annotations
 from typing import Literal
 
 MissingMigrationReason = Literal[
-    "migration_not_recorded", "table_missing", "state_role_controls_table"
+    "migration_not_recorded",
+    "table_missing",
+    "state_role_controls_table",
+    "state_role_controls_schema",
 ]
 """Why the privileged migration check failed (a fixed vocabulary, safe to log)."""
 
@@ -64,15 +67,15 @@ class StatePostgresProvisioningError(Exception):
     """
 
 
-class GraphLogMigrationMissingError(StatePostgresProvisioningError):
-    """The privileged `graph_gateway` migration is not in place, so startup must fail closed.
+class PrivilegedMigrationMissingError(StatePostgresProvisioningError):
+    """An owner-protected migration (graph log or audit integrity) is not in place.
 
-    Raised by
+    Startup must fail closed. Raised by
     :func:`ps_service.persistence.privileged_migration_runner.verify_privileged_migrations_applied`
-    when the migration is not recorded, a table it creates is missing, or the application role
-    owns (or is a member of the owner of) an immutable table. The message is fixed text naming
-    the migration as `<component>/<filename>` and the remedy; it never carries a host, SQL or
-    driver text.
+    when a privileged migration is not recorded, a table or schema it creates is missing, or the
+    application role owns (or is a member of the owner of) an immutable table or its schema. The
+    message is fixed text naming the migration as `<component>/<filename>` and the remedy (the
+    operator-run provisioning command); it never carries a host, SQL or driver text.
 
     Attributes:
         missing_migration: The migration as `<component>/<filename>`.
@@ -89,7 +92,8 @@ class GraphLogMigrationMissingError(StatePostgresProvisioningError):
         """
         super().__init__(
             f"privileged migration {missing_migration} is not in place ({reason}); run "
-            "`python -m ps_service.graph_gateway.provision` with the admin credential"
+            "`python -m ps_service.graph_gateway.provision` with the admin credential, which "
+            "applies every owner-protected migration"
         )
         self.missing_migration = missing_migration
         self.reason: MissingMigrationReason = reason

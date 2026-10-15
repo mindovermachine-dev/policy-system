@@ -58,7 +58,7 @@ def _record_audit_row(audit: PsycopgAuditStore, cur: psycopg.Cursor[TupleRow]) -
 def _audit_row_exists(prov: Provisioned, audit_event_id: str) -> bool:
     with prov.superuser_connect(prov.state_db) as conn:
         row = conn.execute(
-            "SELECT count(*) FROM audit_events WHERE id = %s", (audit_event_id,)
+            "SELECT count(*) FROM audit_log.audit_events WHERE id = %s", (audit_event_id,)
         ).fetchone()
     assert row is not None
     return row[0] == 1
@@ -135,7 +135,7 @@ def test_audit_event_id_must_reference_an_existing_audit_row(
     assert store.last_position(graph) == 0
 
 
-def test_audit_row_referenced_by_a_group_cannot_be_deleted_by_state_role(
+def test_state_role_cannot_delete_an_audit_row_whether_or_not_a_group_anchors_it(
     provisioned_graph_log: Provisioned,
 ) -> None:
     prov = provisioned_graph_log
@@ -147,12 +147,27 @@ def test_audit_row_referenced_by_a_group_cannot_be_deleted_by_state_role(
         unanchored_id = _record_audit_row(audit, cur)
 
     with prov.as_state() as state:
-        state.execute("DELETE FROM audit_events WHERE id = %s", (unanchored_id,))
-        with pytest.raises(psycopg.errors.ForeignKeyViolation):
-            state.execute("DELETE FROM audit_events WHERE id = %s", (anchored_id,))
+        for audit_event_id in (unanchored_id, anchored_id):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                state.execute("DELETE FROM audit_log.audit_events WHERE id = %s", (audit_event_id,))
 
     assert _audit_row_exists(prov, anchored_id)
-    assert not _audit_row_exists(prov, unanchored_id)
+    assert _audit_row_exists(prov, unanchored_id)
+
+
+def test_a_group_row_inserted_by_the_state_role_must_reference_an_existing_audit_row(
+    provisioned_graph_log: Provisioned,
+) -> None:
+    """The link is a real foreign key into the moved `audit_log.audit_events` table."""
+    with (
+        provisioned_graph_log.as_state() as state,
+        pytest.raises(psycopg.errors.ForeignKeyViolation),
+    ):
+        state.execute(
+            "INSERT INTO graph_log.groups (graph, first_position, last_position, audit_event_id) "
+            "VALUES (%s, 1, 1, gen_random_uuid())",
+            (_graph(),),
+        )
 
 
 def test_read_groups_by_unknown_audit_event_id_returns_nothing(

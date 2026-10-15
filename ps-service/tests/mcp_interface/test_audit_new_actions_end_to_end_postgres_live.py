@@ -11,13 +11,11 @@ Could not be run in the authoring environment
 from __future__ import annotations
 
 import json
-import uuid
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
 
-from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.audit import AuditQueryFilters, PsycopgAuditStore
 from ps_service.authz.service import list_audit_events
 from ps_service.config import ServiceConfig, load_config
@@ -27,11 +25,9 @@ from ps_service.ingestion_runs.audit_actions import (
     submission_audit_entry,
 )
 from ps_service.invitations.audit_actions import USER_INVITE_ACTION
-from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-    from typing import LiteralString
+    from persistence.provisioned_postgres import Provisioned
 
 _OWNER = ("owner-sub", "https://issuer.example.com/")
 _ACTOR = ("actor-sub", "https://issuer.example.com/")
@@ -42,23 +38,11 @@ _MARKERS = ("Traceback", "/Users/", "/app/", "Bearer", "itoken")
 
 
 @pytest.fixture(name="live_config")
-def _live_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[ServiceConfig]:  # pyright: ignore[reportUnusedFunction]  # used by name
+def _live_config(fresh_state_postgres_env: Provisioned) -> ServiceConfig:  # pyright: ignore[reportUnusedFunction]  # used by name
+    """The real config, aimed at a brand-new cluster whose `audit_log.audit_events` is empty."""
     config = load_config()
-    assert config.state_postgres_host is not None, (
-        "postgres_live requires PS_STATE_POSTGRES_HOST to be set"
-    )
-    schema = f"audit_e2e_{uuid.uuid4().hex}"
-    with connect_from_config(config) as conn:
-        conn.execute(cast("LiteralString", f'CREATE SCHEMA "{schema}"'))
-    monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")
-    with connect_from_config(config) as conn:
-        apply_pending_migrations(conn, sources=[MigrationSource("audit", AUDIT_MIGRATIONS_DIR)])
-    try:
-        yield config
-    finally:
-        monkeypatch.delenv("PGOPTIONS")
-        with connect_from_config(config) as conn:
-            conn.execute(cast("LiteralString", f'DROP SCHEMA "{schema}" CASCADE'))
+    assert config.state_postgres_host == fresh_state_postgres_env.host
+    return config
 
 
 def _write(

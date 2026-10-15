@@ -32,6 +32,7 @@ from ps_service.api.error_handlers import (
 from ps_service.api.errors import RequestBodyTooLargeError
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.routes import build_api_router
+from ps_service.audit import AUDIT_LOG_SCHEMAS, AUDIT_LOG_TABLES
 from ps_service.auth.middleware import RestAuthMiddleware
 from ps_service.auth.protected_resource import (
     protected_resource_metadata,
@@ -75,7 +76,7 @@ from ps_service.passkey_signing.store import (
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
 )
-from ps_service.persistence import GraphLogMigrationMissingError
+from ps_service.persistence import PrivilegedMigrationMissingError
 from ps_service.persistence import (
     apply_pending_migrations as apply_state_migrations,
 )
@@ -89,6 +90,7 @@ from ps_service.persistence.privileged_migration_runner import (
     verify_privileged_migrations_applied,
 )
 from ps_service.state_migrations import (
+    AUDIT_INTEGRITY_MIGRATION_SOURCE,
     GRAPH_GATEWAY_MIGRATION_SOURCE,
     ORDINARY_STATE_MIGRATION_SOURCES,
 )
@@ -395,18 +397,19 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
     infrastructure whose failure only degrades one gated merge path.
 
     After the ordinary migrations it verifies, read-only and with the same `ps_state`
-    credentials, that the privileged `graph_gateway` migration (the owner-protected graph log
-    tables) was applied by `python -m ps_service.graph_gateway.provision`: the service never
-    creates those tables itself, so a missing one is also FATAL, with a failure entry that names
-    the missing migration.
+    credentials, that the privileged `graph_gateway` and `audit_integrity` migrations (the
+    owner-protected graph log tables and the insert-only audit table) were applied by
+    `python -m ps_service.graph_gateway.provision`: the service never creates those tables
+    itself, so a missing migration, table or schema, or one the application role controls, is
+    also FATAL, with a failure entry that names the missing migration.
 
     Args:
         config: The resolved service configuration; the PS state Postgres settings are read.
 
     Raises:
-        Exception: Whatever the connection, a migration or the graph log verification raised,
-            including `GraphLogMigrationMissingError` when a privileged table is missing; the
-            original exception is re-raised after logging.
+        Exception: Whatever the connection, a migration or the privileged migration
+            verification raised, including `PrivilegedMigrationMissingError` when a privileged
+            migration is missing; the original exception is re-raised after logging.
 
     Side Effects:
         Opens a connection to PS state Postgres, applies pending ordinary migrations, and on
@@ -420,7 +423,7 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
                 conn,
                 sources=ORDINARY_STATE_MIGRATION_SOURCES,
             )
-            _verify_graph_gateway_migrations_at_startup(conn)
+            _verify_privileged_migrations_at_startup(conn)
     except Exception as exc:
         emit_log_entry(
             component="entrypoint",
@@ -431,20 +434,30 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
         raise
 
 
-def _verify_graph_gateway_migrations_at_startup(conn: psycopg.Connection[TupleRow]) -> None:
-    """Fail startup unless the privileged `graph_gateway` migration is in place.
+def _verify_privileged_migrations_at_startup(conn: psycopg.Connection[TupleRow]) -> None:
+    """Fail startup unless every owner-protected migration is in place.
+
+    Checks the `graph_gateway` migration (graph log tables) and then the `audit_integrity`
+    migration (the insert-only, hash-chained audit table and its schema). One verification per
+    source, so a failure names the migration that is actually missing.
 
     Args:
         conn: An open PS state Postgres connection used for read-only checks.
 
     Raises:
-        GraphLogMigrationMissingError: If the `graph_gateway` migration or one of the graph log
-            tables is missing.
+        PrivilegedMigrationMissingError: If a privileged migration is not recorded, one of its
+            tables or schemas is missing, or the application role controls a table or schema.
     """
     verify_privileged_migrations_applied(
         conn,
         sources=[GRAPH_GATEWAY_MIGRATION_SOURCE],
         required_tables=GRAPH_LOG_TABLES,
+    )
+    verify_privileged_migrations_applied(
+        conn,
+        sources=[AUDIT_INTEGRITY_MIGRATION_SOURCE],
+        required_tables=AUDIT_LOG_TABLES,
+        required_schemas=AUDIT_LOG_SCHEMAS,
     )
 
 
@@ -724,11 +737,11 @@ def startup_failure_log_extra(exc: Exception) -> dict[str, object]:
 
     Returns:
         A mapping with `dependency` (the state Postgres name) and `reason` (the exception class
-        name); for a `GraphLogMigrationMissingError` also `missing_migration` and
+        name); for a `PrivilegedMigrationMissingError` also `missing_migration` and
         `missing_reason`.
     """
     extra: dict[str, object] = {"dependency": STATE_POSTGRES, "reason": type(exc).__name__}
-    if isinstance(exc, GraphLogMigrationMissingError):
+    if isinstance(exc, PrivilegedMigrationMissingError):
         extra["missing_migration"] = exc.missing_migration
         extra["missing_reason"] = exc.reason
     return extra

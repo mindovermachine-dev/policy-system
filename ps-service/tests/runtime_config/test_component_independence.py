@@ -8,6 +8,7 @@ IdP-specific reference to the components that must survive an IdP swap.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import ps_service.audit as audit_package
@@ -22,8 +23,10 @@ _ALLOWED_AUDIT_MODULES = frozenset(
         "ps_service.audit.store",  # only the public `AuditStore`/`PsycopgAuditStore`, see below
     }
 )
-_PUBLIC_AUDIT_STORE_NAMES = frozenset({"AuditStore", "PsycopgAuditStore"})
+_PUBLIC_AUDIT_STORE_NAMES = frozenset({"AuditChainVerifier", "AuditStore", "PsycopgAuditStore"})
 _IDP_TERMS = ("authentik", "invitations")
+_RAW_AUDIT_INSERT = re.compile(r"INSERT\s+INTO\s+(audit_log\.)?audit_events\b", re.IGNORECASE)
+"""A raw write to the audit table, qualified or not (the table lives in `audit_log`)."""
 
 
 def _sources(package: object) -> list[Path]:
@@ -60,7 +63,7 @@ def test_authz_and_runtime_config_write_audit_only_via_audit_store_record() -> N
     for package in (authz_package, runtime_config_package):
         for source in _python_sources(package):
             text = source.read_text(encoding="utf-8")
-            if "INSERT INTO audit_events" in text:
+            if _RAW_AUDIT_INSERT.search(text):
                 offenders.append(f"{source.name}: writes audit_events directly")
             for module, name in _audit_imports(source):
                 if module not in _ALLOWED_AUDIT_MODULES:
@@ -96,3 +99,9 @@ def test_audit_authz_runtime_config_reference_no_idp_specific_names() -> None:
     ]
 
     assert offenders == []
+
+
+def test_raw_audit_insert_pattern_catches_both_spellings_of_the_table() -> None:
+    assert _RAW_AUDIT_INSERT.search("INSERT INTO audit_events (id)")
+    assert _RAW_AUDIT_INSERT.search("insert   into audit_log.audit_events (id)")
+    assert not _RAW_AUDIT_INSERT.search("INSERT INTO audit_events_archive (id)")

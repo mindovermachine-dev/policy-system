@@ -46,6 +46,8 @@ _GATEWAY_FILES = [
     ("graph_gateway", "0001_graph_mutation_log.sql"),
     ("graph_gateway", "0002_group_swap_set.sql"),
 ]
+_AUDIT_INTEGRITY_FILES = [("audit_integrity", "0001_audit_log_insert_only_hash_chain.sql")]
+_EXPECTED_TRACKING_ROWS = sorted([*_ORDINARY_FILES, *_GATEWAY_FILES, *_AUDIT_INTEGRITY_FILES])
 _GRAPH_LOG_TABLES = ["applied_markers", "checkpoints", "entries", "groups", "payloads"]
 ADMIN_PASSWORD = "admin-pw-" + uuid.uuid4().hex
 
@@ -93,9 +95,11 @@ def test_cli_on_empty_ps_state_applies_ordinary_then_graph_gateway_and_exits_zer
 
     captured = capsys.readouterr()
     assert exit_code == 0, captured.err
-    assert _tracking_rows(fresh_provisioned) == sorted([*_ORDINARY_FILES, *_GATEWAY_FILES])
+    assert _tracking_rows(fresh_provisioned) == sorted(
+        [*_ORDINARY_FILES, *_GATEWAY_FILES, *_AUDIT_INTEGRITY_FILES]
+    )
     assert _graph_log_tables(fresh_provisioned) == _GRAPH_LOG_TABLES
-    assert "applied 5 ordinary + 2 graph_gateway migration(s)" in captured.out
+    assert "applied 5 ordinary + 2 graph_gateway + 1 audit_integrity migration(s)" in captured.out
     assert ADMIN_PASSWORD not in captured.out + captured.err
 
 
@@ -110,7 +114,7 @@ def test_cli_second_run_applies_nothing_and_exits_zero(
 
     captured = capsys.readouterr()
     assert exit_code == 0, captured.err
-    assert "applied 0 ordinary + 0 graph_gateway migration(s)" in captured.out
+    assert "applied 0 ordinary + 0 graph_gateway + 0 audit_integrity migration(s)" in captured.out
     assert "none (already up to date)" in captured.out
     assert _tracking_rows(fresh_provisioned) == rows_before
 
@@ -123,6 +127,7 @@ def test_provision_returns_component_qualified_ordinary_names_and_bare_graph_gat
     assert result == ProvisionResult(
         ordinary_applied=[f"{component}/{name}" for component, name in _ORDINARY_FILES],
         graph_gateway_applied=[name for _, name in _GATEWAY_FILES],
+        audit_integrity_applied=[name for _, name in _AUDIT_INTEGRITY_FILES],
     )
 
 
@@ -155,28 +160,32 @@ def test_cli_on_already_migrated_database_keeps_rows_and_applies_only_missing(
 
     assert result.ordinary_applied == ["audit/0002_audit_events_details_indexes.sql"]
     assert result.graph_gateway_applied == [name for _, name in _GATEWAY_FILES]
+    assert result.audit_integrity_applied == [name for _, name in _AUDIT_INTEGRITY_FILES]
     with fresh_provisioned.as_state() as conn:
         assert (
             conn.execute(
                 "SELECT actor_subject, actor_issuer, action, resource_type, resource_id, outcome "
-                "FROM audit_events"
+                "FROM audit_log.audit_events"
             ).fetchall()
             == row_before
         )
         present = {
             str(row[0])
             for row in conn.execute(
-                "SELECT indexname FROM pg_indexes WHERE tablename = 'audit_events'"
+                "SELECT indexname FROM pg_indexes "
+                "WHERE schemaname = 'audit_log' AND tablename = 'audit_events'"
             ).fetchall()
         }
         assert set(index_names) <= present
         assert (
             scalar(
                 conn,
-                "SELECT tableowner FROM pg_tables WHERE tablename = 'audit_events'",
+                "SELECT tableowner FROM pg_tables "
+                "WHERE schemaname = 'audit_log' AND tablename = 'audit_events'",
             )
-            == fresh_provisioned.state_user
+            == fresh_provisioned.owner_role
         )
+        assert scalar(conn, "SELECT to_regclass('public.audit_events') IS NULL") is True
     capsys.readouterr()
 
 
@@ -203,6 +212,15 @@ def _ownership_snapshot(prov: Provisioned) -> list[tuple[str, str, str, str, str
     ]
 
 
+def _without_audit_events_objects(
+    snapshot: list[tuple[str, str, str, str, str]],
+) -> list[tuple[str, str, str, str, str]]:
+    """Drop `audit_events` and its indexes (moved out of `public`) from a snapshot."""
+    return [
+        row for row in snapshot if not (row[0] == "relation" and row[1].startswith("audit_events"))
+    ]
+
+
 def test_public_objects_are_owned_by_ps_state_identically_to_service_startup(
     fresh_provisioned: Provisioned,
 ) -> None:
@@ -216,7 +234,11 @@ def test_public_objects_are_owned_by_ps_state_identically_to_service_startup(
     finally:
         drop_cluster_objects(startup_names)
 
-    assert via_cli == via_startup
+    # Provisioning also moves `audit_events` (with its indexes) into the owner-protected
+    # `audit_log` schema; every other public object is exactly what service startup makes.
+    assert via_cli == _without_audit_events_objects(via_startup)
+    assert any(row[1].startswith("audit_events") for row in via_startup)
+    assert not any(row[1].startswith("audit_events") for row in via_cli)
     assert via_cli
     assert all(owner == "APP_ROLE" for kind, _, owner, _, _ in via_cli if kind != "schema")
 
@@ -287,4 +309,6 @@ def test_service_style_and_cli_style_runs_on_one_empty_database_both_succeed(
         thread.join(timeout=120)
 
     assert failures == []
-    assert _tracking_rows(racing_cluster) == sorted([*_ORDINARY_FILES, *_GATEWAY_FILES])
+    assert _tracking_rows(racing_cluster) == sorted(
+        [*_ORDINARY_FILES, *_GATEWAY_FILES, *_AUDIT_INTEGRITY_FILES]
+    )

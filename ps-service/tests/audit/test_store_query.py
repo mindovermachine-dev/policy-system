@@ -84,6 +84,7 @@ def _insert_event(
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_query_returns_matching_events_newest_first_and_paginates_without_gaps_or_dupes() -> None:
     """Filters combine correctly, results are newest first, and a `page_size`
     smaller than the result set produces a `next_cursor` that advances through every
@@ -180,6 +181,7 @@ def test_query_returns_matching_events_newest_first_and_paginates_without_gaps_o
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_query_time_range_filter_excludes_events_outside_the_bound() -> None:
     """`occurred_from`/`occurred_to` narrow to the events in that window."""
     _require_configured_postgres()
@@ -230,6 +232,7 @@ def test_query_time_range_filter_excludes_events_outside_the_bound() -> None:
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_query_connection_failure_leaks_no_host_or_port_or_driver_detail() -> None:
     """A genuine connection failure surfaces as `AuditPostgresUnavailableError`
     with a fixed, generic message -- never one containing the configured host/port,
@@ -281,6 +284,7 @@ def _seed_submit(store: AuditStore, *, run_id: str, celex: str, actor: str) -> N
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_query_details_celex_returns_only_rows_whose_details_celex_matches() -> None:
     _require_configured_postgres()
     store, _config = _store_with_migrations()
@@ -298,6 +302,7 @@ def test_query_details_celex_returns_only_rows_whose_details_celex_matches() -> 
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_query_details_filter_combines_with_action_and_time_range_using_and() -> None:
     _require_configured_postgres()
     store, _config = _store_with_migrations()
@@ -324,6 +329,7 @@ def test_query_details_filter_combines_with_action_and_time_range_using_and() ->
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_query_details_filter_value_is_parameterized_not_interpolated() -> None:
     _require_configured_postgres()
     store, _config = _store_with_migrations()
@@ -340,6 +346,7 @@ def test_query_details_filter_value_is_parameterized_not_interpolated() -> None:
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_query_details_filter_uses_the_expression_index() -> None:
     _require_configured_postgres()
     config = load_config()
@@ -347,7 +354,9 @@ def test_query_details_filter_uses_the_expression_index() -> None:
         apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
         with conn.cursor() as cur:
             cur.execute("SET enable_seqscan = off")
-            cur.execute("EXPLAIN SELECT id FROM audit_events WHERE (details ->> 'celex') = 'x'")
+            cur.execute(
+                "EXPLAIN SELECT id FROM audit_log.audit_events WHERE (details ->> 'celex') = 'x'"
+            )
             plan = "\n".join(str(row[0]) for row in cur.fetchall())
 
     assert "audit_events_details_celex_idx" in plan

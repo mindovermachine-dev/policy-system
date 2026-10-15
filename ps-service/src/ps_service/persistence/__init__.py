@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from ps_service.persistence.connection import check_connectivity_from_config, connect_from_config
 from ps_service.persistence.errors import (
-    GraphLogMigrationMissingError,
+    PrivilegedMigrationMissingError,
     StatePostgresConnectionError,
     StatePostgresMigrationApplyError,
     StatePostgresMigrationLockError,
@@ -21,8 +21,8 @@ from ps_service.persistence.errors import (
 from ps_service.persistence.migration_runner import MigrationSource, apply_pending_migrations
 
 __all__ = [
-    "GraphLogMigrationMissingError",
     "MigrationSource",
+    "PrivilegedMigrationMissingError",
     "StatePostgresConnectionError",
     "StatePostgresMigrationApplyError",
     "StatePostgresMigrationLockError",

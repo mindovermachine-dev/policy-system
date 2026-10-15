@@ -9,12 +9,15 @@ plain text scan (prose), so a docstring cannot quietly re-introduce the coupling
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import ps_service.audit as audit_package
 import ps_service.persistence as persistence_package
 
 _CONSUMERS = ("authz", "runtime_config", "curated_source", "invitations")
+_RAW_AUDIT_INSERT = re.compile(r"INSERT\s+INTO\s+(audit_log\.)?audit_events\b", re.IGNORECASE)
+"""A raw write to the audit table, qualified or not (the table lives in `audit_log`)."""
 
 
 def _package_sources(package: object) -> list[Path]:
@@ -65,3 +68,20 @@ def test_audit_package_source_mentions_no_consumer_component_by_name() -> None:
 def test_persistence_package_imports_none_of_the_components_that_use_it() -> None:
     """`ps_service.persistence` may be imported by components; it imports none of them."""
     assert _forbidden_imports(persistence_package, ("audit", *_CONSUMERS)) == []
+
+
+def test_persistence_package_never_writes_the_audit_table_directly() -> None:
+    """Shared plumbing stays out of the audit trail: only the audit component writes it."""
+    writers = [
+        source.name
+        for source in _package_sources(persistence_package)
+        if _RAW_AUDIT_INSERT.search(source.read_text(encoding="utf-8"))
+    ]
+
+    assert writers == []
+
+
+def test_raw_audit_insert_pattern_catches_both_spellings_of_the_table() -> None:
+    assert _RAW_AUDIT_INSERT.search("INSERT INTO audit_events (id)")
+    assert _RAW_AUDIT_INSERT.search("insert   into audit_log.audit_events (id)")
+    assert not _RAW_AUDIT_INSERT.search("INSERT INTO audit_events_archive (id)")

@@ -143,29 +143,33 @@ def test_init_script_rerun_fails_loudly_and_never_silently_succeeds(
 
 
 def test_migrations_and_catalog_tool_work_as_the_least_privilege_state_role(
-    provisioned: Provisioned,
+    fresh_provisioned: Provisioned,
 ) -> None:
     config: ServiceConfig = dataclasses.replace(
         load_config(),
-        state_postgres_host=provisioned.host,
-        state_postgres_port=provisioned.port,
-        state_postgres_database=provisioned.state_db,
-        state_postgres_user=provisioned.state_user,
-        state_postgres_password=provisioned.state_password,
+        state_postgres_host=fresh_provisioned.host,
+        state_postgres_port=fresh_provisioned.port,
+        state_postgres_database=fresh_provisioned.state_db,
+        state_postgres_user=fresh_provisioned.state_user,
+        state_postgres_password=fresh_provisioned.state_password,
     )
     actor = ("least-privilege-actor", _ISSUER)
     store = PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config))
 
     with connect_from_config(config) as conn:
         apply_pending_migrations(conn, sources=ORDINARY_STATE_MIGRATION_SOURCES)
+    # The privileged part (audit trail moved to the owner-protected `audit_log` schema) is the
+    # operator's admin run; everything the service itself does afterwards is the state role alone.
+    provision_graph_log(fresh_provisioned)
     set_override(store, "https://example.com/least-privilege", actor=actor)
 
     assert get_override(store) == "https://example.com/least-privilege"
     reset_override(store, actor=actor)
     assert get_override(store) is None
-    with provisioned.as_state() as conn:
+    with fresh_provisioned.as_state() as conn:
         row = conn.execute(
-            "SELECT count(*) FROM audit_events WHERE actor_subject = %s", ("least-privilege-actor",)
+            "SELECT count(*) FROM audit_log.audit_events WHERE actor_subject = %s",
+            ("least-privilege-actor",),
         ).fetchone()
     assert row is not None
     assert row[0] == 2

@@ -7,9 +7,11 @@ component migrations (`ps_service.state_migrations`) as the `ps_state` applicati
 them itself -- and then (2) applies the `graph_gateway` migration through
 `ps_service.persistence.privileged_migration_runner`, so the immutable `graph_log` tables are
 owned by a dedicated non-login owner role and the `ps_state` application role only holds INSERT
-and SELECT on them (plus UPDATE on the applied-marker table). From an empty database it needs no
-other step; a repeat run applies nothing. Both runners take the migration advisory lock, so it
-may run while a service replica starts. The service itself never holds the admin credential.
+and SELECT on them (plus UPDATE on the applied-marker table), and finally (3) applies the
+`audit_integrity` migration the same way, which moves `audit_events` into the owner-protected
+`audit_log` schema. From an empty database it needs no other step; a repeat run applies
+nothing. All runners take the migration advisory lock, so it may run while a service replica
+starts. The service itself never holds the admin credential.
 
 Environment (names only; values are never printed):
 
@@ -25,7 +27,8 @@ Environment (names only; values are never printed):
   up" are retried; an authentication or permission failure exits immediately.
 
 A failing ordinary migration exits 1 naming it (component, file, exception class) before any
-`graph_log` object is created; progress already committed stays and the next run resumes.
+`graph_log` or `audit_log` object is created; progress already committed stays and the next run
+resumes.
 """
 
 from __future__ import annotations
@@ -52,6 +55,7 @@ from ps_service.persistence import (
 from ps_service.persistence.migration_runner import discover_migration_files
 from ps_service.persistence.privileged_migration_runner import apply_privileged_migrations
 from ps_service.state_migrations import (
+    AUDIT_INTEGRITY_MIGRATION_SOURCE,
     GRAPH_GATEWAY_MIGRATION_SOURCE,
     ORDINARY_STATE_MIGRATION_SOURCES,
 )
@@ -73,7 +77,8 @@ _CONNECT_RETRY_INTERVAL_SECONDS = 1.0
 _SQLSTATE_CANNOT_CONNECT_NOW = "57P03"
 _PARSER_DESCRIPTION = (
     "Bring the ps_state database from any state to ready: apply the pending ordinary component "
-    "migrations and the graph_gateway migration in one idempotent admin run. "
+    "migrations, the graph_gateway migration and the audit_integrity migration in one idempotent "
+    "admin run. "
     "Reads its target and admin credential from the environment: "
     "PS_STATE_POSTGRES_HOST/PORT/DATABASE/USER, PS_STATE_ADMIN_POSTGRES_USER, "
     "PS_STATE_ADMIN_POSTGRES_PASSWORD and PS_STATE_GRAPH_OWNER_ROLE."
@@ -160,17 +165,20 @@ class ProvisioningTarget:
 
 @dataclass(frozen=True)
 class ProvisionResult:
-    """What one provisioning run applied: `component/file` ordinary entries, bare graph files.
+    """What one provisioning run applied: `component/file` ordinary entries, bare file names.
 
     Attributes:
         ordinary_applied: `component/file` of each ordinary migration applied, in order; empty
             when none was pending.
         graph_gateway_applied: File names of the `graph_gateway` migrations applied, in order;
             empty when none was pending.
+        audit_integrity_applied: File names of the `audit_integrity` migrations applied, in
+            order; empty when none was pending.
     """
 
     ordinary_applied: list[str]
     graph_gateway_applied: list[str]
+    audit_integrity_applied: list[str] = field(default_factory=list)
 
 
 def _is_server_not_ready(exc: psycopg.OperationalError) -> bool:
@@ -234,16 +242,19 @@ def provision(target: ProvisioningTarget, *, emitter: LogEmitter | None = None) 
 
     On one admin connection: apply the pending ordinary component migrations as the application
     role (`run_as_role`, so it owns every public object exactly as service startup would have
-    made it), then the owner-protected `graph_gateway` migration (which links to
-    `public.audit_events`, hence the order). An ordinary failure raises before any `graph_log`
-    object is created; partial ordinary progress stays committed and the next run resumes.
+    made it), then the owner-protected `graph_gateway` migration, then the owner-protected
+    `audit_integrity` migration. The order is load-bearing: `graph_gateway`'s first (applied,
+    immutable) migration references `public.audit_events` by that name, so it must run while the
+    table is still there, and `audit_integrity` then moves the table (the reference follows it).
+    An ordinary failure raises before any `graph_log` or `audit_log` object is created; partial
+    ordinary progress stays committed and the next run resumes.
 
     Args:
         target: Where and as whom to provision.
         emitter: Destination of the migration log entries; `None` uses the process-wide one.
 
     Returns:
-        The migrations applied by this run; both lists are empty when the database was already up
+        The migrations applied by this run; every list is empty when the database was already up
         to date.
 
     Raises:
@@ -254,8 +265,8 @@ def provision(target: ProvisioningTarget, *, emitter: LogEmitter | None = None) 
         psycopg.OperationalError: The server refused the connection (authentication, permission).
 
     Side Effects:
-        Applies migrations to the target database and creates the owner-protected `graph_log`
-        tables.
+        Applies migrations to the target database, creates the owner-protected `graph_log`
+        tables and moves `audit_events` into the owner-protected `audit_log` schema.
     """
     with _connect_when_server_is_ready(target) as conn:
         ordinary = apply_pending_migrations(
@@ -273,9 +284,18 @@ def provision(target: ProvisioningTarget, *, emitter: LogEmitter | None = None) 
             emitter=emitter,
             lock_timeout_seconds=target.lock_timeout_seconds,
         )
+        audit_integrity = apply_privileged_migrations(
+            conn,
+            sources=[AUDIT_INTEGRITY_MIGRATION_SOURCE],
+            owner_role=target.owner_role,
+            app_role=target.app_user,
+            emitter=emitter,
+            lock_timeout_seconds=target.lock_timeout_seconds,
+        )
     return ProvisionResult(
         ordinary_applied=_qualify(ORDINARY_STATE_MIGRATION_SOURCES, ordinary),
         graph_gateway_applied=graph_gateway,
+        audit_integrity_applied=audit_integrity,
     )
 
 
@@ -326,18 +346,24 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
         _emit_provision_entry(outcome="failure", extra={"reason": type(exc).__name__})
         sys.stderr.write(f"graph_gateway provisioning failed: {type(exc).__name__}\n")
         return 1
-    applied = [*result.ordinary_applied, *result.graph_gateway_applied]
+    applied = [
+        *result.ordinary_applied,
+        *result.graph_gateway_applied,
+        *result.audit_integrity_applied,
+    ]
     _emit_provision_entry(
         outcome="success",
         extra={
             "ordinary_applied": result.ordinary_applied,
             "applied": result.graph_gateway_applied,
+            "audit_integrity_applied": result.audit_integrity_applied,
             "owner_role": target.owner_role,
         },
     )
     sys.stdout.write(
         f"provisioning: applied {len(result.ordinary_applied)} ordinary + "
-        f"{len(result.graph_gateway_applied)} graph_gateway migration(s): "
+        f"{len(result.graph_gateway_applied)} graph_gateway + "
+        f"{len(result.audit_integrity_applied)} audit_integrity migration(s): "
         f"{', '.join(applied) or 'none (already up to date)'}\n"
     )
     return 0

@@ -8,6 +8,7 @@ source tree, so a later edit cannot quietly add a raw `INSERT INTO audit_events`
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import ps_service.ingestion_runs as ingestion_runs_package
@@ -21,6 +22,8 @@ _ALLOWED_AUDIT_MODULES = frozenset(
     }
 )
 _PUBLIC_AUDIT_STORE_NAMES = frozenset({"AuditStore", "PsycopgAuditStore"})
+_RAW_AUDIT_INSERT = re.compile(r"INSERT\s+INTO\s+(audit_log\.)?audit_events\b", re.IGNORECASE)
+"""A raw write to the audit table, qualified or not (the table lives in `audit_log`)."""
 
 
 def _python_sources() -> list[Path]:
@@ -51,7 +54,7 @@ def test_ingestion_runs_writes_audit_only_via_the_public_audit_store() -> None:
     offenders: list[str] = []
     for source in _python_sources():
         text = source.read_text(encoding="utf-8")
-        if "INSERT INTO audit_events" in text:
+        if _RAW_AUDIT_INSERT.search(text):
             offenders.append(f"{source.name}: writes audit_events directly")
         for module, name in _audit_imports(source):
             if module not in _ALLOWED_AUDIT_MODULES:
@@ -60,3 +63,9 @@ def test_ingestion_runs_writes_audit_only_via_the_public_audit_store() -> None:
                 offenders.append(f"{source.name}: imports private {module}.{name}")
 
     assert offenders == []
+
+
+def test_raw_audit_insert_pattern_catches_both_spellings_of_the_table() -> None:
+    assert _RAW_AUDIT_INSERT.search("INSERT INTO audit_events (id)")
+    assert _RAW_AUDIT_INSERT.search("insert   into audit_log.audit_events (id)")
+    assert not _RAW_AUDIT_INSERT.search("INSERT INTO audit_events_archive (id)")

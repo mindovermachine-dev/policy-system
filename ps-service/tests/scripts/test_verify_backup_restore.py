@@ -136,6 +136,15 @@ def test_backup_logs_pre_and_post_counts(tmp_path: Path) -> None:
     assert "event=counts phase=post audit_events=7" in result.stderr
 
 
+def test_backup_counts_the_audit_trail_from_its_audit_log_schema(tmp_path: Path) -> None:
+    result = _run_backup(tmp_path)
+
+    assert result.code == 0, result.stderr
+    count_queries = [call for call in result.kubectl_calls if "SELECT count(*)" in call]
+    assert any("FROM audit_log.audit_events" in call for call in count_queries)
+    assert not any(call.endswith("FROM audit_events") for call in count_queries)
+
+
 def test_backup_refuses_a_non_kind_context_without_allow_context(tmp_path: Path) -> None:
     result = _run_backup(tmp_path, context="aks-prod")
 

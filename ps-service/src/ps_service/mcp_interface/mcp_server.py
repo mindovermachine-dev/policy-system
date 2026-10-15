@@ -118,6 +118,9 @@ from ps_service.authz.service import (
 from ps_service.authz.service import (
     list_audit_events as run_list_audit_events,
 )
+from ps_service.authz.service import (
+    verify_audit_log as run_verify_audit_log,
+)
 from ps_service.authz.store import PsycopgAccessRoleStore
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
 from ps_service.curated_source import store as catalog_source_store
@@ -259,7 +262,7 @@ if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import PipelineDependencies
     from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
     from ps_service.api.restore_orchestration import CatalogRestoreDependencies
-    from ps_service.audit.models import AuditEventRow
+    from ps_service.audit.models import AuditChainVerification, AuditEventRow
     from ps_service.authz.models import AccessRoleAssignmentRow
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.catalog_client import CuratedCatalogDependencies
@@ -2767,6 +2770,85 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
         }
 
     return _run_mcp_action("list_audit_events", principal, _body)
+
+
+_VERIFY_AUDIT_LOG_ERRORS = (AccessDeniedError, AuthorizationStoreUnavailableError)
+
+
+def _chain_break_to_dict(verification: AuditChainVerification) -> dict[str, object] | None:
+    """The `first_break` object of `verify-audit-log`, or `None` for an intact chain.
+
+    A row break names the row (`chain_seq`, `id`, `occurred_at`). A `head_mismatch` has no broken
+    row, so it carries the head sequence instead.
+    """
+    first_break = verification.first_break
+    if first_break is None:
+        return None
+    if first_break.kind == "head_mismatch":
+        return {"kind": first_break.kind, "head_chain_seq": verification.head_chain_seq}
+    return {
+        "kind": first_break.kind,
+        "chain_seq": first_break.chain_seq,
+        "id": first_break.event_id,
+        "occurred_at": (
+            None if first_break.occurred_at is None else first_break.occurred_at.isoformat()
+        ),
+    }
+
+
+@server.tool(name="verify-audit-log")
+def verify_audit_log() -> dict[str, object] | str:
+    """Check that the shared audit trail has not been altered, deleted from or truncated.
+
+    Requires `SystemOwner` or `SystemAdmin` and a real authenticated session; the local-test
+    bypass does not provide one and is refused before any verification runs. Takes no
+    arguments. The database recomputes every row's hash in order and compares the last row with
+    the recorded chain head, in one consistent snapshot, so the check is safe to run while the
+    service is writing.
+
+    Returns:
+        `{"intact": bool, "rows_checked": int, "head_chain_seq": int, "first_break": null | {...}}`.
+        `intact` is `true` and `first_break` is `null` when the chain runs unbroken from its
+        first row to the head. Otherwise `first_break` is the lowest-numbered failure: a row
+        break is `{"kind", "chain_seq", "id", "occurred_at"}` with `kind` one of `sequence_gap`
+        (a row is missing), `prev_hash_mismatch` or `row_hash_mismatch` (the row was altered);
+        `{"kind": "head_mismatch", "head_chain_seq"}` means every remaining row verifies but
+        the newest rows are gone (the tail was truncated).
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session.
+        - The caller lacks the required role.
+        - The audit or authorization store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the audit trail; nothing is written. The call is logged. The check is
+        tamper-evident, not tamper-proof: a database superuser who rewrites the whole chain and
+        its head consistently is not detected.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        audit_store = PsycopgAuditStore(config)
+        try:
+            verification = run_verify_audit_log(
+                actor, access_role_store=access_role_store, audit_store=audit_store
+            )
+        except _VERIFY_AUDIT_LOG_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "intact": verification.intact,
+            "rows_checked": verification.rows_checked,
+            "head_chain_seq": verification.head_chain_seq,
+            "first_break": _chain_break_to_dict(verification),
+        }
+
+    return _run_mcp_action("verify_audit_log", principal, _body)
 
 
 _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (

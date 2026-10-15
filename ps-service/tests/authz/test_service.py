@@ -47,8 +47,17 @@ from ps_service.api.errors import (
     SelfGrantOrRevokeBlockedError,
     SystemOwnerFloorViolationError,
 )
-from ps_service.audit.errors import AuditInvalidCursorError, AuditPostgresUnavailableError
-from ps_service.audit.models import AuditEventRow, AuditQueryFilters, AuditQueryPage
+from ps_service.audit.errors import (
+    AuditInvalidCursorError,
+    AuditPersistenceError,
+    AuditPostgresUnavailableError,
+)
+from ps_service.audit.models import (
+    AuditChainVerification,
+    AuditEventRow,
+    AuditQueryFilters,
+    AuditQueryPage,
+)
 from ps_service.authz.models import AccessRole
 from ps_service.authz.service import (
     grant_role,
@@ -57,6 +66,7 @@ from ps_service.authz.service import (
     require_role,
     resolve_active_roles,
     revoke_role,
+    verify_audit_log,
 )
 
 _FIRST_CALLER = ("first-caller", "https://issuer.example.com/")
@@ -1184,3 +1194,63 @@ def test_list_audit_events_passes_allow_listed_details_filter_to_the_store() -> 
 
     ((filters, _cursor, _page_size),) = audit_store.query_calls
     assert filters.details == {"celex": "32024R2847"}
+
+
+# --- verify_audit_log --------------------------------
+
+
+def test_verify_audit_log_denies_a_caller_without_system_admin_before_any_verification() -> None:
+    """The role check precedes the store call."""
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)  # bootstraps FIRST_CALLER only
+    audit_store = FakeAuditStore()
+
+    with pytest.raises(AccessDeniedError):
+        verify_audit_log(
+            _SECOND_CALLER, access_role_store=access_role_store, audit_store=audit_store
+        )
+
+    assert audit_store.verify_calls == []
+
+
+def test_verify_audit_log_never_falls_open_on_an_access_role_store_error() -> None:
+    audit_store = FakeAuditStore()
+
+    with pytest.raises(AuthorizationStoreUnavailableError):
+        verify_audit_log(
+            _FIRST_CALLER, access_role_store=RaisingAccessRoleStore(), audit_store=audit_store
+        )
+
+    assert audit_store.verify_calls == []
+
+
+def test_verify_audit_log_returns_the_store_verification_to_a_system_owner() -> None:
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    expected = AuditChainVerification(
+        intact=True, rows_checked=3, head_chain_seq=3, first_break=None
+    )
+    audit_store = FakeAuditStore(verify_result=expected)
+
+    result = verify_audit_log(
+        _FIRST_CALLER, access_role_store=access_role_store, audit_store=audit_store
+    )
+
+    assert result == expected
+    assert len(audit_store.verify_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "failure", [AuditPostgresUnavailableError("down"), AuditPersistenceError("broken")]
+)
+def test_verify_audit_log_maps_an_audit_store_failure_to_store_unavailable(
+    failure: Exception,
+) -> None:
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    audit_store = FakeAuditStore(raise_on_verify=failure)
+
+    with pytest.raises(AuthorizationStoreUnavailableError) as exc_info:
+        verify_audit_log(
+            _FIRST_CALLER, access_role_store=access_role_store, audit_store=audit_store
+        )
+
+    assert str(exc_info.value) == "The authorization store is temporarily unavailable."

@@ -37,7 +37,7 @@ _UNAVAILABLE_MESSAGE = "The audit trail is temporarily unavailable."
 _LOG_ACTION = "system_audit"
 
 _INSERT_SYSTEM_AUDIT_EVENT = """
-INSERT INTO audit_events (
+INSERT INTO audit_log.audit_events (
     actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
 ) VALUES (
     %(actor_subject)s, %(actor_issuer)s, %(action)s, %(resource_type)s, %(resource_id)s,

@@ -13,6 +13,7 @@ Public surface, re-exported here:
 - Store: `AuditStore` (Protocol), `EventIdAuditStore` (Protocol for stores that report the id of
   the row they wrote) and `PsycopgAuditStore` (PostgreSQL implementation).
 - Models and registries: `AuditDetails`, `AuditEventRow`, `AuditQueryFilters`, `AuditQueryPage`,
+  `AuditChainVerification`, `AuditChainBreak`,
   `register_audit_action`, `resolve_details_model`, `register_audit_resource_type`,
   `is_known_resource_type`, `AUDIT_DETAILS_FILTER_KEYS`.
 - Emission helpers: `AuditContext`, `AuditTarget`, `record_opening_row`,
@@ -23,9 +24,14 @@ Public surface, re-exported here:
 - Errors: `AuditActorUnresolvedError`, `AuditInvalidCursorError`, `AuditInvalidDetailsError`,
   `AuditPersistenceError`, `AuditPostgresUnavailableError`, `AuditTrailUnavailableError`,
   `AuditUnknownActionError`.
-- `MIGRATIONS_DIR`: the component's own migration directory.
+- `MIGRATIONS_DIR`: the component's own (ordinary) migration directory.
+- `PRIVILEGED_MIGRATIONS_DIR`, `AUDIT_LOG_TABLES`, `AUDIT_LOG_SCHEMAS`: the owner-protected
+  `audit_log` migration and the objects startup verifies. Unlike `MIGRATIONS_DIR`, that
+  directory is applied only by the privileged provisioning path
+  (`python -m ps_service.graph_gateway.provision`), never by the ordinary startup runner.
 
-Insert-only is enforced by omission: the store interface defines no `UPDATE` or `DELETE`.
+The table lives in the `audit_log` schema, owned by a non-login role the application role is
+not a member of. The store interface also defines no `UPDATE` or `DELETE`.
 """
 
 from __future__ import annotations
@@ -51,6 +57,8 @@ from ps_service.audit.errors import (
 )
 from ps_service.audit.models import (
     AUDIT_DETAILS_FILTER_KEYS,
+    AuditChainBreak,
+    AuditChainVerification,
     AuditDetails,
     AuditEventRow,
     AuditQueryFilters,
@@ -65,11 +73,28 @@ from ps_service.audit.store import AuditStore, EventIdAuditStore, PsycopgAuditSt
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 """This component's own migration directory, listed by the composition root (`ps_service.main`)."""
 
+PRIVILEGED_MIGRATIONS_DIR = Path(__file__).parent / "privileged_migrations"
+"""The owner-protected migration directory, applied only by the privileged provisioning path.
+
+Deliberately not named `migrations`, so the ordinary-source coverage test (which globs
+`*/migrations`) stays correct."""
+
+AUDIT_LOG_TABLES = ("audit_log.audit_events", "audit_log.audit_chain_head")
+"""Schema-qualified tables the privileged migration leaves behind; startup verifies each."""
+
+AUDIT_LOG_SCHEMAS = ("audit_log",)
+"""Schemas the privileged migration creates; the application role must not own them."""
+
 __all__ = [
     "AUDIT_DETAILS_FILTER_KEYS",
+    "AUDIT_LOG_SCHEMAS",
+    "AUDIT_LOG_TABLES",
     "LOCAL_TEST_BYPASS_AUDIT_ACTOR",
     "MIGRATIONS_DIR",
+    "PRIVILEGED_MIGRATIONS_DIR",
     "AuditActorUnresolvedError",
+    "AuditChainBreak",
+    "AuditChainVerification",
     "AuditContext",
     "AuditDetails",
     "AuditEventRow",

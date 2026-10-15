@@ -143,7 +143,7 @@ def _select_audit_events_for(
 ) -> list[tuple[object, ...]]:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT actor_subject, actor_issuer, outcome, details FROM audit_events "
+            "SELECT actor_subject, actor_issuer, outcome, details FROM audit_log.audit_events "
             "WHERE resource_id = %(resource_id)s AND action = %(action)s",
             {"resource_id": resource_id, "action": action},
         )
@@ -160,6 +160,7 @@ def _active_roles_for(conn: psycopg.Connection[TupleRow], *, subject: str) -> se
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_no_code_path_writes_to_the_dropped_access_role_grant_events_table() -> None:
     """The retired grant-events table is absent."""
     _require_configured_postgres()
@@ -178,6 +179,7 @@ def test_no_code_path_writes_to_the_dropped_access_role_grant_events_table() -> 
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_grant_produces_exactly_one_applied_audit_event_alongside_the_assignment_row() -> None:
     """A real `grant()` call writes exactly one `access_role_assignments` row
     and exactly one `audit_events` row (`action='access_role.grant'`, `outcome='applied'`).
@@ -208,6 +210,7 @@ def test_grant_produces_exactly_one_applied_audit_event_alongside_the_assignment
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_revoke_produces_exactly_one_applied_audit_event_and_removes_the_assignment() -> None:
     """A real `revoke()` call (non-`SystemOwner` path) deletes the assignment
     row and writes exactly one `audit_events` row (`action='access_role.revoke'`,
@@ -244,6 +247,7 @@ def test_revoke_produces_exactly_one_applied_audit_event_and_removes_the_assignm
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_revoke_of_system_owner_produces_exactly_one_applied_audit_event() -> None:
     """`_revoke_system_owner`'s own advisory-locked path: revoking `SystemOwner`
     (with a second owner already present, so the floor check passes) writes exactly one
@@ -286,6 +290,7 @@ def test_revoke_of_system_owner_produces_exactly_one_applied_audit_event() -> No
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_bootstrap_first_owner_produces_exactly_one_applied_bootstrap_audit_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -351,6 +356,7 @@ def test_bootstrap_first_owner_produces_exactly_one_applied_bootstrap_audit_even
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_audit_store_record_failure_during_grant_rolls_back_the_assignment_insert() -> None:
     """When `AuditStore.record` fails, `grant`'s own `access_role_assignments`
     `INSERT` is not applied either (same transaction rolls back both), and the caller
@@ -383,6 +389,7 @@ def test_audit_store_record_failure_during_grant_rolls_back_the_assignment_inser
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_audit_store_record_failure_during_revoke_rolls_back_the_assignment_delete() -> None:
     """Revoke side: when `AuditStore.record` fails during `revoke`, the
     `access_role_assignments` `DELETE` is not applied either -- the target keeps the
@@ -427,6 +434,7 @@ def test_audit_store_record_failure_during_revoke_rolls_back_the_assignment_dele
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_grant_rejected_writes_exactly_one_rejected_audit_event() -> None:
     """`PsycopgAccessRoleStore.record_grant_rejected` writes exactly one `outcome='rejected'`
     `access_role.grant` audit event, via `AuditStore.record_standalone`'s own connection
@@ -466,6 +474,7 @@ def test_record_grant_rejected_writes_exactly_one_rejected_audit_event() -> None
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_revoke_rejected_writes_exactly_one_rejected_audit_event() -> None:
     """`PsycopgAccessRoleStore.record_revoke_rejected` writes exactly one `outcome='rejected'`
     `access_role.revoke` audit event, same mechanism as `record_grant_rejected`.
@@ -502,6 +511,7 @@ def test_record_revoke_rejected_writes_exactly_one_rejected_audit_event() -> Non
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_denied_grant_produces_exactly_one_rejected_audit_event() -> None:
     """Access-denied denial: a real `grant_role` call by an actor holding no
     grant-eligible role writes exactly one rejected `access_role.grant` audit event -- the
@@ -541,6 +551,7 @@ def test_denied_grant_produces_exactly_one_rejected_audit_event() -> None:
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
     """Self-revoke-blocked denial: a real `revoke_role` call where the actor
     targets their own subject writes exactly one rejected `access_role.revoke` audit event.
@@ -590,6 +601,7 @@ def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_denied_system_owner_floor_revoke_produces_exactly_one_rejected_audit_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -671,6 +683,7 @@ def test_denied_system_owner_floor_revoke_produces_exactly_one_rejected_audit_ev
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_bootstrap_identity_mismatch_produces_exactly_one_rejected_bootstrap_audit_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -735,6 +748,7 @@ def test_bootstrap_identity_mismatch_produces_exactly_one_rejected_bootstrap_aud
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_record_standalone_connection_failure_leaks_no_host_or_port_or_driver_detail() -> None:
     """The denial-path leak-check, mirroring the query-path equivalent
     (the same assertion shape, applied here to `record_standalone` instead of
@@ -772,6 +786,7 @@ def test_record_standalone_connection_failure_leaks_no_host_or_port_or_driver_de
 
 
 @pytest.mark.postgres_live
+@pytest.mark.usefixtures("state_postgres_env")
 def test_denial_recording_connection_failure_surfaces_with_no_leak() -> None:
     """Service-layer half of the leak-check: the same connection failure, reached via the
     real `ps_service.authz.store.PsycopgAccessRoleStore.record_grant_rejected` ->

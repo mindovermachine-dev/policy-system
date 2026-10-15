@@ -20,7 +20,7 @@
 #         Prints the artifact path on stdout. A failed backup leaves no artifact behind.
 #         The artifact holds the whole data directory, including the stored role password
 #         hashes and the audit trail: keep it out of the repository and encrypt it at rest.
-# counts  Prints the row counts of `audit_events`, `access_role_assignments` and
+# counts  Prints the row counts of `audit_log.audit_events`, `access_role_assignments` and
 #         `graph_log.entries`, the figures compared before and after a backup or restore.
 # retain-secrets
 #         Prepares a running release for `restore` and `e2e`: copies the three generated
@@ -153,7 +153,7 @@ count_rows() {
 
 counts_line() {
   printf 'audit_events=%s access_role_assignments=%s graph_log_entries=%s' \
-    "$(count_rows audit_events)" \
+    "$(count_rows audit_log.audit_events)" \
     "$(count_rows access_role_assignments)" \
     "$(count_rows graph_log.entries)"
 }

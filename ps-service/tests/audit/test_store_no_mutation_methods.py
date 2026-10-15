@@ -13,14 +13,19 @@ method may appear anywhere, and no new method may contain one of those substring
 
 from __future__ import annotations
 
-from ps_service.audit.store import AuditStore, PsycopgAuditStore
+from ps_service.audit.store import AuditChainVerifier, AuditStore, PsycopgAuditStore
 
 _FORBIDDEN_METHOD_NAME_SUBSTRINGS = ("update", "delete", "mutate")
 _EXPECTED_METHOD_NAMES = {"record", "record_standalone", "query"}
 # `record_standalone_with_event_id` is `record_standalone` returning the inserted id
 # (still insert-only). It is on the implementation and on the narrow `EventIdAuditStore` Protocol,
 # not on `AuditStore`, whose many fakes stay untouched.
-_EXPECTED_IMPLEMENTATION_METHOD_NAMES = _EXPECTED_METHOD_NAMES | {"record_standalone_with_event_id"}
+# `verify_integrity` is a pure read (it recomputes the hash chain in a read-only snapshot) and lives
+# on its own `AuditChainVerifier` Protocol for the same reason.
+_EXPECTED_VERIFIER_METHOD_NAMES = {"verify_integrity"}
+_EXPECTED_IMPLEMENTATION_METHOD_NAMES = (
+    _EXPECTED_METHOD_NAMES | {"record_standalone_with_event_id"} | _EXPECTED_VERIFIER_METHOD_NAMES
+)
 
 
 def _public_method_names(target: type[object]) -> set[str]:
@@ -36,6 +41,12 @@ def test_audit_store_protocol_exposes_no_update_or_delete_method() -> None:
         assert not any(
             forbidden in method_name.lower() for forbidden in _FORBIDDEN_METHOD_NAME_SUBSTRINGS
         )
+
+
+def test_audit_chain_verifier_protocol_exposes_only_the_read_only_verification() -> None:
+    method_names = _public_method_names(AuditChainVerifier)
+
+    assert method_names == _EXPECTED_VERIFIER_METHOD_NAMES
 
 
 def test_psycopg_audit_store_exposes_no_update_or_delete_method() -> None:

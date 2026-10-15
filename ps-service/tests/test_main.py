@@ -65,7 +65,7 @@ from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
 )
-from ps_service.persistence import GraphLogMigrationMissingError
+from ps_service.persistence import PrivilegedMigrationMissingError
 from ps_service.persistence import (
     check_connectivity_from_config as check_state_postgres_connectivity,
 )
@@ -1574,6 +1574,7 @@ def test_startup_after_the_provisioning_cli_on_an_empty_database_applies_nothing
         ("ingestion_runs", "0001_ingestion_runs.sql"),
         ("graph_gateway", "0001_graph_mutation_log.sql"),
         ("graph_gateway", "0002_group_swap_set.sql"),
+        ("audit_integrity", "0001_audit_log_insert_only_hash_chain.sql"),
     } <= tracked
 
 
@@ -1584,7 +1585,7 @@ def test_startup_fails_closed_naming_the_missing_graph_gateway_migration(
     """With `ps_state` credentials only and no provisioning, startup fails closed."""
     config = _config_for_cluster(fresh_provisioned)
 
-    with pytest.raises(GraphLogMigrationMissingError) as raised, TestClient(create_app(config)):
+    with pytest.raises(PrivilegedMigrationMissingError) as raised, TestClient(create_app(config)):
         pass
 
     assert raised.value.missing_migration == "graph_gateway/0001_graph_mutation_log.sql"
@@ -1598,7 +1599,7 @@ def test_startup_failure_entry_names_the_missing_migration_and_no_connection_det
     """The fatal startup log entry carries `missing_migration`, never host or credentials."""
     config = _config_for_cluster(fresh_provisioned)
 
-    with pytest.raises(GraphLogMigrationMissingError), TestClient(create_app(config)):
+    with pytest.raises(PrivilegedMigrationMissingError), TestClient(create_app(config)):
         pass
     reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
 
@@ -1609,10 +1610,35 @@ def test_startup_failure_entry_names_the_missing_migration_and_no_connection_det
     ]
     assert len(failures) == 1
     assert failures[0]["missing_migration"] == "graph_gateway/0001_graph_mutation_log.sql"
-    assert failures[0]["reason"] == "GraphLogMigrationMissingError"
+    assert failures[0]["reason"] == "PrivilegedMigrationMissingError"
     rendered = str(failures[0])
     assert fresh_provisioned.state_password not in rendered
     assert fresh_provisioned.state_db not in rendered
+
+
+@pytest.mark.postgres_live
+def test_startup_failure_entry_names_the_audit_migration_when_only_it_is_unrecorded(
+    fresh_provisioned: Provisioned, tmp_path: Path, read_lines: ReadLines
+) -> None:
+    """With the graph log in place but no audit tracking row, startup names the audit file."""
+    provision_graph_log(fresh_provisioned)
+    config = _config_for_cluster(fresh_provisioned)
+    with fresh_provisioned.superuser_connect(fresh_provisioned.state_db) as admin:
+        admin.execute("DELETE FROM ps_schema_migrations WHERE component = 'audit_integrity'")
+    with pytest.raises(PrivilegedMigrationMissingError) as raised, TestClient(create_app(config)):
+        pass
+    reset_for_tests()  # drain the emitter's queue before reading the log
+
+    audit_file = "audit_integrity/0001_audit_log_insert_only_hash_chain.sql"
+    assert raised.value.missing_migration == audit_file
+    failures = [
+        line
+        for line in read_lines(tmp_path / "ps-service.jsonl")
+        if line.get("component") == "entrypoint" and line.get("outcome") == "failure"
+    ]
+    assert len(failures) == 1
+    assert failures[0]["missing_migration"] == audit_file
+    assert failures[0]["missing_reason"] == "migration_not_recorded"
 
 
 def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_successful_startup(

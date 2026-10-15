@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from ps_service.audit.errors import AuditPostgresUnavailableError
-from ps_service.audit.models import AuditQueryPage
+from ps_service.audit.models import AuditChainVerification, AuditQueryPage
 from ps_service.authz.models import AccessRole, AccessRoleAssignmentRow, AccessRoleGrantEvent
 from ps_service.persistence import StatePostgresConnectionError
 
@@ -400,6 +400,14 @@ class FakeAuditStore:
     )
     raise_on_query: Exception | None = None
     query_calls: list[tuple[AuditQueryFilters, str | None, int]] = field(default_factory=list)
+    verify_result: AuditChainVerification = field(
+        default_factory=lambda: AuditChainVerification(
+            intact=True, rows_checked=0, head_chain_seq=0, first_break=None
+        )
+    )
+    raise_on_verify: Exception | None = None
+    verify_calls: list[None] = field(default_factory=list)
+    """One entry per `verify_integrity` call, so a gate test can assert `verify_calls == []`."""
 
     def record(
         self,
@@ -440,3 +448,10 @@ class FakeAuditStore:
         if self.raise_on_query is not None:
             raise self.raise_on_query
         return self.query_result
+
+    def verify_integrity(self) -> AuditChainVerification:
+        """Record the call, then return `verify_result` or raise `raise_on_verify`."""
+        self.verify_calls.append(None)
+        if self.raise_on_verify is not None:
+            raise self.raise_on_verify
+        return self.verify_result

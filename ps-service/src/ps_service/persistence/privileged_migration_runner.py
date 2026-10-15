@@ -30,7 +30,7 @@ from psycopg import sql
 from ps_service.logging.errors import LoggingLifecycleError
 from ps_service.logging.facade import emit_log_entry
 from ps_service.persistence.errors import (
-    GraphLogMigrationMissingError,
+    PrivilegedMigrationMissingError,
     StatePostgresMigrationApplyError,
     StatePostgresProvisioningError,
 )
@@ -69,6 +69,10 @@ _SELECT_TO_REGCLASS = "SELECT to_regclass(%(name)s) IS NOT NULL"
 _SELECT_CONTROLS_TABLE = (
     "SELECT pg_has_role(current_user, relowner, 'MEMBER') FROM pg_class "
     "WHERE oid = to_regclass(%(name)s)"
+)
+_SELECT_CONTROLS_SCHEMA = (
+    "SELECT pg_has_role(current_user, nspowner, 'MEMBER') FROM pg_namespace "
+    "WHERE nspname = %(name)s"
 )
 
 
@@ -307,7 +311,7 @@ def _require_migrations_recorded(
             for migration_file in discover_migration_files(source.directory):
                 key = {"component": source.component, "filename": migration_file.name}
                 if not has_tracking_table or _is_not_recorded(cur, key):
-                    raise GraphLogMigrationMissingError(
+                    raise PrivilegedMigrationMissingError(
                         f"{source.component}/{migration_file.name}",
                         reason="migration_not_recorded",
                     )
@@ -328,10 +332,29 @@ def _require_tables_in_protected_state(
             cur.execute(_SELECT_CONTROLS_TABLE, {"name": table})
             row = cur.fetchone()
             if row is None:
-                raise GraphLogMigrationMissingError(first_migration, reason="table_missing")
+                raise PrivilegedMigrationMissingError(first_migration, reason="table_missing")
             if row[0]:
-                raise GraphLogMigrationMissingError(
+                raise PrivilegedMigrationMissingError(
                     first_migration, reason="state_role_controls_table"
+                )
+
+
+def _require_schemas_in_protected_state(
+    conn: psycopg.Connection[TupleRow], *, schemas: Sequence[str], first_migration: str
+) -> None:
+    """Raise unless each schema exists and the current role neither owns it nor is its owner.
+
+    A schema owner can drop any table in it, so owning the schema defeats a protected table.
+    """
+    with conn.cursor() as cur:
+        for schema in schemas:
+            cur.execute(_SELECT_CONTROLS_SCHEMA, {"name": schema})
+            row = cur.fetchone()
+            if row is None:
+                raise PrivilegedMigrationMissingError(first_migration, reason="table_missing")
+            if row[0]:
+                raise PrivilegedMigrationMissingError(
+                    first_migration, reason="state_role_controls_schema"
                 )
 
 
@@ -357,6 +380,7 @@ def verify_privileged_migrations_applied(
     *,
     sources: Sequence[MigrationSource],
     required_tables: Sequence[str],
+    required_schemas: Sequence[str] = (),
     emitter: LogEmitter | None = None,
 ) -> None:
     """Check, read-only and with the application role, that the privileged migrations are in place.
@@ -364,13 +388,17 @@ def verify_privileged_migrations_applied(
     Every migration file of every source must have a tracking row, every `required_tables`
     entry (schema-qualified) must exist, and the connected role must neither own a table nor be a
     member of its owner, so a deployment whose tables are owned by `ps_state` also fails closed.
-    Nothing is created or changed.
+    Each `required_schemas` entry must exist and not be owned by the connected role (or a role it
+    is a member of), because a schema owner can drop the tables inside it. Nothing is created or
+    changed.
 
     Args:
         conn: Open connection authenticated as the application role.
         sources: Component migration directories whose files must all be recorded.
         required_tables: Schema-qualified names of tables that must exist and not be
             controlled by the connected role.
+        required_schemas: Names of schemas that must exist and not be controlled by the
+            connected role; empty by default.
         emitter: Log emitter for the outcome entry; `None` uses the process emitter, and
             logging is skipped when none is configured.
 
@@ -378,7 +406,7 @@ def verify_privileged_migrations_applied(
         None; returning normally means every check passed.
 
     Raises:
-        GraphLogMigrationMissingError: a check failed; names the first missing migration
+        PrivilegedMigrationMissingError: a check failed; names the first missing migration
             (`<component>/<filename>`) and a fixed reason, never a host, SQL or driver text.
         StatePostgresProvisioningError: `sources` contain no migration files at all.
         psycopg.Error: a catalog query failed (propagated).
@@ -389,10 +417,14 @@ def verify_privileged_migrations_applied(
     """
     try:
         _require_migrations_recorded(conn, sources=sources)
-        _require_tables_in_protected_state(
-            conn, tables=required_tables, first_migration=_first_migration_name(sources)
+        first_migration = _first_migration_name(sources)
+        _require_schemas_in_protected_state(
+            conn, schemas=required_schemas, first_migration=first_migration
         )
-    except GraphLogMigrationMissingError as exc:
+        _require_tables_in_protected_state(
+            conn, tables=required_tables, first_migration=first_migration
+        )
+    except PrivilegedMigrationMissingError as exc:
         reason: MissingMigrationReason = exc.reason
         _emit_verify_entry(
             outcome="failure",
