@@ -279,10 +279,11 @@ Every issue is triaged and worked on according to the
 [triage policy](docs/policy/triage-policy.md). In short:
 
 - **Classify when you create the issue.** Give it exactly one Group label
-  (`group:1`, `group:2a`, `group:2b`, `group:3`), one Priority label (`P0`-`P3`:
+  (`1-Prod-Impact`, `2a-Toil-Debt-Hygiene`, `2b-CustOps-Hygiene`, `3-Backlog-Feature`), one Priority label (`P0`-`P3`:
   how many customers are affected) and one Severity label (`S0`-`S3`: how bad it
   is for them). If you can't, label it `needs-triage`. The issue type stays in
-  the conventional-commit title prefix; there are no type labels.
+  the conventional-commit title prefix, which is authoritative; type labels such as
+  `bug` do not affect ordering.
 - **Work in group order.** Group 1 (operational: S0-S2 impact in production)
   before Group 2 (repeating manual work, technical debt and hygiene) before
   Group 3 (new features). Within a group: severe-and-widespread first, then

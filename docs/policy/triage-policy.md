@@ -10,18 +10,18 @@ Every issue receives three values: a **Group**, a **Priority (P)** and a **Sever
 
 ### 1.1 Groups (order of work)
 
-**Group 1 — Operational.** Any issue that causes, or would cause, an **S0–S2** impact for a customer in production. This includes preventive work (e.g. a missing alert, or a known risk that would lead to an S0–S2 impact). S3 production issues are not Group 1; they are Group 2b hygiene.
+**Group 1 — Prod-Impact (label `1-Prod-Impact`).** Any issue that causes, or would cause, an **S0–S2** impact for a customer in production. This includes preventive work (e.g. a missing alert, or a known risk that would lead to an S0–S2 impact). S3 production issues are not Group 1; they are Group 2b hygiene.
 
 **Group 1 takes precedence:** if an issue meets the Group 1 definition, it is Group 1, regardless of what else it is (toil, debt, feature, docs …).
 
 **Group 2 — Repeating manual work.** Anything that requires manual intervention on a recurring basis. Two subgroups:
 
-- **2a — Internal development work.**
-- **2b — Customer operations work.**
+- **2a — Internal development work** (label `2a-Toil-Debt-Hygiene`).
+- **2b — Customer operations work** (label `2b-CustOps-Hygiene`).
 
 Group 2 also includes technical debt, cleanup and hygiene, which must never be allowed to accumulate while time is spent on feature work. Customer-visible hygiene (e.g. cosmetic production bugs, customer-facing docs) is 2b; internal hygiene is 2a.
 
-**Group 3 — New features.** New functionality not required by any Group 1 or Group 2 issue.
+**Group 3 — Backlog features (label `3-Backlog-Feature`).** New functionality not required by any Group 1 or Group 2 issue.
 
 **Feature promotion.** A feature that is required to enable a Group 1 or Group 2 issue is promoted (this is the normal rule, not an exception, and needs no approval):
 
@@ -113,20 +113,19 @@ Feature work may start ahead of open Group 1/2 work only through a recorded over
 
 ## 6. GitHub representation
 
-1. **Type** is carried by the issue title's conventional-commit prefix, as already required by [CONTRIBUTING.md](../../CONTRIBUTING.md) (`feat`, `fix`, `perf`, `refactor`, `docs`, `chore`, `ci`, `test`, `style`, `build`; `!` for breaking). It drives the semver bump. There are no type labels.
+1. **Type** is carried by the issue title's conventional-commit prefix, as already required by [CONTRIBUTING.md](../../CONTRIBUTING.md) (`feat`, `fix`, `perf`, `refactor`, `docs`, `chore`, `ci`, `test`, `style`, `build`; `!` for breaking). It drives the semver bump and is the authoritative type. The organization-standard type labels (`bug`, `enhancement`, `documentation`) may also be used; they have no effect on ordering.
 2. **Type and Group are independent.** A `feat:` can be Group 1 or 2 through promotion; a `refactor:` is usually Group 2a debt but is triaged like anything else; a `fix:` for an S3 cosmetic issue is Group 2b hygiene.
 3. **Classification labels** (each issue carries exactly one of each):
 
    | Kind | Labels |
    |------|--------|
-   | Group | `group:1`, `group:2a`, `group:2b`, `group:3` |
+   | Group | `1-Prod-Impact`, `2a-Toil-Debt-Hygiene`, `2b-CustOps-Hygiene`, `3-Backlog-Feature` |
    | Priority | `P0`, `P1`, `P2`, `P3` |
    | Severity | `S0`, `S1`, `S2`, `S3` |
 
 4. **Workflow labels:** `needs-triage`, `blocked`, `override`.
-5. **Retained helper labels** (status or call for help; no effect on ordering): `duplicate`, `invalid`, `wontfix`, `question`, `good first issue`, `help wanted`.
-6. **Retired labels:** `development`, `ad hoc` (replaced by Group and P/S), and `bug`, `enhancement`, `documentation` (duplicate the title type).
-7. **Rollout:** all open issues receive `needs-triage` and are triaged per section 5.
+5. **Organization-standard labels** (status, type or call for help; no effect on ordering): `duplicate`, `invalid`, `wontfix`, `question`, `good first issue`, `help wanted`, `development`, `ad hoc`, `bug`, `enhancement`, `documentation`.
+6. **Rollout:** all open issues receive `needs-triage` and are triaged per section 5.
 
 ## 7. Edge categories
 
@@ -152,6 +151,6 @@ Decisions in the order they were made; the policy sections above reflect all of 
 - **D6c — Override mechanics (decided 2026-10-15).** Only the primary maintainer approves. Recorded on the feature issue with the `override` label and a comment giving reason, approver and the deferred Group 1/2 issue numbers. Overrides are reviewed alongside feature starvation.
 - **D7 — Feature promotion (decided 2026-10-15).** A feature that enables a Group 1/2 issue must link it, inherits its Group and P/S (highest-ranked if several), and is re-triaged when that issue changes. Promotion needs no approval: the link is the justification. Overrides (D6) remain the only path needing maintainer sign-off.
 - **D8 — Minimal triage process (decided 2026-10-15).** Creator triages at creation; maintainer may correct. Untriaged issues (`needs-triage`) cannot be picked up and are triaged before the next pick. Re-triage on changed breadth/severity, changed dependency, or unblocking. Valid blocked reasons: external party, linked issue, scheduled window; recorded with `blocked` + comment. Unclear issues go back to `needs-triage`. Starvation/override review happens when noticed, no fixed cadence. Closes the "good reason" question from D1a.
-- **D9 — GitHub representation (decided 2026-10-15).** Type stays in the conventional-commit title prefix (single source of truth, already drives semver; `refactor` is already a type). Type and Group are independent. Labels: group/P/S (one each) plus `needs-triage`, `blocked`, `override`. Retire `development`, `ad hoc`, `bug`, `enhancement`, `documentation`; keep status/helper labels. Existing open issues get `needs-triage` at rollout.
+- **D9 — GitHub representation (decided 2026-10-15).** Type stays in the conventional-commit title prefix (single source of truth, already drives semver; `refactor` is already a type). Type and Group are independent. Labels: group/P/S (one each) plus `needs-triage`, `blocked`, `override`; the organization-standard labels are kept. Group labels are named `1-Prod-Impact`, `2a-Toil-Debt-Hygiene`, `2b-CustOps-Hygiene`, `3-Backlog-Feature` (number first so they sort in work order; renamed from `group:N` in #334). Existing open issues get `needs-triage` at rollout.
 - **D10 — Edge categories (decided 2026-10-15).** No special rules, only guidance: security and affecting CVEs scored on potential impact; docs/tests scored on customer impact, otherwise Group 2 hygiene; routine dependency upgrades are 2a; spikes inherit the group of their linked problem (else Group 3); unused/pre-release functionality is P3.
 - **D11 — Final consistency fixes (decided 2026-10-15).** (a) Group 1 takes precedence over every other classification. (b) 2a S0 redefined as corruption/loss of internal data or environments; any risk reaching production is Group 1. Resolves the overlap between D2 and D4. (c) S3 production issues and other customer-visible hygiene go to 2b (customer scales); internal hygiene to 2a.
