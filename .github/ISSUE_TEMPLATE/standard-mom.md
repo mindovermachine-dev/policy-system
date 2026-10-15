@@ -2,6 +2,7 @@
 name: MoM Standard Work Item
 about: Create a work item based on the standard MoM issue template
 title: ""
+labels: ["needs-triage"]
 assignees: []
 ---
 

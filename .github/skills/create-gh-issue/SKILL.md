@@ -6,7 +6,7 @@ description: >-
   testable AC from multiple perspectives.
 metadata:
   author: platform
-  version: "4.2.0"
+  version: "4.3.0"
   tags: [gh-issue, backlog-item, interactive]
   copyright: "© 2026 Cartman ApS. All rights reserved."
 ---
@@ -491,6 +491,30 @@ in particular do not use a container name (`company_merge:`) or `revert` as the 
 **Required output:** `Type:` and `Scope:` (scope may be omitted only when the change
 is genuinely cross-cutting).
 
+### Step 3: Classify
+
+**Goal:** Give the issue a Group, Priority (P) and Severity (S) at creation, as
+[the triage policy](../../../docs/policy/triage-policy.md) section 5 requires. The
+policy holds the definitions; do not restate or paraphrase them in the issue.
+
+1. **Group** — propose one of `group:1`, `group:2a`, `group:2b`, `group:3` using
+   policy section 1.1 (and section 7 for edge categories).
+2. **P and S** — propose one of `P0`–`P3` and `S0`–`S3`. Use the scales that match the
+   Group: policy sections 1.2 and 1.3 for Group 1 and 2b; the **2a scales in section 1.4**
+   for Group 2a (internal work), never the customer scales.
+3. **Justify** — one line each for Group, P and S, naming the policy section used.
+4. **Feature promotion** — if the issue is a `feat` that is required to enable an open
+   Group 1 or Group 2 issue (policy section 1.1, "Feature promotion"):
+   - add `Enables #N` to the Related section (no link, no promotion);
+   - inherit Group, P and S from #N (`gh issue view <N> --json labels`); if it enables
+     several, inherit from the highest-ranked one;
+   - if #N carries no resolved classification, treat the inherited values as unresolved.
+5. **Unresolved** — if any of Group, P or S cannot be resolved, do not guess. Mark that
+   value unresolved; the issue is created with `needs-triage` and none of the unresolved
+   classification labels.
+
+**Required output:** Group, P and S (each resolved with a justification, or unresolved).
+
 ---
 
 ## Phase 4: Confirm
@@ -502,6 +526,11 @@ description concise (5-10 words), imperative, lower-case first letter, no traili
 period. Example: `feat(ps-cli): add kgraph list to show ingested RegulatoryInstruments`.
 The title becomes the ready commit header verbatim, so it must already be a valid
 conventional-commit header.
+
+**Classification:** (issue metadata, not a body section) the Group, P and S from
+Phase 3 Step 3, each with its one-line justification and the policy section it used.
+Unresolved values are shown as `unresolved` and result in `needs-triage`. The user
+confirms or corrects them here.
 
 ## Problem
 
@@ -548,7 +577,7 @@ or a note that the user proceeded without a strong justification (Phase 1 Step 3
 
 - [ADR-nnn: title]
 - Depends on: [#issue]
-- Enables: [future work]
+- Enables: [future work, or `Enables #N` for a promoted feature (Phase 3 Step 3)]
 
 **Gate:** Do not create until user explicitly confirms.
 
@@ -572,8 +601,13 @@ or a note that the user proceeded without a strong justification (Phase 1 Step 3
      --repo <owner/repo> \
      --title "<title>" \
      --body-file <temp-file> \
-     --assignee @me
+     --assignee @me \
+     --label "<group:*>" --label "<P*>" --label "<S*>"
    ```
+
+   Pass exactly one `group:*`, one `P*` and one `S*` label, and no `needs-triage`, when
+   all three were confirmed. If any is unresolved, pass `--label needs-triage` plus the
+   labels for the values that were resolved — never a label for an unresolved value.
 
 4. If `github.project` is configured in `system-config.md`, add the issue to that
    project and set Status = Backlog.
@@ -605,3 +639,5 @@ Execution should be silent unless:
    creation.
 10. **Name what is removed** — refactor and replacement issues must list superseded
     code, tests, config and docs, and carry a removal AC for each (Cleanup perspective)
+11. **Classify at creation** — every issue gets Group, P and S (Phase 3 Step 3) or
+    `needs-triage`; definitions live in `docs/policy/triage-policy.md`, never copied here
