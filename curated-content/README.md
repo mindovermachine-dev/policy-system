@@ -31,10 +31,9 @@ never hand-edited.
 content curated here is compatible with public redistribution, covering both external
 (EU regulation) and internal (project-authored) sources.
 
-**Current state:** nine external EU instruments are curated here — CRA, GDPR, NIS2,
-RRF, the Data Act, the Web Accessibility Directive, DSA, DORA, and the AI Act (see
-`catalog.json` for the full list with CELEX ids) — and the internal Engineering
-Practices baseline (`ENGPRAC-1.0`). Populating a new instrument is a one-time maintainer
+**Current state:** two external EU instruments are curated here — CRA and GDPR (see
+`catalog.json` for the CELEX ids) — and the internal Engineering Practices baseline
+(`ENGPRAC-1.0`). Populating a new instrument is a one-time maintainer
 action, separate from restoring an already-curated instrument (see the
 user guide's
 [Load curated content](../docs/artifacts/user-guide.md#load-curated-content)

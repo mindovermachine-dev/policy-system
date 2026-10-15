@@ -1,4 +1,4 @@
-"""Tests for `tools/company-merge/company_merge_similarity_sweep.py`'s curated-content
+"""Tests for `tools/company-merge/company_merge_similarity_sweep.py`'s similarity-corpus
 Capability loader.
 
 Loads the script by path via `importlib.util.spec_from_file_location`, exactly as
@@ -8,7 +8,7 @@ already do for this same script.
 Covers:
 
 - `_load_curated_content_capability_nodes()` reads
-  `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` via
+  `test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json` via
   `export.serialize.parse_serialized_graph_json`, returning all 778 real Capability
   nodes.
 - A missing, malformed, or wrong-shaped `baseline.json` raises
@@ -67,7 +67,7 @@ def _configure_logging_for_route_embedding() -> None:  # pyright: ignore[reportU
     configure_logging()
 
 
-# --- loads the real curated-content corpus via parse_serialized_graph_json --
+# --- loads the real similarity-corpus corpus via parse_serialized_graph_json --
 
 
 def test_loads_capability_nodes_via_parse_serialized_graph_json(
@@ -108,7 +108,7 @@ def test_raises_curated_content_corpus_error_when_a_baseline_json_is_missing(
     )
     # No CRA-1.0 directory at all.
 
-    monkeypatch.setattr(sweep_module, "_CURATED_CONTENT_DIR", tmp_path)
+    monkeypatch.setattr(sweep_module, "_CORPUS_DIR", tmp_path)
 
     with pytest.raises(sweep_module.CuratedContentCorpusError):
         sweep_module._load_curated_content_capability_nodes()
@@ -119,7 +119,7 @@ def test_raises_curated_content_corpus_error_when_a_baseline_json_is_malformed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for instrument_dir in sweep_module._CURATED_CONTENT_INSTRUMENT_DIRS:
+    for instrument_dir in sweep_module._CORPUS_INSTRUMENT_DIRS:
         (tmp_path / instrument_dir).mkdir()
         (tmp_path / instrument_dir / "baseline.json").write_text(
             '{"nodes": [], "edges": []}', encoding="utf-8"
@@ -127,7 +127,7 @@ def test_raises_curated_content_corpus_error_when_a_baseline_json_is_malformed(
     malformed_path = tmp_path / "NIS2-1.0" / "baseline.json"
     malformed_path.write_text("{not valid json", encoding="utf-8")
 
-    monkeypatch.setattr(sweep_module, "_CURATED_CONTENT_DIR", tmp_path)
+    monkeypatch.setattr(sweep_module, "_CORPUS_DIR", tmp_path)
 
     with pytest.raises(sweep_module.CuratedContentCorpusError) as excinfo:
         sweep_module._load_curated_content_capability_nodes()
@@ -140,7 +140,7 @@ def test_raises_curated_content_corpus_error_when_a_baseline_json_has_the_wrong_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for instrument_dir in sweep_module._CURATED_CONTENT_INSTRUMENT_DIRS:
+    for instrument_dir in sweep_module._CORPUS_INSTRUMENT_DIRS:
         (tmp_path / instrument_dir).mkdir()
         (tmp_path / instrument_dir / "baseline.json").write_text(
             '{"nodes": [], "edges": []}', encoding="utf-8"
@@ -148,7 +148,7 @@ def test_raises_curated_content_corpus_error_when_a_baseline_json_has_the_wrong_
     wrong_shape_path = tmp_path / "CRA-1.0" / "baseline.json"
     wrong_shape_path.write_text('{"nodes": []}', encoding="utf-8")  # missing "edges"
 
-    monkeypatch.setattr(sweep_module, "_CURATED_CONTENT_DIR", tmp_path)
+    monkeypatch.setattr(sweep_module, "_CORPUS_DIR", tmp_path)
 
     with pytest.raises(sweep_module.CuratedContentCorpusError):
         sweep_module._load_curated_content_capability_nodes()

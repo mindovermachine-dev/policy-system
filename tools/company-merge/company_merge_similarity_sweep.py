@@ -8,7 +8,7 @@ candidate threshold, and recommends the best one. Use it to validate or re-tune
 
 How a pair is scored: `text_a` (the incoming side) is always embedded fresh through
 `ps_service.llm_interface.embedding.route_embedding`; `text_b` (the existing-candidate
-side) reuses the cached `embedding` of the real curated-content node it cites when one
+side) reuses the cached `embedding` of the real similarity-corpus node it cites when one
 exists, and is otherwise embedded fresh. The two vectors are compared with
 `ps_service.company_merge.similarity.cosine_similarity`, never a reimplementation.
 Each unique text is embedded at most once per run, however many pairs and thresholds
@@ -19,7 +19,7 @@ paired with a real Capability node's own `name`) and 11 true-non-match pairs (tw
 distinct Capability nodes' `name` fields). Every pair cites the real GDPR, NIS2 or CRA
 Capability node id(s) it is drawn from and carries a non-empty rationale. When the
 dataset is built, it is checked against every Capability node in
-`curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json`: a pair whose two sides are the same
+`test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json`: a pair whose two sides are the same
 string and whose string names two or more real nodes is rejected with
 `SweepDatasetValidationError`, because Company Merge resolves identical names by exact
 key before any semantic scoring happens.
@@ -57,7 +57,7 @@ Exit codes:
     1   Neither `--model` nor PS_LLMINTERFACE_EMBED_MODEL resolves to a model.
 
 Requires a configured embedding provider (its own credentials resolvable by LiteLLM)
-unless the embedding transport is injected, and the curated-content baselines checked
+unless the embedding transport is injected, and the similarity-corpus baselines checked
 out in the repository.
 """
 
@@ -97,7 +97,7 @@ class SimilarityPair:
         text_b: Name-shaped string for the existing-candidate side.
         label: `"match"` if the two names denote the same capability, `"non_match"` if
             they are distinct capabilities.
-        cited_node_ids: Ids of the real curated-content Capability node(s) the pair is
+        cited_node_ids: Ids of the real similarity-corpus Capability node(s) the pair is
             drawn from. The last id is the node behind `text_b`.
         rationale: Why the pair carries its label.
         text_b_cached_embedding: The cached `embedding` of the node behind `text_b`,
@@ -173,7 +173,7 @@ class SweepDatasetValidationError(Exception):
 
     Raised by `build_dataset()` when a pair's `text_a` and `text_b` are the identical
     string and that string is the `name` of two or more real Capability nodes across
-    `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json`. Company Merge would resolve
+    `test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json`. Company Merge would resolve
     such a pair by its exact-key match before semantic scoring runs, so it must never
     reach the dataset.
     """
@@ -183,21 +183,21 @@ _TOOLS_COMPANY_MERGE_DIR = Path(__file__).resolve().parent
 
 
 class CuratedContentCorpusError(Exception):
-    """A `curated-content/{id}/baseline.json` file is missing or fails to parse.
+    """A `test-data/similarity-corpus/{id}/baseline.json` file is missing or fails to parse.
 
     Raised while loading the curated Capability nodes, which never silently returns an
     empty or partial list.
     """
 
 
-_CURATED_CONTENT_DIR = _TOOLS_COMPANY_MERGE_DIR.parent.parent / "curated-content"
-_CURATED_CONTENT_INSTRUMENT_DIRS = ("GDPR-1.0", "NIS2-1.0", "CRA-1.0")
+_CORPUS_DIR = _TOOLS_COMPANY_MERGE_DIR.parent.parent / "test-data" / "similarity-corpus"
+_CORPUS_INSTRUMENT_DIRS = ("GDPR-1.0", "NIS2-1.0", "CRA-1.0")
 
 
 def _load_curated_content_capability_nodes() -> tuple[SerializedNode, ...]:
-    """Load every Capability node from the three curated-content baseline exports.
+    """Load every Capability node from the three similarity-corpus baseline exports.
 
-    Reads `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` through
+    Reads `test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json` through
     `export.serialize.parse_serialized_graph_json` and keeps the nodes labeled
     `Capability`.
 
@@ -206,12 +206,12 @@ def _load_curated_content_capability_nodes() -> tuple[SerializedNode, ...]:
             parse as a serialized graph; a failure on any one aborts the whole load.
     """
     nodes: list[SerializedNode] = []
-    for instrument_dir in _CURATED_CONTENT_INSTRUMENT_DIRS:
-        path = _CURATED_CONTENT_DIR / instrument_dir / "baseline.json"
+    for instrument_dir in _CORPUS_INSTRUMENT_DIRS:
+        path = _CORPUS_DIR / instrument_dir / "baseline.json"
         if not path.is_file():
             raise CuratedContentCorpusError(
                 f"{path} does not exist -- build_dataset() requires all three "
-                "curated-content baseline.json files (AC-BI-001/AC-BI-003)"
+                "similarity-corpus baseline.json files (AC-BI-001/AC-BI-003)"
             )
         try:
             graph = parse_serialized_graph_json(path.read_bytes())
@@ -224,7 +224,7 @@ def _load_curated_content_capability_nodes() -> tuple[SerializedNode, ...]:
 
 
 def _capability_nodes_by_id() -> dict[str, SerializedNode]:
-    """Index every real curated-content Capability node by its `id` property.
+    """Index every real similarity-corpus Capability node by its `id` property.
 
     `build_dataset()` uses it to look up each spec's `text_b`-side node and attach its
     cached `embedding`. When the same id appears in more than one instrument file (the
@@ -257,12 +257,12 @@ def _text_b_cached_embedding(
 
 
 def _repeated_capability_names_from_corpus() -> frozenset[str]:
-    """Capability `name` values shared by two or more curated-content nodes.
+    """Capability `name` values shared by two or more similarity-corpus nodes.
 
     Counts names across the Capability nodes of
-    `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json`.
+    `test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json`.
     `_assert_dataset_excludes_real_identical_name_pairs` checks the built-in dataset
-    against this set, at full curated-content scale.
+    against this set, at full similarity-corpus scale.
     """
     names = (
         cast("str", node.properties["name"]) for node in _load_curated_content_capability_nodes()
@@ -277,7 +277,7 @@ def _assert_dataset_excludes_real_identical_name_pairs(
     """Raise if any pair is a same-string pair drawn from a name shared by real nodes.
 
     A mechanical check rather than a manual curation discipline: `repeated_names` is
-    computed from every real Capability node across curated-content
+    computed from every real Capability node across similarity-corpus
     (`_repeated_capability_names_from_corpus`), so it catches any such pair whichever
     regulation it came from.
     """
@@ -301,7 +301,7 @@ _CandidateSpec = tuple[str, str, Literal["match", "non_match"], tuple[str, ...],
 # 10 true-match pairs: each is (human-authored name-style paraphrase, the real node's own
 # `name`, "match", the real node's id, a rationale grounded in the real node's own
 # `description`). Every name, id and description cited below comes from the real
-# `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` files.
+# `test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json` files.
 _MATCH_PAIR_SPECS: tuple[_CandidateSpec, ...] = (
     (
         "Assessing and Mitigating Privacy Risks Before High-Risk Processing Begins",
@@ -419,7 +419,7 @@ _MATCH_PAIR_SPECS: tuple[_CandidateSpec, ...] = (
 # 11 true-non-match pairs: each cites two real, distinct Capability nodes' own `name`
 # fields, with a rationale explaining why the extraction kept them as separate
 # capabilities despite shared vocabulary. Every name, id and description cited below
-# comes from the real `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` files.
+# comes from the real `test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json` files.
 _NON_MATCH_PAIR_SPECS: tuple[_CandidateSpec, ...] = (
     (
         "Confidentiality Control",
@@ -739,7 +739,7 @@ def sweep_dataset(
 
 
 def build_dataset() -> tuple[SimilarityPair, ...]:
-    """Build the full labeled sweep dataset from the curated-content baselines.
+    """Build the full labeled sweep dataset from the similarity-corpus baselines.
 
     Returns:
         10 true-match pairs followed by 11 true-non-match pairs. Each cites the real
@@ -749,14 +749,14 @@ def build_dataset() -> tuple[SimilarityPair, ...]:
         none.
 
     Raises:
-        CuratedContentCorpusError: If a curated-content `baseline.json` is missing or
+        CuratedContentCorpusError: If a similarity-corpus `baseline.json` is missing or
             malformed.
         SweepDatasetValidationError: If a pair uses a name shared by two or more real
             nodes on both of its sides. The dataset is checked mechanically against the
-            whole curated-content corpus rather than trusted to hand curation.
+            whole similarity-corpus corpus rather than trusted to hand curation.
 
     Side Effects:
-        Reads the three curated-content `baseline.json` files.
+        Reads the three similarity-corpus `baseline.json` files.
     """
     nodes_by_id = _capability_nodes_by_id()
     pairs = tuple(

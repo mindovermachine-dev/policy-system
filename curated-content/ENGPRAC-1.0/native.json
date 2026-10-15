@@ -1,7 +1,9 @@
 {
   "edges": [
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s2-pa-1->cap-1"
+      },
       "relationship_type": "COVERS",
       "source_id": "s2-pa-1",
       "source_label": "PracticeArea",
@@ -9,7 +11,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s2-pa-2->cap-3"
+      },
       "relationship_type": "COVERS",
       "source_id": "s2-pa-2",
       "source_label": "PracticeArea",
@@ -17,7 +21,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s2-pa-3->cap-6"
+      },
       "relationship_type": "COVERS",
       "source_id": "s2-pa-3",
       "source_label": "PracticeArea",
@@ -25,7 +31,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s3-pa-1->cap-2"
+      },
       "relationship_type": "COVERS",
       "source_id": "s3-pa-1",
       "source_label": "PracticeArea",
@@ -33,7 +41,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s3-pa-2->cap-4"
+      },
       "relationship_type": "COVERS",
       "source_id": "s3-pa-2",
       "source_label": "PracticeArea",
@@ -41,7 +51,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s3-pa-3->cap-5"
+      },
       "relationship_type": "COVERS",
       "source_id": "s3-pa-3",
       "source_label": "PracticeArea",
@@ -49,7 +61,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s3-pa-3->s4-cap-1"
+      },
       "relationship_type": "COVERS",
       "source_id": "s3-pa-3",
       "source_label": "PracticeArea",
@@ -57,7 +71,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s5-pa-1->cap-7"
+      },
       "relationship_type": "COVERS",
       "source_id": "s5-pa-1",
       "source_label": "PracticeArea",
@@ -65,7 +81,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s5-pa-1->s5-cap-1"
+      },
       "relationship_type": "COVERS",
       "source_id": "s5-pa-1",
       "source_label": "PracticeArea",
@@ -73,7 +91,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s6-pa-1->cap-10"
+      },
       "relationship_type": "COVERS",
       "source_id": "s6-pa-1",
       "source_label": "PracticeArea",
@@ -81,7 +101,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s7-pa-1->cap-9"
+      },
       "relationship_type": "COVERS",
       "source_id": "s7-pa-1",
       "source_label": "PracticeArea",
@@ -89,7 +111,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:s8-pa-1->cap-8"
+      },
       "relationship_type": "COVERS",
       "source_id": "s8-pa-1",
       "source_label": "PracticeArea",
@@ -98,6 +122,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role-1",
         "source_ref": "Sec. 3.1"
       },
       "relationship_type": "DEFINES",
@@ -108,6 +133,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role-2",
         "source_ref": "Sec. 3.2"
       },
       "relationship_type": "DEFINES",
@@ -118,6 +144,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role-3",
         "source_ref": "Sec. 3.3"
       },
       "relationship_type": "DEFINES",
@@ -128,6 +155,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role-4",
         "source_ref": "Sec. 3.4"
       },
       "relationship_type": "DEFINES",
@@ -138,6 +166,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role-5",
         "source_ref": "Sec. 3.5"
       },
       "relationship_type": "DEFINES",
@@ -148,6 +177,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role-6",
         "source_ref": "Sec. 3.6"
       },
       "relationship_type": "DEFINES",
@@ -158,6 +188,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-1",
         "source_ref": "4.1"
       },
       "relationship_type": "EXPRESSES",
@@ -168,6 +199,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-10",
         "source_ref": "4.10"
       },
       "relationship_type": "EXPRESSES",
@@ -178,6 +210,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-2",
         "source_ref": "4.2"
       },
       "relationship_type": "EXPRESSES",
@@ -188,6 +221,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-3",
         "source_ref": "4.3"
       },
       "relationship_type": "EXPRESSES",
@@ -198,6 +232,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-4",
         "source_ref": "4.4"
       },
       "relationship_type": "EXPRESSES",
@@ -208,6 +243,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-5",
         "source_ref": "4.5"
       },
       "relationship_type": "EXPRESSES",
@@ -218,6 +254,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-6",
         "source_ref": "4.6"
       },
       "relationship_type": "EXPRESSES",
@@ -228,6 +265,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-7",
         "source_ref": "4.7"
       },
       "relationship_type": "EXPRESSES",
@@ -238,6 +276,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-8",
         "source_ref": "4.8"
       },
       "relationship_type": "EXPRESSES",
@@ -248,6 +287,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->req-9",
         "source_ref": "4.9"
       },
       "relationship_type": "EXPRESSES",
@@ -258,6 +298,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->s4-req-1",
         "source_ref": "4.11"
       },
       "relationship_type": "EXPRESSES",
@@ -267,7 +308,9 @@
       "target_label": "Requirement"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-1->s2-pol-1"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-1",
       "source_label": "Capability",
@@ -275,7 +318,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-10->s6-pol-1"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-10",
       "source_label": "Capability",
@@ -283,7 +328,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-2->s3-pol-1"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-2",
       "source_label": "Capability",
@@ -291,7 +338,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-3->s2-pol-2"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-3",
       "source_label": "Capability",
@@ -299,7 +348,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-4->s3-pol-2"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-4",
       "source_label": "Capability",
@@ -307,7 +358,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-5->s3-pol-3"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-5",
       "source_label": "Capability",
@@ -315,7 +368,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-6->s2-pol-3"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-6",
       "source_label": "Capability",
@@ -323,7 +378,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-7->s5-pol-1"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-7",
       "source_label": "Capability",
@@ -331,7 +388,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-8->s8-pol-1"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-8",
       "source_label": "Capability",
@@ -339,7 +398,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap-9->s7-pol-1"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap-9",
       "source_label": "Capability",
@@ -347,7 +408,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:s4-cap-1->s4-pol-1"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "s4-cap-1",
       "source_label": "Capability",
@@ -355,7 +418,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:s5-cap-1->s5-pol-1"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "s5-cap-1",
       "source_label": "Capability",
@@ -363,7 +428,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-1->obl-4"
+      },
       "relationship_type": "HAS",
       "source_id": "role-1",
       "source_label": "Role",
@@ -371,7 +438,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-2->obl-1"
+      },
       "relationship_type": "HAS",
       "source_id": "role-2",
       "source_label": "Role",
@@ -379,7 +448,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-3->obl-2"
+      },
       "relationship_type": "HAS",
       "source_id": "role-3",
       "source_label": "Role",
@@ -387,7 +458,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-3->obl-3"
+      },
       "relationship_type": "HAS",
       "source_id": "role-3",
       "source_label": "Role",
@@ -395,7 +468,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-3->obl-5"
+      },
       "relationship_type": "HAS",
       "source_id": "role-3",
       "source_label": "Role",
@@ -403,7 +478,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-3->obl-8"
+      },
       "relationship_type": "HAS",
       "source_id": "role-3",
       "source_label": "Role",
@@ -411,7 +488,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-3->s4-obl-1"
+      },
       "relationship_type": "HAS",
       "source_id": "role-3",
       "source_label": "Role",
@@ -419,7 +498,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-4->obl-10"
+      },
       "relationship_type": "HAS",
       "source_id": "role-4",
       "source_label": "Role",
@@ -427,7 +508,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-4->obl-7"
+      },
       "relationship_type": "HAS",
       "source_id": "role-4",
       "source_label": "Role",
@@ -435,7 +518,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-5->obl-6"
+      },
       "relationship_type": "HAS",
       "source_id": "role-5",
       "source_label": "Role",
@@ -443,7 +528,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role-6->obl-9"
+      },
       "relationship_type": "HAS",
       "source_id": "role-6",
       "source_label": "Role",
@@ -451,7 +538,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s2-std-1->s2-ctrl-1"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s2-std-1",
       "source_label": "Standard",
@@ -459,7 +548,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s2-std-1->s2-ctrl-2"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s2-std-1",
       "source_label": "Standard",
@@ -467,7 +558,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s2-std-2->s2-ctrl-3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s2-std-2",
       "source_label": "Standard",
@@ -475,7 +568,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s2-std-3->s2-ctrl-4"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s2-std-3",
       "source_label": "Standard",
@@ -483,7 +578,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s2-std-3->s2-ctrl-5"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s2-std-3",
       "source_label": "Standard",
@@ -491,7 +588,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s2-std-4->s2-ctrl-6"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s2-std-4",
       "source_label": "Standard",
@@ -499,7 +598,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s2-std-4->s2-ctrl-7"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s2-std-4",
       "source_label": "Standard",
@@ -507,7 +608,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-1->s3-ctrl-1"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-1",
       "source_label": "Standard",
@@ -515,7 +618,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-2->s3-ctrl-2"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-2",
       "source_label": "Standard",
@@ -523,7 +628,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-2->s3-ctrl-3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-2",
       "source_label": "Standard",
@@ -531,7 +638,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-2->s3-ctrl-4"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-2",
       "source_label": "Standard",
@@ -539,7 +648,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-3->s3-ctrl-5"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-3",
       "source_label": "Standard",
@@ -547,7 +658,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-3->s3-ctrl-6"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-3",
       "source_label": "Standard",
@@ -555,7 +668,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-4->s3-ctrl-7"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-4",
       "source_label": "Standard",
@@ -563,7 +678,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-5->s3-ctrl-8"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-5",
       "source_label": "Standard",
@@ -571,7 +688,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s3-std-5->s3-ctrl-9"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s3-std-5",
       "source_label": "Standard",
@@ -579,7 +698,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s4-std-1->s4-ctrl-2"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s4-std-1",
       "source_label": "Standard",
@@ -587,7 +708,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s4-std-1->s4-ctrl-3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s4-std-1",
       "source_label": "Standard",
@@ -595,7 +718,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s4-std-1->s4-ctrl-4"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s4-std-1",
       "source_label": "Standard",
@@ -603,7 +728,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s4-std-2->s4-ctrl-1"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s4-std-2",
       "source_label": "Standard",
@@ -611,7 +738,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s5-std-1->s5-ctrl-1"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s5-std-1",
       "source_label": "Standard",
@@ -619,7 +748,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s5-std-1->s5-ctrl-2"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s5-std-1",
       "source_label": "Standard",
@@ -627,7 +758,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s5-std-2->s5-ctrl-4"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s5-std-2",
       "source_label": "Standard",
@@ -635,7 +768,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s5-std-2->s5-ctrl-5"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s5-std-2",
       "source_label": "Standard",
@@ -643,7 +778,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s5-std-3->s5-ctrl-3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s5-std-3",
       "source_label": "Standard",
@@ -651,7 +788,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s5-std-3->s5-ctrl-6"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s5-std-3",
       "source_label": "Standard",
@@ -659,7 +798,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s6-std-1->s6-ctrl-1"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s6-std-1",
       "source_label": "Standard",
@@ -667,7 +808,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s6-std-2->s6-ctrl-2"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s6-std-2",
       "source_label": "Standard",
@@ -675,7 +818,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s6-std-2->s6-ctrl-3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s6-std-2",
       "source_label": "Standard",
@@ -683,7 +828,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s6-std-2->s6-ctrl-4"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s6-std-2",
       "source_label": "Standard",
@@ -691,7 +838,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s7-std-1->s7-ctrl-1"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s7-std-1",
       "source_label": "Standard",
@@ -699,7 +848,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s7-std-1->s7-ctrl-4"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s7-std-1",
       "source_label": "Standard",
@@ -707,7 +858,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s7-std-2->s7-ctrl-2"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s7-std-2",
       "source_label": "Standard",
@@ -715,7 +868,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s7-std-2->s7-ctrl-3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s7-std-2",
       "source_label": "Standard",
@@ -723,7 +878,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s8-std-1->s8-ctrl-1"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s8-std-1",
       "source_label": "Standard",
@@ -731,7 +888,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s8-std-1->s8-ctrl-3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s8-std-1",
       "source_label": "Standard",
@@ -739,7 +898,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s8-std-2->s8-ctrl-2"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s8-std-2",
       "source_label": "Standard",
@@ -747,7 +908,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s8-std-3->s8-ctrl-4"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s8-std-3",
       "source_label": "Standard",
@@ -755,7 +918,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:s8-std-3->s8-ctrl-5"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "s8-std-3",
       "source_label": "Standard",
@@ -763,7 +928,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s2-rp-1->cap-3"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s2-rp-1",
       "source_label": "RiskPath",
@@ -771,7 +938,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s2-rp-2->cap-1"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s2-rp-2",
       "source_label": "RiskPath",
@@ -779,7 +948,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s3-rp-1->cap-2"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s3-rp-1",
       "source_label": "RiskPath",
@@ -787,7 +958,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s3-rp-1->cap-4"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s3-rp-1",
       "source_label": "RiskPath",
@@ -795,7 +968,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s3-rp-1->cap-5"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s3-rp-1",
       "source_label": "RiskPath",
@@ -803,7 +978,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s3-rp-1->cap-6"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s3-rp-1",
       "source_label": "RiskPath",
@@ -811,7 +988,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s4-rp-1->cap-5"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s4-rp-1",
       "source_label": "RiskPath",
@@ -819,7 +998,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s4-rp-1->s4-cap-1"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s4-rp-1",
       "source_label": "RiskPath",
@@ -827,7 +1008,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s5-rp-1->cap-7"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s5-rp-1",
       "source_label": "RiskPath",
@@ -835,7 +1018,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s5-rp-1->s5-cap-1"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s5-rp-1",
       "source_label": "RiskPath",
@@ -843,7 +1028,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s6-rp-1->cap-10"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s6-rp-1",
       "source_label": "RiskPath",
@@ -851,7 +1038,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s7-rp-1->cap-9"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s7-rp-1",
       "source_label": "RiskPath",
@@ -859,7 +1048,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:s8-rp-1->cap-8"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "s8-rp-1",
       "source_label": "RiskPath",
@@ -867,7 +1058,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s2-pa-1->s2-pol-1"
+      },
       "relationship_type": "OWNS",
       "source_id": "s2-pa-1",
       "source_label": "PracticeArea",
@@ -875,7 +1068,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s2-pa-2->s2-pol-2"
+      },
       "relationship_type": "OWNS",
       "source_id": "s2-pa-2",
       "source_label": "PracticeArea",
@@ -883,7 +1078,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s2-pa-3->s2-pol-3"
+      },
       "relationship_type": "OWNS",
       "source_id": "s2-pa-3",
       "source_label": "PracticeArea",
@@ -891,7 +1088,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s3-pa-1->s3-pol-1"
+      },
       "relationship_type": "OWNS",
       "source_id": "s3-pa-1",
       "source_label": "PracticeArea",
@@ -899,7 +1098,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s3-pa-2->s3-pol-2"
+      },
       "relationship_type": "OWNS",
       "source_id": "s3-pa-2",
       "source_label": "PracticeArea",
@@ -907,7 +1108,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s3-pa-3->s3-pol-3"
+      },
       "relationship_type": "OWNS",
       "source_id": "s3-pa-3",
       "source_label": "PracticeArea",
@@ -915,7 +1118,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s3-pa-3->s4-pol-1"
+      },
       "relationship_type": "OWNS",
       "source_id": "s3-pa-3",
       "source_label": "PracticeArea",
@@ -923,7 +1128,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s5-pa-1->s5-pol-1"
+      },
       "relationship_type": "OWNS",
       "source_id": "s5-pa-1",
       "source_label": "PracticeArea",
@@ -931,7 +1138,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s6-pa-1->s6-pol-1"
+      },
       "relationship_type": "OWNS",
       "source_id": "s6-pa-1",
       "source_label": "PracticeArea",
@@ -939,7 +1148,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s7-pa-1->s7-pol-1"
+      },
       "relationship_type": "OWNS",
       "source_id": "s7-pa-1",
       "source_label": "PracticeArea",
@@ -947,7 +1158,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:s8-pa-1->s8-pol-1"
+      },
       "relationship_type": "OWNS",
       "source_id": "s8-pa-1",
       "source_label": "PracticeArea",
@@ -955,7 +1168,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-1->cap-1"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-1",
       "source_label": "Obligation",
@@ -963,7 +1178,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-10->cap-10"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-10",
       "source_label": "Obligation",
@@ -971,7 +1188,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-2->cap-2"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-2",
       "source_label": "Obligation",
@@ -979,7 +1198,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-3->cap-3"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-3",
       "source_label": "Obligation",
@@ -987,7 +1208,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-4->cap-4"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-4",
       "source_label": "Obligation",
@@ -995,7 +1218,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-5->cap-5"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-5",
       "source_label": "Obligation",
@@ -1003,7 +1228,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-6->cap-6"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-6",
       "source_label": "Obligation",
@@ -1011,7 +1238,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-7->cap-7"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-7",
       "source_label": "Obligation",
@@ -1019,7 +1248,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-7->s5-cap-1"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-7",
       "source_label": "Obligation",
@@ -1027,7 +1258,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-8->cap-8"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-8",
       "source_label": "Obligation",
@@ -1035,7 +1268,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl-9->cap-9"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl-9",
       "source_label": "Obligation",
@@ -1043,7 +1278,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:s4-obl-1->s4-cap-1"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "s4-obl-1",
       "source_label": "Obligation",
@@ -1051,7 +1288,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-1->obl-1"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-1",
       "source_label": "Requirement",
@@ -1059,7 +1298,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-10->obl-10"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-10",
       "source_label": "Requirement",
@@ -1067,7 +1308,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-2->obl-2"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-2",
       "source_label": "Requirement",
@@ -1075,7 +1318,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-3->obl-3"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-3",
       "source_label": "Requirement",
@@ -1083,7 +1328,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-4->obl-4"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-4",
       "source_label": "Requirement",
@@ -1091,7 +1338,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-5->obl-5"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-5",
       "source_label": "Requirement",
@@ -1099,7 +1348,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-6->obl-6"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-6",
       "source_label": "Requirement",
@@ -1107,7 +1358,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-7->obl-7"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-7",
       "source_label": "Requirement",
@@ -1115,7 +1368,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-8->obl-8"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-8",
       "source_label": "Requirement",
@@ -1123,7 +1378,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:req-9->obl-9"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "req-9",
       "source_label": "Requirement",
@@ -1131,7 +1388,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:s4-req-1->s4-obl-1"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "s4-req-1",
       "source_label": "Requirement",
@@ -1139,7 +1398,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s2-pol-1->s2-std-1"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s2-pol-1",
       "source_label": "Policy",
@@ -1147,7 +1408,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s2-pol-2->s2-std-2"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s2-pol-2",
       "source_label": "Policy",
@@ -1155,7 +1418,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s2-pol-2->s2-std-3"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s2-pol-2",
       "source_label": "Policy",
@@ -1163,7 +1428,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s2-pol-3->s2-std-4"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s2-pol-3",
       "source_label": "Policy",
@@ -1171,7 +1438,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s3-pol-1->s3-std-1"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s3-pol-1",
       "source_label": "Policy",
@@ -1179,7 +1448,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s3-pol-1->s3-std-2"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s3-pol-1",
       "source_label": "Policy",
@@ -1187,7 +1458,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s3-pol-2->s3-std-3"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s3-pol-2",
       "source_label": "Policy",
@@ -1195,7 +1468,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s3-pol-2->s3-std-4"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s3-pol-2",
       "source_label": "Policy",
@@ -1203,7 +1478,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s3-pol-3->s3-std-5"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s3-pol-3",
       "source_label": "Policy",
@@ -1211,7 +1488,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s4-pol-1->s4-std-1"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s4-pol-1",
       "source_label": "Policy",
@@ -1219,7 +1498,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s4-pol-1->s4-std-2"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s4-pol-1",
       "source_label": "Policy",
@@ -1227,7 +1508,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s5-pol-1->s5-std-1"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s5-pol-1",
       "source_label": "Policy",
@@ -1235,7 +1518,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s5-pol-1->s5-std-2"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s5-pol-1",
       "source_label": "Policy",
@@ -1243,7 +1528,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s5-pol-1->s5-std-3"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s5-pol-1",
       "source_label": "Policy",
@@ -1251,7 +1538,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s6-pol-1->s6-std-1"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s6-pol-1",
       "source_label": "Policy",
@@ -1259,7 +1548,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s6-pol-1->s6-std-2"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s6-pol-1",
       "source_label": "Policy",
@@ -1267,7 +1558,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s7-pol-1->s7-std-1"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s7-pol-1",
       "source_label": "Policy",
@@ -1275,7 +1568,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s7-pol-1->s7-std-2"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s7-pol-1",
       "source_label": "Policy",
@@ -1283,7 +1578,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s8-pol-1->s8-std-1"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s8-pol-1",
       "source_label": "Policy",
@@ -1291,7 +1588,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s8-pol-1->s8-std-2"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s8-pol-1",
       "source_label": "Policy",
@@ -1299,7 +1598,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:s8-pol-1->s8-std-3"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "s8-pol-1",
       "source_label": "Policy",
@@ -1307,7 +1608,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s2-rp-1->s2-ctrl-3"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s2-rp-1",
       "source_label": "RiskPath",
@@ -1315,7 +1618,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s2-rp-1->s2-ctrl-4"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s2-rp-1",
       "source_label": "RiskPath",
@@ -1323,7 +1628,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s2-rp-1->s2-ctrl-5"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s2-rp-1",
       "source_label": "RiskPath",
@@ -1331,7 +1638,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s2-rp-2->s2-ctrl-1"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s2-rp-2",
       "source_label": "RiskPath",
@@ -1339,7 +1648,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s2-rp-2->s2-ctrl-2"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s2-rp-2",
       "source_label": "RiskPath",
@@ -1347,7 +1658,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s3-rp-1->s3-ctrl-2"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s3-rp-1",
       "source_label": "RiskPath",
@@ -1355,7 +1668,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s3-rp-1->s3-ctrl-5"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s3-rp-1",
       "source_label": "RiskPath",
@@ -1363,7 +1678,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s3-rp-1->s3-ctrl-8"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s3-rp-1",
       "source_label": "RiskPath",
@@ -1371,7 +1688,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s4-rp-1->s4-ctrl-1"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s4-rp-1",
       "source_label": "RiskPath",
@@ -1379,7 +1698,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s4-rp-1->s4-ctrl-2"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s4-rp-1",
       "source_label": "RiskPath",
@@ -1387,7 +1708,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s4-rp-1->s4-ctrl-3"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s4-rp-1",
       "source_label": "RiskPath",
@@ -1395,7 +1718,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s5-rp-1->s5-ctrl-4"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s5-rp-1",
       "source_label": "RiskPath",
@@ -1403,7 +1728,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s5-rp-1->s5-ctrl-6"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s5-rp-1",
       "source_label": "RiskPath",
@@ -1411,7 +1738,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s6-rp-1->s6-ctrl-1"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s6-rp-1",
       "source_label": "RiskPath",
@@ -1419,7 +1748,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s6-rp-1->s6-ctrl-2"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s6-rp-1",
       "source_label": "RiskPath",
@@ -1427,7 +1758,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s6-rp-1->s6-ctrl-4"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s6-rp-1",
       "source_label": "RiskPath",
@@ -1435,7 +1768,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s7-rp-1->s7-ctrl-1"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s7-rp-1",
       "source_label": "RiskPath",
@@ -1443,7 +1778,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s7-rp-1->s7-ctrl-2"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s7-rp-1",
       "source_label": "RiskPath",
@@ -1451,7 +1788,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s7-rp-1->s7-ctrl-3"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s7-rp-1",
       "source_label": "RiskPath",
@@ -1459,7 +1798,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s7-rp-1->s7-ctrl-4"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s7-rp-1",
       "source_label": "RiskPath",
@@ -1467,7 +1808,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s8-rp-1->s8-ctrl-1"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s8-rp-1",
       "source_label": "RiskPath",
@@ -1475,7 +1818,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s8-rp-1->s8-ctrl-2"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s8-rp-1",
       "source_label": "RiskPath",
@@ -1483,7 +1828,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s8-rp-1->s8-ctrl-4"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s8-rp-1",
       "source_label": "RiskPath",
@@ -1491,7 +1838,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:s8-rp-1->s8-ctrl-5"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "s8-rp-1",
       "source_label": "RiskPath",

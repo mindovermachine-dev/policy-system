@@ -20,7 +20,7 @@ from graph_gateway.equivalence_harness import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-_CRA_NATIVE = Path(__file__).resolve().parents[3] / "curated-content" / "CRA-1.0" / "native.json"
+_CRA_NATIVE = Path(__file__).parent / "fixtures" / "CRA-1.0" / "native.json"
 
 
 def _small_artifact() -> Artifact:

@@ -3,6 +3,8 @@
 #
 #   scripts/verify-backup-restore.sh backup [--out-dir DIR] [--allow-context CTX]
 #   scripts/verify-backup-restore.sh counts [--allow-context CTX]
+#   scripts/verify-backup-restore.sh retain-secrets [--chart REF] [--chart-version V] [--interval S]
+#                                    [--timeout S] [--allow-context CTX]
 #   scripts/verify-backup-restore.sh restore --artifact FILE [--chart REF] [--chart-version V]
 #                                    [--yes] [--interval S] [--timeout S] [--allow-context CTX]
 #   scripts/verify-backup-restore.sh verify-provision [--allow-context CTX]
@@ -20,6 +22,16 @@
 #         hashes and the audit trail: keep it out of the repository and encrypt it at rest.
 # counts  Prints the row counts of `audit_events`, `access_role_assignments` and
 #         `graph_log.entries`, the figures compared before and after a backup or restore.
+# retain-secrets
+#         Prepares a running release for `restore` and `e2e`: copies the three generated
+#         credentials Secrets (`<release>-ps-postgres-{admin,state,signing}-credentials`) to
+#         `ps-{admin,state,signing}-retained`, stops ps-service and PS Postgres (a single-node disk
+#         cannot be attached by the replacement pod while the old one holds it), then runs
+#         `helm upgrade --reset-then-reuse-values` with the three `existingSecret` values and
+#         `--wait --wait-for-jobs`. It does nothing when the release already has the three values
+#         set and the Secrets exist. The copies live in the same cluster as the originals, which
+#         is enough for a kind cluster; on a real cluster keep operator-managed copies outside it
+#         (operations guide, Restore). The passwords do not change, so earlier backups stay valid.
 # restore Replaces the PS Postgres data directory with a backup artifact and empties FalkorDB, then
 #         brings the release back up in this order: stop ps-service, FalkorDB and PS Postgres;
 #         extract the artifact into `pgdata` and empty the FalkorDB volume from one helper pod;
@@ -40,7 +52,7 @@
 #         Polls `/ready` inside the ps-service pod until it answers 200 with an empty
 #         `gated_graphs`; logs each 503 (for example `graph_replay`) on the way.
 # seed    Fills a running deployment with content to verify: restores curated instruments (default
-#         ENGPRAC-1.0 and DORA-1.0, the first imports draft Policy/Standard/Control nodes) through
+#         ENGPRAC-1.0 and CRA-1.0, the first imports draft Policy/Standard/Control nodes) through
 #         the restore path and grants access roles through the access-role store, by piping
 #         tools/backup-restore-verify/seed_content.py and seed_grants.py into the ps-service pod.
 #         The ps-service image must write graphs through the Graph Write Gateway.
@@ -103,7 +115,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly SCRIPT_DIR REPO_ROOT
 readonly TOOLS_DIR="${REPO_ROOT}/tools/backup-restore-verify"
-readonly USAGE="Usage: scripts/verify-backup-restore.sh {backup [--out-dir DIR]|counts|restore --artifact FILE [--chart REF] [--chart-version V] [--yes]|verify-provision|wait-ready [--interval S] [--timeout S]|seed [--instrument ID ...]|e2e [--out-dir DIR] [--instrument ID ...] [--yes] [--skip-restore]} [--allow-context CTX]"
+readonly USAGE="Usage: scripts/verify-backup-restore.sh {backup [--out-dir DIR]|counts|retain-secrets [--chart REF] [--chart-version V]|restore --artifact FILE [--chart REF] [--chart-version V] [--yes]|verify-provision|wait-ready [--interval S] [--timeout S]|seed [--instrument ID ...]|e2e [--out-dir DIR] [--instrument ID ...] [--yes] [--skip-restore]} [--allow-context CTX]"
 
 KUBE_CONTEXT=""
 ALLOWED_CONTEXT=""
@@ -287,7 +299,7 @@ require_retained_secrets() {
   for role in admin state signing; do
     secret="$(printf '%s' "$values" | jq -r --arg role "$role" '.psPostgres[$role].existingSecret // ""')"
     if [[ -z "$secret" ]]; then
-      print_error 'Refusing to restore: psPostgres.%s.existingSecret is not set on the release (retain the credentials Secret first)\n' "$role"
+      print_error 'Refusing to restore: psPostgres.%s.existingSecret is not set on the release (run "scripts/verify-backup-restore.sh retain-secrets" first)\n' "$role"
       exit "$EXIT_FAILURE"
     fi
     if ! kubectl get secret "$secret" -o name >/dev/null 2>&1; then
@@ -296,6 +308,59 @@ require_retained_secrets() {
       exit "$EXIT_FAILURE"
     fi
   done
+}
+
+# secrets_are_retained: true when the release has all three existingSecret values set and each
+# Secret exists. Silent, unlike require_retained_secrets, which refuses with a message.
+secrets_are_retained() {
+  local values role secret
+  values="$(helm get values "$RELEASE_NAME" -o json)" || return 1
+  for role in admin state signing; do
+    secret="$(printf '%s' "$values" | jq -r --arg role "$role" '.psPostgres[$role].existingSecret // ""')"
+    [[ -n "$secret" ]] || return 1
+    kubectl get secret "$secret" -o name >/dev/null 2>&1 || return 1
+  done
+}
+
+fail_retain() {
+  log_event retain_secrets_failed "context=${KUBE_CONTEXT}" "step=$1" "reason=$2"
+  print_error 'retain-secrets failed at %s: %s\n' "$1" "$2"
+  exit "$EXIT_FAILURE"
+}
+
+run_retain_secrets() {
+  require_command kubectl
+  require_command helm
+  require_command jq
+  require_allowed_context
+  if secrets_are_retained; then
+    log_event retain_secrets_skipped "context=${KUBE_CONTEXT}" "reason=already_retained"
+    return 0
+  fi
+
+  local role source
+  log_event retain_secrets_start "context=${KUBE_CONTEXT}"
+  for role in admin state signing; do
+    source="${RELEASE_NAME}-ps-postgres-${role}-credentials"
+    kubectl get secret "$source" -o json |
+      jq --arg name "ps-${role}-retained" \
+        '{apiVersion, kind, type, metadata: {name: $name}, data}' |
+      kubectl apply -f - >/dev/null || fail_retain copy "could not copy Secret ${source}"
+  done
+
+  kubectl scale "$SERVICE_DEPLOYMENT" "$POSTGRES_DEPLOYMENT" --replicas=0 ||
+    fail_retain stop "could not scale ps-service and ps-postgres to 0"
+  kubectl wait --for=delete pod -l "app.kubernetes.io/component=ps-postgres" \
+    "--timeout=${STOP_TIMEOUT}" || fail_retain stop "pods of ps-postgres did not stop"
+
+  local -a chart_args=("$CHART")
+  [[ -n "$CHART_VERSION" ]] && chart_args+=(--version "$CHART_VERSION")
+  helm upgrade "$RELEASE_NAME" "${chart_args[@]}" --reset-then-reuse-values \
+    --set psPostgres.admin.existingSecret=ps-admin-retained \
+    --set psPostgres.state.existingSecret=ps-state-retained \
+    --set psPostgres.signing.existingSecret=ps-signing-retained \
+    --wait --wait-for-jobs || fail_retain upgrade "helm upgrade --wait --wait-for-jobs failed"
+  log_event retain_secrets_complete "context=${KUBE_CONTEXT}"
 }
 
 confirm_restore() {
@@ -606,6 +671,7 @@ main() {
     seed) run_seed ;;
     e2e) run_e2e ;;
     counts) run_counts ;;
+    retain-secrets) run_retain_secrets ;;
     restore) run_restore ;;
     verify-provision) run_verify_provision ;;
     wait-ready) run_wait_ready ;;

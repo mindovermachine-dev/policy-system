@@ -5,7 +5,7 @@ first curated artifact is committed under this folder (issue #66, D16). It is a
 documented finding, not a runtime check — nothing in `ps_service`/`ps-cli` reads this
 file, and it is not re-verified per export.
 
-## External sources (EU regulation text — CRA, GDPR, NIS2, ...)
+## External sources (EU regulation text — CRA, GDPR)
 
 Every external instrument curated here is sourced via the Cellar/ELI adapter
 (`ps-service/src/ps_service/ingestion/adapters/cellar_eli/`) — Cellar is the EU
@@ -21,13 +21,12 @@ on EUR-Lex under the EU institutions' own reuse-of-documents policy:
 redistribution, for both commercial and non-commercial purposes — subject to
 acknowledging the source, not distorting the original meaning or wording, and not
 holding the EU institutions liable for how the reused content is subsequently used,
-unless a specific document states an exception. None of the instruments this project
-has ingested to date (CRA, `32024R2847`; GDPR, `32016R0679`; NIS2, `32022L2555`; AI
-Act, `32024R1689`; DORA, `32022R2554`; DSA, `32022R2065`) carry such an exception —
-each was individually checked (EUR-Lex's own legal notice, plus for the AI Act the
-dedicated AI Act Service Desk copyright notice at `ai-act-service-desk.ec.europa.eu`)
-and found to state only the standard Commission Decision 2011/833/EU reuse terms, with
-no instrument-specific restriction. Verbatim EU legal-act text exported into this folder's
+unless a specific document states an exception. Neither of the instruments curated
+here (CRA, `32024R2847`; GDPR, `32016R0679`) carries such an exception, nor does NIS2
+(`32022L2555`), whose frozen baseline is kept as test data under
+`test-data/similarity-corpus/` — each was individually checked (EUR-Lex's own legal
+notice) and found to state only the standard Commission Decision 2011/833/EU reuse
+terms, with no instrument-specific restriction. Verbatim EU legal-act text exported into this folder's
 `{instrument_id}/` artifacts (baseline and native structural graphs alike) is
 therefore compatible with public redistribution as part of this open-source
 repository. **No additional per-instrument license file is required** — this

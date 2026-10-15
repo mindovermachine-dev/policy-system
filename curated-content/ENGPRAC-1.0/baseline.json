@@ -1,7 +1,9 @@
 {
   "edges": [
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_change_release_and_deployment_safety_e21613->cap_release_and_change_control_dda76e"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_change_release_and_deployment_safety_e21613",
       "source_label": "PracticeArea",
@@ -9,7 +11,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_data_protection_and_privacy_engineering_3087a7->cap_privacy_by_design_and_default_fbdf54"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_data_protection_and_privacy_engineering_3087a7",
       "source_label": "PracticeArea",
@@ -17,7 +21,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_engineering_governance_and_exceptions_e5449e->cap_policy_and_exception_governance_e7a14e"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_engineering_governance_and_exceptions_e5449e",
       "source_label": "PracticeArea",
@@ -25,7 +31,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_identity_and_access_for_engineering_systems_82c8b6->cap_access_control_authentication_7c9d11"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_identity_and_access_for_engineering_systems_82c8b6",
       "source_label": "PracticeArea",
@@ -33,7 +41,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_observability_logging_and_audit_evidence_c534a5->cap_security_logging_473e60"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_observability_logging_and_audit_evidence_c534a5",
       "source_label": "PracticeArea",
@@ -41,7 +51,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_quality_engineering_and_test_assurance_2ad063->cap_quality_gate_assurance_c881e0"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_quality_engineering_and_test_assurance_2ad063",
       "source_label": "PracticeArea",
@@ -49,7 +61,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_reliability_and_service_operations_b6daae->cap_service_level_objective_management_12ac06"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_reliability_and_service_operations_b6daae",
       "source_label": "PracticeArea",
@@ -57,7 +71,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_reliability_and_service_operations_b6daae->cap_service_reliability_management_b0c732"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_reliability_and_service_operations_b6daae",
       "source_label": "PracticeArea",
@@ -65,7 +81,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_secure_development_lifecycle_4d942e->cap_secure_development_lifecycle_4d942e"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_secure_development_lifecycle_4d942e",
       "source_label": "PracticeArea",
@@ -73,7 +91,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_software_supply_chain_and_dependencies_1777b3->cap_software_bill_of_materials_management_36b516"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_software_supply_chain_and_dependencies_1777b3",
       "source_label": "PracticeArea",
@@ -81,7 +101,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_software_supply_chain_and_dependencies_1777b3->cap_third_party_component_risk_assessment_b0c31b"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_software_supply_chain_and_dependencies_1777b3",
       "source_label": "PracticeArea",
@@ -89,7 +111,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "COVERS:pa_vulnerability_and_incident_management_7ee00e->cap_vulnerability_management_da8ef6"
+      },
       "relationship_type": "COVERS",
       "source_id": "pa_vulnerability_and_incident_management_7ee00e",
       "source_label": "PracticeArea",
@@ -98,6 +122,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role_data_protection_officer_51179c",
         "source_ref": "Sec. 3.6"
       },
       "relationship_type": "DEFINES",
@@ -108,6 +133,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role_engineering_manager_28f883",
         "source_ref": "Sec. 3.2"
       },
       "relationship_type": "DEFINES",
@@ -118,6 +144,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role_qa_lead_a6c508",
         "source_ref": "Sec. 3.5"
       },
       "relationship_type": "DEFINES",
@@ -128,6 +155,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role_security_engineer_4b30c9",
         "source_ref": "Sec. 3.3"
       },
       "relationship_type": "DEFINES",
@@ -138,6 +166,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role_service_owner_906420",
         "source_ref": "Sec. 3.1"
       },
       "relationship_type": "DEFINES",
@@ -148,6 +177,7 @@
     },
     {
       "properties": {
+        "identity": "DEFINES:ENGPRAC-1.0->role_sre_lead_31d4cd",
         "source_ref": "Sec. 3.4"
       },
       "relationship_type": "DEFINES",
@@ -158,6 +188,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_1",
         "source_ref": "4.1"
       },
       "relationship_type": "EXPRESSES",
@@ -168,6 +199,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_10",
         "source_ref": "4.10"
       },
       "relationship_type": "EXPRESSES",
@@ -178,6 +210,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_11",
         "source_ref": "4.11"
       },
       "relationship_type": "EXPRESSES",
@@ -188,6 +221,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_2",
         "source_ref": "4.2"
       },
       "relationship_type": "EXPRESSES",
@@ -198,6 +232,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_3",
         "source_ref": "4.3"
       },
       "relationship_type": "EXPRESSES",
@@ -208,6 +243,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_4",
         "source_ref": "4.4"
       },
       "relationship_type": "EXPRESSES",
@@ -218,6 +254,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_5",
         "source_ref": "4.5"
       },
       "relationship_type": "EXPRESSES",
@@ -228,6 +265,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_6",
         "source_ref": "4.6"
       },
       "relationship_type": "EXPRESSES",
@@ -238,6 +276,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_7",
         "source_ref": "4.7"
       },
       "relationship_type": "EXPRESSES",
@@ -248,6 +287,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_8",
         "source_ref": "4.8"
       },
       "relationship_type": "EXPRESSES",
@@ -258,6 +298,7 @@
     },
     {
       "properties": {
+        "identity": "EXPRESSES:ENGPRAC-1.0->ENGPRAC-1.0_req_4_9",
         "source_ref": "4.9"
       },
       "relationship_type": "EXPRESSES",
@@ -267,7 +308,9 @@
       "target_label": "Requirement"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_access_control_authentication_7c9d11->pol_access_control_policy_8cf258"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_access_control_authentication_7c9d11",
       "source_label": "Capability",
@@ -275,7 +318,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_policy_and_exception_governance_e7a14e->pol_engineering_policy_governance_policy_07786c"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_policy_and_exception_governance_e7a14e",
       "source_label": "Capability",
@@ -283,7 +328,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_privacy_by_design_and_default_fbdf54->pol_data_protection_and_privacy_engineering_policy_c54cc3"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_privacy_by_design_and_default_fbdf54",
       "source_label": "Capability",
@@ -291,7 +338,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_quality_gate_assurance_c881e0->pol_test_and_quality_gate_policy_a5e458"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_quality_gate_assurance_c881e0",
       "source_label": "Capability",
@@ -299,7 +348,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_release_and_change_control_dda76e->pol_change_and_release_control_policy_994265"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_release_and_change_control_dda76e",
       "source_label": "Capability",
@@ -307,7 +358,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_secure_development_lifecycle_4d942e->pol_secure_sdlc_policy_a1d0e7"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_secure_development_lifecycle_4d942e",
       "source_label": "Capability",
@@ -315,7 +368,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_security_logging_473e60->pol_data_handling_logging_and_audit_retention_policy_3921b6"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_security_logging_473e60",
       "source_label": "Capability",
@@ -323,7 +378,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_service_level_objective_management_12ac06->pol_service_reliability_and_availability_policy_57aa57"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_service_level_objective_management_12ac06",
       "source_label": "Capability",
@@ -331,7 +388,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_service_reliability_management_b0c732->pol_service_reliability_and_availability_policy_57aa57"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_service_reliability_management_b0c732",
       "source_label": "Capability",
@@ -339,7 +398,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_software_bill_of_materials_management_36b516->pol_build_integrity_and_artifact_provenance_policy_2d6597"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_software_bill_of_materials_management_36b516",
       "source_label": "Capability",
@@ -347,7 +408,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_third_party_component_risk_assessment_b0c31b->pol_third_party_component_and_license_policy_f249b2"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_third_party_component_risk_assessment_b0c31b",
       "source_label": "Capability",
@@ -355,7 +418,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "GOVERNED_BY:cap_vulnerability_management_da8ef6->pol_vulnerability_management_and_remediation_policy_6bfc97"
+      },
       "relationship_type": "GOVERNED_BY",
       "source_id": "cap_vulnerability_management_da8ef6",
       "source_label": "Capability",
@@ -363,7 +428,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_data_protection_officer_51179c->obl_implement_data_protection_and_privacy_engineering_8ae672"
+      },
       "relationship_type": "HAS",
       "source_id": "role_data_protection_officer_51179c",
       "source_label": "Role",
@@ -371,7 +438,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_engineering_manager_28f883->obl_maintain_policy_governance_and_exception_management_ddfe31"
+      },
       "relationship_type": "HAS",
       "source_id": "role_engineering_manager_28f883",
       "source_label": "Role",
@@ -379,7 +448,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_qa_lead_a6c508->obl_enforce_test_and_quality_gates_803aa8"
+      },
       "relationship_type": "HAS",
       "source_id": "role_qa_lead_a6c508",
       "source_label": "Role",
@@ -387,7 +458,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_security_engineer_4b30c9->obl_assess_third_party_component_and_vendor_risk_610d8e"
+      },
       "relationship_type": "HAS",
       "source_id": "role_security_engineer_4b30c9",
       "source_label": "Role",
@@ -395,7 +468,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_security_engineer_4b30c9->obl_assure_software_supply_chain_integrity_038ebd"
+      },
       "relationship_type": "HAS",
       "source_id": "role_security_engineer_4b30c9",
       "source_label": "Role",
@@ -403,7 +478,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_security_engineer_4b30c9->obl_enforce_engineering_identity_and_access_controls_b2ea64"
+      },
       "relationship_type": "HAS",
       "source_id": "role_security_engineer_4b30c9",
       "source_label": "Role",
@@ -411,7 +488,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_security_engineer_4b30c9->obl_execute_secure_sdlc_practices_f8d65a"
+      },
       "relationship_type": "HAS",
       "source_id": "role_security_engineer_4b30c9",
       "source_label": "Role",
@@ -419,7 +498,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_security_engineer_4b30c9->obl_operate_vulnerability_and_incident_response_e8c2b1"
+      },
       "relationship_type": "HAS",
       "source_id": "role_security_engineer_4b30c9",
       "source_label": "Role",
@@ -427,7 +508,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_service_owner_906420->obl_ensure_release_and_change_safety_f381ed"
+      },
       "relationship_type": "HAS",
       "source_id": "role_service_owner_906420",
       "source_label": "Role",
@@ -435,7 +518,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_sre_lead_31d4cd->obl_maintain_logging_and_audit_traceability_0fd072"
+      },
       "relationship_type": "HAS",
       "source_id": "role_sre_lead_31d4cd",
       "source_label": "Role",
@@ -443,7 +528,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:role_sre_lead_31d4cd->obl_maintain_reliability_and_operational_readiness_446cca"
+      },
       "relationship_type": "HAS",
       "source_id": "role_sre_lead_31d4cd",
       "source_label": "Role",
@@ -451,7 +538,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_build_artifact_signing_and_sbom_generation_standard_50d1db->ctrl_automated_sbom_generation_and_artifact_signing_verification_gate_9e494d"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_build_artifact_signing_and_sbom_generation_standard_50d1db",
       "source_label": "Standard",
@@ -459,7 +548,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_build_artifact_signing_and_sbom_generation_standard_50d1db->ctrl_build_provenance_attestation_verification_84359e"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_build_artifact_signing_and_sbom_generation_standard_50d1db",
       "source_label": "Standard",
@@ -467,7 +558,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_change_risk_classification_and_approval_standard_1348f4->ctrl_change_risk_classification_approval_sign_off_verification_621c03"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_change_risk_classification_and_approval_standard_1348f4",
       "source_label": "Standard",
@@ -475,7 +568,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_ci_cd_pipeline_security_scanning_standard_500f4c->ctrl_automated_dependency_vulnerability_scan_gate_28a9df"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_ci_cd_pipeline_security_scanning_standard_500f4c",
       "source_label": "Standard",
@@ -483,7 +578,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_ci_cd_pipeline_security_scanning_standard_500f4c->ctrl_automated_secret_scanning_pre_merge_check_c8c8fb"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_ci_cd_pipeline_security_scanning_standard_500f4c",
       "source_label": "Standard",
@@ -491,7 +588,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_ci_cd_pipeline_security_scanning_standard_500f4c->ctrl_automated_static_application_security_testing_gate_b62af8"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_ci_cd_pipeline_security_scanning_standard_500f4c",
       "source_label": "Standard",
@@ -499,7 +598,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_continuous_vulnerability_scanning_and_triage_standard_12c2df->ctrl_automated_vulnerability_scan_coverage_and_triage_sla_check_3fb6ea"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_continuous_vulnerability_scanning_and_triage_standard_12c2df",
       "source_label": "Standard",
@@ -507,7 +608,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_continuous_vulnerability_scanning_and_triage_standard_12c2df->ctrl_vulnerability_intelligence_feed_freshness_check_1cb682"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_continuous_vulnerability_scanning_and_triage_standard_12c2df",
       "source_label": "Standard",
@@ -515,7 +618,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_controlled_release_and_deployment_standard_0563f3->ctrl_automated_deployment_approval_gate_enforcement_416749"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_controlled_release_and_deployment_standard_0563f3",
       "source_label": "Standard",
@@ -523,7 +628,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_controlled_release_and_deployment_standard_0563f3->ctrl_rollback_plan_presence_verification_649da3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_controlled_release_and_deployment_standard_0563f3",
       "source_label": "Standard",
@@ -531,7 +638,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_default_data_minimization_standard_4668dc->ctrl_automated_default_data_minimization_scan_fad340"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_default_data_minimization_standard_4668dc",
       "source_label": "Standard",
@@ -539,7 +648,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_default_data_minimization_standard_4668dc->ctrl_default_retention_period_compliance_check_345281"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_default_data_minimization_standard_4668dc",
       "source_label": "Standard",
@@ -547,7 +658,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_engineering_system_access_provisioning_standard_6d1c79->ctrl_automated_least_privilege_provisioning_scan_06d6b7"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_engineering_system_access_provisioning_standard_6d1c79",
       "source_label": "Standard",
@@ -555,7 +668,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_error_budget_gated_release_and_reliability_review_standard_ba03d0->ctrl_error_budget_gated_release_freeze_control_af547e"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_error_budget_gated_release_and_reliability_review_standard_ba03d0",
       "source_label": "Standard",
@@ -563,7 +678,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_error_budget_gated_release_and_reliability_review_standard_ba03d0->ctrl_monthly_reliability_posture_review_8f473b"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_error_budget_gated_release_and_reliability_review_standard_ba03d0",
       "source_label": "Standard",
@@ -571,7 +688,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_periodic_access_review_and_recertification_standard_3979a6->ctrl_manager_access_recertification_sign_off_verification_e7ccad"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_periodic_access_review_and_recertification_standard_3979a6",
       "source_label": "Standard",
@@ -579,7 +698,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_periodic_access_review_and_recertification_standard_3979a6->ctrl_quarterly_access_recertification_report_automation_f52c85"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_periodic_access_review_and_recertification_standard_3979a6",
       "source_label": "Standard",
@@ -587,7 +708,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_policy_exception_request_and_risk_acceptance_standard_508f50->ctrl_exception_register_completeness_check_e18b4f"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_policy_exception_request_and_risk_acceptance_standard_508f50",
       "source_label": "Standard",
@@ -595,7 +718,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_policy_exception_request_and_risk_acceptance_standard_508f50->ctrl_quarterly_exception_risk_acceptance_review_c085e2"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_policy_exception_request_and_risk_acceptance_standard_508f50",
       "source_label": "Standard",
@@ -603,7 +728,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_privacy_by_design_review_standard_5f7111->ctrl_privacy_by_design_review_completion_check_ddb8ba"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_privacy_by_design_review_standard_5f7111",
       "source_label": "Standard",
@@ -611,7 +738,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_privacy_by_design_review_standard_5f7111->ctrl_quarterly_proportionality_sampling_review_20bccb"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_privacy_by_design_review_standard_5f7111",
       "source_label": "Standard",
@@ -619,7 +748,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_production_resilience_and_capacity_standard_f57731->ctrl_automated_failover_test_verification_51160e"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_production_resilience_and_capacity_standard_f57731",
       "source_label": "Standard",
@@ -627,7 +758,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_production_resilience_and_capacity_standard_f57731->ctrl_quarterly_capacity_planning_review_b551ca"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_production_resilience_and_capacity_standard_f57731",
       "source_label": "Standard",
@@ -635,7 +768,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_release_quality_gate_verification_standard_029f0c->ctrl_ci_quality_gate_enforcement_check_a67d2c"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_release_quality_gate_verification_standard_029f0c",
       "source_label": "Standard",
@@ -643,7 +778,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_release_quality_gate_verification_standard_029f0c->ctrl_release_readiness_manual_sign_off_review_b92cf4"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_release_quality_gate_verification_standard_029f0c",
       "source_label": "Standard",
@@ -651,7 +788,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_secure_coding_and_threat_modeling_standard_9d102d->ctrl_threat_model_review_completion_check_2bf91d"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_secure_coding_and_threat_modeling_standard_9d102d",
       "source_label": "Standard",
@@ -659,7 +798,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_security_incident_response_and_postmortem_standard_533601->ctrl_incident_response_tabletop_drill_verification_43f8fa"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_security_incident_response_and_postmortem_standard_533601",
       "source_label": "Standard",
@@ -667,7 +808,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_security_incident_response_and_postmortem_standard_533601->ctrl_post_incident_postmortem_completion_review_e48d27"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_security_incident_response_and_postmortem_standard_533601",
       "source_label": "Standard",
@@ -675,7 +818,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_security_log_retention_and_integrity_standard_5871bb->ctrl_automated_security_log_retention_integrity_check_f60320"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_security_log_retention_and_integrity_standard_5871bb",
       "source_label": "Standard",
@@ -683,7 +828,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_security_log_retention_and_integrity_standard_5871bb->ctrl_log_retention_window_purge_compliance_check_067def"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_security_log_retention_and_integrity_standard_5871bb",
       "source_label": "Standard",
@@ -691,7 +838,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_security_log_retention_and_integrity_standard_5871bb->ctrl_quarterly_audit_evidence_sampling_review_986f9f"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_security_log_retention_and_integrity_standard_5871bb",
       "source_label": "Standard",
@@ -699,7 +848,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_service_level_objective_and_error_budget_definition_standard_6b5b83->ctrl_automated_sli_slo_compliance_monitoring_check_1c5879"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_service_level_objective_and_error_budget_definition_standard_6b5b83",
       "source_label": "Standard",
@@ -707,7 +858,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_service_level_objective_and_error_budget_definition_standard_6b5b83->ctrl_error_budget_burn_rate_alerting_control_4da0e8"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_service_level_objective_and_error_budget_definition_standard_6b5b83",
       "source_label": "Standard",
@@ -715,7 +868,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_severity_based_remediation_sla_standard_bd219b->ctrl_automated_remediation_sla_compliance_check_183f56"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_severity_based_remediation_sla_standard_bd219b",
       "source_label": "Standard",
@@ -723,7 +878,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_structured_security_log_schema_standard_167468->ctrl_ci_structured_access_log_schema_validator_8c5af3"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_structured_security_log_schema_standard_167468",
       "source_label": "Standard",
@@ -731,7 +888,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_third_party_component_and_vendor_risk_assessment_standard_032fac->ctrl_automated_third_party_component_risk_scoring_scan_6cf924"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_third_party_component_and_vendor_risk_assessment_standard_032fac",
       "source_label": "Standard",
@@ -739,7 +898,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_third_party_component_and_vendor_risk_assessment_standard_032fac->ctrl_new_component_and_vendor_risk_assessment_sign_off_verification_4a01ca"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_third_party_component_and_vendor_risk_assessment_standard_032fac",
       "source_label": "Standard",
@@ -747,7 +908,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_third_party_component_and_vendor_risk_assessment_standard_032fac->ctrl_quarterly_third_party_risk_reassessment_review_5d39ff"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_third_party_component_and_vendor_risk_assessment_standard_032fac",
       "source_label": "Standard",
@@ -755,7 +918,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "IMPLEMENTED_BY:std_third_party_license_compliance_standard_427780->ctrl_automated_dependency_license_scan_gate_b2707c"
+      },
       "relationship_type": "IMPLEMENTED_BY",
       "source_id": "std_third_party_license_compliance_standard_427780",
       "source_label": "Standard",
@@ -763,7 +928,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_data_protection_and_privacy_e21fcb->cap_privacy_by_design_and_default_fbdf54"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_data_protection_and_privacy_e21fcb",
       "source_label": "RiskPath",
@@ -771,7 +938,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_incident_and_recovery_readiness_1b9be5->cap_vulnerability_management_da8ef6"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_incident_and_recovery_readiness_1b9be5",
       "source_label": "RiskPath",
@@ -779,7 +948,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_reliable_service_operation_9f928d->cap_service_level_objective_management_12ac06"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_reliable_service_operation_9f928d",
       "source_label": "RiskPath",
@@ -787,7 +958,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_reliable_service_operation_9f928d->cap_service_reliability_management_b0c732"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_reliable_service_operation_9f928d",
       "source_label": "RiskPath",
@@ -795,7 +968,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_secure_build_and_release_dd5aff->cap_quality_gate_assurance_c881e0"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_secure_build_and_release_dd5aff",
       "source_label": "RiskPath",
@@ -803,7 +978,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_secure_build_and_release_dd5aff->cap_release_and_change_control_dda76e"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_secure_build_and_release_dd5aff",
       "source_label": "RiskPath",
@@ -811,7 +988,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_secure_build_and_release_dd5aff->cap_secure_development_lifecycle_4d942e"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_secure_build_and_release_dd5aff",
       "source_label": "RiskPath",
@@ -819,7 +998,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_secure_build_and_release_dd5aff->cap_software_bill_of_materials_management_36b516"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_secure_build_and_release_dd5aff",
       "source_label": "RiskPath",
@@ -827,7 +1008,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_third_party_and_supply_chain_risk_6a6854->cap_software_bill_of_materials_management_36b516"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_third_party_and_supply_chain_risk_6a6854",
       "source_label": "RiskPath",
@@ -835,7 +1018,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_third_party_and_supply_chain_risk_6a6854->cap_third_party_component_risk_assessment_b0c31b"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_third_party_and_supply_chain_risk_6a6854",
       "source_label": "RiskPath",
@@ -843,7 +1028,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_traceability_and_auditability_24e1fc->cap_security_logging_473e60"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_traceability_and_auditability_24e1fc",
       "source_label": "RiskPath",
@@ -851,7 +1038,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_unauthorized_access_to_engineering_systems_2553da->cap_access_control_authentication_7c9d11"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_unauthorized_access_to_engineering_systems_2553da",
       "source_label": "RiskPath",
@@ -859,7 +1048,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "MITIGATED_BY:rp_uncontrolled_policy_exceptions_70265c->cap_policy_and_exception_governance_e7a14e"
+      },
       "relationship_type": "MITIGATED_BY",
       "source_id": "rp_uncontrolled_policy_exceptions_70265c",
       "source_label": "RiskPath",
@@ -867,7 +1058,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_change_release_and_deployment_safety_e21613->pol_change_and_release_control_policy_994265"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_change_release_and_deployment_safety_e21613",
       "source_label": "PracticeArea",
@@ -875,7 +1068,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_data_protection_and_privacy_engineering_3087a7->pol_data_protection_and_privacy_engineering_policy_c54cc3"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_data_protection_and_privacy_engineering_3087a7",
       "source_label": "PracticeArea",
@@ -883,7 +1078,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_engineering_governance_and_exceptions_e5449e->pol_engineering_policy_governance_policy_07786c"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_engineering_governance_and_exceptions_e5449e",
       "source_label": "PracticeArea",
@@ -891,7 +1088,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_identity_and_access_for_engineering_systems_82c8b6->pol_access_control_policy_8cf258"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_identity_and_access_for_engineering_systems_82c8b6",
       "source_label": "PracticeArea",
@@ -899,7 +1098,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_observability_logging_and_audit_evidence_c534a5->pol_data_handling_logging_and_audit_retention_policy_3921b6"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_observability_logging_and_audit_evidence_c534a5",
       "source_label": "PracticeArea",
@@ -907,7 +1108,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_quality_engineering_and_test_assurance_2ad063->pol_test_and_quality_gate_policy_a5e458"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_quality_engineering_and_test_assurance_2ad063",
       "source_label": "PracticeArea",
@@ -915,7 +1118,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_reliability_and_service_operations_b6daae->pol_service_reliability_and_availability_policy_57aa57"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_reliability_and_service_operations_b6daae",
       "source_label": "PracticeArea",
@@ -923,7 +1128,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_secure_development_lifecycle_4d942e->pol_secure_sdlc_policy_a1d0e7"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_secure_development_lifecycle_4d942e",
       "source_label": "PracticeArea",
@@ -931,7 +1138,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_software_supply_chain_and_dependencies_1777b3->pol_build_integrity_and_artifact_provenance_policy_2d6597"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_software_supply_chain_and_dependencies_1777b3",
       "source_label": "PracticeArea",
@@ -939,7 +1148,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_software_supply_chain_and_dependencies_1777b3->pol_third_party_component_and_license_policy_f249b2"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_software_supply_chain_and_dependencies_1777b3",
       "source_label": "PracticeArea",
@@ -947,7 +1158,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "OWNS:pa_vulnerability_and_incident_management_7ee00e->pol_vulnerability_management_and_remediation_policy_6bfc97"
+      },
       "relationship_type": "OWNS",
       "source_id": "pa_vulnerability_and_incident_management_7ee00e",
       "source_label": "PracticeArea",
@@ -955,7 +1168,9 @@
       "target_label": "Policy"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_assess_third_party_component_and_vendor_risk_610d8e->cap_third_party_component_risk_assessment_b0c31b"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_assess_third_party_component_and_vendor_risk_610d8e",
       "source_label": "Obligation",
@@ -963,7 +1178,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_assure_software_supply_chain_integrity_038ebd->cap_software_bill_of_materials_management_36b516"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_assure_software_supply_chain_integrity_038ebd",
       "source_label": "Obligation",
@@ -971,7 +1188,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_enforce_engineering_identity_and_access_controls_b2ea64->cap_access_control_authentication_7c9d11"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_enforce_engineering_identity_and_access_controls_b2ea64",
       "source_label": "Obligation",
@@ -979,7 +1198,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_enforce_test_and_quality_gates_803aa8->cap_quality_gate_assurance_c881e0"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_enforce_test_and_quality_gates_803aa8",
       "source_label": "Obligation",
@@ -987,7 +1208,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_ensure_release_and_change_safety_f381ed->cap_release_and_change_control_dda76e"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_ensure_release_and_change_safety_f381ed",
       "source_label": "Obligation",
@@ -995,7 +1218,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_execute_secure_sdlc_practices_f8d65a->cap_secure_development_lifecycle_4d942e"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_execute_secure_sdlc_practices_f8d65a",
       "source_label": "Obligation",
@@ -1003,7 +1228,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_implement_data_protection_and_privacy_engineering_8ae672->cap_privacy_by_design_and_default_fbdf54"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_implement_data_protection_and_privacy_engineering_8ae672",
       "source_label": "Obligation",
@@ -1011,7 +1238,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_maintain_logging_and_audit_traceability_0fd072->cap_security_logging_473e60"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_maintain_logging_and_audit_traceability_0fd072",
       "source_label": "Obligation",
@@ -1019,7 +1248,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_maintain_policy_governance_and_exception_management_ddfe31->cap_policy_and_exception_governance_e7a14e"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_maintain_policy_governance_and_exception_management_ddfe31",
       "source_label": "Obligation",
@@ -1027,7 +1258,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_maintain_reliability_and_operational_readiness_446cca->cap_service_level_objective_management_12ac06"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_maintain_reliability_and_operational_readiness_446cca",
       "source_label": "Obligation",
@@ -1035,7 +1268,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_maintain_reliability_and_operational_readiness_446cca->cap_service_reliability_management_b0c732"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_maintain_reliability_and_operational_readiness_446cca",
       "source_label": "Obligation",
@@ -1043,7 +1278,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "REQUIRES:obl_operate_vulnerability_and_incident_response_e8c2b1->cap_vulnerability_management_da8ef6"
+      },
       "relationship_type": "REQUIRES",
       "source_id": "obl_operate_vulnerability_and_incident_response_e8c2b1",
       "source_label": "Obligation",
@@ -1051,7 +1288,9 @@
       "target_label": "Capability"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_1->obl_maintain_policy_governance_and_exception_management_ddfe31"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_1",
       "source_label": "Requirement",
@@ -1059,7 +1298,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_10->obl_maintain_logging_and_audit_traceability_0fd072"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_10",
       "source_label": "Requirement",
@@ -1067,7 +1308,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_11->obl_assess_third_party_component_and_vendor_risk_610d8e"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_11",
       "source_label": "Requirement",
@@ -1075,7 +1318,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_2->obl_execute_secure_sdlc_practices_f8d65a"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_2",
       "source_label": "Requirement",
@@ -1083,7 +1328,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_3->obl_enforce_engineering_identity_and_access_controls_b2ea64"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_3",
       "source_label": "Requirement",
@@ -1091,7 +1338,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_4->obl_ensure_release_and_change_safety_f381ed"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_4",
       "source_label": "Requirement",
@@ -1099,7 +1348,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_5->obl_assure_software_supply_chain_integrity_038ebd"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_5",
       "source_label": "Requirement",
@@ -1107,7 +1358,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_6->obl_enforce_test_and_quality_gates_803aa8"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_6",
       "source_label": "Requirement",
@@ -1115,7 +1368,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_7->obl_maintain_reliability_and_operational_readiness_446cca"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_7",
       "source_label": "Requirement",
@@ -1123,7 +1378,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_8->obl_operate_vulnerability_and_incident_response_e8c2b1"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_8",
       "source_label": "Requirement",
@@ -1131,7 +1388,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SATISFIED_BY:ENGPRAC-1.0_req_4_9->obl_implement_data_protection_and_privacy_engineering_8ae672"
+      },
       "relationship_type": "SATISFIED_BY",
       "source_id": "ENGPRAC-1.0_req_4_9",
       "source_label": "Requirement",
@@ -1139,7 +1398,9 @@
       "target_label": "Obligation"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_access_control_policy_8cf258->std_engineering_system_access_provisioning_standard_6d1c79"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_access_control_policy_8cf258",
       "source_label": "Policy",
@@ -1147,7 +1408,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_access_control_policy_8cf258->std_periodic_access_review_and_recertification_standard_3979a6"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_access_control_policy_8cf258",
       "source_label": "Policy",
@@ -1155,7 +1418,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_build_integrity_and_artifact_provenance_policy_2d6597->std_build_artifact_signing_and_sbom_generation_standard_50d1db"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_build_integrity_and_artifact_provenance_policy_2d6597",
       "source_label": "Policy",
@@ -1163,7 +1428,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_change_and_release_control_policy_994265->std_change_risk_classification_and_approval_standard_1348f4"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_change_and_release_control_policy_994265",
       "source_label": "Policy",
@@ -1171,7 +1438,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_change_and_release_control_policy_994265->std_controlled_release_and_deployment_standard_0563f3"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_change_and_release_control_policy_994265",
       "source_label": "Policy",
@@ -1179,7 +1448,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_data_handling_logging_and_audit_retention_policy_3921b6->std_security_log_retention_and_integrity_standard_5871bb"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_data_handling_logging_and_audit_retention_policy_3921b6",
       "source_label": "Policy",
@@ -1187,7 +1458,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_data_handling_logging_and_audit_retention_policy_3921b6->std_structured_security_log_schema_standard_167468"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_data_handling_logging_and_audit_retention_policy_3921b6",
       "source_label": "Policy",
@@ -1195,7 +1468,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_data_protection_and_privacy_engineering_policy_c54cc3->std_default_data_minimization_standard_4668dc"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_data_protection_and_privacy_engineering_policy_c54cc3",
       "source_label": "Policy",
@@ -1203,7 +1478,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_data_protection_and_privacy_engineering_policy_c54cc3->std_privacy_by_design_review_standard_5f7111"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_data_protection_and_privacy_engineering_policy_c54cc3",
       "source_label": "Policy",
@@ -1211,7 +1488,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_engineering_policy_governance_policy_07786c->std_policy_exception_request_and_risk_acceptance_standard_508f50"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_engineering_policy_governance_policy_07786c",
       "source_label": "Policy",
@@ -1219,7 +1498,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_secure_sdlc_policy_a1d0e7->std_ci_cd_pipeline_security_scanning_standard_500f4c"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_secure_sdlc_policy_a1d0e7",
       "source_label": "Policy",
@@ -1227,7 +1508,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_secure_sdlc_policy_a1d0e7->std_secure_coding_and_threat_modeling_standard_9d102d"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_secure_sdlc_policy_a1d0e7",
       "source_label": "Policy",
@@ -1235,7 +1518,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_service_reliability_and_availability_policy_57aa57->std_error_budget_gated_release_and_reliability_review_standard_ba03d0"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_service_reliability_and_availability_policy_57aa57",
       "source_label": "Policy",
@@ -1243,7 +1528,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_service_reliability_and_availability_policy_57aa57->std_production_resilience_and_capacity_standard_f57731"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_service_reliability_and_availability_policy_57aa57",
       "source_label": "Policy",
@@ -1251,7 +1538,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_service_reliability_and_availability_policy_57aa57->std_service_level_objective_and_error_budget_definition_standard_6b5b83"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_service_reliability_and_availability_policy_57aa57",
       "source_label": "Policy",
@@ -1259,7 +1548,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_test_and_quality_gate_policy_a5e458->std_release_quality_gate_verification_standard_029f0c"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_test_and_quality_gate_policy_a5e458",
       "source_label": "Policy",
@@ -1267,7 +1558,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_third_party_component_and_license_policy_f249b2->std_third_party_component_and_vendor_risk_assessment_standard_032fac"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_third_party_component_and_license_policy_f249b2",
       "source_label": "Policy",
@@ -1275,7 +1568,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_third_party_component_and_license_policy_f249b2->std_third_party_license_compliance_standard_427780"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_third_party_component_and_license_policy_f249b2",
       "source_label": "Policy",
@@ -1283,7 +1578,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_vulnerability_management_and_remediation_policy_6bfc97->std_continuous_vulnerability_scanning_and_triage_standard_12c2df"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_vulnerability_management_and_remediation_policy_6bfc97",
       "source_label": "Policy",
@@ -1291,7 +1588,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_vulnerability_management_and_remediation_policy_6bfc97->std_security_incident_response_and_postmortem_standard_533601"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_vulnerability_management_and_remediation_policy_6bfc97",
       "source_label": "Policy",
@@ -1299,7 +1598,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "SUPPORTED_BY:pol_vulnerability_management_and_remediation_policy_6bfc97->std_severity_based_remediation_sla_standard_bd219b"
+      },
       "relationship_type": "SUPPORTED_BY",
       "source_id": "pol_vulnerability_management_and_remediation_policy_6bfc97",
       "source_label": "Policy",
@@ -1307,7 +1608,9 @@
       "target_label": "Standard"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_data_protection_and_privacy_e21fcb->ctrl_automated_default_data_minimization_scan_fad340"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_data_protection_and_privacy_e21fcb",
       "source_label": "RiskPath",
@@ -1315,7 +1618,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_data_protection_and_privacy_e21fcb->ctrl_default_retention_period_compliance_check_345281"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_data_protection_and_privacy_e21fcb",
       "source_label": "RiskPath",
@@ -1323,7 +1628,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_data_protection_and_privacy_e21fcb->ctrl_privacy_by_design_review_completion_check_ddb8ba"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_data_protection_and_privacy_e21fcb",
       "source_label": "RiskPath",
@@ -1331,7 +1638,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_data_protection_and_privacy_e21fcb->ctrl_quarterly_proportionality_sampling_review_20bccb"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_data_protection_and_privacy_e21fcb",
       "source_label": "RiskPath",
@@ -1339,7 +1648,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_incident_and_recovery_readiness_1b9be5->ctrl_automated_remediation_sla_compliance_check_183f56"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_incident_and_recovery_readiness_1b9be5",
       "source_label": "RiskPath",
@@ -1347,7 +1658,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_incident_and_recovery_readiness_1b9be5->ctrl_automated_vulnerability_scan_coverage_and_triage_sla_check_3fb6ea"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_incident_and_recovery_readiness_1b9be5",
       "source_label": "RiskPath",
@@ -1355,7 +1668,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_incident_and_recovery_readiness_1b9be5->ctrl_incident_response_tabletop_drill_verification_43f8fa"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_incident_and_recovery_readiness_1b9be5",
       "source_label": "RiskPath",
@@ -1363,7 +1678,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_incident_and_recovery_readiness_1b9be5->ctrl_post_incident_postmortem_completion_review_e48d27"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_incident_and_recovery_readiness_1b9be5",
       "source_label": "RiskPath",
@@ -1371,7 +1688,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_reliable_service_operation_9f928d->ctrl_automated_failover_test_verification_51160e"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_reliable_service_operation_9f928d",
       "source_label": "RiskPath",
@@ -1379,7 +1698,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_reliable_service_operation_9f928d->ctrl_error_budget_gated_release_freeze_control_af547e"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_reliable_service_operation_9f928d",
       "source_label": "RiskPath",
@@ -1387,7 +1708,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_secure_build_and_release_dd5aff->ctrl_automated_deployment_approval_gate_enforcement_416749"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_secure_build_and_release_dd5aff",
       "source_label": "RiskPath",
@@ -1395,7 +1718,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_secure_build_and_release_dd5aff->ctrl_automated_sbom_generation_and_artifact_signing_verification_gate_9e494d"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_secure_build_and_release_dd5aff",
       "source_label": "RiskPath",
@@ -1403,7 +1728,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_secure_build_and_release_dd5aff->ctrl_automated_static_application_security_testing_gate_b62af8"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_secure_build_and_release_dd5aff",
       "source_label": "RiskPath",
@@ -1411,7 +1738,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_third_party_and_supply_chain_risk_6a6854->ctrl_automated_dependency_license_scan_gate_b2707c"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_third_party_and_supply_chain_risk_6a6854",
       "source_label": "RiskPath",
@@ -1419,7 +1748,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_third_party_and_supply_chain_risk_6a6854->ctrl_automated_third_party_component_risk_scoring_scan_6cf924"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_third_party_and_supply_chain_risk_6a6854",
       "source_label": "RiskPath",
@@ -1427,7 +1758,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_third_party_and_supply_chain_risk_6a6854->ctrl_new_component_and_vendor_risk_assessment_sign_off_verification_4a01ca"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_third_party_and_supply_chain_risk_6a6854",
       "source_label": "RiskPath",
@@ -1435,7 +1768,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_traceability_and_auditability_24e1fc->ctrl_automated_security_log_retention_integrity_check_f60320"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_traceability_and_auditability_24e1fc",
       "source_label": "RiskPath",
@@ -1443,7 +1778,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_traceability_and_auditability_24e1fc->ctrl_ci_structured_access_log_schema_validator_8c5af3"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_traceability_and_auditability_24e1fc",
       "source_label": "RiskPath",
@@ -1451,7 +1788,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_traceability_and_auditability_24e1fc->ctrl_log_retention_window_purge_compliance_check_067def"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_traceability_and_auditability_24e1fc",
       "source_label": "RiskPath",
@@ -1459,7 +1798,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_unauthorized_access_to_engineering_systems_2553da->ctrl_automated_least_privilege_provisioning_scan_06d6b7"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_unauthorized_access_to_engineering_systems_2553da",
       "source_label": "RiskPath",
@@ -1467,7 +1808,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_unauthorized_access_to_engineering_systems_2553da->ctrl_manager_access_recertification_sign_off_verification_e7ccad"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_unauthorized_access_to_engineering_systems_2553da",
       "source_label": "RiskPath",
@@ -1475,7 +1818,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_unauthorized_access_to_engineering_systems_2553da->ctrl_quarterly_access_recertification_report_automation_f52c85"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_unauthorized_access_to_engineering_systems_2553da",
       "source_label": "RiskPath",
@@ -1483,7 +1828,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_uncontrolled_policy_exceptions_70265c->ctrl_exception_register_completeness_check_e18b4f"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_uncontrolled_policy_exceptions_70265c",
       "source_label": "RiskPath",
@@ -1491,7 +1838,9 @@
       "target_label": "Control"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "VERIFIED_BY:rp_uncontrolled_policy_exceptions_70265c->ctrl_quarterly_exception_risk_acceptance_review_c085e2"
+      },
       "relationship_type": "VERIFIED_BY",
       "source_id": "rp_uncontrolled_policy_exceptions_70265c",
       "source_label": "RiskPath",
@@ -38497,6 +38846,7 @@
         "pass_fail_criteria": "PASS if every personal-data field collected by the feature's default configuration matches a field with a recorded minimality justification in its privacy-by-design review, and no personal-data-widening option is enabled by default. FAIL if any unjustified field is collected by default, or any widening option ships enabled.",
         "reviewer_role": "Data Protection Officer",
         "risk_alignment_rationale": "Directly verifies s7-rp-1: a default configuration that silently collects or exposes more personal data than justified is exactly the proportionality failure this risk path is scoped to catch before it reaches production undetected.",
+        "status": "draft",
         "title": "Automated Default Data Minimization Scan",
         "type": "automated"
       }
@@ -38513,6 +38863,7 @@
         "pass_fail_criteria": "PASS if the build's license scan reports zero disallowed-license dependencies, or every disallowed-license dependency present has a logged Security Engineer override. FAIL if any disallowed-license dependency is promoted without a logged override.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies the Third-Party and Supply Chain Risk RiskPath: a disallowed-license dependency reaching a released artifact undetected is exactly the unassessed supply-chain exposure this RiskPath describes.",
+        "status": "draft",
         "title": "Automated Dependency License Scan Gate",
         "type": "automated"
       }
@@ -38529,6 +38880,7 @@
         "pass_fail_criteria": "PASS if the dependency scan reports zero unresolved critical-severity vulnerabilities. FAIL if any critical-severity vulnerability is unresolved at merge time without a logged Security Engineer override.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath and grounds the Software Supply Chain and Dependencies practice area (cap-5): a vulnerable dependency reaching a signed, released artifact undetected is exactly the build-integrity exposure this RiskPath describes.",
+        "status": "draft",
         "title": "Automated Dependency Vulnerability Scan Gate",
         "type": "automated"
       }
@@ -38545,6 +38897,7 @@
         "pass_fail_criteria": "PASS if every high-risk release promoted to production has a recorded approver sign-off logged in the pipeline before the promotion timestamp. FAIL if any high-risk release is promoted without a logged sign-off.",
         "reviewer_role": "Service Owner",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Release and Change Control mitigation (cap-4): an unapproved high-risk change reaching production undetected is exactly the exposure this gate is designed to block.",
+        "status": "draft",
         "title": "Automated Deployment Approval Gate Enforcement",
         "type": "automated"
       }
@@ -38561,6 +38914,7 @@
         "pass_fail_criteria": "PASS if every business-critical service's most recent failover-test record is dated within the last 6 months and shows a pass/fail outcome with time-to-recover. FAIL if any business-critical service has no such record, or its most recent record is older than 6 months.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies s5-rp-1: a business-critical service that has never had its failover design actually tested is exactly the unbounded-outage-impact exposure that risk path describes -- redundancy that exists only on paper.",
+        "status": "draft",
         "title": "Automated Failover Test Verification",
         "type": "automated"
       }
@@ -38577,6 +38931,7 @@
         "pass_fail_criteria": "PASS if every access grant created in the scan window has a linked ticket reference, a named approver distinct from the requestor, and (for administrative roles) an expiry of 8 hours or less. FAIL if any grant is missing one of these.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies s2-rp-1 (Unauthorized Access to Engineering Systems): a grant without a linked approval or without a time-boxed elevation is exactly the unauthorized/unaccountable-access exposure that risk path describes.",
+        "status": "draft",
         "title": "Automated Least-Privilege Provisioning Scan",
         "type": "automated"
       }
@@ -38593,6 +38948,7 @@
         "pass_fail_criteria": "PASS if every closed finding's closure date is at or before its severity's SLA deadline or is linked to a valid, non-expired exception record, and every finding within 2 days of its deadline with no closure has a logged Engineering Manager escalation. FAIL if any closed finding missed its SLA with no linked exception, or any at-risk finding was not escalated.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies s8-rp-1: a vulnerability remediated late, or never escalated when at risk of missing its SLA, is exactly the slow-remediation exposure that lets a known weakness remain exploitable long enough to become an incident.",
+        "status": "draft",
         "title": "Automated Remediation SLA Compliance Check",
         "type": "automated"
       }
@@ -38609,6 +38965,7 @@
         "pass_fail_criteria": "PASS if the promoted artifact has a generated SBOM (SPDX or CycloneDX format) and a signature that verifies successfully against the build-signing key. FAIL if either the SBOM is missing or the signature fails verification.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Build Integrity and Artifact Provenance mitigation (cap-5, renamed this slice to converge onto CRA's Software Bill of Materials Management Capability): an unsigned artifact or one missing its SBOM reaching production is exactly the build-integrity exposure this RiskPath describes.",
+        "status": "draft",
         "title": "Automated SBOM Generation and Artifact Signing Verification Gate",
         "type": "automated"
       }
@@ -38625,6 +38982,7 @@
         "pass_fail_criteria": "PASS if the secret scan detects zero committed secrets in the pull request diff. FAIL if any secret is detected and the merge proceeds without a logged Security Engineer override confirming remediation (key rotation).",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath: a committed secret reaching a built and released artifact undetected is a build-integrity exposure this RiskPath is scoped to catch before promotion.",
+        "status": "draft",
         "title": "Automated Secret-Scanning Pre-Merge Check",
         "type": "automated"
       }
@@ -38641,6 +38999,7 @@
         "pass_fail_criteria": "PASS if every in-scope service's expected log volume for the checked day is present and no unauthorized modification or deletion is detected anywhere in the current retention window. FAIL if any service's expected log volume is missing, or any out-of-band modification or deletion is detected.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies s6-rp-1: a gap or silent alteration in retained logs is exactly the undetected-evidence-loss failure mode that risk path describes -- retention that exists as policy text but not as a verified fact.",
+        "status": "draft",
         "title": "Automated Security Log Retention Integrity Check",
         "type": "automated"
       }
@@ -38657,6 +39016,7 @@
         "pass_fail_criteria": "PASS if every in-scope service's SLI is being measured continuously and its computed error budget is available and current (updated within the last measurement window). FAIL if any in-scope service has no live SLI measurement, no recorded SLO target, or a stale (not updated within the window) error-budget computation.",
         "reviewer_role": "SRE Lead",
         "risk_alignment_rationale": "Directly verifies s5-rp-1 (Reliable Service Operation): a service with no live SLI measurement or a stale error-budget computation is exactly the undetected-degradation failure mode that risk path describes -- reliability commitments existing on paper without anyone actually knowing whether they're being met.",
+        "status": "draft",
         "title": "Automated SLI/SLO Compliance Monitoring Check",
         "type": "automated"
       }
@@ -38673,6 +39033,7 @@
         "pass_fail_criteria": "PASS if the pull request's SAST scan reports zero unresolved critical-severity findings. FAIL if any critical-severity finding is unresolved at merge time without a logged Security Engineer override.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath: an unresolved critical vulnerability reaching the build pipeline undetected is exactly the exposure this RiskPath describes; this gate is the first automated checkpoint that prevents it.",
+        "status": "draft",
         "title": "Automated Static Application Security Testing Gate",
         "type": "automated"
       }
@@ -38689,6 +39050,7 @@
         "pass_fail_criteria": "PASS if every component in scope has a recorded, current risk score (scan run within the last 30 days for new intake, or the current quarter for in-use components). FAIL if any in-scope component is missing a current risk score.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies the Third-Party and Supply Chain Risk RiskPath's Third-Party Component Risk Assessment mitigation (s4-cap-1): a component with no current risk score is exactly the unassessed-dependency exposure this RiskPath describes, and this scan is the data source the manual sign-off (s4-ctrl-3) and reassessment review (s4-ctrl-4) both depend on.",
+        "status": "draft",
         "title": "Automated Third-Party Component Risk Scoring Scan",
         "type": "automated"
       }
@@ -38705,6 +39067,7 @@
         "pass_fail_criteria": "PASS if every in-scope service has a scan result dated within the last scan interval and every finding detected in the window has a recorded triage (severity, triage date) within 2 business days of detection. FAIL if any service's scan is stale, or any finding is untriaged past 2 business days.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies s8-rp-1 (Incident and Recovery Readiness): a service with no current scan, or a finding sitting untriaged, is exactly the undetected/unactioned-vulnerability exposure that lets a fixable weakness silently become an incident.",
+        "status": "draft",
         "title": "Automated Vulnerability Scan Coverage and Triage SLA Check",
         "type": "automated"
       }
@@ -38721,6 +39084,7 @@
         "pass_fail_criteria": "PASS if the promoted artifact's provenance attestation references a valid source commit hash and CI build job ID that both resolve to real, existing records. FAIL if the attestation is missing or references an unresolvable commit or build job.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Build Integrity and Artifact Provenance mitigation (cap-5) by ensuring an artifact's claimed origin can always be traced back to a real build, closing the loop the signing gate (s3-ctrl-8) alone cannot -- a signature proves integrity since signing, not where the artifact came from.",
+        "status": "draft",
         "title": "Build Provenance Attestation Verification",
         "type": "automated"
       }
@@ -38737,6 +39101,7 @@
         "pass_fail_criteria": "PASS if, for the sampled changes, 100% show a recorded risk-tier classification and the approval(s) matching that tier (Engineering Manager for medium; Engineering Manager plus Service Owner for high) logged before the promotion timestamp. FAIL if any sampled change is missing its classification or a required approval.",
         "reviewer_role": "Service Owner",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Release and Change Control mitigation (cap-4) by catching misclassified or under-approved changes that the automated deployment gate (s3-ctrl-5) only checks for changes already tagged high-risk -- this control catches misclassification itself.",
+        "status": "draft",
         "title": "Change Risk Classification Approval Sign-off Verification",
         "type": "manual"
       }
@@ -38753,6 +39118,7 @@
         "pass_fail_criteria": "PASS if the release candidate's CI run shows all three gates (coverage threshold, static analysis, security scan) recorded as passed. FAIL if any gate is missing, failed, or skipped without a logged override.",
         "reviewer_role": "QA Lead",
         "risk_alignment_rationale": "Directly supports the Secure Build and Release risk exposure (the mandatory RiskPath Slice 3 mints, which cap-6 attaches to via a forward MITIGATED_BY edge) by ensuring untested or unscanned code cannot reach production silently; grounds cap-6's Test and Quality Gate Policy governance in a concrete, automatically enforced gate.",
+        "status": "draft",
         "title": "CI Quality Gate Enforcement Check",
         "type": "automated"
       }
@@ -38769,6 +39135,7 @@
         "pass_fail_criteria": "PASS if 100% of validated log samples for the build contain all required schema fields with correct types and no unstructured line substituted for a required event. FAIL if any required field is missing, mistyped, or a required event is emitted as unstructured free text.",
         "reviewer_role": "SRE Lead",
         "risk_alignment_rationale": "Directly verifies s6-rp-1 (Traceability and Auditability): a log stream missing required fields or emitted as unstructured text is exactly the untraceable-evidence failure mode that risk path describes -- an incident investigator or auditor unable to reconstruct who did what, when.",
+        "status": "draft",
         "title": "CI Structured Access Log Schema Validator",
         "type": "automated"
       }
@@ -38785,6 +39152,7 @@
         "pass_fail_criteria": "PASS if every in-scope personal-data store's configured retention period matches its recorded legal-basis/purpose justification and no record is found retained past its configured period. FAIL if any store's retention period exceeds its justification, or any record is found past its configured retention period.",
         "reviewer_role": "Data Protection Officer",
         "risk_alignment_rationale": "Directly verifies s7-rp-1: personal data retained beyond what its legal basis and purpose justify is a concrete, checkable instance of the disproportionate-processing exposure this risk path describes, distinct from s7-ctrl-2's design-time default-collection check by catching drift over the data's actual lifetime.",
+        "status": "draft",
         "title": "Default Retention Period Compliance Check",
         "type": "automated"
       }
@@ -38801,6 +39169,7 @@
         "pass_fail_criteria": "PASS if every burn-rate threshold breach in the evaluation window produced a recorded alert routed to the accountable SRE Lead within 5 minutes. FAIL if any threshold breach produced no alert, or the alert was routed later than 5 minutes after the breach.",
         "reviewer_role": "SRE Lead",
         "risk_alignment_rationale": "Directly verifies s5-rp-1 by ensuring a shrinking error budget actually reaches a human before it is fully exhausted, closing the gap between measurement (s5-ctrl-1) and action.",
+        "status": "draft",
         "title": "Error Budget Burn-Rate Alerting Control",
         "type": "automated"
       }
@@ -38817,6 +39186,7 @@
         "pass_fail_criteria": "PASS if every release promotion in the evaluation window either (a) targeted a service with a non-exhausted error budget, or (b) targeted a service with an exhausted budget but carried a linked, valid exception record. FAIL if any release was promoted to a service with an exhausted error budget with no linked exception.",
         "reviewer_role": "SRE Lead",
         "risk_alignment_rationale": "Directly verifies s5-rp-1's most acute failure mode: shipping more change into a service that is already failing its reliability commitments, compounding an existing degradation instead of stabilizing it -- this Control is the concrete, automatically enforced mechanism that makes the Service Reliability and Availability Policy's error-budget-gating commitment real.",
+        "status": "draft",
         "title": "Error-Budget-Gated Release Freeze Control",
         "type": "automated"
       }
@@ -38833,6 +39203,7 @@
         "pass_fail_criteria": "PASS if every register entry tagged 'open' has a non-null risk-acceptance rationale, a non-null expiry date no more than 12 months after creation, and no entry's expiry date is in the past. FAIL if any open entry is missing a rationale, has a missing/invalid expiry, or is past its expiry while still tagged 'open'.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies s2-rp-2 (Uncontrolled Policy Exceptions): an exception register entry missing a rationale or expiry is exactly the failure mode that risk path describes -- an exception that is never actually time-boxed or justified, effectively becoming a permanent, unreviewed policy bypass.",
+        "status": "draft",
         "title": "Exception Register Completeness Check",
         "type": "automated"
       }
@@ -38849,6 +39220,7 @@
         "pass_fail_criteria": "PASS if a tabletop drill result is recorded within the last 6 months, exercising the current incident-response runbook, with any surfaced gap logged with an assigned owner and target date. FAIL if no drill was conducted within the window, or a surfaced gap has no assigned owner/target date.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies s8-rp-1's recovery-readiness half: a runbook that has never actually been exercised is exactly the untested-recovery-capability exposure this risk path describes -- an incident-response plan that only looks ready on paper.",
+        "status": "draft",
         "title": "Incident Response Tabletop Drill Verification",
         "type": "manual"
       }
@@ -38865,6 +39237,7 @@
         "pass_fail_criteria": "PASS if every purge event in the evaluation window occurred at or after the log segment's full retention period and is recorded in the purge log. FAIL if any log segment was purged before its retention window elapsed, or any purge event has no corresponding purge-log record.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies s6-rp-1: evidence purged early -- whether accidental or malicious -- is a direct loss of the traceability and audit evidence this risk path exists to protect; this Control is the concrete mechanism that catches that failure mode before it becomes an unrecoverable audit gap.",
+        "status": "draft",
         "title": "Log Retention Window Purge Compliance Check",
         "type": "automated"
       }
@@ -38881,6 +39254,7 @@
         "pass_fail_criteria": "PASS if 100% of active grants in scope have a recorded confirm-or-revoke decision from the accountable manager within 5 business days of the quarterly report. FAIL if any grant lacks a recorded decision or the decision is late.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies s2-rp-1 by confirming the human decision step of recertification actually happened for every grant, not just that a report was produced -- closing the loop the automated report (s2-ctrl-4) cannot close on its own.",
+        "status": "draft",
         "title": "Manager Access Recertification Sign-off Verification",
         "type": "manual"
       }
@@ -38897,6 +39271,7 @@
         "pass_fail_criteria": "PASS if every in-scope service has a recorded monthly verdict with a named reviewer, and every 'degrading' verdict has a linked remediation action. FAIL if any in-scope service is missing a monthly verdict, or a 'degrading' verdict has no linked remediation action.",
         "reviewer_role": "Engineering Manager (independent second reviewer)",
         "risk_alignment_rationale": "Directly verifies s5-rp-1 by catching a slow reliability decline that automated alerting (s5-ctrl-2) reacts to only at threshold-crossing time -- the periodic human judgment call over trend, not just instantaneous state.",
+        "status": "draft",
         "title": "Monthly Reliability Posture Review",
         "type": "manual"
       }
@@ -38913,6 +39288,7 @@
         "pass_fail_criteria": "PASS if every component/vendor newly integrated in the review period has a logged Security Engineer sign-off (approve, approve-with-conditions, or reject-and-not-integrated) dated before its first production use. FAIL if any newly integrated component/vendor lacks a sign-off, or the sign-off postdates first production use.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies the Third-Party and Supply Chain Risk RiskPath's Third-Party Component Risk Assessment mitigation (s4-cap-1) by confirming the human sign-off step of risk assessment actually happened before adoption, not just that a risk score was computed -- closing the loop the automated scan (s4-ctrl-2) alone cannot close.",
+        "status": "draft",
         "title": "New Component and Vendor Risk Assessment Sign-off Verification",
         "type": "manual"
       }
@@ -38929,6 +39305,7 @@
         "pass_fail_criteria": "PASS if 100% of confirmed security incidents in the review period have a postmortem document dated within 10 business days of resolution, naming a root cause and follow-up items each with an owner and target date. FAIL if any confirmed incident is missing a postmortem, the postmortem is late, or it lacks a root cause or owned follow-up items.",
         "reviewer_role": "Security Engineer (independent second reviewer)",
         "risk_alignment_rationale": "Directly verifies s8-rp-1 by confirming the organization actually learns from a confirmed incident -- a missing or superficial postmortem is exactly the repeat-failure exposure this risk path is scoped to catch, closing the loop the drill verification (s8-ctrl-4) tests only in simulation.",
+        "status": "draft",
         "title": "Post-Incident Postmortem Completion Review",
         "type": "manual"
       }
@@ -38945,6 +39322,7 @@
         "pass_fail_criteria": "PASS if every in-scope production feature/service has a privacy-by-design review document dated within the last 12 months (or since its last material change to personal-data processing, whichever is more recent) with a recorded DPO approval sign-off predating its production release date. FAIL if any in-scope feature/service's review is missing, stale, or lacks a DPO sign-off.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies s7-rp-1 (Data Protection and Privacy): a missing or stale privacy-by-design review is exactly the undetected-personal-data-exposure blind spot that risk path describes -- a feature reaching production without anyone having assessed what personal data it touches or whether its safeguards are proportionate.",
+        "status": "draft",
         "title": "Privacy-by-Design Review Completion Check",
         "type": "manual"
       }
@@ -38961,6 +39339,7 @@
         "pass_fail_criteria": "PASS if the quarterly report is generated and lists 100% of active access grants across in-scope systems, grouped by grantee and role, by the first business day of the quarter. FAIL if the report is missing any in-scope system or is not generated by that date.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies s2-rp-1 by ensuring the recertification review (s2-ctrl-5) has complete, accurate input data -- an incomplete report would let stale, unauthorized access go unreviewed.",
+        "status": "draft",
         "title": "Quarterly Access Recertification Report Automation",
         "type": "automated"
       }
@@ -38977,6 +39356,7 @@
         "pass_fail_criteria": "PASS if every sampled service's logs allow the reviewer to fully reconstruct at least one representative access event end-to-end with no missing or unreadable segment. FAIL if any sampled service's logs are incomplete, unreadable, or insufficient to reconstruct a representative event.",
         "reviewer_role": "SRE Lead (independent second reviewer)",
         "risk_alignment_rationale": "Directly verifies s6-rp-1 by testing the end-to-end auditability claim the automated checks (s6-ctrl-1/s6-ctrl-2) can't fully cover on their own -- proving logs are not just present and unaltered, but actually usable to answer a real audit or incident question.",
+        "status": "draft",
         "title": "Quarterly Audit Evidence Sampling Review",
         "type": "manual"
       }
@@ -38993,6 +39373,7 @@
         "pass_fail_criteria": "PASS if every business-critical service has a recorded quarterly capacity review with a pass/gap verdict, and every identified gap has an assigned owner and target date. FAIL if any service lacks a quarterly review, or a gap has no assigned owner/target date.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies s5-rp-1 by catching capacity shortfalls before they cause an SLO breach -- a proactive check that complements the reactive error-budget alerting in s5-ctrl-2.",
+        "status": "draft",
         "title": "Quarterly Capacity Planning Review",
         "type": "manual"
       }
@@ -39009,6 +39390,7 @@
         "pass_fail_criteria": "PASS if, for the quarter, every open exception has been reviewed by the accountable Engineering Manager with a written confirm-or-revoke decision recorded. FAIL if any open exception has no recorded quarterly decision.",
         "reviewer_role": "Security Engineer (independent second reviewer)",
         "risk_alignment_rationale": "Directly verifies s2-rp-2 by catching exceptions that pass the automated completeness check (s2-ctrl-1) but whose underlying justification has become stale -- the human judgment call the automated check cannot make.",
+        "status": "draft",
         "title": "Quarterly Exception Risk-Acceptance Review",
         "type": "manual"
       }
@@ -39025,6 +39407,7 @@
         "pass_fail_criteria": "PASS if every sampled feature's applied safeguards (encryption, pseudonymization, access restriction) are, in the DPO's documented judgment, proportionate to the personal data's current sensitivity and legal basis. FAIL if any sampled feature's safeguards are found disproportionate -- too weak for the data's current sensitivity, or the legal basis has changed without a corresponding safeguard review.",
         "reviewer_role": "Engineering Manager (independent second reviewer)",
         "risk_alignment_rationale": "Directly verifies s7-rp-1 by testing the human judgment call the automated checks (s7-ctrl-2/s7-ctrl-3) can't make on their own -- whether the combination of safeguards actually applied remains proportionate as data sensitivity or legal basis shifts over time, not just whether individual fields or retention periods pass a mechanical check.",
+        "status": "draft",
         "title": "Quarterly Proportionality Sampling Review",
         "type": "manual"
       }
@@ -39041,6 +39424,7 @@
         "pass_fail_criteria": "PASS if, for the quarter, every component/vendor on the high-risk reassessment list has a logged continue-or-remediate decision from the Security Engineer. FAIL if any listed high-risk component/vendor lacks a recorded quarterly decision.",
         "reviewer_role": "Engineering Manager (independent second reviewer)",
         "risk_alignment_rationale": "Directly verifies the Third-Party and Supply Chain Risk RiskPath by catching components whose risk profile has worsened since intake (e.g. a maintenance lapse or newly disclosed vulnerability) that the intake-time sign-off (s4-ctrl-3) could not have known about.",
+        "status": "draft",
         "title": "Quarterly Third-Party Risk Reassessment Review",
         "type": "manual"
       }
@@ -39057,6 +39441,7 @@
         "pass_fail_criteria": "PASS if the QA Lead has logged a written sign-off for the release candidate referencing test evidence, rollback plan, and triaged known issues, with a timestamp preceding the deployment timestamp. FAIL if any high-risk release deploys without a logged QA Lead sign-off, or the sign-off predates the final CI gate result.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly supports the same Secure Build and Release exposure as s2-ctrl-6 by adding the human judgment step automated gates cannot make -- catching known issues or incomplete rollback plans that pass automated checks but still represent real release risk.",
+        "status": "draft",
         "title": "Release Readiness Manual Sign-off Review",
         "type": "manual"
       }
@@ -39073,6 +39458,7 @@
         "pass_fail_criteria": "PASS if the release's promotion record includes a non-null rollback plan reference (previous version tag and rollback trigger criteria). FAIL if promotion proceeds with a missing rollback plan reference.",
         "reviewer_role": "Service Owner",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath: a release promoted without a verified rollback path leaves an unsafe, unrecoverable production change in place if the build proves defective post-release.",
+        "status": "draft",
         "title": "Rollback Plan Presence Verification",
         "type": "automated"
       }
@@ -39089,6 +39475,7 @@
         "pass_fail_criteria": "PASS if every production service has a threat model document dated within the last 12 months (or since its last material architecture change, whichever is more recent) with a recorded Security Engineer review sign-off. FAIL if any production service's threat model is missing, stale, or lacks a sign-off.",
         "reviewer_role": "Engineering Manager",
         "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Secure Development Lifecycle mitigation (cap-2): a stale or missing threat model is exactly the design-time blind spot that lets an unvetted attack surface reach the build pipeline undetected.",
+        "status": "draft",
         "title": "Threat Model Review Completion Check",
         "type": "manual"
       }
@@ -39105,6 +39492,7 @@
         "pass_fail_criteria": "PASS if the vulnerability-intelligence feed's last successful update is within the defined freshness window (24 hours). FAIL if the feed's last successful update is older than 24 hours, or the last scheduled update failed.",
         "reviewer_role": "Security Engineer",
         "risk_alignment_rationale": "Directly verifies s8-rp-1 by grounding the scan-coverage check (s8-ctrl-1) itself: a scan running against stale vulnerability data would report false confidence, silently missing newly disclosed vulnerabilities that could otherwise be caught before becoming an incident.",
+        "status": "draft",
         "title": "Vulnerability Intelligence Feed Freshness Check",
         "type": "automated"
       }
@@ -73604,6 +73992,7 @@
         "implementer_role": "Release Engineer / CI pipeline owner",
         "procedure": "1) The CI pipeline generates an SBOM (in a standard format such as SPDX or CycloneDX) for every build artifact at build time, listing all direct and transitive dependencies. 2) The pipeline cryptographically signs the artifact using the organization's build-signing key immediately after a successful build. 3) A provenance attestation is generated linking the signed artifact to its source commit hash and CI build job ID. 4) An artifact missing an SBOM, a valid signature, or a provenance attestation is blocked from promotion to production.",
         "reviewer_role": "Security Engineer",
+        "status": "draft",
         "title": "Build Artifact Signing and SBOM Generation Standard",
         "verification_notes": "A Control can test conformance by checking, for each artifact promoted to production, that the CI build record shows a generated SBOM, a valid signature verification result, and a provenance attestation referencing the source commit and build job ID.",
         "version": "1.0"
@@ -73620,6 +74009,7 @@
         "implementer_role": "Requesting engineering team",
         "procedure": "1) The requesting engineer classifies the change as low/medium/high risk using the organization's risk-classification checklist (blast radius, data sensitivity, reversibility). 2) Low-risk changes proceed with standard CI gate approval only. 3) Medium-risk changes require the Engineering Manager's recorded approval. 4) High-risk changes require the Service Owner's recorded approval in addition to the Engineering Manager's. 5) Misclassified changes discovered post-hoc are logged and the classification checklist is updated.",
         "reviewer_role": "Engineering Manager",
+        "status": "draft",
         "title": "Change Risk Classification and Approval Standard",
         "verification_notes": "A Control can test conformance by sampling promoted changes and checking each has a recorded risk-tier classification and the approval(s) matching that tier (Engineering Manager for medium, plus Service Owner for high) logged before the promotion timestamp.",
         "version": "1.0"
@@ -73636,6 +74026,7 @@
         "implementer_role": "Release Engineer / CI pipeline owner",
         "procedure": "1) Every pull request triggers automated SAST (static application security testing), dependency vulnerability scanning, and secret scanning in the CI pipeline. 2) A pull request with an unresolved critical-severity SAST or dependency-scan finding, or any detected committed secret, is blocked from merge. 3) Findings below critical severity are recorded as backlog items with a triage SLA. 4) Any override of a blocked merge requires the Security Engineer's written approval per the Policy's exception pathway.",
         "reviewer_role": "Security Engineer",
+        "status": "draft",
         "title": "CI/CD Pipeline Security Scanning Standard",
         "verification_notes": "A Control can test conformance by checking the CI pipeline's scan results for each merged pull request: SAST/dependency-scan/secret-scan status recorded, and no merge shows a critical-severity finding without a logged Security Engineer override.",
         "version": "1.0"
@@ -73652,6 +74043,7 @@
         "implementer_role": "Security Engineer",
         "procedure": "1) Every production service and its runtime dependencies are scanned on a recurring schedule (at minimum daily) for known vulnerabilities using the organization's vulnerability-intelligence feed. 2) Every new finding is triaged by the Security Engineer within 2 business days, assigning a severity (critical/high/medium/low) using the organization's CVSS-aligned severity matrix. 3) Triaged findings are logged in the vulnerability register with the affected service, component, severity, and detection date. 4) A finding already covered by an active, unexpired exception is not re-triaged until the exception expires.",
         "reviewer_role": "Service Owner",
+        "status": "draft",
         "title": "Continuous Vulnerability Scanning and Triage Standard",
         "verification_notes": "A Control can test conformance by checking: (a) every in-scope service has a scan result dated within the last scan interval, (b) every new finding has a triage record (severity, triage date) within 2 business days of its detection date, (c) no untriaged finding remains open past that window.",
         "version": "1.0"
@@ -73668,6 +74060,7 @@
         "implementer_role": "Release Engineer / CI pipeline owner",
         "procedure": "1) Every release candidate is tagged with a change risk tier (low/medium/high) per the Change Risk Classification and Approval Standard. 2) High-risk releases require a named approver's recorded sign-off in the deployment pipeline before promotion is unblocked. 3) Every release must have a documented rollback plan (previous version reference and rollback trigger criteria) attached before promotion. 4) No release is promoted during a declared change-freeze window without a logged emergency-change exception.",
         "reviewer_role": "Service Owner",
+        "status": "draft",
         "title": "Controlled Release and Deployment Standard",
         "verification_notes": "A Control can test conformance by checking the deployment pipeline's promotion record for each release: risk tier recorded, approver sign-off present for high-risk releases, rollback plan reference present, and no promotion timestamp falling inside an active freeze window without a logged exception.",
         "version": "1.0"
@@ -73684,6 +74077,7 @@
         "implementer_role": "Requesting engineering team",
         "procedure": "1) For every feature that collects personal data, the default configuration (behavior with no user or administrator action taken) must collect only the personal-data fields necessary for the feature's stated purpose. 2) Any configuration option that would widen personal-data collection, exposure, or retention beyond the default must require an explicit, auditable opt-in action; it must never ship as the default. 3) The owning team records, in the feature's privacy-by-design review, the specific minimality justification for each personal-data field collected by default. 4) Default retention periods for personal data must be set to the shortest period that satisfies the recorded legal basis and business purpose, and must be reviewed whenever that basis or purpose changes.",
         "reviewer_role": "Data Protection Officer",
+        "status": "draft",
         "title": "Default Data Minimization Standard",
         "verification_notes": "A Control can test conformance by sampling shipped default configurations for in-scope features and checking: (a) each personal-data field collected by default has a recorded minimality justification in the feature's privacy-by-design review, (b) no personal-data-widening option is enabled by default, (c) default retention periods match the shortest period the recorded legal basis/purpose supports.",
         "version": "1.0"
@@ -73700,6 +74094,7 @@
         "implementer_role": "Security Engineer",
         "procedure": "1) Access requestor submits a request naming the specific system, resource, and role needed, with a business justification. 2) The Security Engineer (or delegated system owner) verifies the requested access matches the minimum privilege needed for the requestor's role. 3) Access is provisioned via the identity provider with a linked ticket reference recording the approver and justification. 4) Standing administrative roles are prohibited; time-boxed elevation is used instead, capped at 8 hours per grant.",
         "reviewer_role": "System Owner (Service Owner role)",
+        "status": "draft",
         "title": "Engineering System Access Provisioning Standard",
         "verification_notes": "A Control can test conformance by sampling access grants in the identity provider's audit log and checking each has: a linked ticket reference, a named approver distinct from the requestor, and (for administrative roles) a time-boxed expiry of 8 hours or less.",
         "version": "1.0"
@@ -73716,6 +74111,7 @@
         "implementer_role": "Release Engineer / CI pipeline owner",
         "procedure": "1) The CI/CD pipeline queries the current error-budget state for the target service before promoting a release; a fully exhausted budget blocks promotion automatically. 2) An override requires the exception pathway defined in the Service Reliability and Availability Policy. 3) Monthly, the SRE Lead reviews each service's error-budget burn trend alongside its failover-test and capacity-review results (from the Production Resilience and Capacity Standard) and records whether the reliability posture is stable, improving, or degrading. 4) A degrading posture triggers a documented remediation action (e.g. a scheduled capacity increase or an updated failover design).",
         "reviewer_role": "SRE Lead",
+        "status": "draft",
         "title": "Error-Budget-Gated Release and Reliability Review Standard",
         "verification_notes": "A Control can test conformance by checking: (a) the CI pipeline's release-gate log shows an error-budget check recorded for every promoted release, (b) every month has a logged SRE Lead reliability-posture review referencing that month's error-budget, failover, and capacity data, (c) every 'degrading' verdict has a linked remediation action.",
         "version": "1.0"
@@ -73732,6 +74128,7 @@
         "implementer_role": "Security Engineer",
         "procedure": "1) Every calendar quarter, an automated report lists all active access grants per system, grouped by grantee and role. 2) The accountable Engineering Manager or Security Engineer for each system reviews the report and either confirms continued need or revokes access. 3) Revocations are executed within 5 business days of the review. 4) The completed review, including any revocations, is logged with a timestamp and reviewer name.",
         "reviewer_role": "Engineering Manager",
+        "status": "draft",
         "title": "Periodic Access Review and Recertification Standard",
         "verification_notes": "A Control can test conformance by checking that, for each quarter, every in-scope system has a logged review entry with a timestamp within that quarter and a named reviewer, and that any grant flagged for revocation shows a revocation timestamp within 5 business days.",
         "version": "1.0"
@@ -73748,6 +74145,7 @@
         "implementer_role": "Requesting engineering team",
         "procedure": "1) Requestor submits an exception request in the policy exception register, naming the specific policy/standard clause being deviated from and the business justification. 2) The Engineering Manager accountable for the affected service reviews the request within 5 business days. 3) If approved, the Engineering Manager records a written risk-acceptance rationale and sets an expiry date not exceeding 12 months. 4) The register entry is tagged 'open' until the expiry date, at which point it is either renewed with a fresh review or closed.",
         "reviewer_role": "Engineering Manager",
+        "status": "draft",
         "title": "Policy Exception Request and Risk Acceptance Standard",
         "verification_notes": "A Control can test conformance by querying the exception register for: (a) every 'open' entry has a non-null expiry date and risk-acceptance rationale field, (b) no entry's expiry date is more than 12 months past its creation date, (c) no entry is past its expiry date while still tagged 'open'.",
         "version": "1.0"
@@ -73764,6 +74162,7 @@
         "implementer_role": "Requesting engineering team",
         "procedure": "1) Before first production release, or after any material change to what personal data is collected or how it is used, the owning team completes a privacy-by-design review documenting: data flows, categories of personal data involved, legal basis for processing, and proportionality of the safeguards applied. 2) The Data Protection Officer reviews the documented review and either approves it, requests changes, or records mitigations as backlog items. 3) A feature must not reach production until its privacy-by-design review is DPO-approved. 4) The review is re-conducted after any material architecture change that alters what personal data is collected, how it is processed, or its legal basis.",
         "reviewer_role": "Data Protection Officer",
+        "status": "draft",
         "title": "Privacy-by-Design Review Standard",
         "verification_notes": "A Control can test conformance by checking that: (a) every production feature/service that processes personal data has a privacy-by-design review document dated within the last 12 months or since its last material change to personal-data processing, whichever is more recent, (b) the document carries a recorded DPO approval sign-off predating the feature's production release date.",
         "version": "1.0"
@@ -73780,6 +74179,7 @@
         "implementer_role": "SRE Lead",
         "procedure": "1) Every business-critical service must have a documented redundancy/failover design covering its single points of failure. 2) The SRE Lead schedules a failover/disaster-recovery test at least every 6 months and records the result (pass/fail, time-to-recover). 3) Capacity is reviewed quarterly against current and forecast load, using the service's SLO-defined latency/throughput targets as the pass bar. 4) Any capacity or failover gap identified is logged as a backlog item with an owner and target date.",
         "reviewer_role": "Engineering Manager",
+        "status": "draft",
         "title": "Production Resilience and Capacity Standard",
         "verification_notes": "A Control can test conformance by checking: (a) every business-critical service has a failover test result recorded within the last 6 months, (b) every such service has a capacity review recorded within the last quarter, (c) any logged gap has an assigned owner and target date.",
         "version": "1.0"
@@ -73796,6 +74196,7 @@
         "implementer_role": "Release Engineer / CI pipeline owner",
         "procedure": "1) The CI pipeline runs automated test-coverage, static-analysis, and security-scan gates against every release candidate. 2) A release candidate failing any gate is blocked from promotion. 3) For releases classified high-risk, the QA Lead performs a manual readiness review covering test evidence, rollback plan, and known-issue triage before sign-off. 4) Any override of a failed gate requires the QA Lead's written approval per the Policy's exception pathway.",
         "reviewer_role": "QA Lead",
+        "status": "draft",
         "title": "Release Quality Gate Verification Standard",
         "verification_notes": "A Control can test conformance by checking the CI pipeline's gate results for each release candidate: coverage/static-analysis/security-scan gate status recorded, and for high-risk releases, a logged QA Lead sign-off record with a timestamp preceding the deployment timestamp.",
         "version": "1.0"
@@ -73812,6 +74213,7 @@
         "implementer_role": "Requesting engineering team",
         "procedure": "1) Before a service's first production release, the development team creates a threat model covering data flows, trust boundaries, and identified threats using STRIDE or an equivalent method. 2) The Security Engineer reviews the threat model and records identified mitigations as backlog items. 3) The threat model is re-reviewed after any material architecture change (new external integration, new data store, new trust boundary). 4) Developers apply the organization's secure coding standard (input validation, output encoding, parameterized queries) during implementation, verified by the SAST gate.",
         "reviewer_role": "Security Engineer",
+        "status": "draft",
         "title": "Secure Coding and Threat Modeling Standard",
         "verification_notes": "A Control can test conformance by checking that: (a) every production service has a threat model document dated within the last 12 months or since its last material architecture change, whichever is more recent, (b) the document has a recorded Security Engineer review sign-off.",
         "version": "1.0"
@@ -73828,6 +74230,7 @@
         "implementer_role": "Security Engineer",
         "procedure": "1) A suspected security incident (from monitoring, a vulnerability finding, or an external report) is triaged by the on-call security responder within 1 hour of detection, who declares it confirmed or a false positive. 2) A confirmed incident is assigned an incident commander who coordinates containment, eradication, and recovery, following the incident-response runbook. 3) The Security Engineer schedules an incident-response tabletop drill at least every 6 months, exercising the runbook against a simulated scenario and recording the result. 4) Within 10 business days of a confirmed incident's resolution, the incident commander leads a blameless postmortem documenting root cause, timeline, and follow-up remediation items with owners and target dates.",
         "reviewer_role": "Engineering Manager",
+        "status": "draft",
         "title": "Security Incident Response and Postmortem Standard",
         "verification_notes": "A Control can test conformance by checking: (a) every logged suspected incident has an on-call triage record within 1 hour of detection, (b) every confirmed incident has a completed postmortem dated within 10 business days of its resolution date with root cause and follow-up items recorded, (c) a tabletop drill result exists dated within the last 6 months.",
         "version": "1.0"
@@ -73844,6 +74247,7 @@
         "implementer_role": "SRE Lead",
         "procedure": "1) Access and security logs are retained for a minimum of 400 days, aligned to the organization's audit-evidence window, in write-once storage. 2) A scheduled job computes and records a retention-integrity check daily, confirming for each service that its expected log volume for the prior day is present and no log segment within the retention window has been deleted or altered outside the log pipeline's own append path. 3) Any detected gap or integrity failure is escalated to the SRE Lead within 1 business day and tracked as an incident until remediated. 4) Logs reaching the end of the retention window are purged per the organization's data-retention schedule and the purge is recorded in the purge log.",
         "reviewer_role": "Security Engineer",
+        "status": "draft",
         "title": "Security Log Retention and Integrity Standard",
         "verification_notes": "A Control can test conformance by checking: (a) every service's expected log volume for each day in the retention window is present, (b) the daily retention-integrity check ran and recorded a result, (c) no integrity failure remained unescalated past 1 business day, (d) no log segment was purged before its retention window elapsed.",
         "version": "1.0"
@@ -73860,6 +74264,7 @@
         "implementer_role": "SRE Lead",
         "procedure": "1) For each user-facing capability of a production service, the SRE Lead and Service Owner jointly define one or more Service Level Indicators (request success rate, latency percentile, or equivalent) following the SLI/SLO model in Google's SRE book. 2) A target Service Level Objective and measurement window are set for each SLI and recorded in a declarative SLO definition (OpenSLO-compatible YAML or equivalent), naming the metric source. 3) The corresponding error budget (1 minus the SLO) is computed and tracked continuously against the live SLI. 4) An alert policy fires when the rolling error budget crosses a defined burn-rate threshold; when the budget is fully exhausted, new releases to that service are automatically blocked pending the exception pathway.",
         "reviewer_role": "Service Owner",
+        "status": "draft",
         "title": "Service Level Objective and Error Budget Definition Standard",
         "verification_notes": "A Control can test conformance by checking: (a) every in-scope service has a recorded SLO definition naming its SLI, target, and measurement window, (b) the error-budget alert policy fired and was acted on whenever the tracked burn rate crossed its threshold, (c) no release was promoted to a service with an exhausted error budget without a logged exception.",
         "version": "1.0"
@@ -73876,6 +74281,7 @@
         "implementer_role": "Service Owner",
         "procedure": "1) Every triaged vulnerability finding is assigned a remediation deadline based on its severity: critical 7 days, high 30 days, medium 90 days, from triage date. 2) The Security Engineer tracks open findings against their deadlines in the vulnerability register. 3) A finding within 2 days of missing its SLA without a completed remediation or filed exception is automatically escalated to the accountable Engineering Manager. 4) Remediation (patch deployed, mitigation applied, or exception granted per the Policy's exception pathway) closes the finding with a recorded closure date and method.",
         "reviewer_role": "Security Engineer",
+        "status": "draft",
         "title": "Severity-Based Remediation SLA Standard",
         "verification_notes": "A Control can test conformance by checking: (a) every closed finding's closure date is at or before its severity's SLA deadline, or is linked to a valid exception record, (b) every finding within 2 days of its deadline with no closure has a logged escalation to the Engineering Manager.",
         "version": "1.0"
@@ -73892,6 +74298,7 @@
         "implementer_role": "Service Owner",
         "procedure": "1) Every production service must emit access and security log events in the organization's structured log schema (JSON, with a defined field set: timestamp, actor identity, action, resource, outcome, source origin). 2) The Security Engineer maintains the canonical schema definition and versions it. 3) New services onboard by validating their log output against the current schema version in CI before first production deployment. 4) Any schema change is reviewed jointly by the SRE Lead and Security Engineer, and a migration window is set for existing services.",
         "reviewer_role": "SRE Lead",
+        "status": "draft",
         "title": "Structured Security Log Schema Standard",
         "verification_notes": "A Control can test conformance by validating a sample of each service's emitted log events against the current schema definition in CI: (a) required fields present, (b) field types match, (c) no unstructured free-text line substituted for a required structured event.",
         "version": "1.0"
@@ -73908,6 +74315,7 @@
         "implementer_role": "Requesting engineering team",
         "procedure": "1) Before integrating a new third-party component, open-source library, or vendor, the requesting team runs the automated component risk-scoring scan against it (known-vulnerability history, maintenance activity, and provenance signals). 2) The Security Engineer reviews the risk score and any flagged findings, and records a written risk assessment sign-off (approve, approve-with-conditions, or reject) before the component may be integrated. 3) Every third-party component or vendor scored high-risk at intake is placed on a quarterly reassessment list. 4) Each quarter, the Security Engineer reviews the current risk-scoring scan results for every listed high-risk component/vendor and records a continue-or-remediate decision.",
         "reviewer_role": "Security Engineer",
+        "status": "draft",
         "title": "Third-Party Component and Vendor Risk Assessment Standard",
         "verification_notes": "A Control can test conformance by checking that: (a) every newly integrated component has a recorded risk-scoring scan result and a Security Engineer sign-off dated before its first production use, (b) every component/vendor on the high-risk reassessment list has a logged continue-or-remediate decision dated within the current quarter.",
         "version": "1.0"
@@ -73924,6 +74332,7 @@
         "implementer_role": "Release Engineer / CI pipeline owner",
         "procedure": "1) Every build pipeline run scans all direct and transitive open-source dependencies and records each one's declared license. 2) A dependency carrying a license on the organization's disallowed list blocks the build from promotion. 3) A dependency carrying a license requiring manual legal review (e.g. certain copyleft terms) is flagged and routed to the Security Engineer for a documented allow/deny decision. 4) Any override permitting a disallowed-license dependency requires the Security Engineer's written approval per the Policy's exception pathway.",
         "reviewer_role": "Security Engineer",
+        "status": "draft",
         "title": "Third-Party License Compliance Standard",
         "verification_notes": "A Control can test conformance by checking the CI pipeline's license-scan results for each build: every dependency's license recorded, no disallowed-license dependency promoted without a logged Security Engineer override, and every flagged copyleft dependency showing a documented allow/deny decision.",
         "version": "1.0"

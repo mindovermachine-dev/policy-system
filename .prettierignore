@@ -16,3 +16,6 @@ ps-cli/src/ps_cli/schemas/internal_regulation_intake_v1.schema.json
 # hash these files as exported, so they can't be independently formatted.
 curated-content/**/baseline.json
 curated-content/**/native.json
+# Frozen copies of exported artifacts; their golden hashes depend on the exact bytes.
+ps-service/tests/export/fixtures/**/*.json
+ps-service/tests/graph_gateway/fixtures/**/*.json

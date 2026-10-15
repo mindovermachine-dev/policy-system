@@ -706,6 +706,11 @@ decrypted copy only for the duration of the restore.
 
    On a new cluster, create the Secrets first and install with the same values, so the first
    start of PS Postgres uses the retained passwords.
+
+   On a `kind-*` evaluator cluster, `scripts/verify-backup-restore.sh retain-secrets
+   [--chart <reference>] [--chart-version <version>]` runs the copy, the stop and the upgrade
+   above and does nothing when the release already retains the three Secrets. It keeps the copies
+   in the same cluster, so it is not a substitute for copies outside the cluster on a real one.
 2. **Use the same chart version as the backup, or a newer one.** The provisioning Job applies any
    migration the newer version adds to the restored databases.
 3. **Know the target.** The restore overwrites all PS Postgres data and empties FalkorDB in the

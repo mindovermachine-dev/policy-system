@@ -462,3 +462,70 @@ def test_wait_ready_times_out_while_the_service_stays_not_ready(tmp_path: Path) 
 )
 def test_script_carries_the_documented_restore_strings(flag: str) -> None:
     assert flag in SCRIPT.read_text()
+
+
+def test_retain_secrets_copies_the_secrets_then_stops_postgres_then_upgrades(
+    tmp_path: Path,
+) -> None:
+    result = _run(tmp_path, ["retain-secrets"], helm_values={})
+
+    assert result.code == 0, result.stderr
+    applies = [call for call in result.kubectl if call == "apply -f -"]
+    assert len(applies) == 3
+    for role in ("admin", "state", "signing"):
+        assert f"get secret policy-system-ps-postgres-{role}-credentials -o json" in result.kubectl
+    scale = _index(result.kubectl, "scale deploy/policy-system-ps-service")
+    assert "deploy/policy-system-ps-postgres --replicas=0" in result.kubectl[scale]
+    assert scale > _last_index(result.kubectl, "apply -f -")
+    assert (
+        _index(result.kubectl, "wait --for=delete pod -l app.kubernetes.io/component=ps-postgres")
+        > scale
+    )
+    upgrade = next(call for call in result.helm if call.startswith("upgrade"))
+    assert "--reset-then-reuse-values" in upgrade
+    assert "--wait --wait-for-jobs" in upgrade
+    for role in ("admin", "state", "signing"):
+        assert f"--set psPostgres.{role}.existingSecret=ps-{role}-retained" in upgrade
+
+
+def test_retain_secrets_passes_the_chart_version_to_helm(tmp_path: Path) -> None:
+    result = _run(tmp_path, ["retain-secrets", "--chart-version", "5.0.0"], helm_values={})
+
+    assert result.code == 0, result.stderr
+    upgrade = next(call for call in result.helm if call.startswith("upgrade"))
+    assert "--version 5.0.0" in upgrade
+
+
+def test_retain_secrets_does_nothing_when_the_release_already_retains_them(
+    tmp_path: Path,
+) -> None:
+    result = _run(tmp_path, ["retain-secrets"])
+
+    assert result.code == 0, result.stderr
+    assert "retain_secrets_skipped" in result.stderr
+    assert not [call for call in result.kubectl if call.startswith(("apply", "scale"))]
+    assert not [call for call in result.helm if call.startswith("upgrade")]
+
+
+def test_retain_secrets_refuses_outside_a_kind_context(tmp_path: Path) -> None:
+    result = _run(tmp_path, ["retain-secrets"], context="aks-prod", helm_values={})
+
+    assert result.code == 1
+    assert "aks-prod" in result.stderr
+    assert not [call for call in result.kubectl if call.startswith(("apply", "scale"))]
+
+
+def test_retain_secrets_fails_when_helm_upgrade_fails(tmp_path: Path) -> None:
+    result = _run(tmp_path, ["retain-secrets"], helm_values={}, helm_upgrade_exit=1)
+
+    assert result.code == 1
+    assert "retain-secrets failed at upgrade" in result.stderr
+
+
+def test_restore_refusal_points_to_retain_secrets(tmp_path: Path) -> None:
+    artifact = _make_artifact(tmp_path)
+
+    result = _run(tmp_path, _restore_args(artifact), helm_values={"psPostgres": {}})
+
+    assert result.code == 1
+    assert "retain-secrets" in result.stderr

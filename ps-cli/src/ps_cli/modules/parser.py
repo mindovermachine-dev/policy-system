@@ -23,7 +23,7 @@ _CONTEXT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 # .instrument_id`/`CatalogInstrumentEntry.instrument_id` (ps_service/api/models.py) are both
 # bare `Field(min_length=1)`, no `pattern=`. This charset is instead this module's own
 # documented assumption -- alnum start, alnum/`_`/`-`/`.` body, no `/`, matching every real
-# `catalog.json` entry (`CRA-1.0`, `GDPR-1.0`, `NIS2-1.0`) while rejecting a path-traversal
+# `catalog.json` entry (`CRA-1.0`, `GDPR-1.0`, `ENGPRAC-1.0`) while rejecting a path-traversal
 # payload at parse time (L1 "Fail Fast at Boundaries"). `export instrument`'s
 # `instrument_id` positional (`_add_export_parser`) uses it, and the strict charset is the
 # right validation for an id that will be sent on to PS Service.

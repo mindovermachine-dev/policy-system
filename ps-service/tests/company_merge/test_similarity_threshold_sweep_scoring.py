@@ -18,7 +18,7 @@ Covers, hermetically (a hand-scripted fake `EmbeddingCaller`, zero network/Falko
   dependency.
 - `build_dataset()`'s identical-name exclusion mechanism, proven at corpus scale: a
   mechanical guard raises on a violating pair, computed against all 778 real
-  Capability nodes across curated-content -- not merely omitted by hand.
+  Capability nodes across similarity-corpus -- not merely omitted by hand.
 - `sweep_dataset()` fetches each unique text's embedding at most once across every pair
   AND every threshold.
 - `sweep_dataset()` lets a `LlmProviderError` from any `route_embedding` call propagate
@@ -390,7 +390,7 @@ def test_assert_dataset_excludes_real_identical_name_pairs_raises_on_a_violation
 def test_assert_dataset_excludes_real_identical_name_pairs_passes_the_real_dataset(
     sweep_module: ModuleType,
 ) -> None:
-    """The guard, run against the real 778-node curated-content corpus, raises
+    """The guard, run against the real 778-node similarity-corpus corpus, raises
     nothing for the shipped dataset -- `build_dataset()` itself already proves this
     by not raising, but this test isolates the guard call so a future regression
     here fails loudly and specifically, rather than only failing indirectly via
@@ -408,7 +408,7 @@ def test_repeated_capability_names_from_corpus_matches_the_known_10_groups(
     sweep_module: ModuleType,
 ) -> None:
     """10 Capability names are shared verbatim across two or more
-    of the 778 real Capability nodes across curated-content. Spot-checks a
+    of the 778 real Capability nodes across similarity-corpus. Spot-checks a
     few of the 10 by name.
     """
     repeated_names = sweep_module._repeated_capability_names_from_corpus()  # pyright: ignore[reportPrivateUsage] -- internal helper under test
@@ -725,7 +725,7 @@ def _sha256_deterministic_vector(text: str, *, dimensions: int) -> tuple[float, 
     truncates to exactly `dimensions` -- identical every time for the same
     `(text, dimensions)`, effectively distinct across different strings (SHA-256
     collision odds negligible at this scale). `dimensions` must match the real
-    curated-content embedding length so a fake `text_a` vector and a real cached
+    similarity-corpus embedding length so a fake `text_a` vector and a real cached
     `text_b_cached_embedding` can be compared by `cosine_similarity` without a
     length mismatch. Not a scoring reimplementation: this only fabricates fake
     embedding *inputs* for the hermetic fake `call_embedding` below --
@@ -772,7 +772,7 @@ def test_sweep_dataset_scores_the_full_real_dataset_cleanly_across_the_default_r
     """Calls `sweep_dataset()` directly (no CLI) over the complete,
     real 21-pair dataset (10 match + 11 non-match, `build_dataset()`) with a fully
     scripted fake `call_embedding` covering every unique text via the deterministic
-    SHA-256-based vector scheme (extended to match the real curated-content embedding
+    SHA-256-based vector scheme (extended to match the real similarity-corpus embedding
     dimension), swept across the default 0.70-0.95 step 0.01 threshold range
     (26 thresholds). Proves the
     whole real dataset scores cleanly through the real `cosine_similarity`/cache path
@@ -780,7 +780,7 @@ def test_sweep_dataset_scores_the_full_real_dataset_cleanly_across_the_default_r
     valid [0.0, 1.0] range -- with no CLI or live/network dependency.
 
     Every pair's `text_b` carries a real `text_b_cached_embedding` (every cited node in
-    `build_dataset()`'s real 21-pair dataset resolves to a real curated-content node with a
+    `build_dataset()`'s real 21-pair dataset resolves to a real similarity-corpus node with a
     real cached embedding), so only `text_a` is ever fetched fresh via the fake
     `call_embedding` -- proven below, not merely assumed.
     """

@@ -5,19 +5,19 @@ Loads the script by path via `importlib.util.spec_from_file_location`, exactly a
 (same non-package-script-by-path pattern as `test_similarity_threshold_sweep_scoring.py`
 already uses for this same script).
 
-Covers, against the real `curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json` files (no
+Covers, against the real `test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json` files (no
 network, no FalkorDB -- read via `parse_serialized_graph_json`, an independent read path
 from the sweep script's own `_load_curated_content_capability_nodes()`, so this test
 suite doesn't just trust the implementation's own count):
 
 - `build_dataset()` returns at least 10 true-match pairs and at least 10
   true-non-match pairs, and every pair's `cited_node_ids` resolve to real Capability
-  ids actually present in curated-content (membership checked by loading the baseline
+  ids actually present in similarity-corpus (membership checked by loading the baseline
   exports here directly, not merely trusted from the literal string).
 - Every pair's `rationale` is a non-empty string.
 - Corpus-scale property: a property test iterating every real
   identical-name id group found by scanning all 778 real Capability node entries
-  across curated-content (10 such groups -- independently re-counted here, not
+  across similarity-corpus (10 such groups -- independently re-counted here, not
   trusted blindly) asserts none of those names appear as a same-string
   (`text_a == text_b`) pair in the dataset.
 """
@@ -43,8 +43,8 @@ if TYPE_CHECKING:
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT_PATH = _REPO_ROOT / "tools" / "company-merge" / "company_merge_similarity_sweep.py"
 _MODULE_NAME = "_company_merge_similarity_sweep_dataset_under_test"
-_CURATED_CONTENT_DIR = _REPO_ROOT / "curated-content"
-_CURATED_CONTENT_INSTRUMENT_DIRS = ("GDPR-1.0", "NIS2-1.0", "CRA-1.0")
+_CORPUS_DIR = _REPO_ROOT / "test-data" / "similarity-corpus"
+_CORPUS_INSTRUMENT_DIRS = ("GDPR-1.0", "NIS2-1.0", "CRA-1.0")
 
 
 def _load_sweep_module() -> ModuleType:
@@ -78,7 +78,7 @@ def _configure_logging_for_route_embedding() -> None:  # pyright: ignore[reportU
 
 
 def _real_capability_nodes() -> list[SerializedNode]:
-    """Load every real Capability node directly from the three curated-content
+    """Load every real Capability node directly from the three similarity-corpus
     baseline exports -- independent of the sweep script's own
     `_load_curated_content_capability_nodes()`, so this test suite doesn't just
     trust the implementation's own count.
@@ -89,8 +89,8 @@ def _real_capability_nodes() -> list[SerializedNode]:
     `label == "Capability"`.
     """
     nodes: list[SerializedNode] = []
-    for instrument_dir in _CURATED_CONTENT_INSTRUMENT_DIRS:
-        path = _CURATED_CONTENT_DIR / instrument_dir / "baseline.json"
+    for instrument_dir in _CORPUS_INSTRUMENT_DIRS:
+        path = _CORPUS_DIR / instrument_dir / "baseline.json"
         graph = parse_serialized_graph_json(path.read_bytes())
         nodes.extend(node for node in graph.nodes if node.label == "Capability")
     return nodes
@@ -104,7 +104,7 @@ def real_capability_ids() -> frozenset[str]:
 @pytest.fixture(scope="module")
 def real_identical_name_groups() -> dict[str, int]:
     """Every real Capability `name` shared by two or more of the 778 real Capability
-    node entries across curated-content, with its occurrence count -- independently
+    node entries across similarity-corpus, with its occurrence count -- independently
     re-scanned here.
     """
     names: list[str] = [cast("str", node.properties["name"]) for node in _real_capability_nodes()]
@@ -163,7 +163,7 @@ def test_every_pairs_cited_node_ids_resolve_to_real_capability_ids(
             assert node_id in real_capability_ids, (
                 f"cited_node_ids entry {node_id!r} (pair text_a={pair.text_a!r}, "
                 f"text_b={pair.text_b!r}) is not a real Capability id present in "
-                "curated-content/{GDPR,NIS2,CRA}-1.0/baseline.json"
+                "test-data/similarity-corpus/{GDPR,NIS2,CRA}-1.0/baseline.json"
             )
 
 
@@ -210,7 +210,7 @@ def test_exactly_ten_real_capability_names_are_shared_across_two_or_more_nodes(
     real_identical_name_groups: dict[str, int],
 ) -> None:
     """10 such names -- independently re-counted here by scanning all 778 real
-    Capability node entries across curated-content directly.
+    Capability node entries across similarity-corpus directly.
     """
     assert len(real_identical_name_groups) == 10
 

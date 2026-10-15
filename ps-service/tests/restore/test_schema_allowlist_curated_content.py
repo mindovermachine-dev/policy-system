@@ -35,7 +35,7 @@ _LEG_CASES = [
     for instrument_dir in _INSTRUMENT_DIRS
     for leg in _LEGS
 ]
-_EXPECTED_INSTRUMENT_COUNT = 10
+_EXPECTED_INSTRUMENT_COUNT = 3
 
 
 def test_curated_content_directories_match_the_catalog() -> None:

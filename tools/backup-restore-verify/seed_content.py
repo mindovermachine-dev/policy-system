@@ -5,7 +5,7 @@ Run inside the ps-service pod (it uses the service's own configuration, gateway 
 curated-content source from the environment):
 
     kubectl exec -i deploy/policy-system-ps-service -- python - --instrument ENGPRAC-1.0 \\
-        --instrument DORA-1.0 < seed_content.py
+        --instrument CRA-1.0 < seed_content.py
 
 Each instrument is restored from the curated-content catalog by the same orchestration entry point
 `POST /restorations/from-catalog` calls (no LLM involved). ENGPRAC-1.0 imports draft Policy,
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 SEED_OWNER_SUBJECT = "backup-restore-verify-owner"
-DEFAULT_INSTRUMENTS = ("ENGPRAC-1.0", "DORA-1.0")
+DEFAULT_INSTRUMENTS = ("ENGPRAC-1.0", "CRA-1.0")
 
 
 def seed_instruments(

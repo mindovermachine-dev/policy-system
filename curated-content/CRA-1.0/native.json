@@ -1,7 +1,9 @@
 {
   "edges": [
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_12->32024R2847#012.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_12",
       "source_label": "ARTICLE",
@@ -9,7 +11,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_12->32024R2847#012.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_12",
       "source_label": "ARTICLE",
@@ -17,7 +21,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_12->32024R2847#012.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_12",
       "source_label": "ARTICLE",
@@ -25,7 +31,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_12->32024R2847#012.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_12",
       "source_label": "ARTICLE",
@@ -33,7 +41,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -41,7 +51,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -49,7 +61,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -57,7 +71,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -65,7 +81,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -73,7 +91,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -81,7 +101,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -89,7 +111,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -97,7 +121,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -105,7 +131,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -113,7 +141,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.011"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -121,7 +151,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.012"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -129,7 +161,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.013"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -137,7 +171,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.014"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -145,7 +181,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.015"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -153,7 +191,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.016"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -161,7 +201,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.017"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -169,7 +211,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.018"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -177,7 +221,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.019"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -185,7 +231,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.020"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -193,7 +241,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.021"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -201,7 +251,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.022"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -209,7 +261,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.023"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -217,7 +271,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.024"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -225,7 +281,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_13->32024R2847#013.025"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_13",
       "source_label": "ARTICLE",
@@ -233,7 +291,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -241,7 +301,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -249,7 +311,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -257,7 +321,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -265,7 +331,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -273,7 +341,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -281,7 +351,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -289,7 +361,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -297,7 +371,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -305,7 +381,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_14->32024R2847#014.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_14",
       "source_label": "ARTICLE",
@@ -313,7 +391,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_15->32024R2847#015.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_15",
       "source_label": "ARTICLE",
@@ -321,7 +401,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_15->32024R2847#015.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_15",
       "source_label": "ARTICLE",
@@ -329,7 +411,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_15->32024R2847#015.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_15",
       "source_label": "ARTICLE",
@@ -337,7 +421,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_15->32024R2847#015.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_15",
       "source_label": "ARTICLE",
@@ -345,7 +431,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_15->32024R2847#015.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_15",
       "source_label": "ARTICLE",
@@ -353,7 +441,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_16->32024R2847#016.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_16",
       "source_label": "ARTICLE",
@@ -361,7 +451,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_16->32024R2847#016.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_16",
       "source_label": "ARTICLE",
@@ -369,7 +461,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_16->32024R2847#016.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_16",
       "source_label": "ARTICLE",
@@ -377,7 +471,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_16->32024R2847#016.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_16",
       "source_label": "ARTICLE",
@@ -385,7 +481,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_16->32024R2847#016.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_16",
       "source_label": "ARTICLE",
@@ -393,7 +491,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_16->32024R2847#016.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_16",
       "source_label": "ARTICLE",
@@ -401,7 +501,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_17->32024R2847#017.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_17",
       "source_label": "ARTICLE",
@@ -409,7 +511,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_17->32024R2847#017.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_17",
       "source_label": "ARTICLE",
@@ -417,7 +521,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_17->32024R2847#017.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_17",
       "source_label": "ARTICLE",
@@ -425,7 +531,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_17->32024R2847#017.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_17",
       "source_label": "ARTICLE",
@@ -433,7 +541,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_17->32024R2847#017.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_17",
       "source_label": "ARTICLE",
@@ -441,7 +551,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_17->32024R2847#017.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_17",
       "source_label": "ARTICLE",
@@ -449,7 +561,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_18->32024R2847#018.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_18",
       "source_label": "ARTICLE",
@@ -457,7 +571,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_18->32024R2847#018.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_18",
       "source_label": "ARTICLE",
@@ -465,7 +581,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_18->32024R2847#018.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_18",
       "source_label": "ARTICLE",
@@ -473,7 +591,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_19->32024R2847#019.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_19",
       "source_label": "ARTICLE",
@@ -481,7 +601,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_19->32024R2847#019.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_19",
       "source_label": "ARTICLE",
@@ -489,7 +611,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_19->32024R2847#019.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_19",
       "source_label": "ARTICLE",
@@ -497,7 +621,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_19->32024R2847#019.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_19",
       "source_label": "ARTICLE",
@@ -505,7 +631,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_19->32024R2847#019.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_19",
       "source_label": "ARTICLE",
@@ -513,7 +641,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_19->32024R2847#019.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_19",
       "source_label": "ARTICLE",
@@ -521,7 +651,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_19->32024R2847#019.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_19",
       "source_label": "ARTICLE",
@@ -529,7 +661,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_19->32024R2847#019.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_19",
       "source_label": "ARTICLE",
@@ -537,7 +671,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_2->32024R2847#002.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_2",
       "source_label": "ARTICLE",
@@ -545,7 +681,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_2->32024R2847#002.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_2",
       "source_label": "ARTICLE",
@@ -553,7 +691,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_2->32024R2847#002.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_2",
       "source_label": "ARTICLE",
@@ -561,7 +701,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_2->32024R2847#002.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_2",
       "source_label": "ARTICLE",
@@ -569,7 +711,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_2->32024R2847#002.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_2",
       "source_label": "ARTICLE",
@@ -577,7 +721,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_2->32024R2847#002.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_2",
       "source_label": "ARTICLE",
@@ -585,7 +731,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_2->32024R2847#002.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_2",
       "source_label": "ARTICLE",
@@ -593,7 +741,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_2->32024R2847#002.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_2",
       "source_label": "ARTICLE",
@@ -601,7 +751,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_20->32024R2847#020.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_20",
       "source_label": "ARTICLE",
@@ -609,7 +761,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_20->32024R2847#020.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_20",
       "source_label": "ARTICLE",
@@ -617,7 +771,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_20->32024R2847#020.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_20",
       "source_label": "ARTICLE",
@@ -625,7 +781,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_20->32024R2847#020.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_20",
       "source_label": "ARTICLE",
@@ -633,7 +791,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_20->32024R2847#020.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_20",
       "source_label": "ARTICLE",
@@ -641,7 +801,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_20->32024R2847#020.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_20",
       "source_label": "ARTICLE",
@@ -649,7 +811,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_22->32024R2847#022.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_22",
       "source_label": "ARTICLE",
@@ -657,7 +821,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_22->32024R2847#022.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_22",
       "source_label": "ARTICLE",
@@ -665,7 +831,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_23->32024R2847#023.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_23",
       "source_label": "ARTICLE",
@@ -673,7 +841,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_23->32024R2847#023.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_23",
       "source_label": "ARTICLE",
@@ -681,7 +851,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_24->32024R2847#024.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_24",
       "source_label": "ARTICLE",
@@ -689,7 +861,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_24->32024R2847#024.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_24",
       "source_label": "ARTICLE",
@@ -697,7 +871,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_24->32024R2847#024.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_24",
       "source_label": "ARTICLE",
@@ -705,7 +881,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_26->32024R2847#026.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_26",
       "source_label": "ARTICLE",
@@ -713,7 +891,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_26->32024R2847#026.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_26",
       "source_label": "ARTICLE",
@@ -721,7 +901,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_26->32024R2847#026.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_26",
       "source_label": "ARTICLE",
@@ -729,7 +911,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -737,7 +921,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -745,7 +931,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -753,7 +941,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -761,7 +951,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -769,7 +961,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -777,7 +971,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -785,7 +981,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -793,7 +991,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_27->32024R2847#027.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_27",
       "source_label": "ARTICLE",
@@ -801,7 +1001,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_28->32024R2847#028.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_28",
       "source_label": "ARTICLE",
@@ -809,7 +1011,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_28->32024R2847#028.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_28",
       "source_label": "ARTICLE",
@@ -817,7 +1021,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_28->32024R2847#028.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_28",
       "source_label": "ARTICLE",
@@ -825,7 +1031,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_28->32024R2847#028.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_28",
       "source_label": "ARTICLE",
@@ -833,7 +1041,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_28->32024R2847#028.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_28",
       "source_label": "ARTICLE",
@@ -841,7 +1051,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_30->32024R2847#030.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_30",
       "source_label": "ARTICLE",
@@ -849,7 +1061,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_30->32024R2847#030.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_30",
       "source_label": "ARTICLE",
@@ -857,7 +1071,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_30->32024R2847#030.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_30",
       "source_label": "ARTICLE",
@@ -865,7 +1081,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_30->32024R2847#030.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_30",
       "source_label": "ARTICLE",
@@ -873,7 +1091,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_30->32024R2847#030.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_30",
       "source_label": "ARTICLE",
@@ -881,7 +1101,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_30->32024R2847#030.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_30",
       "source_label": "ARTICLE",
@@ -889,7 +1111,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_31->32024R2847#031.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_31",
       "source_label": "ARTICLE",
@@ -897,7 +1121,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_31->32024R2847#031.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_31",
       "source_label": "ARTICLE",
@@ -905,7 +1131,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_31->32024R2847#031.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_31",
       "source_label": "ARTICLE",
@@ -913,7 +1141,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_31->32024R2847#031.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_31",
       "source_label": "ARTICLE",
@@ -921,7 +1151,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_31->32024R2847#031.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_31",
       "source_label": "ARTICLE",
@@ -929,7 +1161,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_32->32024R2847#032.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_32",
       "source_label": "ARTICLE",
@@ -937,7 +1171,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_32->32024R2847#032.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_32",
       "source_label": "ARTICLE",
@@ -945,7 +1181,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_32->32024R2847#032.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_32",
       "source_label": "ARTICLE",
@@ -953,7 +1191,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_32->32024R2847#032.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_32",
       "source_label": "ARTICLE",
@@ -961,7 +1201,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_32->32024R2847#032.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_32",
       "source_label": "ARTICLE",
@@ -969,7 +1211,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_32->32024R2847#032.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_32",
       "source_label": "ARTICLE",
@@ -977,7 +1221,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_33->32024R2847#033.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_33",
       "source_label": "ARTICLE",
@@ -985,7 +1231,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_33->32024R2847#033.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_33",
       "source_label": "ARTICLE",
@@ -993,7 +1241,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_33->32024R2847#033.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_33",
       "source_label": "ARTICLE",
@@ -1001,7 +1251,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_33->32024R2847#033.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_33",
       "source_label": "ARTICLE",
@@ -1009,7 +1261,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_33->32024R2847#033.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_33",
       "source_label": "ARTICLE",
@@ -1017,7 +1271,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_35->32024R2847#035.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_35",
       "source_label": "ARTICLE",
@@ -1025,7 +1281,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_35->32024R2847#035.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_35",
       "source_label": "ARTICLE",
@@ -1033,7 +1291,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_36->32024R2847#036.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_36",
       "source_label": "ARTICLE",
@@ -1041,7 +1301,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_36->32024R2847#036.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_36",
       "source_label": "ARTICLE",
@@ -1049,7 +1311,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_36->32024R2847#036.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_36",
       "source_label": "ARTICLE",
@@ -1057,7 +1321,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_36->32024R2847#036.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_36",
       "source_label": "ARTICLE",
@@ -1065,7 +1331,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_37->32024R2847#037.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_37",
       "source_label": "ARTICLE",
@@ -1073,7 +1341,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_37->32024R2847#037.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_37",
       "source_label": "ARTICLE",
@@ -1081,7 +1351,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_37->32024R2847#037.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_37",
       "source_label": "ARTICLE",
@@ -1089,7 +1361,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_37->32024R2847#037.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_37",
       "source_label": "ARTICLE",
@@ -1097,7 +1371,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_37->32024R2847#037.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_37",
       "source_label": "ARTICLE",
@@ -1105,7 +1381,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_37->32024R2847#037.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_37",
       "source_label": "ARTICLE",
@@ -1113,7 +1391,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_38->32024R2847#038.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_38",
       "source_label": "ARTICLE",
@@ -1121,7 +1401,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_38->32024R2847#038.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_38",
       "source_label": "ARTICLE",
@@ -1129,7 +1411,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1137,7 +1421,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1145,7 +1431,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1153,7 +1441,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1161,7 +1451,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1169,7 +1461,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1177,7 +1471,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1185,7 +1481,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1193,7 +1491,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1201,7 +1501,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1209,7 +1511,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.011"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1217,7 +1521,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_39->32024R2847#039.012"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_39",
       "source_label": "ARTICLE",
@@ -1225,7 +1531,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_4->32024R2847#004.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_4",
       "source_label": "ARTICLE",
@@ -1233,7 +1541,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_4->32024R2847#004.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_4",
       "source_label": "ARTICLE",
@@ -1241,7 +1551,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_4->32024R2847#004.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_4",
       "source_label": "ARTICLE",
@@ -1249,7 +1561,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_4->32024R2847#004.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_4",
       "source_label": "ARTICLE",
@@ -1257,7 +1571,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_41->32024R2847#041.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_41",
       "source_label": "ARTICLE",
@@ -1265,7 +1581,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_41->32024R2847#041.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_41",
       "source_label": "ARTICLE",
@@ -1273,7 +1591,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_41->32024R2847#041.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_41",
       "source_label": "ARTICLE",
@@ -1281,7 +1601,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_41->32024R2847#041.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_41",
       "source_label": "ARTICLE",
@@ -1289,7 +1611,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_42->32024R2847#042.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_42",
       "source_label": "ARTICLE",
@@ -1297,7 +1621,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_42->32024R2847#042.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_42",
       "source_label": "ARTICLE",
@@ -1305,7 +1631,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_42->32024R2847#042.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_42",
       "source_label": "ARTICLE",
@@ -1313,7 +1641,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_43->32024R2847#043.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_43",
       "source_label": "ARTICLE",
@@ -1321,7 +1651,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_43->32024R2847#043.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_43",
       "source_label": "ARTICLE",
@@ -1329,7 +1661,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_43->32024R2847#043.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_43",
       "source_label": "ARTICLE",
@@ -1337,7 +1671,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_43->32024R2847#043.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_43",
       "source_label": "ARTICLE",
@@ -1345,7 +1681,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_43->32024R2847#043.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_43",
       "source_label": "ARTICLE",
@@ -1353,7 +1691,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_43->32024R2847#043.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_43",
       "source_label": "ARTICLE",
@@ -1361,7 +1701,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_44->32024R2847#044.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_44",
       "source_label": "ARTICLE",
@@ -1369,7 +1711,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_44->32024R2847#044.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_44",
       "source_label": "ARTICLE",
@@ -1377,7 +1721,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_45->32024R2847#045.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_45",
       "source_label": "ARTICLE",
@@ -1385,7 +1731,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_45->32024R2847#045.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_45",
       "source_label": "ARTICLE",
@@ -1393,7 +1741,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_46->32024R2847#046.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_46",
       "source_label": "ARTICLE",
@@ -1401,7 +1751,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_46->32024R2847#046.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_46",
       "source_label": "ARTICLE",
@@ -1409,7 +1761,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_46->32024R2847#046.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_46",
       "source_label": "ARTICLE",
@@ -1417,7 +1771,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_46->32024R2847#046.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_46",
       "source_label": "ARTICLE",
@@ -1425,7 +1781,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_47->32024R2847#047.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_47",
       "source_label": "ARTICLE",
@@ -1433,7 +1791,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_47->32024R2847#047.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_47",
       "source_label": "ARTICLE",
@@ -1441,7 +1801,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_47->32024R2847#047.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_47",
       "source_label": "ARTICLE",
@@ -1449,7 +1811,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_47->32024R2847#047.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_47",
       "source_label": "ARTICLE",
@@ -1457,7 +1821,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_47->32024R2847#047.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_47",
       "source_label": "ARTICLE",
@@ -1465,7 +1831,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_47->32024R2847#047.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_47",
       "source_label": "ARTICLE",
@@ -1473,7 +1841,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_49->32024R2847#049.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_49",
       "source_label": "ARTICLE",
@@ -1481,7 +1851,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_49->32024R2847#049.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_49",
       "source_label": "ARTICLE",
@@ -1489,7 +1861,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_5->32024R2847#005.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_5",
       "source_label": "ARTICLE",
@@ -1497,7 +1871,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_5->32024R2847#005.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_5",
       "source_label": "ARTICLE",
@@ -1505,7 +1881,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_51->32024R2847#051.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_51",
       "source_label": "ARTICLE",
@@ -1513,7 +1891,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_51->32024R2847#051.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_51",
       "source_label": "ARTICLE",
@@ -1521,7 +1901,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1529,7 +1911,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1537,7 +1921,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1545,7 +1931,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1553,7 +1941,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1561,7 +1951,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1569,7 +1961,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1577,7 +1971,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1585,7 +1981,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1593,7 +1991,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1601,7 +2001,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.011"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1609,7 +2011,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.012"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1617,7 +2021,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.013"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1625,7 +2031,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.014"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1633,7 +2041,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.015"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1641,7 +2051,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_52->32024R2847#052.016"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_52",
       "source_label": "ARTICLE",
@@ -1649,7 +2061,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1657,7 +2071,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1665,7 +2081,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1673,7 +2091,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1681,7 +2101,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1689,7 +2111,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1697,7 +2121,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1705,7 +2131,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1713,7 +2141,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_54->32024R2847#054.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_54",
       "source_label": "ARTICLE",
@@ -1721,7 +2151,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_55->32024R2847#055.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_55",
       "source_label": "ARTICLE",
@@ -1729,7 +2161,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_55->32024R2847#055.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_55",
       "source_label": "ARTICLE",
@@ -1737,7 +2171,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_55->32024R2847#055.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_55",
       "source_label": "ARTICLE",
@@ -1745,7 +2181,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_55->32024R2847#055.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_55",
       "source_label": "ARTICLE",
@@ -1753,7 +2191,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_55->32024R2847#055.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_55",
       "source_label": "ARTICLE",
@@ -1761,7 +2201,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_56->32024R2847#056.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_56",
       "source_label": "ARTICLE",
@@ -1769,7 +2211,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_56->32024R2847#056.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_56",
       "source_label": "ARTICLE",
@@ -1777,7 +2221,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_56->32024R2847#056.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_56",
       "source_label": "ARTICLE",
@@ -1785,7 +2231,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_56->32024R2847#056.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_56",
       "source_label": "ARTICLE",
@@ -1793,7 +2241,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_56->32024R2847#056.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_56",
       "source_label": "ARTICLE",
@@ -1801,7 +2251,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_56->32024R2847#056.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_56",
       "source_label": "ARTICLE",
@@ -1809,7 +2261,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_56->32024R2847#056.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_56",
       "source_label": "ARTICLE",
@@ -1817,7 +2271,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1825,7 +2281,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1833,7 +2291,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1841,7 +2301,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1849,7 +2311,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1857,7 +2321,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1865,7 +2331,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1873,7 +2341,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1881,7 +2351,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1889,7 +2361,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1897,7 +2371,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_57->32024R2847#057.011"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_57",
       "source_label": "ARTICLE",
@@ -1905,7 +2381,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_58->32024R2847#058.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_58",
       "source_label": "ARTICLE",
@@ -1913,7 +2391,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_58->32024R2847#058.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_58",
       "source_label": "ARTICLE",
@@ -1921,7 +2401,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_59->32024R2847#059.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_59",
       "source_label": "ARTICLE",
@@ -1929,7 +2411,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_59->32024R2847#059.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_59",
       "source_label": "ARTICLE",
@@ -1937,7 +2421,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_59->32024R2847#059.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_59",
       "source_label": "ARTICLE",
@@ -1945,7 +2431,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_59->32024R2847#059.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_59",
       "source_label": "ARTICLE",
@@ -1953,7 +2441,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_59->32024R2847#059.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_59",
       "source_label": "ARTICLE",
@@ -1961,7 +2451,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_60->32024R2847#060.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_60",
       "source_label": "ARTICLE",
@@ -1969,7 +2461,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_60->32024R2847#060.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_60",
       "source_label": "ARTICLE",
@@ -1977,7 +2471,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_60->32024R2847#060.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_60",
       "source_label": "ARTICLE",
@@ -1985,7 +2481,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_60->32024R2847#060.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_60",
       "source_label": "ARTICLE",
@@ -1993,7 +2491,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_60->32024R2847#060.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_60",
       "source_label": "ARTICLE",
@@ -2001,7 +2501,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_61->32024R2847#061.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_61",
       "source_label": "ARTICLE",
@@ -2009,7 +2511,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_61->32024R2847#061.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_61",
       "source_label": "ARTICLE",
@@ -2017,7 +2521,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_61->32024R2847#061.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_61",
       "source_label": "ARTICLE",
@@ -2025,7 +2531,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_61->32024R2847#061.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_61",
       "source_label": "ARTICLE",
@@ -2033,7 +2541,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_61->32024R2847#061.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_61",
       "source_label": "ARTICLE",
@@ -2041,7 +2551,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_61->32024R2847#061.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_61",
       "source_label": "ARTICLE",
@@ -2049,7 +2561,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_62->32024R2847#062.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_62",
       "source_label": "ARTICLE",
@@ -2057,7 +2571,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_62->32024R2847#062.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_62",
       "source_label": "ARTICLE",
@@ -2065,7 +2581,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_62->32024R2847#062.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_62",
       "source_label": "ARTICLE",
@@ -2073,7 +2591,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_63->32024R2847#063.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_63",
       "source_label": "ARTICLE",
@@ -2081,7 +2601,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_63->32024R2847#063.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_63",
       "source_label": "ARTICLE",
@@ -2089,7 +2611,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_63->32024R2847#063.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_63",
       "source_label": "ARTICLE",
@@ -2097,7 +2621,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_63->32024R2847#063.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_63",
       "source_label": "ARTICLE",
@@ -2105,7 +2631,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2113,7 +2641,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2121,7 +2651,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2129,7 +2661,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2137,7 +2671,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2145,7 +2681,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2153,7 +2691,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2161,7 +2701,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2169,7 +2711,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2177,7 +2721,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_64->32024R2847#064.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_64",
       "source_label": "ARTICLE",
@@ -2185,7 +2731,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_69->32024R2847#069.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_69",
       "source_label": "ARTICLE",
@@ -2193,7 +2741,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_69->32024R2847#069.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_69",
       "source_label": "ARTICLE",
@@ -2201,7 +2751,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_69->32024R2847#069.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_69",
       "source_label": "ARTICLE",
@@ -2209,7 +2761,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_7->32024R2847#007.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_7",
       "source_label": "ARTICLE",
@@ -2217,7 +2771,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_7->32024R2847#007.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_7",
       "source_label": "ARTICLE",
@@ -2225,7 +2781,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_7->32024R2847#007.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_7",
       "source_label": "ARTICLE",
@@ -2233,7 +2791,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_7->32024R2847#007.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_7",
       "source_label": "ARTICLE",
@@ -2241,7 +2801,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_70->32024R2847#070.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_70",
       "source_label": "ARTICLE",
@@ -2249,7 +2811,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_70->32024R2847#070.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_70",
       "source_label": "ARTICLE",
@@ -2257,7 +2821,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_71->32024R2847#071.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_71",
       "source_label": "ARTICLE",
@@ -2265,7 +2831,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_71->32024R2847#071.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_71",
       "source_label": "ARTICLE",
@@ -2273,7 +2841,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_8->32024R2847#008.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_8",
       "source_label": "ARTICLE",
@@ -2281,7 +2851,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_8->32024R2847#008.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_8",
       "source_label": "ARTICLE",
@@ -2289,7 +2861,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_9->32024R2847#009.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_9",
       "source_label": "ARTICLE",
@@ -2297,7 +2871,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#art_9->32024R2847#009.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#art_9",
       "source_label": "ARTICLE",
@@ -2305,7 +2881,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_1"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2313,7 +2891,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_10"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2321,7 +2901,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_11"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2329,7 +2911,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_12"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2337,7 +2921,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_2"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2345,7 +2931,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_3"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2353,7 +2941,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_4"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2361,7 +2951,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_5"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2369,7 +2961,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_6"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2377,7 +2971,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_7"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2385,7 +2981,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_8"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2393,7 +2991,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_I->32024R2847#art_9"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_I",
       "source_label": "CHAPTER",
@@ -2401,7 +3001,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_13"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2409,7 +3011,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_14"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2417,7 +3021,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_15"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2425,7 +3031,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_16"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2433,7 +3041,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_17"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2441,7 +3051,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_18"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2449,7 +3061,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_19"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2457,7 +3071,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_20"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2465,7 +3081,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_21"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2473,7 +3091,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_22"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2481,7 +3101,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_23"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2489,7 +3111,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_24"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2497,7 +3121,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_25"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2505,7 +3131,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_II->32024R2847#art_26"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_II",
       "source_label": "CHAPTER",
@@ -2513,7 +3141,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_III->32024R2847#art_27"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_III",
       "source_label": "CHAPTER",
@@ -2521,7 +3151,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_III->32024R2847#art_28"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_III",
       "source_label": "CHAPTER",
@@ -2529,7 +3161,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_III->32024R2847#art_29"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_III",
       "source_label": "CHAPTER",
@@ -2537,7 +3171,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_III->32024R2847#art_30"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_III",
       "source_label": "CHAPTER",
@@ -2545,7 +3181,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_III->32024R2847#art_31"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_III",
       "source_label": "CHAPTER",
@@ -2553,7 +3191,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_III->32024R2847#art_32"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_III",
       "source_label": "CHAPTER",
@@ -2561,7 +3201,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_III->32024R2847#art_33"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_III",
       "source_label": "CHAPTER",
@@ -2569,7 +3211,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_III->32024R2847#art_34"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_III",
       "source_label": "CHAPTER",
@@ -2577,7 +3221,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_35"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2585,7 +3231,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_36"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2593,7 +3241,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_37"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2601,7 +3251,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_38"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2609,7 +3261,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_39"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2617,7 +3271,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_40"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2625,7 +3281,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_41"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2633,7 +3291,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_42"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2641,7 +3301,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_43"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2649,7 +3311,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_44"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2657,7 +3321,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_45"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2665,7 +3331,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_46"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2673,7 +3341,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_47"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2681,7 +3351,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_48"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2689,7 +3361,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_49"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2697,7 +3371,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_50"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2705,7 +3381,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_IV->32024R2847#art_51"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_IV",
       "source_label": "CHAPTER",
@@ -2713,7 +3391,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_52"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2721,7 +3401,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_53"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2729,7 +3411,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_54"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2737,7 +3421,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_55"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2745,7 +3431,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_56"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2753,7 +3441,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_57"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2761,7 +3451,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_58"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2769,7 +3461,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_59"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2777,7 +3471,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_V->32024R2847#art_60"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_V",
       "source_label": "CHAPTER",
@@ -2785,7 +3481,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VI->32024R2847#art_61"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VI",
       "source_label": "CHAPTER",
@@ -2793,7 +3491,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VI->32024R2847#art_62"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VI",
       "source_label": "CHAPTER",
@@ -2801,7 +3501,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VII->32024R2847#art_63"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VII",
       "source_label": "CHAPTER",
@@ -2809,7 +3511,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VII->32024R2847#art_64"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VII",
       "source_label": "CHAPTER",
@@ -2817,7 +3521,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VII->32024R2847#art_65"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VII",
       "source_label": "CHAPTER",
@@ -2825,7 +3531,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VIII->32024R2847#art_66"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VIII",
       "source_label": "CHAPTER",
@@ -2833,7 +3541,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VIII->32024R2847#art_67"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VIII",
       "source_label": "CHAPTER",
@@ -2841,7 +3551,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VIII->32024R2847#art_68"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VIII",
       "source_label": "CHAPTER",
@@ -2849,7 +3561,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VIII->32024R2847#art_69"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VIII",
       "source_label": "CHAPTER",
@@ -2857,7 +3571,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VIII->32024R2847#art_70"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VIII",
       "source_label": "CHAPTER",
@@ -2865,7 +3581,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32024R2847#cpt_VIII->32024R2847#art_71"
+      },
       "relationship_type": "HAS",
       "source_id": "32024R2847#cpt_VIII",
       "source_label": "CHAPTER",
@@ -2873,7 +3591,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#anx_I"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2881,7 +3601,9 @@
       "target_label": "ANNEX"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#anx_II"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2889,7 +3611,9 @@
       "target_label": "ANNEX"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#anx_III"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2897,7 +3621,9 @@
       "target_label": "ANNEX"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#anx_IV"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2905,7 +3631,9 @@
       "target_label": "ANNEX"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#anx_V"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2913,7 +3641,9 @@
       "target_label": "ANNEX"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#anx_VI"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2921,7 +3651,9 @@
       "target_label": "ANNEX"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#anx_VII"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2929,7 +3661,9 @@
       "target_label": "ANNEX"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#anx_VIII"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2937,7 +3671,9 @@
       "target_label": "ANNEX"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#cpt_I"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2945,7 +3681,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#cpt_II"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2953,7 +3691,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#cpt_III"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2961,7 +3701,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#cpt_IV"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2969,7 +3711,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#cpt_V"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2977,7 +3721,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#cpt_VI"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2985,7 +3731,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#cpt_VII"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -2993,7 +3741,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#cpt_VIII"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3001,7 +3751,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_1"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3009,7 +3761,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_10"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3017,7 +3771,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_100"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3025,7 +3781,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_101"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3033,7 +3791,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_102"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3041,7 +3801,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_103"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3049,7 +3811,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_104"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3057,7 +3821,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_105"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3065,7 +3831,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_106"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3073,7 +3841,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_107"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3081,7 +3851,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_108"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3089,7 +3861,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_109"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3097,7 +3871,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_11"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3105,7 +3881,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_110"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3113,7 +3891,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_111"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3121,7 +3901,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_112"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3129,7 +3911,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_113"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3137,7 +3921,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_114"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3145,7 +3931,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_115"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3153,7 +3941,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_116"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3161,7 +3951,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_117"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3169,7 +3961,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_118"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3177,7 +3971,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_119"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3185,7 +3981,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_12"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3193,7 +3991,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_120"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3201,7 +4001,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_121"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3209,7 +4011,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_122"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3217,7 +4021,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_123"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3225,7 +4031,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_124"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3233,7 +4041,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_125"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3241,7 +4051,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_126"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3249,7 +4061,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_127"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3257,7 +4071,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_128"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3265,7 +4081,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_129"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3273,7 +4091,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_13"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3281,7 +4101,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_130"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3289,7 +4111,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_14"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3297,7 +4121,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_15"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3305,7 +4131,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_16"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3313,7 +4141,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_17"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3321,7 +4151,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_18"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3329,7 +4161,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_19"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3337,7 +4171,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_2"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3345,7 +4181,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_20"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3353,7 +4191,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_21"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3361,7 +4201,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_22"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3369,7 +4211,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_23"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3377,7 +4221,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_24"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3385,7 +4231,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_25"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3393,7 +4241,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_26"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3401,7 +4251,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_27"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3409,7 +4261,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_28"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3417,7 +4271,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_29"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3425,7 +4281,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_3"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3433,7 +4291,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_30"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3441,7 +4301,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_31"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3449,7 +4311,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_32"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3457,7 +4321,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_33"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3465,7 +4331,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_34"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3473,7 +4341,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_35"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3481,7 +4351,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_36"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3489,7 +4361,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_37"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3497,7 +4371,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_38"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3505,7 +4381,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_39"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3513,7 +4391,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_4"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3521,7 +4401,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_40"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3529,7 +4411,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_41"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3537,7 +4421,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_42"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3545,7 +4431,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_43"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3553,7 +4441,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_44"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3561,7 +4451,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_45"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3569,7 +4461,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_46"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3577,7 +4471,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_47"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3585,7 +4481,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_48"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3593,7 +4491,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_49"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3601,7 +4501,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_5"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3609,7 +4511,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_50"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3617,7 +4521,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_51"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3625,7 +4531,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_52"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3633,7 +4541,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_53"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3641,7 +4551,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_54"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3649,7 +4561,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_55"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3657,7 +4571,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_56"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3665,7 +4581,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_57"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3673,7 +4591,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_58"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3681,7 +4601,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_59"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3689,7 +4611,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_6"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3697,7 +4621,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_60"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3705,7 +4631,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_61"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3713,7 +4641,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_62"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3721,7 +4651,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_63"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3729,7 +4661,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_64"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3737,7 +4671,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_65"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3745,7 +4681,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_66"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3753,7 +4691,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_67"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3761,7 +4701,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_68"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3769,7 +4711,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_69"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3777,7 +4721,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_7"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3785,7 +4731,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_70"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3793,7 +4741,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_71"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3801,7 +4751,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_72"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3809,7 +4761,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_73"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3817,7 +4771,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_74"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3825,7 +4781,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_75"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3833,7 +4791,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_76"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3841,7 +4801,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_77"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3849,7 +4811,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_78"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3857,7 +4821,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_79"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3865,7 +4831,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_8"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3873,7 +4841,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_80"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3881,7 +4851,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_81"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3889,7 +4861,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_82"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3897,7 +4871,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_83"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3905,7 +4881,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_84"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3913,7 +4891,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_85"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3921,7 +4901,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_86"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3929,7 +4911,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_87"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3937,7 +4921,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_88"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3945,7 +4931,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_89"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3953,7 +4941,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_9"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3961,7 +4951,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_90"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3969,7 +4961,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_91"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3977,7 +4971,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_92"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3985,7 +4981,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_93"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3993,7 +4991,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_94"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4001,7 +5001,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_95"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4009,7 +5011,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_96"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4017,7 +5021,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_97"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4025,7 +5031,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_98"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4033,7 +5041,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:CRA-1.0->32024R2847#rct_99"
+      },
       "relationship_type": "HAS",
       "source_id": "CRA-1.0",
       "source_label": "RegulatoryInstrument",

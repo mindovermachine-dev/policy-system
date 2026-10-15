@@ -1,7 +1,9 @@
 {
   "edges": [
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_1->32016R0679#001.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_1",
       "source_label": "ARTICLE",
@@ -9,7 +11,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_1->32016R0679#001.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_1",
       "source_label": "ARTICLE",
@@ -17,7 +21,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_1->32016R0679#001.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_1",
       "source_label": "ARTICLE",
@@ -25,7 +31,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_11->32016R0679#011.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_11",
       "source_label": "ARTICLE",
@@ -33,7 +41,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_11->32016R0679#011.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_11",
       "source_label": "ARTICLE",
@@ -41,7 +51,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_12->32016R0679#012.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_12",
       "source_label": "ARTICLE",
@@ -49,7 +61,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_12->32016R0679#012.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_12",
       "source_label": "ARTICLE",
@@ -57,7 +71,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_12->32016R0679#012.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_12",
       "source_label": "ARTICLE",
@@ -65,7 +81,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_12->32016R0679#012.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_12",
       "source_label": "ARTICLE",
@@ -73,7 +91,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_12->32016R0679#012.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_12",
       "source_label": "ARTICLE",
@@ -81,7 +101,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_12->32016R0679#012.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_12",
       "source_label": "ARTICLE",
@@ -89,7 +111,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_12->32016R0679#012.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_12",
       "source_label": "ARTICLE",
@@ -97,7 +121,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_12->32016R0679#012.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_12",
       "source_label": "ARTICLE",
@@ -105,7 +131,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_13->32016R0679#013.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_13",
       "source_label": "ARTICLE",
@@ -113,7 +141,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_13->32016R0679#013.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_13",
       "source_label": "ARTICLE",
@@ -121,7 +151,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_13->32016R0679#013.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_13",
       "source_label": "ARTICLE",
@@ -129,7 +161,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_13->32016R0679#013.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_13",
       "source_label": "ARTICLE",
@@ -137,7 +171,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_14->32016R0679#014.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_14",
       "source_label": "ARTICLE",
@@ -145,7 +181,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_14->32016R0679#014.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_14",
       "source_label": "ARTICLE",
@@ -153,7 +191,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_14->32016R0679#014.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_14",
       "source_label": "ARTICLE",
@@ -161,7 +201,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_14->32016R0679#014.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_14",
       "source_label": "ARTICLE",
@@ -169,7 +211,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_14->32016R0679#014.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_14",
       "source_label": "ARTICLE",
@@ -177,7 +221,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_15->32016R0679#015.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_15",
       "source_label": "ARTICLE",
@@ -185,7 +231,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_15->32016R0679#015.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_15",
       "source_label": "ARTICLE",
@@ -193,7 +241,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_15->32016R0679#015.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_15",
       "source_label": "ARTICLE",
@@ -201,7 +251,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_15->32016R0679#015.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_15",
       "source_label": "ARTICLE",
@@ -209,7 +261,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_17->32016R0679#017.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_17",
       "source_label": "ARTICLE",
@@ -217,7 +271,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_17->32016R0679#017.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_17",
       "source_label": "ARTICLE",
@@ -225,7 +281,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_17->32016R0679#017.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_17",
       "source_label": "ARTICLE",
@@ -233,7 +291,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_18->32016R0679#018.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_18",
       "source_label": "ARTICLE",
@@ -241,7 +301,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_18->32016R0679#018.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_18",
       "source_label": "ARTICLE",
@@ -249,7 +311,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_18->32016R0679#018.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_18",
       "source_label": "ARTICLE",
@@ -257,7 +321,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_2->32016R0679#002.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_2",
       "source_label": "ARTICLE",
@@ -265,7 +331,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_2->32016R0679#002.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_2",
       "source_label": "ARTICLE",
@@ -273,7 +341,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_2->32016R0679#002.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_2",
       "source_label": "ARTICLE",
@@ -281,7 +351,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_2->32016R0679#002.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_2",
       "source_label": "ARTICLE",
@@ -289,7 +361,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_20->32016R0679#020.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_20",
       "source_label": "ARTICLE",
@@ -297,7 +371,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_20->32016R0679#020.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_20",
       "source_label": "ARTICLE",
@@ -305,7 +381,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_20->32016R0679#020.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_20",
       "source_label": "ARTICLE",
@@ -313,7 +391,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_20->32016R0679#020.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_20",
       "source_label": "ARTICLE",
@@ -321,7 +401,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_21->32016R0679#021.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_21",
       "source_label": "ARTICLE",
@@ -329,7 +411,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_21->32016R0679#021.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_21",
       "source_label": "ARTICLE",
@@ -337,7 +421,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_21->32016R0679#021.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_21",
       "source_label": "ARTICLE",
@@ -345,7 +431,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_21->32016R0679#021.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_21",
       "source_label": "ARTICLE",
@@ -353,7 +441,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_21->32016R0679#021.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_21",
       "source_label": "ARTICLE",
@@ -361,7 +451,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_21->32016R0679#021.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_21",
       "source_label": "ARTICLE",
@@ -369,7 +461,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_22->32016R0679#022.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_22",
       "source_label": "ARTICLE",
@@ -377,7 +471,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_22->32016R0679#022.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_22",
       "source_label": "ARTICLE",
@@ -385,7 +481,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_22->32016R0679#022.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_22",
       "source_label": "ARTICLE",
@@ -393,7 +491,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_22->32016R0679#022.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_22",
       "source_label": "ARTICLE",
@@ -401,7 +501,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_23->32016R0679#023.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_23",
       "source_label": "ARTICLE",
@@ -409,7 +511,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_23->32016R0679#023.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_23",
       "source_label": "ARTICLE",
@@ -417,7 +521,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_24->32016R0679#024.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_24",
       "source_label": "ARTICLE",
@@ -425,7 +531,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_24->32016R0679#024.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_24",
       "source_label": "ARTICLE",
@@ -433,7 +541,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_24->32016R0679#024.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_24",
       "source_label": "ARTICLE",
@@ -441,7 +551,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_25->32016R0679#025.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_25",
       "source_label": "ARTICLE",
@@ -449,7 +561,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_25->32016R0679#025.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_25",
       "source_label": "ARTICLE",
@@ -457,7 +571,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_25->32016R0679#025.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_25",
       "source_label": "ARTICLE",
@@ -465,7 +581,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_26->32016R0679#026.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_26",
       "source_label": "ARTICLE",
@@ -473,7 +591,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_26->32016R0679#026.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_26",
       "source_label": "ARTICLE",
@@ -481,7 +601,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_26->32016R0679#026.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_26",
       "source_label": "ARTICLE",
@@ -489,7 +611,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_27->32016R0679#027.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_27",
       "source_label": "ARTICLE",
@@ -497,7 +621,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_27->32016R0679#027.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_27",
       "source_label": "ARTICLE",
@@ -505,7 +631,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_27->32016R0679#027.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_27",
       "source_label": "ARTICLE",
@@ -513,7 +641,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_27->32016R0679#027.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_27",
       "source_label": "ARTICLE",
@@ -521,7 +651,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_27->32016R0679#027.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_27",
       "source_label": "ARTICLE",
@@ -529,7 +661,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -537,7 +671,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -545,7 +681,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -553,7 +691,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -561,7 +701,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -569,7 +711,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -577,7 +721,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -585,7 +731,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -593,7 +741,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -601,7 +751,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_28->32016R0679#028.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_28",
       "source_label": "ARTICLE",
@@ -609,7 +761,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_3->32016R0679#003.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_3",
       "source_label": "ARTICLE",
@@ -617,7 +771,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_3->32016R0679#003.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_3",
       "source_label": "ARTICLE",
@@ -625,7 +781,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_3->32016R0679#003.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_3",
       "source_label": "ARTICLE",
@@ -633,7 +791,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_30->32016R0679#030.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_30",
       "source_label": "ARTICLE",
@@ -641,7 +801,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_30->32016R0679#030.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_30",
       "source_label": "ARTICLE",
@@ -649,7 +811,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_30->32016R0679#030.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_30",
       "source_label": "ARTICLE",
@@ -657,7 +821,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_30->32016R0679#030.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_30",
       "source_label": "ARTICLE",
@@ -665,7 +831,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_30->32016R0679#030.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_30",
       "source_label": "ARTICLE",
@@ -673,7 +841,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_32->32016R0679#032.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_32",
       "source_label": "ARTICLE",
@@ -681,7 +851,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_32->32016R0679#032.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_32",
       "source_label": "ARTICLE",
@@ -689,7 +861,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_32->32016R0679#032.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_32",
       "source_label": "ARTICLE",
@@ -697,7 +871,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_32->32016R0679#032.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_32",
       "source_label": "ARTICLE",
@@ -705,7 +881,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_33->32016R0679#033.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_33",
       "source_label": "ARTICLE",
@@ -713,7 +891,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_33->32016R0679#033.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_33",
       "source_label": "ARTICLE",
@@ -721,7 +901,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_33->32016R0679#033.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_33",
       "source_label": "ARTICLE",
@@ -729,7 +911,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_33->32016R0679#033.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_33",
       "source_label": "ARTICLE",
@@ -737,7 +921,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_33->32016R0679#033.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_33",
       "source_label": "ARTICLE",
@@ -745,7 +931,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_34->32016R0679#034.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_34",
       "source_label": "ARTICLE",
@@ -753,7 +941,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_34->32016R0679#034.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_34",
       "source_label": "ARTICLE",
@@ -761,7 +951,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_34->32016R0679#034.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_34",
       "source_label": "ARTICLE",
@@ -769,7 +961,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_34->32016R0679#034.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_34",
       "source_label": "ARTICLE",
@@ -777,7 +971,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -785,7 +981,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -793,7 +991,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -801,7 +1001,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -809,7 +1011,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -817,7 +1021,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -825,7 +1031,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -833,7 +1041,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -841,7 +1051,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -849,7 +1061,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -857,7 +1071,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_35->32016R0679#035.011"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_35",
       "source_label": "ARTICLE",
@@ -865,7 +1081,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_36->32016R0679#036.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_36",
       "source_label": "ARTICLE",
@@ -873,7 +1091,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_36->32016R0679#036.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_36",
       "source_label": "ARTICLE",
@@ -881,7 +1101,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_36->32016R0679#036.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_36",
       "source_label": "ARTICLE",
@@ -889,7 +1111,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_36->32016R0679#036.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_36",
       "source_label": "ARTICLE",
@@ -897,7 +1121,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_36->32016R0679#036.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_36",
       "source_label": "ARTICLE",
@@ -905,7 +1131,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_37->32016R0679#037.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_37",
       "source_label": "ARTICLE",
@@ -913,7 +1141,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_37->32016R0679#037.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_37",
       "source_label": "ARTICLE",
@@ -921,7 +1151,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_37->32016R0679#037.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_37",
       "source_label": "ARTICLE",
@@ -929,7 +1161,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_37->32016R0679#037.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_37",
       "source_label": "ARTICLE",
@@ -937,7 +1171,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_37->32016R0679#037.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_37",
       "source_label": "ARTICLE",
@@ -945,7 +1181,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_37->32016R0679#037.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_37",
       "source_label": "ARTICLE",
@@ -953,7 +1191,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_37->32016R0679#037.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_37",
       "source_label": "ARTICLE",
@@ -961,7 +1201,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_38->32016R0679#038.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_38",
       "source_label": "ARTICLE",
@@ -969,7 +1211,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_38->32016R0679#038.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_38",
       "source_label": "ARTICLE",
@@ -977,7 +1221,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_38->32016R0679#038.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_38",
       "source_label": "ARTICLE",
@@ -985,7 +1231,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_38->32016R0679#038.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_38",
       "source_label": "ARTICLE",
@@ -993,7 +1241,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_38->32016R0679#038.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_38",
       "source_label": "ARTICLE",
@@ -1001,7 +1251,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_38->32016R0679#038.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_38",
       "source_label": "ARTICLE",
@@ -1009,7 +1261,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_39->32016R0679#039.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_39",
       "source_label": "ARTICLE",
@@ -1017,7 +1271,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_39->32016R0679#039.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_39",
       "source_label": "ARTICLE",
@@ -1025,7 +1281,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1033,7 +1291,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1041,7 +1301,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1049,7 +1311,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1057,7 +1321,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1065,7 +1331,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1073,7 +1341,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1081,7 +1351,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1089,7 +1361,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1097,7 +1371,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1105,7 +1381,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_40->32016R0679#040.011"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_40",
       "source_label": "ARTICLE",
@@ -1113,7 +1391,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_41->32016R0679#041.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_41",
       "source_label": "ARTICLE",
@@ -1121,7 +1401,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_41->32016R0679#041.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_41",
       "source_label": "ARTICLE",
@@ -1129,7 +1411,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_41->32016R0679#041.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_41",
       "source_label": "ARTICLE",
@@ -1137,7 +1421,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_41->32016R0679#041.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_41",
       "source_label": "ARTICLE",
@@ -1145,7 +1431,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_41->32016R0679#041.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_41",
       "source_label": "ARTICLE",
@@ -1153,7 +1441,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_41->32016R0679#041.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_41",
       "source_label": "ARTICLE",
@@ -1161,7 +1451,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_42->32016R0679#042.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_42",
       "source_label": "ARTICLE",
@@ -1169,7 +1461,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_42->32016R0679#042.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_42",
       "source_label": "ARTICLE",
@@ -1177,7 +1471,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_42->32016R0679#042.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_42",
       "source_label": "ARTICLE",
@@ -1185,7 +1481,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_42->32016R0679#042.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_42",
       "source_label": "ARTICLE",
@@ -1193,7 +1491,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_42->32016R0679#042.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_42",
       "source_label": "ARTICLE",
@@ -1201,7 +1501,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_42->32016R0679#042.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_42",
       "source_label": "ARTICLE",
@@ -1209,7 +1511,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_42->32016R0679#042.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_42",
       "source_label": "ARTICLE",
@@ -1217,7 +1521,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_42->32016R0679#042.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_42",
       "source_label": "ARTICLE",
@@ -1225,7 +1531,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1233,7 +1541,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1241,7 +1551,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1249,7 +1561,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1257,7 +1571,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1265,7 +1581,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1273,7 +1591,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1281,7 +1601,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1289,7 +1611,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_43->32016R0679#043.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_43",
       "source_label": "ARTICLE",
@@ -1297,7 +1621,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1305,7 +1631,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1313,7 +1641,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1321,7 +1651,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1329,7 +1661,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1337,7 +1671,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1345,7 +1681,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1353,7 +1691,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1361,7 +1701,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_45->32016R0679#045.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_45",
       "source_label": "ARTICLE",
@@ -1369,7 +1711,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_46->32016R0679#046.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_46",
       "source_label": "ARTICLE",
@@ -1377,7 +1721,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_46->32016R0679#046.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_46",
       "source_label": "ARTICLE",
@@ -1385,7 +1731,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_46->32016R0679#046.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_46",
       "source_label": "ARTICLE",
@@ -1393,7 +1741,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_46->32016R0679#046.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_46",
       "source_label": "ARTICLE",
@@ -1401,7 +1751,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_46->32016R0679#046.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_46",
       "source_label": "ARTICLE",
@@ -1409,7 +1761,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_47->32016R0679#047.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_47",
       "source_label": "ARTICLE",
@@ -1417,7 +1771,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_47->32016R0679#047.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_47",
       "source_label": "ARTICLE",
@@ -1425,7 +1781,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_47->32016R0679#047.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_47",
       "source_label": "ARTICLE",
@@ -1433,7 +1791,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_49->32016R0679#049.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_49",
       "source_label": "ARTICLE",
@@ -1441,7 +1801,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_49->32016R0679#049.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_49",
       "source_label": "ARTICLE",
@@ -1449,7 +1811,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_49->32016R0679#049.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_49",
       "source_label": "ARTICLE",
@@ -1457,7 +1821,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_49->32016R0679#049.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_49",
       "source_label": "ARTICLE",
@@ -1465,7 +1831,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_49->32016R0679#049.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_49",
       "source_label": "ARTICLE",
@@ -1473,7 +1841,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_49->32016R0679#049.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_49",
       "source_label": "ARTICLE",
@@ -1481,7 +1851,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_5->32016R0679#005.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_5",
       "source_label": "ARTICLE",
@@ -1489,7 +1861,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_5->32016R0679#005.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_5",
       "source_label": "ARTICLE",
@@ -1497,7 +1871,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_51->32016R0679#051.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_51",
       "source_label": "ARTICLE",
@@ -1505,7 +1881,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_51->32016R0679#051.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_51",
       "source_label": "ARTICLE",
@@ -1513,7 +1891,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_51->32016R0679#051.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_51",
       "source_label": "ARTICLE",
@@ -1521,7 +1901,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_51->32016R0679#051.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_51",
       "source_label": "ARTICLE",
@@ -1529,7 +1911,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_52->32016R0679#052.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_52",
       "source_label": "ARTICLE",
@@ -1537,7 +1921,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_52->32016R0679#052.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_52",
       "source_label": "ARTICLE",
@@ -1545,7 +1931,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_52->32016R0679#052.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_52",
       "source_label": "ARTICLE",
@@ -1553,7 +1941,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_52->32016R0679#052.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_52",
       "source_label": "ARTICLE",
@@ -1561,7 +1951,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_52->32016R0679#052.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_52",
       "source_label": "ARTICLE",
@@ -1569,7 +1961,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_52->32016R0679#052.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_52",
       "source_label": "ARTICLE",
@@ -1577,7 +1971,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_53->32016R0679#053.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_53",
       "source_label": "ARTICLE",
@@ -1585,7 +1981,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_53->32016R0679#053.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_53",
       "source_label": "ARTICLE",
@@ -1593,7 +1991,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_53->32016R0679#053.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_53",
       "source_label": "ARTICLE",
@@ -1601,7 +2001,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_53->32016R0679#053.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_53",
       "source_label": "ARTICLE",
@@ -1609,7 +2011,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_54->32016R0679#054.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_54",
       "source_label": "ARTICLE",
@@ -1617,7 +2021,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_54->32016R0679#054.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_54",
       "source_label": "ARTICLE",
@@ -1625,7 +2031,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_55->32016R0679#055.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_55",
       "source_label": "ARTICLE",
@@ -1633,7 +2041,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_55->32016R0679#055.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_55",
       "source_label": "ARTICLE",
@@ -1641,7 +2051,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_55->32016R0679#055.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_55",
       "source_label": "ARTICLE",
@@ -1649,7 +2061,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_56->32016R0679#056.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_56",
       "source_label": "ARTICLE",
@@ -1657,7 +2071,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_56->32016R0679#056.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_56",
       "source_label": "ARTICLE",
@@ -1665,7 +2081,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_56->32016R0679#056.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_56",
       "source_label": "ARTICLE",
@@ -1673,7 +2091,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_56->32016R0679#056.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_56",
       "source_label": "ARTICLE",
@@ -1681,7 +2101,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_56->32016R0679#056.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_56",
       "source_label": "ARTICLE",
@@ -1689,7 +2111,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_56->32016R0679#056.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_56",
       "source_label": "ARTICLE",
@@ -1697,7 +2121,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_57->32016R0679#057.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_57",
       "source_label": "ARTICLE",
@@ -1705,7 +2131,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_57->32016R0679#057.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_57",
       "source_label": "ARTICLE",
@@ -1713,7 +2141,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_57->32016R0679#057.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_57",
       "source_label": "ARTICLE",
@@ -1721,7 +2151,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_57->32016R0679#057.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_57",
       "source_label": "ARTICLE",
@@ -1729,7 +2161,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_58->32016R0679#058.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_58",
       "source_label": "ARTICLE",
@@ -1737,7 +2171,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_58->32016R0679#058.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_58",
       "source_label": "ARTICLE",
@@ -1745,7 +2181,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_58->32016R0679#058.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_58",
       "source_label": "ARTICLE",
@@ -1753,7 +2191,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_58->32016R0679#058.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_58",
       "source_label": "ARTICLE",
@@ -1761,7 +2201,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_58->32016R0679#058.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_58",
       "source_label": "ARTICLE",
@@ -1769,7 +2211,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_58->32016R0679#058.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_58",
       "source_label": "ARTICLE",
@@ -1777,7 +2221,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_6->32016R0679#006.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_6",
       "source_label": "ARTICLE",
@@ -1785,7 +2231,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_6->32016R0679#006.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_6",
       "source_label": "ARTICLE",
@@ -1793,7 +2241,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_6->32016R0679#006.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_6",
       "source_label": "ARTICLE",
@@ -1801,7 +2251,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_6->32016R0679#006.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_6",
       "source_label": "ARTICLE",
@@ -1809,7 +2261,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1817,7 +2271,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1825,7 +2281,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1833,7 +2291,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1841,7 +2301,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1849,7 +2311,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1857,7 +2321,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1865,7 +2331,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1873,7 +2341,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1881,7 +2351,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.010"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1889,7 +2361,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.011"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1897,7 +2371,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_60->32016R0679#060.012"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_60",
       "source_label": "ARTICLE",
@@ -1905,7 +2381,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1913,7 +2391,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1921,7 +2401,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1929,7 +2411,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1937,7 +2421,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1945,7 +2431,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1953,7 +2441,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1961,7 +2451,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1969,7 +2461,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_61->32016R0679#061.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_61",
       "source_label": "ARTICLE",
@@ -1977,7 +2471,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_62->32016R0679#062.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_62",
       "source_label": "ARTICLE",
@@ -1985,7 +2481,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_62->32016R0679#062.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_62",
       "source_label": "ARTICLE",
@@ -1993,7 +2491,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_62->32016R0679#062.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_62",
       "source_label": "ARTICLE",
@@ -2001,7 +2501,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_62->32016R0679#062.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_62",
       "source_label": "ARTICLE",
@@ -2009,7 +2511,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_62->32016R0679#062.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_62",
       "source_label": "ARTICLE",
@@ -2017,7 +2521,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_62->32016R0679#062.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_62",
       "source_label": "ARTICLE",
@@ -2025,7 +2531,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_62->32016R0679#062.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_62",
       "source_label": "ARTICLE",
@@ -2033,7 +2541,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_64->32016R0679#064.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_64",
       "source_label": "ARTICLE",
@@ -2041,7 +2551,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_64->32016R0679#064.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_64",
       "source_label": "ARTICLE",
@@ -2049,7 +2561,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_64->32016R0679#064.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_64",
       "source_label": "ARTICLE",
@@ -2057,7 +2571,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_64->32016R0679#064.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_64",
       "source_label": "ARTICLE",
@@ -2065,7 +2581,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_64->32016R0679#064.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_64",
       "source_label": "ARTICLE",
@@ -2073,7 +2591,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_64->32016R0679#064.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_64",
       "source_label": "ARTICLE",
@@ -2081,7 +2601,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_64->32016R0679#064.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_64",
       "source_label": "ARTICLE",
@@ -2089,7 +2611,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_64->32016R0679#064.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_64",
       "source_label": "ARTICLE",
@@ -2097,7 +2621,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_65->32016R0679#065.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_65",
       "source_label": "ARTICLE",
@@ -2105,7 +2631,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_65->32016R0679#065.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_65",
       "source_label": "ARTICLE",
@@ -2113,7 +2641,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_65->32016R0679#065.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_65",
       "source_label": "ARTICLE",
@@ -2121,7 +2651,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_65->32016R0679#065.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_65",
       "source_label": "ARTICLE",
@@ -2129,7 +2661,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_65->32016R0679#065.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_65",
       "source_label": "ARTICLE",
@@ -2137,7 +2671,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_65->32016R0679#065.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_65",
       "source_label": "ARTICLE",
@@ -2145,7 +2681,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_66->32016R0679#066.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_66",
       "source_label": "ARTICLE",
@@ -2153,7 +2691,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_66->32016R0679#066.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_66",
       "source_label": "ARTICLE",
@@ -2161,7 +2701,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_66->32016R0679#066.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_66",
       "source_label": "ARTICLE",
@@ -2169,7 +2711,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_66->32016R0679#066.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_66",
       "source_label": "ARTICLE",
@@ -2177,7 +2721,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_68->32016R0679#068.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_68",
       "source_label": "ARTICLE",
@@ -2185,7 +2731,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_68->32016R0679#068.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_68",
       "source_label": "ARTICLE",
@@ -2193,7 +2741,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_68->32016R0679#068.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_68",
       "source_label": "ARTICLE",
@@ -2201,7 +2751,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_68->32016R0679#068.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_68",
       "source_label": "ARTICLE",
@@ -2209,7 +2761,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_68->32016R0679#068.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_68",
       "source_label": "ARTICLE",
@@ -2217,7 +2771,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_68->32016R0679#068.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_68",
       "source_label": "ARTICLE",
@@ -2225,7 +2781,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_69->32016R0679#069.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_69",
       "source_label": "ARTICLE",
@@ -2233,7 +2791,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_69->32016R0679#069.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_69",
       "source_label": "ARTICLE",
@@ -2241,7 +2801,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_7->32016R0679#007.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_7",
       "source_label": "ARTICLE",
@@ -2249,7 +2811,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_7->32016R0679#007.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_7",
       "source_label": "ARTICLE",
@@ -2257,7 +2821,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_7->32016R0679#007.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_7",
       "source_label": "ARTICLE",
@@ -2265,7 +2831,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_7->32016R0679#007.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_7",
       "source_label": "ARTICLE",
@@ -2273,7 +2841,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_70->32016R0679#070.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_70",
       "source_label": "ARTICLE",
@@ -2281,7 +2851,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_70->32016R0679#070.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_70",
       "source_label": "ARTICLE",
@@ -2289,7 +2861,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_70->32016R0679#070.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_70",
       "source_label": "ARTICLE",
@@ -2297,7 +2871,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_70->32016R0679#070.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_70",
       "source_label": "ARTICLE",
@@ -2305,7 +2881,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_71->32016R0679#071.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_71",
       "source_label": "ARTICLE",
@@ -2313,7 +2891,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_71->32016R0679#071.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_71",
       "source_label": "ARTICLE",
@@ -2321,7 +2901,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_72->32016R0679#072.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_72",
       "source_label": "ARTICLE",
@@ -2329,7 +2911,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_72->32016R0679#072.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_72",
       "source_label": "ARTICLE",
@@ -2337,7 +2921,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_73->32016R0679#073.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_73",
       "source_label": "ARTICLE",
@@ -2345,7 +2931,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_73->32016R0679#073.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_73",
       "source_label": "ARTICLE",
@@ -2353,7 +2941,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_74->32016R0679#074.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_74",
       "source_label": "ARTICLE",
@@ -2361,7 +2951,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_74->32016R0679#074.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_74",
       "source_label": "ARTICLE",
@@ -2369,7 +2961,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_75->32016R0679#075.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_75",
       "source_label": "ARTICLE",
@@ -2377,7 +2971,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_75->32016R0679#075.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_75",
       "source_label": "ARTICLE",
@@ -2385,7 +2981,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_75->32016R0679#075.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_75",
       "source_label": "ARTICLE",
@@ -2393,7 +2991,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_75->32016R0679#075.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_75",
       "source_label": "ARTICLE",
@@ -2401,7 +3001,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_75->32016R0679#075.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_75",
       "source_label": "ARTICLE",
@@ -2409,7 +3011,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_75->32016R0679#075.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_75",
       "source_label": "ARTICLE",
@@ -2417,7 +3021,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_76->32016R0679#076.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_76",
       "source_label": "ARTICLE",
@@ -2425,7 +3031,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_76->32016R0679#076.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_76",
       "source_label": "ARTICLE",
@@ -2433,7 +3041,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_77->32016R0679#077.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_77",
       "source_label": "ARTICLE",
@@ -2441,7 +3051,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_77->32016R0679#077.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_77",
       "source_label": "ARTICLE",
@@ -2449,7 +3061,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_78->32016R0679#078.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_78",
       "source_label": "ARTICLE",
@@ -2457,7 +3071,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_78->32016R0679#078.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_78",
       "source_label": "ARTICLE",
@@ -2465,7 +3081,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_78->32016R0679#078.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_78",
       "source_label": "ARTICLE",
@@ -2473,7 +3091,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_78->32016R0679#078.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_78",
       "source_label": "ARTICLE",
@@ -2481,7 +3101,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_79->32016R0679#079.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_79",
       "source_label": "ARTICLE",
@@ -2489,7 +3111,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_79->32016R0679#079.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_79",
       "source_label": "ARTICLE",
@@ -2497,7 +3121,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_8->32016R0679#008.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_8",
       "source_label": "ARTICLE",
@@ -2505,7 +3131,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_8->32016R0679#008.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_8",
       "source_label": "ARTICLE",
@@ -2513,7 +3141,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_8->32016R0679#008.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_8",
       "source_label": "ARTICLE",
@@ -2521,7 +3151,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_80->32016R0679#080.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_80",
       "source_label": "ARTICLE",
@@ -2529,7 +3161,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_80->32016R0679#080.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_80",
       "source_label": "ARTICLE",
@@ -2537,7 +3171,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_81->32016R0679#081.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_81",
       "source_label": "ARTICLE",
@@ -2545,7 +3181,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_81->32016R0679#081.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_81",
       "source_label": "ARTICLE",
@@ -2553,7 +3191,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_81->32016R0679#081.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_81",
       "source_label": "ARTICLE",
@@ -2561,7 +3201,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_82->32016R0679#082.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_82",
       "source_label": "ARTICLE",
@@ -2569,7 +3211,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_82->32016R0679#082.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_82",
       "source_label": "ARTICLE",
@@ -2577,7 +3221,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_82->32016R0679#082.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_82",
       "source_label": "ARTICLE",
@@ -2585,7 +3231,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_82->32016R0679#082.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_82",
       "source_label": "ARTICLE",
@@ -2593,7 +3241,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_82->32016R0679#082.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_82",
       "source_label": "ARTICLE",
@@ -2601,7 +3251,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_82->32016R0679#082.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_82",
       "source_label": "ARTICLE",
@@ -2609,7 +3261,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2617,7 +3271,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2625,7 +3281,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2633,7 +3291,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2641,7 +3301,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2649,7 +3311,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.006"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2657,7 +3321,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.007"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2665,7 +3331,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.008"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2673,7 +3341,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_83->32016R0679#083.009"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_83",
       "source_label": "ARTICLE",
@@ -2681,7 +3351,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_84->32016R0679#084.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_84",
       "source_label": "ARTICLE",
@@ -2689,7 +3361,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_84->32016R0679#084.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_84",
       "source_label": "ARTICLE",
@@ -2697,7 +3371,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_85->32016R0679#085.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_85",
       "source_label": "ARTICLE",
@@ -2705,7 +3381,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_85->32016R0679#085.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_85",
       "source_label": "ARTICLE",
@@ -2713,7 +3391,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_85->32016R0679#085.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_85",
       "source_label": "ARTICLE",
@@ -2721,7 +3401,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_88->32016R0679#088.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_88",
       "source_label": "ARTICLE",
@@ -2729,7 +3411,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_88->32016R0679#088.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_88",
       "source_label": "ARTICLE",
@@ -2737,7 +3421,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_88->32016R0679#088.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_88",
       "source_label": "ARTICLE",
@@ -2745,7 +3431,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_89->32016R0679#089.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_89",
       "source_label": "ARTICLE",
@@ -2753,7 +3441,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_89->32016R0679#089.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_89",
       "source_label": "ARTICLE",
@@ -2761,7 +3451,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_89->32016R0679#089.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_89",
       "source_label": "ARTICLE",
@@ -2769,7 +3461,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_89->32016R0679#089.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_89",
       "source_label": "ARTICLE",
@@ -2777,7 +3471,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_9->32016R0679#009.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_9",
       "source_label": "ARTICLE",
@@ -2785,7 +3481,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_9->32016R0679#009.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_9",
       "source_label": "ARTICLE",
@@ -2793,7 +3491,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_9->32016R0679#009.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_9",
       "source_label": "ARTICLE",
@@ -2801,7 +3501,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_9->32016R0679#009.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_9",
       "source_label": "ARTICLE",
@@ -2809,7 +3511,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_90->32016R0679#090.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_90",
       "source_label": "ARTICLE",
@@ -2817,7 +3521,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_90->32016R0679#090.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_90",
       "source_label": "ARTICLE",
@@ -2825,7 +3531,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_91->32016R0679#091.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_91",
       "source_label": "ARTICLE",
@@ -2833,7 +3541,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_91->32016R0679#091.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_91",
       "source_label": "ARTICLE",
@@ -2841,7 +3551,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_92->32016R0679#092.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_92",
       "source_label": "ARTICLE",
@@ -2849,7 +3561,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_92->32016R0679#092.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_92",
       "source_label": "ARTICLE",
@@ -2857,7 +3571,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_92->32016R0679#092.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_92",
       "source_label": "ARTICLE",
@@ -2865,7 +3581,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_92->32016R0679#092.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_92",
       "source_label": "ARTICLE",
@@ -2873,7 +3591,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_92->32016R0679#092.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_92",
       "source_label": "ARTICLE",
@@ -2881,7 +3601,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_93->32016R0679#093.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_93",
       "source_label": "ARTICLE",
@@ -2889,7 +3611,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_93->32016R0679#093.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_93",
       "source_label": "ARTICLE",
@@ -2897,7 +3621,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_93->32016R0679#093.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_93",
       "source_label": "ARTICLE",
@@ -2905,7 +3631,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_94->32016R0679#094.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_94",
       "source_label": "ARTICLE",
@@ -2913,7 +3641,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_94->32016R0679#094.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_94",
       "source_label": "ARTICLE",
@@ -2921,7 +3651,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_97->32016R0679#097.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_97",
       "source_label": "ARTICLE",
@@ -2929,7 +3661,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_97->32016R0679#097.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_97",
       "source_label": "ARTICLE",
@@ -2937,7 +3671,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_97->32016R0679#097.003"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_97",
       "source_label": "ARTICLE",
@@ -2945,7 +3681,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_97->32016R0679#097.004"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_97",
       "source_label": "ARTICLE",
@@ -2953,7 +3691,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_97->32016R0679#097.005"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_97",
       "source_label": "ARTICLE",
@@ -2961,7 +3701,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_99->32016R0679#099.001"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_99",
       "source_label": "ARTICLE",
@@ -2969,7 +3711,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#art_99->32016R0679#099.002"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#art_99",
       "source_label": "ARTICLE",
@@ -2977,7 +3721,9 @@
       "target_label": "PARAGRAPH"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_I->32016R0679#art_1"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_I",
       "source_label": "CHAPTER",
@@ -2985,7 +3731,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_I->32016R0679#art_2"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_I",
       "source_label": "CHAPTER",
@@ -2993,7 +3741,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_I->32016R0679#art_3"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_I",
       "source_label": "CHAPTER",
@@ -3001,7 +3751,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_I->32016R0679#art_4"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_I",
       "source_label": "CHAPTER",
@@ -3009,7 +3761,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_II->32016R0679#art_10"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_II",
       "source_label": "CHAPTER",
@@ -3017,7 +3771,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_II->32016R0679#art_11"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_II",
       "source_label": "CHAPTER",
@@ -3025,7 +3781,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_II->32016R0679#art_5"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_II",
       "source_label": "CHAPTER",
@@ -3033,7 +3791,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_II->32016R0679#art_6"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_II",
       "source_label": "CHAPTER",
@@ -3041,7 +3801,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_II->32016R0679#art_7"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_II",
       "source_label": "CHAPTER",
@@ -3049,7 +3811,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_II->32016R0679#art_8"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_II",
       "source_label": "CHAPTER",
@@ -3057,7 +3821,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_II->32016R0679#art_9"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_II",
       "source_label": "CHAPTER",
@@ -3065,7 +3831,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_12"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3073,7 +3841,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_13"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3081,7 +3851,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_14"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3089,7 +3861,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_15"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3097,7 +3871,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_16"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3105,7 +3881,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_17"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3113,7 +3891,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_18"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3121,7 +3901,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_19"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3129,7 +3911,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_20"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3137,7 +3921,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_21"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3145,7 +3931,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_22"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3153,7 +3941,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_III->32016R0679#art_23"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_III",
       "source_label": "CHAPTER",
@@ -3161,7 +3951,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_24"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3169,7 +3961,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_25"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3177,7 +3971,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_26"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3185,7 +3981,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_27"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3193,7 +3991,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_28"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3201,7 +4001,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_29"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3209,7 +4011,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_30"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3217,7 +4021,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_31"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3225,7 +4031,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_32"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3233,7 +4041,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_33"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3241,7 +4051,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_34"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3249,7 +4061,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_35"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3257,7 +4071,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_36"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3265,7 +4081,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_37"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3273,7 +4091,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_38"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3281,7 +4101,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_39"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3289,7 +4111,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_40"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3297,7 +4121,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_41"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3305,7 +4131,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_42"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3313,7 +4141,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IV->32016R0679#art_43"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IV",
       "source_label": "CHAPTER",
@@ -3321,7 +4151,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IX->32016R0679#art_85"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IX",
       "source_label": "CHAPTER",
@@ -3329,7 +4161,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IX->32016R0679#art_86"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IX",
       "source_label": "CHAPTER",
@@ -3337,7 +4171,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IX->32016R0679#art_87"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IX",
       "source_label": "CHAPTER",
@@ -3345,7 +4181,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IX->32016R0679#art_88"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IX",
       "source_label": "CHAPTER",
@@ -3353,7 +4191,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IX->32016R0679#art_89"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IX",
       "source_label": "CHAPTER",
@@ -3361,7 +4201,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IX->32016R0679#art_90"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IX",
       "source_label": "CHAPTER",
@@ -3369,7 +4211,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_IX->32016R0679#art_91"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_IX",
       "source_label": "CHAPTER",
@@ -3377,7 +4221,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_V->32016R0679#art_44"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_V",
       "source_label": "CHAPTER",
@@ -3385,7 +4231,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_V->32016R0679#art_45"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_V",
       "source_label": "CHAPTER",
@@ -3393,7 +4241,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_V->32016R0679#art_46"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_V",
       "source_label": "CHAPTER",
@@ -3401,7 +4251,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_V->32016R0679#art_47"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_V",
       "source_label": "CHAPTER",
@@ -3409,7 +4261,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_V->32016R0679#art_48"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_V",
       "source_label": "CHAPTER",
@@ -3417,7 +4271,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_V->32016R0679#art_49"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_V",
       "source_label": "CHAPTER",
@@ -3425,7 +4281,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_V->32016R0679#art_50"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_V",
       "source_label": "CHAPTER",
@@ -3433,7 +4291,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_51"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3441,7 +4301,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_52"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3449,7 +4311,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_53"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3457,7 +4321,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_54"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3465,7 +4331,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_55"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3473,7 +4341,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_56"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3481,7 +4351,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_57"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3489,7 +4361,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_58"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3497,7 +4371,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VI->32016R0679#art_59"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VI",
       "source_label": "CHAPTER",
@@ -3505,7 +4381,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_60"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3513,7 +4391,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_61"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3521,7 +4401,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_62"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3529,7 +4411,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_63"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3537,7 +4421,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_64"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3545,7 +4431,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_65"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3553,7 +4441,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_66"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3561,7 +4451,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_67"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3569,7 +4461,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_68"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3577,7 +4471,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_69"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3585,7 +4481,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_70"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3593,7 +4491,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_71"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3601,7 +4501,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_72"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3609,7 +4511,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_73"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3617,7 +4521,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_74"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3625,7 +4531,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_75"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3633,7 +4541,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VII->32016R0679#art_76"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VII",
       "source_label": "CHAPTER",
@@ -3641,7 +4551,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VIII->32016R0679#art_77"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VIII",
       "source_label": "CHAPTER",
@@ -3649,7 +4561,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VIII->32016R0679#art_78"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VIII",
       "source_label": "CHAPTER",
@@ -3657,7 +4571,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VIII->32016R0679#art_79"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VIII",
       "source_label": "CHAPTER",
@@ -3665,7 +4581,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VIII->32016R0679#art_80"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VIII",
       "source_label": "CHAPTER",
@@ -3673,7 +4591,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VIII->32016R0679#art_81"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VIII",
       "source_label": "CHAPTER",
@@ -3681,7 +4601,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VIII->32016R0679#art_82"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VIII",
       "source_label": "CHAPTER",
@@ -3689,7 +4611,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VIII->32016R0679#art_83"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VIII",
       "source_label": "CHAPTER",
@@ -3697,7 +4621,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_VIII->32016R0679#art_84"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_VIII",
       "source_label": "CHAPTER",
@@ -3705,7 +4631,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_X->32016R0679#art_92"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_X",
       "source_label": "CHAPTER",
@@ -3713,7 +4641,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_X->32016R0679#art_93"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_X",
       "source_label": "CHAPTER",
@@ -3721,7 +4651,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_XI->32016R0679#art_94"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_XI",
       "source_label": "CHAPTER",
@@ -3729,7 +4661,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_XI->32016R0679#art_95"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_XI",
       "source_label": "CHAPTER",
@@ -3737,7 +4671,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_XI->32016R0679#art_96"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_XI",
       "source_label": "CHAPTER",
@@ -3745,7 +4681,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_XI->32016R0679#art_97"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_XI",
       "source_label": "CHAPTER",
@@ -3753,7 +4691,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_XI->32016R0679#art_98"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_XI",
       "source_label": "CHAPTER",
@@ -3761,7 +4701,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:32016R0679#cpt_XI->32016R0679#art_99"
+      },
       "relationship_type": "HAS",
       "source_id": "32016R0679#cpt_XI",
       "source_label": "CHAPTER",
@@ -3769,7 +4711,9 @@
       "target_label": "ARTICLE"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_I"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3777,7 +4721,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_II"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3785,7 +4731,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_III"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3793,7 +4741,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_IV"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3801,7 +4751,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_IX"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3809,7 +4761,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_V"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3817,7 +4771,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_VI"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3825,7 +4781,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_VII"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3833,7 +4791,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_VIII"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3841,7 +4801,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_X"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3849,7 +4811,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#cpt_XI"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3857,7 +4821,9 @@
       "target_label": "CHAPTER"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_1"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3865,7 +4831,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_10"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3873,7 +4841,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_100"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3881,7 +4851,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_101"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3889,7 +4861,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_102"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3897,7 +4871,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_103"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3905,7 +4881,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_104"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3913,7 +4891,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_105"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3921,7 +4901,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_106"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3929,7 +4911,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_107"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3937,7 +4921,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_108"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3945,7 +4931,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_109"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3953,7 +4941,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_11"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3961,7 +4951,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_110"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3969,7 +4961,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_111"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3977,7 +4971,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_112"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3985,7 +4981,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_113"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -3993,7 +4991,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_114"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4001,7 +5001,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_115"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4009,7 +5011,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_116"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4017,7 +5021,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_117"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4025,7 +5031,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_118"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4033,7 +5041,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_119"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4041,7 +5051,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_12"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4049,7 +5061,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_120"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4057,7 +5071,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_121"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4065,7 +5081,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_122"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4073,7 +5091,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_123"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4081,7 +5101,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_124"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4089,7 +5111,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_125"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4097,7 +5121,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_126"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4105,7 +5131,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_127"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4113,7 +5141,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_128"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4121,7 +5151,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_129"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4129,7 +5161,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_13"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4137,7 +5171,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_130"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4145,7 +5181,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_131"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4153,7 +5191,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_132"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4161,7 +5201,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_133"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4169,7 +5211,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_134"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4177,7 +5221,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_135"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4185,7 +5231,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_136"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4193,7 +5241,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_137"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4201,7 +5251,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_138"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4209,7 +5261,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_139"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4217,7 +5271,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_14"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4225,7 +5281,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_140"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4233,7 +5291,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_141"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4241,7 +5301,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_142"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4249,7 +5311,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_143"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4257,7 +5321,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_144"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4265,7 +5331,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_145"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4273,7 +5341,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_146"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4281,7 +5351,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_147"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4289,7 +5361,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_148"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4297,7 +5371,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_149"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4305,7 +5381,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_15"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4313,7 +5391,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_150"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4321,7 +5401,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_151"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4329,7 +5411,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_152"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4337,7 +5421,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_153"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4345,7 +5431,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_154"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4353,7 +5441,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_155"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4361,7 +5451,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_156"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4369,7 +5461,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_157"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4377,7 +5471,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_158"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4385,7 +5481,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_159"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4393,7 +5491,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_16"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4401,7 +5501,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_160"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4409,7 +5511,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_161"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4417,7 +5521,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_162"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4425,7 +5531,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_163"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4433,7 +5541,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_164"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4441,7 +5551,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_165"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4449,7 +5561,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_166"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4457,7 +5571,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_167"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4465,7 +5581,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_168"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4473,7 +5591,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_169"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4481,7 +5601,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_17"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4489,7 +5611,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_170"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4497,7 +5621,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_171"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4505,7 +5631,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_172"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4513,7 +5641,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_173"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4521,7 +5651,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_18"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4529,7 +5661,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_19"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4537,7 +5671,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_2"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4545,7 +5681,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_20"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4553,7 +5691,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_21"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4561,7 +5701,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_22"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4569,7 +5711,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_23"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4577,7 +5721,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_24"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4585,7 +5731,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_25"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4593,7 +5741,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_26"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4601,7 +5751,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_27"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4609,7 +5761,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_28"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4617,7 +5771,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_29"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4625,7 +5781,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_3"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4633,7 +5791,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_30"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4641,7 +5801,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_31"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4649,7 +5811,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_32"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4657,7 +5821,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_33"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4665,7 +5831,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_34"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4673,7 +5841,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_35"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4681,7 +5851,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_36"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4689,7 +5861,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_37"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4697,7 +5871,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_38"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4705,7 +5881,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_39"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4713,7 +5891,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_4"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4721,7 +5901,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_40"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4729,7 +5911,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_41"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4737,7 +5921,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_42"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4745,7 +5931,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_43"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4753,7 +5941,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_44"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4761,7 +5951,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_45"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4769,7 +5961,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_46"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4777,7 +5971,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_47"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4785,7 +5981,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_48"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4793,7 +5991,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_49"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4801,7 +6001,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_5"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4809,7 +6011,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_50"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4817,7 +6021,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_51"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4825,7 +6031,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_52"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4833,7 +6041,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_53"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4841,7 +6051,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_54"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4849,7 +6061,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_55"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4857,7 +6071,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_56"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4865,7 +6081,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_57"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4873,7 +6091,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_58"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4881,7 +6101,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_59"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4889,7 +6111,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_6"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4897,7 +6121,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_60"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4905,7 +6131,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_61"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4913,7 +6141,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_62"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4921,7 +6151,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_63"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4929,7 +6161,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_64"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4937,7 +6171,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_65"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4945,7 +6181,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_66"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4953,7 +6191,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_67"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4961,7 +6201,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_68"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4969,7 +6211,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_69"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4977,7 +6221,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_7"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4985,7 +6231,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_70"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -4993,7 +6241,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_71"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5001,7 +6251,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_72"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5009,7 +6261,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_73"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5017,7 +6271,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_74"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5025,7 +6281,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_75"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5033,7 +6291,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_76"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5041,7 +6301,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_77"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5049,7 +6311,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_78"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5057,7 +6321,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_79"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5065,7 +6331,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_8"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5073,7 +6341,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_80"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5081,7 +6351,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_81"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5089,7 +6361,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_82"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5097,7 +6371,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_83"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5105,7 +6381,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_84"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5113,7 +6391,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_85"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5121,7 +6401,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_86"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5129,7 +6411,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_87"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5137,7 +6421,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_88"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5145,7 +6431,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_89"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5153,7 +6441,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_9"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5161,7 +6451,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_90"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5169,7 +6461,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_91"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5177,7 +6471,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_92"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5185,7 +6481,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_93"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5193,7 +6491,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_94"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5201,7 +6501,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_95"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5209,7 +6511,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_96"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5217,7 +6521,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_97"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5225,7 +6531,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_98"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",
@@ -5233,7 +6541,9 @@
       "target_label": "RECITAL"
     },
     {
-      "properties": {},
+      "properties": {
+        "identity": "HAS:GDPR-1.0->32016R0679#rct_99"
+      },
       "relationship_type": "HAS",
       "source_id": "GDPR-1.0",
       "source_label": "RegulatoryInstrument",

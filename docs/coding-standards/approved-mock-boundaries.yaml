@@ -97,7 +97,7 @@ process_os:
   # A private module-level `Path` constant redirected to `tmp_path` for deterministic real-file-I/O
   # testing, not a behavior fake (the loader function itself always runs for real against the
   # redirected directory); same shape as `_domain_concepts_path` above.
-  - company_merge_similarity_sweep._CURATED_CONTENT_DIR
+  - company_merge_similarity_sweep._CORPUS_DIR
   # Same category: resource-location config values (a records dir and a report path), not
   # behavior fakes; `main()` itself always runs for real against the redirected paths.
   - exclusion_audit._DEFAULT_RECORDS_DIR

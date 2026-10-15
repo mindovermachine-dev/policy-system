@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
 _REPO = Path(__file__).resolve().parents[3]
-_CURATED = _REPO / "curated-content" / "ENGPRAC-1.0"
+_CURATED = Path(__file__).parent / "fixtures" / "ENGPRAC-1.0"
 _GOLDEN = json.loads((Path(__file__).parent / "_golden_export.json").read_text())
 _INSTRUMENT_ID = "ENGPRAC-1.0"
 
