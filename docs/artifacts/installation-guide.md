@@ -61,17 +61,6 @@ Other documents:
 > chart on a local `kind` cluster and the script
 > [`scripts/deploy-ps-eval.sh`](../../scripts/deploy-ps-eval.sh).
 
-Production administrators use the same Helm chart with a different values profile. See
-[Production installation](#production-installation). This section covers the evaluator
-profile only.
-
-The evaluator profile has these properties:
-
-- It runs the bundled Authentik identity provider over HTTPS with a locally issued
-  certificate.
-- Login is required.
-
-> **Why HTTPS:** Passkeys work only in a secure browser context.
 
 ### Prerequisites
 
@@ -191,9 +180,7 @@ The command prints the cluster information when the cluster is up.
 >    Restore](./operations-guide.md#restore)), or load the content again. See [User Guide: Load
 >    curated content](./user-guide.md#load-curated-content).
 >
-> **Why:** kind fixes its `extraPortMappings` when it creates a cluster. You cannot change
-> them later. The evaluator profile serves Authentik over HTTPS on host port `30443`. Older
-> clusters have a plain-HTTP mapping on `30080` and do not have the `30443` mapping.
+
 
 ### 5. Provision the Azure LLM backend
 
@@ -203,10 +190,9 @@ This step creates these resources in your own Azure subscription:
 - Two model deployments.
 - A Key Vault.
 
-It then syncs the credentials into the kind cluster from step 4. You do this step once per
-subscription. You can run both scripts again safely. They do nothing when nothing changed.
+It then syncs the credentials into the kind cluster from step 4. You can run both scripts again safely. They do nothing when nothing changed.
 
-Your signed-in identity needs the `Owner` or `Contributor` role at subscription scope.
+Your signed-in Azure identity needs the `Owner` or `Contributor` role at subscription scope.
 
 Sign in to Azure:
 
@@ -230,10 +216,6 @@ The script does these things:
 4. It checks the configured region and quota.
 5. It provisions the resources. It prints a summary line only, never a secret value.
 
-If the AIServices account is soft-deleted, the script finds it. It asks before it permanently
-purges the account to release the model capacity. Add `--yes` to accept the deployment
-prompt and the purge prompt without questions.
-
 Sync the credentials into the cluster:
 
 ```bash
@@ -243,11 +225,6 @@ scripts/sync-llm-secrets-to-kind.sh
 The script reads the three credentials from Key Vault. It writes them into the active kind
 cluster as the Secret `policy-system-llm-credentials`.
 
-> **Why it is safe:** The script stops unless your current `kubectl` context is a `kind-*`
-> context. It cannot write Azure credentials into the wrong cluster.
-
-To rotate this key later, see the [Operations
-Guide](./operations-guide.md#rotating-the-azure-llm-api-key).
 
 ### 6. Install ps-cli
 
@@ -316,27 +293,6 @@ scripts/deploy-ps-eval.sh
 The script asks for the **owner's email**. This person becomes the first `SystemOwner` and the
 Authentik administrator.
 
-Options:
-
-| Option | Meaning |
-| --- | --- |
-| `--owner-email <address>` | The owner's email. Skips the prompt. The address is the Authentik username and the OIDC `sub` that PS Service expects. |
-| `--hostname <name>` | The name that serves Authentik. Default: `authentik.test`. Every machine that logs in must resolve this name to this machine. Names ending in `.local` are rejected: Claude Code cannot resolve them. |
-| `--apply-host-setup` | Runs the missing host steps through `sudo`. The steps are: map the hostname to `127.0.0.1` in `/etc/hosts`, and (macOS) trust the local CA in the system keychain. Without this option, an interactive run asks first. A `--yes` run only prints the commands. If both steps are already done, nothing happens. |
-| `--yes` | Never prompts. You must then give `--owner-email`. |
-
-Optional environment variables:
-
-| Variable | Meaning | Default |
-| --- | --- | --- |
-| `PS_OWNER_LINK_TTL` | Minutes that the enrolment link stays valid | `30` |
-| `PS_EVAL_STATE_DIR` | Folder for the local CA and certificate | `~/.config/policy-system/eval-tls` |
-| `PS_ROLLOUT_TIMEOUT` | Rollout timeout | script default |
-
-You do not need `PS_CHART_REF`. By default, the script deploys the published chart. To deploy
-a checkout instead, run `helm dependency build charts/policy-system` once. Then set
-`PS_CHART_REF=./charts/policy-system`. To find out when the published chart contains this
-flow, see [Verification status](#verification-status).
 
 The script does these things, in this order:
 
@@ -361,19 +317,6 @@ The script ends with these items, in this order:
 1. What is left to do on this machine.
 2. The `ps-cli` login command.
 3. The enrolment link.
-
-> **Why a real login:** The evaluator profile uses OIDC login against the bundled Authentik.
-> `psService.localTestBypass.enabled=true` cannot start in a container. The bypass refuses to
-> bind a non-loopback host, and every container image binds `0.0.0.0`. The deployment
-> therefore runs with the bypass **off**.
->
-> **Why HTTPS and a local certificate:** Browsers offer passkeys only in a secure context.
-> Also, `ps-cli` refuses to send credentials to an issuer that is not `https` and not
-> loopback.
->
-> **Why the hostname must resolve to the kind node:** The PS Service pod must resolve the
-> Authentik hostname to the node IP. Its token validation then reaches the same Authentik that
-> a browser reaches.
 
 Check the pods:
 
@@ -459,13 +402,13 @@ store.
 
 Registering the passkey also logs you in.
 
-The link works once. It expires after `PS_OWNER_LINK_TTL` minutes (default 30). If the link
+The link works once. It expires after 30 minutes. If the link
 expired, run `scripts/deploy-ps-eval.sh` again for a new link.
 
 Registration ends on the Authentik application library. It shows **"No Applications
 available"**. This is expected, not a failure. The only application is the `ps-cli` OAuth
 client. It has no launch URL, so Authentik does not list it. You are registered and logged
-in. Go to the next part.
+in.
 
 #### Log in with ps-cli
 
@@ -591,12 +534,14 @@ Add the marketplace first. Then install the plugin from it.
    ```json
    {
      "env": {
-       "PS_MCP_URL": "https://<host>/mcp/"
+       "PS_MCP_URL": "http://127.0.0.1:8000/mcp/"
      }
    }
    ```
 
-   - Use your PS Service's public address for `<host>`. The trailing slash is part of the URL.
+   - The evaluator's PS Service is published on host port `8000`, so the URL is
+     `http://127.0.0.1:8000/mcp/`. The trailing slash is part of the URL. Do not use
+     `authentik.test`: Authentik is only the login server and does not serve `/mcp/`.
    - If `PS_MCP_URL` is not set, `/mcp` shows `ps-mcp` as failed with
      `Missing environment variables: PS_MCP_URL`. Set it, then start a new Claude Code session.
    - The plugin does not use `userConfig` for the URL. A `${user_config.*}` value never reached
@@ -604,8 +549,10 @@ Add the marketplace first. Then install the plugin from it.
 
 4. Quit Claude Desktop fully (⌘Q). Start it again. Open a **new** chat.
 
-5. Sign in. In Claude Code run `/mcp`, select `plugin:ps-plugin:ps-mcp`, and choose
-   **Authenticate**.
+5. Sign in from the Claude Code CLI. In a terminal, run `claude`, then `/mcp`, select
+   `plugin:ps-plugin:ps-mcp`, and choose **Authenticate**.
+
+   - Once you have signed in here, a new Claude Desktop - Code session is signed in too.
 
    - The browser opens Authentik. Sign in with your own account. The plugin uses the
      pre-registered `ps-cli` OAuth client, so you enter no token and need no `ps-cli` install.
@@ -627,12 +574,10 @@ bundles Claude Code 2.1.295). Lower versions are untested.
 
 To ask a question, see the [User Guide](./user-guide.md#using-claude-desktop---code).
 
-Which Claude surfaces can reach your deployment, and what is verified per surface: [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment). The evaluator is a non-public deployment; what is verified per surface is listed in that section.
-
 ### What is exposed (evaluator)
 
-The evaluator profile is for one trusted person on their own machine. It exposes Authentik to
-the local network on purpose. This table shows what is reachable and by whom:
+The evaluator profile runs on one machine and exposes Authentik to the local network on
+purpose, so colleagues on the LAN can log in. This table shows what is reachable and by whom:
 
 | Listener | Address | Reachable by | What it serves |
 | --- | --- | --- | --- |
@@ -653,7 +598,6 @@ The admin UI uses the same HTTPS listener as everything else. You do not need a 
 **To limit access to your own machine:**
 
 - Block port `30443` of the laptop from the LAN with the host firewall.
-- Do not enrol colleagues.
 
 Things to know:
 
@@ -663,7 +607,6 @@ Things to know:
 - The Authentik API token of the chart is the Authentik bootstrap token. It is
   **administrator-equivalent**. It is stored in the Secret `policy-system-authentik-api-token`.
   Anyone with `kubectl` access to the cluster can read it. The scripts never print it.
-- The evaluator profile is not for production. Never expose it on the public internet.
 
 ---
 
@@ -672,12 +615,6 @@ Things to know:
 > [!NOTE]
 > **This path is for production and customer-tenant deployments** to a real Azure
 > subscription. It uses [`scripts/deploy-ps-prod.sh`](../../scripts/deploy-ps-prod.sh).
->
-> `deploy-ps-prod.sh` is separate and self-contained. It is not the same code path as
-> `deploy-llm.sh` (used by [Evaluator installation step
-> 5](#5-provision-the-azure-llm-backend)) or
-> [`deploy-ps-eval.sh`](#7-deploy-policy-system-backend). All three keep working
-> independently.
 >
 > In one run, `deploy-ps-prod.sh` provisions:
 >
@@ -824,8 +761,8 @@ Registering the passkey also logs you in.
 The link works once. It lapses after 30 minutes. `PS_OWNER_LINK_TTL` sets another duration in
 minutes.
 
-Production uses a real Let's Encrypt certificate. You do not need to trust a CA in the browser
-or for `ps-cli`.
+A Let's Encrypt certificate serves the host. You do not need to trust a CA in the browser or
+for `ps-cli`.
 
 After enrolment, the browser ends on `https://<host>/auth/`. The Authentik public allowlist
 does not serve this path, so PS Service answers it. An error or "not found" page is
@@ -872,8 +809,8 @@ curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/m
 **Point `ps-cli` at this instance and log in.** Use the URL that [step
 3](#3-run-scriptsdeploy-ps-prodsh) printed (`https://<label>.<region>.cloudapp.azure.com`).
 See [User Guide: Point ps-cli at your
-instance](./user-guide.md#point-ps-cli-at-your-instance). Login is required, as on the
-evaluator instance. Production deploys the bundled Authentik identity provider.
+instance](./user-guide.md#point-ps-cli-at-your-instance). Login is required.
+Production deploys the bundled Authentik identity provider.
 
 **Install the Policy System Plugin.**
 
@@ -883,7 +820,25 @@ evaluator instance. Production deploys the bundled Authentik identity provider.
 2. Install the Policy System Plugin (`ps-plugin`):
    `/plugin install ps-plugin@ps-marketplace`.
 
-For the `PS_MCP_URL` setting and sign-in, see [Evaluator installation, step 9](#9-install-the-policy-system-plugin). For which Claude surfaces reach a public deployment, see [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
+3. Set the PS Service URL. Add `PS_MCP_URL` to the `env` block of `~/.claude/settings.json`. Use
+   the URL that [step 3](#3-run-scriptsdeploy-ps-prodsh) printed, with `/mcp/` added. The
+   trailing slash is part of the URL:
+
+   ```json
+   {
+     "env": {
+       "PS_MCP_URL": "https://<label>.<region>.cloudapp.azure.com/mcp/"
+     }
+   }
+   ```
+
+   If `PS_MCP_URL` is not set, `/mcp` shows `ps-mcp` as failed with
+   `Missing environment variables: PS_MCP_URL`. Set it, then start a new Claude Code session.
+
+4. Sign in. In Claude Code run `/mcp`, select `plugin:ps-plugin:ps-mcp`, and choose
+   **Authenticate**.
+
+For which Claude surfaces reach a public deployment, see [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
 
 > **Plugin configuration:** The plugin's Policy System MCP connector (`ps-mcp`) connects straight
 > to the URL in `PS_MCP_URL` and signs in with the pre-registered `ps-cli` OAuth client. It does
@@ -933,8 +888,8 @@ This table shows what is public and what is not:
 2. Open `http://localhost:9000/auth/if/admin/`.
 3. Sign in as the owner.
 
-Production uses the `/auth` prefix. The port-forward stays on your machine (loopback). It is
-not public.
+Authentik is served under the `/auth` prefix. The port-forward stays on your machine
+(loopback). It is not public.
 
 Things to know:
 
@@ -973,8 +928,8 @@ deployment has a public hostname (see [What is exposed (production)](#what-is-ex
 
 | Surface | Public deployment | Non-public deployment | Status |
 | --- | --- | --- | --- |
-| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (Claude Code 2.1.236). Non-public: Expected (inferred, not run); evaluator on `authentik.test`: verification pending. |
-| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (not tested). Login in the Desktop Code tab: Expected, not yet verified; evaluator on `authentik.test`: verification pending. |
+| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (Claude Code 2.1.236). Non-public: Expected (inferred, not run). Evaluator on `authentik.test`, `PS_MCP_URL` set to `http://127.0.0.1:8000/mcp/`: login verified (Claude Code 2.1.302). |
+| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (not tested). Login in the Desktop Code tab: Expected, not yet verified for a public deployment. Evaluator on `authentik.test`: verified (Desktop app 2.42304.0). Sign in from the Claude Code CLI first; a new Desktop Code session is then signed in. |
 | Claude Desktop Chat and Cowork | Works as a manually added custom connector (URL plus Client ID `ps-cli`): GO | Does not work (needs public PS Service and Authentik) | Expected for everything beyond the login result. |
 | claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested). |
 

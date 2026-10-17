@@ -31,6 +31,10 @@ def _text() -> str:
     return _INSTALL.read_text()
 
 
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", " ", text)
+
+
 def test_install_guide_has_no_mdns_five_second_delay_guidance() -> None:
     text = _text()
 
@@ -43,22 +47,22 @@ def test_docs_never_name_the_old_default_hostname(path: Path) -> None:
     assert _OLD_LOCAL not in path.read_text()
 
 
-def test_hostname_option_row_names_the_new_default_and_the_rejection() -> None:
-    rows = [line for line in _text().splitlines() if line.startswith("| `--hostname <name>`")]
+def test_guide_names_the_default_hostname_and_the_local_rejection() -> None:
+    text = _squash(_text())
 
-    assert len(rows) == 1
-    assert "Default: `authentik.test`" in rows[0]
-    assert "`.local`" in rows[0]
-    assert "rejected" in rows[0]
+    assert "https://authentik.test:30443/application/o/ps-cli/" in text
+    assert "rejects any `--hostname` that ends in `.local`" in text
 
 
 @pytest.mark.parametrize("surface", ["| Claude Code (CLI) |", "| Claude Desktop - Code tab |"])
-def test_surface_table_rows_mark_the_evaluator_hostname_as_pending(surface: str) -> None:
+def test_surface_table_rows_state_the_evaluator_hostname_status(surface: str) -> None:
     rows = [line for line in _text().splitlines() if line.startswith(surface)]
 
     assert len(rows) == 1
     assert "authentik.test" in rows[0]
-    assert "pending" in rows[0]
+    assert "pending" in rows[0] or re.search(
+        r"verified \((?:Claude Code|Desktop app) \d[\d.]*\)", rows[0], re.IGNORECASE
+    )
 
 
 def test_nothing_claims_the_evaluator_hostname_verified_without_a_version() -> None:
