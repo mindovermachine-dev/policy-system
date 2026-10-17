@@ -26,7 +26,7 @@ import pytest
 from api._gateway_fakes import ProcessGateway, process_gateway_installed
 from litellm.types.utils import Embedding, EmbeddingResponse
 
-from export._gateway_fakes import ArtifactDoc, ExportRig
+from export._gateway_fakes import ArtifactDoc, ExportRig, ScriptedPolicyGraph
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.models import ExportRequest
@@ -93,6 +93,7 @@ def test_run_export_matches_the_pre_migration_golden_export(
         export=export_instrument,
         call_embedding=_golden_embedder,
         graph_write_access=graph_write_access,
+        open_single_tenant_graph=lambda _db: ScriptedPolicyGraph(),
     )
 
     response = run_export(

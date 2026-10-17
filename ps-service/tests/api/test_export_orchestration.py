@@ -17,13 +17,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+import redis.exceptions
+from export._gateway_fakes import ScriptedPolicyGraph, pending_review
 
-from api._gateway_fakes import process_gateway_installed
+from api._gateway_fakes import installed_process_gateway, process_gateway_installed
 from ps_service.api import export_orchestration
 from ps_service.api.errors import (
     ExportConfigIncompleteError,
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
+    ExportUnresolvedNearMissesError,
 )
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.graph_write_access import graph_write_access
@@ -39,8 +42,11 @@ if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter, ReadLines
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
+    from ps_service.api.models import ExportAcceptedResponse
+    from ps_service.company_merge.models import PendingReviewRecord
     from ps_service.config import ServiceConfig
     from ps_service.export.export_instrument import InstrumentDescriptor
+    from ps_service.logging import LogEmitter
 
 _INSTRUMENT_ID = "CRA-1.0"
 _SHORT_NAME = "CRA"
@@ -89,10 +95,13 @@ class _FakeExistenceGraph:
 
     properties: dict[str, object] | None
     call_log: list[str] = field(default_factory=list)
+    capability_ids: tuple[str, ...] = ()
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         _ = params
         self.call_log.append(q)
+        if q == "MATCH (c:Capability) RETURN c.id":
+            return _FakeQueryResult([[capability_id] for capability_id in self.capability_ids])
         assert q == "MATCH (n:RegulatoryInstrument {id: $id}) RETURN properties(n)"
         if self.properties is None:
             return _FakeQueryResult([])
@@ -156,6 +165,7 @@ def _build_dependencies(
     db: _FakeDb,
     baseline_graph: _FakeExistenceGraph,
     stage: _FakeExportStage,
+    policy_graph: ScriptedPolicyGraph | None = None,
 ) -> tuple[ExportDependencies, list[str], list[str]]:
     open_baseline_calls: list[str] = []
     open_native_calls: list[str] = []
@@ -170,6 +180,7 @@ def _build_dependencies(
         open_native_calls.append(short_name)
         return object()
 
+    policy = policy_graph if policy_graph is not None else ScriptedPolicyGraph()
     dependencies = ExportDependencies(
         open_db=lambda config: cast("FalkorDB", db),
         open_baseline_graph=cast("Callable[[FalkorDB, str], object]", _open_baseline),  # pyright: ignore[reportArgumentType]
@@ -177,6 +188,7 @@ def _build_dependencies(
         export=stage,
         call_embedding=None,
         graph_write_access=graph_write_access,
+        open_single_tenant_graph=lambda _db: policy,
     )
     return dependencies, open_baseline_calls, open_native_calls
 
@@ -459,3 +471,159 @@ def test_run_export_always_removes_the_scratch_directory(
 
     assert len(recorded_paths) == 2
     assert not Path(recorded_paths[1]).exists()
+
+
+# --- near-miss gate: pass-through and other-instrument reviews (PIN) ------------
+
+
+def _run_with_reviews(
+    reviews: list[PendingReviewRecord],
+    emitter: LogEmitter,
+    *,
+    capability_ids: tuple[str, ...] = ("cap_a", "cap_b"),
+) -> tuple[_FakeExportStage, ExportAcceptedResponse]:
+    db = _FakeDb(graphs=[_BASELINE_NAME])
+    baseline_graph = _FakeExistenceGraph(properties=_PROPERTIES, capability_ids=capability_ids)
+    stage = _FakeExportStage()
+    dependencies, _open_baseline_calls, _open_native_calls = _build_dependencies(
+        db=db, baseline_graph=baseline_graph, stage=stage, policy_graph=ScriptedPolicyGraph(reviews)
+    )
+    response = run_export(
+        _request(), config=_config(), actor="x", dependencies=dependencies, emitter=emitter
+    )
+    return stage, response
+
+
+def test_run_export_runs_when_policy_system_holds_no_reviews(make_emitter: MakeEmitter) -> None:
+    """No review at all, the export runs exactly as before."""
+    stage, response = _run_with_reviews([], make_emitter()[0])
+
+    assert len(stage.calls) == 1
+    assert response.instrument_id == _INSTRUMENT_ID
+
+
+def test_run_export_is_not_refused_by_reviews_of_other_instruments(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Reviews naming only Capability ids absent from this baseline do not block."""
+    stage, response = _run_with_reviews(
+        [pending_review("review_other", incoming_id="cap_x", nearest_existing_id="cap_y")],
+        make_emitter()[0],
+    )
+
+    assert len(stage.calls) == 1
+    assert response.instrument_id == _INSTRUMENT_ID
+
+
+def test_run_export_is_refused_when_only_one_side_of_a_review_is_in_the_instrument(
+    make_emitter: MakeEmitter,
+) -> None:
+    """A review with one instrument side and one foreign side still blocks."""
+    with pytest.raises(ExportUnresolvedNearMissesError) as raised:
+        _run_with_reviews(
+            [pending_review("review_mixed", incoming_id="cap_x", nearest_existing_id="cap_b")],
+            make_emitter()[0],
+        )
+
+    assert raised.value.review_ids == ("review_mixed",)
+    assert raised.value.count == 1
+
+
+# --- a refused export writes nothing and logs one `refused` entry ---------------
+
+
+def test_refused_export_writes_nothing_and_emits_exactly_one_refused_entry(
+    monkeypatch: pytest.MonkeyPatch, make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """A refused export leaves no audit row, backfill, scratch dir or `started` entry."""
+    emitter, log_path = make_emitter()
+    recorded_paths: list[str] = []
+    real_mkdtemp = tempfile.mkdtemp
+
+    def _recording_mkdtemp(prefix: str | None = None) -> str:
+        path = real_mkdtemp(prefix=prefix)
+        recorded_paths.append(path)
+        return path
+
+    monkeypatch.setattr(export_orchestration.tempfile, "mkdtemp", _recording_mkdtemp)
+    db = _FakeDb(graphs=[_BASELINE_NAME])
+    baseline_graph = _FakeExistenceGraph(properties=_PROPERTIES, capability_ids=("cap_a", "cap_b"))
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph(
+        [
+            pending_review("review_1", incoming_id="cap_a"),
+            pending_review("review_2", nearest_existing_id="cap_b"),
+        ]
+    )
+    dependencies, _open_baseline_calls, open_native_calls = _build_dependencies(
+        db=db, baseline_graph=baseline_graph, stage=stage, policy_graph=policy
+    )
+
+    with pytest.raises(ExportUnresolvedNearMissesError):
+        run_export(
+            _request(),
+            config=_config(),
+            actor="test-actor",
+            dependencies=dependencies,
+            emitter=emitter,
+        )
+    emitter.flush()
+
+    installed = installed_process_gateway()
+    assert installed.system_audit.rows == []
+    assert installed.rig.events == []  # no embedding backfill group reached the gateway
+    assert stage.calls == []
+    assert open_native_calls == []
+    assert recorded_paths == []
+    entries = [
+        row
+        for row in read_lines(log_path)
+        if row["component"] == "export" and row["action"] == "export_instrument"
+    ]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["outcome"] == "refused"
+    assert entry["entity_id"] == _INSTRUMENT_ID
+    assert entry["caller"] == "test-actor"
+    assert entry["schema_version"] == DOMAIN_SCHEMA_VERSION
+    assert entry["review_count"] == 2
+    assert "review_1" not in str(entry)
+
+
+# --- fail closed when `policy_system` cannot be read (PIN) ----------------------
+
+
+def test_unreadable_policy_system_fails_closed_before_anything_is_written(
+    monkeypatch: pytest.MonkeyPatch, make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """The read error propagates; no audit row, backfill, scratch dir or log entry."""
+    emitter, log_path = make_emitter()
+    recorded_paths: list[str] = []
+    real_mkdtemp = tempfile.mkdtemp
+
+    def _recording_mkdtemp(prefix: str | None = None) -> str:
+        path = real_mkdtemp(prefix=prefix)
+        recorded_paths.append(path)
+        return path
+
+    monkeypatch.setattr(export_orchestration.tempfile, "mkdtemp", _recording_mkdtemp)
+    db = _FakeDb(graphs=[_BASELINE_NAME])
+    baseline_graph = _FakeExistenceGraph(properties=_PROPERTIES, capability_ids=("cap_a",))
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph(fail_with=redis.exceptions.ConnectionError("policy_system down"))
+    dependencies, _open_baseline_calls, _open_native_calls = _build_dependencies(
+        db=db, baseline_graph=baseline_graph, stage=stage, policy_graph=policy
+    )
+
+    with pytest.raises(redis.exceptions.ConnectionError, match="policy_system down"):
+        run_export(
+            _request(), config=_config(), actor="x", dependencies=dependencies, emitter=emitter
+        )
+    emitter.flush()
+
+    installed = installed_process_gateway()
+    assert installed.system_audit.rows == []
+    assert installed.rig.events == []
+    assert stage.calls == []
+    assert recorded_paths == []
+    assert [row for row in read_lines(log_path) if row["component"] == "export"] == []

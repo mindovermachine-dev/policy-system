@@ -22,7 +22,12 @@ import, so importing ``ps_service.main`` does not load that component at module 
    ``RegulatoryInstrument`` node's properties to build the full ``InstrumentDescriptor`` on the
    server. An empty result also raises ``ExportInstrumentNotFoundError`` (the key exists but
    this ``instrument_id`` was never written to it).
-5. Records one ``export.instrument`` system audit row, failing closed with
+5. Refuses the export with :class:`~ps_service.api.errors.ExportUnresolvedNearMissesError` when
+   an unresolved ``PendingReview`` in ``policy_system`` names a ``Capability`` id of the
+   instrument's baseline graph (``ps_service.export.near_miss_gate``). A failure to read either
+   graph propagates, so the export fails closed. This runs before step 6, so a refusal writes
+   no audit row, no embedding backfill and no file.
+6. Records one ``export.instrument`` system audit row, failing closed with
    ``AuditTrailUnavailableError`` before anything is computed or written, then calls the
    injected ``export`` delegate with the gateway, the row's id and the baseline graph name. The
    delegate runs inside a per-request scratch directory used as ``repo_root``, so its file
@@ -30,7 +35,7 @@ import, so importing ``ps_service.main`` does not load that component at module 
    checkout. The wrapper reads ``baseline.json`` and ``native.json`` back from the scratch tree,
    base64-encodes them into the response, and always removes the scratch directory, on success
    or failure.
-6. Emits ``started``, ``succeeded`` and ``failed`` audit log entries itself, because the
+7. Emits ``started``, ``succeeded`` and ``failed`` audit log entries itself, because the
    delegate emits no audit logging.
 
 No ``ps_service.export.export_instrument`` or ``InstrumentDescriptor`` type enters this module's
@@ -50,6 +55,7 @@ from ps_service.api.errors import (
     ExportConfigIncompleteError,
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
+    ExportUnresolvedNearMissesError,
 )
 from ps_service.api.export_audit_actions import (
     EXPORT_INSTRUMENT_ACTION,
@@ -65,6 +71,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ps_service.api.models import ExportRequest
+    from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.config import ServiceConfig
     from ps_service.export.export_instrument import InstrumentDescriptor
     from ps_service.export.falkordb_connection import (
@@ -165,6 +172,9 @@ class ExportDependencies:
             delegate's default.
         graph_write_access: Resolves the graph write gateway and system audit recorder for a
             ``ServiceConfig``; raises ``GraphWriteUnavailableError`` when none is installed.
+        open_single_tenant_graph: Opens the single-tenant ``policy_system`` graph on a connection;
+            the near-miss gate reads unresolved ``PendingReview`` nodes from it. Required, with no
+            default, so a test cannot silently open the real graph.
     """
 
     open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
@@ -173,6 +183,7 @@ class ExportDependencies:
     export: ExportStage
     call_embedding: EmbeddingCaller | None
     graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
+    open_single_tenant_graph: Callable[[ReadOnlyDatabase], GraphHandle]
 
 
 # --- instrument_id -> short_name (no graph access) -------------------
@@ -319,7 +330,13 @@ def _classify_export_failure(exc: Exception) -> ExportStageFailedError:
 
 
 def _emit_export_log(
-    *, instrument_id: str, outcome: str, actor: str, schema_version: str, emitter: LogEmitter | None
+    *,
+    instrument_id: str,
+    outcome: str,
+    actor: str,
+    schema_version: str,
+    emitter: LogEmitter | None,
+    review_count: int | None = None,
 ) -> None:
     """Emit one export audit log entry.
 
@@ -328,10 +345,12 @@ def _emit_export_log(
 
     Args:
         instrument_id: Instrument being exported; logged as the entity id.
-        outcome: ``"started"``, ``"succeeded"`` or ``"failed"``.
+        outcome: ``"started"``, ``"succeeded"``, ``"failed"`` or ``"refused"``.
         actor: The requesting client host; logged as ``caller``.
         schema_version: Domain schema version logged with the entry.
         emitter: Log emitter; ``None`` selects the process-wide default.
+        review_count: Number of unresolved near-miss reviews that refused the export; logged as
+            ``review_count`` only when given, so other entries are unchanged.
 
     Returns:
         None.
@@ -339,12 +358,15 @@ def _emit_export_log(
     Side Effects:
         Emits one structured log entry.
     """
+    extra: dict[str, object] = {"caller": actor, "schema_version": schema_version}
+    if review_count is not None:
+        extra["review_count"] = review_count
     emit_log_entry(
         component=_COMPONENT,
         action=_ACTION,
         entity_id=instrument_id,
         outcome=outcome,
-        extra={"caller": actor, "schema_version": schema_version},
+        extra=extra,
         emitter=emitter,
     )
 
@@ -418,6 +440,8 @@ def run_export(
         ExportInstrumentNotFoundError: ``instrument_id`` is malformed, or names no ingested
             instrument (HTTP 404).
         ExportConfigIncompleteError: The embedding model is not configured (HTTP 503).
+        ExportUnresolvedNearMissesError: An unresolved near-miss review touches a Capability of
+            the instrument (HTTP 409); raised before the audit row, so nothing is written.
         GraphWriteUnavailableError: No graph write gateway is installed.
         AuditTrailUnavailableError: The ``export.instrument`` audit row could not be written;
             nothing was computed or written.
@@ -425,13 +449,15 @@ def run_export(
             (HTTP 502).
         KeyError: The ``RegulatoryInstrument`` node lacks ``version``, ``title`` or
             ``source_type``.
-        Exception: Errors from listing graphs or running the existence query (for example a
-            FalkorDB connection error) propagate unchanged.
+        Exception: Errors from listing graphs, running the existence query or reading the
+            near-miss gate's graphs (for example a FalkorDB connection error) propagate
+            unchanged; the export fails closed before the audit row.
 
     Side Effects:
         Records one ``export.instrument`` system audit row. Creates and always removes a scratch
         directory. The delegate writes embeddings into the baseline graph through the gateway.
-        Emits ``started`` and then ``succeeded`` or ``failed`` log entries.
+        Emits ``started`` and then ``succeeded`` or ``failed`` log entries; a refusal emits
+        one ``refused`` entry (with ``review_count``) and no ``started`` entry.
     """
     instrument_id = request_body.instrument_id
     short_name = _derive_short_name(instrument_id)
@@ -463,6 +489,28 @@ def run_export(
     descriptor = _to_descriptor(
         short_name=short_name, instrument_id=instrument_id, properties=properties
     )
+
+    # Export serializes the per-instrument graphs only, so a near miss recorded in `policy_system`
+    # would be lost from the artifact. Refuse before the audit row, the backfill and any file are
+    # written. A read failure propagates: the export fails closed.
+    from ps_service.export.near_miss_gate import (  # noqa: PLC0415 -- function-local
+        unresolved_near_miss_review_ids,
+    )
+
+    blocking_review_ids = unresolved_near_miss_review_ids(
+        baseline_graph, dependencies.open_single_tenant_graph(db)
+    )
+    if blocking_review_ids:
+        # An expected user condition, not a failure: `refused`, one entry, no `started` entry.
+        _emit_export_log(
+            instrument_id=instrument_id,
+            outcome="refused",
+            actor=actor,
+            schema_version=DOMAIN_SCHEMA_VERSION,
+            emitter=emitter,
+            review_count=len(blocking_review_ids),
+        )
+        raise ExportUnresolvedNearMissesError(instrument_id, blocking_review_ids)
 
     # The embedding backfill's write group is anchored to this row. It is recorded outside the try
     # below, before anything is computed: if it cannot be written, AuditTrailUnavailableError
@@ -598,6 +646,29 @@ def _default_open_native_graph(db: ReadOnlyDatabase, short_name: str) -> _GraphQ
     return graph_query_handle(db, native_graph_name(short_name))
 
 
+def _default_open_single_tenant_graph(db: ReadOnlyDatabase) -> GraphHandle:
+    """Open the single-tenant ``policy_system`` graph, read-only, on ``db``.
+
+    The graph name is ``single_tenant_graph_name()`` (``PS_FALKORDB_GRAPH``, default
+    ``policy_system``): ``ServiceConfig`` has no graph-name field, a known configuration gap.
+
+    Args:
+        db: The read-only FalkorDB connection.
+
+    Returns:
+        A read handle on the single-tenant graph.
+
+    Side Effects:
+        None beyond selecting the graph.
+    """
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local
+        select_graph,
+        single_tenant_graph_name,
+    )
+
+    return select_graph(db, single_tenant_graph_name())
+
+
 def build_default_export_dependencies() -> ExportDependencies:
     """Wire the real ``export_instrument`` orchestration into an ``ExportDependencies``.
 
@@ -626,4 +697,5 @@ def build_default_export_dependencies() -> ExportDependencies:
         export=export_instrument,
         call_embedding=default_embedding_caller,
         graph_write_access=graph_write_access,
+        open_single_tenant_graph=_default_open_single_tenant_graph,
     )

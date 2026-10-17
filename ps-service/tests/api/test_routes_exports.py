@@ -9,12 +9,15 @@ without a real graph or LLM.
 from __future__ import annotations
 
 import base64
+import json
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+import redis.exceptions
+from export._gateway_fakes import ScriptedPolicyGraph, pending_review
 from fastapi.testclient import TestClient
 
 from api._fakes import install_compliance_officer_grant, install_no_principal
@@ -49,6 +52,13 @@ if TYPE_CHECKING:
 _INSTRUMENT_ID = "CRA-1.0"
 _BASELINE_BYTES = b'{"nodes": [], "edges": []}'
 _NATIVE_BYTES = b'{"nodes": [], "edges": []}'
+_CAPABILITY_IDS_QUERY = "MATCH (c:Capability) RETURN c.id"
+_WIRE_CONTRACT = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "wire-contracts"
+    / "export-unresolved-near-misses-409.json"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -78,10 +88,15 @@ class _FakeQueryResult:
 
 
 class _FakeExistenceGraph:
-    """Answers the one existence `MATCH` `run_export` issues, when reached."""
+    """Answers the existence `MATCH` and the Capability id read `run_export` issues."""
+
+    def __init__(self, capability_ids: tuple[str, ...] = ()) -> None:
+        self._capability_ids = capability_ids
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        _ = q, params
+        _ = params
+        if q == _CAPABILITY_IDS_QUERY:
+            return _FakeQueryResult([[capability_id] for capability_id in self._capability_ids])
         return _FakeQueryResult(
             [
                 [
@@ -174,9 +189,14 @@ class _PartialWriteExportStage:
         raise RuntimeError("native serialization boom (mid-orchestration failure)")
 
 
-def _open_baseline(db_arg: FalkorDB, short_name: str) -> _FakeExistenceGraph:
-    _ = db_arg, short_name
-    return _FakeExistenceGraph()
+def _baseline_opener(
+    capability_ids: tuple[str, ...],
+) -> Callable[[FalkorDB, str], _FakeExistenceGraph]:
+    def _open_baseline(db_arg: FalkorDB, short_name: str) -> _FakeExistenceGraph:
+        _ = db_arg, short_name
+        return _FakeExistenceGraph(capability_ids)
+
+    return _open_baseline
 
 
 def _open_native(db_arg: FalkorDB, short_name: str) -> object:
@@ -185,12 +205,20 @@ def _open_native(db_arg: FalkorDB, short_name: str) -> object:
 
 
 def _fake_dependencies(
-    stage: ExportStage, *, graphs: list[str] | None = None
+    stage: ExportStage,
+    *,
+    graphs: list[str] | None = None,
+    capability_ids: tuple[str, ...] = (),
+    policy_graph: ScriptedPolicyGraph | None = None,
 ) -> ExportDependencies:
     db = _FakeDb(graphs=graphs if graphs is not None else ["cra_baseline"])
+    policy = policy_graph if policy_graph is not None else ScriptedPolicyGraph()
     return ExportDependencies(
         open_db=lambda config: cast("FalkorDB", db),
-        open_baseline_graph=cast("Callable[[FalkorDB, str], object]", _open_baseline),  # pyright: ignore[reportArgumentType]
+        open_baseline_graph=cast(
+            "Callable[[FalkorDB, str], object]", _baseline_opener(capability_ids)
+        ),  # pyright: ignore[reportArgumentType]
+        open_single_tenant_graph=lambda _db: policy,
         open_native_graph=cast("Callable[[FalkorDB, str], object]", _open_native),  # pyright: ignore[reportArgumentType]
         export=stage,
         call_embedding=None,
@@ -239,10 +267,12 @@ def _client_with_fake(
     *,
     graphs: list[str] | None = None,
     config: ServiceConfig | None = None,
+    capability_ids: tuple[str, ...] = (),
+    policy_graph: ScriptedPolicyGraph | None = None,
 ) -> TestClient:
     app = create_app(config or _app_config())
     app.dependency_overrides[provide_export_dependencies] = lambda: _fake_dependencies(
-        stage, graphs=graphs
+        stage, graphs=graphs, capability_ids=capability_ids, policy_graph=policy_graph
     )
     return TestClient(app, raise_server_exceptions=False)
 
@@ -276,6 +306,64 @@ def test_valid_export_body_returns_200_with_expected_shape() -> None:
     assert base64.b64decode(body["native_blob_base64"]) == _NATIVE_BYTES
     assert [s["stage"] for s in body["stages"]] == ["embedded", "serialized", "cataloged"]
     assert stage.call_count == 1
+
+
+@pytest.mark.usefixtures("_stub_export_log")
+def test_unresolved_near_misses_return_409_with_count_and_review_ids() -> None:
+    """Reviews touching the instrument's Capabilities refuse the export."""
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph(
+        [
+            pending_review("review_1", incoming_id="cap_a"),
+            pending_review("review_2", nearest_existing_id="cap_b"),
+            pending_review("review_other", incoming_id="cap_x"),
+        ]
+    )
+    client = _client_with_fake(stage, capability_ids=("cap_a", "cap_b"), policy_graph=policy)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"]["code"] == "export_unresolved_near_misses"
+    assert "2 unresolved near-miss reviews" in body["error"]["message"]
+    assert "review_1" in body["error"]["message"]
+    assert "review_2" in body["error"]["message"]
+    assert "review_other" not in body["error"]["message"]
+    assert stage.call_count == 0
+    assert body == json.loads(_WIRE_CONTRACT.read_text())
+
+
+@pytest.mark.usefixtures("_stub_export_log")
+def test_refused_export_leaves_the_audit_trail_and_gateway_untouched() -> None:
+    """At the route, a 409 records no audit row and submits no backfill group."""
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph([pending_review("review_1", incoming_id="cap_a")])
+    client = _client_with_fake(stage, capability_ids=("cap_a",), policy_graph=policy)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 409
+    installed = installed_process_gateway()
+    assert installed.system_audit.rows == []
+    assert installed.rig.events == []
+    assert stage.call_count == 0
+
+
+@pytest.mark.usefixtures("_stub_export_log")
+def test_unreadable_policy_system_returns_the_generic_500_and_writes_nothing() -> None:
+    """Pinned behaviour: today's graph-unreachable behaviour, fail closed before the audit row."""
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph(fail_with=redis.exceptions.ConnectionError("policy_system down"))
+    client = _client_with_fake(stage, capability_ids=("cap_a",), policy_graph=policy)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "internal_error"
+    assert "policy_system down" not in response.text
+    assert installed_process_gateway().system_audit.rows == []
+    assert stage.call_count == 0
 
 
 @pytest.mark.usefixtures("_stub_export_log")

@@ -437,7 +437,7 @@ The `ps-list-ingested` skill lists every regulatory instrument currently in the 
 Use the ps-near-miss-review skill to show the pending near-miss reviews.
 ```
 
-When ingestion finds two entities that are close but not identical, it records a near-miss pending review instead of merging them. The `ps-near-miss-review` skill lists the pending reviews and resolves one by keeping the two entities separate or merging them. A merge cannot be undone through this skill, so it does not run at the call: the skill returns an approval link, and the merge runs when you complete a passkey signing in the browser. The skill can then report whether the approval was signed.
+When ingestion finds two entities that are close but not identical, it records a near-miss pending review instead of merging them. The `ps-near-miss-review` skill lists the pending reviews and resolves one by keeping the two entities separate or merging them. A merge cannot be undone through this skill, so it does not run at the call: the skill returns an approval link, and the merge runs when you complete a passkey signing in the browser. The skill can then report whether the approval was signed. Resolve an instrument's near misses before you export it: an export is refused while any unresolved review touches its Capabilities.
 
 ### Author a policy
 
@@ -672,6 +672,12 @@ A few behaviors worth knowing about `export instrument`:
 - Re-running the command against the same destination overwrites `baseline.json` /
   `native.json` / `manifest.json` deterministically — there's no merge or append
   behavior to worry about.
+- Near misses must be resolved before an export. If any unresolved near-miss review
+  touches one of the instrument's Capabilities, PS Service refuses with HTTP 409:
+  `ps-cli` prints the message (the count and the review ids), exits non-zero and writes
+  no files. Resolve the reviews with the `ps-near-miss-review` skill (see
+  [Review near-miss merge candidates](#review-near-miss-merge-candidates)), then export
+  again.
 - If the exported instrument is internal-source, `ps-cli` prints an explicit notice
   that the exported files may contain your organization's own confidential policy
   content.

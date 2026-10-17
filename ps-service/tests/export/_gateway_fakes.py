@@ -15,15 +15,16 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from graph_gateway._fakes import FakeQueryResult, GatewayRig, InMemoryGraph
 
+from ps_service.company_merge.models import PendingReviewRecord
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.ingestion.falkordb_client import native_graph_name
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping
+    from collections.abc import Collection, Mapping, Sequence
 
     from ps_service.graph_gateway.models import GraphLogGroup
 
@@ -32,6 +33,7 @@ _EXISTENCE = "MATCH (n:RegulatoryInstrument {id: $id}) RETURN properties(n)"
 _MISSING_EMBEDDING = re.compile(
     r"MATCH \(n:(\w+)\) WHERE n\.embedding IS NULL RETURN n\.id, n\.(\w+)"
 )
+_CAPABILITY_IDS = "MATCH (c:Capability) RETURN c.id"
 _NODE_ROWS = re.compile(r"MATCH \(n:(\w+)\) RETURN labels\(n\), properties\(n\)")
 _EDGE_ROWS = re.compile(
     r"MATCH \(s\)-\[r:(\w+)\]->\(t\) RETURN labels\(s\), s\.id, labels\(t\), t\.id, properties\(r\)"
@@ -66,6 +68,8 @@ class ExportReadGraph:
         return FakeQueryResult(self._answer(q))
 
     def _answer(self, q: str) -> list[object]:
+        if q == _CAPABILITY_IDS:
+            return [[node_id] for label, node_id in self._graph.nodes if label == "Capability"]
         if q == "CALL db.labels()":
             return [[label] for label in sorted({label for label, _ in self._graph.nodes})]
         if q == "CALL db.relationshipTypes()":
@@ -98,6 +102,65 @@ class ExportReadGraph:
                 if key[0] == match[1]
             ]
         raise AssertionError(f"not an Export read statement the double was taught: {q}")
+
+
+def _pending_review_row(record: PendingReviewRecord) -> list[object]:
+    """One `PendingReviewRecord` in the column order `list_pending_reviews` reads."""
+    return [
+        record.id,
+        record.kind,
+        record.incoming_id,
+        record.incoming_text,
+        record.nearest_existing_id,
+        record.nearest_existing_text,
+        record.similarity,
+        record.created_at,
+    ]
+
+
+class ScriptedPolicyGraph:
+    """Handle for `policy_system`: answers only the `list_pending_reviews` statement.
+
+    Fakes cannot run Cypher, so the "resolvable" predicate is the caller's to script: the handle
+    returns the reviews it was given for whatever statement it receives and records every
+    statement, so a test can compare them with what `list_pending_reviews` itself sends.
+    """
+
+    def __init__(
+        self, reviews: Sequence[PendingReviewRecord] = (), *, fail_with: Exception | None = None
+    ) -> None:
+        self._reviews = tuple(reviews)
+        self._fail_with = fail_with
+        self.statements: list[str] = []
+        """Every statement received, in order."""
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> FakeQueryResult:
+        """Record `q`, then fail or return the scripted reviews as result rows."""
+        _ = params
+        self.statements.append(q)
+        if self._fail_with is not None:
+            raise self._fail_with
+        return FakeQueryResult([_pending_review_row(r) for r in self._reviews])
+
+
+def pending_review(
+    review_id: str,
+    *,
+    incoming_id: str = "capability_incoming_a",
+    nearest_existing_id: str = "capability_existing_a",
+    kind: Literal["Capability", "Policy"] = "Capability",
+) -> PendingReviewRecord:
+    """A `PendingReviewRecord` touching the given ids (defaults touch no instrument)."""
+    return PendingReviewRecord(
+        id=review_id,
+        kind=kind,
+        incoming_id=incoming_id,
+        incoming_text="Report the incident to the authority.",
+        nearest_existing_id=nearest_existing_id,
+        nearest_existing_text="Conduct a risk assessment.",
+        similarity=0.62,
+        created_at="2026-01-01T00:00:00+00:00",
+    )
 
 
 @dataclass(frozen=True, slots=True)

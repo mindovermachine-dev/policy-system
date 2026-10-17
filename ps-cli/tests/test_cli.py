@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 
 from ps_cli import cli
@@ -21,6 +22,7 @@ from ps_cli.config import load_config
 from ps_cli.credentials import TokenBundle, build_credential_store
 from ps_cli.device_flow import poll_for_token, request_device_authorization
 from ps_cli.errors import PsCliError
+from ps_cli.http_client import PsServiceClient
 from ps_cli.models import (
     ExportManifest,
     ExportResult,
@@ -42,6 +44,14 @@ if TYPE_CHECKING:
 
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
+_EXPORT_NEAR_MISSES_409_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "ps-service"
+    / "tests"
+    / "fixtures"
+    / "wire-contracts"
+    / "export-unresolved-near-misses-409.json"
+)
 _MAIN_MODULE_PATH = Path(__file__).resolve().parent.parent / "src" / "ps_cli" / "__main__.py"
 
 
@@ -1095,6 +1105,34 @@ def test_run_export_instrument_writes_files_and_prints_summary_on_mocked_success
     assert str(baseline_path) in captured.out
     assert str(native_path) in captured.out
     assert str(manifest_path) in captured.out
+
+
+def test_run_export_instrument_409_prints_the_service_message_exits_1_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """PIN (characterisation): a refused export (HTTP 409) prints the message and exits 1.
+
+    Drives the real `PsServiceClient` over a transport that serves the shared wire-contract body
+    ps-service answers with, through parser, dispatch and `run()`; the destination stays empty.
+    """
+    contract = json.loads(_EXPORT_NEAR_MISSES_409_PATH.read_text())
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(409, json=contract)
+
+    client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+    exit_code = run(["export", "instrument", "CRA-1.0", str(tmp_path)], client=client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "export_unresolved_near_misses" in captured.err
+    assert "2 unresolved near-miss reviews" in captured.err
+    assert "review_1" in captured.err
+    assert "review_2" in captured.err
+    assert "Traceback" not in captured.err
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_run_export_instrument_defaults_destination_to_cwd(

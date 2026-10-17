@@ -20,7 +20,7 @@ from api._gateway_fakes import (
 )
 from litellm.types.utils import Embedding, EmbeddingResponse
 
-from export._gateway_fakes import ExportRig
+from export._gateway_fakes import ExportRig, ScriptedPolicyGraph
 from ps_service.api.errors import ExportStageFailedError, GraphWriteUnavailableError
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.graph_write_access import graph_write_access, install_graph_write_gateway
@@ -139,6 +139,7 @@ def _dependencies(
         export=export_instrument,
         call_embedding=call_embedding,
         graph_write_access=access,  # pyright: ignore[reportArgumentType]
+        open_single_tenant_graph=lambda _db: ScriptedPolicyGraph(),
     )
 
 

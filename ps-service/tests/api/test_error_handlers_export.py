@@ -19,6 +19,7 @@ from ps_service.api.errors import (
     ExportConfigIncompleteError,
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
+    ExportUnresolvedNearMissesError,
 )
 
 
@@ -83,3 +84,26 @@ def test_export_errors_never_leak_a_filesystem_path_or_host_port() -> None:
     response = client.get("/boom")
 
     assert "10.0.0.5:6379" not in response.text
+
+
+def test_export_unresolved_near_misses_error_maps_to_409_with_the_message_verbatim() -> None:
+    exc = ExportUnresolvedNearMissesError("CRA-1.0", ("review_b", "review_a"))
+    client = TestClient(_build_app_that_raises(exc), raise_server_exceptions=False)
+
+    response = client.get("/boom")
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"]["code"] == "export_unresolved_near_misses"
+    assert body["error"]["message"] == str(exc)
+    assert "review_a" in body["error"]["message"]
+    assert "review_b" in body["error"]["message"]
+
+
+def test_export_unresolved_near_misses_error_exposes_count_and_review_ids() -> None:
+    exc = ExportUnresolvedNearMissesError("CRA-1.0", ("review_a", "review_b"))
+
+    assert exc.count == 2
+    assert exc.review_ids == ("review_a", "review_b")
+    assert exc.instrument_id == "CRA-1.0"
+    assert "2 unresolved near-miss reviews" in str(exc)

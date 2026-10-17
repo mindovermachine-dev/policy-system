@@ -32,6 +32,7 @@ from ps_service.api.errors import (
     ExportConfigIncompleteError,
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
+    ExportUnresolvedNearMissesError,
     GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
     InternalIngestOwnerRequiredError,
@@ -125,6 +126,7 @@ _SAFE_VERBATIM: tuple[type[Exception], ...] = (
     PendingReviewNotFoundError,
     ExportInstrumentNotFoundError,
     ExportConfigIncompleteError,
+    ExportUnresolvedNearMissesError,
     CuratedSourceUnavailableError,
     MergeApprovalRequiresAuthenticatedCallerError,
     InternalIngestOwnerRequiredError,
@@ -341,6 +343,11 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
         status.HTTP_409_CONFLICT,
     ),
     (
+        ExportUnresolvedNearMissesError,
+        "export_unresolved_near_misses",
+        status.HTTP_409_CONFLICT,
+    ),
+    (
         RestoreInstrumentIdNotFoundError,
         "restore_instrument_id_not_found",
         status.HTTP_404_NOT_FOUND,
@@ -500,7 +507,8 @@ def register_exception_handlers(app: FastAPI) -> None:
       ``ExportInstrumentNotFoundError``, ``PendingApprovalNotFoundError``,
       ``PendingApprovalInvalidOrExpiredError``, ``RestoreInstrumentIdNotFoundError``.
     * 409: ``ShortNameCollisionError``, ``CelexAlreadyIngestedError``,
-      ``RestoreInstrumentIdAmbiguousError``.
+      ``RestoreInstrumentIdAmbiguousError``, ``ExportUnresolvedNearMissesError`` (the export
+      was refused because the instrument still has unresolved near-miss reviews).
     * 413: ``RequestBodyTooLargeError``.
     * 422: ``InternalSeedValidationError``, ``RestoreArtifactRejectedError``,
       ``RequestValidationError`` (generic message, no field detail).

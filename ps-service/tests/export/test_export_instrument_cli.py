@@ -32,8 +32,15 @@ from api._gateway_fakes import RecordingSystemAudit
 from graph_gateway._fakes import GatewayRig
 from litellm.types.utils import Embedding, EmbeddingResponse
 
-from export._gateway_fakes import ExportReadGraph, ExportRig
+from export._gateway_fakes import (
+    ExportReadGraph,
+    ExportRig,
+    ScriptedPolicyGraph,
+    pending_review,
+)
+from ps_service.api.errors import ExportUnresolvedNearMissesError
 from ps_service.audit.errors import AuditTrailUnavailableError
+from ps_service.company_merge.falkordb_client import single_tenant_graph_name
 from ps_service.config import ServiceConfig
 from ps_service.logging import facade
 
@@ -93,16 +100,30 @@ def cli_module() -> ModuleType:
 
 
 class _FakeFalkorDB:
-    """Records `select_graph` calls; each name is a read handle over that rig graph."""
+    """Records `select_graph` calls; each name is a read handle over that rig graph.
+
+    The single-tenant `policy_system` name answers with `policy_graph` when one is scripted;
+    otherwise that graph does not exist (`list_graphs` omits it) as on a fresh server.
+    """
 
     def __init__(self, *, rig: GatewayRig, host: str, port: int) -> None:
         self.host = host
         self.port = port
         self.selected: list[str] = []
+        self.policy_graph: ScriptedPolicyGraph | None = None
         self._rig = rig
 
-    def select_graph(self, name: str) -> ExportReadGraph:
+    def list_graphs(self) -> list[str]:
+        names = list(self._rig.graphs.graphs)
+        if self.policy_graph is not None:
+            names.append(single_tenant_graph_name())
+        return names
+
+    def select_graph(self, name: str) -> ExportReadGraph | ScriptedPolicyGraph:
         self.selected.append(name)
+        if name == single_tenant_graph_name():
+            assert self.policy_graph is not None, "policy_system must not be selected when absent"
+            return self.policy_graph
         return ExportReadGraph(self._rig.graphs.open(name))
 
 
@@ -383,6 +404,109 @@ def test_main_exits_non_zero_and_writes_nothing_when_the_audit_row_cannot_be_wri
     assert "audit" in capsys.readouterr().err.lower()
     assert caller.calls == []
     assert rig.rig.store.groups == []
+    assert not (tmp_path / "repo").exists()
+
+
+def _refusal_argv(tmp_path: Path) -> list[str]:
+    return [
+        *_BASE_ARGV,
+        "--repo-root",
+        str(tmp_path / "repo"),
+        "--packaged-copy-path",
+        str(tmp_path / "p.json"),
+    ]
+
+
+def test_main_refuses_with_exit_1_and_writes_nothing_while_near_misses_are_unresolved(
+    cli_module: ModuleType,
+    wiring: _Wiring,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Exit 1, count and review ids on stderr, no files, no audit row, no gateway."""
+    rig = wiring.rig
+    _seed_instrument(rig, "32024R2847", source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
+    wiring.fake_db.policy_graph = ScriptedPolicyGraph(
+        [
+            pending_review("review-b", incoming_id="cap1"),
+            pending_review("review-a", nearest_existing_id="cap1"),
+            pending_review("review-other", incoming_id="elsewhere"),
+        ]
+    )
+    caller = _FakeEmbeddingCaller()
+
+    exit_code = wiring.main(cli_module, _refusal_argv(tmp_path), call_embedding=caller)
+
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert err.strip() == str(
+        ExportUnresolvedNearMissesError("32024R2847", ("review-a", "review-b"))
+    )
+    assert "2 unresolved near-miss reviews" in err
+    assert caller.calls == []
+    assert wiring.gateway_configs == []
+    assert wiring.system_audit.rows == []
+    assert rig.rig.store.groups == []
+    assert not (tmp_path / "repo").exists()
+    assert not (tmp_path / "p.json").exists()
+
+
+def test_main_exports_when_policy_system_holds_only_other_instruments_reviews(
+    cli_module: ModuleType, wiring: _Wiring, tmp_path: Path
+) -> None:
+    """Reviews that touch no baseline Capability id do not block the export."""
+    rig = wiring.rig
+    _seed_instrument(rig, "32024R2847", source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
+    wiring.fake_db.policy_graph = ScriptedPolicyGraph(
+        [pending_review("review-other", incoming_id="elsewhere")]
+    )
+
+    exit_code = wiring.main(
+        cli_module, _refusal_argv(tmp_path), call_embedding=_FakeEmbeddingCaller()
+    )
+
+    assert exit_code == 0
+    assert (tmp_path / "repo" / "curated-content" / "catalog.json").exists()
+
+
+def test_main_skips_the_gate_and_creates_no_graph_when_policy_system_is_absent(
+    cli_module: ModuleType, wiring: _Wiring, tmp_path: Path
+) -> None:
+    """An absent `policy_system` holds no review and is never selected (that would create it)."""
+    _seed_instrument(wiring.rig, "32024R2847", source_type="external")
+    assert wiring.fake_db.policy_graph is None
+
+    exit_code = wiring.main(
+        cli_module, _refusal_argv(tmp_path), call_embedding=_FakeEmbeddingCaller()
+    )
+
+    assert exit_code == 0
+    assert single_tenant_graph_name() not in wiring.fake_db.selected
+
+
+def test_main_fails_closed_when_policy_system_cannot_be_read(
+    cli_module: ModuleType,
+    wiring: _Wiring,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A read failure exits 1 with a message and writes nothing."""
+    rig = wiring.rig
+    _seed_instrument(rig, "32024R2847", source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
+    wiring.fake_db.policy_graph = ScriptedPolicyGraph(fail_with=ConnectionError("boom"))
+    caller = _FakeEmbeddingCaller()
+
+    exit_code = wiring.main(cli_module, _refusal_argv(tmp_path), call_embedding=caller)
+
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert single_tenant_graph_name() in err
+    assert "boom" in err
+    assert caller.calls == []
+    assert wiring.system_audit.rows == []
     assert not (tmp_path / "repo").exists()
 
 

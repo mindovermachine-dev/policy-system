@@ -467,6 +467,9 @@ async def create_export(
         ExportInstrumentNotFoundError: The instrument id is malformed or names no ingested
             instrument (404).
         ExportConfigIncompleteError: The embedding model is not configured (503).
+        ExportUnresolvedNearMissesError: Unresolved near-miss reviews touch the instrument's
+            Capabilities (409); the message gives the count and the review ids, and nothing was
+            written.
         GraphWriteUnavailableError: The service has no Graph Write Gateway (503); nothing was opened
             or written.
         AuditTrailUnavailableError: The ``export.instrument`` audit row could not be written (503);

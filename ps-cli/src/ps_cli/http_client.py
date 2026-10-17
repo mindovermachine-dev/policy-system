@@ -683,7 +683,10 @@ class PsServiceClient:
                 non-2xx response (an unknown instrument id surfaces as
                 `export_instrument_not_found`, a pipeline failure as
                 `export_stage_failed` naming the failing stage, an incomplete LLM
-                Interface config as `export_config_incomplete`); a 200 body does
+                Interface config as `export_config_incomplete`, an instrument that
+                still has unresolved near-miss reviews as HTTP 409
+                `export_unresolved_near_misses` with the count and review ids in
+                the message); a 200 body does
                 not match the expected success shape; or the stored login cannot
                 be used to obtain a token (none stored, refresh rejected, IdP or
                 credential store unavailable).

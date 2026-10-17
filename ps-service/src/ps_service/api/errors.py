@@ -186,6 +186,44 @@ class ExportConfigIncompleteError(ApiError):
     """
 
 
+class ExportUnresolvedNearMissesError(ApiError):
+    """A `POST /exports` instrument still has unresolved near-miss reviews.
+
+    Raised by `api.export_orchestration.run_export` after the instrument is found and before the
+    `export.instrument` audit row is recorded, when at least one resolvable `PendingReview` in
+    `policy_system` names an id of a `Capability` in the instrument's `{short}_baseline` graph.
+    Review decisions live outside the exported graphs, so exporting now would publish Capabilities
+    that were never reviewed. The caller resolves the reviews (`near_misses_list`,
+    `near_misses_resolve`) and exports again. Handled as HTTP 409; `str(exc)` is the full message,
+    safe to surface verbatim, and is the one text the maintainer script also prints.
+
+    Attributes:
+        instrument_id: The instrument whose export was refused.
+        review_ids: Ids of the blocking reviews, in the order given.
+    """
+
+    def __init__(self, instrument_id: str, review_ids: tuple[str, ...]) -> None:
+        """Build the message from the instrument id, the count and the review ids.
+
+        Args:
+            instrument_id: The instrument whose export was refused.
+            review_ids: Ids of the blocking reviews; at least one.
+        """
+        self.instrument_id = instrument_id
+        self.review_ids = review_ids
+        noun, verb = ("review", "involves") if len(review_ids) == 1 else ("reviews", "involve")
+        super().__init__(
+            f"cannot export {instrument_id!r}: {len(review_ids)} unresolved near-miss {noun} "
+            f"{verb} its Capabilities ({', '.join(review_ids)}). "
+            "Resolve them (near_misses_list, near_misses_resolve) and export again."
+        )
+
+    @property
+    def count(self) -> int:
+        """The number of blocking reviews."""
+        return len(self.review_ids)
+
+
 class ExportStageFailedError(ApiError):
     """An export stage raised; the export did not complete.
 

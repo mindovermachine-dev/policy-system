@@ -33,6 +33,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WIRE_CONTRACTS_DIR = _REPO_ROOT / "ps-service" / "tests" / "fixtures" / "wire-contracts"
 _ENVELOPE_CONTRACT_PATH = _WIRE_CONTRACTS_DIR / "ingest-internal-envelope.json"
 _ENVELOPE_CONTRACT: dict[str, object] = json.loads(_ENVELOPE_CONTRACT_PATH.read_text())
+# The 409 body ps-service answers `POST /exports` with while the instrument has unresolved
+# near-miss reviews; ps-service's own route test asserts its response equals this file.
+_EXPORT_NEAR_MISSES_409_PATH = _WIRE_CONTRACTS_DIR / "export-unresolved-near-misses-409.json"
+_EXPORT_NEAR_MISSES_409: dict[str, object] = json.loads(_EXPORT_NEAR_MISSES_409_PATH.read_text())
 
 
 class TestShouldWarnInsecure:
@@ -328,6 +332,27 @@ class TestExportInstrument:
 
         assert "export_instrument_not_found" in excinfo.value.msg
         assert "MISSING-1.0" in excinfo.value.msg
+
+    def test_409_export_unresolved_near_misses_surfaces_code_count_and_review_ids(self) -> None:
+        """PIN (characterisation): the service's 409 body, read from the shared wire contract.
+
+        The generic `_raise_from_error_body` already carries the code and the service's message
+        (the count and every review id) into the raised error, so no client change is needed.
+        """
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(409, json=_EXPORT_NEAR_MISSES_409)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.export_instrument("CRA-1.0")
+
+        assert "export_unresolved_near_misses" in excinfo.value.msg
+        assert "2 unresolved near-miss reviews" in excinfo.value.msg
+        assert "review_1" in excinfo.value.msg
+        assert "review_2" in excinfo.value.msg
 
     def test_502_export_stage_failed_surfaces_failing_stage(self) -> None:
         """A 502 export_stage_failed body's failing_stage surfaces in the raised error."""

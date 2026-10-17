@@ -16,7 +16,9 @@ builds its own gateway from the service configuration, so the PS state Postgres
 `--port` apply to the gateway's FalkorDB as well, so reads and writes hit the same
 server. One `export.instrument` system audit row is recorded first and the backfill is
 anchored to it; if the row cannot be written, nothing is embedded or written
-(fail-closed).
+(fail-closed). Before that, the script refuses (exit 1, nothing written) while an unresolved
+Company Merge near-miss review in `policy_system` touches one of the instrument's Capabilities:
+the review decisions live outside the exported graphs and would be lost from the artifact.
 
 Unlike the other scripts in `tools/`, this one always needs a configured LLM Provider:
 the embedding backfill is the only step that calls out to one. Example:
@@ -35,7 +37,10 @@ Requires:
 
 Exit codes:
     0   The export succeeded; the written paths are printed.
-    1   No embedding model is configured, FalkorDB is unreachable, the audit trail is
+    1   No embedding model is configured, FalkorDB is unreachable, the instrument still
+        has unresolved near-miss reviews (resolve them with near_misses_list and
+        near_misses_resolve first; the count and review ids go to stderr and nothing is
+        written) or `policy_system` cannot be read for that check, the audit trail is
         unavailable, the embedding backfill could not be written, the LLM provider
         failed, or the source graphs are not exportable. A message goes to stderr.
 """
@@ -51,17 +56,20 @@ from typing import TYPE_CHECKING, cast
 
 from falkordb import FalkorDB
 
+from ps_service.api.errors import ExportUnresolvedNearMissesError
 from ps_service.api.export_audit_actions import (
     EXPORT_INSTRUMENT_ACTION,
     EXPORT_INSTRUMENT_RESOURCE_TYPE,
     ExportInstrumentDetails,
 )
 from ps_service.audit.errors import AuditTrailUnavailableError
+from ps_service.company_merge.falkordb_client import select_graph, single_tenant_graph_name
 from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.export.errors import ExportGraphWriteError, ExportSourceGraphError
 from ps_service.export.export_instrument import InstrumentDescriptor, export_instrument
 from ps_service.export.falkordb_connection import graph_query_handle
+from ps_service.export.near_miss_gate import unresolved_near_miss_review_ids
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.ingestion.falkordb_client import native_graph_name
@@ -178,8 +186,10 @@ def main(
 
     Returns:
         Process exit code: `0` on success; `1` when no embedding model is configured,
-        FalkorDB is unreachable, the audit row cannot be recorded, the backfill cannot
-        be written, the LLM provider fails, or the source graphs are not exportable.
+        FalkorDB is unreachable, unresolved near-miss reviews touch the instrument (or
+        `policy_system` cannot be read to check), the audit row cannot be recorded, the
+        backfill cannot be written, the LLM provider fails, or the source graphs are not
+        exportable.
 
     Raises:
         SystemExit: Raised by argparse on invalid arguments or `--help`.
@@ -231,6 +241,30 @@ def main(
         print(
             f"FalkorDB connection failed at {args.host}:{args.port}. "
             f"Is FalkorDB running? Error: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Same precondition as POST /exports: unresolved near-miss reviews live in `policy_system`,
+    # which export never serializes, so their decisions would be lost from the artifact.
+    # Runs before any audit row, gateway or file so a refusal writes nothing.
+    policy_name = single_tenant_graph_name()
+    try:
+        # `policy_system` may not exist yet (no ingestion has run): then no review can exist,
+        # and selecting it would create an empty graph, so only select it when it is listed.
+        blocking_review_ids = (
+            unresolved_near_miss_review_ids(
+                graph_query_handle(db, baseline_name), select_graph(db, policy_name)
+            )
+            if policy_name in db.list_graphs()
+            else ()
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail closed on any read failure: print and exit non-zero
+        print(f"Could not read unresolved near misses from '{policy_name}': {exc}", file=sys.stderr)
+        return 1
+    if blocking_review_ids:
+        print(
+            ExportUnresolvedNearMissesError(descriptor.instrument_id, blocking_review_ids),
             file=sys.stderr,
         )
         return 1

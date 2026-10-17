@@ -24,7 +24,10 @@ for how the `restore_instrument` tool (the `ps-restore-instrument` skill) loads 
 deployment. The export CLI needs more than FalkorDB and an LLM provider: it writes the
 embedding backfill through the Graph Write Gateway, so the PS state Postgres (the graph
 mutation log and the audit trail) must be configured and reachable, and each run records one
-system audit row before any embedding is computed. `catalog.json` is always regenerated wholesale by that same tooling —
+system audit row before any embedding is computed. Resolve every near-miss review of the instrument first (`near_misses_list`,
+`near_misses_resolve`): the export refuses (exit 1, nothing written) while an unresolved
+review touches one of its Capabilities, because review decisions live in `policy_system`,
+outside the exported graphs. `catalog.json` is always regenerated wholesale by that same tooling —
 never hand-edited.
 
 **Licensing:** see [`LICENSING.md`](./LICENSING.md) for the one-time confirmation that
