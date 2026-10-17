@@ -24,6 +24,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "ps-upgrade.sh"
 PROD_VALUES = REPO_ROOT / "charts" / "policy-system" / "values-prod.yaml"
+CHART_VERSION_LIB = REPO_ROOT / "scripts" / "lib" / "chart-version.sh"
 
 SUBPROCESS_TIMEOUT_SECONDS = 30.0
 
@@ -52,13 +53,16 @@ def _write_executable(path: Path, body: str) -> None:
 
 
 def _run_upgrade(
-    tmp_path: Path, *, context: str, release_values: str
+    tmp_path: Path, *, context: str, release_values: str, bundle_version: str | None = None
 ) -> tuple[int, list[str], str]:
     tree = tmp_path / "tree"
-    (tree / "scripts").mkdir(parents=True)
+    (tree / "scripts" / "lib").mkdir(parents=True)
     (tree / "ps-cli").mkdir()
     (tree / "charts" / "policy-system").mkdir(parents=True)
     shutil.copy(SCRIPT, tree / "scripts" / "ps-upgrade.sh")
+    shutil.copy(CHART_VERSION_LIB, tree / "scripts" / "lib" / "chart-version.sh")
+    if bundle_version is not None:
+        (tree / "VERSION").write_text(f"{bundle_version}\n")
     shutil.copy(PROD_VALUES, tree / "charts" / "policy-system" / "values-prod.yaml")
     _write_executable(tree / "ps-cli" / "install.sh", "#!/usr/bin/env bash\nexit 0\n")
 
@@ -122,3 +126,23 @@ def test_production_upgrade_refuses_a_release_without_auth_values(tmp_path: Path
     assert code == 1
     assert "psService.auth.issuer" in stderr
     assert not any(call.startswith("upgrade ") for call in calls)
+
+
+@pytest.mark.parametrize("context", ["kind-policy-system", "aks-prod"])
+def test_bundle_upgrade_installs_the_chart_of_the_bundle_release(
+    tmp_path: Path, context: str
+) -> None:
+    code, calls, stderr = _run_upgrade(
+        tmp_path, context=context, release_values=RELEASE_VALUES, bundle_version="9.9.9"
+    )
+
+    assert code == 0, stderr
+    assert "--version 9.9.9" in _upgrade_call(calls)
+
+
+@pytest.mark.parametrize("context", ["kind-policy-system", "aks-prod"])
+def test_clone_upgrade_does_not_pin_a_chart_version(tmp_path: Path, context: str) -> None:
+    code, calls, stderr = _run_upgrade(tmp_path, context=context, release_values=RELEASE_VALUES)
+
+    assert code == 0, stderr
+    assert "--version" not in _upgrade_call(calls)

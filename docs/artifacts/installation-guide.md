@@ -6,7 +6,7 @@
   - [Prerequisites](#prerequisites)
   - [1. Install Claude Desktop](#1-install-claude-desktop)
   - [2. Install Podman and start its machine](#2-install-podman-and-start-its-machine)
-  - [3. Clone the repo](#3-clone-the-repo)
+  - [3. Download the deploy bundle](#3-download-the-deploy-bundle)
   - [4. Create the local cluster](#4-create-the-local-cluster)
   - [5. Provision the Azure LLM backend](#5-provision-the-azure-llm-backend)
   - [6. Install ps-cli](#6-install-ps-cli)
@@ -16,6 +16,7 @@
   - [What is exposed (evaluator)](#what-is-exposed-evaluator)
 - [Production installation](#production-installation)
   - [Prerequisites (Production)](#prerequisites-production)
+  - [Download the deploy bundle (Production)](#download-the-deploy-bundle-production)
   - [1. Sign in to Azure](#1-sign-in-to-azure)
   - [2. Review scripts/ps-defaults.conf](#2-review-scriptsps-defaultsconf)
   - [3. Run scripts/deploy-ps-prod.sh](#3-run-scriptsdeploy-ps-prodsh)
@@ -69,7 +70,6 @@ Install these tools before you start:
 | Tool                                                                 | Why                                         |
 | --------------------------------------------------------------------- | -------------------------------------------- |
 | [Claude Desktop](https://claude.com/download)                        | Hosts the Policy System Plugin              |
-| [git](https://git-scm.com/downloads)                                 | Clones this repo                            |
 | [Podman](https://podman.io/docs/installation)                        | Container runtime for the local cluster     |
 | [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman         |
 | [kubectl](https://kubernetes.io/docs/tasks/tools/)                   | Talks to the cluster                        |
@@ -114,24 +114,30 @@ podman info
 > **Why 4 CPUs and 8 GB:** kind under Podman needs enough headroom to run a control plane and
 > both Policy System containers. 4 CPUs and 8 GB is the tested minimum.
 
-### 3. Clone the repo
+### 3. Download the deploy bundle
 
-Go to the folder where you want the repo.
+The bundle holds the few files that steps 4 to 7 run: the kind cluster config and the
+deploy scripts. (The production path uses the same bundle.) You do not need git or a clone of the repo. Each release attaches the bundle,
+and it installs the chart of the same release, so the scripts and the chart always match.
 
-Clone the repo:
-
-```bash
-git clone https://github.com/mindovermachine-dev/policy-system
-```
-
-Go to the repo root folder:
+Go to the folder where you want the bundle. Download and unpack it:
 
 ```bash
-cd policy-system
+curl -fsSL https://github.com/mindovermachine-dev/policy-system/releases/latest/download/ps-deploy-bundle.tgz | tar xz
 ```
 
-Run all the remaining steps from this folder. They use repo-relative paths, such as
-`deploy/kind/cluster.yaml` and `./charts/policy-system`.
+Go to the bundle folder:
+
+```bash
+cd policy-system-deploy
+```
+
+Run all the remaining steps from this folder. They use relative paths, such as
+`deploy/kind/cluster.yaml`.
+
+> **Prefer a clone?** `git clone https://github.com/mindovermachine-dev/policy-system` and
+> `cd policy-system` also work. Every step is the same. A clone installs the newest published
+> chart instead of the chart of one release.
 
 ### 4. Create the local cluster
 
@@ -277,7 +283,7 @@ not crash.
 
 One script does the whole deployment. Before you run it, make sure that:
 
-- You are in the repo root folder.
+- You are in the bundle folder from step 3 (or the repo root folder, if you cloned).
 - Your kubectl context is the kind cluster. The script refuses to run against any other
   context than `kind-*`.
 - The LLM Secret from step 5 exists.
@@ -347,7 +353,8 @@ curated content](./user-guide.md#load-curated-content).
 
 To upgrade to a newer release later, see the [Operations
 Guide](./operations-guide.md#updating-to-the-latest-version). Your graph data stays across
-upgrades.
+upgrades. Download the bundle again before you re-run `scripts/deploy-ps-eval.sh` after an
+upgrade, because an old bundle installs the chart of its own release.
 
 #### Recover the owner
 
@@ -640,6 +647,32 @@ Install these tools before you start:
 
 Your signed-in identity needs the `Owner` or `Contributor` role at subscription scope. The
 script checks this before it changes anything.
+
+### Download the deploy bundle (Production)
+
+The bundle holds the files `deploy-ps-prod.sh` needs: the script, `scripts/ps-defaults.conf` and
+the production Helm values. You do not need git or a clone of the repo. Each release attaches
+the bundle, and it installs the chart of the same release, so the script and the chart always
+match.
+
+Go to the folder where you want the bundle. Download and unpack it:
+
+```bash
+curl -fsSL https://github.com/mindovermachine-dev/policy-system/releases/latest/download/ps-deploy-bundle.tgz | tar xz
+```
+
+Go to the bundle folder:
+
+```bash
+cd policy-system-deploy
+```
+
+Run the remaining production steps from this folder. They use relative paths, such as
+`scripts/ps-defaults.conf`. To upgrade later, download the bundle again.
+
+> **Prefer a clone?** `git clone https://github.com/mindovermachine-dev/policy-system` and
+> `cd policy-system` also work. A clone installs the newest published chart instead of the
+> chart of one release.
 
 ### 1. Sign in to Azure
 
@@ -1096,7 +1129,8 @@ even when `/etc/hosts` maps the name. The default is now `authentik.test`, and
 `deploy-ps-eval.sh` rejects any `--hostname` that ends in `.local`. The hostname is also the
 issuer and the WebAuthn relying-party ID, so moving an install changes all three. The steps:
 
-1. Pull the release that contains this change.
+1. Download the bundle of the release that contains this change (step 3), or pull it if you
+   cloned the repo.
 2. Run `scripts/deploy-ps-eval.sh --owner-email <same email>`. Before it touches the cluster, it
    prints what this machine still needs and the reset command in step 5. Read it first.
 3. Edit the hosts file: remove the `<old-name>.local` lines and add `127.0.0.1 authentik.test` and

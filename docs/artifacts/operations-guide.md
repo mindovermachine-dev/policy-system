@@ -44,6 +44,14 @@ diagnosing an issue. For first-time deployment, see the [Installation
 Guide](./installation-guide.md). For day-to-day usage (`ps-cli`, Claude Desktop), see
 the [User Guide](./user-guide.md).
 
+Run the `scripts/` commands in this guide from the folder you unpacked the deploy bundle into
+(see [Installation Guide: Download the deploy bundle](./installation-guide.md#3-download-the-deploy-bundle)),
+or from the repo root if you cloned it. Download the bundle again before an upgrade: the scripts
+in it install the chart of their own release. The bundle holds `ps-upgrade.sh`,
+`ps-reset-data.sh`, `grant-access-role.sh` and `ps-aks.sh`. It does not hold
+`verify-backup-restore.sh` (its `counts` and `compare` steps import PS Service code) or
+`ps-service.sh` (developers only); both need a clone.
+
 ---
 
 ## Evaluator (local-test) operations

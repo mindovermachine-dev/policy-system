@@ -45,6 +45,7 @@ else
   readonly COLOR_RESET=""
 fi
 
+chart_version_args=()
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/deploy-llm-common.sh
 source "${SCRIPT_DIR}/lib/deploy-llm-common.sh"
@@ -52,6 +53,8 @@ source "${SCRIPT_DIR}/lib/deploy-llm-common.sh"
 # issues the passkey-enrolment link.
 # shellcheck source=lib/authentik-owner.sh
 source "${SCRIPT_DIR}/lib/authentik-owner.sh"
+# shellcheck source=lib/chart-version.sh
+source "${SCRIPT_DIR}/lib/chart-version.sh"
 
 readonly EXIT_USAGE=2
 readonly EXIT_FAILURE=1
@@ -1116,6 +1119,7 @@ ensure_release() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4"
   local owner_subject="$5" owner_issuer="$6" authentik_base_url="$7" authentik_public_url="$8"
   local desired_json
+  set_chart_version_args "$SCRIPT_DIR" "$CHART_REF"
   desired_json="$(release_values_json "$issuer" "$audience" "$cli_client_id" "$scopes" \
     "$owner_subject" "$owner_issuer" "$authentik_base_url" "$authentik_public_url")"
   if helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1; then
@@ -1134,7 +1138,8 @@ ensure_release() {
       return 0
     fi
   fi
-  helm upgrade --install "$HELM_RELEASE_NAME" "$CHART_REF" -f "$VALUES_PROD_FILE" \
+  helm upgrade --install "$HELM_RELEASE_NAME" "$CHART_REF" \
+    ${chart_version_args[@]+"${chart_version_args[@]}"} -f "$VALUES_PROD_FILE" \
     --set llm.existingSecret="$LLM_SECRET_NAME" \
     --set psService.auth.issuer="$issuer" \
     --set psService.auth.audience="$audience" \

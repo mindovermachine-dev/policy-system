@@ -39,7 +39,18 @@ esac
 
 command -v jq >/dev/null || { printf 'jq is required.\n' >&2; exit 1; }
 
-client=(uv run --quiet --project "${REPO_ROOT}/ps-cli" python -I "${SCRIPT_DIR}/grant_access_role_client.py")
+# From a clone, run the client in the ps-cli project. From the deploy bundle there is no ps-cli
+# project; the client then runs in the Python of the installed `ps-cli` uv tool, which has ps_cli.
+if [[ -f "${REPO_ROOT}/ps-cli/pyproject.toml" ]]; then
+  client=(uv run --quiet --project "${REPO_ROOT}/ps-cli" python -I "${SCRIPT_DIR}/grant_access_role_client.py")
+else
+  tool_python="$(uv tool dir)/ps-cli/bin/python"
+  if [[ ! -x "${tool_python}" ]]; then
+    printf "ps-cli is not installed as a uv tool (see the installation guide's ps-cli step).\n" >&2
+    exit 1
+  fi
+  client=("${tool_python}" -I "${SCRIPT_DIR}/grant_access_role_client.py")
+fi
 if ! reply="$("${client[@]}" --principal "${principal}" --role "${role}")"; then
   exit 1 # the client already wrote the reason to stderr
 fi

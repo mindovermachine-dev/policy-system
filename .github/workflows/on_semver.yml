@@ -242,8 +242,13 @@ jobs:
       - name: Generate SHA256SUMS
         run: sha256sum dist/ps_cli-*.whl > SHA256SUMS
 
-      - name: Upload the wheel and SHA256SUMS to the release
+      - name: Build the deploy bundle
+        env:
+          IMAGE_TAG: ${{ needs.verify-tag-on-main.outputs.image-tag }}
+        run: scripts/release/build-deploy-bundle.sh "$IMAGE_TAG" dist
+
+      - name: Upload the wheel, SHA256SUMS and deploy bundle to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.verify-tag-on-main.outputs.git-tag }}
-        run: gh release upload "$RELEASE_TAG" dist/ps_cli-*.whl SHA256SUMS
+        run: gh release upload "$RELEASE_TAG" dist/ps_cli-*.whl SHA256SUMS dist/ps-deploy-bundle.tgz

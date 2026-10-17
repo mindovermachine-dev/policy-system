@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -270,3 +272,63 @@ def test_help_prints_usage_and_exits_zero(ps_service: Running, tmp_path: Path) -
     assert "--principal" in result.stdout
     assert "GRANT_ACCESS_ROLE_TOKEN" in result.stdout
     assert ps_service.service.requests == []
+
+
+def _bundle_tree(tmp_path: Path, *, with_tool: bool) -> tuple[Path, dict[str, str]]:
+    """The deploy-bundle layout (no `ps-cli/` project) plus a fake `uv` that names a tool dir."""
+    tree = tmp_path / "bundle"
+    (tree / "scripts").mkdir(parents=True)
+    for name in ("grant-access-role.sh", "grant_access_role_client.py"):
+        shutil.copy(REPO_ROOT / "scripts" / name, tree / "scripts" / name)
+    tool_dir = tmp_path / "uv-tools"
+    if with_tool:
+        (tool_dir / "ps-cli" / "bin").mkdir(parents=True)
+        tool_python = tool_dir / "ps-cli" / "bin" / "python"
+        tool_python.write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n')
+        tool_python.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_uv = bin_dir / "uv"
+    fake_uv.write_text(f'#!/usr/bin/env bash\n[[ "$*" == "tool dir" ]] && echo "{tool_dir}"\n')
+    fake_uv.chmod(0o755)
+    return tree, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def test_bundle_layout_runs_the_client_in_the_installed_ps_cli_tool(
+    ps_service: Running, tmp_path: Path
+) -> None:
+    tree, env = _bundle_tree(tmp_path, with_tool=True)
+
+    result = subprocess.run(  # noqa: S603
+        ["bash", str(tree / "scripts" / "grant-access-role.sh")],  # noqa: S607
+        env={
+            **os.environ,
+            **env,
+            "PS_CLI_SERVICE_URL": ps_service.url,
+            "PS_CLI_CONFIG_DIR": str(tmp_path),
+            "GRANT_ACCESS_ROLE_TOKEN": TOKEN,
+        },
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("Granted ComplianceOfficer to ")
+
+
+def test_bundle_layout_without_the_ps_cli_tool_fails_with_a_hint(tmp_path: Path) -> None:
+    tree, env = _bundle_tree(tmp_path, with_tool=False)
+
+    result = subprocess.run(  # noqa: S603
+        ["bash", str(tree / "scripts" / "grant-access-role.sh")],  # noqa: S607
+        env={**os.environ, **env},
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "not installed as a uv tool" in result.stderr

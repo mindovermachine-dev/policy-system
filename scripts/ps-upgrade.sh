@@ -35,6 +35,10 @@ log_step() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=lib/chart-version.sh
+# shellcheck source-path=SCRIPTDIR
+source "${SCRIPT_DIR}/lib/chart-version.sh"
+chart_version_args=()
 
 readonly EXIT_FAILURE=1
 readonly RELEASE_NAME="policy-system"
@@ -74,7 +78,9 @@ require_release_auth_issuer() {
 
 upgrade_local_test() {
   log_step "Upgrading Policy System (Evaluator/local-test)"
+  set_chart_version_args "$SCRIPT_DIR" "$CHART_REF"
   helm upgrade --install "$RELEASE_NAME" "$CHART_REF" \
+    ${chart_version_args[@]+"${chart_version_args[@]}"} \
     --reset-then-reuse-values \
     --set llm.existingSecret="$LLM_SECRET" --wait --wait-for-jobs
 }
@@ -84,7 +90,9 @@ upgrade_production() {
   require_release_auth_issuer
 
   log_step "Upgrading Policy System (Production)"
+  set_chart_version_args "$SCRIPT_DIR" "$CHART_REF"
   helm upgrade --install "$RELEASE_NAME" "$CHART_REF" \
+    ${chart_version_args[@]+"${chart_version_args[@]}"} \
     -f "$PROD_VALUES_FILE" \
     --reset-then-reuse-values \
     --set llm.existingSecret="$LLM_SECRET" \

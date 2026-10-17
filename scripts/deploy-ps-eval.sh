@@ -56,6 +56,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/authentik-owner.sh"
 # shellcheck source=lib/local-tls.sh
 source "${SCRIPT_DIR}/lib/local-tls.sh"
+# shellcheck source=lib/chart-version.sh
+source "${SCRIPT_DIR}/lib/chart-version.sh"
 
 readonly EXIT_USAGE=2
 readonly EXIT_FAILURE=1
@@ -87,6 +89,7 @@ SKIP_OWNER_PROMPT=false
 AUTHENTIK_API_BASE=""
 AUTHENTIK_LINK_BASE=""
 AUTHENTIK_CURL_ARGS=()
+chart_version_args=()
 hostname_arg="$DEFAULT_HOSTNAME"
 kind_context=""
 namespace="default"
@@ -286,6 +289,7 @@ release_values_json() {
 ensure_release() {
   local desired_json="$1" chart_ref="${PS_CHART_REF:-$DEFAULT_CHART_REF}"
   local values_file current_json
+  set_chart_version_args "$SCRIPT_DIR" "$chart_ref"
   if helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1; then
     current_json="$(helm get values "$HELM_RELEASE_NAME" -o json)"
     if [[ "$(jq -S . <<<"$current_json")" == "$(jq -S . <<<"$desired_json")" ]]; then
@@ -295,7 +299,8 @@ ensure_release() {
   fi
   values_file="$(local_tls_state_dir)/release-values.json"
   printf '%s\n' "$desired_json" >"$values_file"
-  helm upgrade --install "$HELM_RELEASE_NAME" "$chart_ref" -f "$values_file" >/dev/null
+  helm upgrade --install "$HELM_RELEASE_NAME" "$chart_ref" ${chart_version_args[@]+"${chart_version_args[@]}"} \
+    -f "$values_file" >/dev/null
   made_release_change=true
 }
 

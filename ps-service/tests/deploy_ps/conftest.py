@@ -204,6 +204,7 @@ DEPLOY_PS_RELATIVE_FILES = (
     Path("scripts/ps-defaults.conf"),
     Path("scripts/lib/deploy-llm-common.sh"),
     Path("scripts/lib/authentik-owner.sh"),
+    Path("scripts/lib/chart-version.sh"),
 )
 
 # Fake `az`. Dispatches on "$1 $2", same shape as

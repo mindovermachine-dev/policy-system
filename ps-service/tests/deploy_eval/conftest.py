@@ -33,6 +33,7 @@ NODE_IP = "10.89.0.7"
 COPIED_FILES = (
     Path("scripts/deploy-ps-eval.sh"),
     Path("scripts/lib/authentik-owner.sh"),
+    Path("scripts/lib/chart-version.sh"),
     Path("scripts/lib/local-tls.sh"),
 )
 
