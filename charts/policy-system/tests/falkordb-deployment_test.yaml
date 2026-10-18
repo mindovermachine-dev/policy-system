@@ -6,11 +6,11 @@ tests:
     asserts:
       - isKind:
           of: Deployment
-  - it: uses the falkordb/falkordb:latest image
+  - it: uses the pinned falkordb/falkordb:v4.22.1 image
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: falkordb/falkordb:latest
+          value: falkordb/falkordb:v4.22.1
   - it: runs exactly one replica
     asserts:
       - equal:

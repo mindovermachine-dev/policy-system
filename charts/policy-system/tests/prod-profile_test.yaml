@@ -13,6 +13,7 @@ set:
   psService.authzBootstrapOwner.subject: first-owner-subject
   psService.authzBootstrapOwner.issuer: https://example-issuer.test
 templates:
+  - falkordb-deployment.yaml
   - falkordb-browser-service.yaml
   - ps-service-service.yaml
   - secret.yaml
@@ -22,6 +23,12 @@ templates:
   - charts/authentik/templates/worker/deployment.yaml
   - charts/authentik/templates/secret.yaml
 tests:
+  - it: falkordb deployment uses the pinned image from values.yaml under prod values
+    template: falkordb-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: falkordb/falkordb:v4.22.1
   - it: falkordb browser service does not render under prod values
     template: falkordb-browser-service.yaml
     asserts:

@@ -53,7 +53,7 @@ When `psService.localTestBypass.enabled=false` (the chart's default) and either 
 | `falkordb.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Never hardcoded to kind's default StorageClass name (both profiles) — override explicitly for a real cluster if needed. |
 | `falkordb.browser.enabled` | `true` (`false` in prod) | **** FalkorDB Browser UI Service. On by default for local-test convenience, off in prod. |
 | `falkordb.browser.nodePort` | `30300` | Fixed NodePort behind host port `3001` (via `extraPortMappings`). Only applies when `falkordb.browser.enabled=true`. |
-| `falkordb.image.repository` / `falkordb.image.tag` | `falkordb/falkordb` / `latest` | FalkorDB image. |
+| `falkordb.image.repository` / `falkordb.image.tag` | `falkordb/falkordb` / `v4.22.1` | FalkorDB image. |
 
 Immediately after installing, `falkordb.persistence.enabled` (on by default; the
 volume only avoids a replay of the graph log when the pod restarts) and the `llm.*` keys (which provider, and how its credentials

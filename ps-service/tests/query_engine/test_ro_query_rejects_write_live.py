@@ -1,6 +1,6 @@
 r"""Live: FalkorDB itself rejects a write that evades the textual guard.
 
-Observed behaviour (image `falkordb/falkordb:latest`, digest 23c7a71f7c72):
+Observed behaviour (image `falkordb/falkordb:v4.22.1`, observed 2026-10-18):
 
 - The chosen write is `CALL db.idx.fulltext.createNodeIndex('Spike','name')`. The Query Engine's
   textual guard (`\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|FOREACH)\b`) lets it through, because

@@ -7,7 +7,8 @@ fullnameOverride: ""
 falkordb:
   image:
     repository: falkordb/falkordb
-    tag: latest
+    # Pinned tag; the bump procedure is in CONTRIBUTING.md.
+    tag: v4.22.1
   persistence:
     enabled: true
     storageClassName: ""

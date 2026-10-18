@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+from graph_gateway.falkordb_image import falkordb_image_ref
 
 from ps_test_support.required_startup_env import REQUIRED_STARTUP_ENV
 
@@ -284,7 +285,7 @@ def test_runtime_image_contains_no_test_modules_or_fixtures(
 # gate instead asserts `/ready` answers 503 `not_ready` for the exactly-known reason, and
 # proves FalkorDB specifically healthy -- which is the half of readiness this image controls.
 
-_FALKORDB_IMAGE = "falkordb/falkordb:latest"
+_FALKORDB_IMAGE = falkordb_image_ref()
 _SERVICE_CONTAINER_PORT = 8000
 
 # `logging/facade.py`'s `_DEFAULT_LOG_FILENAME` under the Dockerfile's `PS_LOGGING_DIR`. The
@@ -619,7 +620,7 @@ def smoke_network(container_cli: str) -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def falkordb_hostname(container_cli: str, smoke_network: str) -> Iterator[str]:
-    """Run `falkordb/falkordb:latest` on the smoke network and return its resolvable hostname."""
+    """Run the chart-pinned FalkorDB image on the smoke network; return its resolvable hostname."""
     name = _unique("ps-smoke-falkordb")
     result = _run_container_cli(
         container_cli,

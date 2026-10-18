@@ -34,7 +34,7 @@ services:
       - PS_PASSKEYSIGNING_POSTGRES_PASSWORD=ps_signing_dev_password
 
   falkordb:
-    image: falkordb/falkordb:latest
+    image: falkordb/falkordb:v4.22.1
     # Deliberately its own network namespace. `network_mode: service:app` made
     # this container a podman-level dependent of the dev container, and VS Code's
     # "Rebuild Container" removes the dev container with a bare `podman rm -f`,

@@ -66,11 +66,32 @@ The devcontainer (`.devcontainer/`) is a Docker Compose setup with two
 services:
 
 - `app` — the dev/backend container VS Code attaches to.
-- `falkordb` — the community-maintained `falkordb/falkordb:latest` image,
+- `falkordb` — the community-maintained `falkordb/falkordb:v4.22.1` image
+  (pinned in `charts/policy-system/values.yaml` as `falkordb.image.tag`),
   started automatically alongside `app`.
 
 Reopen the repo in the container (VS Code: "Reopen in Container") and both
 services start together.
+
+### Bumping the FalkorDB image
+
+Never use `latest`; tags are `vMAJOR.MINOR.PATCH`. To move to a new tag:
+
+1. Change `falkordb.image.tag` in `charts/policy-system/values.yaml`. It is the
+   only source the chart and the Python tests read.
+2. Update the literals the guard test reports: the compose file, the line above,
+   the two tool usage lines under `tools/graph-ingestion/`, the
+   `falkordb.image.tag` row in `docs/artifacts/helm-chart-values-reference.md`,
+   and the image tag and observation date in the docstring of
+   `ps-service/tests/query_engine/test_ro_query_rejects_write_live.py`.
+3. Start a throwaway container of the new tag and run the live read-only test:
+   `PS_TEST_FALKORDB_PORT=<port> uv run pytest ps-service/tests/query_engine/test_ro_query_rejects_write_live.py -m falkordb_live -p no:xdist -o addopts=""`.
+4. Run the smoke tests:
+   `uv run pytest ps-service/tests/test_container_image.py -m container_image -p no:xdist -o addopts=""`.
+5. Run `helm unittest charts/policy-system` and
+   `uv run pytest ps-service/tests/test_falkordb_image_pin.py`.
+6. Record the new tag and the evidence from steps 3 to 5 on the GitHub issue for the
+   bump (or in the wrapup commit message).
 
 `devx-cafe/gh-tt` must be installed as part of the devcontainer setup. Once the devcontainer is up you must run the following:
 
