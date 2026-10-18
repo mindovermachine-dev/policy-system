@@ -64,6 +64,13 @@ _REGULATORY_INSTRUMENT = Node(
             _OPTIONAL,
             "Needed for external sources; for national_transposition an ISO 3166-1 alpha-2 code.",
         ),
+        Property(
+            "celex",
+            _STRING,
+            _OPTIONAL,
+            "Base-act CELEX identifier (e.g. 32016R0679); absent for internal instruments "
+            "or when unknown. The change monitor uses it to poll CELLAR for amendments.",
+        ),
         Property("effective_date", DateType(), _REQUIRED),
         Property("version", _STRING, _REQUIRED),
         Property("status", EnumType(("active", "superseded", "vacated")), _REQUIRED),

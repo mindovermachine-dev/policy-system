@@ -246,6 +246,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 | `source_type` | enum: `external` \| `internal` | Yes | `external` = EU legislation, international standard, or national law. `internal` = organizationally-authored Business Regulation (e.g. Engineering Practices standard). |
 | `instrument_type` | enum: `regulation` \| `directive` \| `national_transposition` | Conditional | Required for source_type external; absent for internal. Shapes the identity. |
 | `jurisdiction` | string | No | Needed for external sources; for national_transposition an ISO 3166-1 alpha-2 code. |
+| `celex` | string | No | Base-act CELEX identifier (e.g. 32016R0679); absent for internal instruments or when unknown. The change monitor uses it to poll CELLAR for amendments. |
 | `effective_date` | date (ISO 8601) | Yes | |
 | `version` | string | Yes | |
 | `status` | enum: `active` \| `superseded` \| `vacated` | Yes | |

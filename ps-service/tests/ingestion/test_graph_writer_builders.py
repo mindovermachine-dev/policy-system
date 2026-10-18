@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from ps_service.domain_schema import DOMAIN_SCHEMA
 from ps_service.graph_gateway.models import MutationGroup, NodeRef, UpsertEdge, UpsertNode
 from ps_service.ingestion.errors import IngestionPersistenceError
 from ps_service.ingestion.graph_writer import (
@@ -115,6 +116,19 @@ def test_instrument_node_omits_instrument_type_and_celex_when_absent() -> None:
 
     assert "instrument_type" not in writes.instrument.properties
     assert "celex" not in writes.instrument.properties
+
+
+def test_every_instrument_property_the_writer_emits_is_declared_in_the_domain_schema() -> None:
+    """The served schema must describe every key the writer can put on the node."""
+    writes = _writes(metadata=_metadata(celex="32024R2847"))
+    declared = {
+        prop.name
+        for node in DOMAIN_SCHEMA.nodes
+        if node.label == "RegulatoryInstrument"
+        for prop in node.properties
+    }
+
+    assert set(writes.instrument.properties) <= declared
 
 
 # --- structural nodes -------------------------------------------------------------------

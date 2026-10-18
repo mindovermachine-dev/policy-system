@@ -10,6 +10,7 @@ RegulatoryInstrument
   source_type: enum(external|internal) !
   instrument_type: enum(regulation|directive|national_transposition) ?
   jurisdiction: string
+  celex: string
   effective_date: date !
   version: string !
   status: enum(active|superseded|vacated) !

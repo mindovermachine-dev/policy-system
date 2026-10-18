@@ -99,6 +99,7 @@ INTAKE_PROFILE = Profile(
         Narrow("RegulatoryInstrument", "source_type", ConstType("internal")),
         Omit("RegulatoryInstrument", "id"),
         Omit("RegulatoryInstrument", "instrument_type"),
+        Omit("RegulatoryInstrument", "celex"),
         Add("RegulatoryInstrument", _OPTIONAL_CONFIDENCE),
         Omit("Standard", "status"),
         Omit("Control", "status"),
