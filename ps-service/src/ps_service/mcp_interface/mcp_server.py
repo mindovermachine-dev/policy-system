@@ -2166,9 +2166,10 @@ def restore_instrument(
             the tool runs.
 
     Returns:
-        A dict with `instrument_id` and a `stages` list holding one entry per completed restore
-        stage,
-        each with its own `stage` and `status`.
+        A dict with `instrument_id`, a `stages` list holding one entry per completed restore
+        stage, each with its own `stage` and `status`, and `near_miss_reviews_created`: the
+        number of Capability near-miss reviews the restore recorded (resolve them with
+        `near_misses_list` and `near_misses_resolve`).
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller is not authenticated or lacks the required access role.

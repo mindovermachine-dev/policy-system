@@ -295,12 +295,15 @@ class RestorationAcceptedResponse(BaseModel):
     Attributes:
         instrument_id: Identifier of the restored instrument; non-empty.
         stages: Completed restore stages in execution order.
+        near_miss_reviews_created: Number of Capability near-miss reviews the restore recorded;
+            resolve them with the near-miss review tools.
     """
 
     model_config = ConfigDict(frozen=True)
 
     instrument_id: str = Field(min_length=1)
     stages: list[RestorationStageOutcome]
+    near_miss_reviews_created: int = Field(ge=0)
 
 
 class ExportRequest(BaseModel):

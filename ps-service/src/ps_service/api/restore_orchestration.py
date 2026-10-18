@@ -424,6 +424,7 @@ def _to_accepted_response(outcome: RestoreOutcome) -> RestorationAcceptedRespons
         stages=[
             RestorationStageOutcome(stage=stage, status="succeeded") for stage in outcome.stages
         ],
+        near_miss_reviews_created=outcome.near_miss_reviews_created,
     )
 
 
@@ -583,7 +584,11 @@ def _audited_restore(
             target,
             component=_COMPONENT,
             outcome="applied",
-            details={**base, "status": "succeeded"},
+            details={
+                **base,
+                "status": "succeeded",
+                "near_miss_reviews_created": response.near_miss_reviews_created,
+            },
             emitter=emitter,
         )
         return response

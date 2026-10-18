@@ -160,6 +160,7 @@ class _FakeCatalogRestoreStage:
         return RestoreOutcome(
             instrument_id=artifact.manifest.instrument_id,
             stages=("verified", "staged", "merged_and_finalized"),
+            near_miss_reviews_created=0,
         )
 
 

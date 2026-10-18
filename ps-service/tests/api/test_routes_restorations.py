@@ -103,6 +103,7 @@ class _FakeRestoreStage:
         return RestoreOutcome(
             instrument_id="CRA-1.0",
             stages=("verified", "staged", "merged_and_finalized"),
+            near_miss_reviews_created=0,
         )
 
 

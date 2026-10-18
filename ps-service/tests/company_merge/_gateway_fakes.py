@@ -52,6 +52,13 @@ _LOSER_EDGE_READ = re.compile(
     r"|\(l:(?P<out_kind>\w+) \{id: \$loser_id\}\)-\[:(?P<out_type>\w+)\]->\(n:(?P<out_other>\w+)\)"
     r") RETURN DISTINCT n\.id$"
 )
+_UNRESOLVED_PAIRS_READ = re.compile(
+    r"^UNWIND \$pairs AS p "
+    r"MATCH \(r:PendingReview \{kind: \$kind, incoming_id: p\.incoming_id, "
+    r"nearest_existing_id: p\.nearest_existing_id\}\) "
+    r"RETURN DISTINCT r\.incoming_id, r\.nearest_existing_id$"
+)
+_LIST_REVIEWS_PREFIX = "MATCH (r:PendingReview) MATCH (a) WHERE a.id = r.incoming_id"
 BASELINE = "cra_baseline"
 
 
@@ -111,10 +118,57 @@ class RigReadHandle(SingleTenantStore):
             return self._existence_row(
                 existence.group("kind"), cast("str", (params or {})["review_id"])
             )
+        if _UNRESOLVED_PAIRS_READ.match(q) is not None:
+            return self._unresolved_pair_rows(params or {})
+        if q.startswith(_LIST_REVIEWS_PREFIX):
+            return self._resolvable_review_rows()
         loser_edges = _LOSER_EDGE_READ.match(q)
         if loser_edges is not None:
             return self._loser_edge_rows(loser_edges, cast("str", (params or {})["loser_id"]))
         return super()._read(q, params)
+
+    def _unresolved_pair_rows(self, params: dict[str, object]) -> list[object]:
+        """The pairs among `$pairs` that a `PendingReview` of `$kind` in the rig's graph names."""
+        wanted = {
+            (pair["incoming_id"], pair["nearest_existing_id"])
+            for pair in cast("list[dict[str, str]]", params["pairs"])
+        }
+        return [
+            [props["incoming_id"], props["nearest_existing_id"]]
+            for (label, _), props in self._graph.nodes.items()
+            if label == "PendingReview"
+            and props.get("kind") == params["kind"]
+            and (props["incoming_id"], props["nearest_existing_id"]) in wanted
+        ]
+
+    def _resolvable_review_rows(self) -> list[object]:
+        """The list read: reviews whose two nodes exist, are not `merged`, oldest first."""
+
+        def _live(kind: object, node_id: object) -> bool:
+            node = self._graph.nodes.get((cast("str", kind), cast("str", node_id)))
+            return node is not None and node.get("status", "active") != "merged"
+
+        resolvable = [
+            {**props, "id": review_id}
+            for (label, review_id), props in self._graph.nodes.items()
+            if label == "PendingReview"
+            and _live(props["kind"], props["incoming_id"])
+            and _live(props["kind"], props["nearest_existing_id"])
+        ]
+        resolvable.sort(key=lambda props: cast("str", props["created_at"]))
+        return [
+            [
+                p["id"],
+                p["kind"],
+                p["incoming_id"],
+                p["incoming_text"],
+                p["nearest_existing_id"],
+                p["nearest_existing_text"],
+                p["similarity"],
+                p["created_at"],
+            ]
+            for p in resolvable
+        ]
 
     def _existence_row(self, kind: str, review_id: str) -> list[object]:
         """The combined existence read: both nodes (not `merged`) and their `created_at`."""

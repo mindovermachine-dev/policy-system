@@ -135,3 +135,35 @@ def test_restore_never_scores_a_tombstone_as_a_semantic_candidate() -> None:
 
     assert _requires(primitives) == [(obl_id, new_id)]
     assert len(_capabilities(primitives)) == 1
+
+
+def _review_nodes(leg_primitives: tuple[UpsertNode | UpsertEdge, ...]) -> list[UpsertNode]:
+    return [p for p in leg_primitives if isinstance(p, UpsertNode) and p.label == "PendingReview"]
+
+
+def test_AC_BI_006_a_merged_loser_is_redirected_and_never_reviewed() -> None:
+    """The redirect resolves the tombstone before any semantic comparison.
+
+    The incoming vector scores 0.8 against the survivor, so it WOULD be a near miss had it been
+    scored; the control below shows the same vector does produce a review for a fresh id.
+    """
+    tomb_id = capability_id("Absorbed")
+    survivor_id = capability_id("Survivor")
+    obl_id = obligation_id("role_r", "Do the thing.")
+    near_survivor = [0.6, 0.8]
+
+    redirected = _build(
+        _baseline(capability_id_value=tomb_id, obligation_id_value=obl_id, embedding=near_survivor),
+        _live(absorbed_id=tomb_id, survivor_id=survivor_id),
+    )
+    control = _build(
+        _baseline(
+            capability_id_value=capability_id("Brand New"),
+            obligation_id_value=obl_id,
+            embedding=near_survivor,
+        ),
+        _live(absorbed_id=tomb_id, survivor_id=survivor_id),
+    )
+
+    assert _review_nodes(redirected) == []
+    assert len(_review_nodes(control)) == 1

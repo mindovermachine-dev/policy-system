@@ -227,7 +227,8 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
     `MAX_POLICY_SYSTEM_ATTEMPTS` refused attempts `RestoreConcurrencyConflictError` is raised.
 
     Returns:
-        The classification and governance counts of the built `policy_system` leg.
+        The classification, governance and `near_miss_reviews_created` counts of the built
+        `policy_system` leg.
     """
     last_stale: StaleGraphStateError | None = None
     for attempt in range(1, MAX_POLICY_SYSTEM_ATTEMPTS + 1):
@@ -424,4 +425,5 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
     return RestoreOutcome(
         instrument_id=instrument_id,
         stages=("verified", "staged", "merged_and_finalized"),
+        near_miss_reviews_created=classification_counts["near_miss_reviews_created"],
     )

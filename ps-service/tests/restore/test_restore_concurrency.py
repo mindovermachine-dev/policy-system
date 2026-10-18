@@ -16,6 +16,7 @@ from ps_service.graph_gateway.models import MutationGroup, UpsertNode
 from ps_service.restore.errors import RestoreConcurrencyConflictError
 from ps_service.restore.graph_submission import MAX_POLICY_SYSTEM_ATTEMPTS
 from restore._fixtures import build_restore_artifact, small_graphs
+from restore._near_miss_fixtures import INCOMING, near_miss_artifact, reviews, seed_existing
 
 if TYPE_CHECKING:
     from ps_service.graph_gateway.gateway import GraphWriteGateway
@@ -141,3 +142,26 @@ def test_three_refused_attempts_raise_the_concurrency_conflict_and_only_the_riva
         "gw214_native" not in restore_rig.graphs.graphs
         or not restore_rig.graph("gw214_native").nodes
     )
+
+
+def test_AC_BI_007_a_retry_rebuilds_the_reviews_so_one_race_leaves_one_set(
+    restore_rig: RestoreRig,
+) -> None:
+    seed_existing(restore_rig)
+    racing = _install(restore_rig, races=1)
+
+    outcome = restore_rig.restore(near_miss_artifact())
+
+    assert racing.submits == 2
+    assert outcome.near_miss_reviews_created == len(INCOMING)
+    assert len(reviews(restore_rig)) == len(INCOMING)  # not twice that: the refused set is gone
+
+
+def test_AC_BI_007_three_refused_attempts_leave_no_review(restore_rig: RestoreRig) -> None:
+    seed_existing(restore_rig)
+    _install(restore_rig, races=MAX_POLICY_SYSTEM_ATTEMPTS)
+
+    with pytest.raises(RestoreConcurrencyConflictError):
+        restore_rig.restore(near_miss_artifact())
+
+    assert reviews(restore_rig) == {}

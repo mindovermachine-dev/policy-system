@@ -1317,6 +1317,10 @@
               "minLength": 1,
               "type": "string"
             },
+            "near_miss_reviews_created": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "stages": {
               "items": {
                 "$ref": "#/components/schemas/RestorationStageOutcome"
@@ -1324,7 +1328,7 @@
               "type": "array"
             }
           },
-          "required": ["instrument_id", "stages"],
+          "required": ["instrument_id", "stages", "near_miss_reviews_created"],
           "type": "object"
         },
         "RestorationManifestPayload": {

@@ -145,7 +145,11 @@ run — using the id the listing printed. The `ps-restore-instrument` skill fetc
 the artifact and restores it, given just the `instrument_id`: _"Use the
 ps-restore-instrument skill to restore CRA-1.0."_ This loads whichever curated
 instrument — external or internal, e.g. an Engineering Practices standard — is
-registered under that id. A freshly deployed instance has an empty graph and
+registered under that id. When a restored Capability nearly matches one already in
+the graph, the restore records a near-miss review instead of merging them and reports
+how many it opened as `near_miss_reviews_created`; resolve them with the
+`ps-near-miss-review` skill (see
+[Review near-miss merge candidates](#review-near-miss-merge-candidates)). A freshly deployed instance has an empty graph and
 answers nothing until something is restored or ingested. Requires
 `ComplianceOfficer`; see [Role System](#role-system).
 
@@ -281,7 +285,7 @@ What is recorded:
 |---|---|---|
 | Access-role changes, policy lifecycle, graph cleanup | `access_role.*`, `policy.*`, `capability.*`, `obligation.*` | Applied and denied attempts |
 | Regulation ingestion (`ingest_regulation`, `start_ingestion`, and each re-ingest of `check_regulations`) | `ingestion_run.submit` before the run, `ingestion_run.complete` after | The CELEX id, the instrument id, `trigger` (`sync_ingest`, `async_ingest`, `amendment_check`), the counts of new Obligations, new Capabilities and matched Capabilities, and a `reason_code` on failure. Polling a run writes nothing. A `check_regulations` sweep runs the full pipeline (Ingestion, Domain Mapper, Company Merge) for each amendment, so its completion row carries the real counts of the amendment |
-| Instrument restore (`restore_instrument`, `POST /restorations`) | `instrument.restore` opening and terminal rows | The instrument id, the source (`catalog` or `upload`) and the outcome: `succeeded`, `failed` (with a `reason_code`), `rejected` (`group_rejected`: the graph write was refused and nothing was written) or `committed_apply_pending` (the restore is recorded in the graph log and is applied on recovery) |
+| Instrument restore (`restore_instrument`, `POST /restorations`) | `instrument.restore` opening and terminal rows | The instrument id, the source (`catalog` or `upload`) and the outcome: `succeeded`, `failed` (with a `reason_code`), `rejected` (`group_rejected`: the graph write was refused and nothing was written) or `committed_apply_pending` (the restore is recorded in the graph log and is applied on recovery). The `succeeded` row also carries `near_miss_reviews_created`, the number of near-miss reviews the restore opened; the `committed_apply_pending` row omits it |
 | Near-miss resolution | `near_miss.resolve` | Both entity ids and the decision. A `merge` is recorded when the approver signs with their passkey; the approver is the actor and the row carries the `approval_id` |
 | `invite-user` | `user.invite` | The invitee email. The invite token and URL are never recorded |
 
@@ -437,7 +441,7 @@ The `ps-list-ingested` skill lists every regulatory instrument currently in the 
 Use the ps-near-miss-review skill to show the pending near-miss reviews.
 ```
 
-When ingestion finds two entities that are close but not identical, it records a near-miss pending review instead of merging them. The `ps-near-miss-review` skill lists the pending reviews and resolves one by keeping the two entities separate or merging them. A merge cannot be undone through this skill, so it does not run at the call: the skill returns an approval link, and the merge runs when you complete a passkey signing in the browser. The skill can then report whether the approval was signed. Resolve an instrument's near misses before you export it: an export is refused while any unresolved review touches its Capabilities.
+When ingestion or a restore finds two entities that are close but not identical, it records a near-miss pending review instead of merging them. The `ps-near-miss-review` skill lists the pending reviews and resolves one by keeping the two entities separate or merging them. A merge cannot be undone through this skill, so it does not run at the call: the skill returns an approval link, and the merge runs when you complete a passkey signing in the browser. The skill can then report whether the approval was signed. Resolve an instrument's near misses before you export it: an export is refused while any unresolved review touches its Capabilities.
 
 ### Author a policy
 

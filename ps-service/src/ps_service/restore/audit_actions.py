@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import Field
+
 from ps_service.audit import AuditDetails, register_audit_action, register_audit_resource_type
 
 __all__ = [
@@ -55,12 +57,15 @@ class InstrumentRestoreDetails(AuditDetails):
         source: Where the artifact came from: the curated catalog or a direct upload.
         reason_code: Enumerated cause of a `failed` or `rejected` row;
             `None` otherwise.
+        near_miss_reviews_created: Capability near-miss reviews the restore recorded; set on the
+            `succeeded` row only, `None` otherwise.
     """
 
     instrument_id: str
     status: Literal["started", "succeeded", "failed", "rejected", "committed_apply_pending"]
     source: Literal["catalog", "upload"]
     reason_code: RestoreFailureReason | None = None
+    near_miss_reviews_created: int | None = Field(default=None, ge=0)
 
 
 _STAGE_REASONS: dict[str, RestoreFailureReason] = {

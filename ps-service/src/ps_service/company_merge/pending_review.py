@@ -6,6 +6,7 @@ was computed, so listing and resolving a review never re-queries embeddings.
 
 Public functions:
     `persist_pending_reviews`: write one node per near miss as one gateway group.
+    `read_unresolved_review_pairs`: which near-miss pairs already have a review.
     `list_pending_reviews`: read the reviews a Compliance Officer can still act on.
     `get_pending_review`: read one review by id, resolvable or not.
     `resolve_review`: decide a review, either `keep-separate` or `merge`.
@@ -55,6 +56,7 @@ __all__ = [
     "get_pending_review",
     "list_pending_reviews",
     "persist_pending_reviews",
+    "read_unresolved_review_pairs",
     "resolve_review",
 ]
 
@@ -76,6 +78,16 @@ _LIST_PENDING_REVIEWS_QUERY = (
     "RETURN r.id, r.kind, r.incoming_id, r.incoming_text, "
     "r.nearest_existing_id, r.nearest_existing_text, r.similarity, r.created_at "
     "ORDER BY r.created_at ASC"
+)
+
+# The pairs among `$pairs` that already have a review of `$kind`. No status filter: every
+# `PendingReview` node is unresolved, because a resolved review is deleted. Values travel as
+# params; the text is fixed.
+_UNRESOLVED_PAIRS_QUERY = (
+    "UNWIND $pairs AS p "
+    "MATCH (r:PendingReview {kind: $kind, incoming_id: p.incoming_id, "
+    "nearest_existing_id: p.nearest_existing_id}) "
+    "RETURN DISTINCT r.incoming_id, r.nearest_existing_id"
 )
 
 # One review by id for audit emission. Unlike `_LIST_PENDING_REVIEWS_QUERY` it has NO
@@ -209,6 +221,48 @@ def build_pending_review_primitives(
                 "(a reserved key, or a value that is not finite or is out of range)"
             ) from exc
     return tuple(primitives)
+
+
+def read_unresolved_review_pairs(
+    graph: GraphHandle,
+    near_misses: tuple[NearMissPair, ...],
+    *,
+    kind: Literal["Capability", "Policy"],
+) -> set[tuple[str, str]]:
+    """Return the `(incoming_id, nearest_existing_id)` pairs that already have a review.
+
+    One batched, parameterised read covers every pair. Every `PendingReview` node is unresolved
+    (a resolved review is deleted), so no status filter applies. Nothing is read for an empty
+    `near_misses`.
+
+    Args:
+        graph: Read handle on the single-tenant `policy_system` graph.
+        near_misses: The pairs a caller is about to record.
+        kind: Label of the entities the pairs refer to; only reviews of this kind match.
+
+    Returns:
+        The subset of the pairs for which a `PendingReview` of `kind` exists.
+
+    Raises:
+        CompanyMergePersistenceError: The read of `graph` failed.
+    """
+    if not near_misses:
+        return set()
+    pairs = list(
+        dict.fromkeys((pair.incoming_id, pair.nearest_existing_id) for pair in near_misses)
+    )
+    rows = read_rows(
+        graph,
+        _UNRESOLVED_PAIRS_QUERY,
+        {
+            "kind": kind,
+            "pairs": [
+                {"incoming_id": incoming, "nearest_existing_id": nearest}
+                for incoming, nearest in pairs
+            ],
+        },
+    )
+    return {(cast("str", row[0]), cast("str", row[1])) for row in rows}
 
 
 def persist_pending_reviews(

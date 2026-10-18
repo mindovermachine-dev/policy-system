@@ -44,7 +44,10 @@ class RestoreOutcome:
         instrument_id: Canonical id of the restored instrument (non-empty).
         stages: Names, in order, of the restore stages that ran; an audit-facing summary, not a
             control-flow signal.
+        near_miss_reviews_created: Number of Capability `PendingReview` nodes the restore
+            recorded for a Compliance Officer to resolve; 0 when there were none.
     """
 
     instrument_id: str
     stages: tuple[str, ...]
+    near_miss_reviews_created: int

@@ -48,14 +48,21 @@ def test_restore_artifact_mutation_raises() -> None:
 
 
 def test_restore_outcome_holds_instrument_id_and_stages() -> None:
-    outcome = RestoreOutcome(instrument_id="CRA-1.0", stages=("staged", "merged", "finalized"))
+    outcome = RestoreOutcome(
+        instrument_id="CRA-1.0",
+        stages=("staged", "merged", "finalized"),
+        near_miss_reviews_created=2,
+    )
 
     assert outcome.instrument_id == "CRA-1.0"
     assert outcome.stages == ("staged", "merged", "finalized")
+    assert outcome.near_miss_reviews_created == 2
 
 
 def test_restore_outcome_mutation_raises() -> None:
-    outcome = RestoreOutcome(instrument_id="CRA-1.0", stages=("staged",))
+    outcome = RestoreOutcome(
+        instrument_id="CRA-1.0", stages=("staged",), near_miss_reviews_created=0
+    )
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         outcome.instrument_id = "other"  # pyright: ignore[reportAttributeAccessIssue]  # asserting frozen-dataclass mutation is rejected at runtime

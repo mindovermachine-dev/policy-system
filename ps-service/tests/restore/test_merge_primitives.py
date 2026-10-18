@@ -250,7 +250,116 @@ def test_the_counts_are_the_classification_and_governance_audit_keys(rig: MergeR
         "governance_standards": 0,
         "governance_controls": 0,
         "governance_status_overridden": 0,
+        "near_miss_reviews_created": 0,
     }
+
+
+def _near_miss_graph() -> SerializedGraph:
+    """The baseline of `_external` with an embedding scoring 0.8 against the seeded Capability."""
+    graph = _external()
+    nodes = tuple(
+        _node("Capability", _CAP, name="Thing Doing", confidence=0.8, embedding=[0.8, 0.6])
+        if n.label == "Capability"
+        else n
+        for n in graph.nodes
+    )
+    return SerializedGraph(nodes=nodes, edges=graph.edges)
+
+
+def _seed_near_miss_target(rig: MergeRig) -> str:
+    existing = capability_id("Existing Thing")
+    rig.policy_system.seed_node(
+        ("Capability",),
+        existing,
+        {"id": existing, "name": "Existing Thing", "embedding": [1.0, 0.0], "status": "active"},
+    )
+    return existing
+
+
+def test_AC_BI_001_near_misses_become_pending_review_nodes(rig: MergeRig) -> None:
+    existing = _seed_near_miss_target(rig)
+
+    leg = _build(rig.legacy, _near_miss_graph())
+
+    (review,) = _nodes(leg, "PendingReview")
+    assert review.properties["kind"] == "Capability"
+    assert review.properties["incoming_id"] == _CAP
+    assert review.properties["incoming_text"] == "Thing Doing"
+    assert review.properties["nearest_existing_id"] == existing
+    assert review.properties["nearest_existing_text"] == "Existing Thing"
+    assert review.properties["similarity"] == pytest.approx(0.8)
+    assert leg.counts["near_miss_reviews_created"] == 1
+
+
+def test_reviews_are_last_in_the_leg_and_nothing_is_written_to_the_graph(rig: MergeRig) -> None:
+    _seed_near_miss_target(rig)
+    before = (dict(rig.policy_system.nodes), dict(rig.policy_system.edges))
+
+    leg = _build(rig.legacy, _near_miss_graph())
+
+    kinds = [isinstance(p, UpsertNode) and p.label == "PendingReview" for p in leg.primitives]
+    assert kinds[-1]
+    assert kinds.index(True) == len(kinds) - kinds.count(True)
+    assert (dict(rig.policy_system.nodes), dict(rig.policy_system.edges)) == before
+    assert rig.groups == []
+
+
+def _seed_review(
+    rig: MergeRig, *, incoming_id: str, nearest_existing_id: str, kind: str = "Capability"
+) -> None:
+    rig.policy_system.nodes[("PendingReview", "review_seeded")] = {
+        "id": "review_seeded",
+        "kind": kind,
+        "status": "pending",
+        "incoming_id": incoming_id,
+        "nearest_existing_id": nearest_existing_id,
+    }
+
+
+def _review_reads(rig: MergeRig) -> list[str]:
+    return [q for q in rig.legacy.statements if "PendingReview" in q]
+
+
+def test_AC_BI_004_pair_with_unresolved_review_is_skipped(rig: MergeRig) -> None:
+    existing = _seed_near_miss_target(rig)
+    _seed_review(rig, incoming_id=_CAP, nearest_existing_id=existing)
+
+    leg = _build(rig.legacy, _near_miss_graph())
+
+    assert _review_reads(rig), "the unresolved-review read was never issued"
+    assert _nodes(leg, "PendingReview") == []
+    assert leg.counts["near_miss_reviews_created"] == 0
+
+
+def test_AC_BI_004_a_review_of_another_pair_or_kind_does_not_skip(rig: MergeRig) -> None:
+    existing = _seed_near_miss_target(rig)
+    _seed_review(rig, incoming_id=_CAP, nearest_existing_id="cap_other")
+    rig.policy_system.nodes[("PendingReview", "review_policy")] = {
+        "id": "review_policy",
+        "kind": "Policy",
+        "status": "pending",
+        "incoming_id": _CAP,
+        "nearest_existing_id": existing,
+    }
+
+    leg = _build(rig.legacy, _near_miss_graph())
+
+    assert _review_reads(rig)
+    assert len(_nodes(leg, "PendingReview")) == 1
+    assert leg.counts["near_miss_reviews_created"] == 1
+
+
+def test_a_leg_without_near_misses_issues_no_review_read(rig: MergeRig) -> None:
+    _build(rig.legacy, _external())
+
+    assert _review_reads(rig) == []
+
+
+def test_a_leg_without_near_misses_creates_no_review_and_counts_zero(rig: MergeRig) -> None:
+    leg = _build(rig.legacy, _external())
+
+    assert _nodes(leg, "PendingReview") == []
+    assert leg.counts["near_miss_reviews_created"] == 0
 
 
 def _internal() -> SerializedGraph:

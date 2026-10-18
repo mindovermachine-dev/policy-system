@@ -44,6 +44,7 @@ def test_instrument_restore_details_carry_instrument_id_status_source_and_reason
         "status",
         "source",
         "reason_code",
+        "near_miss_reviews_created",
     }
     details = InstrumentRestoreDetails(
         instrument_id="CRA-1.0", status="failed", source="upload", reason_code="artifact_rejected"
@@ -163,3 +164,17 @@ def test_the_terminal_row_of_each_restore_outcome(
     row = classify_restore_terminal_row(exc)
 
     assert (row.outcome, row.status, row.reason_code) == (outcome, status, reason)
+
+
+def test_near_miss_reviews_created_defaults_to_none_and_rejects_a_negative_count() -> None:
+    base = {"instrument_id": "CRA-1.0", "status": "succeeded", "source": "upload"}
+
+    assert InstrumentRestoreDetails.model_validate(base).near_miss_reviews_created is None
+    assert (
+        InstrumentRestoreDetails.model_validate(
+            {**base, "near_miss_reviews_created": 2}
+        ).near_miss_reviews_created
+        == 2
+    )
+    with pytest.raises(ValidationError):
+        InstrumentRestoreDetails.model_validate({**base, "near_miss_reviews_created": -1})

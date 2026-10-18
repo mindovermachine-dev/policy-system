@@ -46,6 +46,10 @@ from ps_service.company_merge.graph_writer import (
 )
 from ps_service.company_merge.models import GovernanceDraftCounts
 from ps_service.company_merge.obligation_redirect import resolve_obligation_redirects
+from ps_service.company_merge.pending_review import (
+    build_pending_review_primitives,
+    read_unresolved_review_pairs,
+)
 from ps_service.graph_gateway.models import UpsertNode
 from ps_service.logging.facade import emit_log_entry
 from ps_service.restore.baseline_reader import SerializedGraphReader
@@ -88,8 +92,9 @@ class PolicySystemLeg:
     Attributes:
         primitives: The writes, in dependency order; empty when the artifact adds nothing to
             `policy_system`.
-        counts: The six classification keys and the four governance keys of the `succeeded`
-            audit entry, each a non-negative count.
+        counts: The six classification keys, the four governance keys and
+            `near_miss_reviews_created` of the `succeeded` audit entry, each a non-negative
+            count.
     """
 
     primitives: tuple[Primitive, ...]
@@ -189,11 +194,13 @@ def build_policy_system_leg(
     moves the position and the gateway refuses the leg. Primitives come in dependency order:
     instrument, Roles, Requirements, provenance edges, Obligations, Capability mints, draft
     governance, PracticeArea and RiskPath nodes, then the rewired edges (regulatory spine,
-    governance and classification).
+    governance and classification), then one `PendingReview` per Capability near miss.
 
     Business Rules: Capabilities converge onto an existing one by embedding similarity; a draft
     Policy never converges; Obligations a cleanup merge absorbed are redirected to their
-    survivor; governance content is created only as a `draft` owned by `governance.owner`.
+    survivor; governance content is created only as a `draft` owned by `governance.owner`; every
+    Capability near miss is recorded as a `PendingReview` in the same leg, so a failed restore
+    leaves none.
 
     Args:
         baseline_graph: The parsed baseline leg of the artifact.
@@ -210,8 +217,8 @@ def build_policy_system_leg(
         The leg's primitives (empty for a baseline that adds nothing) and its audit counts.
 
     Side Effects:
-        Reads `live` and emits log entries (dedup, redirect and `build_policy_system_leg`
-        success); writes no graph.
+        Reads `live` (including the unresolved reviews of the near-miss pairs) and emits log
+        entries (dedup, redirect and `build_policy_system_leg` success); writes no graph.
 
     Raises:
         RestoreOwnerRequiredError: the baseline carries governance content and `governance.owner`
@@ -256,6 +263,16 @@ def build_policy_system_leg(
         {label: read_existing_ids(live, label, ids) for label, ids in candidates.items()}
     )
     existing = overlay.existing
+    # Read with the other `live` reads, at the same position, before anything is built.
+    # A pair that `live` already holds an unresolved review for is not recorded a second time.
+    already_reviewed = read_unresolved_review_pairs(
+        live, dedup_result.near_misses, kind="Capability"
+    )
+    new_near_misses = tuple(
+        pair
+        for pair in dedup_result.near_misses
+        if (pair.incoming_id, pair.nearest_existing_id) not in already_reviewed
+    )
 
     overlay.add(
         build_role_and_requirement_primitives(
@@ -300,7 +317,13 @@ def build_policy_system_leg(
         )
     )
 
-    counts = {**classification_write_counts(read), **governance_count_fields(governance_counts)}
+    # Last, so the reviews follow the content they refer to inside the same all-or-nothing leg.
+    overlay.add(build_pending_review_primitives(new_near_misses, kind="Capability", values=values))
+    counts = {
+        **classification_write_counts(read),
+        **governance_count_fields(governance_counts),
+        "near_miss_reviews_created": len(new_near_misses),
+    }
     emit_log_entry(
         component=_COMPONENT,
         action=_ACTION,

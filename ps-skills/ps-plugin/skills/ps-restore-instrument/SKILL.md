@@ -17,14 +17,19 @@ reachable by any MCP-capable client.
 `instrument_id` (e.g. `CRA-1.0`) — normally discovered first via
 `ps-get-catalog-listing`. There is no bulk/multi-instrument restore.
 
-**Deliverable:** the restored `instrument_id` and one `stage`/`status`
+**Deliverable:** the restored `instrument_id`, one `stage`/`status`
 entry per completed restore stage — the same summary ps-cli's own `restore
-instrument` used to print — or the specific named error state on failure.
+instrument` used to print — and `near_miss_reviews_created`, the number of
+near-miss pending reviews the restore opened for restored Capabilities that
+nearly match an existing one — or the specific named error state on failure.
 
 **Audit:** every restore that reaches the restore step is recorded as an
 `instrument.restore` opening row and a terminal row (instrument id, outcome,
 a `status` of `succeeded`, `failed`, `rejected` or `committed_apply_pending`,
-and a `reason_code` on failure or rejection). Use `ps-list-audit-events` with `details`
+and a `reason_code` on failure or rejection). The `succeeded` row also carries
+`near_miss_reviews_created`; the `committed_apply_pending` row omits it,
+because that row is classified without a response (the reviews exist in the
+graph and show up once the restore is recovered). Use `ps-list-audit-events` with `details`
 `{"instrument_id": "<id>"}` to read them. If the audit trail cannot record the
 opening row nothing is restored.
 
@@ -80,7 +85,7 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    | `error: the policy graph database is not reachable`                                   | The compliance graph database cannot be reached — report it distinctly from every state above                                                                                 |
    | `error: The audit trail is temporarily unavailable; the operation was not performed.` | The audit trail could not record the operation, so it was NOT run (nothing was restored) — report it distinctly from an outage of the graph or of PS Service; nothing changed |
    | `error: an unexpected error occurred`                                                 | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                             |
-   | Successful structured response                                                        | Report `instrument_id` and every completed stage's own `stage`/`status` plainly                                                                                               |
+   | Successful structured response                                                        | Report `instrument_id`, every completed stage's own `stage`/`status`, and `near_miss_reviews_created` plainly                                                                 |
 
 4. **Output**, in this shape on success:
 
@@ -90,7 +95,14 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    Stages:
      <stage> — <status>
      ...
+
+   Near-miss reviews created: <near_miss_reviews_created>
    ```
+
+   When `near_miss_reviews_created` is greater than zero, add one line after
+   the Output block: that many near-miss reviews are waiting, and they are
+   listed and resolved (keep separate or merge) with `ps-near-miss-review`.
+   Never merge or resolve them on the user's behalf from this skill.
 
    On a named error state, report that state plainly instead — do not emit
    an Output block that implies a successful restore when none occurred.

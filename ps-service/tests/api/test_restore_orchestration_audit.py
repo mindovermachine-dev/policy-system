@@ -145,6 +145,7 @@ class _Delegate:
         return RestoreOutcome(
             instrument_id=artifact.manifest.instrument_id,
             stages=("verified", "staged", "merged_and_finalized"),
+            near_miss_reviews_created=0,
         )
 
 
@@ -560,6 +561,26 @@ def test_a_commit_not_yet_applied_is_audited_applied_with_committed_apply_pendin
         ("applied", "started", None),
         ("applied", "committed_apply_pending", None),
     ]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RestoreGroupRejectedError("refused"),
+        RestoreApplyPendingError("committed"),
+        ArtifactIntegrityError("checksum mismatch"),
+    ],
+    ids=["rejected", "committed_apply_pending", "failed"],
+)
+def test_only_the_succeeded_row_carries_the_near_miss_review_count(error: Exception) -> None:
+    ok_store, failed_store = InMemoryAuditStore(), InMemoryAuditStore()
+
+    _run_upload(ok_store, _Delegate(ok_store))
+    with pytest.raises(Exception):  # noqa: B017 -- each error maps to a different API error
+        _run_upload(failed_store, _Delegate(failed_store, error=error))
+
+    assert [r.details.get("near_miss_reviews_created") for r in ok_store.rows] == [None, 0]
+    assert all("near_miss_reviews_created" not in r.details for r in failed_store.rows)
 
 
 def test_an_unreachable_store_is_audited_failed_graph_unavailable(

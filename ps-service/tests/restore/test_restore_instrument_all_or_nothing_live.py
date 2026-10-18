@@ -15,7 +15,7 @@ Not run in the implementation sandbox (no FalkorDB, no Postgres); the fast twin 
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -23,6 +23,8 @@ import ps_service.restore.merge_primitives as merge_primitives_module
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 from ps_service.export.serialize import serialize_graph
+from ps_service.graph_gateway.errors import GraphWriteRejectedError
+from ps_service.restore.errors import RestoreGroupRejectedError
 from ps_service.restore.restore_instrument import restore_instrument
 from restore._fixtures import build_restore_artifact
 from restore.live_gateway import live_restore
@@ -31,6 +33,8 @@ if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter
     from falkordb import FalkorDB
     from persistence.provisioned_postgres import Provisioned
+
+    from ps_service.graph_gateway.gateway import GraphWriteGateway
 
 _ACTOR = "test-actor"
 _SIMILARITY_THRESHOLD = 0.9
@@ -144,5 +148,105 @@ def test_build_step_failure_leaves_the_log_and_every_graph_untouched(
         # "Neither graph": the native and baseline legs were never written either.
         assert live_falkordb.connection.exists(native_target) == 0
         assert live_falkordb.connection.exists(baseline_target) == 0
+    finally:
+        live_falkordb.connection.delete(native_target, baseline_target, single_tenant_graph_name)
+
+
+def _near_miss_baseline(instrument_id: str) -> SerializedGraph:
+    """One Capability scoring 0.8 against the one seeded below (threshold 0.9 never merges it)."""
+    return SerializedGraph(
+        nodes=(
+            SerializedNode(
+                label="RegulatoryInstrument", properties={"id": instrument_id, "title": "RT57"}
+            ),
+            SerializedNode(
+                label="Capability",
+                properties={
+                    "id": "cap_nm_incoming",
+                    "name": "Retain Records",
+                    "confidence": 0.9,
+                    "embedding": [0.8, 0.6],
+                },
+            ),
+        ),
+        edges=(),
+    )
+
+
+class _RefusingGateway:
+    """The live gateway, except every multi-graph group is refused."""
+
+    def __init__(self, inner: GraphWriteGateway) -> None:
+        self.submit_group = inner.submit_group
+        self.read_log_position = inner.read_log_position
+        self.is_caught_up = inner.is_caught_up
+        self.catch_up = inner.catch_up
+
+    def submit_multi_graph_group(self, group: object) -> object:
+        del group
+        raise GraphWriteRejectedError("the group is refused")
+
+
+def _pending_review_count(db: FalkorDB, graph_name: str) -> int:
+    result = db.select_graph(graph_name).query("MATCH (r:PendingReview) RETURN count(r)")
+    return int(cast("list[list[int]]", result.result_set)[0][0])
+
+
+@pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.parametrize("fail_the_build", [False, True], ids=["succeeds", "fails"])
+def test_near_miss_reviews_are_all_or_nothing_with_the_restored_content(
+    live_falkordb: FalkorDB,
+    provisioned_graph_log: Provisioned,
+    make_emitter: MakeEmitter,
+    *,
+    fail_the_build: bool,
+) -> None:
+    """A successful restore leaves its reviews, a failed one none."""
+    emitter, _log_path = make_emitter()
+    token = uuid.uuid4().hex[:12]
+    short_name = f"NM339{token}"
+    single_tenant_graph_name = f"__nm339_single_tenant_{token}__"
+    native_target = f"{short_name.lower()}_native"
+    baseline_target = f"{short_name.lower()}_baseline"
+    instrument_id = f"NM339-{token}"
+    live_falkordb.select_graph(single_tenant_graph_name).query(
+        "CREATE (:Capability {id: 'cap_nm_existing', name: 'Keep Records', "
+        "embedding: [1.0, 0.0], status: 'active'})"
+    )
+    artifact = build_restore_artifact(
+        instrument_id=instrument_id,
+        short_name=short_name,
+        native_graph=_native_graph(instrument_id),
+        baseline_graph=_near_miss_baseline(instrument_id),
+    )
+    try:
+        with live_restore(provisioned_graph_log, live_falkordb) as live:
+
+            def _open_gateway() -> object:
+                if not fail_the_build:
+                    return live.gateway
+                # The leg, reviews included, is built and submitted; the gateway refuses the group.
+                return _RefusingGateway(live.gateway)
+
+            def _restore() -> object:
+                return restore_instrument(
+                    artifact,
+                    db=live_falkordb,
+                    single_tenant_graph_name=single_tenant_graph_name,
+                    similarity_threshold=_SIMILARITY_THRESHOLD,
+                    actor=_ACTOR,
+                    open_gateway=_open_gateway,
+                    audit_event_id=live.audit_event_id,
+                    emitter=emitter,
+                )
+
+            if fail_the_build:
+                with pytest.raises(RestoreGroupRejectedError):
+                    _restore()
+                assert _pending_review_count(live_falkordb, single_tenant_graph_name) == 0
+            else:
+                _restore()
+                assert _pending_review_count(live_falkordb, single_tenant_graph_name) == 1
     finally:
         live_falkordb.connection.delete(native_target, baseline_target, single_tenant_graph_name)

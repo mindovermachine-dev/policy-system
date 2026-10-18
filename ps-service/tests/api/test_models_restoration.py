@@ -66,9 +66,25 @@ def test_restoration_stage_outcome_and_accepted_response_are_frozen() -> None:
     response = RestorationAcceptedResponse(
         instrument_id="CRA-1.0",
         stages=[stage],
+        near_miss_reviews_created=0,
     )
 
     with pytest.raises(ValidationError):
         response.instrument_id = "other"  # type: ignore[misc]
 
     assert response.stages[0].stage == "verified"
+
+
+def test_accepted_response_requires_a_non_negative_near_miss_review_count() -> None:
+    stage = RestorationStageOutcome(stage="verified", status="succeeded")
+
+    with pytest.raises(ValidationError):
+        RestorationAcceptedResponse.model_validate({"instrument_id": "CRA-1.0", "stages": [stage]})
+    with pytest.raises(ValidationError):
+        RestorationAcceptedResponse(
+            instrument_id="CRA-1.0", stages=[stage], near_miss_reviews_created=-1
+        )
+    response = RestorationAcceptedResponse(
+        instrument_id="CRA-1.0", stages=[stage], near_miss_reviews_created=3
+    )
+    assert response.model_dump()["near_miss_reviews_created"] == 3
