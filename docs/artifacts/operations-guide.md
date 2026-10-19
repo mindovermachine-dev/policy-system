@@ -29,11 +29,18 @@
   - [Contents and protection](#contents-and-protection)
   - [Authentik is not covered](#authentik-is-not-covered)
   - [Operational notes](#operational-notes)
+- [Authentik Backup](#authentik-backup)
+  - [Take an Authentik backup](#take-an-authentik-backup)
+  - [Check the Authentik backup](#check-the-authentik-backup)
+  - [Authentik secrets to retain and protection](#authentik-secrets-to-retain-and-protection)
 - [Restore](#restore)
   - [Before you start](#before-you-start)
   - [Restore with the script](#restore-with-the-script)
   - [Restore by hand](#restore-by-hand)
   - [If a credentials Secret is lost](#if-a-credentials-secret-is-lost)
+- [Authentik Restore](#authentik-restore)
+  - [Restore Authentik by hand](#restore-authentik-by-hand)
+  - [Restoring Authentik and PS together](#restoring-authentik-and-ps-together)
 - [Troubleshooting / FAQ](#troubleshooting--faq)
   - [Reading a failed ingestion](#reading-a-failed-ingestion)
 - [Teardown](#teardown)
@@ -735,10 +742,9 @@ hashes in the backup match those passwords. Keep those Secrets separately from t
 ### Authentik is not covered
 
 This backup does not include Authentik. Authentik keeps its users, passkeys and OIDC application
-in its own Postgres (when enabled), a separate server that `pg_basebackup` of PS Postgres does
-not read. A tested Authentik backup and restore procedure is tracked in
-[#235](https://github.com/mindovermachine-dev/policy-system/issues/235). Until then, follow the
-upstream procedure: <https://docs.goauthentik.io/sys-mgmt/ops/backup-restore>.
+in its own Postgres, a separate server that `pg_basebackup` of PS Postgres does not read. Back it
+up with the [Authentik Backup](#authentik-backup) procedure and restore it with
+[Authentik Restore](#authentik-restore), which also covers restoring Authentik and PS together.
 
 ### Operational notes
 
@@ -747,6 +753,66 @@ upstream procedure: <https://docs.goauthentik.io/sys-mgmt/ops/backup-restore>.
   `ALTER ROLE` by hand as well.
 - A pre-existing PVC from a chart version that predates this layout does not contain the
   `ps_state` database. Upgrade onto a fresh PVC (nothing is migrated).
+
+## Authentik Backup
+
+Authentik keeps its users, enrolled passkeys, the `ps-cli` OIDC application and its flows in the
+`authentik` database of its own Postgres (`policy-system-authentik-postgres`, role `authentik`),
+separate from PS Postgres. The [PS backup](#backup) does not read it. Back it up with one logical
+dump (`pg_dump`, custom format): one file, taken from the running database.
+
+### Take an Authentik backup
+
+Run `pg_dump` inside the Authentik Postgres pod over the local socket and stream the archive to a
+local file:
+
+```bash
+kubectl exec deploy/policy-system-authentik-postgres -- pg_dump -U authentik -d authentik -Fc \
+  > "authentik-$(date -u +%Y%m%dT%H%M%SZ).dump"
+```
+
+`-Fc` writes one compressed archive that `pg_restore` can read. `pg_dump` takes a consistent
+snapshot of the live database, so Authentik can keep running.
+
+### Check the Authentik backup
+
+A backup is usable only if all three hold:
+
+1. The `kubectl exec` exit code is `0`.
+2. The file is not empty.
+3. `pg_restore -l` can read the archive:
+
+   ```bash
+   kubectl exec -i deploy/policy-system-authentik-postgres -- sh -c \
+     'cat > /tmp/check.dump && pg_restore -l /tmp/check.dump > /dev/null; rc=$?; rm -f /tmp/check.dump; exit $rc' \
+     < authentik-<UTC timestamp>.dump
+   ```
+
+   Copy the file into the pod before reading it, as above. Piping the file straight into
+   `pg_restore -l` leaves `kubectl exec` hanging after the command has finished.
+
+Delete a file that fails any check and run the backup again.
+
+### Authentik secrets to retain and protection
+
+The dump contains every user and their enrolled passkey credentials. It is not encrypted by
+Postgres or by the command. Keep it out of any repository, and store it encrypted at rest (an
+encrypted volume or bucket, or an encrypting archiver) with access limited to the operators who
+may restore the deployment. Treat it as you treat the PS backup, which holds the signing
+credentials.
+
+Keep these two Secrets with the backup, outside the cluster and outside the dump file:
+
+| Secret | Why |
+| --- | --- |
+| `policy-system-authentik-credentials` (key `AUTHENTIK_SECRET_KEY`; the same Secret also holds `AUTHENTIK_POSTGRESQL__PASSWORD`) | Authentik's secret key, which it uses for signing and for protecting stored values. A restored database is meant to be served with the key it was written under. Operator-managed: set `authentik.credentialsExistingSecret` and `authentik.authentik.existingSecret.secretName` to the same Secret name. |
+| `policy-system-authentik-api-token` (key `PS_AUTHENTIK_API_TOKEN`) | The API token PS Service sends to Authentik for invitations. Authentik stores the token in the database and applies the bootstrap token only once, so after a restore the original token works and a regenerated one does not. Operator-managed: `psService.authentik.existingSecret`. |
+
+What the kind verification showed: after a restore, the original API token was accepted by
+Authentik, and a passkey login still worked when Authentik ran with a different
+`AUTHENTIK_SECRET_KEY`. Keep the key anyway, because the test did not exercise every value
+Authentik protects with it. The dump holds no role entries, so it carries no database role or
+password. The Authentik database password is not needed to read the dump.
 
 ## Restore
 
@@ -805,7 +871,7 @@ decrypted copy only for the duration of the restore.
    migration the newer version adds to the restored databases.
 3. **Know the target.** The restore overwrites all PS Postgres data and empties FalkorDB in the
    current kubectl context. Authentik is not touched; restore it separately
-   (see [Authentik is not covered](#authentik-is-not-covered), [#235](https://github.com/mindovermachine-dev/policy-system/issues/235)).
+   (see [Authentik Restore](#authentik-restore), which also gives the order for restoring both).
 
 ### Restore with the script
 
@@ -951,6 +1017,75 @@ Use the role names from `psPostgres.admin.user`, `psPostgres.state.user` and
 last deployed revision, and `--reset-then-reuse-values` reuses that revision's values, so pass the
 `--set` flags again on the retry. Delete the leftover provisioning Job of the failed revision
 (`kubectl delete job policy-system-ps-state-provision-r<N>`).
+
+## Authentik Restore
+
+This puts one [Authentik backup file](#take-an-authentik-backup) back into the Authentik Postgres
+of a running release. The restore overwrites every user, passkey and flow in Authentik with the
+contents of the file. Users created, and passkeys enrolled, after the backup are gone, and users
+deleted after the backup reappear.
+
+### Restore Authentik by hand
+
+1. Stop the Authentik server and worker so nothing holds the database open:
+
+   ```bash
+   kubectl scale deploy/policy-system-authentik-server deploy/policy-system-authentik-worker --replicas=0
+   for component in server worker; do
+     kubectl wait --for=delete pod -l app.kubernetes.io/name=authentik,app.kubernetes.io/component=$component --timeout=180s
+   done
+   ```
+
+2. Replace the database. `authentik` is the Postgres superuser of this server, so it can drop and
+   create databases from the `postgres` maintenance database:
+
+   ```bash
+   kubectl exec deploy/policy-system-authentik-postgres -- psql -U authentik -d postgres \
+     -v ON_ERROR_STOP=1 -c 'DROP DATABASE authentik WITH (FORCE)' -c 'CREATE DATABASE authentik OWNER authentik'
+   kubectl exec -i deploy/policy-system-authentik-postgres -- \
+     pg_restore -U authentik -d authentik --exit-on-error --no-owner < authentik-<UTC timestamp>.dump
+   ```
+
+3. Start Authentik again and wait for it:
+
+   ```bash
+   kubectl scale deploy/policy-system-authentik-server deploy/policy-system-authentik-worker --replicas=1
+   kubectl rollout status deploy/policy-system-authentik-server --timeout=300s
+   kubectl rollout status deploy/policy-system-authentik-worker --timeout=300s
+   ```
+
+4. Check it: `pg_restore` exited `0`, and a user created after the backup is gone. Log in with
+   a passkey that was enrolled before the backup. PS Service resolves the
+   caller from the ID token `sub`, which for the `ps-cli` application is the Authentik username
+   (`sub_mode: user_username`), so a restored user presents the same `principal_subject` as before
+   and their PS access-role grants apply unchanged.
+
+### Restoring Authentik and PS together
+
+PS access-role grants are keyed by the Authentik username (`principal_subject`) and the issuer, so
+the two backups describe one identity state and should be taken at the same time. Restore in this
+order:
+
+1. Restore PS Postgres first ([Restore](#restore)). It stops PS Service and leaves it stopped.
+2. Restore Authentik ([Restore Authentik by hand](#restore-authentik-by-hand)) and wait until
+   the Authentik server is ready.
+3. Start PS Service last. It reads Authentik's OIDC discovery document when it starts and exits
+   with `OIDC discovery failed` while Authentik is unreachable, so it crash-loops if it starts
+   first.
+
+Restoring the two to different points in time has these consequences:
+
+- **Authentik older than PS.** A username created after the Authentik backup no longer exists in
+  Authentik but keeps its grants in PS. If a different person is later invited under that same
+  username, they inherit those grants. Review `list-access-roles` against the Authentik user
+  list and revoke grants for usernames that no longer exist before inviting anyone.
+- **Authentik newer than PS.** Users can exist that have no grants in PS, and a grant revoked
+  after the PS backup returns with the restore. Check the assignments after the restore.
+- **Users deleted after an older Authentik backup** reappear with working passkeys. Delete them
+  again in Authentik.
+
+The username-reuse risk is closed only by an immutable subject identifier, which is a separate
+decision and not part of this procedure.
 
 ---
 

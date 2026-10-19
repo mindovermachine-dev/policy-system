@@ -28,7 +28,8 @@ _BACKUP_COMMAND = (
     "kubectl exec deploy/policy-system-ps-postgres -- "
     "pg_basebackup -U postgres_admin -D - -Ft -X fetch -c fast"
 )
-_AUTHENTIK_BACKUP_DOCS = "https://docs.goauthentik.io/sys-mgmt/ops/backup-restore"
+_AUTHENTIK_BACKUP_LINK = "(#authentik-backup)"
+_AUTHENTIK_RESTORE_LINK = "(#authentik-restore)"
 
 
 def _read(path: Path) -> str:
@@ -1514,12 +1515,33 @@ def test_operations_guide_backup_states_contents_and_encryption() -> None:
     assert "not encrypted by Postgres or by the command" in backup
 
 
-def test_operations_guide_backup_excludes_authentik_and_links_the_follow_up() -> None:
+def test_operations_guide_backup_excludes_authentik_and_links_the_procedure() -> None:
     backup = _collapsed(_section(_read(_OPS), "## Backup"))
 
     assert "Authentik" in backup
     assert "not covered" in backup
-    assert _AUTHENTIK_BACKUP_DOCS in backup
+    assert _AUTHENTIK_BACKUP_LINK in backup
+    assert _AUTHENTIK_RESTORE_LINK in backup
+    assert "docs.goauthentik.io" not in backup
+
+
+def test_operations_guide_authentik_backup_and_restore_sections() -> None:
+    ops = _read(_OPS)
+    backup = _collapsed(_section(ops, "## Authentik Backup"))
+    restore = _collapsed(_section(ops, "## Authentik Restore"))
+
+    for needle in ("pg_dump", "-Fc", "pg_restore -l", "encrypted", "AUTHENTIK_SECRET_KEY"):
+        assert needle in backup, needle
+    for needle in ("passkey", "pg_restore", "principal_subject"):
+        assert needle in backup + restore, needle
+    assert "user and their enrolled passkey" in backup
+    assert "policy-system-authentik-api-token" in backup
+    for needle in (
+        "Restore PS Postgres first",
+        "Start PS Service last",
+        "different points in time",
+    ):
+        assert needle in restore, needle
 
 
 def test_operations_guide_backup_has_no_change_history_wording() -> None:
@@ -1631,7 +1653,8 @@ def test_no_old_backup_statements() -> None:
         "encrypted",
         "existingSecret",
         "--wait-for-jobs",
-        _AUTHENTIK_BACKUP_DOCS,
+        _AUTHENTIK_BACKUP_LINK,
+        _AUTHENTIK_RESTORE_LINK,
     ):
         assert present in backup_restore, present
 
