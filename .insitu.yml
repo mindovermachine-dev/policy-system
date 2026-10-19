@@ -215,6 +215,10 @@ inventory:
     command: |
       npx --no-install prettier --write .
 
+# insitu has no per-check dependencies: every check in a parallel wave starts
+# at once, and only waves run in order. A check that needs a tool installed by
+# another check (helm, node_modules) therefore goes in a follow-up wave, and
+# callers run both waves, e.g. `gh insitu run post-create post-create-deps`.
 waves:
   - id: post-create
     name: Dev Container Post Create
@@ -229,10 +233,15 @@ waves:
       - repo-gitconfig
       - install-actionlint
       - install-helm
-      - helm-dependency-build
       - install-lint-tools
-      - verify-lint-tools
       - verify-uv
+
+  - id: post-create-deps
+    name: Dev Container Post Create (needs installed tools)
+    parallel: true
+    checks:
+      - helm-dependency-build
+      - verify-lint-tools
 
   - id: "prep-runner"
     name: "Run to prepare GitHub runner"
@@ -243,9 +252,14 @@ waves:
       - install-lint-tools
       - install-actionlint
       - install-helm
-      - helm-dependency-build
       - sync-dev-group
       - version-txt
+
+  - id: prep-runner-deps
+    name: Prepare GitHub runner (needs installed tools)
+    parallel: true
+    checks:
+      - helm-dependency-build
 
   - id: trunk-worthy
     name: Minimum quality checks before commit

@@ -23,7 +23,7 @@ if ! gh auth status >/dev/null 2>&1; then
  To finish setup inside the container, run:
    gh auth login
    gh ext install devx-cafe/gh-insitu
-   gh insitu run post-create
+   gh insitu run post-create post-create-deps
 
  Or export GH_TOKEN on the host (e.g. `export GH_TOKEN=$(gh auth token)`),
  restart VS Code from that shell, and rebuild the container.
@@ -39,4 +39,4 @@ if gh ext list 2>/dev/null | grep -q 'devx-cafe/gh-insitu'; then
 else
   gh ext install devx-cafe/gh-insitu
 fi
-gh insitu run post-create
+gh insitu run post-create post-create-deps

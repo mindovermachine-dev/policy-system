@@ -72,7 +72,7 @@ runs:
     - name: Prepare runner environment
       shell: bash
       run: |
-        gh insitu run prep-runner
+        gh insitu run prep-runner prep-runner-deps
 
     - name: Verify environment
       if: ${{ inputs.verify }}

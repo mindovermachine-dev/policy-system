@@ -98,7 +98,7 @@ Never use `latest`; tags are `vMAJOR.MINOR.PATCH`. To move to a new tag:
 ```bash
 gh auth login
 gh ext install devx-cafe/gh-insitu
-gh insitu run post-create
+gh insitu run post-create post-create-deps
 ```
 
 Running PS Service against your own state Postgres (`scripts/ps-service.sh start`): the
