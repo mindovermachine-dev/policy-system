@@ -61,6 +61,13 @@ psService:
     # Opt-in only — even under the local-test profile this stays off by
     # default; an evaluator flips it with --set psService.localTestBypass.enabled=true.
     enabled: false
+  passkeySigning:
+    # Origins (scheme://host[:port]) the companion-browser approval page may be served from.
+    # The first entry names the WebAuthn relying party (its host is the rp_id); a POST on an
+    # approval route whose Host matches none of them is answered 421. Empty keeps the relying
+    # party derived from each request's own Host, which is only suitable for a deployment that
+    # is not reachable by other names.
+    allowedOrigins: []
   auth:
     # issuer/audience are required (render fails naming them) whenever
     # localTestBypass.enabled=false — see templates/ps-service-deployment.yaml's

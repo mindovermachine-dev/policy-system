@@ -69,6 +69,7 @@ def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_USER", raising=False)
     monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_PASSWORD", raising=False)
     monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_DATABASE", raising=False)
+    monkeypatch.delenv("PS_PASSKEYSIGNING_ALLOWED_ORIGINS", raising=False)
 
     result = load_config()
 
@@ -869,4 +870,59 @@ def test_load_config_fails_closed_naming_the_variable_for_an_invalid_drift_check
     with pytest.raises(
         ServiceConfigurationError, match="PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS"
     ):
+        load_config()
+
+
+# --- PS_PASSKEYSIGNING_ALLOWED_ORIGINS -------------------------------------
+
+
+def test_load_config_without_allowed_origins_yields_an_empty_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unset `PS_PASSKEYSIGNING_ALLOWED_ORIGINS` means no names are configured."""
+    monkeypatch.delenv("PS_PASSKEYSIGNING_ALLOWED_ORIGINS", raising=False)
+
+    assert load_config().passkey_signing_allowed_origins == ()
+
+
+def test_load_config_parses_allowed_origins_in_order_and_trims_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The comma-separated list keeps its order; the first entry is the relying-party name."""
+    monkeypatch.setenv(
+        "PS_PASSKEYSIGNING_ALLOWED_ORIGINS", " https://ps.test , http://localhost:8000 "
+    )
+
+    assert load_config().passkey_signing_allowed_origins == (
+        "https://ps.test",
+        "http://localhost:8000",
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "",
+        "   ",
+        ",",
+        "https://ps.test,,http://localhost:8000",
+        "ps.test",
+        "ps.test:8000",
+        "ftp://ps.test",
+        "https://ps.test/",
+        "https://ps.test/path",
+        "https://ps.test?x=1",
+        "https://ps.test#frag",
+        "https://",
+        "https://user@ps.test",
+        "https://ps.test:notaport",
+    ],
+)
+def test_load_config_rejects_a_malformed_allowed_origins_value(
+    invalid: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicitly set value that is empty or not `http(s)://host[:port]` fails closed."""
+    monkeypatch.setenv("PS_PASSKEYSIGNING_ALLOWED_ORIGINS", invalid)
+
+    with pytest.raises(ServiceConfigurationError, match="PS_PASSKEYSIGNING_ALLOWED_ORIGINS"):
         load_config()

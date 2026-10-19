@@ -497,6 +497,21 @@ tests:
       - notExists:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_SCOPES")]
 
+  - it: passkeySigning.allowedOrigins unset omits PS_PASSKEYSIGNING_ALLOWED_ORIGINS entirely
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_ALLOWED_ORIGINS")]
+
+  - it: passkeySigning.allowedOrigins renders one comma-joined PS_PASSKEYSIGNING_ALLOWED_ORIGINS in order
+    set:
+      psService.passkeySigning.allowedOrigins:
+        - https://ps.test
+        - http://localhost:8000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_ALLOWED_ORIGINS")].value
+          value: https://ps.test,http://localhost:8000
+
   - it: default render (localTestBypass.enabled=false, no auth values) fails naming the missing values
     set:
       llm.provider: ollama

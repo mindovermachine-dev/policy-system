@@ -2,22 +2,26 @@
 
 Independent of the identity provider's login-time WebAuthn: a separate credential type, a
 separate relying-party id (PS Service's own hostname, not the identity provider's issuer path) and
-separate storage (`signing_credentials`). `rp_id` and `origin` are derived from each request's own
-`Host` header and scheme, never hardcoded, the same "derive from the request itself" pattern as
-`ps_service.auth.middleware._resource_metadata_url`. The relying party therefore needs no
-configuration value and works under a local bind, a Kubernetes NodePort and a production ingress
-alike.
+separate storage (`signing_credentials`). When origins are configured
+(`ServiceConfig.passkey_signing_allowed_origins`), the first one names the relying party: its
+host is the `rp_id` and its scheme and authority the `origin`, whatever `Host` the request
+carries, and a request whose `Host` matches none of them is not served. When none is configured,
+`rp_id` and `origin` are derived from each request's own `Host` header and scheme, the same
+"derive from the request itself" pattern as `ps_service.auth.middleware._resource_metadata_url`,
+which works under a local bind, a Kubernetes NodePort and an ingress alike.
 
-Functions: `rp_id_and_origin`, `signable_link_host`, `enrollment_challenge`,
-`build_registration_options`, `verify_registration`, `build_authentication_options` and
-`verify_authentication`. Verification functions raise the `webauthn` library's
-`WebAuthnException` subclasses; the router maps them to one generic rejection.
+Functions: `rp_id_and_origin`, `request_host_is_allowed`, `signable_link_host`,
+`enrollment_challenge`, `build_registration_options`, `verify_registration`,
+`build_authentication_options` and `verify_authentication`. Verification functions raise the
+`webauthn` library's `WebAuthnException` subclasses; the router maps them to one generic
+rejection.
 """
 
 from __future__ import annotations
 
 import hashlib
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import webauthn
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor
@@ -45,25 +49,101 @@ collide, even for the same `pending_approvals` row.
 """
 
 
-def rp_id_and_origin(request: Request) -> tuple[str, str]:
-    """Derive the WebAuthn `(rp_id, origin)` pair from the live request's scheme and host.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
-    `rp_id` is the bare host with any port stripped (a port is never valid in a relying-party
-    id). `origin` keeps the port and matches the browser's own origin exactly
-    (`scheme://host[:port]`), because the verification compares it verbatim against
-    `clientDataJSON.origin`.
+
+def _request_host(request: Request) -> str:
+    """Return the request's `Host` header, else the URL's hostname, else an empty string."""
+    return request.headers.get("host") or request.url.hostname or ""
+
+
+def _authority_key(authority: str, scheme: str) -> tuple[str, int] | None:
+    """Normalise a `host[:port]` to `(lowercase host without brackets, effective port)`.
+
+    The effective port is the explicit one, else the default of `scheme`. A malformed
+    authority yields `None`, which matches nothing.
+    """
+    try:
+        parts = urlsplit(f"//{authority}")
+        port = parts.port
+    except ValueError:
+        return None
+    if not parts.hostname:
+        return None
+    return parts.hostname, port or _DEFAULT_PORTS.get(scheme, 0)
+
+
+def _matching_origin(request: Request, origins: Sequence[str]) -> str | None:
+    """Return the configured origin whose authority equals the request's `Host`, else `None`.
+
+    Host and origin are compared case-insensitively, with a missing port read as the default of
+    the origin's own scheme and an IPv6 literal compared without its brackets. The request's
+    own scheme is not consulted.
+    """
+    host = _request_host(request)
+    for origin in origins:
+        parts = urlsplit(origin)
+        configured = _authority_key(parts.netloc, parts.scheme)
+        if configured is not None and configured == _authority_key(host, parts.scheme):
+            return origin
+    return None
+
+
+def _configured_origins(request: Request) -> tuple[str, ...]:
+    """Return the allowed origins from the running app's configuration."""
+    return request.app.state.config.passkey_signing_allowed_origins
+
+
+def request_host_is_allowed(request: Request) -> bool:
+    """Return whether the request's `Host` may be served by the signing ceremony.
+
+    Business Rules:
+        With no configured origins every host is allowed. Otherwise the `Host` header must
+        equal the authority of at least one configured origin; `X-Forwarded-Host` and
+        `Forwarded` are never consulted.
 
     Args:
-        request: The incoming HTTP request. Its `Host` header is used; when absent, the URL's
-            hostname, and when that is absent too, an empty string.
+        request: The incoming HTTP request.
 
     Returns:
-        A tuple `(rp_id, origin)`. Nothing is validated: an empty host yields an empty `rp_id`.
+        `True` when no origins are configured or the host matches one; `False` otherwise.
 
     Side Effects:
         None.
     """
-    host = request.headers.get("host") or request.url.hostname or ""
+    origins = _configured_origins(request)
+    return not origins or _matching_origin(request, origins) is not None
+
+
+def rp_id_and_origin(request: Request) -> tuple[str, str]:
+    """Return the WebAuthn `(rp_id, origin)` pair for a request.
+
+    `rp_id` is a bare host with any port stripped (a port is never valid in a relying-party
+    id). `origin` keeps the port and matches the browser's own origin exactly
+    (`scheme://host[:port]`), because the verification compares it verbatim against
+    `clientDataJSON.origin`.
+
+    Business Rules:
+        With configured origins, `rp_id` is the first origin's host, so it stays stable across
+        every configured name, and `origin` is the configured origin the request's `Host`
+        matches (the first one when none matches). With none configured, both are derived from
+        the request's `Host` header and scheme, and nothing is validated.
+
+    Args:
+        request: The incoming HTTP request. Without configured origins its `Host` header is
+            used; when absent, the URL's hostname, and when that is absent too, an empty string.
+
+    Returns:
+        A tuple `(rp_id, origin)`. An empty host yields an empty `rp_id` when unconfigured.
+
+    Side Effects:
+        None.
+    """
+    origins = _configured_origins(request)
+    if origins:
+        first = origins[0]
+        return urlsplit(first).hostname or "", _matching_origin(request, origins) or first
+    host = _request_host(request)
     rp_id = host.split(":", 1)[0]
     origin = f"{request.url.scheme}://{host}"
     return rp_id, origin

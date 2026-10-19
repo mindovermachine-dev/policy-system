@@ -154,6 +154,21 @@ Tell kind to use Podman:
 export KIND_EXPERIMENTAL_PROVIDER=podman
 ```
 
+Check that this machine is safe to expose. The cluster publishes Authentik on every network
+interface of the machine (port `30443`), so the check lists the machine's addresses and fails
+when one is outside the loopback, link-local and private ranges:
+
+```bash
+scripts/deploy-ps-eval.sh --check-exposure
+```
+
+The command prints `Exposure check passed` and exits `0` when every address is private. If it
+fails, it names each public address. Disconnect or firewall that interface and run it again. If you
+accept the exposure, pass `--allow-public-host`. A VPN address (for example Tailscale's
+`100.64.0.0/10`) and a global IPv6 address also count as public. A machine with such an address
+needs the flag on both calls: `--check-exposure --allow-public-host` here and `--allow-public-host`
+on the `scripts/deploy-ps-eval.sh` run in step 7.
+
 Create the cluster:
 
 ```bash
@@ -181,7 +196,7 @@ The command prints the cluster information when the cluster is up.
 >
 > After you delete the cluster:
 >
-> 1. Run the `kind create cluster` command above again.
+> 1. Run the exposure check and the `kind create cluster` command of this step again.
 > 2. Run step 5 and the steps after it again.
 > 3. Restore a PS Postgres backup (see [Operations Guide:
 >    Restore](./operations-guide.md#restore)), or load the content again. See [User Guide: Load
@@ -292,6 +307,8 @@ One script does the whole deployment. Before you run it, make sure that:
 - The LLM Secret from step 5 exists.
 - The cluster has the `30443` port mapping from step 4. If step 4's warning applies to you,
   recreate the cluster first.
+- If step 4 needed `--allow-public-host`, pass it here too. The script runs the same exposure
+  check first.
 
 Run the script:
 
@@ -305,19 +322,21 @@ Authentik administrator.
 
 The script does these things, in this order:
 
-1. It checks that `kubectl`, `helm`, `openssl`, `jq`, `curl`, and `podman` (or `docker`) are
+1. It checks that no interface of the machine holds a public address (see step 4). It stops
+   before any cluster call, unless you passed `--allow-public-host`.
+2. It checks that `kubectl`, `helm`, `openssl`, `jq`, `curl`, and `podman` (or `docker`) are
    on `PATH`. It stops and names every missing tool.
-2. It finds the IP address of the kind node.
-3. It creates a local certificate authority once. It creates a certificate for the hostname.
+3. It finds the IP address of the kind node.
+4. It creates a local certificate authority once. It creates a certificate for the hostname.
    It stores both in the state directory with owner-only permissions. It creates the
    certificate again when the hostname changes or the certificate is close to expiry.
-4. It runs **one** `helm upgrade --install`. This sets the issuer
+5. It runs **one** `helm upgrade --install`. This sets the issuer
    (`https://<hostname>:30443/application/o/ps-cli/`) and the bootstrap owner together. The
    bootstrap owner is the owner's email as `sub`, with that issuer. There is no second
    deployment. The script runs the upgrade again only when its values change.
-5. It waits until Authentik and PS Service are Ready. It makes Authentik serve the local
+6. It waits until Authentik and PS Service are Ready. It makes Authentik serve the local
    certificate.
-6. It creates the owner as an Authentik administrator. The username and email are the address
+7. It creates the owner as an Authentik administrator. The username and email are the address
    you gave. **No password is set, prompted for, or logged.** It prints a single-use,
    time-limited link to register a passkey.
 
@@ -604,6 +623,22 @@ purpose, so colleagues on the LAN can log in. This table shows what is reachable
 2. Sign in as the owner.
 
 The admin UI uses the same HTTPS listener as everything else. You do not need a port-forward.
+
+**The exposure preflight.** `scripts/deploy-ps-eval.sh` stops before any cluster call when an
+interface of the machine holds a public address, and `scripts/deploy-ps-eval.sh --check-exposure`
+runs only that check (step 4 runs it before `kind create cluster`). Loopback, link-local, and
+private addresses pass: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`,
+`fc00::/7`, and `fe80::/10`. Everything else fails, including a VPN address in `100.64.0.0/10`. If
+`ip` and `ifconfig` are both missing, the check fails because it cannot verify. `--allow-public-host`
+accepts the exposure.
+
+**Approval-page names.** The deploy script sets `psService.passkeySigning.allowedOrigins` to
+`http://localhost:8000`. That origin is the WebAuthn relying party for signing approvals
+(`rp_id` `localhost`), whatever hostname you pass to `--hostname`, and a POST to an approval
+route (`/approvals/<id>/...`) on any other `Host` is answered `421`. Approve from this machine
+at `localhost:8000`. The approval link the service hands out is built from the `Host` of the
+request that created it, so a client that reached PS Service under a name that is not listed
+receives a link that answers `421`; open it on `http://localhost:8000` instead.
 
 **To limit access to your own machine:**
 

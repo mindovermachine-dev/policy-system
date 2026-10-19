@@ -55,9 +55,10 @@ case "$args" in
     elif [[ -e "$FAKE_DIR/restored" ]]; then cat "$FAKE_DIGESTS_AFTER"
     else cat "$FAKE_DIGESTS_EMPTY"; fi
     exit 0 ;;
+  *"exec"*"deploy/policy-system-ps-service -- python -c"*)
+    cat >/dev/null; printf '%s\\n' "$FAKE_READY"; exit 0 ;;
   *"exec -i deploy/policy-system-ps-service -- python -"*)
     cat >>"$FAKE_DIR/seed-stdin.txt"; exit 0 ;;
-  *"exec deploy/policy-system-ps-service"*) printf '%s\\n' "$FAKE_READY"; exit 0 ;;
   *"psql"*"DISTINCT graph"*) printf 'alpha\\nbeta\\n'; exit 0 ;;
   *psql*)
     if [[ -e "$FAKE_DIR/restored" ]]; then printf '%s\\n' "$FAKE_COUNT_AFTER"

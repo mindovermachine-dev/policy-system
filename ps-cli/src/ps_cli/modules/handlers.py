@@ -32,12 +32,16 @@ if TYPE_CHECKING:
 _LLM_INTERFACE_DEPENDENCY_NAME = "llm_interface"
 
 
+_LOGIN_FOR_DETAIL_HINT = "log in to see dependency detail"
+
+
 def _assert_llm_interface_available(client: PsServiceClientProtocol) -> None:
     """Fail fast with a `PsCliError` when PS Service reports its LLM Interface as unreachable.
 
-    Uses the service's existing readiness check. Only `llm_interface` appearing in
-    `unhealthy_dependencies` blocks the command; `cellar_eli` alone never does,
-    since it is only needed conditionally for the non-curated CELEX fallback. The
+    Uses the service's readiness check with the dependency names required (the call is
+    authenticated, and a reply without names is an error rather than a pass). Only
+    `llm_interface` appearing in `unhealthy_dependencies` blocks the command; `cellar_eli`
+    alone never does, since it is only needed conditionally for the non-curated CELEX fallback. The
     error message names the dependency only, never the raw recorded error string.
     An unreachable PS Service is reported by `check_readiness()` itself with distinct
     wording ("Could not reach PS Service...").
@@ -49,15 +53,22 @@ def _assert_llm_interface_available(client: PsServiceClientProtocol) -> None:
         None when the LLM Interface is not reported unhealthy.
 
     Raises:
-        PsCliError: The LLM Interface is reported unhealthy, or PS Service is
+        PsCliError: The LLM Interface is reported unhealthy, the dependency names are
+            unavailable (not logged in, or a reply without names), or PS Service is
             unreachable or returns an unexpected readiness response.
 
     Side Effects:
         Makes one readiness request to PS Service.
     """
-    readiness = client.check_readiness()
+    readiness = client.check_readiness(require_detail=True)
+    unhealthy = readiness.unhealthy_dependencies
     assert_contract(
-        contract=_LLM_INTERFACE_DEPENDENCY_NAME not in readiness.unhealthy_dependencies,
+        contract=unhealthy is not None,
+        msg="readiness detail unavailable.",
+        hint="run `ps-cli auth login` and retry",
+    )
+    assert_contract(
+        contract=_LLM_INTERFACE_DEPENDENCY_NAME not in (unhealthy or ()),
         msg="LLM Interface is unavailable.",
         hint="check PS Service's /ready endpoint and its LLM provider configuration",
     )
@@ -188,7 +199,9 @@ def handle_get_health(client: PsServiceClientProtocol) -> None:
     The three summary lines print only once both checks have succeeded, so nothing
     is printed before a call that might still fail. "Reachable but not ready" is
     reported as a `PsCliError` whose hint lists the unhealthy dependencies, if any
-    are named (a not-ready state is not always attributable to one).
+    are named (a not-ready state is not always attributable to one). The readiness
+    request carries the login when there is one; without a login PS Service answers
+    the status only and the report points to `ps-cli auth login` for the detail.
 
     Args:
         client: The PS Service client to use.
@@ -208,11 +221,13 @@ def handle_get_health(client: PsServiceClientProtocol) -> None:
     """
     health_status = client.check_health()
     readiness = client.check_readiness()
-    hint = (
-        f"unhealthy dependencies: {', '.join(sorted(readiness.unhealthy_dependencies))}"
-        if readiness.unhealthy_dependencies
-        else None
-    )
+    names = readiness.unhealthy_dependencies
+    if names is None:
+        hint: str | None = _LOGIN_FOR_DETAIL_HINT
+    elif names:
+        hint = f"unhealthy dependencies: {', '.join(sorted(names))}"
+    else:
+        hint = None
     assert_contract(
         contract=health_status == "alive" and readiness.status == "ready",
         msg=(
@@ -224,6 +239,8 @@ def handle_get_health(client: PsServiceClientProtocol) -> None:
     print("reachable: yes")
     print(f"health: {health_status}")
     print(f"ready: {readiness.status}")
+    if names is None:
+        print(f"💡 {_LOGIN_FOR_DETAIL_HINT}")
 
 
 def _dispatch_export_instrument(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:

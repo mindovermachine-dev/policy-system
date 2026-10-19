@@ -625,7 +625,6 @@ class TestCheckReadiness:
         [
             ["not", "a", "dict"],
             {"status": 123, "unhealthy_dependencies": []},
-            {"status": "ready"},
             {"status": "ready", "unhealthy_dependencies": "not-a-list"},
             {"status": "ready", "unhealthy_dependencies": ["falkordb", 123]},
         ],
@@ -633,8 +632,8 @@ class TestCheckReadiness:
     def test_check_readiness_raises_generic_error_on_malformed_body(self, body: object) -> None:
         """Every malformed /ready body shape raises the generic PsCliError.
 
-        Covers: non-dict body, status not a string, missing unhealthy_dependencies
-        key, unhealthy_dependencies not a list, and a non-string list item.
+        Covers: non-dict body, status not a string, unhealthy_dependencies not a
+        list, and a non-string list item.
         """
         client = PsServiceClient(
             "http://127.0.0.1:8000",
@@ -1003,3 +1002,131 @@ class TestUnauthorizedResponseMapping:
 
         assert marker_access_token not in excinfo.value.msg
         assert marker_access_token not in (excinfo.value.hint or "")
+
+
+def _logged_in_client(handler: Callable[[httpx.Request], httpx.Response]) -> PsServiceClient:
+    transport, _ = _build_auth_and_business_transport(handler)
+    store = _FakeCredentialStore()
+    store.set_tokens("dev", TokenBundle(refresh_token="seed-rt", issuer=_FAKE_ISSUER))
+    return PsServiceClient(
+        "http://127.0.0.1:8000", transport=transport, credential_store=store, context="dev"
+    )
+
+
+def _not_logged_in_client(handler: Callable[[httpx.Request], httpx.Response]) -> PsServiceClient:
+    transport, _ = _build_auth_and_business_transport(handler)
+    return PsServiceClient(
+        "http://127.0.0.1:8000",
+        transport=transport,
+        credential_store=_FakeCredentialStore(),
+        context="dev",
+    )
+
+
+_READY_BODY_STATUS_ONLY: dict[str, object] = {"status": "ready"}
+
+
+class TestCheckReadinessDetail:
+    """`check_readiness` against a status-only reply and against an authenticated one."""
+
+    def test_status_only_body_parses_with_no_dependency_names(self) -> None:
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_make_ready_handler(_READY_BODY_STATUS_ONLY)),
+        )
+
+        result = client.check_readiness()
+
+        assert result == ReadinessResult(status="ready", unhealthy_dependencies=None)
+
+    def test_required_detail_raises_when_the_reply_carries_no_dependency_names(self) -> None:
+        transport, _ = _build_auth_and_business_transport(
+            _make_ready_handler(_READY_BODY_STATUS_ONLY)
+        )
+        store = _FakeCredentialStore()
+        store.set_tokens("dev", TokenBundle(refresh_token="seed-rt", issuer=_FAKE_ISSUER))
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=transport, credential_store=store, context="dev"
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.check_readiness(require_detail=True)
+
+        assert "readiness detail unavailable" in excinfo.value.msg
+
+    def test_required_detail_without_credentials_configured_raises_and_sends_nothing(
+        self,
+    ) -> None:
+        requests_seen: list[httpx.Request] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests_seen.append(request)
+            return httpx.Response(200, json=_READY_BODY_HEALTHY)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.check_readiness(require_detail=True)
+
+        assert "readiness detail unavailable" in excinfo.value.msg
+        assert requests_seen == []
+
+    def test_required_detail_when_not_logged_in_raises_and_never_asks_for_readiness(
+        self,
+    ) -> None:
+        requests_seen: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests_seen.append(request.url.path)
+            return httpx.Response(200, json=_READY_BODY_HEALTHY)
+
+        client = _not_logged_in_client(_handler)
+
+        with pytest.raises(PsCliError):
+            client.check_readiness(require_detail=True)
+
+        assert "/ready" not in requests_seen
+
+    def test_required_detail_sends_the_bearer_token_and_returns_the_names(self) -> None:
+        captured: list[str | None] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request.headers.get("authorization"))
+            return httpx.Response(200, json=_READY_BODY_NOT_READY)
+
+        client = _logged_in_client(_handler)
+
+        result = client.check_readiness(require_detail=True)
+
+        assert captured == ["Bearer refreshed-token-1"]
+        assert result.unhealthy_dependencies == ["falkordb", "cellar_eli"]
+
+    def test_default_call_when_logged_in_sends_the_bearer_token_and_returns_the_names(
+        self,
+    ) -> None:
+        captured: list[str | None] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request.headers.get("authorization"))
+            return httpx.Response(200, json=_READY_BODY_NOT_READY)
+
+        client = _logged_in_client(_handler)
+
+        result = client.check_readiness()
+
+        assert captured == ["Bearer refreshed-token-1"]
+        assert result.unhealthy_dependencies == ["falkordb", "cellar_eli"]
+
+    def test_default_call_when_not_logged_in_still_succeeds_without_a_token(self) -> None:
+        captured: list[str | None] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request.headers.get("authorization"))
+            return httpx.Response(200, json=_READY_BODY_STATUS_ONLY)
+
+        client = _not_logged_in_client(_handler)
+
+        result = client.check_readiness()
+
+        assert captured == [None]
+        assert result == ReadinessResult(status="ready", unhealthy_dependencies=None)

@@ -32,10 +32,13 @@ from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig
 from graph_gateway.live_endpoints import falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
+from mcp.server.auth.provider import AccessToken
 from persistence.provisioned_postgres import Provisioned, provision_graph_log
+from starlette.requests import Request
 
 import ps_service.main as main_module
 from ps_service import dependency_health
+from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.config import ServiceConfig, load_config
 from ps_service.graph_gateway.connection import connect as connect_falkordb
 from ps_service.graph_gateway.connection import select_graph
@@ -81,7 +84,6 @@ if TYPE_CHECKING:
     from starlette.applications import Starlette
 
     from ps_service.auth.models import AuthContext
-    from ps_service.auth.verifier import PsTokenVerifier
     from ps_service.graph_gateway.connection import GraphQueryResult
     from ps_service.graph_gateway.connection import WritableGraph as GraphHandle
 
@@ -152,6 +154,35 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     monkeypatch.setattr(
         main_module, "check_state_postgres_connectivity", stub_check_state_postgres_connectivity
     )
+
+
+_DETAIL_TOKEN = "readiness-detail-token"
+_DETAIL_HEADERS = {"Authorization": f"Bearer {_DETAIL_TOKEN}"}
+
+
+@pytest.fixture(autouse=True)
+def _accept_the_detail_token(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Make the verifier accept `_DETAIL_TOKEN` as a valid access token and reject any other.
+
+    Every app in this file builds its verifier from a fake discovery document, so there is no
+    real signing key to mint a token with; this stands in for a successful verification.
+    """
+
+    async def verify_token(self: PsTokenVerifier, token: str) -> AccessToken | None:
+        if token != _DETAIL_TOKEN:
+            return None
+        return AccessToken(token=token, client_id="detail-reader", scopes=[])
+
+    # detroit-exception: the verifier's cryptographic path needs a real IdP signing key; the
+    # readiness detail gate under test only depends on its accept/reject answer
+    monkeypatch.setattr(PsTokenVerifier, "verify_token", verify_token)
+
+
+def _ready_detail(client: TestClient) -> httpx.Response:
+    """GET /ready presenting the token the fake verifier accepts."""
+    return client.get("/ready", headers=_DETAIL_HEADERS)  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
 
 
 def _fake_fetch_discovery_document(issuer: str, **_kwargs: object) -> dict[str, Any]:
@@ -300,7 +331,7 @@ def test_health_version_matches_ps_service_pyproject_toml_version(app: FastAPI) 
 
 def test_ready_returns_503_and_not_ready_status_before_lifespan_runs(app: FastAPI) -> None:
     """GET /ready via a bare (never-entered) TestClient returns 503 and 'not_ready'."""
-    response = TestClient(app).get("/ready")
+    response = _ready_detail(TestClient(app))
 
     assert response.status_code == 503
     assert response.json() == {
@@ -315,10 +346,92 @@ def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> No
     /ready to 'ready'.
     """
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
+
+
+def test_ready_without_credentials_returns_status_only_when_not_ready(app: FastAPI) -> None:
+    """A probe with no token gets the status and nothing about dependencies or graphs."""
+    response = TestClient(app).get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
+
+
+def test_ready_without_credentials_returns_status_only_when_ready(app: FastAPI) -> None:
+    """A ready service still answers a tokenless probe with 200 and the status alone."""
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+def test_ready_without_credentials_hides_a_named_unhealthy_dependency(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """A failing gating dependency flips the code to 503 but is not named to an anonymous caller."""
+
+    def failing_probe(config: ServiceConfig) -> None:
+        error = IngestionConfigurationError("FalkorDB connection failed")
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
+        raise error
+
+    monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_probe)
+
+    with TestClient(app) as client:
+        anonymous = client.get("/ready")
+        authenticated = _ready_detail(client)
+
+    assert anonymous.status_code == 503
+    assert anonymous.json() == {"status": "not_ready"}
+    assert authenticated.json()["unhealthy_dependencies"] == ["falkordb"]
+
+
+def test_ready_with_a_valid_token_returns_detail(app: FastAPI) -> None:
+    """A verified caller gets the status, the unhealthy dependency names and the gated graphs."""
+    with TestClient(app) as client:
+        response = _ready_detail(client)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
+
+
+def test_ready_with_an_invalid_token_is_status_only_and_not_a_401(app: FastAPI) -> None:
+    """A token the verifier rejects never breaks the probe and never unlocks the detail."""
+    with TestClient(app) as client:
+        response = client.get("/ready", headers={"Authorization": "Bearer not-the-token"})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+@pytest.mark.parametrize("header", ["Basic abc", "Bearer", "Bearer   ", _DETAIL_TOKEN])
+def test_ready_with_a_malformed_authorization_header_is_status_only(
+    header: str, app: FastAPI
+) -> None:
+    """Only a `Bearer <token>` header is considered; anything else is an anonymous call."""
+    with TestClient(app) as client:
+        response = client.get("/ready", headers={"Authorization": header})
+
+    assert response.json() == {"status": "ready"}
+
+
+def test_ready_with_bypass_unauthenticated_is_status_only() -> None:
+    """With the local-test bypass there is no verifier, so there is no detail path at all."""
+    config = _complete_config(
+        is_local_test_bypass_active=True, auth_issuer=None, auth_audience=None
+    )
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        plain = client.get("/ready")
+        with_bearer = _ready_detail(client)
+
+    assert plain.json() == {"status": "ready"}
+    assert with_bearer.json() == {"status": "ready"}
 
 
 def test_lifespan_calls_configure_before_emit_log_entry(tmp_path: Path, app: FastAPI) -> None:
@@ -420,11 +533,11 @@ def _get_ready_after_lifespan_startup(app: FastAPI) -> httpx.Response:
     ("make_response", "expected_status", "expected_keys"),
     [
         (_get_bare_health, 200, {"status", "version"}),
-        (_get_bare_ready, 503, {"status", "unhealthy_dependencies", "gated_graphs"}),
+        (_get_bare_ready, 503, {"status"}),
         (
             _get_ready_after_lifespan_startup,
             200,
-            {"status", "unhealthy_dependencies", "gated_graphs"},
+            {"status"},
         ),
     ],
 )
@@ -439,8 +552,8 @@ def test_response_body_contains_only_a_status_key(
     Covers every state the health/ready tests reach: bare `/health`
     (200, `{"status"}`), bare `/ready` before `lifespan` runs (503, not
     ready), and `/ready` after `lifespan` startup completes (200, ready) —
-    both `/ready` states carry `{"status", "unhealthy_dependencies", "gated_graphs"}`
-    — no undocumented key ever leaks into either response.
+    both anonymous `/ready` states carry `{"status"}` alone — no undocumented key
+    ever leaks into any of these responses.
     """
     response = make_response(app)
 
@@ -1211,7 +1324,7 @@ def test_ready_stays_not_ready_after_startup_when_a_dependency_check_fails(
     monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
 
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     # `check_connectivity_from_config` wraps both the connect step and the
     # `list_graphs()` probe in one `dependency_health`-recording try/except, so
@@ -1333,7 +1446,7 @@ def test_ready_stays_ready_when_only_passkey_signing_postgres_check_fails(
     )
 
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.json() == {
         "status": "ready",
@@ -1468,7 +1581,7 @@ def test_ready_is_not_ready_when_state_postgres_check_fails(
     )
 
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.status_code == 503
     assert response.json() == {
@@ -1514,7 +1627,7 @@ def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not
     )
 
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.status_code == 503
     assert response.json() == {
@@ -1650,7 +1763,7 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
     reflected on the next `/ready` poll, without needing a restart.
     """
     with TestClient(app) as client:
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1658,7 +1771,7 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
 
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
 
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": ["falkordb"],
             "gated_graphs": [],
@@ -1668,7 +1781,7 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
 def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -> None:
     with TestClient(app) as client:
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": ["falkordb"],
             "gated_graphs": [],
@@ -1676,7 +1789,7 @@ def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -
 
         dependency_health.mark_healthy(dependency_health.FALKORDB)
 
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1686,7 +1799,7 @@ def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -
 def test_ready_response_has_empty_unhealthy_dependencies_list_when_ready(app: FastAPI) -> None:
     """A fully healthy `/ready` response names zero unhealthy dependencies."""
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
 
@@ -1696,7 +1809,7 @@ def test_ready_response_lists_unhealthy_dependency_names_when_not_ready(app: Fas
     with TestClient(app) as client:
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
 
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.json() == {
         "status": "not_ready",
@@ -1715,7 +1828,7 @@ def test_ready_response_never_contains_the_raw_mark_unhealthy_error_string(app: 
             error=RuntimeError("super-secret-connection-string-should-never-leak"),
         )
 
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert "super-secret-connection-string-should-never-leak" not in response.text
     assert response.json()["unhealthy_dependencies"] == ["falkordb"]
@@ -1727,7 +1840,7 @@ def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: Fast
     it in `unhealthy_dependencies` but must not flip `status` to `not_ready`.
     """
     with TestClient(app) as client:
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1737,7 +1850,7 @@ def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: Fast
             dependency_health.LLM_INTERFACE, error=ConnectionError("boom")
         )
 
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": ["llm_interface"],
             "gated_graphs": [],
@@ -1750,7 +1863,7 @@ def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI
     `status` to `not_ready`.
     """
     with TestClient(app) as client:
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1760,7 +1873,7 @@ def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI
             dependency_health.CELLAR_ELI, error=ConnectionError("boom")
         )
 
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": ["cellar_eli"],
             "gated_graphs": [],
@@ -1779,7 +1892,7 @@ def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without
         dependency_health.mark_unhealthy(
             dependency_health.LLM_INTERFACE, error=ConnectionError("boom")
         )
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": ["llm_interface"],
             "gated_graphs": [],
@@ -1787,7 +1900,7 @@ def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without
 
         dependency_health.mark_healthy(dependency_health.LLM_INTERFACE)
 
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1805,7 +1918,7 @@ def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_re
         dependency_health.mark_unhealthy(
             dependency_health.CELLAR_ELI, error=ConnectionError("boom")
         )
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": ["cellar_eli"],
             "gated_graphs": [],
@@ -1813,7 +1926,7 @@ def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_re
 
         dependency_health.mark_healthy(dependency_health.CELLAR_ELI)
 
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1836,7 +1949,7 @@ def test_ready_lists_both_llm_interface_and_cellar_eli_when_both_unhealthy_but_s
             dependency_health.CELLAR_ELI, error=ConnectionError("boom")
         )
 
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.json() == {
         "status": "ready",
@@ -1862,7 +1975,7 @@ def test_ready_is_ready_when_llm_interface_startup_probe_fails_but_falkordb_succ
     monkeypatch.setattr(main_module, "check_llm_interface_connectivity", failing_llm_check)
 
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.json() == {
         "status": "ready",
@@ -1888,7 +2001,7 @@ def test_ready_is_ready_when_cellar_eli_startup_probe_fails_but_falkordb_succeed
     monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", failing_cellar_check)
 
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.json() == {
         "status": "ready",
@@ -1953,7 +2066,7 @@ def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_p
     monkeypatch.setattr(main_module, "check_falkordb_connectivity", flaky_falkordb_check)
 
     with TestClient(app) as client:
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": ["falkordb"],
             "gated_graphs": [],
@@ -1961,7 +2074,7 @@ def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_p
 
         falkordb_reachable = True
 
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1985,7 +2098,7 @@ def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_
 
     with TestClient(app) as client:
         for _ in range(3):
-            response = client.get("/ready")
+            response = _ready_detail(client)
             assert response.status_code == 503
             assert response.json() == {
                 "status": "not_ready",
@@ -2056,7 +2169,8 @@ def test_concurrent_ready_polls_while_not_ready_leave_app_state_consistent(
     """Concurrent `/ready` requests while `app.state.ready` is
     `False` must not corrupt `dependency_health` registry state or leave
     `app.state.ready` inconsistent. `ready()`'s retry body has no `await`
-    point, so within one process no two calls ever truly interleave --
+    point (an anonymous call never reaches the verifier), so within one process no two calls
+    ever truly interleave --
     proven here by actually racing many concurrent calls via
     `asyncio.gather` against the same running app.
     """
@@ -2073,7 +2187,8 @@ def test_concurrent_ready_polls_while_not_ready_leave_app_state_consistent(
     )
 
     async def poll() -> JSONResponse:
-        return cast("JSONResponse", await ready_route.endpoint())
+        anonymous_request = Request({"type": "http", "headers": []})
+        return cast("JSONResponse", await ready_route.endpoint(anonymous_request))
 
     async def poll_many() -> list[JSONResponse]:
         return await asyncio.gather(*(poll() for _ in range(20)))
@@ -2098,7 +2213,7 @@ def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete
     incomplete_app = create_app(_complete_config(company_merge_similarity_threshold=None))
 
     with TestClient(incomplete_app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.json() == {
         "status": "not_ready",
@@ -2115,7 +2230,7 @@ def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
     complete_app = create_app(_complete_config())
 
     with TestClient(complete_app) as client:
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
 
@@ -2155,12 +2270,12 @@ def test_ready_never_self_heals_missing_config_without_a_restart(app: FastAPI) -
     incomplete_app = create_app(_complete_config(company_merge_similarity_threshold=None))
 
     with TestClient(incomplete_app) as client:
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
         }
-        assert client.get("/ready").json() == {
+        assert _ready_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -2653,10 +2768,10 @@ def test_ready_reports_not_ready_while_startup_replay_runs_then_ready_when_it_en
 
     with TestClient(app) as client:
         assert blocked.reached.wait(timeout=5), "the startup replay never started"
-        during = client.get("/ready")
+        during = _ready_detail(client)
         blocked.release.set()
         status_after = _await_ready(client)
-        after = client.get("/ready")
+        after = _ready_detail(client)
 
     assert during.status_code == 503
     assert during.json()["status"] == "not_ready"
@@ -2846,7 +2961,7 @@ def test_infrastructure_error_during_startup_replay_holds_not_ready_and_retries(
         deadline = time.monotonic() + 5
         while not _retry_entries(read_lines) and time.monotonic() < deadline:
             time.sleep(0.01)
-        during = [client.get("/ready") for _ in range(3)]
+        during = [_ready_detail(client) for _ in range(3)]
         graph.heal()
         status_after = _await_ready(client)
 
@@ -2909,7 +3024,7 @@ def test_ready_lists_a_graph_that_failed_verification_in_gated_graphs_with_statu
 
     with TestClient(app) as client:
         _await_ready(client)
-        response = client.get("/ready")
+        response = _ready_detail(client)
 
     assert response.status_code == 200
     assert response.json() == {
@@ -2928,7 +3043,7 @@ def test_ready_gated_graphs_is_empty_when_all_graphs_are_healthy(
 
     with TestClient(app) as client:
         _await_ready(client)
-        body = client.get("/ready").json()
+        body = _ready_detail(client).json()
 
     assert body["gated_graphs"] == []
 
@@ -2941,7 +3056,7 @@ def test_ready_gated_graphs_is_present_while_replay_is_running_and_empty(
 
     with TestClient(app) as client:
         assert replay.reached(0)
-        body = client.get("/ready").json()
+        body = _ready_detail(client).json()
         replay.release_all()
         _await_ready(client)
 
@@ -2952,7 +3067,7 @@ def test_ready_gated_graphs_is_empty_without_a_graph_gateway() -> None:
     app = create_app(_complete_config())
 
     with TestClient(app) as client:
-        body = client.get("/ready").json()
+        body = _ready_detail(client).json()
 
     assert body["gated_graphs"] == []
 
@@ -2960,7 +3075,7 @@ def test_ready_gated_graphs_is_empty_without_a_graph_gateway() -> None:
 # The read gate: while `graph_replay` is unhealthy no request that could read a
 # half-rebuilt graph is served. Only liveness, readiness and the OAuth metadata are exempt.
 
-_REPLAY_GATE_BODY = {"status": "not_ready", "unhealthy_dependencies": ["graph_replay"]}
+_REPLAY_GATE_BODY = {"status": "not_ready"}
 
 
 def _hold_replay() -> None:
@@ -3106,12 +3221,12 @@ def test_service_ready_flow_against_real_stores(
     try:
         with TestClient(create_app(config)) as client:
             assert reached.wait(timeout=30), "the startup replay never queried the graph"
-            during = client.get("/ready")
+            during = _ready_detail(client)
             gated_route = client.get("/catalog")
             alive = client.get("/health")
             release.set()
             status_after = _await_ready(client)
-            after = client.get("/ready")
+            after = _ready_detail(client)
         rebuilt = canonical_digest(select_graph(db, name))
     finally:
         release.set()
@@ -3224,7 +3339,7 @@ def test_ready_and_app_state_are_identical_with_the_drift_monitor_on_and_off(
         app = _app_with_gateway(monkeypatch, gateway)
         with TestClient(app) as client:
             assert _await_ready(client) == 200
-            body = cast("dict[str, object]", client.get("/ready").json())
+            body = cast("dict[str, object]", _ready_detail(client).json())
             return body, set(app.state._state)  # pyright: ignore[reportPrivateUsage]
 
     without_monitor = observe(_FakeStartupGateway())
@@ -3265,7 +3380,7 @@ def test_a_drift_check_that_cannot_reach_falkordb_leaves_ready_untouched(
     with TestClient(app) as client:
         assert _await_ready(client) == 200
         result = gateway.check_drift("compliance")  # a checkpoint exists, so the digest is read
-        body = client.get("/ready").json()
+        body = _ready_detail(client).json()
 
     assert result.status == "failed"
     assert body == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}

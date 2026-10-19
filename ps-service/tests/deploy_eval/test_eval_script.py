@@ -59,6 +59,15 @@ def test_fresh_run_deploys_once_with_owner_subject_issuer_and_base_url(
     assert values["llm"] == {"existingSecret": "policy-system-llm-credentials"}
 
 
+def test_the_release_pins_the_signing_origin_to_localhost_whatever_the_hostname(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", "ps.example.test")
+
+    ps = eval_fixture.deployed_values()["psService"]
+    assert ps["passkeySigning"] == {"allowedOrigins": ["http://localhost:8000"]}
+
+
 def test_default_hostname_is_authentik_test_everywhere(eval_fixture: EvalFixture) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
@@ -828,3 +837,179 @@ def test_ps_service_is_not_restarted_when_the_certificate_was_already_served(
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     assert not any("rollout restart" in c for c in eval_fixture.kubectl_calls())
+
+
+# --- exposure preflight: the LAN-facing listener must not meet a public address -----------------
+
+PUBLIC_ADDRESS = "203.0.113.9"
+PRIVATE_ONLY = (
+    "127.0.0.1",
+    "::1",
+    "10.1.2.3",
+    "172.16.0.1",
+    "172.31.255.254",
+    "192.168.1.5",
+    "169.254.7.7",
+    "fe80::1",
+    "fd00::1",
+)
+
+
+def test_public_address_aborts_before_any_cluster_call_and_names_it(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_addresses("192.168.1.5", PUBLIC_ADDRESS)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
+
+    assert PUBLIC_ADDRESS in run.stderr
+    assert "192.168.1.5" not in run.stderr
+    assert "--allow-public-host" in run.stderr
+    assert eval_fixture.kubectl_calls() == []
+    assert _mutations(eval_fixture) == []
+
+
+def test_every_offending_address_is_named(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses(PUBLIC_ADDRESS, "198.51.100.4", "2001:db8::5")
+
+    run = eval_fixture.run("--check-exposure", expect=1)
+
+    for address in (PUBLIC_ADDRESS, "198.51.100.4", "2001:db8::5"):
+        assert address in run.stderr
+
+
+def test_allow_public_host_flag_lets_the_preflight_pass(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses("192.168.1.5", PUBLIC_ADDRESS)
+
+    run = eval_fixture.run("--check-exposure", "--allow-public-host")
+
+    assert PUBLIC_ADDRESS not in run.stderr
+
+
+def test_allow_public_host_flag_lets_a_full_deploy_run_through(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_addresses(PUBLIC_ADDRESS)
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL, "--allow-public-host")
+
+    assert len(eval_fixture.helm_upgrades()) == 1
+
+
+def test_private_loopback_and_link_local_only_pass_without_the_flag(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_addresses(*PRIVATE_ONLY)
+
+    eval_fixture.run("--check-exposure")
+
+
+def test_no_non_loopback_address_passes(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses("127.0.0.1", "::1")
+
+    eval_fixture.run("--check-exposure")
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "172.32.0.1",
+        "172.15.255.255",
+        "100.64.0.1",
+        "100.127.255.254",
+        "192.169.0.1",
+        "8.8.8.8",
+        "fec0::1",
+        "2001:db8::1",
+        "::ffff:8.8.8.8",
+        "::ffff:0808:0808",
+    ],
+)
+def test_addresses_outside_the_private_ranges_are_public(
+    eval_fixture: EvalFixture, address: str
+) -> None:
+    eval_fixture.set_addresses("192.168.1.5", address)
+
+    run = eval_fixture.run("--check-exposure", expect=1)
+
+    assert address in run.stderr
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "172.16.0.1",
+        "172.31.0.1",
+        "169.254.1.1",
+        "FD00::1",
+        "FC00::1",
+        "fe80::1%en0",
+        "febf::1",
+        "::ffff:10.0.0.1",
+        "::ffff:c0a8:0105",
+    ],
+)
+def test_addresses_inside_the_private_ranges_pass(eval_fixture: EvalFixture, address: str) -> None:
+    eval_fixture.set_addresses(address)
+
+    eval_fixture.run("--check-exposure")
+
+
+def test_check_exposure_mode_exits_after_the_check_without_tool_checks(
+    eval_fixture: EvalFixture,
+) -> None:
+    for tool in ("kubectl", "helm", "openssl", "curl", "jq", "podman"):
+        eval_fixture.remove_tool(tool)
+
+    run = eval_fixture.run("--check-exposure")
+
+    assert "Missing required tool" not in run.stderr
+    assert not eval_fixture.kubectl_log.exists()
+    assert not eval_fixture.helm_log.exists()
+
+
+def test_a_normal_run_checks_exposure_before_the_tool_check(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses(PUBLIC_ADDRESS)
+    eval_fixture.remove_tool("kubectl")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
+
+    assert PUBLIC_ADDRESS in run.stderr
+    assert "Missing required tool" not in run.stderr
+
+
+def test_ifconfig_output_is_parsed_when_ip_is_absent(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses("192.168.1.5", PUBLIC_ADDRESS, "fe80::1%en0", tool="ifconfig")
+
+    run = eval_fixture.run("--check-exposure", expect=1)
+
+    assert PUBLIC_ADDRESS in run.stderr
+    assert "192.168.1.5" not in run.stderr
+    assert "fe80" not in run.stderr
+
+
+def test_ifconfig_private_only_passes(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses("127.0.0.1", "192.168.1.5", "fe80::1%en0", tool="ifconfig")
+
+    eval_fixture.run("--check-exposure")
+
+
+def test_no_address_tool_fails_closed_naming_the_flag(eval_fixture: EvalFixture) -> None:
+    for name in ("ip", "ifconfig"):
+        (eval_fixture.bin_dir / name).unlink(missing_ok=True)
+
+    run = eval_fixture.run("--check-exposure", expect=1)
+
+    assert "--allow-public-host" in run.stderr
+    assert "cannot" in run.stderr.lower()
+
+
+def test_help_lists_the_exposure_flags_and_unknown_flags_still_fail(
+    eval_fixture: EvalFixture,
+) -> None:
+    helped = eval_fixture.run("--help")
+    unknown = eval_fixture.run("--bogus", expect=2)
+
+    assert "--allow-public-host" in helped.stdout
+    assert "--check-exposure" in helped.stdout
+    assert "unknown flag" in unknown.stderr

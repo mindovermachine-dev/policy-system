@@ -73,3 +73,17 @@ def test_the_old_default_hostname_literal_appears_in_no_tracked_file() -> None:
     ]
 
     assert offenders == []
+
+
+def test_the_eval_script_documents_the_exposure_flags_in_its_header() -> None:
+    header = EVAL.read_text().split("set -euo pipefail", 1)[0]
+
+    assert "--allow-public-host" in header
+    assert "--check-exposure" in header
+
+
+def test_the_eval_release_values_set_the_passkey_signing_allowed_origins() -> None:
+    source = EVAL.read_text()
+
+    assert "passkeySigning" in source
+    assert "allowedOrigins" in source

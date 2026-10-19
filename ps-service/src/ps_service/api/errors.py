@@ -429,3 +429,17 @@ class PipelineStageError(ApiError):
         super().__init__(f"{stage} stage failed: {reason}")
         self.stage: str = stage
         self.reason: str = reason
+
+
+class SigningHostNotAllowedError(ApiError):
+    """A companion-browser `/approvals/{id}/*` POST arrived on a `Host` that is not configured.
+
+    Raised before the approval id or code is read, so the response is no oracle for approval
+    ids and no challenge is issued. The message is fixed in `__init__` and names neither the
+    requested host nor any configured one. Handled as HTTP 421 (Misdirected Request);
+    `str(exc)` is safe to surface verbatim.
+    """
+
+    def __init__(self) -> None:
+        """Fix the message so every raise site produces byte-identical text."""
+        super().__init__("This address is not permitted for approvals.")

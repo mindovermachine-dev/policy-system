@@ -295,11 +295,6 @@ _LOG_FILE_IN_IMAGE = "/var/log/ps-service/ps-service.jsonl"
 _FALKORDB_DEPENDENCY = "falkordb"
 _BARRIER_DEPENDENCY = "llm_interface"
 
-# PS state Postgres is unconditionally probed and never no-ops when unconfigured
-# (unlike Passkey Signing Postgres), so it always shows unhealthy in the smoke-test container,
-# which never sets `PS_STATE_POSTGRES_HOST`. It also gates `/ready`.
-_STATE_POSTGRES_DEPENDENCY = "state_postgres"
-
 # `GET /catalog` reads the catalog-source override from the PS state Postgres and
 # fails closed without one, so the catalog smoke test runs against a real Postgres sidecar.
 _POSTGRES_IMAGE = "postgres:16-alpine"
@@ -701,11 +696,7 @@ def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     assert response.status_code == _HTTP_SERVICE_UNAVAILABLE, (
         f"/ready answered {response.status_code}: {response.text}"
     )
-    assert response.json() == {
-        "status": "not_ready",
-        "unhealthy_dependencies": [_BARRIER_DEPENDENCY, _STATE_POSTGRES_DEPENDENCY],
-        "gated_graphs": [],
-    }
+    assert response.json() == {"status": "not_ready"}
 
 
 def test_startup_probe_reports_the_llm_interface_dependency_unhealthy(
@@ -1015,15 +1006,7 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
 
         response = _get_from_container(container_cli, service.name, "/ready")
         assert response.status_code == _HTTP_SERVICE_UNAVAILABLE
-        assert response.json() == {
-            "status": "not_ready",
-            "unhealthy_dependencies": [
-                _FALKORDB_DEPENDENCY,
-                _BARRIER_DEPENDENCY,
-                _STATE_POSTGRES_DEPENDENCY,
-            ],
-            "gated_graphs": [],
-        }
+        assert response.json() == {"status": "not_ready"}
     finally:
         _remove_container(container_cli, name)
 

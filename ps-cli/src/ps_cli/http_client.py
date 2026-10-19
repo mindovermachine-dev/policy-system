@@ -130,15 +130,21 @@ def _parse_health_body(payload: object) -> str:
 def _parse_readiness_body(payload: object) -> ReadinessResult:
     """Parse a `GET /ready` 200 response body into a `ReadinessResult`.
 
-    Raises `PsCliError` (generic, defensive) if the body does not match the
-    expected `ReadyResponseBody` shape.
+    A body without `unhealthy_dependencies` (the status-only reply an unauthenticated
+    caller gets) parses with `unhealthy_dependencies=None`. Raises `PsCliError`
+    (generic, defensive) if the body does not match the expected `ReadyResponseBody`
+    shape.
     """
     if not isinstance(payload, dict):
         raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
     body = cast("dict[str, object]", payload)
     status = body.get("status")
-    unhealthy_raw = body.get("unhealthy_dependencies")
-    if not isinstance(status, str) or not isinstance(unhealthy_raw, list):
+    if not isinstance(status, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    if "unhealthy_dependencies" not in body:
+        return ReadinessResult(status=status, unhealthy_dependencies=None)
+    unhealthy_raw = body["unhealthy_dependencies"]
+    if not isinstance(unhealthy_raw, list):
         raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
     unhealthy_items = cast("list[object]", unhealthy_raw)
     if not all(isinstance(item, str) for item in unhealthy_items):
@@ -398,20 +404,28 @@ class PsServiceClientProtocol(Protocol):
         """
         ...
 
-    def check_readiness(self) -> ReadinessResult:
-        """`GET /ready`: readiness plus any currently-unhealthy dependency names.
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
+        """`GET /ready`: readiness plus, for a logged-in caller, the unhealthy dependency names.
+
+        Args:
+            require_detail: When true the dependency names are mandatory: the call is
+                authenticated (failing closed when not logged in) and a reply without
+                names raises. When false the call sends a bearer token if one is
+                available and otherwise falls back to the status-only reply.
 
         Returns:
             A `ReadinessResult` with the service's readiness `status` and the names
-            of dependencies currently recorded unhealthy (empty when none).
+            of dependencies currently recorded unhealthy (empty when none, `None`
+            when the reply carried no names).
 
         Raises:
             PsCliError: PS Service cannot be reached or the connection is
-                interrupted (refused, reset, timed out, TLS failure), or the response
-                body does not match the expected shape.
+                interrupted (refused, reset, timed out, TLS failure), the response
+                body does not match the expected shape, or `require_detail` is set
+                and the names are unavailable.
 
         Side Effects:
-            One unauthenticated HTTP GET to PS Service.
+            One HTTP GET to PS Service.
         """
         ...
 
@@ -485,7 +499,8 @@ class PsServiceClient:
         When `credential_store` and `context` are both given, every authenticated
         call (`ingest_internal`, `export_instrument`) attaches a bearer token; when
         either is `None`, no header is ever attached. `check_health`,
-        `get_service_version` and `check_readiness` never attach one regardless.
+        `get_service_version` never attach one regardless; `check_readiness` attaches
+        one when a login is available.
 
         Parameters:
             base_url: PS Service base URL. A URL that is neither HTTPS nor a
@@ -529,8 +544,8 @@ class PsServiceClient:
         Refreshes (or fails closed) via `device_flow.ensure_valid_access_token`.
         Returns `{}` -- no network call, no store read -- whenever
         `credential_store` or `context` was not given at construction (the
-        unauthenticated-call shape; `check_health`/`get_service_version`/
-        `check_readiness` go through `_get`, which never calls this method at all).
+        unauthenticated-call shape; `check_health` and `get_service_version`
+        never call this method, `check_readiness` does).
         """
         if self._credential_store is None or self._context is None:
             return {}
@@ -555,8 +570,14 @@ class PsServiceClient:
         if response.status_code == HTTPStatus.UNAUTHORIZED:
             raise PsCliError(msg=_AUTHENTICATION_REJECTED_MSG.format(base_url=self._base_url))
 
-    def _get(self, path: str, *, timeout: httpx.Timeout | None = None) -> httpx.Response:
-        """Un-authenticated `GET path`: no bearer header, no 401 special-case.
+    def _get(
+        self,
+        path: str,
+        *,
+        timeout: httpx.Timeout | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """`GET path` with no 401 special-case; a bearer header only when `headers` carries one.
 
         Used only by `check_health`/`get_service_version`/`check_readiness` --
         endpoints exempt from the login-required contract. `timeout=None` (the
@@ -564,8 +585,8 @@ class PsServiceClient:
         """
         try:
             if timeout is None:
-                return self._client.get(path)
-            return self._client.get(path, timeout=timeout)
+                return self._client.get(path, headers=headers)
+            return self._client.get(path, timeout=timeout, headers=headers)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
         except httpx.TransportError as exc:
@@ -636,28 +657,64 @@ class PsServiceClient:
         response = self._get(_HEALTH_PATH)
         return _parse_service_version_body(response.json())
 
-    def check_readiness(self) -> ReadinessResult:
-        """`GET /ready`: readiness plus any currently-unhealthy dependency names.
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
+        """`GET /ready`: readiness plus, for a logged-in caller, the unhealthy dependency names.
 
-        Reports whether PS Service's startup checks completed, and which
-        dependencies (if any) are currently recorded unhealthy.
+        PS Service answers an unauthenticated call with the status only; a valid
+        bearer token also returns the names of the currently-unhealthy dependencies.
+
+        Args:
+            require_detail: When true the names are mandatory: the bearer header is
+                built first (a missing login fails closed before any request) and a
+                reply without names raises. When false a bearer token is attached
+                when one can be obtained and any failure to obtain it is ignored, so
+                the status-only reply is still returned.
 
         Returns:
             A `ReadinessResult` with the readiness `status` and the names of
-            currently-unhealthy dependencies (empty when none).
+            currently-unhealthy dependencies (empty when none, `None` when the
+            reply carried no names).
 
         Raises:
             PsCliError: PS Service cannot be reached or the connection is
-                interrupted (refused, reset, timed out, TLS failure), or the
-                response body does not match the expected shape.
+                interrupted (refused, reset, timed out, TLS failure), the response
+                body does not match the expected shape, or `require_detail` is set
+                and no login is available or the reply carries no names.
             ValueError: The response body is not valid JSON (propagated from
                 `httpx`).
 
         Side Effects:
-            One unauthenticated HTTP GET to PS Service.
+            One HTTP GET to PS Service, authenticated when a login is available.
+            May refresh the access token.
         """
-        response = self._get(_READY_PATH)
-        return _parse_readiness_body(response.json())
+        headers = self._readiness_headers(require_detail=require_detail)
+        response = self._get(_READY_PATH, headers=headers)
+        result = _parse_readiness_body(response.json())
+        if require_detail and result.unhealthy_dependencies is None:
+            raise PsCliError(
+                msg="readiness detail unavailable: PS Service did not name its dependencies.",
+                hint="run `ps-cli auth login` and retry",
+            )
+        return result
+
+    def _readiness_headers(self, *, require_detail: bool) -> dict[str, str]:
+        """The `Authorization` header for `GET /ready`, or `{}` when none can be built.
+
+        With `require_detail` any failure to build the header propagates, and an empty
+        result (no credential store or context configured) raises as well.
+        """
+        if not require_detail:
+            try:
+                return self._authorization_headers()
+            except PsCliError:
+                return {}
+        headers = self._authorization_headers()
+        if not headers:
+            raise PsCliError(
+                msg="readiness detail unavailable: log in first.",
+                hint="run `ps-cli auth login` and retry",
+            )
+        return headers
 
     def export_instrument(self, instrument_id: str) -> ExportResult:
         """`POST /exports` with `{"instrument_id": instrument_id}`.

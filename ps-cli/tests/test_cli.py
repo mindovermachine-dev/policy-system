@@ -74,7 +74,7 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `get_service_version()` to be called."""
         raise AssertionError("get_service_version must not be called in this test")
 
-    def check_readiness(self) -> ReadinessResult:
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
         """Fail: this test's fake does not expect `check_readiness()` to be called."""
         raise AssertionError("check_readiness must not be called in this test")
 
@@ -504,8 +504,8 @@ def _build_ingest_document_handler_with_resource_metadata(
                     }
                 )
             else:
-                # `/ready` -- `_assert_llm_interface_available`'s unauthenticated
-                # pre-flight check, no `Authorization` header expected or recorded.
+                # `/ready` -- `_assert_llm_interface_available`'s pre-flight check; its
+                # bearer header is not recorded here, only the POST's is.
                 self._write_json({"status": "ready", "unhealthy_dependencies": []})
 
         def do_POST(self) -> None:
@@ -622,7 +622,7 @@ _INTERNAL_NOT_IMPLEMENTED_MESSAGE = (
 class _FakeInternalIngestSuccessClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose ingest_internal() succeeds."""
 
-    def check_readiness(self) -> ReadinessResult:
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
         """Return a healthy default -- this fake's test is not about the pre-flight check."""
         return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
@@ -646,7 +646,7 @@ class _FakeInternalIngest501Client(_UnusedPsServiceClientMethods):
     `cli.run()`'s handling of that failure without a real network call.
     """
 
-    def check_readiness(self) -> ReadinessResult:
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
         """Return a healthy default -- this fake's test is not about the pre-flight check."""
         return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
@@ -760,9 +760,11 @@ class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
         """Script this fake's check_readiness() outcome, and whether ingest may proceed."""
         self._readiness = readiness
         self._allow_ingest = allow_ingest
+        self.require_detail_seen: list[bool] = []
 
-    def check_readiness(self) -> ReadinessResult:
-        """Return the scripted ReadinessResult."""
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
+        """Record whether the caller demanded the dependency names, then return the result."""
+        self.require_detail_seen.append(require_detail)
         return self._readiness
 
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
@@ -799,6 +801,41 @@ def test_ingest_document_fails_fast_when_llm_interface_unreachable(
     assert exit_code == 1
     assert "LLM Interface" in captured.err
     assert "unavailable" in captured.err
+
+
+def test_ingest_document_requires_the_dependency_names_from_the_readiness_check(
+    tmp_path: Path,
+) -> None:
+    """The pre-flight asks for the named dependencies, never the status-only reply."""
+    document_path = tmp_path / "seeds/internal-sop.json"
+    _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
+    fake_client = _FakeReadinessGatedInternalIngestClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=[]),
+        allow_ingest=True,
+    )
+
+    exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
+
+    assert exit_code == 0
+    assert fake_client.require_detail_seen == [True]
+
+
+def test_ingest_document_fails_when_the_readiness_reply_names_no_dependencies(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A reply without names never counts as the LLM Interface being available."""
+    document_path = tmp_path / "seeds/internal-sop.json"
+    _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
+    fake_client = _FakeReadinessGatedInternalIngestClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=None)
+    )
+
+    exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "readiness detail unavailable" in captured.err
 
 
 def test_ingest_document_does_not_block_when_only_cellar_eli_unreachable(
@@ -1400,7 +1437,7 @@ class _FakeHealthClient(_UnusedPsServiceClientMethods):
         """Return the scripted health status."""
         return self._health_status
 
-    def check_readiness(self) -> ReadinessResult:
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
         """Return the scripted readiness result."""
         return self._readiness
 
@@ -1421,6 +1458,39 @@ def test_run_get_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture
     assert "reachable: yes" in captured.out
     assert "health: alive" in captured.out
     assert "ready: ready" in captured.out
+
+
+def test_run_get_health_without_a_login_succeeds_and_points_to_login(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A status-only readiness reply still reports success and hints how to see the detail."""
+    fake_client = _FakeHealthClient(
+        health_status="alive",
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=None),
+    )
+
+    exit_code = run(["get", "health"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "ready: ready" in captured.out
+    assert "log in to see dependency detail" in captured.out
+
+
+def test_run_get_health_not_ready_without_a_login_hints_at_login(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_client = _FakeHealthClient(
+        health_status="alive",
+        readiness=ReadinessResult(status="not_ready", unhealthy_dependencies=None),
+    )
+
+    exit_code = run(["get", "health"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "not ready" in captured.err
+    assert "log in to see dependency detail" in captured.err
 
 
 def test_run_get_health_returns_one_with_distinct_message_when_not_ready(

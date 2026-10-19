@@ -52,7 +52,7 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `get_service_version()` to be called."""
         raise AssertionError("get_service_version must not be called in this test")
 
-    def check_readiness(self) -> ReadinessResult:
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
         """Fail: this test's fake does not expect `check_readiness()` to be called."""
         raise AssertionError("check_readiness must not be called in this test")
 
@@ -123,7 +123,7 @@ class _FakeInternalIngestClient(_UnusedPsServiceClientMethods):
         """Script this fake's ingest_internal() outcome."""
         self._result = result
 
-    def check_readiness(self) -> ReadinessResult:
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
         """Report a fully-healthy target -- the pre-flight check must let this through."""
         return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
@@ -218,7 +218,7 @@ class _FakeHealthClient(_UnusedPsServiceClientMethods):
         """Return the scripted health status."""
         return self._health_status
 
-    def check_readiness(self) -> ReadinessResult:
+    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
         """Return the scripted readiness result."""
         return self._readiness
 

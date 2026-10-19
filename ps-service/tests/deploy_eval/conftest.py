@@ -193,6 +193,19 @@ esac
 """
 
 
+FAKE_IP = r"""#!/usr/bin/env bash
+# Fake `ip -o addr show`: prints the lines the test wrote to $PS_TEST_IP_OUTPUT.
+cat "$PS_TEST_IP_OUTPUT"
+"""
+
+FAKE_IFCONFIG = r"""#!/usr/bin/env bash
+# Fake `ifconfig`: prints the text the test wrote to $PS_TEST_IFCONFIG_OUTPUT.
+cat "$PS_TEST_IFCONFIG_OUTPUT"
+"""
+
+DEFAULT_HOST_ADDRESSES = ("127.0.0.1", "::1", "192.168.1.5", "fe80::1")
+
+
 def _install_python_fake(source: Path, target: Path) -> None:
     lines = source.read_text(encoding="utf-8").splitlines()
     lines[0] = f"#!{sys.executable}"
@@ -268,6 +281,29 @@ class EvalFixture:
     def add_container_engine(self, name: str) -> None:
         _install_python_fake(FAKES_DIR / "podman", self.bin_dir / name)
 
+    def set_addresses(self, *addresses: str, tool: str = "ip") -> None:
+        """Make the fake address tool (`ip` or `ifconfig`) report exactly these addresses."""
+        for name in ("ip", "ifconfig"):
+            (self.bin_dir / name).unlink(missing_ok=True)
+        if tool == "ip":
+            lines = [
+                f"2: eth0    {'inet6' if ':' in a else 'inet'} {a}/64 scope global"
+                for a in addresses
+            ]
+            (self.root / "ip-output.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            _install_text_fake(FAKE_IP, self.bin_dir / "ip")
+        else:
+            lines = ["en0: flags=8863<UP> mtu 1500"]
+            for a in addresses:
+                family, detail = (
+                    ("inet6", "prefixlen 64") if ":" in a else ("inet", "netmask 0xffffff00")
+                )
+                lines.append(f"\t{family} {a} {detail}")
+            (self.root / "ifconfig-output.txt").write_text(
+                "\n".join(lines) + "\n", encoding="utf-8"
+            )
+            _install_text_fake(FAKE_IFCONFIG, self.bin_dir / "ifconfig")
+
     def use_real_openssl(self) -> None:
         real = shutil.which("openssl")
         assert real, "the integration test needs a real openssl"
@@ -321,6 +357,8 @@ class EvalFixture:
             "PS_TEST_KUBECTL_APPLIED": str(self.root / "kubectl-applied.yaml"),
             "PS_TEST_HELM_LOG": str(self.helm_log),
             "PS_TEST_HELM_STATE_DIR": str(self.helm_state),
+            "PS_TEST_IP_OUTPUT": str(self.root / "ip-output.txt"),
+            "PS_TEST_IFCONFIG_OUTPUT": str(self.root / "ifconfig-output.txt"),
             "PS_TEST_OPENSSL_LOG": str(self.root / "openssl.log"),
             "PS_TEST_SERVED_SEQUENCE": str(self.root / "served-sequence.txt"),
             "PS_TEST_SECRET_B64": base64.b64encode(TOKEN.encode()).decode(),
@@ -369,6 +407,7 @@ def eval_fixture(tmp_path: Path) -> EvalFixture:
     _install_text_fake(FAKE_HELM, fixture.bin_dir / "helm")
     _install_text_fake(FAKE_OPENSSL, fixture.bin_dir / "openssl")
     fixture.add_container_engine("podman")
+    fixture.set_addresses(*DEFAULT_HOST_ADDRESSES)
     fixture.seed_curl()
     fixture.served("local")
     fixture.env_extra["PS_TEST_PODMAN_NODE_IP"] = NODE_IP

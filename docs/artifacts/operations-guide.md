@@ -9,6 +9,7 @@
   - [Updating or reinstalling the Policy System Plugin](#updating-or-reinstalling-the-policy-system-plugin)
   - [Owner recovery, certificate renewal and re-running the script](#owner-recovery-certificate-renewal-and-re-running-the-script)
   - [Reaching the Authentik admin UI (evaluator)](#reaching-the-authentik-admin-ui-evaluator)
+  - [Allowed approval origins](#allowed-approval-origins)
   - [Recreating the kind cluster](#recreating-the-kind-cluster)
   - [Cleanup / teardown](#cleanup--teardown)
   - [Rotating the Azure LLM API key](#rotating-the-azure-llm-api-key)
@@ -17,6 +18,7 @@
   - [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log)
   - [Audit log integrity](#audit-log-integrity)
   - [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph)
+  - [What `/ready` reveals](#what-ready-reveals)
   - [Owner recovery and the Authentik admin UI](#owner-recovery-and-the-authentik-admin-ui)
   - [Rotate the API key later](#rotate-the-api-key-later)
   - [Start and stop the AKS cluster](#start-and-stop-the-aks-cluster)
@@ -171,12 +173,36 @@ CA and sign in as the owner. To keep it to your own machine, block port `30443` 
 host firewall. See [Installation Guide: What is exposed
 (evaluator)](./installation-guide.md#what-is-exposed-evaluator).
 
+### Allowed approval origins
+
+`psService.passkeySigning.allowedOrigins` (env `PS_PASSKEYSIGNING_ALLOWED_ORIGINS`, a
+comma-separated list of `scheme://host[:port]` origins) names the places the approval page may be
+served from. The first entry is the WebAuthn relying party: its host is the `rp_id` and its origin
+is what the browser must present. A POST to an approval route (`/approvals/<id>/summary`,
+`enroll/options`, `enroll/verify`, `sign/options`, `sign/verify`) whose `Host` matches no entry
+is answered `421`, before the approval is read and without issuing a challenge. `Host` and the
+entries are compared case-insensitively, a missing port counts as the scheme's default, and
+`X-Forwarded-Host` is ignored. The evaluator script sets it to `http://localhost:8000`.
+
+- With no entry set, the relying party is derived from each request's own `Host`, and a startup
+  warning is logged unless the local-test bypass is active. Set it on every deployment that is
+  reachable under more than one name.
+- A passkey is bound to its `rp_id`. Changing the first entry makes every passkey enrolled under
+  the old one unusable until it is enrolled again.
+- The approval link is built from the `Host` of the request that created it. A client that reached
+  PS Service under an unlisted name receives a link that answers `421`; open the approval from a
+  listed name.
+
+See [Helm Chart Values Reference](./helm-chart-values-reference.md).
+
 ### Recreating the kind cluster
 
 `deploy/kind/cluster.yaml`'s port mappings are fixed when a cluster is created. A `policy-system`
 cluster created before Authentik was served over HTTPS lacks the `30443` mapping (it had a
 plain-HTTP `30080` one), so it must be deleted and recreated — `kind delete cluster --name
-policy-system`, then the `kind create cluster` command from the installation guide. This destroys
+policy-system`, then step 4 of the installation guide again: first `scripts/deploy-ps-eval.sh
+--check-exposure` (add `--allow-public-host` only if you accept a public address on this machine),
+then the `kind create cluster` command. This destroys
 the cluster's PVC data (FalkorDB graph, PS Postgres, Authentik's Postgres), so load curated
 content again afterwards, or restore a PS Postgres backup (see [Restore](#restore)). The local CA
 and certificate live outside the cluster (default
@@ -454,17 +480,19 @@ for this. The log entries carry the action `startup_replay` (`replayed`, `resume
 
 What you see while it runs:
 
-- `/health` stays `200`. `/ready` answers `503` `not_ready` with `graph_replay` in
-  `unhealthy_dependencies`, so the pod is out of the Service rotation. Any other path except
-  `/.well-known/` answers `503` with the same body and `Retry-After: 5`, so no caller reads a
-  graph that is empty or half rebuilt. A rebuild of a graph the size of CRA times ten (about
+- `/health` stays `200`. `/ready` answers `503` `not_ready`, so the pod is out of the Service
+  rotation; a caller with a valid access token also sees `graph_replay` in
+  `unhealthy_dependencies` (see [What `/ready` reveals](#what-ready-reveals)). Any other path
+  except `/.well-known/` answers `503` with the status-only body `{"status": "not_ready"}` and
+  `Retry-After: 5`, so no caller reads a graph that is empty or half rebuilt. A rebuild of a graph the size of CRA times ten (about
   160,000 log entries) took 45 seconds on a laptop; do not restart the pod just because it takes
   a minute.
 - If Postgres or FalkorDB is down, the replay is tried again with a growing wait, capped at
   `startup_replay_max_backoff_seconds`, until it can finish; the entries `startup_replay` /
   `retry` show the attempt and the error class.
 
-**A gated graph.** `/ready` always lists `gated_graphs`. A graph appears there when its rebuild
+**A gated graph.** `/ready` lists `gated_graphs` for a caller with a valid access token (an
+anonymous call sees the status only, see [What `/ready` reveals](#what-ready-reveals)). A graph appears there when its rebuild
 failed (the rebuilt graph did not match its recorded digest, the log has a gap or an entry that
 does not decode, or the rebuild went past its checkpoint without being compared) or when
 FalkorDB refuses one of its logged entries. The other graphs are served and `/ready` can be `200`
@@ -474,13 +502,32 @@ name the graph, the position and the error class, never content), rebuild it fro
 
 ```bash
 POD=$(kubectl get pod -l app.kubernetes.io/component=falkordb -o jsonpath='{.items[0].metadata.name}')
-kubectl exec "$POD" -c falkordb -- redis-cli DEL <graph>      # the name from gated_graphs
+kubectl exec "$POD" -c falkordb -- redis-cli DEL <graph>      # the name from gated_graphs (authenticated /ready)
 kubectl rollout restart deploy/<ps-service deployment>        # the empty graph is rebuilt at start
 ```
 
 Deleting the key removes the graph and the progress record kept inside it; the log is not
 touched. If the rebuild fails again at the same position, the log itself or a checkpoint is
 wrong: keep the pod as it is and escalate with the logged position.
+
+
+### What `/ready` reveals
+
+`/ready` needs no token, so a probe never has to log in, and the HTTP status (`200` ready, `503`
+not ready) is the whole answer for the probe. An anonymous call, a call whose token does not
+verify, and every call while the local-test bypass is active receive only
+`{"status": "ready"}` or `{"status": "not_ready"}`. A bad token is not an error here; it is
+treated as no token. A call with a valid `Authorization: Bearer <access token>` (any verified
+user, no role needed) also receives `unhealthy_dependencies` and `gated_graphs`. The
+replay-gate `503` on every other path carries the status only. `ps-cli get health` sends your
+login automatically. To read the detail by hand:
+
+```bash
+curl -s -H "Authorization: Bearer $ACCESS_TOKEN" http://127.0.0.1:8000/ready
+```
+
+The local-test bypass has no verifier, so it never returns the detail; read the startup log
+entries instead.
 
 ### Graph drift alert
 
@@ -977,9 +1024,14 @@ keep the version the release runs. The final lines log the row counts of `audit_
    scripts/verify-backup-restore.sh wait-ready
    ```
 
-   While PS Service rebuilds the graphs from the log, `/ready` can answer `503` with
-   `graph_replay` in `unhealthy_dependencies`. The restore is done when it answers `200` with an
-   empty `gated_graphs`. A gated graph is handled as described in
+   While PS Service rebuilds the graphs from the log, `/ready` can answer `503` (an authenticated
+   call names `graph_replay` in `unhealthy_dependencies`). The restore is done when it answers
+   `200`; an authenticated call must also show an empty `gated_graphs`. The script runs
+   in-pod over loopback without a login: set `PS_READY_TOKEN` to a valid access token to make
+   `wait-ready` (and the `restore` and `e2e` steps that wait for readiness) also require an empty
+   `gated_graphs`; without it the script waits for `200` and `"status": "ready"` only, logs
+   `gated_graphs=unchecked`, and skips the gated check. The `e2e` run still proves the graphs
+   through its digest and count comparison. A gated graph is handled as described in
    [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph).
 7. Compare the counts with the system the backup was taken from:
    `scripts/verify-backup-restore.sh counts` prints `audit_events`, `access_role_assignments` and
@@ -1094,7 +1146,7 @@ decision and not part of this procedure.
 | Symptom | Check |
 | --- | --- |
 | `ps-cli` reports "Could not reach PS Service" | Is the target URL right (`ps-cli config get-contexts` / `echo $PS_CLI_SERVICE_URL`)? Is PS Service actually running there? |
-| A command fails right after connecting | `ps-cli get health` reports the process state and readiness and names every unhealthy dependency (`unhealthy_dependencies`: `falkordb`, `state_postgres`, `graph_replay`, `llm_interface`, `cellar_eli`, `passkey_signing_postgres`). Readiness (`/ready`, HTTP 200 or 503) depends only on `falkordb`, `state_postgres` and `graph_replay`, and on the ingestion configuration being complete: `health: alive` with `ready: not_ready` means one of these is down, the startup graph replay has not finished, or required ingestion config is incomplete. `llm_interface`, `cellar_eli` and `passkey_signing_postgres` are named in `unhealthy_dependencies` without flipping `ready` to `not_ready`. |
+| A command fails right after connecting | `ps-cli get health` reports the process state and readiness and, when you are logged in (`ps-cli auth login`), names every unhealthy dependency (`unhealthy_dependencies`: `falkordb`, `state_postgres`, `graph_replay`, `llm_interface`, `cellar_eli`, `passkey_signing_postgres`). Readiness (`/ready`, HTTP 200 or 503) depends only on `falkordb`, `state_postgres` and `graph_replay`, and on the ingestion configuration being complete: `health: alive` with `ready: not_ready` means one of these is down, the startup graph replay has not finished, or required ingestion config is incomplete. `llm_interface`, `cellar_eli` and `passkey_signing_postgres` are named in `unhealthy_dependencies` without flipping `ready` to `not_ready`. Without a login the report shows the readiness status only and suggests logging in to see the dependencies. |
 | `ingest document`, or an `ingest_regulation` / `start_ingestion` tool call, fails immediately with a config-related error | PS Service's ingestion-required config (`PS_LLMINTERFACE_MODEL`, `PS_LLMINTERFACE_EMBED_MODEL`, `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is likely missing — this is a PS Service operator/deployer concern, see [Helm Chart Values Reference](./helm-chart-values-reference.md#core-values). |
 | `ingest document` (or an `ingest_regulation` / `start_ingestion` tool call) fails with HTTP 503 "graph writes are unavailable: the graph write gateway is not running" | Ingestion, the Domain Mapper (extraction and derivation), Company Merge (the merge stage and near-miss resolution) Policy Lifecycle (every tool that creates, edits, adds to or transitions a Policy, and `get-policy` when a legacy Policy needs its `status`/`version` backfilled) Graph Cleanup (the edit that runs when a passkey approval is signed) and Restore (`POST /restorations`, `POST /restorations/from-catalog` and the `restore_instrument` MCP tool: a restore is one gateway group), including a re-ingest that resumes at any of those stages, write the graph only through the Graph Write Gateway, which needs the PS state database (the graph mutation log). The state database is not configured, or the gateway could not be built at startup; configure it (see [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log)) and restart. Ingestion never writes to FalkorDB directly as a fallback, and neither does the Domain Mapper, Company Merge, Policy Lifecycle, Graph Cleanup or Restore, and nothing was written. A restore answers the same 503 before it reads any graph; it needs the PS state database as well as FalkorDB, and the `restore_instrument` MCP tool answers `error: ...` with the same text. The Policy Lifecycle MCP tools do not answer HTTP 503: without a gateway they answer `error: ...` with the same text, record no audit row and write nothing. The same applies to resolving a near-miss and to signing a near-miss merge approval: without the gateway the request is answered 503 and the approval stays pending, so it can be signed again after the restart. Graph Cleanup answers no 503 either: the signed approval is executed, but without a gateway the edit is not made, the audit trail holds an `applied` row followed by a `failed` row for the approval, and the Compliance Officer is told the edit could not be completed; read the outcome with `check-cleanup-approval`, and preview again after the restart. An approval signed while the graph is behind its log is settled only once the graph has caught up (the check answers with no outcome until then). The same 503 answers the Regulatory Change Monitor's amendment check (the `check_regulations` tool and `POST /change-checks`, including a `finalize` or link-only re-ingest that runs no pipeline stage but still writes the succession; the sweep looks for the gateway first, before any graph is opened, and the MCP tool answers `error: ...`) and Export (`POST /exports`): the Regulatory Change Monitor records the instrument succession and Export its embedding backfill only through the Graph Write Gateway, with no direct-write fallback. Export therefore also needs the PS state database, and so does the maintainer CLI shim `tools/curated-export/export_instrument.py` (`curated-export`), which builds its own gateway. A link-only or `finalize` re-ingest now leaves an `ingestion_run.submit` / `ingestion_run.complete` audit pair, and every Export run one `export.instrument` system audit row. A 503 from the audit trail instead means the run's audit row could not be recorded; nothing was written either, and the request can be retried. |
 | `ps-cli export instrument`, or `POST /exports`, fails with HTTP 409 `export_unresolved_near_misses`, or `tools/curated-export/export_instrument.py` exits 1 and prints the same message to stderr | The instrument still has unresolved near-miss reviews: the message gives the count and the review ids. Review decisions live in the `policy_system` graph, which an export never serializes, so exporting now would publish Capabilities that were never reviewed. Nothing was done: no `export.instrument` audit row, no embedding backfill and no file or `catalog.json` was written. Resolve the reviews (the `near_misses_list` and `near_misses_resolve` tools, or the `ps-near-miss-review` skill) and export again; there is no override. If `policy_system` cannot be read the export fails closed with the usual graph error (HTTP 500 from the route, exit 1 from the shim) and writes nothing. The check reads the graph named by `PS_FALKORDB_GRAPH` (default `policy_system`). |
@@ -1105,7 +1157,7 @@ decision and not part of this procedure.
 | Every request returns 401 although the token is fresh | The identity provider or its key set (JWKS) is unreachable from PS Service, or the token's issuer or audience does not match `PS_AUTH_ISSUER` / `PS_AUTH_AUDIENCE`. Readiness is unaffected. Check `kubectl logs` for the unauthenticated entries and their reason category. |
 | Ingestion fails at the first stage with a Cellar/ELI error | The EU publication service is unreachable or returned an unparseable document. `cellar_eli` can appear in `unhealthy_dependencies`; readiness is unaffected. Retry later. |
 | The `ps-service` pod restarts repeatedly with `OOMKilled` | The container exceeded its memory limit. Raise `psService.resources` in the chart values (see [Helm Chart Values Reference](./helm-chart-values-reference.md)). |
-| `ingest document`, or an `ingest_regulation` / `start_ingestion` / `check_regulations` tool call, fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/ready` endpoint and its LLM provider configuration. |
+| `ingest document`, or an `ingest_regulation` / `start_ingestion` / `check_regulations` tool call, fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/ready` endpoint with a valid access token (`ps-cli get health` while logged in) and its LLM provider configuration. |
 | `ps-cli auth login` against the evaluator reports "Could not verify the TLS certificate of ..." | The issuer is HTTPS with a locally issued certificate and the CA is not in the OS trust store, which `ps-cli` verifies against. Trust the CA there (`scripts/deploy-ps-eval.sh --apply-host-setup` does this on the evaluator's own machine). A plain "Could not reach ..." means the host is unreachable instead. See [Installation Guide, step 8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli). |
 | A browser shows a certificate warning, or passkey registration is refused, on the evaluator | The browser does not trust the local CA, or the hostname is not mapped in `/etc/hosts` on that machine. Passkeys need a trusted HTTPS origin. Trust `ca.pem` and map the hostname (see step 8). |
 | The deploy script stops with "Authentik rejected the shared API token" | Authentik's bootstrap token never rotates and the Secret no longer matches it. See [Installation Guide: Upgrading an existing install](./installation-guide.md#upgrading-an-existing-install). |

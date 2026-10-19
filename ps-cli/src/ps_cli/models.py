@@ -11,7 +11,7 @@ command handler consumes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class StageOutcomeBody(TypedDict):
@@ -144,12 +144,17 @@ class ReadyResponseBody(TypedDict):
     """Raw JSON shape of a `GET /ready` 200 response body."""
 
     status: str
-    unhealthy_dependencies: list[str]
+    unhealthy_dependencies: NotRequired[list[str]]
 
 
 @dataclass(frozen=True)
 class ReadinessResult:
-    """Parsed result of `PsServiceClient.check_readiness()`."""
+    """Parsed result of `PsServiceClient.check_readiness()`.
+
+    `unhealthy_dependencies` is `None` when the response carried no dependency names
+    (an unauthenticated reply is status only), which is different from an empty list
+    (the service reported that nothing is unhealthy).
+    """
 
     status: str
-    unhealthy_dependencies: list[str]
+    unhealthy_dependencies: list[str] | None

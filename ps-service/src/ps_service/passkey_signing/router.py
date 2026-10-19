@@ -59,7 +59,10 @@ from ps_service.api.dependencies import (
     provide_audit_store,
     provide_pending_approval_store,
 )
-from ps_service.api.errors import PendingApprovalInvalidOrExpiredError
+from ps_service.api.errors import (
+    PendingApprovalInvalidOrExpiredError,
+    SigningHostNotAllowedError,
+)
 from ps_service.audit import (
     AuditContext,
     AuditStore,
@@ -90,6 +93,7 @@ from ps_service.passkey_signing.store import (
 from ps_service.passkey_signing.webauthn_rp import (
     build_authentication_options,
     build_registration_options,
+    request_host_is_allowed,
     rp_id_and_origin,
     verify_authentication,
     verify_registration,
@@ -117,6 +121,35 @@ def provide_signing_credential_store(
         of its methods is called, so building one per request is cheap.
     """
     return PsycopgSigningCredentialStore(config)
+
+
+def require_allowed_signing_host(request: Request) -> None:
+    """Refuse a POST whose `Host` is not one of the configured allowed origins.
+
+    Placed first on every POST route, so a wrong `Host` is rejected before the approval id or
+    code is read: it is no oracle for approval ids and no challenge is issued. With no
+    configured origins every host passes.
+
+    Args:
+        request: The incoming HTTP request (injected).
+
+    Raises:
+        SigningHostNotAllowedError: the request's `Host` matches no configured origin (HTTP 421,
+            fixed body naming nothing).
+
+    Side Effects:
+        On rejection, emits one failed-outcome log entry with reason `host_not_allowed`; the
+        host value itself is not logged.
+    """
+    if request_host_is_allowed(request):
+        return
+    emit_log_entry(
+        component="passkey_signing",
+        action="host_check",
+        outcome="failed",
+        extra={"reason": "host_not_allowed"},
+    )
+    raise SigningHostNotAllowedError
 
 
 class _ApprovalCodeRequest(BaseModel):
@@ -803,7 +836,8 @@ def build_passkey_signing_router() -> APIRouter:
     """Build the router that serves the companion-browser signing ceremony.
 
     The caller mounts it with `app.include_router`; the bearer-token middleware exempts the
-    `/approvals` prefix, so each route authorizes itself with the approval code.
+    `/approvals` prefix, so each route authorizes itself with the approval code. Every POST
+    route also refuses a `Host` outside the configured allowed origins before reading anything.
 
     Returns:
         A new `APIRouter` with prefix `/approvals` exposing `GET /{pending_approval_id}`
@@ -814,19 +848,41 @@ def build_passkey_signing_router() -> APIRouter:
         None; it only registers routes on the new router.
     """
     router = APIRouter(prefix="/approvals")
+    host_guard = [Depends(require_allowed_signing_host)]
     router.add_api_route(
         "/{pending_approval_id}",
         get_approval_shell,
         methods=["GET"],
         response_class=HTMLResponse,
     )
-    router.add_api_route("/{pending_approval_id}/summary", post_approval_summary, methods=["POST"])
     router.add_api_route(
-        "/{pending_approval_id}/enroll/options", post_enroll_options, methods=["POST"]
+        "/{pending_approval_id}/summary",
+        post_approval_summary,
+        methods=["POST"],
+        dependencies=host_guard,
     )
     router.add_api_route(
-        "/{pending_approval_id}/enroll/verify", post_enroll_verify, methods=["POST"]
+        "/{pending_approval_id}/enroll/options",
+        post_enroll_options,
+        methods=["POST"],
+        dependencies=host_guard,
     )
-    router.add_api_route("/{pending_approval_id}/sign/options", post_sign_options, methods=["POST"])
-    router.add_api_route("/{pending_approval_id}/sign/verify", post_sign_verify, methods=["POST"])
+    router.add_api_route(
+        "/{pending_approval_id}/enroll/verify",
+        post_enroll_verify,
+        methods=["POST"],
+        dependencies=host_guard,
+    )
+    router.add_api_route(
+        "/{pending_approval_id}/sign/options",
+        post_sign_options,
+        methods=["POST"],
+        dependencies=host_guard,
+    )
+    router.add_api_route(
+        "/{pending_approval_id}/sign/verify",
+        post_sign_verify,
+        methods=["POST"],
+        dependencies=host_guard,
+    )
     return router

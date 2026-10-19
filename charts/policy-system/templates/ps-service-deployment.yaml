@@ -218,6 +218,10 @@ spec:
             - name: PS_AUTH_ISSUER
               value: {{ .Values.psService.auth.issuer | quote }}
             {{- end }}
+            {{- if .Values.psService.passkeySigning.allowedOrigins }}
+            - name: PS_PASSKEYSIGNING_ALLOWED_ORIGINS
+              value: {{ join "," .Values.psService.passkeySigning.allowedOrigins | quote }}
+            {{- end }}
             {{- if .Values.psService.auth.audience }}
             - name: PS_AUTH_AUDIENCE
               value: {{ .Values.psService.auth.audience | quote }}

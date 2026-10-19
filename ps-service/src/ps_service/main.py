@@ -171,6 +171,7 @@ class _MaxBodySizeMiddleware:
         await self._app(scope, receive, send)
 
 
+_BEARER_PREFIX = "Bearer "
 _REPLAY_GATE_EXEMPT_PATHS = frozenset({"/health", "/ready"})
 _REPLAY_GATE_EXEMPT_PREFIX = "/.well-known/"
 _REPLAY_GATE_RETRY_AFTER_SECONDS = "5"
@@ -180,7 +181,7 @@ class _ReplayReadGateMiddleware:
     """Pure ASGI middleware that serves nothing graph-related while the startup replay runs.
 
     While `graph_replay` is unhealthy a graph may be empty or half rebuilt, so any request that
-    could read it gets `503` with the `/ready` shape. Exempt: `/health`, `/ready` and the
+    could read it gets `503` with the status-only `/ready` body. Exempt: `/health`, `/ready` and the
     `/.well-known/` metadata, the only paths that are unauthenticated and graph-free. It is the
     outermost layer, so it runs before authentication: a caller who is not authenticated learns
     nothing beyond "not ready". A dependency that was never recorded
@@ -211,7 +212,7 @@ class _ReplayReadGateMiddleware:
             response = JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 headers={"Retry-After": _REPLAY_GATE_RETRY_AFTER_SECONDS},
-                content={"status": "not_ready", "unhealthy_dependencies": [GRAPH_REPLAY]},
+                content={"status": "not_ready"},
             )
             await response(scope, receive, send)
             return
@@ -854,6 +855,61 @@ def _add_http_middleware(
     app.add_middleware(_ReplayReadGateMiddleware)
 
 
+def _emit_startup_warnings(config: ServiceConfig) -> None:
+    """Log one warning for each unsafe-looking setting the process starts with.
+
+    Covers a non-loopback bind, an active local-test bypass, and an exposed deployment that
+    configures no Passkey Signing allowed origins (so the relying party follows each request's
+    `Host`). Nothing is raised; the entries only make the condition visible to an operator.
+    """
+    if not _is_loopback(config.host):
+        emit_log_entry(
+            component="entrypoint",
+            action="startup",
+            outcome="warning",
+            extra={"host": config.host},
+        )
+    if config.is_local_test_bypass_active:
+        emit_log_entry(
+            component="entrypoint",
+            action="startup",
+            outcome="warning",
+            extra={"local_test_bypass_active": True, "bind_scope": "loopback-only"},
+        )
+    elif not config.passkey_signing_allowed_origins:
+        emit_log_entry(
+            component="passkey_signing",
+            action="allowed_origins_check",
+            outcome="warning",
+            extra={"allowed_origins_configured": False},
+        )
+
+
+async def _is_verified_caller(request: Request, verifier: PsTokenVerifier | None) -> bool:
+    """Whether `request` carries a bearer token the verifier accepts.
+
+    No header, a non-`Bearer` scheme, an empty token, no verifier (local-test bypass) and a token
+    the verifier rejects all answer `False`; nothing here ever raises or answers 401.
+
+    Args:
+        request: The request whose `Authorization` header is inspected.
+        verifier: The process-wide token verifier, or `None` when the bypass is active.
+
+    Returns:
+        `True` only when a bearer token is present and verifies.
+
+    Side Effects:
+        One verifier call (and its single log line) per request that presents a bearer token.
+    """
+    if verifier is None:
+        return False
+    value = request.headers.get("authorization")
+    if value is None or not value.startswith(_BEARER_PREFIX):
+        return False
+    token = value[len(_BEARER_PREFIX) :].strip()
+    return bool(token) and await verifier.verify_token(token) is not None
+
+
 def create_app(config: ServiceConfig) -> FastAPI:
     """Build the FastAPI app wired to the given `ServiceConfig`.
 
@@ -978,20 +1034,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
         _refuse_non_loopback_bypass_bind(config)
         log_path = (config.logging_dir / _LOG_FILENAME) if config.logging_dir is not None else None
         configure(log_path=log_path, mirror_failures_to_stderr=True)
-        if not _is_loopback(config.host):
-            emit_log_entry(
-                component="entrypoint",
-                action="startup",
-                outcome="warning",
-                extra={"host": config.host},
-            )
-        if config.is_local_test_bypass_active:
-            emit_log_entry(
-                component="entrypoint",
-                action="startup",
-                outcome="warning",
-                extra={"local_test_bypass_active": True, "bind_scope": "loopback-only"},
-            )
+        _emit_startup_warnings(config)
         emit_log_entry(component="entrypoint", action="startup", outcome="success")
         missing_config = missing_ingestion_config_fields(config)
         if missing_config:
@@ -1063,7 +1106,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
         """
         return {"status": "alive", "version": installed_version("ps-service")}
 
-    async def ready() -> JSONResponse:
+    async def ready(request: Request) -> JSONResponse:
         """Report "ready" only once startup succeeded AND every gating dependency is healthy now.
 
         Two independent gates: `app.state.ready` AND the live `dependency_health` registry's
@@ -1087,7 +1130,14 @@ def create_app(config: ServiceConfig) -> FastAPI:
         `dependency_health`, but neither their startup nor live health ever flips `/ready`'s
         status.
 
-        `unhealthy_dependencies` names every currently-unhealthy member of `_READY_DEPENDENCIES`
+        The body depends on who asks. An anonymous caller (no `Authorization: Bearer` header, a
+        token the verifier rejects, or the local-test bypass, which has no verifier) gets only
+        `{"status": ...}`: the dependency and graph names stay private to authenticated callers.
+        This route is exempt from the REST bearer middleware, so a rejected or stale token is
+        never a 401 here; it is simply treated as anonymous and the probe keeps its answer.
+
+        `unhealthy_dependencies` (authenticated callers only) names every currently-unhealthy
+        member of `_READY_DEPENDENCIES`
         (gating or not) by its `dependency_health` constant string, read directly off the live
         registry via `is_healthy` -- never the raw error text `mark_unhealthy` stores, which stays
         private to `dependency_health`. Always present, empty when every dependency is healthy, so
@@ -1095,16 +1145,19 @@ def create_app(config: ServiceConfig) -> FastAPI:
         dependency may appear here even while `status` stays `"ready"`, when it is LLM Interface
         or Cellar/ELI.
 
-        `gated_graphs` names the graphs that refuse writes until an operator acts: a graph whose
-        replay failed verification, or whose logged entry FalkorDB refuses. Always present, empty
-        when there are none; it never changes the status code, since the other graphs are
-        unaffected.
+        `gated_graphs` (authenticated callers only) names the graphs that refuse writes until an
+        operator acts: a graph whose replay failed verification, or whose logged entry FalkorDB
+        refuses. Empty when there are none; it never changes the status code, since the other
+        graphs are unaffected.
+
+        Args:
+            request: The incoming request; only its `Authorization` header is read.
 
         Returns:
-            A JSON response `{"status": "ready" | "not_ready", "unhealthy_dependencies": [...],
-            "gated_graphs": [...]}`. The HTTP status is `200` when ready and `503` when not, so the
-            chart's body-blind `httpGet` `readinessProbe` pulls the pod from Service rotation on a
-            real outage.
+            A JSON response `{"status": "ready" | "not_ready"}`, plus `"unhealthy_dependencies"`
+            and `"gated_graphs"` lists for a caller whose bearer token verifies. The HTTP status
+            is `200` when ready and `503` when not, so the chart's body-blind `httpGet`
+            `readinessProbe` pulls the pod from Service rotation on a real outage.
 
         Side Effects:
             While not yet ready, re-probes the gating dependencies (see
@@ -1112,17 +1165,16 @@ def create_app(config: ServiceConfig) -> FastAPI:
         """
         if not app.state.ready and app.state.config_complete:
             app.state.ready = _retry_gating_dependencies(config)
-        unhealthy_dependencies = [
-            dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)
-        ]
         is_ready = app.state.ready and all_healthy(_GATING_DEPENDENCIES)
+        content: dict[str, object] = {"status": "ready" if is_ready else "not_ready"}
+        if await _is_verified_caller(request, verifier):
+            content["unhealthy_dependencies"] = [
+                dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)
+            ]
+            content["gated_graphs"] = _gated_graphs(app)
         return JSONResponse(
             status_code=status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "status": "ready" if is_ready else "not_ready",
-                "unhealthy_dependencies": unhealthy_dependencies,
-                "gated_graphs": _gated_graphs(app),
-            },
+            content=content,
         )
 
     app.add_api_route("/health", health, methods=["GET"])

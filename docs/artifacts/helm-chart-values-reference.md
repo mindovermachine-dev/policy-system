@@ -38,6 +38,7 @@ keys below for you; you only set them by hand when deploying the chart without a
 | `psService.auth.audience` | `""` | `PS_AUTH_AUDIENCE` — the resource-server audience (for the bundled Authentik, the fixed OAuth2 Provider's `client_id`, `ps-cli`). Required unless `psService.localTestBypass.enabled=true`. |
 | `psService.auth.cliClientId` | `""` | `PS_AUTH_CLI_CLIENT_ID` — the public CLI client's id (for the bundled Authentik, `ps-cli`). Optional; when set it is advertised in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`. |
 | `psService.auth.scopes` | `""` | `PS_AUTH_SCOPES` — space/comma-separated OAuth scope(s) a client should request at login (for the bundled Authentik, `openid profile email offline_access`). Not used for token validation, but required in practice: PS-Cli's device-flow login sources its OAuth `scope` request directly from this value via `scopes_supported`, and most IdPs reject an empty scope. See the [IdP configuration contract](./idp-configuration-contract.md). |
+| `psService.passkeySigning.allowedOrigins` | `[]` | `PS_PASSKEYSIGNING_ALLOWED_ORIGINS` — list of origins (`scheme://host[:port]`, no path) the approval page may be served from, rendered comma-joined and only when non-empty. The first entry is the WebAuthn relying party: its host is the `rp_id` and passkeys enrolled under it stay valid only while it is unchanged. A POST to an approval route whose `Host` matches none of the entries is answered `421`. Empty derives the relying party from each request's `Host`, so set it on every deployment that is reachable by more than one name. **Script (evaluator):** `["http://localhost:8000"]`. |
 
 PS Service reads some settings that the chart does not expose as values. `PS_SERVICE_MAX_REQUEST_BODY_BYTES` is the largest accepted request body: a positive integer number of bytes, default `104857600` (100 MiB). A request whose `Content-Length` is larger is answered `413` before its body is read. The default applies to every deployment; to change it, add the variable to the `ps-service` container's environment yourself.
 
@@ -101,7 +102,7 @@ helm install policy-system ./charts/policy-system \
 ```
 
 Without `psService.ollamaHostGatewayIP` set, PS Service cannot reach Ollama. `/ready` still
-reports `"status": "ready"` — readiness depends on FalkorDB, PS state Postgres and the startup graph replay, not on the LLM provider — but lists
+reports `"status": "ready"` — readiness depends on FalkorDB, PS state Postgres and the startup graph replay, not on the LLM provider — but an authenticated call lists
 `llm_interface` under `unhealthy_dependencies`, and `ps-cli ingest document` and the
 `ingest_regulation`, `start_ingestion` and `check_regulations` tools stop at their pre-flight check with
 `LLM Interface is unavailable.`. See
@@ -177,7 +178,7 @@ rendered.
 Verify what reached the pod, then check readiness. `/ready`'s `status` reflects FalkorDB,
 PS state Postgres and the startup graph replay only, so `helm install --wait` succeeding and `"status": "ready"` do **not**
 prove the Azure credentials or deployment names work. The LLM signal is the
-`unhealthy_dependencies` list in the same response: at startup PS Service makes one real
+`unhealthy_dependencies` list in the response to a call with a valid bearer token: at startup PS Service makes one real
 completion call with `PS_LLMINTERFACE_MODEL` and one real embedding call with
 `PS_LLMINTERFACE_EMBED_MODEL`, and if either fails `llm_interface` is listed there.
 
@@ -187,7 +188,9 @@ kubectl exec deploy/policy-system-ps-service -- env | grep '^PS_LLMINTERFACE_'
 
 ```bash
 curl -s http://127.0.0.1:8000/ready
-# healthy: {"status":"ready","unhealthy_dependencies":[]}
+# anonymous: {"status":"ready"} (status only, no dependency names)
+curl -s -H "Authorization: Bearer $ACCESS_TOKEN" http://127.0.0.1:8000/ready
+# healthy: {"status":"ready","unhealthy_dependencies":[],"gated_graphs":[]}
 # "llm_interface" listed: wrong key, base URL or deployment name — fix the --set
 # values and `helm upgrade`; the restarted pod re-probes at startup.
 ```

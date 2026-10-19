@@ -107,3 +107,74 @@ def test_idp_contract_says_the_redirect_uris_hold_no_hostname() -> None:
     section = section.split("\n## ", 1)[0].split("\n### ", 1)[0]
 
     assert "no hostname" in section
+
+
+_CHECK = "scripts/deploy-ps-eval.sh --check-exposure"
+_KIND_CREATE = "kind create cluster --config"
+
+
+def test_install_guide_runs_the_exposure_check_before_creating_the_cluster() -> None:
+    step = _text().split("### 4. Create the local cluster", 1)[1].split("\n### 5.", 1)[0]
+
+    assert _CHECK in step
+    assert step.index(_CHECK) < step.index(_KIND_CREATE)
+    assert "--allow-public-host" in step
+
+
+def test_install_guide_recreate_path_points_back_to_the_exposure_check() -> None:
+    warning = _text().split("**Do you already have a `policy-system` kind cluster", 1)[1]
+    recreate = warning.split("\n### 5.", 1)[0]
+
+    assert "exposure check" in _squash(recreate)
+
+
+def test_operations_guide_recreate_path_runs_the_exposure_check_first() -> None:
+    text = _squash((_ARTIFACTS / "operations-guide.md").read_text())
+    section = text.split("### Recreating the kind cluster", 1)[1].split("### Cleanup", 1)[0]
+
+    assert _CHECK in section
+    assert section.index(_CHECK) < section.index("kind create cluster")
+
+
+def test_exposed_section_describes_the_preflight_and_the_flag() -> None:
+    text = _squash(_text())
+    section = text.split("### What is exposed (evaluator)", 1)[1].split("## Production", 1)[0]
+
+    assert "--check-exposure" in section
+    assert "--allow-public-host" in section
+    assert "100.64" in section
+
+
+def test_guide_says_a_multi_homed_rerun_needs_the_flag_on_both_calls() -> None:
+    step = _squash(_text().split("### 4. Create the local cluster", 1)[1].split("\n### 5.", 1)[0])
+
+    assert "both" in step
+
+
+def test_exposed_section_explains_the_configured_approval_origins() -> None:
+    text = _squash(_text())
+    section = text.split("### What is exposed (evaluator)", 1)[1].split("## Production", 1)[0]
+
+    assert "psService.passkeySigning.allowedOrigins" in section
+    assert "421" in section
+    assert "http://localhost:8000" in section
+
+
+def test_operations_guide_documents_the_allowed_approval_origins() -> None:
+    text = _squash((_ARTIFACTS / "operations-guide.md").read_text())
+    section = text.split("### Allowed approval origins", 1)[1].split("\n### ", 1)[0]
+
+    assert "psService.passkeySigning.allowedOrigins" in section
+    assert "PS_PASSKEYSIGNING_ALLOWED_ORIGINS" in section
+    assert "421" in section
+    assert "rp_id" in section
+    assert "first" in section
+
+
+def test_architecture_doc_states_the_configured_origins_and_host_rejection() -> None:
+    text = _squash(
+        (_REPO / "docs" / "architecture" / "ps-service-container-architecture.md").read_text()
+    )
+
+    assert "PS_PASSKEYSIGNING_ALLOWED_ORIGINS" in text
+    assert "421" in text

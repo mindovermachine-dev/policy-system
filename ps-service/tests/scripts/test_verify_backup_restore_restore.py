@@ -23,6 +23,8 @@ SCRIPT = REPO_ROOT / "scripts" / "verify-backup-restore.sh"
 
 SUBPROCESS_TIMEOUT_SECONDS = 60.0
 INIT_LINE = "ps-postgres-init: created roles ps_state, ps_signing"
+READY_STATUS_ONLY = '200 {"status":"ready"}'
+READY_TOKEN = "ready-token-value-7d1c"
 READY_OK = '200 {"status":"ready","unhealthy_dependencies":[],"gated_graphs":[]}'
 READY_REPLAY = (
     '503 {"status":"not_ready","unhealthy_dependencies":["graph_replay"],"gated_graphs":[]}'
@@ -50,7 +52,8 @@ case "$args" in
   "logs deploy/policy-system-ps-postgres"*) cat "$FAKE_PG_LOGS"; exit 0 ;;
   "apply -f -") cat >"$FAKE_APPLY_FILE"; exit 0 ;;
   *"exec -i"*"tar -xf"*) cat >"$FAKE_STDIN_FILE"; exit 0 ;;
-  *"exec deploy/policy-system-ps-service"*)
+  *"exec"*"deploy/policy-system-ps-service -- python -c"*)
+    cat >"$FAKE_READY_STDIN"
     first="$(head -n 1 "$FAKE_READY_SEQUENCE")"
     if [[ "$(wc -l <"$FAKE_READY_SEQUENCE")" -gt 1 ]]; then
       tail -n +2 "$FAKE_READY_SEQUENCE" >"$FAKE_READY_SEQUENCE.next"
@@ -82,6 +85,7 @@ class RunResult:
     helm: list[str]
     stdin_copy: Path
     manifest: Path
+    ready_stdin: str
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -114,6 +118,7 @@ def _run(
     ready_lines: tuple[str, ...] = (READY_REPLAY, READY_OK),
     missing_secret: str = "",
     helm_upgrade_exit: int = 0,
+    ready_token: str | None = None,
 ) -> RunResult:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -127,6 +132,8 @@ def _run(
     values_file.write_text(json.dumps(RETAINED_VALUES if helm_values is None else helm_values))
     pg_logs_file = tmp_path / "pg.log"
     pg_logs_file.write_text(pg_logs)
+    ready_stdin = tmp_path / "ready.stdin"
+    ready_stdin.write_text("")
     ready_file = tmp_path / "ready.seq"
     ready_file.write_text("\n".join(ready_lines) + "\n")
     stdin_copy = tmp_path / "helper-stdin.tar"
@@ -145,11 +152,15 @@ def _run(
         "FAKE_JOB_COMPLETE": job_complete,
         "FAKE_PG_LOGS": str(pg_logs_file),
         "FAKE_READY_SEQUENCE": str(ready_file),
+        "FAKE_READY_STDIN": str(ready_stdin),
         "FAKE_MISSING_SECRET": missing_secret,
         "FAKE_STDIN_FILE": str(stdin_copy),
         "FAKE_APPLY_FILE": str(manifest),
         "FAKE_HELM_UPGRADE_EXIT": str(helm_upgrade_exit),
     }
+    env.pop("PS_READY_TOKEN", None)
+    if ready_token is not None:
+        env["PS_READY_TOKEN"] = ready_token
     result = subprocess.run(  # noqa: S603 - bash is a shutil.which-resolved absolute path; args are literals
         [bash, str(SCRIPT), *args],
         env=env,
@@ -167,6 +178,7 @@ def _run(
         helm_log.read_text().splitlines(),
         stdin_copy,
         manifest,
+        ready_stdin.read_text(),
     )
 
 
@@ -433,11 +445,88 @@ def test_wait_ready_fails_when_a_graph_is_gated(tmp_path: Path) -> None:
     gated = '200 {"status":"ready","unhealthy_dependencies":[],"gated_graphs":["g1"]}'
 
     result = _run(
-        tmp_path, ["wait-ready", "--interval", "0.05", "--timeout", "2"], ready_lines=(gated,)
+        tmp_path,
+        ["wait-ready", "--interval", "0.05", "--timeout", "2"],
+        ready_lines=(gated,),
+        ready_token=READY_TOKEN,
     )
 
     assert result.code == 1
     assert "event=ready_timeout" in result.stderr
+
+
+def test_wait_ready_without_a_token_succeeds_on_a_status_only_200_and_logs_unchecked(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        tmp_path,
+        ["wait-ready", "--interval", "0.05", "--timeout", "5"],
+        ready_lines=(READY_STATUS_ONLY,),
+    )
+
+    assert result.code == 0, result.stderr
+    assert "event=ready http=200" in result.stderr
+    assert "gated_graphs=unchecked" in result.stderr
+    assert result.ready_stdin == ""
+
+
+def test_wait_ready_without_a_token_does_not_accept_a_not_ready_status(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        ["wait-ready", "--interval", "0.05", "--timeout", "1"],
+        ready_lines=('200 {"status":"not_ready"}',),
+    )
+
+    assert result.code == 1
+    assert "event=ready_timeout" in result.stderr
+
+
+def test_wait_ready_with_a_token_sends_it_to_the_pod_and_checks_gated_graphs(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        tmp_path,
+        ["wait-ready", "--interval", "0.05", "--timeout", "5"],
+        ready_lines=(READY_OK,),
+        ready_token=READY_TOKEN,
+    )
+
+    assert result.code == 0, result.stderr
+    assert result.ready_stdin == READY_TOKEN
+    assert "gated_graphs=unchecked" not in result.stderr
+    assert "Authorization" in SCRIPT.read_text()
+
+
+def test_wait_ready_with_a_token_fails_when_the_reply_carries_no_gated_graphs_field(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        tmp_path,
+        ["wait-ready", "--interval", "0.05", "--timeout", "1"],
+        ready_lines=(READY_STATUS_ONLY,),
+        ready_token=READY_TOKEN,
+    )
+
+    assert result.code == 1
+    assert "event=ready_timeout" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "ready_lines", [(READY_OK,), ('200 {"status":"ready","gated_graphs":["g"]}',)]
+)
+def test_the_ready_token_never_reaches_a_log_line_or_a_kubectl_argument(
+    tmp_path: Path, ready_lines: tuple[str, ...]
+) -> None:
+    result = _run(
+        tmp_path,
+        ["wait-ready", "--interval", "0.05", "--timeout", "1"],
+        ready_lines=ready_lines,
+        ready_token=READY_TOKEN,
+    )
+
+    assert READY_TOKEN not in result.stderr
+    assert READY_TOKEN not in result.stdout
+    assert all(READY_TOKEN not in call for call in result.kubectl)
 
 
 def test_wait_ready_times_out_while_the_service_stays_not_ready(tmp_path: Path) -> None:

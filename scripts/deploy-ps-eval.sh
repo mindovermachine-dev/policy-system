@@ -5,7 +5,9 @@
 # link printed. No password is ever set, prompted for, or logged.
 #
 # Usage:
-#   scripts/deploy-ps-eval.sh [--owner-email <address>] [--hostname <name>] [--apply-host-setup] [--yes]
+#   scripts/deploy-ps-eval.sh [--owner-email <address>] [--hostname <name>] [--apply-host-setup]
+#                             [--allow-public-host] [--yes]
+#   scripts/deploy-ps-eval.sh --check-exposure [--allow-public-host]
 #
 #   --owner-email  The first SystemOwner. Prompted for when omitted. The address is both the
 #                  Authentik username and the OIDC `sub` PS Service expects, so the deploy sets
@@ -19,6 +21,17 @@
 #                  macOS system keychain) without asking. Without it, an interactive run asks first and
 #                  a non-interactive run only prints the commands. Nothing is touched when both
 #                  are already in place.
+#   --allow-public-host
+#                  Accept a machine that has a non-private address. The cluster publishes
+#                  Authentik on every interface of the host (port 30443), so the run stops
+#                  before any cluster call when an interface holds an address outside the
+#                  loopback, link-local and private ranges (10/8, 172.16/12, 192.168/16,
+#                  169.254/16, fc00::/7, fe80::/10). VPN addresses such as Tailscale's
+#                  100.64/10 and global IPv6 addresses count as public. Pass the flag on every
+#                  run, `--check-exposure` included, on such a machine.
+#   --check-exposure
+#                  Run only that address check and exit (0 passed, 1 failed), with no cluster
+#                  or tool requirement. Run it before `kind create cluster`.
 #   --yes          Non-interactive: never prompt (an owner email is then required).
 #
 # Environment: PS_CHART_REF (chart path or OCI ref; default the published OCI chart),
@@ -61,7 +74,7 @@ source "${SCRIPT_DIR}/lib/chart-version.sh"
 
 readonly EXIT_USAGE=2
 readonly EXIT_FAILURE=1
-USAGE="usage: $(basename "$0") [--owner-email <address>] [--hostname <name>] [--apply-host-setup] [--yes]"
+USAGE="usage: $(basename "$0") [--owner-email <address>] [--hostname <name>] [--apply-host-setup] [--allow-public-host] [--yes] | --check-exposure [--allow-public-host]"
 readonly USAGE
 
 readonly HELM_RELEASE_NAME="policy-system"
@@ -97,6 +110,8 @@ node_ip=""
 made_release_change=false
 cert_refreshed=false
 apply_host_setup=false
+allow_public_host=false
+check_exposure_only=false
 needs_hosts=false
 needs_trust=false
 ps_cli_context_ready=false
@@ -110,6 +125,8 @@ parse_args() {
     case "$1" in
       --yes) SKIP_OWNER_PROMPT=true ;;
       --apply-host-setup) apply_host_setup=true ;;
+      --allow-public-host) allow_public_host=true ;;
+      --check-exposure) check_exposure_only=true ;;
       --owner-email | --hostname)
         if [[ $# -lt 2 || -z "$2" ]]; then
           print_error '%s needs a value\n%s\n' "$1" "$USAGE"
@@ -154,6 +171,84 @@ reject_local_suffix_hostname() {
 
 log_step() {
   printf '==> %s\n' "$1" >&2
+}
+
+# enumerate_host_addresses: prints every IPv4 and IPv6 address of this machine's interfaces, one per
+# line, from `ip` (Linux) or else `ifconfig` (macOS, BSD). Returns 1 when neither tool exists.
+enumerate_host_addresses() {
+  if command -v ip >/dev/null 2>&1; then
+    ip -o addr show | awk '{ for (i = 1; i < NF; i++) if ($i == "inet" || $i == "inet6") print $(i + 1) }'
+  elif command -v ifconfig >/dev/null 2>&1; then
+    ifconfig | awk '{ for (i = 1; i < NF; i++) if ($i == "inet" || $i == "inet6") print $(i + 1) }'
+  else
+    return 1
+  fi
+}
+
+# is_private_ipv4 <a.b.c.d>: 0 for loopback, private and link-local IPv4 addresses.
+is_private_ipv4() {
+  local first second rest
+  IFS=. read -r first second rest <<<"$1"
+  first=$((10#${first})) second=$((10#${second}))
+  case "$first" in
+    10 | 127) return 0 ;;
+    172) [[ "$second" -ge 16 && "$second" -le 31 ]] ;;
+    192) [[ "$second" -eq 168 ]] ;;
+    169) [[ "$second" -eq 254 ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+# is_private_address <address>: 0 when the address is loopback, private or link-local, so the
+# listener on this interface is not reachable from outside the local network. Anything else,
+# including CGNAT 100.64/10 and global IPv6, is public. Scope ids and prefix lengths are ignored;
+# IPv4-mapped IPv6 addresses are classified by the IPv4 address they carry.
+is_private_address() {
+  local address hextet high low
+  address="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  address="${address%%%*}"
+  address="${address%%/*}"
+  if [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    is_private_ipv4 "$address"
+  elif [[ "$address" =~ ^::ffff:([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    is_private_ipv4 "${BASH_REMATCH[1]}"
+  elif [[ "$address" =~ ^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$ ]]; then
+    high=$((16#${BASH_REMATCH[1]})) low=$((16#${BASH_REMATCH[2]}))
+    is_private_ipv4 "$((high >> 8)).$((high & 255)).$((low >> 8)).$((low & 255))"
+  elif [[ "$address" == "::1" ]]; then
+    return 0
+  else
+    hextet="${address%%:*}"
+    [[ "$hextet" =~ ^(f[cd][0-9a-f]{2}|fe[89ab][0-9a-f])$ ]]
+  fi
+}
+
+# check_host_exposure: hard-stops (before any tool check or cluster call) when an interface of this
+# machine holds a public address, because the kind cluster publishes Authentik on all of them.
+# --allow-public-host accepts that. Fails closed when the addresses cannot be listed.
+check_host_exposure() {
+  local addresses address offending=()
+  if [[ "$allow_public_host" == true ]]; then
+    log_step "Exposure check skipped (--allow-public-host)"
+    return 0
+  fi
+  if ! addresses="$(enumerate_host_addresses)"; then
+    print_error 'Cannot verify this machine'"'"'s network exposure: neither ip nor ifconfig is available. Fix: install one of them, or re-run with --allow-public-host to accept the risk.\n'
+    exit "$EXIT_FAILURE"
+  fi
+  while IFS= read -r address; do
+    [[ -n "$address" ]] || continue
+    is_private_address "$address" || offending+=("$address")
+  done <<<"$addresses"
+  if [[ ${#offending[@]} -gt 0 ]]; then
+    for address in "${offending[@]}"; do
+      print_error 'exposure: public address %s on this machine\n' "$address"
+    done
+    print_error 'The cluster publishes Authentik (port 30443) on every interface of this machine, so it would be reachable from those addresses. Fix: disconnect or firewall them, or re-run with --allow-public-host to accept the exposure (see %s, What is exposed).\n' \
+      "$INSTALL_GUIDE"
+    exit "$EXIT_FAILURE"
+  fi
+  log_step "Exposure check passed: no public address on this machine"
 }
 
 # check_required_tools: hard-stops, before any state change, unless every prerequisite CLI is on
@@ -262,8 +357,9 @@ announce_upgrade_host_steps() {
 # script gives the chart, in the JSON shape `helm get values -o json` returns (so the release
 # comparison is exact). Sets, in ONE deploy: the local-TLS Secret, the Authentik pods' mount of
 # it (the chart cannot make that conditional), the issuer/audience/client for ps-cli, the
-# bootstrap owner (subject == the owner's email, issuer == the issuer above) and the in-reach
-# Authentik base URL PS Service calls for invitations.
+# bootstrap owner (subject == the owner's email, issuer == the issuer above), the in-reach
+# Authentik base URL PS Service calls for invitations and the one origin the approval page is
+# served from (http://localhost:8000, the same relying party for every hostname).
 release_values_json() {
   local host="$1" issuer="$2" checksum="$3"
   jq -n --arg llm "$LLM_SECRET_NAME" --arg tls "$TLS_SECRET_NAME" --arg host "$host" \
@@ -277,6 +373,7 @@ release_values_json() {
           volumeMounts: [{name: "ps-tls", mountPath: "/ps-tls", readOnly: true}],
           podAnnotations: {"checksum/local-tls": $sum}}},
       psService: {localTestBypass: {enabled: false},
+        passkeySigning: {allowedOrigins: ["http://localhost:8000"]},
         authentikHostname: $host, authentikHostAliasIP: $ip,
         auth: {issuer: $issuer, audience: $app, cliClientId: $app, scopes: $scopes},
         authzBootstrapOwner: {subject: $owner, issuer: $issuer},
@@ -476,6 +573,8 @@ print_closing_summary() {
 main() {
   parse_args "$@"
 
+  check_host_exposure
+  [[ "$check_exposure_only" == true ]] && exit 0
   check_required_tools
   require_kind_context
   require_llm_secret

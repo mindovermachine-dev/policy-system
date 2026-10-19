@@ -1701,3 +1701,44 @@ def test_no_old_backup_statements() -> None:
     ).lower()
     for absent in ("replaces", "no longer", "previously", "used to"):
         assert absent not in history, absent
+
+
+def test_operations_guide_states_what_an_unauthenticated_ready_reveals() -> None:
+    ops = _read(_OPS)
+    section = _collapsed(_section(ops, "### What `/ready` reveals"))
+
+    for needle in (
+        '{"status": "ready"}',
+        '{"status": "not_ready"}',
+        "unhealthy_dependencies",
+        "gated_graphs",
+        "Authorization: Bearer",
+        "local-test bypass",
+        "not an error",
+    ):
+        assert needle in section, needle
+    assert "(#what-ready-reveals)" in ops
+
+
+def test_operations_guide_restore_says_the_gated_check_needs_a_ready_token() -> None:
+    restore = _collapsed(_section(_read(_OPS), "## Restore"))
+
+    assert "PS_READY_TOKEN" in restore
+    assert "gated_graphs=unchecked" in restore
+
+
+def test_architecture_documents_state_unauthenticated_ready_is_status_only() -> None:
+    ca = _collapsed(_read(_CA))
+    sa = _collapsed(_read(_SA))
+
+    assert 'the body is `{"status": "ready" | "not_ready"}` for every unauthenticated' in ca
+    assert "never answered `401`" in ca
+    assert "only to a caller with a valid bearer token" in sa
+    assert "reported by name only;" not in sa
+
+
+def test_helm_values_reference_shows_the_anonymous_and_the_authenticated_ready_answer() -> None:
+    valref = _read(_VALREF)
+
+    assert 'anonymous: {"status":"ready"}' in valref
+    assert "Authorization: Bearer $ACCESS_TOKEN" in valref

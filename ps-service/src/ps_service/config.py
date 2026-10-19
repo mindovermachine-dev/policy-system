@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit
 
 from ps_service.curated_source.errors import CuratedSourceConfigurationError
 from ps_service.curated_source.source_url import validate_source_url
@@ -118,6 +119,11 @@ class ServiceConfig:
         passkey_signing_postgres_database: Its database name; `None` when unset.
         passkey_signing_postgres_user: Its user name; `None` when unset.
         passkey_signing_postgres_password: Its password; `None` when unset.
+        passkey_signing_allowed_origins: The origins (`scheme://host[:port]`) the companion-browser
+            approval page may be served from (`PS_PASSKEYSIGNING_ALLOWED_ORIGINS`, comma
+            separated). The first entry names the WebAuthn relying party and its origin; a POST
+            on an approval route whose `Host` matches none is rejected. Empty when unset, in
+            which case the relying party is derived from each request's own `Host`.
         state_postgres_host: Host of the PS state Postgres instance (`PS_STATE_POSTGRES_HOST`),
             separate from Passkey Signing's, with its own tables and migration tracking;
             `None` when unset. Unlike Passkey Signing, an unset host is not "not applicable":
@@ -171,6 +177,7 @@ class ServiceConfig:
     passkey_signing_postgres_database: str | None = None
     passkey_signing_postgres_user: str | None = None
     passkey_signing_postgres_password: str | None = field(default=None, repr=False)
+    passkey_signing_allowed_origins: tuple[str, ...] = ()
     state_postgres_host: str | None = None
     state_postgres_port: int = _DEFAULT_STATE_POSTGRES_PORT
     state_postgres_database: str | None = None
@@ -673,6 +680,45 @@ def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
     return tuple(part for part in raw.replace(",", " ").split() if part)
 
 
+def _parse_passkey_signing_allowed_origins(raw: str) -> tuple[str, ...]:
+    """Parse `PS_PASSKEYSIGNING_ALLOWED_ORIGINS` into an ordered tuple of origins.
+
+    Each comma-separated entry is trimmed and must be `http://` or `https://` followed by a
+    host and an optional port: no path (a trailing slash included), query, fragment or user
+    info. An explicitly set value that is empty or has an empty entry is rejected rather than
+    treated as unset. The error names the variable, never the offending value.
+    """
+    origins = tuple(part.strip() for part in raw.split(","))
+    if not all(_is_plain_origin(origin) for origin in origins):
+        message = (
+            "PS_PASSKEYSIGNING_ALLOWED_ORIGINS must be a comma-separated list of "
+            "http(s)://host[:port] origins with no path, query or fragment"
+        )
+        raise ServiceConfigurationError(message)
+    return origins
+
+
+def _resolve_passkey_signing_allowed_origins() -> tuple[str, ...]:
+    """Resolve `PS_PASSKEYSIGNING_ALLOWED_ORIGINS`: parsed when set, `()` when unset."""
+    raw = os.environ.get("PS_PASSKEYSIGNING_ALLOWED_ORIGINS")
+    return _parse_passkey_signing_allowed_origins(raw) if raw is not None else ()
+
+
+def _is_plain_origin(origin: str) -> bool:
+    """Return whether `origin` is exactly `http(s)://host[:port]`."""
+    try:
+        parts = urlsplit(origin)
+        _ = parts.port
+    except ValueError:
+        return False
+    return (
+        parts.scheme in {"http", "https"}
+        and bool(parts.hostname)
+        and "@" not in parts.netloc
+        and origin == f"{parts.scheme}://{parts.netloc}"
+    )
+
+
 def load_config() -> ServiceConfig:
     """Resolve the process environment into a validated `ServiceConfig`.
 
@@ -899,6 +945,7 @@ def load_config() -> ServiceConfig:
         passkey_signing_postgres_database=passkey_signing_postgres_database,
         passkey_signing_postgres_user=passkey_signing_postgres_user,
         passkey_signing_postgres_password=passkey_signing_postgres_password,
+        passkey_signing_allowed_origins=_resolve_passkey_signing_allowed_origins(),
         state_postgres_host=state_postgres_host,
         state_postgres_port=state_postgres_port,
         state_postgres_database=state_postgres_database,

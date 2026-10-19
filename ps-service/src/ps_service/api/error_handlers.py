@@ -52,6 +52,7 @@ from ps_service.api.errors import (
     RestoreStageFailedError,
     SelfGrantOrRevokeBlockedError,
     ShortNameCollisionError,
+    SigningHostNotAllowedError,
     SystemOwnerFloorViolationError,
 )
 from ps_service.audit.errors import AuditTrailUnavailableError
@@ -138,6 +139,7 @@ _SAFE_VERBATIM: tuple[type[Exception], ...] = (
     SelfGrantOrRevokeBlockedError,
     SystemOwnerFloorViolationError,
     ShortNameCollisionError,
+    SigningHostNotAllowedError,
 )
 """API-boundary error types whose ``str(exc)`` is domain-level and safe to surface."""
 
@@ -309,6 +311,11 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
         PendingApprovalInvalidOrExpiredError,
         "pending_approval_invalid_or_expired",
         status.HTTP_404_NOT_FOUND,
+    ),
+    (
+        SigningHostNotAllowedError,
+        "signing_host_not_allowed",
+        status.HTTP_421_MISDIRECTED_REQUEST,
     ),
     (
         InvalidAccessRoleError,
@@ -514,6 +521,7 @@ def register_exception_handlers(app: FastAPI) -> None:
       ``RestoreInstrumentIdAmbiguousError``, ``ExportUnresolvedNearMissesError`` (the export
       was refused because the instrument still has unresolved near-miss reviews).
     * 413: ``RequestBodyTooLargeError``.
+    * 421: ``SigningHostNotAllowedError``.
     * 422: ``InternalSeedValidationError``, ``RestoreArtifactRejectedError``,
       ``RequestValidationError`` (generic message, no field detail).
     * 502: ``PipelineStageError``, ``RestoreStageFailedError``, ``ExportStageFailedError``

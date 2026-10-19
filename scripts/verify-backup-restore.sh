@@ -49,8 +49,12 @@
 #         script runs only on an empty data directory, so its line means the restore did not
 #         keep the restored data).
 # wait-ready
-#         Polls `/ready` inside the ps-service pod until it answers 200 with an empty
-#         `gated_graphs`; logs each 503 (for example `graph_replay`) on the way.
+#         Polls `/ready` inside the ps-service pod until it answers 200 with status ready; logs
+#         each 503 on the way. PS_READY_TOKEN (optional, an access token read from the
+#         environment and handed to the pod on stdin) is sent as a Bearer header and then also
+#         requires an empty `gated_graphs`; without it the reply is status only, the gated check
+#         is skipped and `gated_graphs=unchecked` is logged. restore and e2e wait the same way
+#         (e2e still proves every graph by comparing digests).
 # seed    Fills a running deployment with content to verify: restores curated instruments (default
 #         ENGPRAC-1.0 and CRA-1.0, the first imports draft Policy/Standard/Control nodes) through
 #         the restore path and grants access roles through the access-role store, by piping
@@ -241,15 +245,31 @@ run_verify_provision() {
 # ready_probe prints "<http code> <body>" from /ready inside the ps-service pod, or nothing while
 # the pod cannot be reached (starting). Exec is used because a pod that is not Ready is not in the
 # Service endpoints, and that is exactly the state that is observed.
+# PS_READY_TOKEN, when set, reaches the pod on stdin (never as an argument or in a log line) and is
+# sent as a Bearer header, which is what makes PS Service include `gated_graphs` in the reply.
 ready_probe() {
-  kubectl exec "$SERVICE_DEPLOYMENT" -- python -c '
-import urllib.request, urllib.error
+  printf '%s' "${PS_READY_TOKEN:-}" | kubectl exec -i "$SERVICE_DEPLOYMENT" -- python -c '
+import sys, urllib.request, urllib.error
+token = sys.stdin.read().strip()
+headers = {"Authorization": "Bearer " + token} if token else {}
+request = urllib.request.Request("http://127.0.0.1:8000/ready", headers=headers)
 try:
-    response = urllib.request.urlopen("http://127.0.0.1:8000/ready", timeout=5)
+    response = urllib.request.urlopen(request, timeout=5)
     print(response.status, response.read().decode())
 except urllib.error.HTTPError as error:
     print(error.code, error.read().decode())
 ' 2>/dev/null || true
+}
+
+# ready_body_acceptable succeeds for a 200 body that reports ready. With PS_READY_TOKEN set the body
+# must also show an empty `gated_graphs`; without it the reply is status only and that check is skipped.
+ready_body_acceptable() {
+  local body="$1"
+  if [[ -n "${PS_READY_TOKEN:-}" ]]; then
+    printf '%s' "$body" | jq -e '.status == "ready" and .gated_graphs == []' >/dev/null 2>&1
+  else
+    printf '%s' "$body" | jq -e '.status == "ready"' >/dev/null 2>&1
+  fi
 }
 
 wait_ready() {
@@ -261,8 +281,12 @@ wait_ready() {
     body="${probe#* }"
     if [[ -z "$probe" ]]; then
       log_event ready_poll http=none "body=pod-not-reachable"
-    elif [[ "$code" == "200" ]] && printf '%s' "$body" | jq -e '.gated_graphs == []' >/dev/null 2>&1; then
-      log_event ready http=200 "body=${body}"
+    elif [[ "$code" == "200" ]] && ready_body_acceptable "$body"; then
+      if [[ -n "${PS_READY_TOKEN:-}" ]]; then
+        log_event ready http=200 "body=${body}"
+      else
+        log_event ready http=200 "body=${body}" gated_graphs=unchecked
+      fi
       return 0
     else
       log_event ready_poll "http=${code}" "body=${body}"
@@ -270,7 +294,7 @@ wait_ready() {
     sleep "$POLL_INTERVAL"
   done
   log_event ready_timeout "seconds=${READY_TIMEOUT}"
-  print_error '/ready did not answer 200 with empty gated_graphs within %s seconds\n' "$READY_TIMEOUT"
+  print_error '/ready did not answer 200 and ready (with empty gated_graphs when PS_READY_TOKEN is set) within %s seconds\n' "$READY_TIMEOUT"
   return "$EXIT_FAILURE"
 }
 
@@ -457,7 +481,7 @@ restore_sequence() {
   run_provisioning_upgrade
   (verify_provision) || fail_restore provision "the provisioning check failed"
   kubectl scale "$SERVICE_DEPLOYMENT" --replicas=1 || fail_restore start "could not scale ps-service to 1"
-  wait_ready || fail_restore ready "/ready did not reach 200 with empty gated_graphs"
+  wait_ready || fail_restore ready "/ready did not reach 200 and ready"
 }
 
 run_restore() {
@@ -594,7 +618,7 @@ run_e2e() {
     start_data_stores
     run_provisioning_upgrade
     kubectl scale "$SERVICE_DEPLOYMENT" --replicas=1 || fail_e2e "could not scale ps-service to 1"
-    wait_ready || fail_e2e "/ready did not reach 200 with empty gated_graphs"
+    wait_ready || fail_e2e "/ready did not reach 200 and ready"
   else
     restore_sequence
   fi
