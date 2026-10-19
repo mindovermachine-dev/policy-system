@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from conftest import LibHarness
 
@@ -24,7 +26,7 @@ EXIT_FAILURE=1
 print_error() {{ local f="$1"; shift; printf "$f" "$@" >&2; }}
 source "{LIB}/authentik-owner.sh"
 source "{LIB}/local-tls.sh"
-AUTHENTIK_API_BASE="https://authentik.test:30443"
+AUTHENTIK_API_BASE="https://ps.test:30443"
 AUTHENTIK_LINK_BASE="$AUTHENTIK_API_BASE"
 AUTHENTIK_CURL_ARGS=(--cacert /tmp/ca.pem)
 AUTHENTIK_API_TOKEN="$PS_TEST_TOKEN"
@@ -43,7 +45,7 @@ def _seed_state_dir(harness: LibHarness, leaf_body: str) -> None:
 
 def _refresh(harness: LibHarness) -> tuple[int, str, str]:
     proc = harness.run(
-        PRELUDE + "refresh_authentik_cert_if_differs authentik.test 30443 /tmp/ca.pem 127.0.0.1"
+        PRELUDE + "refresh_authentik_cert_if_differs ps.test 30443 /tmp/ca.pem 127.0.0.1"
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -149,6 +151,49 @@ def test_api_token_never_reaches_output_or_argv_during_refresh(lib_harness: LibH
     assert lib_harness.token not in everything
 
 
+def test_a_dns_name_is_accepted_as_the_evaluator_hostname(lib_harness: LibHarness) -> None:
+    for name in ("ps.test", "ps", "my-eval.example.test", "PS.Test"):
+        proc = lib_harness.run(PRELUDE + f'local_tls_validate_hostname "{name}"')
+
+        assert proc.returncode == 0, f"{name}: {proc.stderr}"
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [
+        ("192.168.1.5", "IP address"),
+        ("10.0.0.1", "IP address"),
+        ("::1", "letters, digits"),
+        ("fe80::1", "letters, digits"),
+        ("ps.test\nIP:1.2.3.4", "letters, digits"),
+        ("ps.test;DNS:evil.test", "letters, digits"),
+        ("ps test", "letters, digits"),
+        ("ps_test", "letters, digits"),
+        ("-ps.test", "letters, digits"),
+        ("ps..test", "letters, digits"),
+        ("ps.test.", "letters, digits"),
+    ],
+)
+def test_an_unsafe_or_ip_literal_hostname_is_rejected_with_a_fix(
+    lib_harness: LibHarness, name: str, reason: str
+) -> None:
+    proc = lib_harness.run(
+        PRELUDE + 'local_tls_validate_hostname "$PS_TEST_NAME"', PS_TEST_NAME=name
+    )
+
+    assert proc.returncode != 0
+    assert reason in proc.stderr
+    assert "Fix:" in proc.stderr
+
+
+def test_a_rejected_hostname_writes_nothing_to_the_state_dir(lib_harness: LibHarness) -> None:
+    proc = lib_harness.run(PRELUDE + 'ensure_local_leaf "ps.test;DNS:evil.test"')
+
+    assert proc.returncode != 0
+    assert not (lib_harness.root / "state" / "ca.key").exists()
+    assert not (lib_harness.root / "state" / "ca.cnf").exists()
+
+
 def test_lib_never_disables_certificate_verification() -> None:
     text = (Path(__file__).resolve().parents[3] / "scripts/lib/local-tls.sh").read_text()
 
@@ -165,7 +210,7 @@ def test_served_fingerprint_is_empty_not_fatal_when_nothing_answers_under_set_e(
 
     proc = lib_harness.run(
         PRELUDE.replace("set -uo pipefail", "set -euo pipefail")
-        + 'have="$(served_fingerprint authentik.test 30443 /tmp/ca.pem 127.0.0.1)"\n'
+        + 'have="$(served_fingerprint ps.test 30443 /tmp/ca.pem 127.0.0.1)"\n'
         + 'echo "survived=[$have]"'
     )
 

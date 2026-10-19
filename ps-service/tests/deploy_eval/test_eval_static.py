@@ -75,6 +75,100 @@ def test_the_old_default_hostname_literal_appears_in_no_tracked_file() -> None:
     assert offenders == []
 
 
+_OLD_TEST = "authentik" + ".test"
+_ROOT_ISSUER = re.compile(r":30443" + r"/application/o/")
+_DEFAULT_HOSTNAME_POINTING_AT_OLD_NAME = re.compile(
+    r"DEFAULT_HOSTNAME\s*=\s*[\"']?" + re.escape(_OLD_TEST)
+)
+_GUIDE = REPO_ROOT / "docs" / "artifacts" / "installation-guide.md"
+_MIGRATION_HEADING_PREFIX = "### Moving an existing evaluator from "
+_GUARDED_ROOTS = (*_SCANNED_ROOTS, "deploy")
+_BINARY_SUFFIXES = frozenset({".pyc", ".png", ".gz", ".tgz"})
+
+
+def _guarded_files() -> list[Path]:
+    return [
+        path
+        for root in _GUARDED_ROOTS
+        if (REPO_ROOT / root).exists()
+        for path in (REPO_ROOT / root).rglob("*")
+        if path.is_file()
+        and not _SKIPPED_PARTS & set(path.parts)
+        and path.suffix not in _BINARY_SUFFIXES
+    ]
+
+
+def _migration_section_lines() -> tuple[int, int]:
+    """Return the guide's [start, end) line indexes of the single old-name migration section."""
+    lines = _GUIDE.read_text().splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith(_MIGRATION_HEADING_PREFIX)]
+    assert len(starts) == 1, "the guide must hold exactly one migration section"
+    end = next(
+        (i for i in range(starts[0] + 1, len(lines)) if re.match(r"#{2,3} ", lines[i])),
+        len(lines),
+    )
+    return starts[0], end
+
+
+def _text_outside_the_migration_section(path: Path) -> str:
+    text = path.read_text(errors="ignore")
+    if path != _GUIDE:
+        return text
+    start, end = _migration_section_lines()
+    lines = text.splitlines()
+    return "\n".join(lines[:start] + lines[end:])
+
+
+def test_the_old_name_and_its_default_hostname_constant_appear_only_in_the_migration_section() -> (
+    None
+):
+    offenders = sorted(
+        {
+            str(path.relative_to(REPO_ROOT))
+            for path in _guarded_files()
+            for text in [_text_outside_the_migration_section(path)]
+            if _OLD_TEST in text or _DEFAULT_HOSTNAME_POINTING_AT_OLD_NAME.search(text)
+        }
+    )
+
+    assert offenders == []
+
+
+def test_no_root_path_evaluator_issuer_remains_outside_the_migration_section() -> None:
+    offenders = sorted(
+        {
+            str(path.relative_to(REPO_ROOT))
+            for path in _guarded_files()
+            if _ROOT_ISSUER.search(_text_outside_the_migration_section(path))
+        }
+    )
+
+    assert offenders == []
+
+
+def test_the_script_writes_no_loopback_hosts_mapping() -> None:
+    writes = [
+        line
+        for line in _code_lines(EVAL)
+        if ("tee -a" in line or ">>" in line) and ("127.0.0.1" in line or "::1" in line)
+    ]
+    loopback_loops = [line for line in _code_lines(EVAL) if re.search(r"127\.0\.0\.1\s+::1", line)]
+
+    assert writes == []
+    assert loopback_loops == []
+
+
+def test_every_loopback_address_in_the_script_belongs_to_a_local_connection() -> None:
+    allowed = ("--resolve", "PF", "8000", "port-forward", "_PORT", "_LOCAL_URL", "psql")
+    stray = [
+        line
+        for line in _code_lines(EVAL)
+        if "127.0.0.1" in line and not any(marker in line for marker in allowed)
+    ]
+
+    assert stray == []
+
+
 def test_the_eval_script_documents_the_exposure_flags_in_its_header() -> None:
     header = EVAL.read_text().split("set -euo pipefail", 1)[0]
 
@@ -87,3 +181,32 @@ def test_the_eval_release_values_set_the_passkey_signing_allowed_origins() -> No
 
     assert "passkeySigning" in source
     assert "allowedOrigins" in source
+
+
+def _code_lines(path: Path) -> list[str]:
+    """The script's lines that are neither blank nor comments."""
+    return [
+        line
+        for line in path.read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def test_issuer_is_built_with_the_auth_prefix_in_one_place() -> None:
+    code = _code_lines(EVAL)
+    literal_prefix = [line for line in code if re.search(r"/auth(?![A-Za-z0-9_])", line)]
+    issuer_lines = [line for line in code if "application/o/" in line]
+
+    assert len(literal_prefix) == 1
+    assert "AUTHENTIK_WEB_PATH=" in literal_prefix[0]
+    assert len(issuer_lines) == 1
+    assert "authentik_base_url" in issuer_lines[0]
+
+
+def test_the_script_and_its_libs_hold_no_old_name_literal() -> None:
+    needle = "authentik" + ".test"
+    files = [EVAL, *sorted((REPO_ROOT / "scripts" / "lib").glob("*.sh"))]
+
+    offenders = [str(path) for path in files if needle in path.read_text()]
+
+    assert offenders == []

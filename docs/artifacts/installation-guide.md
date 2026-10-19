@@ -327,11 +327,16 @@ The script does these things, in this order:
 2. It checks that `kubectl`, `helm`, `openssl`, `jq`, `curl`, and `podman` (or `docker`) are
    on `PATH`. It stops and names every missing tool.
 3. It finds the IP address of the kind node.
-4. It creates a local certificate authority once. It creates a certificate for the hostname.
-   It stores both in the state directory with owner-only permissions. It creates the
-   certificate again when the hostname changes or the certificate is close to expiry.
+4. It creates a local certificate authority (CA) that can only vouch for the evaluator
+   hostname. The CA has a critical name constraint for that hostname, is valid for at most 730
+   days, and is limited to TLS server authentication. It creates a certificate for exactly that
+   hostname. It stores both in the state directory with owner-only permissions. It creates the
+   certificate again when its names differ or it is close to expiry. It replaces the CA, and
+   the certificate with it, when the CA lacks the constraint, permits another name, is
+   valid for longer than 730 days, or is close to expiry. It keeps the replaced CA next to the
+   new one as `ca.replaced-<fingerprint prefix>.pem`.
 5. It runs **one** `helm upgrade --install`. This sets the issuer
-   (`https://<hostname>:30443/application/o/ps-cli/`) and the bootstrap owner together. The
+   (`https://<hostname>:30443/auth/application/o/ps-cli/`) and the bootstrap owner together. The
    bootstrap owner is the owner's email as `sub`, with that issuer. There is no second
    deployment. The script runs the upgrade again only when its values change.
 6. It waits until Authentik and PS Service are Ready. It makes Authentik serve the local
@@ -399,29 +404,56 @@ three parts below in order.
 
 For the passkey page to open, this machine must do both of these:
 
-- Resolve `authentik.test` to `127.0.0.1` and `::1`.
-- Trust the local CA. The CA file is `~/.config/policy-system/eval-tls/ca.pem`, or the same
-  file under `PS_EVAL_STATE_DIR`.
+- Map `ps.test` to its own LAN address in the hosts file. This is the same line every other
+  machine uses, so one address works everywhere. The script finds the address: it takes the
+  address of the default-route interface, else the only private IPv4 address of the machine. If
+  neither gives one address (for example, because container bridges add several private
+  addresses and there is no default route), the script stops before it changes anything and
+  asks for `--lan-address <ip>`.
+- Trust the local CA for TLS server authentication only. The CA file is
+  `~/.config/policy-system/eval-tls/ca.pem`, or the same file under `PS_EVAL_STATE_DIR`.
 
 The script checks both. Then one of these happens:
 
 - **Both are in place.** The script prints "This machine is ready". Go to the next part.
 - **One is missing.** The script asks whether to run the two `sudo` steps for you. The option
   `--apply-host-setup` answers yes in advance.
-- **You declined, or a `sudo` step failed.** Run the commands that the output lists:
+- **A hosts line maps `ps.test` to another address.** The script reports that line and
+  never edits it, and never adds a second one. Edit or remove it so that `ps.test` maps to the
+  LAN address, then run the script again.
+- **You declined, or a `sudo` step failed.** Run the commands that the output lists. Replace
+  `192.168.1.42` with the LAN address that the output shows:
 
 ```bash
-echo '127.0.0.1 authentik.test' | sudo tee -a /etc/hosts
-echo '::1 authentik.test' | sudo tee -a /etc/hosts
+echo '192.168.1.42 ps.test' | sudo tee -a /etc/hosts
 ```
+
+On macOS, trust the CA for TLS server authentication only:
 
 ```bash
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.config/policy-system/eval-tls/ca.pem
+sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain ~/.config/policy-system/eval-tls/ca.pem
 ```
 
-The second command is for macOS only. On other systems, import `ca.pem` as a trusted root
-certificate in the certificate store of the operating system or browser. Firefox has its own
-store.
+On Linux, the system trust store has no switch for the purpose, so what limits the trust
+depends on the distribution family. The CA itself is limited to TLS server authentication
+(its extended key usage) and to `ps.test` (a critical name constraint):
+
+- **Debian and Ubuntu.** The store ignores the extended key usage of a CA, so on this family
+  only the name constraint limits what the CA can vouch for.
+
+  ```bash
+  sudo cp ~/.config/policy-system/eval-tls/ca.pem /usr/local/share/ca-certificates/ps-local-ca.crt && sudo update-ca-certificates
+  ```
+
+- **Fedora and RHEL.** The store takes the purposes from the extended key usage of the CA, so
+  trust is limited to TLS server authentication, and it also enforces the name constraint.
+
+  ```bash
+  sudo cp ~/.config/policy-system/eval-tls/ca.pem /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust
+  ```
+
+On other systems, import `ca.pem` as a trusted root for TLS server authentication in the
+certificate store of the operating system or browser. Firefox has its own store.
 
 #### Register the owner's passkey
 
@@ -489,24 +521,30 @@ instance](./user-guide.md#point-ps-cli-at-your-instance). For credential storage
 #### Another machine (a colleague on the LAN)
 
 Do the hostname and certificate setup on every other machine whose browser or `ps-cli` logs in.
-Two things are different:
+It is the same setup as on the evaluator machine, with the evaluator machine's LAN address:
 
-1. **Map the hostname to the LAN IP of the evaluator laptop, not to loopback.** Add this
-   line to the hosts file of that machine. To find the IP on macOS, run `ipconfig getifaddr en0`
-   on the laptop.
+1. **Map the hostname to the LAN address of the evaluator machine.** Add this line to the hosts
+   file of that machine. The closing output of the script prints the line with the address it
+   found. To find the address by hand on macOS, run `ipconfig getifaddr en0` on the evaluator
+   machine.
 
    ```
-   192.168.1.42 authentik.test
+   192.168.1.42 ps.test
    ```
 
-2. **Copy the CA certificate from the evaluator machine.**
+2. **Copy the CA certificate (`ca.pem`) from the evaluator machine.**
    - The file is `~/.config/policy-system/eval-tls/ca.pem`. If you set `PS_EVAL_STATE_DIR`,
      the file is in that folder. The closing output of the script prints the full path.
    - Send the certificate only. **Never send `ca.key`** from the same folder.
    - You can use any file transfer: AirDrop, a shared drive, or `scp` (if Remote Login is on
      for the laptop).
-   - Trust the copy as described above. `ps-cli` reads the same OS trust
-     store.
+   - Trust the copy for TLS server authentication only, with the commands above (on macOS,
+     with `-p ssl`). `ps-cli` reads the same OS trust store.
+
+Every colleague's hosts line points at that one address. **Reserve the address for the
+evaluator machine in the DHCP settings of your router** (a reserved DHCP address). If the
+address changes, every colleague's browser stops reaching `ps.test` until the hosts line is
+updated.
 
 Without both changes, the browser shows a certificate warning and passkey registration fails.
 
@@ -570,7 +608,7 @@ Add the marketplace first. Then install the plugin from it.
 
    - The evaluator's PS Service is published on host port `8000`, so the URL is
      `http://127.0.0.1:8000/mcp/`. The trailing slash is part of the URL. Do not use
-     `authentik.test`. Authentik is only the login server and does not serve `/mcp/`.
+     `ps.test`. It is the Authentik login server and does not serve `/mcp/`.
    - If `PS_MCP_URL` is not set, `/mcp` shows `ps-mcp` as failed with
      `Missing environment variables: PS_MCP_URL`. Set it, then start a new Claude Code session.
    - The plugin does not use `userConfig` for the URL. A `${user_config.*}` value never reached
@@ -610,7 +648,7 @@ purpose, so colleagues on the LAN can log in. This table shows what is reachable
 
 | Listener | Address | Reachable by | What it serves |
 | --- | --- | --- | --- |
-| Authentik over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`). `deploy/kind/cluster.yaml` maps it to the HTTPS NodePort of the Authentik server. | Anyone who can reach port `30443` of this machine. On a shared LAN, this is everyone on the LAN. | **All of Authentik**: the login, enrolment, and device-code pages, the whole API, and the **admin UI** (`https://<hostname>:30443/if/admin/`). Only the Authentik login (a passkey) protects it. This is on purpose: it lets a colleague on the LAN log in. |
+| Authentik over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`). `deploy/kind/cluster.yaml` maps it to the HTTPS NodePort of the Authentik server. | Anyone who can reach port `30443` of this machine. On a shared LAN, this is everyone on the LAN. | **All of Authentik**: the login, enrolment, and device-code pages, the whole API, and the **admin UI** (`https://<hostname>:30443/auth/if/admin/`). Only the Authentik login (a passkey) protects it. This is on purpose: it lets a colleague on the LAN log in. |
 | Authentik over plain HTTP | NodePort `30080` inside the kind node only | Nobody outside the node. It is not mapped to the host and not reachable from the LAN. | The deploy script uses it through a loopback `kubectl port-forward` while it sets up the certificate. |
 | PS Service | `127.0.0.1:8000` | This machine only | The REST API and the MCP endpoint. Every call needs an Authentik-issued bearer token. |
 | FalkorDB Browser | `127.0.0.1:3001` | This machine only | The graph explorer UI. Authentik does not protect it. |
@@ -618,8 +656,8 @@ purpose, so colleagues on the LAN can log in. This table shows what is reachable
 
 **To reach the Authentik admin UI:**
 
-1. Open `https://<hostname>:30443/if/admin/` in a browser that trusts the CA. The default is
-   `https://authentik.test:30443/if/admin/`.
+1. Open `https://<hostname>:30443/auth/if/admin/` in a browser that trusts the CA. The default is
+   `https://ps.test:30443/auth/if/admin/`.
 2. Sign in as the owner.
 
 The admin UI uses the same HTTPS listener as everything else. You do not need a port-forward.
@@ -646,9 +684,10 @@ receives a link that answers `421`; open it on `http://localhost:8000` instead.
 
 Things to know:
 
-- The local CA private key (`ca.key`, in the state directory) can create a certificate for any
-  name. Browsers that trust `ca.pem` accept that certificate. Keep the key on the evaluator
-  machine with owner-only permissions. Never copy it. Share `ca.pem` only.
+- The local CA private key (`ca.key`, in the state directory) can create a certificate only for
+  the evaluator hostname and its subdomains, because the CA carries a critical name
+  constraint, and only for TLS server authentication. Keep the key on the evaluator machine
+  with owner-only permissions. Never copy it. Share `ca.pem` only.
 - The Authentik API token of the chart is the Authentik bootstrap token. It is
   **administrator-equivalent**. It is stored in the Secret `policy-system-authentik-api-token`.
   Anyone with `kubectl` access to the cluster can read it. The scripts never print it.
@@ -1004,8 +1043,8 @@ deployment has a public hostname. See [What is exposed (production)](#what-is-ex
 
 | Surface | Public deployment | Non-public deployment | Status |
 | --- | --- | --- | --- |
-| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (Claude Code 2.1.236). Non-public: Expected (inferred, not run). Evaluator on `authentik.test`, `PS_MCP_URL` set to `http://127.0.0.1:8000/mcp/`: login verified (Claude Code 2.1.302). |
-| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (not tested). Login in the Desktop Code tab: Expected, not yet verified for a public deployment. Evaluator on `authentik.test`: verified (Desktop app 2.42304.0). Sign in from the Claude Code CLI first. Then a new Desktop Code session is signed in. |
+| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (Claude Code 2.1.236). Non-public: Expected (inferred, not run). Evaluator on `ps.test`, `PS_MCP_URL` set to `http://127.0.0.1:8000/mcp/`: pending, not yet verified on this name. |
+| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (not tested). Login in the Desktop Code tab: Expected, not yet verified for a public deployment. Evaluator on `ps.test`: pending, not yet verified on this name. Sign in from the Claude Code CLI first. Then a new Desktop Code session is signed in. |
 | Claude Desktop Chat and Cowork | Works as a manually added custom connector (URL plus Client ID `ps-cli`): GO | Does not work (needs public PS Service and Authentik) | Expected for everything beyond the login result. |
 | claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested). |
 
@@ -1082,7 +1121,7 @@ Authentik device flow.
 
 `<issuer>` is the value of `psService.auth.issuer`:
 
-- Evaluator: `https://authentik.test:30443/application/o/ps-cli/` (it uses your `--hostname`).
+- Evaluator: `https://ps.test:30443/auth/application/o/ps-cli/` (it uses your `--hostname`).
 - Production: `https://<label>.<region>.cloudapp.azure.com/auth/application/o/ps-cli/`.
 
 On the evaluator, add `--cacert` with the path to the local CA to each `curl` command.
@@ -1149,8 +1188,7 @@ To fix it:
    kubectl port-forward svc/policy-system-authentik-server 9000:80
    ```
 
-   - Evaluator: `http://127.0.0.1:9000/if/admin/`
-   - Production: `http://127.0.0.1:9000/auth/if/admin/`
+   - Evaluator and production: `http://127.0.0.1:9000/auth/if/admin/`
 
 2. Store the token in a Secret with the key `PS_AUTHENTIK_API_TOKEN`.
 3. Set `psService.authentik.existingSecret` to the name of that Secret. See the [Helm Chart
@@ -1168,7 +1206,7 @@ warning in [step 4](#4-create-the-local-cluster).
 **Applies to:** evaluators installed with a hostname ending in `.local` (the former default).
 
 Claude Code cannot resolve `.local` names. It fails with `ENOTFOUND`,
-even when `/etc/hosts` maps the name. The default is now `authentik.test`, and
+even when `/etc/hosts` maps the name. The evaluator name is `ps.test`, and
 `deploy-ps-eval.sh` rejects any `--hostname` that ends in `.local`. The hostname is also the
 issuer and the WebAuthn relying-party ID, so moving an install changes all three. The steps:
 
@@ -1176,11 +1214,14 @@ issuer and the WebAuthn relying-party ID, so moving an install changes all three
    cloned the repo.
 2. Run `scripts/deploy-ps-eval.sh --owner-email <same email>`. Before it touches the cluster, it
    prints what this machine still needs and the reset command in step 5. Read it first.
-3. Edit the hosts file: remove the `<old-name>.local` lines and add `127.0.0.1 authentik.test` and
-   `::1 authentik.test`. The script's `--apply-host-setup` does this with `sudo`. The local CA is
-   reused, so there is no new trust step unless the CA is not yet trusted.
+3. Edit the hosts file: remove the `<old-name>.local` lines and add `<LAN address> ps.test`. The
+   script prints the exact line. Its `--apply-host-setup` adds it with `sudo` and never edits or
+   removes an existing line. The local CA is replaced by one that permits only `ps.test`. Remove
+   the old CA and trust the new one with the commands the script prints (see
+   [Moving an existing evaluator to ps.test](#moving-an-existing-evaluator-from-authentiktest-to-pstest)
+   for the removal commands).
 4. The script then does the rest in one pass:
-   - It regenerates the leaf certificate for the new name and keeps the CA.
+   - It regenerates the leaf certificate for the new name.
    - It runs one `helm upgrade` that moves the issuer, the bootstrap owner's issuer, the Authentik
      base URL and the `hostAliases` entry for PS Service.
    - It restarts the Authentik pods, because the certificate checksum changed.
@@ -1212,16 +1253,78 @@ issuer and the WebAuthn relying-party ID, so moving an install changes all three
    the old one no longer works. After a hostname change the script issues a fresh enrolment link
    even though the old passkey is still listed. After signing in, the owner may delete the dead
    passkey from the user settings page.
-7. Each LAN colleague changes their hosts line to `<laptop-LAN-IP> authentik.test`, keeps the same
-   CA file, and registers a new passkey (invitation or recovery link).
+7. Each LAN colleague changes their hosts line to `<LAN address> ps.test`, trusts the new
+   `ca.pem`, and registers a new passkey (invitation or recovery link).
 8. Everyone using `ps-cli` runs `ps-cli auth login` again. The stored tokens belong to the old
    issuer.
 
 This procedure has not been verified on a live cluster. Treat the steps as unverified.
 
+### Moving an existing evaluator from authentik.test to ps.test
+
+**Applies to:** evaluators installed under the name `authentik.test`, whose Authentik issuer sits at the
+root path (`https://authentik.test:30443/application/o/ps-cli/`). This is the only place in the guide
+that names the old name.
+
+The evaluator now has one name, `ps.test`, with Authentik under `/auth/` as in production. The
+issuer is `https://ps.test:30443/auth/application/o/ps-cli/`. The local CA is replaced by one that
+permits only `ps.test`. **All passkeys must be registered again**: the owner and every invitee,
+because a passkey is bound to the name it was registered on.
+
+`scripts/deploy-ps-eval.sh` finds the old name and issuer in the recorded Helm values and
+announces the move before it changes the cluster. The steps:
+
+1. Run `scripts/deploy-ps-eval.sh --owner-email <same email>` from the release that contains this
+   change. Read what it prints first.
+2. Remove the old CA on every machine that trusted it. The script names the old CA by subject, SHA-1
+   and SHA-256 fingerprint (colon-free hex) and keeps a copy next to the new one in its state
+   directory as `ca.replaced-<first 8 hex of the SHA-1>.pem`. Use the commands it prints:
+   - macOS: `sudo security remove-trusted-cert -d <state dir>/ca.replaced-<first 8>.pem` clears the
+     admin trust settings the old trust command set. Then
+     `sudo security delete-certificate -Z <SHA-1> -t /Library/Keychains/System.keychain` deletes
+     the certificate.
+   - Debian/Ubuntu: `sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt && sudo update-ca-certificates --fresh`
+   - Fedora/RHEL: `sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust`
+
+   Then trust the new `ca.pem` for TLS server authentication with the commands in
+   [step 8, This machine](#this-machine-hostname-and-certificate).
+3. Fix the hosts file. The script lists the lines it found for the old name, and you remove the
+   lines that map `authentik.test`. Add `<LAN address> ps.test` (the script prints the exact line). The
+   script never edits an existing hosts line. Its `--apply-host-setup` only appends the new line
+   when no line maps `ps.test`.
+4. The script then does the rest in one pass: it regenerates the CA and the leaf for `ps.test`,
+   runs one `helm upgrade` that moves the issuer, the bootstrap owner's issuer, the Authentik base
+   URL and the `hostAliases` entry, and waits for the rollouts. A re-run changes nothing: no second
+   upgrade, no second hosts line, no second CA and no duplicate user.
+5. Clear the role assignments recorded under the old issuer, **before the owner signs in**. The
+   script prints the same block as step 5 of
+   [Moving an existing evaluator off a .local hostname](#moving-an-existing-evaluator-off-a-local-hostname)
+   (`DELETE FROM access_role_assignments;`). Evaluator only. Never run it against a production
+   install.
+6. Register a new passkey with the fresh single-use enrolment link the script prints. It issues
+   the link even though the owner already has a passkey on the old name. Every invitee registers
+   a new passkey too, with a new invitation or recovery link. The owner may delete the dead
+   passkeys in the user settings.
+7. Each LAN colleague changes their hosts line to `<LAN address> ps.test`, removes the old CA
+   and trusts the new `ca.pem` (never `ca.key`), then runs `ps-cli auth login` again. The stored
+   tokens belong to the old issuer.
+8. Reserve the server's address in your router's DHCP settings (a reserved DHCP address). Every
+   colleague's hosts line points at it.
+
+**The same host with a different issuer.** When the recorded hostname already is `ps.test` and
+only the issuer differs (for example the root-path issuer), the script announces the role
+assignment reset in step 5 but does not issue a new enrolment link: the passkeys are bound to the
+host name, which did not change, so they stay valid.
+
+**The name is permanent.** Once anyone registers a signing passkey, the WebAuthn `rp_id` is the
+name, so the evaluator name `ps.test` cannot change again without losing every signing passkey.
+Choose before the first signing passkey is registered.
+
+This procedure is unverified: it has not been run on a live evaluator moved from the old name.
+
 ### Recording verification evidence
 
-The evaluator on `authentik.test` has not yet been run from Claude Code, Claude Desktop or
+The evaluator on `ps.test` has not yet been run from Claude Code, Claude Desktop or
 `ps-cli`. A person must run the checks below on a machine with those tools and record the result.
 Nothing in this guide may claim a verified result for this change until that is done.
 
@@ -1232,8 +1335,8 @@ Nothing in this guide may claim a verified result for this change until that is 
 3. Claude Desktop, Code tab: do the same login. Record the Desktop app version and the bundled
    Claude Code version.
 4. Run `ps-cli auth login` and record the result.
-5. Do an upgrade rehearsal. Take an evaluator installed under a `.local` name. Follow
-   [Moving an existing evaluator off a .local hostname](#moving-an-existing-evaluator-off-a-local-hostname).
+5. Do a migration rehearsal. Take an evaluator installed under the former name and issuer. Follow
+   [Moving an existing evaluator to ps.test](#moving-an-existing-evaluator-from-authentiktest-to-pstest).
    Record whether the owner got an enrolment link, registered a new passkey, and still holds
    `SystemOwner`. Prove `SystemOwner` with an owner-only call. Record the command and result.
 6. Fill in the template below and keep it with your deployment records.
@@ -1241,13 +1344,13 @@ Nothing in this guide may claim a verified result for this change until that is 
 ```text
 Evaluator verification evidence
 Date / operator:
-Evaluator hostname:               authentik.test
+Evaluator hostname:               ps.test
 1. Claude Code CLI version (claude --version):
 2. mcp-logs line "Successfully connected" for plugin:ps-plugin:ps-mcp:
 3. Claude Desktop version / bundled Claude Code version:
 4. Desktop Code tab: ps-mcp OAuth result:
 5. ps-cli auth login result:
-6. Upgrade rehearsal: owner enrolment link issued (yes/no), new passkey registered (yes/no),
+6. Migration rehearsal: owner enrolment link issued (yes/no), new passkey registered (yes/no),
    SystemOwner confirmed by an owner-only call (command and result):
 ```
 
@@ -1273,7 +1376,7 @@ before you rely on a claim for a real deployment.
   - A second user invited and enrolled.
   - Owner re-run recovery.
   - Certificate refresh without a manual restart.
-  - This run used an earlier hostname. The evaluator on `authentik.test` is untested.
+  - This run used an earlier hostname. The evaluator on `ps.test` is untested, and so is the migration from the former name.
 - **A second machine on the LAN: simulated, not tried on physical hardware.**
   - A separate container with the CA in its trust store reached Authentik over HTTPS through
     the `0.0.0.0:30443` mapping of the host.

@@ -168,7 +168,7 @@ email as before:
 
 In the evaluator profile the admin UI is on the same HTTPS listener as the login pages, reachable
 from any machine that can reach this laptop's port `30443` — by design. Open
-`https://authentik.test:30443/if/admin/` (your `--hostname`) in a browser that trusts the local
+`https://ps.test:30443/auth/if/admin/` (your `--hostname`) in a browser that trusts the local
 CA and sign in as the owner. To keep it to your own machine, block port `30443` from the LAN in the
 host firewall. See [Installation Guide: What is exposed
 (evaluator)](./installation-guide.md#what-is-exposed-evaluator).

@@ -1,0 +1,41 @@
+suite: authentik serves under /auth/ in the default evaluator profile
+# Default values plus authentik.enabled=true: the evaluator renders the same web path
+# as production, and the bootstrap token env survives next to it.
+release:
+  name: policy-system
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+  authentik.enabled: true
+templates:
+  - charts/authentik/templates/server/deployment.yaml
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
+tests:
+  - it: eval profile serves Authentik under /auth/ on the server
+    template: charts/authentik/templates/server/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_WEB__PATH")].value
+          value: /auth/
+
+  - it: eval profile serves Authentik under /auth/ on the worker
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_WEB__PATH")].value
+          value: /auth/
+
+  - it: eval profile keeps the bootstrap token env on server and worker
+    template: charts/authentik/templates/server/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.key
+          value: PS_AUTHENTIK_API_TOKEN
+
+  - it: eval profile keeps the bootstrap token env on the worker
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.key
+          value: PS_AUTHENTIK_API_TOKEN

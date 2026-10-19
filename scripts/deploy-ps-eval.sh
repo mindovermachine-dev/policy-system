@@ -5,22 +5,31 @@
 # link printed. No password is ever set, prompted for, or logged.
 #
 # Usage:
-#   scripts/deploy-ps-eval.sh [--owner-email <address>] [--hostname <name>] [--apply-host-setup]
-#                             [--allow-public-host] [--yes]
+#   scripts/deploy-ps-eval.sh [--owner-email <address>] [--hostname <name>] [--lan-address <ip>]
+#                             [--apply-host-setup] [--allow-public-host] [--yes]
 #   scripts/deploy-ps-eval.sh --check-exposure [--allow-public-host]
 #
 #   --owner-email  The first SystemOwner. Prompted for when omitted. The address is both the
 #                  Authentik username and the OIDC `sub` PS Service expects, so the deploy sets
 #                  the owner identity in one pass.
-#   --hostname     The name Authentik is served under (default authentik.test). It must resolve
-#                  to this machine on every machine that logs in (/etc/hosts). Names ending in
-#                  .local are rejected: Claude Code cannot resolve them.
+#   --hostname     The name Authentik is served under (default ps.test). Every machine that
+#                  logs in, this one included, maps it to this machine's LAN address in its
+#                  hosts file (/etc/hosts). Names ending in
+#                  .local are rejected: Claude Code cannot resolve them. IP addresses and
+#                  names with characters other than letters, digits, dots and hyphens are
+#                  rejected too. The local CA permits only this name, so a different name
+#                  replaces the CA (trust the new one and remove the old).
+#   --lan-address  This machine's LAN address, the one the hostname maps to. Detected when
+#                  omitted: the address of the default-route interface, else the only private
+#                  IPv4 address of the machine. The run stops before any change, naming this flag,
+#                  when neither identifies one address.
 #   --apply-host-setup
 #                  Run the two sudo steps this machine needs when they are not already done
-#                  (map the hostname to 127.0.0.1 and ::1 in /etc/hosts; trust the local CA in the
-#                  macOS system keychain) without asking. Without it, an interactive run asks first and
-#                  a non-interactive run only prints the commands. Nothing is touched when both
-#                  are already in place.
+#                  (map the hostname to the LAN address in /etc/hosts; trust the local CA for TLS
+#                  server authentication in the macOS system keychain) without asking. Without it,
+#                  an interactive run asks first and a non-interactive run only prints the
+#                  commands. Nothing is touched when both are already in place, and a hosts line
+#                  that maps the hostname to another address is reported, never edited.
 #   --allow-public-host
 #                  Accept a machine that has a non-private address. The cluster publishes
 #                  Authentik on every interface of the host (port 30443), so the run stops
@@ -74,12 +83,12 @@ source "${SCRIPT_DIR}/lib/chart-version.sh"
 
 readonly EXIT_USAGE=2
 readonly EXIT_FAILURE=1
-USAGE="usage: $(basename "$0") [--owner-email <address>] [--hostname <name>] [--apply-host-setup] [--allow-public-host] [--yes] | --check-exposure [--allow-public-host]"
+USAGE="usage: $(basename "$0") [--owner-email <address>] [--hostname <name>] [--lan-address <ip>] [--apply-host-setup] [--allow-public-host] [--yes] | --check-exposure [--allow-public-host]"
 readonly USAGE
 
 readonly HELM_RELEASE_NAME="policy-system"
 readonly DEFAULT_CHART_REF="oci://ghcr.io/mindovermachine-dev/charts/policy-system"
-readonly DEFAULT_HOSTNAME="authentik.test"
+readonly EVALUATOR_HOSTNAME="ps.test"
 readonly LLM_SECRET_NAME="policy-system-llm-credentials"
 readonly TLS_SECRET_NAME="policy-system-local-tls"
 readonly API_TOKEN_SECRET_NAME="policy-system-authentik-api-token"
@@ -87,6 +96,9 @@ readonly AUTHENTIK_SERVER_SERVICE="${HELM_RELEASE_NAME}-authentik-server"
 # The kind cluster maps this host port to Authentik's HTTPS NodePort (deploy/kind/cluster.yaml,
 # authentik.server.service.nodePortHttps in the chart): the only Authentik port on the host.
 readonly AUTHENTIK_HTTPS_PORT=30443
+# Authentik serves every page under this path (the chart's AUTHENTIK_WEB__PATH), so the issuer,
+# the API base, the enrolment link and the admin UI all sit below it.
+readonly AUTHENTIK_WEB_PATH="/auth"
 readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
 readonly PS_SERVICE_LOCAL_URL="http://127.0.0.1:8000"
@@ -103,7 +115,7 @@ AUTHENTIK_API_BASE=""
 AUTHENTIK_LINK_BASE=""
 AUTHENTIK_CURL_ARGS=()
 chart_version_args=()
-hostname_arg="$DEFAULT_HOSTNAME"
+hostname_arg="$EVALUATOR_HOSTNAME"
 kind_context=""
 namespace="default"
 node_ip=""
@@ -112,12 +124,16 @@ cert_refreshed=false
 apply_host_setup=false
 allow_public_host=false
 check_exposure_only=false
+lan_address=""
 needs_hosts=false
+hosts_conflict=""
 needs_trust=false
 ps_cli_context_ready=false
 # Read by lib/authentik-owner.sh: true when the hostname changed on an existing install, because
-# the owner's passkeys are bound to the old name and are unusable (see announce_upgrade_host_steps).
+# the owner's passkeys are bound to the old name and are unusable (see announce_migration).
 OWNER_IGNORE_EXISTING_DEVICES=false
+installed_host=""
+installed_issuer=""
 
 # parse_args <args...>: sets OWNER_EMAIL/hostname_arg/SKIP_OWNER_PROMPT from the flags.
 parse_args() {
@@ -127,16 +143,12 @@ parse_args() {
       --apply-host-setup) apply_host_setup=true ;;
       --allow-public-host) allow_public_host=true ;;
       --check-exposure) check_exposure_only=true ;;
-      --owner-email | --hostname)
+      --owner-email | --hostname | --lan-address)
         if [[ $# -lt 2 || -z "$2" ]]; then
           print_error '%s needs a value\n%s\n' "$1" "$USAGE"
           exit "$EXIT_USAGE"
         fi
-        if [[ "$1" == "--owner-email" ]]; then
-          OWNER_EMAIL="$2"
-        else
-          hostname_arg="$2"
-        fi
+        set_value_flag "$1" "$2"
         shift
         ;;
       -h | --help)
@@ -151,6 +163,40 @@ parse_args() {
     shift
   done
   reject_local_suffix_hostname
+  local_tls_validate_hostname "$hostname_arg" || exit "$EXIT_USAGE"
+  [[ -z "$lan_address" ]] || validate_lan_address_flag "$lan_address"
+}
+
+# set_value_flag <flag> <value>: stores the value of --owner-email, --hostname or --lan-address.
+set_value_flag() {
+  case "$1" in
+    --owner-email) OWNER_EMAIL="$2" ;;
+    --hostname) hostname_arg="$2" ;;
+    --lan-address) lan_address="$2" ;;
+    *) ;;
+  esac
+}
+
+# is_ipv4_literal <value>: 0 for four dot-separated decimal fields, each at most 255.
+is_ipv4_literal() {
+  local shape='^[0-9]{1,3}(\.[0-9]{1,3}){3}$' octet
+  [[ "$1" =~ $shape ]] || return 1
+  for octet in ${1//./ }; do
+    [[ $((10#$octet)) -le 255 ]] || return 1
+  done
+}
+
+# validate_lan_address_flag <value>: hard-stops with a usage error unless the value is an IPv4
+# address that is neither loopback nor unspecified.
+validate_lan_address_flag() {
+  if is_ipv4_literal "$1"; then
+    case "$1" in
+      127.* | 0.*) ;;
+      *) return 0 ;;
+    esac
+  fi
+  print_error 'Invalid --lan-address "%s": use this machine'"'"'s LAN IPv4 address, such as 192.168.1.5 (not a loopback address).\n%s\n' "$1" "$USAGE"
+  exit "$EXIT_USAGE"
 }
 
 # reject_local_suffix_hostname: hard-stops (before any tool check or cluster call) on a --hostname
@@ -162,7 +208,7 @@ reject_local_suffix_hostname() {
   case "$lowered" in
     *.local | *.local.)
       print_error 'Invalid --hostname "%s": it ends in .local. Claude Code cannot resolve .local names (it treats them as mDNS and fails with ENOTFOUND, even when /etc/hosts maps them), so you could not sign in. Fix: use another name, such as %s (the default), and re-run.\n' \
-        "$hostname_arg" "$DEFAULT_HOSTNAME"
+        "$hostname_arg" "$EVALUATOR_HOSTNAME"
       exit "$EXIT_USAGE"
       ;;
     *) ;;
@@ -221,6 +267,65 @@ is_private_address() {
     hextet="${address%%:*}"
     [[ "$hextet" =~ ^(f[cd][0-9a-f]{2}|fe[89ab][0-9a-f])$ ]]
   fi
+}
+
+# is_lan_ipv4 <a.b.c.d>: 0 for a private IPv4 address that is neither loopback nor link-local.
+is_lan_ipv4() {
+  is_private_ipv4 "$1" || return 1
+  case "$1" in
+    127.* | 169.254.*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# private_lan_addresses: prints the LAN IPv4 addresses of this machine's interfaces, one per line.
+private_lan_addresses() {
+  local address
+  while IFS= read -r address; do
+    address="${address%%/*}"
+    [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    if is_lan_ipv4 "$address"; then
+      printf '%s\n' "$address"
+    fi
+  done < <(enumerate_host_addresses || true)
+}
+
+# default_route_address: prints the address the default route leaves from: the `src` of
+# `ip route get` on Linux, the address of the `route -n get default` interface on macOS. Prints
+# nothing when no route or neither tool can be found.
+default_route_address() {
+  local interface
+  if command -v ip >/dev/null 2>&1; then
+    { ip route get 1.1.1.1 2>/dev/null \
+      | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }'; } || true
+  elif command -v route >/dev/null 2>&1 && command -v ipconfig >/dev/null 2>&1; then
+    interface="$(route -n get default 2>/dev/null | awk '$1 == "interface:" { print $2; exit }' || true)"
+    [[ -z "$interface" ]] || ipconfig getifaddr "$interface" 2>/dev/null || true
+  fi
+}
+
+# detect_lan_address: sets lan_address unless --lan-address gave it: the default-route address,
+# else the only private IPv4 address. Hard-stops, before any change, naming --lan-address when
+# no address or several addresses qualify.
+detect_lan_address() {
+  local candidates first="" second="" found
+  [[ -z "$lan_address" ]] || return 0
+  lan_address="$(default_route_address)"
+  if [[ -n "$lan_address" ]] && is_lan_ipv4 "$lan_address"; then
+    return 0
+  fi
+  lan_address=""
+  candidates="$(private_lan_addresses)"
+  { read -r first || true; read -r second || true; } <<<"$candidates"
+  if [[ -n "$first" && -z "$second" ]]; then
+    lan_address="$first"
+    return 0
+  fi
+  found="found no private address"
+  [[ -z "$candidates" ]] || found="found $(printf '%s' "$candidates" | tr '\n' ' ')"
+  print_error 'Cannot tell which LAN address of this machine %s should map to (%s). Fix: re-run with --lan-address <ip>, the address colleagues reach this machine on (for example 192.168.1.5).\n' \
+    "$hostname_arg" "$found"
+  exit "$EXIT_FAILURE"
 }
 
 # check_host_exposure: hard-stops (before any tool check or cluster call) when an interface of this
@@ -312,45 +417,178 @@ detect_node_ip() {
   fi
 }
 
-# announce_upgrade_host_steps <host> <ca.pem>: when an existing release was installed for a
-# DIFFERENT hostname, prints (stderr, informational only: no sudo, no prompt, no mutation) what
-# this machine and the evaluator still need, BEFORE the first cluster change. Passkeys are bound to
-# the hostname (WebAuthn RP ID), so it also makes provision_owner issue a fresh enrolment link even
-# though the old passkey is still listed. No output and no flag for a fresh install, an unchanged
-# hostname, or a release that recorded no hostname.
-announce_upgrade_host_steps() {
-  local host="$1" ca="$2" installed mapping
+# print_hosts_steps <host>: prints the hosts-file command this machine still needs, or, when a
+# line maps <host> to another address, what is wrong and how to fix it. Prints nothing when the
+# mapping is in place.
+print_hosts_steps() {
+  local mapping
+  mapping="$(missing_host_mapping "$1")"
+  if [[ -n "$mapping" ]]; then
+    printf "  echo '%s' | sudo tee -a %s\n" "$mapping" "$(hosts_file)"
+  fi
+  print_hosts_conflict "$1"
+}
+
+# print_hosts_conflict <host>: reports a hosts line that maps <host> to an address other than this
+# machine's LAN address. The line is never edited or duplicated by the script.
+print_hosts_conflict() {
+  local state
+  state="$(host_mapping_state "$1")"
+  [[ "$state" == conflict* ]] || return 0
+  printf '  %s already maps %s to %s, not to this machine'"'"'s LAN address %s; the script never edits existing lines.\n' \
+    "$(hosts_file)" "$1" "${state#conflict }" "$lan_address"
+  printf '  Fix: edit or remove that line so that %s maps to %s, then re-run.\n' "$1" "$lan_address"
+}
+
+# read_installed_release: sets installed_host and installed_issuer to the values the installed
+# release recorded (the hostname PS Service resolves and its OIDC issuer). Both stay empty when
+# there is no release or it recorded neither.
+read_installed_release() {
+  local values
+  installed_host=""
+  installed_issuer=""
   helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1 || return 0
-  installed="$(helm get values "$HELM_RELEASE_NAME" -o json 2>/dev/null \
-    | jq -r '.psService.authentikHostname // empty' 2>/dev/null || true)"
-  [[ -n "$installed" && "$installed" != "$host" ]] || return 0
-  OWNER_IGNORE_EXISTING_DEVICES=true
-  # The command block below is shown to the user verbatim: its $ must not expand here.
-  # shellcheck disable=SC2016
+  values="$(helm get values "$HELM_RELEASE_NAME" -o json 2>/dev/null || true)"
+  installed_host="$(jq -r '.psService.authentikHostname // empty' <<<"$values" 2>/dev/null || true)"
+  installed_issuer="$(jq -r '.psService.auth.issuer // empty' <<<"$values" 2>/dev/null || true)"
+}
+
+# migration_kind <host> <issuer>: prints `host` when the installed release was made for another
+# hostname, `issuer` when only its recorded issuer differs, and `none` otherwise (a fresh install,
+# nothing recorded, or nothing changed).
+migration_kind() {
+  if [[ -n "$installed_host" && "$installed_host" != "$1" ]]; then
+    printf 'host\n'
+  elif [[ -n "$installed_issuer" && "$installed_issuer" != "$2" ]]; then
+    printf 'issuer\n'
+  else
+    printf 'none\n'
+  fi
+}
+
+# old_host_lines <host>: prints the hosts-file lines (comments excluded) that name <host>.
+old_host_lines() {
+  awk -v host="$1" '
+    { line = $0; sub(/#.*/, "") }
+    { for (i = 2; i <= NF; i++) if ($i == host) { print line; next } }
+  ' "$(hosts_file)" 2>/dev/null || true
+}
+
+# print_old_host_lines <host>: names the hosts-file lines of the former name to remove. Prints
+# nothing when none exist. The script never edits the hosts file for this.
+print_old_host_lines() {
+  local lines line
+  lines="$(old_host_lines "$1")"
+  [[ -n "$lines" ]] || return 0
+  printf 'Remove these lines from %s (the former name no longer reaches this evaluator):\n' "$(hosts_file)"
+  while IFS= read -r line; do
+    printf '  %s\n' "$line"
+  done <<<"$lines"
+}
+
+# print_replaced_ca_steps: when the local CA was replaced in this run, names the old CA (subject,
+# SHA-1 and SHA-256, kept copy) and prints how to remove it on macOS (admin trust settings first,
+# then the keychain entry) and on each Linux family, so no machine keeps trusting the old one.
+print_replaced_ca_steps() {
+  [[ -n "$LOCAL_TLS_REPLACED_CA_SHA1" ]] || return 0
+  printf 'The local CA was replaced: the previous one is unconstrained or permits another name.\n'
+  printf 'On every machine that trusts the old CA, remove it, then trust the new one below.\n'
+  printf '  Old CA subject: %s\n  SHA-1:          %s\n  SHA-256:        %s\n  Kept at:        %s\n' \
+    "$LOCAL_TLS_REPLACED_CA_SUBJECT" "$LOCAL_TLS_REPLACED_CA_SHA1" "$LOCAL_TLS_REPLACED_CA_SHA256" \
+    "$LOCAL_TLS_REPLACED_CA_PEM"
+  printf '  macOS (the first command clears the admin trust settings, the second deletes the certificate):\n'
+  printf '    sudo security remove-trusted-cert -d %s\n' "$LOCAL_TLS_REPLACED_CA_PEM"
+  printf '    sudo security delete-certificate -Z %s -t /Library/Keychains/System.keychain\n' \
+    "$LOCAL_TLS_REPLACED_CA_SHA1"
+  printf '  Debian/Ubuntu: sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt && sudo update-ca-certificates --fresh\n'
+  printf '  Fedora/RHEL:   sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust\n'
+  printf 'New CA to trust: %s/ca.pem\n\n' "$(local_tls_state_dir)"
+}
+
+# print_machine_move_steps <host> <ca.pem>: what this machine still needs after a hostname change:
+# the former name's hosts lines to remove, the new mapping, and trust for the new CA.
+print_machine_move_steps() {
+  printf 'Before the cluster changes, this machine still needs:\n'
+  print_old_host_lines "$installed_host"
+  print_hosts_steps "$1"
+  if [[ ! -f "$2" ]] || ! ca_is_trusted "$2"; then
+    print_trust_commands "$2"
+  fi
+  printf '(or re-run with --apply-host-setup to have the script do the sudo steps)\n\n'
+}
+
+# print_passkey_notice <host>: every passkey is bound to the hostname, so all must be registered
+# again. The owner gets a fresh single-use link although the old passkey is still listed.
+print_passkey_notice() {
+  printf 'Passkeys are bound to the hostname, so all passkeys must be registered again: the owner\n'
+  printf 'registers a new passkey with a fresh enrolment link (issued even though the old passkey is\n'
+  printf 'still listed), and every invitee registers a new passkey too.\n'
+  printf 'LAN colleagues must change their hosts line to %s %s and trust the new CA.\n\n' "$lan_address" "$1"
+}
+
+# print_role_reset: the evaluator-only command that clears the role assignments recorded under the
+# former issuer, which must run before the owner signs in. The $ signs are shown verbatim.
+# shellcheck disable=SC2016
+print_role_reset() {
+  printf 'After the script finishes and BEFORE the owner signs in, clear the role assignments\n'
+  printf 'recorded under the old issuer (evaluator only, never a production install):\n'
+  printf '  POD=$(kubectl get pod -l app.kubernetes.io/component=ps-postgres -o jsonpath=%s)\n' \
+    "'{.items[0].metadata.name}'"
+  printf '  STATE_PW=$(kubectl get secret policy-system-ps-postgres-state-credentials \\\n'
+  printf "    -o jsonpath='{.data.PS_STATE_POSTGRES_PASSWORD}' | base64 -d)\n"
+  printf '  kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state -d ps_state \\\n'
+  printf '    -c "DELETE FROM access_role_assignments;"\n'
+  printf 'Do not open the enrolment link before running this command.\n'
+  printf 'Details: %s#upgrading-an-existing-install\n\n' "$INSTALL_GUIDE"
+}
+
+# print_migration_intro <kind> <host> <issuer>: what changes, naming the recorded and the new
+# hostname or issuer.
+print_migration_intro() {
+  case "$1" in
+    host)
+      printf '\nThis evaluator was installed for %s; switching to %s.\n' "$installed_host" "$2"
+      [[ -z "$installed_issuer" ]] \
+        || printf 'Its OIDC issuer moves from %s to %s.\n' "$installed_issuer" "$3"
+      ;;
+    issuer)
+      printf '\nThe OIDC issuer changes from %s to %s on the same host; passkeys stay valid.\n' \
+        "$installed_issuer" "$3"
+      ;;
+    *) ;;
+  esac
+}
+
+# announce_migration <host> <issuer> <ca.pem>: before the first cluster change, prints (stderr,
+# informational only: no sudo, no prompt, no mutation) what a move of an existing evaluator needs:
+# the replaced CA to remove, the hosts lines, the passkey re-registration and the role reset.
+# A hostname change also makes provision_owner issue a fresh enrolment link although the old
+# passkey is still listed; an issuer-only change keeps the passkeys and issues none. Nothing is
+# printed for a fresh install, an unchanged release, or one that recorded neither value.
+announce_migration() {
+  local host="$1" issuer="$2" ca="$3" kind
+  read_installed_release
+  kind="$(migration_kind "$host" "$issuer")"
+  [[ "$kind" != host ]] || OWNER_IGNORE_EXISTING_DEVICES=true
   {
-    printf '\nThis evaluator was installed for %s; switching to %s.\n' "$installed" "$host"
-    printf 'Before the cluster changes, this machine still needs:\n'
-    while IFS= read -r mapping; do
-      printf "  echo '%s' | sudo tee -a %s\n" "$mapping" "$(hosts_file)"
-    done < <(missing_host_mappings "$host")
-    if [[ ! -f "$ca" ]] || ! ca_is_trusted "$ca"; then
-      printf '  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s\n' "$ca"
-    fi
-    printf '(or re-run with --apply-host-setup to have the script do the sudo steps)\n\n'
-    printf 'Passkeys are bound to the hostname, so the owner registers a new passkey: the script\n'
-    printf 'issues a fresh enrolment link even though the old passkey is still listed.\n'
-    printf 'LAN colleagues must change their hosts line to <your-LAN-IP> %s and register a new passkey.\n\n' "$host"
-    printf 'After the script finishes and BEFORE the owner signs in, clear the role assignments\n'
-    printf 'recorded under the old issuer (evaluator only, never a production install):\n'
-    printf '  POD=$(kubectl get pod -l app.kubernetes.io/component=ps-postgres -o jsonpath=%s)\n' \
-      "'{.items[0].metadata.name}'"
-    printf '  STATE_PW=$(kubectl get secret policy-system-ps-postgres-state-credentials \\\n'
-    printf "    -o jsonpath='{.data.PS_STATE_POSTGRES_PASSWORD}' | base64 -d)\n"
-    printf '  kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state -d ps_state \\\n'
-    printf '    -c "DELETE FROM access_role_assignments;"\n'
-    printf 'Do not open the enrolment link before running this command.\n'
-    printf 'Details: %s#upgrading-an-existing-install\n\n' "$INSTALL_GUIDE"
+    print_migration_intro "$kind" "$host" "$issuer"
+    print_replaced_ca_steps
+    [[ "$kind" != host ]] || print_machine_move_steps "$host" "$ca"
+    [[ "$kind" != host ]] || print_passkey_notice "$host"
+    [[ "$kind" == none ]] || print_role_reset
   } >&2
+}
+
+# authentik_base_url <host>: prints the externally reachable Authentik address, with its web path
+# and without a trailing slash. The issuer, PS Service's Authentik base URL and the owner API
+# base are all this value plus a suffix.
+authentik_base_url() {
+  printf 'https://%s:%s%s' "$1" "$AUTHENTIK_HTTPS_PORT" "$AUTHENTIK_WEB_PATH"
+}
+
+# authentik_issuer <host>: prints the OIDC issuer of the ps-cli application, which ends in a slash.
+authentik_issuer() {
+  printf '%s/application/o/%s/' "$(authentik_base_url "$1")" "$AUTHENTIK_APP_SLUG"
 }
 
 # release_values_json <host> <issuer> <checksum>: prints the complete set of user values this
@@ -365,7 +603,7 @@ release_values_json() {
   jq -n --arg llm "$LLM_SECRET_NAME" --arg tls "$TLS_SECRET_NAME" --arg host "$host" \
     --arg ip "$node_ip" --arg issuer "$issuer" --arg app "$AUTHENTIK_APP_SLUG" \
     --arg scopes "$AUTHENTIK_SCOPES" --arg owner "$OWNER_EMAIL" \
-    --arg base "https://${host}:${AUTHENTIK_HTTPS_PORT}" --arg sum "$checksum" \
+    --arg base "$(authentik_base_url "$host")" --arg sum "$checksum" \
     '{llm: {existingSecret: $llm},
       localTls: {secretName: $tls},
       authentik: {enabled: true,
@@ -431,7 +669,7 @@ ensure_authentik_serves_local_cert() {
   log_step "Refreshing the certificate Authentik serves"
   cert_refreshed=true
   start_authentik_port_forward "$namespace" "$AUTHENTIK_SERVER_SERVICE" 80 || exit "$EXIT_FAILURE"
-  AUTHENTIK_API_BASE="http://127.0.0.1:${AUTHENTIK_PF_LOCAL_PORT}"
+  AUTHENTIK_API_BASE="http://127.0.0.1:${AUTHENTIK_PF_LOCAL_PORT}${AUTHENTIK_WEB_PATH}"
   AUTHENTIK_CURL_ARGS=()
   if ! check_token_accepted \
     || ! refresh_authentik_cert_if_differs "$host" "$AUTHENTIK_HTTPS_PORT" "$ca" 127.0.0.1; then
@@ -446,36 +684,66 @@ hosts_file() {
   printf '%s' "${PS_HOSTS_FILE:-/etc/hosts}"
 }
 
-# host_maps_to <host> <address>: 0 when the hosts file maps <host> to <address>.
-host_maps_to() {
-  awk -v host="$1" -v addr="$2" '
+# host_mapping_state <host>: prints how the hosts file relates <host> to this machine's LAN
+# address: `present` (a line maps it there and no other line maps it elsewhere), `missing` (no
+# line maps it) or `conflict <address...>` (lines map it to other addresses).
+host_mapping_state() {
+  awk -v host="$1" -v addr="$lan_address" '
     { sub(/#.*/, "") }
-    $1 == addr { for (i = 2; i <= NF; i++) if ($i == host) found = 1 }
-    END { exit !found }' "$(hosts_file)" 2>/dev/null
+    { for (i = 2; i <= NF; i++) if ($i == host) {
+        if ($1 == addr) found = 1
+        else other = (other == "" ? $1 : other " " $1)
+      } }
+    END {
+      if (other != "") print "conflict " other
+      else if (found) print "present"
+      else print "missing"
+    }' "$(hosts_file)" 2>/dev/null || printf 'missing\n'
 }
 
-# missing_host_mappings <host>: prints one hosts-file line per loopback address that does not yet
-# map <host>. Both families are mapped so a resolver that tries ::1 first still reaches the
-# NodePort on this machine.
-missing_host_mappings() {
-  local address
-  for address in 127.0.0.1 ::1; do
-    host_maps_to "$1" "$address" || printf '%s %s\n' "$address" "$1"
-  done
+# missing_host_mapping <host>: prints the one hosts-file line that maps <host> to this machine's
+# LAN address, only when no line maps <host> at all.
+missing_host_mapping() {
+  [[ "$(host_mapping_state "$1")" == missing ]] || return 0
+  printf '%s %s\n' "$lan_address" "$1"
 }
 
-# ca_is_trusted <ca.pem>: 0 when the macOS system trust settings accept the CA. Other systems
-# cannot be checked, so they report "not trusted" and get the guide pointer.
+# ca_is_trusted <ca.pem>: 0 when the macOS system trust settings accept the CA for TLS server
+# authentication. Other systems cannot be checked, so they report "not trusted" and get the
+# commands to run.
 ca_is_trusted() {
   [[ "$(uname -s)" == Darwin ]] && command -v security >/dev/null 2>&1 \
-    && security verify-cert -c "$1" >/dev/null 2>&1
+    && security verify-cert -c "$1" -p ssl >/dev/null 2>&1
 }
 
-# check_local_access <host> <ca>: sets needs_hosts/needs_trust to what this machine still lacks.
+# print_trust_commands <ca.pem>: the commands that trust the CA on this operating system, limited
+# to TLS server authentication, with what bounds the trust where the system has no switch for it.
+print_trust_commands() {
+  local ca="$1"
+  if [[ "$(uname -s)" == Darwin ]]; then
+    printf '  sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain %s\n' "$ca"
+    return 0
+  fi
+  printf '  Debian/Ubuntu: sudo cp %s /usr/local/share/ca-certificates/ps-local-ca.crt && sudo update-ca-certificates\n' "$ca"
+  printf '    (this store ignores key usage, so only the name constraint limits what the CA can vouch for)\n'
+  printf '  Fedora/RHEL:   sudo cp %s /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust\n' "$ca"
+  printf '    (this store takes the purposes from the CA'"'"'s extended key usage, TLS server authentication only, and enforces the name constraint)\n'
+  printf '  Other systems: import %s as a trusted root for TLS server authentication in the system or browser store.\n' "$ca"
+}
+
+# check_local_access <host> <ca>: sets needs_hosts/hosts_conflict/needs_trust to what this machine
+# still lacks.
 check_local_access() {
+  local state
   needs_hosts=false
+  hosts_conflict=""
   needs_trust=false
-  [[ -z "$(missing_host_mappings "$1")" ]] || needs_hosts=true
+  state="$(host_mapping_state "$1")"
+  case "$state" in
+    missing) needs_hosts=true ;;
+    conflict*) hosts_conflict="${state#conflict }" ;;
+    *) ;;
+  esac
   ca_is_trusted "$2" || needs_trust=true
 }
 
@@ -500,12 +768,12 @@ setup_local_access() {
   [[ "$needs_hosts" == false && "$needs_trust" == false ]] && return 0
   confirm_local_access_setup || return 0
   if [[ "$needs_hosts" == true ]]; then
-    log_step "Mapping ${host} to 127.0.0.1 and ::1 in $(hosts_file) (sudo)"
-    missing_host_mappings "$host" | sudo tee -a "$(hosts_file)" >/dev/null || true
+    log_step "Mapping ${host} to ${lan_address} in $(hosts_file) (sudo)"
+    missing_host_mapping "$host" | sudo tee -a "$(hosts_file)" >/dev/null || true
   fi
   if [[ "$needs_trust" == true && "$(uname -s)" == Darwin ]]; then
-    log_step "Trusting the local CA in the system keychain (sudo)"
-    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$ca" || true
+    log_step "Trusting the local CA for TLS server authentication in the system keychain (sudo)"
+    sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain "$ca" || true
   fi
   check_local_access "$host" "$ca"
 }
@@ -529,6 +797,34 @@ configure_ps_cli_context() {
   fi
 }
 
+# print_local_steps <host> <ca>: what this machine still lacks before the enrolment link opens
+# (the hosts line, a hosts line to fix, the CA trust), or that it is ready.
+print_local_steps() {
+  local host="$1" ca="$2"
+  if [[ "$needs_hosts" == true || "$needs_trust" == true || -n "$hosts_conflict" ]]; then
+    printf 'Before opening the enrolment link in a browser on this machine:\n'
+    print_hosts_steps "$host"
+    if [[ "$needs_trust" == true ]]; then
+      print_trust_commands "$ca"
+    fi
+    printf '(re-run with --apply-host-setup to have the script do the sudo steps)\n\n'
+  else
+    printf 'This machine is ready: %s maps to %s and the local CA is trusted.\n\n' "$host" "$lan_address"
+  fi
+}
+
+# print_colleague_steps <host> <ca>: what every other machine that logs in does, and the advice
+# to give this machine a fixed address because their hosts lines point at it.
+print_colleague_steps() {
+  local host="$1" ca="$2"
+  printf 'Other machines (LAN colleagues), on each one:\n'
+  printf "  1. Map the name to this machine's LAN address: echo '%s %s' | sudo tee -a /etc/hosts\n" "$lan_address" "$host"
+  printf '  2. Copy %s there (only the certificate, never copy ca.key) and trust it for TLS server\n' "$ca"
+  printf '     authentication; see %s\n' "$INSTALL_GUIDE_TRUST_STEP"
+  printf "Every colleague's hosts line points at %s, so reserve it for this machine in your router's\n" "$lan_address"
+  printf 'DHCP settings (a reserved DHCP address); a new address breaks every colleague until their hosts line is updated.\n\n'
+}
+
 # print_closing_summary <host>: what the evaluator does next. Only the steps this machine still
 # lacks are listed; ps-cli and other-machine setup live in the installation guide. The
 # enrolment link is printed last, exactly once (it is a single-use credential-equivalent).
@@ -540,24 +836,10 @@ print_closing_summary() {
   else
     printf 'Policy System (evaluator profile) already up to date.\n'
   fi
-  printf '\nAuthentik:  https://%s:%s/\nPS Service: %s\n\n' \
-    "$host" "$AUTHENTIK_HTTPS_PORT" "$PS_SERVICE_LOCAL_URL"
-  if [[ "$needs_hosts" == true || "$needs_trust" == true ]]; then
-    printf 'Before opening the enrolment link in a browser on this machine, run:\n'
-    if [[ "$needs_hosts" == true ]]; then
-      local mapping
-      while IFS= read -r mapping; do
-        printf "  echo '%s' | sudo tee -a %s\n" "$mapping" "$(hosts_file)"
-      done < <(missing_host_mappings "$host")
-    fi
-    if [[ "$needs_trust" == true ]]; then
-      printf '  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s\n' "$ca"
-      printf '  (not macOS: import %s as a trusted root in your system or browser store)\n' "$ca"
-    fi
-    printf '(or re-run with --apply-host-setup to have the script do it)\n\n'
-  else
-    printf 'This machine is ready: %s resolves to 127.0.0.1 and ::1 and the local CA is trusted.\n\n' "$host"
-  fi
+  printf '\nAuthentik:  %s/\nOIDC issuer: %s\nPS Service: %s\n\n' \
+    "$(authentik_base_url "$host")" "$(authentik_issuer "$host")" "$PS_SERVICE_LOCAL_URL"
+  print_local_steps "$host" "$ca"
+  print_replaced_ca_steps
   if [[ "$ps_cli_context_ready" == true ]]; then
     printf 'ps-cli is pointed at %s. After you register the passkey, log in with:\n' "$PS_SERVICE_LOCAL_URL"
   else
@@ -566,7 +848,7 @@ print_closing_summary() {
       "$PS_CLI_CONTEXT" "$PS_SERVICE_LOCAL_URL" "$PS_CLI_CONTEXT"
   fi
   printf '  ps-cli auth login\n\n'
-  printf 'Other machines (LAN colleagues): copy %s there and see %s\n\n' "$ca" "$INSTALL_GUIDE_TRUST_STEP"
+  print_colleague_steps "$host" "$ca"
   print_owner_link_message
 }
 
@@ -576,20 +858,21 @@ main() {
   check_host_exposure
   [[ "$check_exposure_only" == true ]] && exit 0
   check_required_tools
+  detect_lan_address
   require_kind_context
   require_llm_secret
   prompt_owner_email || exit "$EXIT_FAILURE"
   detect_node_ip
-  announce_upgrade_host_steps "$hostname_arg" "$(local_tls_state_dir)/ca.pem"
 
   trap stop_authentik_port_forward EXIT
 
+  local issuer checksum
+  issuer="$(authentik_issuer "$hostname_arg")"
   log_step "Preparing local TLS for ${hostname_arg}"
   ensure_local_leaf "$hostname_arg" || exit "$EXIT_FAILURE"
+  announce_migration "$hostname_arg" "$issuer" "$(local_tls_state_dir)/ca.pem"
   apply_local_tls_secret "$namespace" "$TLS_SECRET_NAME"
 
-  local issuer checksum
-  issuer="https://${hostname_arg}:${AUTHENTIK_HTTPS_PORT}/application/o/${AUTHENTIK_APP_SLUG}/"
   checksum="$(leaf_fingerprint | tr -d ':' | tr '[:upper:]' '[:lower:]')"
   log_step "Reconciling the Helm release"
   ensure_release "$(release_values_json "$hostname_arg" "$issuer" "$checksum")"
@@ -611,7 +894,7 @@ main() {
   wait_for_rollouts ps-service
 
   log_step "Creating the owner and issuing the enrolment link"
-  AUTHENTIK_API_BASE="https://${hostname_arg}:${AUTHENTIK_HTTPS_PORT}"
+  AUTHENTIK_API_BASE="$(authentik_base_url "$hostname_arg")"
   AUTHENTIK_LINK_BASE="$AUTHENTIK_API_BASE"
   AUTHENTIK_CURL_ARGS=(--cacert "$(local_tls_state_dir)/ca.pem"
     --resolve "${hostname_arg}:${AUTHENTIK_HTTPS_PORT}:127.0.0.1")

@@ -308,7 +308,9 @@ under `kind`, **not** on AKS's managed NGINX add-on (see [Open Risks](#open-risk
 **The evaluator counterpart.** `deploy-ps-eval.sh` keeps the whole Authentik server, admin UI
 included, reachable on `0.0.0.0:30443` (the kind cluster maps Authentik's HTTPS NodePort to the
 host) — deliberately, so a LAN colleague can log in — and serves it over HTTPS with a
-certificate from a local CA the script creates, because browsers only offer passkeys in a secure
+certificate from a name-constrained local CA the script creates (a critical name constraint
+for the one evaluator hostname, at most 730 days of validity, limited to TLS server
+authentication), because browsers only offer passkeys in a secure
 context and `ps-cli` refuses credentials over a non-`https`, non-loopback issuer. Authentik's
 plain-HTTP NodePort stays inside the node. PS Service's pod trusts the local CA through
 `SSL_CERT_FILE`; `ps-cli` instead verifies against the operating-system trust

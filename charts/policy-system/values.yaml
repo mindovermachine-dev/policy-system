@@ -109,10 +109,11 @@ psService:
     # psPostgres.state.existingSecret's convention.
     existingSecret: ""
     baseUrl: "https://authentik.example.com"
-    # Optional user-reachable Authentik address (issue #165), used ONLY to build the
+    # Optional user-reachable Authentik address, used ONLY to build the
     # enrollment link handed to an invitee; PS Service still calls the Authentik API at
     # baseUrl. Set it when baseUrl is an in-cluster address (production: the public
-    # `https://<host>/auth`); leave empty when baseUrl is already user-reachable (evaluator).
+    # `https://<host>/auth`); leave empty when baseUrl is already user-reachable (evaluator:
+    # `https://<host>:30443/auth`).
     # Empty = PS_AUTHENTIK_PUBLIC_URL is not rendered.
     publicUrl: ""
   # IP of the Podman network gateway (e.g. `podman network inspect podman
@@ -129,7 +130,7 @@ psService:
   # A human/ps-cli client on the evaluator's own machine adds the same hostname to their own
   # /etc/hosts pointing at 127.0.0.1; a colleague on the same LAN points it at the
   # evaluator's laptop's LAN IP instead. See docs/artifacts/installation-guide.md.
-  # The evaluator script uses authentik.test; names ending in .local do not work with Claude Code.
+  # The evaluator script uses ps.test; names ending in .local do not work with Claude Code.
   authentikHostname: ""
   authentikHostAliasIP: ""
 
@@ -292,6 +293,13 @@ authentik:
   # The Secret name is a literal: Helm never templates values files and the release name is fixed
   # ("policy-system"); see values-prod.yaml -- it sets authentik.global.env (a list, which Helm
   # replaces rather than merges), so these live under server/worker.env, which prod never sets.
+  # Authentik is served under /auth/, as in production. The AUTHENTIK_WEB__PATH env var on every
+  # Authentik Deployment is the effective switch; authentik.authentik.web.path is left at its
+  # default so the probes keep the unprefixed health path, exactly as production does.
+  global:
+    env:
+      - name: AUTHENTIK_WEB__PATH
+        value: /auth/
   worker:
     env:
       - name: AUTHENTIK_BOOTSTRAP_TOKEN

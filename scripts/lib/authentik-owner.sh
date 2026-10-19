@@ -199,7 +199,7 @@ check_token_accepted() {
   case "$AUTHENTIK_HTTP_STATUS" in
     200) return 0 ;;
     401 | 403)
-      print_error 'Authentik rejected the shared API token (HTTP %s). Authentik created its bootstrap token from an earlier value of this Secret, and AUTHENTIK_BOOTSTRAP_TOKEN does not rotate it, so the Secret and Authentik now disagree. Fix: create an API token in the Authentik admin UI (kubectl port-forward svc/policy-system-authentik-server 9000:80, then open http://127.0.0.1:9000/if/admin/ ; production serves it under /auth/if/admin/), store it in a Secret with key PS_AUTHENTIK_API_TOKEN, set psService.authentik.existingSecret to that Secret, re-run. On an evaluator cluster with no data to keep, delete the cluster and start again.\n' \
+      print_error 'Authentik rejected the shared API token (HTTP %s). Authentik created its bootstrap token from an earlier value of this Secret, and AUTHENTIK_BOOTSTRAP_TOKEN does not rotate it, so the Secret and Authentik now disagree. Fix: create an API token in the Authentik admin UI (kubectl port-forward svc/policy-system-authentik-server 9000:80, then open http://127.0.0.1:9000/auth/if/admin/), store it in a Secret with key PS_AUTHENTIK_API_TOKEN, set psService.authentik.existingSecret to that Secret, re-run. On an evaluator cluster with no data to keep, delete the cluster and start again.\n' \
         "$AUTHENTIK_HTTP_STATUS"
       return 1
       ;;

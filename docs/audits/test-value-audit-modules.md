@@ -673,7 +673,7 @@
 | `ps-service/tests/query_engine/test_ro_query_rejects_write_live.py` | 4 | keep | Live: FalkorDB itself rejects a write that evades the textual guard. |
 | `ps-service/tests/release/test_bump_from_commits.py` | 14 | keep | `scripts/release/bump-from-commits.sh` -- the conventional-commit classifier. |
 | `ps-service/tests/release/test_create_github_release.py` | 5 | keep | `previous-release-tag.sh` and `create-github-release.sh` . |
-| `ps-service/tests/release/test_docs_installation_hostname.py` | 8 | keep | The evaluator hostname documentation (`authentik.test`, `.local` rejected). |
+| `ps-service/tests/release/test_docs_installation_hostname.py` | 8 | keep | The evaluator hostname documentation (`ps.test`, `.local` rejected, migration sections). |
 | `ps-service/tests/release/test_docs_mcp_connector_rule.py` | 17 | keep | The docs state the direct-connector rule consistently. |
 | `ps-service/tests/release/test_docs_plugin_names.py` | 3 | keep | The guides carry no stale `ps-*` plugin/connector names and their links resolve. |
 | `ps-service/tests/release/test_lint_commit_header.py` | 16 | keep | `scripts/release/lint-commit-header.sh` -- the conventional-header guard rail. |

@@ -275,22 +275,22 @@ tests:
             - ip: "10.88.0.1"
               hostnames: ["host.containers.internal"]
 
-  # --- Issue #160: authentikHostname/authentikHostAliasIP hostAliases wiring ---
+  # --- authentikHostname/authentikHostAliasIP hostAliases wiring ---
 
   - it: authentikHostname+authentikHostAliasIP set (no ollama) renders the exact hostAliases entry
     set:
-      psService.authentikHostname: authentik.test
+      psService.authentikHostname: ps.test
       psService.authentikHostAliasIP: 172.18.0.2
     asserts:
       - equal:
           path: spec.template.spec.hostAliases
           value:
             - ip: "172.18.0.2"
-              hostnames: ["authentik.test"]
+              hostnames: ["ps.test"]
 
   - it: authentikHostname set without authentikHostAliasIP renders no hostAliases entry for it
     set:
-      psService.authentikHostname: authentik.test
+      psService.authentikHostname: ps.test
     asserts:
       - notExists:
           path: spec.template.spec.hostAliases
@@ -306,7 +306,7 @@ tests:
     set:
       llm.provider: ollama
       psService.ollamaHostGatewayIP: 10.88.0.1
-      psService.authentikHostname: authentik.test
+      psService.authentikHostname: ps.test
       psService.authentikHostAliasIP: 172.18.0.2
     asserts:
       - equal:
@@ -315,22 +315,22 @@ tests:
             - ip: "10.88.0.1"
               hostnames: ["host.containers.internal"]
             - ip: "172.18.0.2"
-              hostnames: ["authentik.test"]
+              hostnames: ["ps.test"]
 
-  - it: the evaluator hostname wiring renders authentik.test and no .local name (issue #239)
+  - it: the evaluator hostname wiring renders ps.test, the /auth issuer and no .local name
     set:
-      psService.authentikHostname: authentik.test
+      psService.authentikHostname: ps.test
       psService.authentikHostAliasIP: 172.18.0.2
-      psService.auth.issuer: https://authentik.test:30443/application/o/ps-cli/
+      psService.auth.issuer: https://ps.test:30443/auth/application/o/ps-cli/
       psService.auth.audience: ps-cli
-      psService.authentik.baseUrl: https://authentik.test:30443
+      psService.authentik.baseUrl: https://ps.test:30443/auth
     asserts:
       - equal:
           path: spec.template.spec.hostAliases[0].hostnames[0]
-          value: authentik.test
+          value: ps.test
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_ISSUER")].value
-          value: https://authentik.test:30443/application/o/ps-cli/
+          value: https://ps.test:30443/auth/application/o/ps-cli/
       - notMatchRegex:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_ISSUER")].value
           pattern: '\.local\b'

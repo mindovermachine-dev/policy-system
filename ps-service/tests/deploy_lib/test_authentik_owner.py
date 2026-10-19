@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from conftest import LibHarness
 
 EMAIL = "owner@example.com"
-HOST = "https://authentik.test:30443"
+HOST = "https://ps.test:30443/auth"
 
 PRELUDE = f"""
 set -uo pipefail
@@ -29,7 +29,7 @@ print_error() {{ local f="$1"; shift; printf "$f" "$@" >&2; }}
 source "$PS_TEST_LIB_DIR/authentik-owner.sh"
 AUTHENTIK_API_BASE="${{AUTHENTIK_API_BASE:-{HOST}}}"
 AUTHENTIK_LINK_BASE="${{AUTHENTIK_LINK_BASE:-{HOST}}}"
-AUTHENTIK_CURL_ARGS=(--cacert /tmp/ca.pem --resolve authentik.test:30443:127.0.0.1)
+AUTHENTIK_CURL_ARGS=(--cacert /tmp/ca.pem --resolve ps.test:30443:127.0.0.1)
 AUTHENTIK_API_TOKEN="$PS_TEST_TOKEN"
 """
 

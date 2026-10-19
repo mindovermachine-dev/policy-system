@@ -42,7 +42,7 @@ def test_script_generated_leaf_chains_to_the_local_ca_and_names_the_host(
     state = eval_fixture.state_dir
     assert "OK" in _openssl("verify", "-CAfile", str(state / "ca.pem"), str(state / "leaf.pem"))
     text = _openssl("x509", "-in", str(state / "leaf.pem"), "-noout", "-text")
-    assert "DNS:authentik.test" in text
+    assert "DNS:ps.test" in text
     assert "Authority Key Identifier" in text
     assert "Subject Key Identifier" in text
     # The closing summary names the local CA so the evaluator can trust it (the script does not

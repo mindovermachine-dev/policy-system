@@ -8,6 +8,7 @@ Authentik-API `curl`).
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
@@ -15,15 +16,52 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from conftest import EvalFixture
+    from conftest import EvalFixture, ScriptRun
 
 # Mirror deploy_eval/conftest.py's own constants (hardcoded, same precedent as deploy_ps).
 OWNER_EMAIL = "owner@example.com"
 NODE_IP = "10.89.0.7"
 TOKEN = "s3cr3t-authentik-token-value"
-HOST = "authentik.test"
-ISSUER = f"https://{HOST}:30443/application/o/ps-cli/"
-AUTH_BASE = f"https://{HOST}:30443"
+HOST = "ps.test"
+LAN = "192.168.1.5"
+MACOS_TRUST = (
+    "sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain"
+)
+ISSUER = f"https://{HOST}:30443/auth/application/o/ps-cli/"
+AUTH_BASE = f"https://{HOST}:30443/auth"
+OPENSSL_TIMEOUT_SECONDS = 30
+SECONDS_PER_DAY = 86400
+
+
+def _x509_text(path: Path) -> str:
+    out = subprocess.run(  # noqa: S603 - fixed argv, test-owned file
+        ["openssl", "x509", "-in", str(path), "-noout", "-text"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=OPENSSL_TIMEOUT_SECONDS,
+    )
+    return " ".join(out.stdout.split())
+
+
+def _expires_within_days(path: Path, days: int) -> bool:
+    """True when the certificate expires no later than `days` days (plus one) from now."""
+    seconds = (days + 1) * SECONDS_PER_DAY
+    done = subprocess.run(  # noqa: S603 - fixed argv, test-owned file
+        ["openssl", "x509", "-in", str(path), "-noout", "-checkend", str(seconds)],  # noqa: S607
+        capture_output=True,
+        check=False,
+        timeout=OPENSSL_TIMEOUT_SECONDS,
+    )
+    return done.returncode != 0
+
+
+def _leaf_sans(fixture: EvalFixture) -> list[str]:
+    """The DNS/IP entries of the generated leaf's subject alternative name."""
+    text = _x509_text(fixture.state_dir / "leaf.pem")
+    after = text.split("X509v3 Subject Alternative Name:", 1)[1]
+    names = after.split("X509v3", 1)[0].split("Signature Algorithm", 1)[0]
+    return [entry.strip() for entry in names.split(",") if entry.strip()]
 
 
 def _mutations(fixture: EvalFixture) -> list[str]:
@@ -68,18 +106,18 @@ def test_the_release_pins_the_signing_origin_to_localhost_whatever_the_hostname(
     assert ps["passkeySigning"] == {"allowedOrigins": ["http://localhost:8000"]}
 
 
-def test_default_hostname_is_authentik_test_everywhere(eval_fixture: EvalFixture) -> None:
+def test_default_hostname_is_the_single_evaluator_name_everywhere(
+    eval_fixture: EvalFixture,
+) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     values = eval_fixture.deployed_values()
     ps = values["psService"]
-    assert ps["authentikHostname"] == "authentik.test"
-    assert ps["auth"]["issuer"] == "https://authentik.test:30443/application/o/ps-cli/"
-    assert (
-        ps["authzBootstrapOwner"]["issuer"] == "https://authentik.test:30443/application/o/ps-cli/"
-    )
-    assert ps["authentik"]["baseUrl"] == "https://authentik.test:30443"
-    assert "DNS:authentik.test" in (eval_fixture.state_dir / "leaf.pem").read_text()
+    assert ps["authentikHostname"] == HOST
+    assert ps["auth"]["issuer"] == ISSUER
+    assert ps["authzBootstrapOwner"]["issuer"] == ISSUER
+    assert ps["authentik"]["baseUrl"] == AUTH_BASE
+    assert _leaf_sans(eval_fixture) == [f"DNS:{HOST}"]
     assert ".local" not in json.dumps(values)
 
 
@@ -123,10 +161,30 @@ def test_custom_hostname_drives_issuer_base_url_and_certificate(
     eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", "ps.example.test")
 
     values = eval_fixture.deployed_values()["psService"]
-    assert values["auth"]["issuer"] == "https://ps.example.test:30443/application/o/ps-cli/"
-    assert values["authentik"]["baseUrl"] == "https://ps.example.test:30443"
-    leaf = (eval_fixture.state_dir / "leaf.pem").read_text()
-    assert "DNS:ps.example.test" in leaf
+    assert values["auth"]["issuer"] == "https://ps.example.test:30443/auth/application/o/ps-cli/"
+    assert values["authentik"]["baseUrl"] == "https://ps.example.test:30443/auth"
+    assert _leaf_sans(eval_fixture) == ["DNS:ps.example.test"]
+
+
+def test_an_ip_literal_hostname_is_rejected_before_any_change(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", "192.168.1.5", expect=2)
+
+    assert "192.168.1.5" in run.stderr
+    assert "IP address" in run.stderr
+    assert "Fix:" in run.stderr
+    assert _mutations(eval_fixture) == []
+    assert not eval_fixture.state_dir.exists()
+
+
+@pytest.mark.parametrize("name", ["ps.test\nIP:1.2.3.4", "ps.test;DNS:evil.test", "ps test"])
+def test_a_hostname_with_unsafe_characters_is_rejected_before_any_change(
+    eval_fixture: EvalFixture, name: str
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", name, expect=2)
+
+    assert "letters, digits" in run.stderr
+    assert _mutations(eval_fixture) == []
+    assert not eval_fixture.state_dir.exists()
 
 
 def test_deployments_are_awaited_after_helm(eval_fixture: EvalFixture) -> None:
@@ -205,6 +263,14 @@ def test_authentik_api_is_called_through_the_external_host_with_the_local_ca(
         assert argv[argv.index("--resolve") + 1] == f"{HOST}:30443:127.0.0.1"
 
 
+def test_owner_link_carries_the_auth_prefix_once(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    link = run.stdout.rstrip().splitlines()[-1]
+    assert link.startswith(f"https://{HOST}:30443/auth/if/flow/ps-passkey-recovery/?flow_token=")
+    assert "/auth/auth" not in run.stdout
+
+
 def test_rerun_with_an_enrolled_owner_issues_no_new_link_and_no_second_deploy(
     eval_fixture: EvalFixture,
 ) -> None:
@@ -256,6 +322,7 @@ def test_a_rejected_shared_token_prints_the_upgrade_fix_and_creates_nothing(
 
     assert "existingSecret" in run.stderr
     assert "does not rotate" in run.stderr
+    assert "http://127.0.0.1:9000/auth/if/admin/" in run.stderr
     assert eval_fixture.curl_users() == {}
 
 
@@ -282,13 +349,32 @@ def test_the_tls_secret_carries_leaf_key_and_ca_and_is_applied_before_helm(
     assert kube.index(create) < next(i for i, c in enumerate(kube) if "rollout status" in c)
 
 
+def test_only_the_ca_certificate_is_referenced_for_distribution_never_its_key(
+    eval_fixture: EvalFixture,
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    ca_key = eval_fixture.state_dir / "ca.key"
+    observable = eval_fixture.everything_observable(run)
+    applied = eval_fixture.root / "kubectl-applied.yaml"
+    # The only mention of the key is the warning not to copy it.
+    assert observable.replace("never copy ca.key", "").count("ca.key") == 0
+    assert str(ca_key) not in observable
+    assert ca_key.read_text() not in observable + applied.read_text()
+    assert f"{eval_fixture.state_dir.resolve()}/ca.pem" in run.stdout
+
+
 def test_ca_is_created_once_and_reused_by_a_rerun(eval_fixture: EvalFixture) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL)
     ca_first = (eval_fixture.state_dir / "ca.pem").read_text()
 
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
-    assert (eval_fixture.state_dir / "ca.pem").read_text() == ca_first
+    ca = eval_fixture.state_dir / "ca.pem"
+    assert ca.read_text() == ca_first
+    text = _x509_text(ca)
+    assert f"X509v3 Name Constraints: critical Permitted: DNS:{HOST} " in text
+    assert _expires_within_days(ca, 730)
 
 
 def test_no_certificate_refresh_when_authentik_already_serves_the_local_leaf(
@@ -302,7 +388,7 @@ def test_no_certificate_refresh_when_authentik_already_serves_the_local_leaf(
     assert not [c for c in eval_fixture.kubectl_calls() if "port-forward" in c]
 
 
-def test_a_different_served_certificate_applies_the_blueprint_over_loopback_http(
+def test_cert_refresh_goes_through_the_auth_prefixed_loopback_port_forward(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.served("other", "other", "local")
@@ -312,7 +398,7 @@ def test_a_different_served_certificate_applies_the_blueprint_over_loopback_http
     urls = eval_fixture.curl_urls()
     applies = [u for u in urls if u.endswith("/apply/")]
     assert len(applies) == 1
-    assert applies[0].startswith("http://127.0.0.1:41999/api/v3/managed/blueprints/")
+    assert applies[0].startswith("http://127.0.0.1:41999/auth/api/v3/managed/blueprints/")
     assert not any(
         "rollout restart deployment/policy-system-authentik" in c
         for c in eval_fixture.kubectl_calls()
@@ -366,7 +452,7 @@ def test_hostname_ending_in_local_is_rejected_before_any_change(
 
     assert "Claude Code" in run.stderr
     assert ".local" in run.stderr
-    assert "authentik.test" in run.stderr
+    assert "ps.test" in run.stderr
     assert _mutations(eval_fixture) == []
     assert eval_fixture.kubectl_calls() == []
 
@@ -494,12 +580,13 @@ def test_closing_output_lists_the_missing_local_steps_and_points_at_the_guide(
     eval_fixture: EvalFixture,
 ) -> None:
     hosts = _hosts_file(eval_fixture)
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=False)
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
 
-    assert f"echo '127.0.0.1 {HOST}' | sudo tee -a {hosts}" in run.stdout
-    assert f"echo '::1 {HOST}' | sudo tee -a {hosts}" in run.stdout
-    assert "sudo security add-trusted-cert" in run.stdout
+    assert f"echo '{LAN} {HOST}' | sudo tee -a {hosts}" in run.stdout
+    assert MACOS_TRUST in run.stdout
     assert str(eval_fixture.state_dir / "ca.pem") in run.stdout
     assert "installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli" in run.stdout
     assert "--apply-host-setup" in run.stdout
@@ -507,6 +594,23 @@ def test_closing_output_lists_the_missing_local_steps_and_points_at_the_guide(
     assert "LAN colleagues" in run.stdout
     assert "export SSL_CERT_FILE" not in run.stdout
     assert run.stdout.rstrip().splitlines()[-1].startswith("https://")
+
+
+def test_closing_output_prints_the_issuer_and_the_auth_url(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert f"Authentik:  https://{HOST}:30443/auth/" in run.stdout
+    assert f"OIDC issuer: {ISSUER}" in run.stdout
+
+
+def test_closing_output_points_ps_service_and_ps_cli_at_the_loopback_address(
+    eval_fixture: EvalFixture,
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert "PS Service: http://127.0.0.1:8000" in run.stdout
+    assert "ps-cli config set-context eval --url http://127.0.0.1:8000" in run.stdout
+    assert "/mcp/" not in run.stdout.split("OIDC issuer:")[0]
 
 
 def _fake_ps_cli(fixture: EvalFixture, *, current: str = "") -> Path:
@@ -555,11 +659,13 @@ def test_without_ps_cli_the_closing_output_prints_the_commands(eval_fixture: Eva
 def test_closing_output_omits_the_hosts_step_when_the_hostname_is_already_mapped(
     eval_fixture: EvalFixture,
 ) -> None:
-    hosts = _hosts_file(eval_fixture, f"127.0.0.1 localhost\n127.0.0.1 {HOST} # ps\n::1 {HOST}\n")
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 localhost\n{LAN} {HOST} # ps\n")
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=False)
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
 
-    assert "sudo tee -a" not in run.stdout
+    assert f"sudo tee -a {hosts}" not in run.stdout
     assert "add-trusted-cert" in run.stdout
 
 
@@ -573,65 +679,289 @@ def test_without_consent_no_sudo_command_is_run(eval_fixture: EvalFixture) -> No
     assert (eval_fixture.root / "hosts").read_text() == ""
 
 
-def test_apply_host_setup_maps_the_hostname_and_trusts_the_ca_through_sudo(
-    eval_fixture: EvalFixture,
-) -> None:
+def test_the_name_is_mapped_to_the_lan_address_not_to_loopback(eval_fixture: EvalFixture) -> None:
     hosts = _hosts_file(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
+
+    assert f"echo '{LAN} {HOST}' | sudo tee -a {hosts}" in run.stdout
+    assert f"127.0.0.1 {HOST}" not in run.output
+    assert f"::1 {HOST}" not in run.output
+    assert "resolves to 127.0.0.1" not in run.output
+
+
+def test_apply_host_setup_appends_exactly_one_hosts_line(eval_fixture: EvalFixture) -> None:
+    hosts = _hosts_file(eval_fixture, "127.0.0.1 localhost\n")
     sudo_log = _fake_sudo(eval_fixture)
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
 
     written = (eval_fixture.root / "hosts").read_text().splitlines()
-    assert written == [f"127.0.0.1 {HOST}", f"::1 {HOST}"]
+    assert written == ["127.0.0.1 localhost", f"{LAN} {HOST}"]
     assert f"tee -a {hosts}" in sudo_log.read_text()
-    assert "sudo tee -a" not in run.stdout
+    assert f"sudo tee -a {hosts}" not in run.stdout
 
 
-def test_apply_host_setup_does_nothing_when_the_machine_is_already_set_up(
+def test_rerun_with_the_mapping_present_changes_nothing_and_prints_ready(
     eval_fixture: EvalFixture,
 ) -> None:
-    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n::1 {HOST}\n")
+    hosts = _hosts_file(eval_fixture, f"{LAN} {HOST}\n")
     sudo_log = _fake_sudo(eval_fixture)
-    # CA trust is only checkable on macOS, so make the script see Darwin whatever the host is.
-    # `uname` in bin_dir is a symlink to the real binary: unlink before writing, or the write
-    # would go through the link and overwrite the system `uname`.
-    uname = eval_fixture.bin_dir / "uname"
-    uname.unlink()
-    uname.write_text("#!/usr/bin/env bash\necho Darwin\n")
-    uname.chmod(0o755)
-    security = eval_fixture.bin_dir / "security"
-    security.write_text("#!/usr/bin/env bash\nexit 0\n")
-    security.chmod(0o755)
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=True)
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
 
     assert not sudo_log.exists()
-    assert "This machine is ready" in run.stdout
+    assert (eval_fixture.root / "hosts").read_text() == f"{LAN} {HOST}\n"
+    assert f"This machine is ready: {HOST} maps to {LAN}" in run.stdout
 
 
-def test_a_hostname_mapped_only_for_ipv4_gets_just_the_ipv6_line(eval_fixture: EvalFixture) -> None:
-    """Without the IPv6 line, macOS waits 5s per lookup, so the missing line is added."""
-    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n")
-    sudo_log = _fake_sudo(eval_fixture)
-
-    eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
-
-    assert (eval_fixture.root / "hosts").read_text().splitlines() == [
-        f"127.0.0.1 {HOST}",
-        f"::1 {HOST}",
-    ]
-    assert f"tee -a {hosts}" in sudo_log.read_text()
-
-
-def test_closing_output_prints_only_the_missing_ipv6_command_for_an_ipv4_only_hosts_file(
+def test_a_hosts_line_mapping_the_name_to_another_address_is_reported_not_duplicated(
     eval_fixture: EvalFixture,
 ) -> None:
-    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n")
+    before = f"10.0.0.99 {HOST}\n"
+    hosts = _hosts_file(eval_fixture, before)
+    sudo_log = _fake_sudo(eval_fixture)
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=True)
 
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
 
-    assert f"echo '::1 {HOST}' | sudo tee -a {hosts}" in run.stdout
-    assert f"echo '127.0.0.1 {HOST}'" not in run.stdout
+    assert (eval_fixture.root / "hosts").read_text() == before
+    assert not sudo_log.exists()
+    assert f"maps {HOST} to 10.0.0.99" in run.stdout
+    assert LAN in run.stdout
+    assert "Fix:" in run.stdout
+    assert "This machine is ready" not in run.stdout
+
+
+def test_a_loopback_mapping_of_the_name_is_reported_not_duplicated(
+    eval_fixture: EvalFixture,
+) -> None:
+    before = f"127.0.0.1 {HOST}\n::1 {HOST}\n"
+    hosts = _hosts_file(eval_fixture, before)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
+
+    assert (eval_fixture.root / "hosts").read_text() == before
+    assert f"maps {HOST} to 127.0.0.1" in run.stdout
+
+
+def test_provisioning_does_not_depend_on_the_hosts_file(eval_fixture: EvalFixture) -> None:
+    """The script's own calls name the loopback address themselves.
+
+    A missing hosts file (the machine has not been set up yet) does not stop the deploy.
+    """
+    absent = str(eval_fixture.root / "no-such-hosts-file")
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=absent)
+
+    calls = eval_fixture.curl_calls()
+    assert calls
+    assert all("--resolve" in call["argv"] for call in calls)
+    assert eval_fixture.curl_users()
+
+
+# --- LAN address of this machine ---------------------------------------------------------------
+
+
+def _hosts_line_printed(run: ScriptRun) -> str:
+    lines = [line for line in run.stdout.splitlines() if line.startswith("  echo '")]
+    assert len(lines) == 1, run.stdout
+    return lines[0]
+
+
+def test_lan_address_comes_from_the_default_route_first(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses("10.0.0.9", "192.168.1.5", "172.17.0.1")
+    eval_fixture.set_default_route("10.0.0.9")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert f"echo '10.0.0.9 {HOST}'" in _hosts_line_printed(run)
+
+
+def test_lan_address_comes_from_the_default_route_on_macos(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses("10.0.0.9", "192.168.1.5", tool="ifconfig")
+    eval_fixture.set_default_route("10.0.0.9", tool="ifconfig")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert f"echo '10.0.0.9 {HOST}'" in _hosts_line_printed(run)
+
+
+def test_lan_address_is_the_single_private_address_without_a_default_route(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_addresses("127.0.0.1", "::1", "fe80::1", "169.254.7.7", "10.0.0.9")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert f"echo '10.0.0.9 {HOST}'" in _hosts_line_printed(run)
+
+
+def test_several_private_addresses_without_a_default_route_need_the_flag_before_any_change(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_addresses("10.0.0.9", "192.168.1.5", "172.17.0.1")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
+
+    assert "--lan-address" in run.stderr
+    for address in ("10.0.0.9", "192.168.1.5", "172.17.0.1"):
+        assert address in run.stderr
+    assert "Fix:" in run.stderr
+    assert eval_fixture.kubectl_calls() == []
+    assert _mutations(eval_fixture) == []
+
+
+def test_no_private_address_needs_the_flag_before_any_change(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses("127.0.0.1", "::1")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
+
+    assert "--lan-address" in run.stderr
+    assert _mutations(eval_fixture) == []
+
+
+def test_the_lan_address_flag_overrides_detection(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_addresses("10.0.0.9", "192.168.1.5")
+    eval_fixture.set_default_route("10.0.0.9")
+
+    run = eval_fixture.run(
+        "--owner-email",
+        OWNER_EMAIL,
+        "--lan-address",
+        "192.168.1.5",
+        PS_HOSTS_FILE=_hosts_file(eval_fixture),
+    )
+
+    assert f"echo '192.168.1.5 {HOST}'" in _hosts_line_printed(run)
+
+
+@pytest.mark.parametrize("value", ["not-an-address", "300.1.1.1", "127.0.0.1", "::1", "10.0.0"])
+def test_an_unusable_lan_address_is_a_usage_error_before_any_change(
+    eval_fixture: EvalFixture, value: str
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--lan-address", value, expect=2)
+
+    assert "--lan-address" in run.stderr
+    assert eval_fixture.kubectl_calls() == []
+    assert _mutations(eval_fixture) == []
+
+
+# --- trust for TLS server authentication only --------------------------------------------------
+
+
+def test_trust_command_on_macos_limits_trust_to_ssl(eval_fixture: EvalFixture) -> None:
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=False)
+    ca = eval_fixture.state_dir / "ca.pem"
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert f"  {MACOS_TRUST} {ca}" in run.stdout
+    assert "-r trustRoot -k" not in run.stdout
+
+
+def test_apply_host_setup_runs_the_ssl_only_trust_command_on_macos(
+    eval_fixture: EvalFixture,
+) -> None:
+    sudo_log = _fake_sudo(eval_fixture)
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=False)
+
+    eval_fixture.run(
+        "--owner-email",
+        OWNER_EMAIL,
+        "--apply-host-setup",
+        PS_HOSTS_FILE=_hosts_file(eval_fixture),
+    )
+
+    trust_args = MACOS_TRUST.removeprefix("sudo ")
+    assert f"{trust_args} {eval_fixture.state_dir / 'ca.pem'}" in sudo_log.read_text()
+
+
+def test_trust_commands_on_linux_are_printed_for_debian_and_fedora_families(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_platform("Linux")
+    ca = eval_fixture.state_dir / "ca.pem"
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert "add-trusted-cert" not in run.stdout
+    assert (
+        f"sudo cp {ca} /usr/local/share/ca-certificates/ps-local-ca.crt"
+        " && sudo update-ca-certificates"
+    ) in run.stdout
+    assert (
+        f"sudo cp {ca} /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust"
+    ) in run.stdout
+    squashed = " ".join(run.stdout.split())
+    # Debian ignores the purposes of a CA, so only the name constraint limits it there; Fedora
+    # derives the purposes from the CA's extended key usage.
+    assert "Debian" in squashed
+    assert "ignores" in squashed
+    assert "name constraint" in squashed
+    assert "extended key usage" in squashed
+    assert "TLS server authentication" in squashed
+
+
+def test_ca_trust_check_uses_the_ssl_policy_and_is_skipped_when_already_trusted(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_platform("Darwin")
+    security_log = eval_fixture.add_security(trusted=True)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    ca = eval_fixture.state_dir / "ca.pem"
+    assert f"verify-cert -c {ca} -p ssl" in security_log.read_text()
+    assert "add-trusted-cert" not in run.stdout
+
+
+def test_apply_host_setup_does_not_trust_twice(eval_fixture: EvalFixture) -> None:
+    sudo_log = _fake_sudo(eval_fixture)
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=True)
+
+    eval_fixture.run(
+        "--owner-email",
+        OWNER_EMAIL,
+        "--apply-host-setup",
+        PS_HOSTS_FILE=_hosts_file(eval_fixture),
+    )
+
+    assert "add-trusted-cert" not in sudo_log.read_text()
+    assert "tee -a" in sudo_log.read_text()
+
+
+# --- what colleagues do ------------------------------------------------------------------------
+
+
+def test_closing_output_tells_colleagues_to_map_the_lan_address_and_copy_only_ca_pem(
+    eval_fixture: EvalFixture,
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    colleagues = run.stdout.split("Other machines (LAN colleagues)", 1)[1]
+    colleagues = colleagues.split("\nhttps://", 1)[0]
+    squashed = " ".join(colleagues.split())
+    ca = eval_fixture.state_dir / "ca.pem"
+    assert f"{LAN} {HOST}" in squashed
+    assert str(ca) in squashed
+    assert "ca.key" in squashed
+    assert "never" in squashed.lower()
+    assert "copy ca.key" not in squashed.replace("never copy ca.key", "")
+
+
+def test_closing_output_recommends_a_reserved_dhcp_address(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    squashed = " ".join(run.stdout.split())
+    assert "reserve" in squashed
+    assert "DHCP" in squashed
 
 
 # --- helm idempotence --------------------------------------------------------------------------
@@ -667,13 +997,8 @@ def _install_for_host(fixture: EvalFixture, host: str) -> None:
 
 
 def _make_machine_trust_the_ca(fixture: EvalFixture) -> None:
-    uname = fixture.bin_dir / "uname"
-    uname.unlink()
-    uname.write_text("#!/usr/bin/env bash\necho Darwin\n")
-    uname.chmod(0o755)
-    security = fixture.bin_dir / "security"
-    security.write_text("#!/usr/bin/env bash\nexit 0\n")
-    security.chmod(0o755)
+    fixture.set_platform("Darwin")
+    fixture.add_security(trusted=True)
 
 
 def test_upgrade_listing_is_printed_before_the_first_cluster_change(
@@ -681,6 +1006,8 @@ def test_upgrade_listing_is_printed_before_the_first_cluster_change(
 ) -> None:
     _install_for_host(eval_fixture, OLD_HOST)
     hosts = _hosts_file(eval_fixture)
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=False)
 
     run = eval_fixture.run(
         "--owner-email", OWNER_EMAIL, expect=None, PS_HOSTS_FILE=hosts, PS_TEST_APPLY_FAIL="1"
@@ -692,21 +1019,20 @@ def test_upgrade_listing_is_printed_before_the_first_cluster_change(
     assert len(eval_fixture.helm_upgrades()) == 1  # only the seeding run
     # ... and the listing was printed before that first cluster change was attempted.
     assert f"switching to {HOST}" in run.stderr
-    assert f"127.0.0.1 {HOST}" in run.stderr
-    assert f"::1 {HOST}" in run.stderr
+    assert f"{LAN} {HOST}" in run.stderr
+    assert f"127.0.0.1 {HOST}" not in run.stderr
     assert "add-trusted-cert" in run.stderr
 
 
 def test_upgrade_listing_omits_steps_already_done(eval_fixture: EvalFixture) -> None:
     _install_for_host(eval_fixture, OLD_HOST)
-    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n::1 {HOST}\n")
+    hosts = _hosts_file(eval_fixture, f"{LAN} {HOST}\n")
     _make_machine_trust_the_ca(eval_fixture)
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
 
     assert f"switching to {HOST}" in run.stderr
-    assert f"127.0.0.1 {HOST}" not in run.stderr
-    assert f"::1 {HOST}" not in run.stderr
+    assert f"echo '{LAN} {HOST}'" not in run.stderr
     assert "add-trusted-cert" not in run.stderr
 
 
@@ -787,6 +1113,290 @@ def test_same_hostname_rerun_with_a_passkey_still_issues_no_link(eval_fixture: E
     run = eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     assert "already has a passkey" in run.stdout
+
+
+# --- migration of an evaluator deployed on another name and issuer ---------------------------
+
+OLD_NAME = "authentik" + ".test"
+OLD_ROOT_ISSUER = "https://" + OLD_NAME + ":30443" + "/application/o/ps-cli/"
+LEGACY_CA_DAYS = "3650"
+LINK_MARKER = f"{AUTH_BASE}/if/flow/"
+SIGN_DAYS = "397"
+
+
+def _openssl(*args: str, cwd: Path) -> str:
+    done = subprocess.run(  # noqa: S603 - fixed argv, test-owned files
+        ["openssl", *args],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=cwd,
+        timeout=OPENSSL_TIMEOUT_SECONDS,
+    )
+    return done.stdout
+
+
+def _write_legacy_ca_and_leaf(fixture: EvalFixture, host: str) -> None:
+    """An unconstrained ten-year CA and a leaf for `host`, as an old state directory holds."""
+    state = fixture.state_dir
+    (state / "ca.cnf").write_text(
+        "[req]\ndistinguished_name = dn\nprompt = no\nx509_extensions = v3\n"
+        "[dn]\nCN = Policy System local CA\n[v3]\nbasicConstraints = critical, CA:TRUE\n"
+        "keyUsage = critical, keyCertSign\nsubjectKeyIdentifier = hash\n"
+    )
+    (state / "leaf.cnf").write_text(
+        f"[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = {host}\n[v3]\n"
+        f"basicConstraints = CA:FALSE\nsubjectAltName = DNS:{host}\n"
+        "subjectKeyIdentifier = hash\nauthorityKeyIdentifier = keyid, issuer\n"
+    )
+    _openssl(
+        *("req", "-x509", "-new", "-newkey", "rsa:2048", "-nodes", "-sha256"),
+        *("-days", LEGACY_CA_DAYS, "-config", "ca.cnf", "-keyout", "ca.key", "-out", "ca.pem"),
+        cwd=state,
+    )
+    _openssl(
+        *("req", "-new", "-newkey", "rsa:2048", "-nodes", "-config", "leaf.cnf"),
+        *("-keyout", "leaf.key", "-out", "leaf.csr"),
+        cwd=state,
+    )
+    _openssl(
+        *("x509", "-req", "-sha256", "-days", SIGN_DAYS, "-in", "leaf.csr"),
+        *("-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial"),
+        *("-extfile", "leaf.cnf", "-extensions", "v3", "-out", "leaf.pem"),
+        cwd=state,
+    )
+
+
+def _ca_hash(path: Path, algorithm: str) -> str:
+    out = _openssl(
+        "x509", "-in", str(path), "-noout", "-fingerprint", f"-{algorithm}", cwd=path.parent
+    )
+    return out.split("=", 1)[1].strip().replace(":", "").upper()
+
+
+def _seed_legacy_evaluator(fixture: EvalFixture) -> None:
+    """An evaluator on another name: root-path issuer, unconstrained CA, an enrolled passkey."""
+    fixture.run("--owner-email", OWNER_EMAIL, "--hostname", OLD_NAME)
+    values = fixture.deployed_values()
+    values["psService"]["auth"]["issuer"] = OLD_ROOT_ISSUER
+    values["psService"]["authzBootstrapOwner"]["issuer"] = OLD_ROOT_ISSUER
+    (fixture.helm_state / "values.json").write_text(json.dumps(values))
+    _write_legacy_ca_and_leaf(fixture, OLD_NAME)
+    pk = next(iter(fixture.curl_users()))
+    fixture.seed_curl(devices={pk: [{"pk": 1, "name": "passkey"}]})
+
+
+def test_migration_is_detected_from_the_recorded_values_and_announced_before_any_cluster_change(
+    eval_fixture: EvalFixture,
+) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None, PS_TEST_APPLY_FAIL="1")
+
+    assert run.returncode != 0
+    assert any("apply" in c for c in eval_fixture.kubectl_calls())
+    assert len(eval_fixture.helm_upgrades()) == 1
+    assert f"installed for {OLD_NAME}; switching to {HOST}" in run.stderr
+    assert OLD_ROOT_ISSUER in run.stderr
+    assert ISSUER in run.stderr
+    assert "LINK" not in run.stdout
+    assert LINK_MARKER not in run.output
+
+
+def test_migration_moves_the_release_to_the_new_name_and_issuer_in_one_upgrade(
+    eval_fixture: EvalFixture,
+) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    values = eval_fixture.deployed_values()["psService"]
+    assert len(eval_fixture.helm_upgrades()) == 2
+    assert values["authentikHostname"] == HOST
+    assert values["auth"]["issuer"] == ISSUER
+    assert values["authzBootstrapOwner"]["issuer"] == ISSUER
+
+
+def test_migration_replaces_the_unconstrained_ca_and_names_the_old_ca_to_remove(
+    eval_fixture: EvalFixture,
+) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+    old_ca = eval_fixture.state_dir / "ca.pem"
+    sha1, sha256 = _ca_hash(old_ca, "sha1"), _ca_hash(old_ca, "sha256")
+    old_text = old_ca.read_text()
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    kept = eval_fixture.state_dir / f"ca.replaced-{sha1[:8]}.pem"
+    assert kept.read_text() == old_text
+    assert (eval_fixture.state_dir / "ca.pem").read_text() != old_text
+    assert "Permitted: DNS:" + HOST in _x509_text(eval_fixture.state_dir / "ca.pem")
+    for stream in (run.stderr, run.stdout):
+        assert sha1 in stream
+        assert sha256 in stream
+        assert "Policy System local CA" in stream
+        assert f"sudo security remove-trusted-cert -d {kept.resolve()}" in stream
+        assert (
+            f"sudo security delete-certificate -Z {sha1} -t /Library/Keychains/System.keychain"
+            in stream
+        )
+        assert "sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt" in stream
+        assert "update-ca-certificates --fresh" in stream
+        assert "sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem" in stream
+    assert ":".join([sha1[:2], sha1[2:4]]) not in run.output
+    assert f"{eval_fixture.state_dir.resolve()}/ca.pem" in run.stderr
+
+
+def test_migration_tells_the_machine_to_remove_old_name_hosts_lines_and_add_the_new_one(
+    eval_fixture: EvalFixture,
+) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+    original = f"127.0.0.1 localhost\n127.0.0.1 {OLD_NAME}\n::1 {OLD_NAME}\n"
+    hosts = _hosts_file(eval_fixture, original)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
+
+    assert f"  127.0.0.1 {OLD_NAME}" in run.stderr
+    assert f"  ::1 {OLD_NAME}" in run.stderr
+    assert "Remove these lines" in run.stderr
+    assert "127.0.0.1 localhost" not in run.stderr
+    assert f"echo '{LAN} {HOST}' | sudo tee -a {hosts}" in run.stderr
+    assert (eval_fixture.root / "hosts").read_text() == original
+
+
+def test_migration_without_old_name_hosts_lines_asks_for_no_removal(
+    eval_fixture: EvalFixture,
+) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    assert "Remove these lines" not in run.stderr
+
+
+def test_migration_issues_a_fresh_single_use_link_although_the_owner_has_a_passkey_on_the_old_name(
+    eval_fixture: EvalFixture,
+) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert run.stdout.count(LINK_MARKER) == 1
+    assert "already has a passkey" not in run.stdout
+    squashed = " ".join(run.stderr.split())
+    assert "all passkeys must be registered again" in squashed
+    assert "registers a new passkey with a fresh enrolment link" in squashed
+
+
+def test_migration_prints_the_role_assignment_reset_before_any_cluster_change_and_link(
+    eval_fixture: EvalFixture,
+) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None, PS_TEST_APPLY_FAIL="1")
+
+    assert "DELETE FROM access_role_assignments" in run.stderr
+    assert "Do not open the enrolment link before running this command" in run.stderr
+    assert LINK_MARKER not in run.output
+
+
+def test_a_same_name_issuer_change_announces_the_role_reset_and_issues_no_new_link(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+    values = eval_fixture.deployed_values()
+    values["psService"]["auth"]["issuer"] = OLD_ROOT_ISSUER.replace(OLD_NAME, HOST)
+    values["psService"]["authzBootstrapOwner"]["issuer"] = OLD_ROOT_ISSUER.replace(OLD_NAME, HOST)
+    (eval_fixture.helm_state / "values.json").write_text(json.dumps(values))
+    pk = next(iter(eval_fixture.curl_users()))
+    eval_fixture.seed_curl(devices={pk: [{"pk": 1, "name": "passkey"}]})
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert "issuer changes" in run.stderr
+    assert ISSUER in run.stderr
+    assert "DELETE FROM access_role_assignments" in run.stderr
+    assert "switching to" not in run.stderr
+    assert "registered again" not in run.stderr
+    assert "already has a passkey" in run.stdout
+    assert LINK_MARKER not in run.stdout
+    assert "replaced" not in run.output
+
+
+def test_rerun_after_migration_creates_no_second_upgrade_hosts_line_ca_or_user(
+    eval_fixture: EvalFixture,
+) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {OLD_NAME}\n")
+    _fake_sudo(eval_fixture)
+    first = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts
+    )
+    ca_after_first = (eval_fixture.state_dir / "ca.pem").read_text()
+    users_after_first = eval_fixture.curl_users()
+
+    second = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts
+    )
+
+    assert "replaced" in first.stderr
+    assert len(eval_fixture.helm_upgrades()) == 2
+    assert "unchanged" in second.stderr
+    assert (eval_fixture.root / "hosts").read_text().splitlines().count(f"{LAN} {HOST}") == 1
+    assert (eval_fixture.state_dir / "ca.pem").read_text() == ca_after_first
+    assert len(list(eval_fixture.state_dir.glob("ca.replaced-*.pem"))) == 1
+    assert eval_fixture.curl_users() == users_after_first
+    assert len(eval_fixture.curl_users()) == 1
+    assert "switching to" not in second.stderr
+    assert "replaced" not in second.output
+    assert "SHA-1" not in second.output
+
+
+def test_a_leaf_without_the_name_san_is_reissued_on_rerun(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+    state = eval_fixture.state_dir
+    ca_before = (state / "ca.pem").read_text()
+    (state / "bare.cnf").write_text(
+        "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = bare\n"
+    )
+    _openssl(
+        "req",
+        "-new",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-config",
+        "bare.cnf",
+        "-keyout",
+        "leaf.key",
+        "-out",
+        "bare.csr",
+        cwd=state,
+    )
+    _openssl(
+        "x509",
+        "-req",
+        "-sha256",
+        "-days",
+        SIGN_DAYS,
+        "-in",
+        "bare.csr",
+        "-CA",
+        "ca.pem",
+        "-CAkey",
+        "ca.key",
+        "-CAserial",
+        "ca.srl",
+        "-out",
+        "leaf.pem",
+        cwd=state,
+    )
+    assert "Subject Alternative Name" not in _x509_text(state / "leaf.pem")
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert _leaf_sans(eval_fixture) == [f"DNS:{HOST}"]
+    assert (state / "ca.pem").read_text() == ca_before
 
 
 # --- order: Authentik first, then the certificate, then PS Service (found live at LC2) ---------
@@ -889,7 +1499,7 @@ def test_allow_public_host_flag_lets_the_preflight_pass(eval_fixture: EvalFixtur
 def test_allow_public_host_flag_lets_a_full_deploy_run_through(
     eval_fixture: EvalFixture,
 ) -> None:
-    eval_fixture.set_addresses(PUBLIC_ADDRESS)
+    eval_fixture.set_addresses(LAN, PUBLIC_ADDRESS)
 
     eval_fixture.run("--owner-email", OWNER_EMAIL, "--allow-public-host")
 
@@ -1013,3 +1623,9 @@ def test_help_lists_the_exposure_flags_and_unknown_flags_still_fail(
     assert "--allow-public-host" in helped.stdout
     assert "--check-exposure" in helped.stdout
     assert "unknown flag" in unknown.stderr
+
+
+def test_help_documents_the_lan_address_flag(eval_fixture: EvalFixture) -> None:
+    helped = eval_fixture.run("--help")
+
+    assert "--lan-address" in helped.stdout

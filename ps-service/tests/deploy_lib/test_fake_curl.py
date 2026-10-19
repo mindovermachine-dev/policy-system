@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 FAKES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "fakes"
-API = "https://authentik.test:30443/api/v3"
+API = "https://ps.test:30443/auth/api/v3"
 TOKEN = "s3cr3t-token-value"
 
 
@@ -147,7 +147,7 @@ def test_recovery_link_carries_the_request_authority(curl: FakeCurl) -> None:
         "-X", "POST", f"{API}/core/users/{user['pk']}/recovery/?token_duration=minutes=30"
     )
     assert status == 200
-    assert body["link"].startswith("https://authentik.test:30443/if/flow/ps-passkey-recovery/")
+    assert body["link"].startswith("https://ps.test:30443/auth/if/flow/ps-passkey-recovery/")
 
 
 def test_recovery_without_a_recovery_flow_is_a_400(curl: FakeCurl) -> None:

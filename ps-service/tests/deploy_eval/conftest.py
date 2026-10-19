@@ -4,10 +4,10 @@
 Same pattern as `deploy_ps/conftest.py`: the real script and the real `scripts/lib/*.sh` files are
 copied into an isolated `tmp_path/scripts` tree and run there; only the process boundary is faked.
 `curl` is the stateful Authentik API fake from `tests/fixtures/fakes/`; `kubectl`, `helm`,
-`podman`/`docker` and `openssl` (network `s_client` and, unless a test asks for the real
-binary, certificate generation) are small recording fakes written below and put first on a
-minimal `PATH` that contains nothing else but the coreutils the script needs, so "tool missing"
-is real.
+`podman`/`docker`, `ip`/`route`/`ipconfig`, `uname`, `security` and `openssl` (network `s_client`;
+certificate generation and parsing run the real binary) are small recording fakes written below
+and put first on a minimal `PATH` that contains nothing else but the coreutils the script needs,
+so "tool missing" is real.
 """
 
 from __future__ import annotations
@@ -133,9 +133,9 @@ exit 0
 
 FAKE_OPENSSL = r"""#!/usr/bin/env bash
 # Fake openssl. `s_client` answers from $PS_TEST_SERVED_SEQUENCE (local|other|none, one per call,
-# the last repeats). Unless $PS_TEST_REAL_OPENSSL names the real binary, `req`/`x509`/`verify`
-# write and read tiny stand-in files (a PEM-looking body plus the SAN line) instead of real
-# cryptography.
+# the last repeats). When $PS_TEST_REAL_OPENSSL names the real binary (the fixture default), every
+# other subcommand runs it. Without it, `req`/`x509`/`verify` write and read tiny stand-in files
+# (a PEM-looking body plus the SAN line) instead of real cryptography.
 printf '%s\n' "$*" >> "$PS_TEST_OPENSSL_LOG"
 if [[ "${1:-}" == "s_client" ]]; then
   seq="$PS_TEST_SERVED_SEQUENCE"
@@ -194,8 +194,38 @@ esac
 
 
 FAKE_IP = r"""#!/usr/bin/env bash
-# Fake `ip -o addr show`: prints the lines the test wrote to $PS_TEST_IP_OUTPUT.
+# Fake `ip`: `ip route ...` prints the route the test wrote to $PS_TEST_IP_ROUTE_OUTPUT (and fails
+# when there is none); anything else prints the address lines in $PS_TEST_IP_OUTPUT.
+if [[ "${1:-}" == route ]]; then
+  [[ -s "$PS_TEST_IP_ROUTE_OUTPUT" ]] || exit 1
+  cat "$PS_TEST_IP_ROUTE_OUTPUT"
+  exit 0
+fi
 cat "$PS_TEST_IP_OUTPUT"
+"""
+
+FAKE_ROUTE = r"""#!/usr/bin/env bash
+# Fake macOS `route -n get default`: prints the interface the test chose in $PS_TEST_ROUTE_OUTPUT.
+[[ -s "$PS_TEST_ROUTE_OUTPUT" ]] || exit 1
+cat "$PS_TEST_ROUTE_OUTPUT"
+"""
+
+FAKE_IPCONFIG = r"""#!/usr/bin/env bash
+# Fake macOS `ipconfig getifaddr <interface>`: prints $PS_TEST_IPCONFIG_ADDRESS.
+[[ "${1:-}" == getifaddr && -s "$PS_TEST_IPCONFIG_ADDRESS" ]] || exit 1
+cat "$PS_TEST_IPCONFIG_ADDRESS"
+"""
+
+FAKE_UNAME = r"""#!/usr/bin/env bash
+# Fake `uname`: prints the platform the test chose in $PS_TEST_PLATFORM.
+printf '%s\n' "$PS_TEST_PLATFORM"
+"""
+
+FAKE_SECURITY = r"""#!/usr/bin/env bash
+# Fake macOS `security`: logs its arguments; `verify-cert` succeeds only when the test marked the
+# CA as trusted ($PS_TEST_SECURITY_TRUSTED).
+printf '%s\n' "$*" >> "$PS_TEST_SECURITY_LOG"
+[[ "${1:-}" == verify-cert && -n "${PS_TEST_SECURITY_TRUSTED:-}" ]]
 """
 
 FAKE_IFCONFIG = r"""#!/usr/bin/env bash
@@ -304,10 +334,43 @@ class EvalFixture:
             )
             _install_text_fake(FAKE_IFCONFIG, self.bin_dir / "ifconfig")
 
+    def set_default_route(self, address: str, *, tool: str = "ip") -> None:
+        """Make the default route leave through the interface that holds `address`."""
+        if tool == "ip":
+            route = f"1.1.1.1 via 192.168.1.1 dev eth0 src {address} uid 1000\n"
+            (self.root / "ip-route-output.txt").write_text(route, encoding="utf-8")
+            return
+        (self.root / "route-output.txt").write_text(
+            "   route to: default\ndestination: default\n  gateway: 192.168.1.1\n"
+            "  interface: en0\n",
+            encoding="utf-8",
+        )
+        (self.root / "ipconfig-address.txt").write_text(f"{address}\n", encoding="utf-8")
+        _install_text_fake(FAKE_ROUTE, self.bin_dir / "route")
+        _install_text_fake(FAKE_IPCONFIG, self.bin_dir / "ipconfig")
+
+    def set_platform(self, name: str) -> None:
+        """Make `uname -s` report `name` (`Darwin` or `Linux`)."""
+        (self.bin_dir / "uname").unlink(missing_ok=True)
+        _install_text_fake(FAKE_UNAME, self.bin_dir / "uname")
+        self.env_extra["PS_TEST_PLATFORM"] = name
+
+    def add_security(self, *, trusted: bool) -> Path:
+        """Provide a macOS `security`; returns the log of its arguments."""
+        _install_text_fake(FAKE_SECURITY, self.bin_dir / "security")
+        if trusted:
+            self.env_extra["PS_TEST_SECURITY_TRUSTED"] = "1"
+        return self.root / "security.log"
+
     def use_real_openssl(self) -> None:
+        """Run the real `openssl` behind the recording fake (the fixture default)."""
         real = shutil.which("openssl")
-        assert real, "the integration test needs a real openssl"
+        assert real, "the script tests need a real openssl"
         self.env_extra["PS_TEST_REAL_OPENSSL"] = real
+
+    def use_stand_in_openssl(self) -> None:
+        """Replace certificate generation with tiny stand-in files (invocation-level tests)."""
+        self.env_extra.pop("PS_TEST_REAL_OPENSSL", None)
 
     def curl_calls(self) -> list[dict[str, Any]]:
         if not self.curl_log.exists():
@@ -359,6 +422,10 @@ class EvalFixture:
             "PS_TEST_HELM_STATE_DIR": str(self.helm_state),
             "PS_TEST_IP_OUTPUT": str(self.root / "ip-output.txt"),
             "PS_TEST_IFCONFIG_OUTPUT": str(self.root / "ifconfig-output.txt"),
+            "PS_TEST_IP_ROUTE_OUTPUT": str(self.root / "ip-route-output.txt"),
+            "PS_TEST_ROUTE_OUTPUT": str(self.root / "route-output.txt"),
+            "PS_TEST_IPCONFIG_ADDRESS": str(self.root / "ipconfig-address.txt"),
+            "PS_TEST_SECURITY_LOG": str(self.root / "security.log"),
             "PS_TEST_OPENSSL_LOG": str(self.root / "openssl.log"),
             "PS_TEST_SERVED_SEQUENCE": str(self.root / "served-sequence.txt"),
             "PS_TEST_SECRET_B64": base64.b64encode(TOKEN.encode()).decode(),
@@ -410,5 +477,6 @@ def eval_fixture(tmp_path: Path) -> EvalFixture:
     fixture.set_addresses(*DEFAULT_HOST_ADDRESSES)
     fixture.seed_curl()
     fixture.served("local")
+    fixture.use_real_openssl()
     fixture.env_extra["PS_TEST_PODMAN_NODE_IP"] = NODE_IP
     return fixture
