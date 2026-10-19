@@ -51,7 +51,7 @@ def _load_sweep_module() -> ModuleType:
     return module
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def sweep_module() -> ModuleType:
     return _load_sweep_module()
 

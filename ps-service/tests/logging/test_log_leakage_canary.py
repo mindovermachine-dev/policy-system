@@ -9,6 +9,8 @@ the `canary-` prefix.
 from __future__ import annotations
 
 import asyncio
+import functools
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -17,8 +19,19 @@ from api._fakes import build_fake_change_check_dependencies, install_no_principa
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from invitations.test_client import (
+    _RecordingTransport,  # pyright: ignore[reportPrivateUsage]  -- reuse `create_invitation`'s own fake-transport double rather than re-declaring it
+)
 from litellm.types.utils import Choices, Message, ModelResponse
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, TextContent
+from mcp_interface.test_catalog_source_authz_gate import (
+    _ACCESS_DENIED_MESSAGE,  # pyright: ignore[reportPrivateUsage]  -- reuse the gate tests' own fixtures rather than re-declaring them
+    _CALLER_ISSUER,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _SYSTEM_OWNER_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _fake_store_factory,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _seeded_store,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _verified_actor,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
 from pydantic import BaseModel
 
 from ps_service.api.dependencies import (
@@ -29,7 +42,9 @@ from ps_service.api.dependencies import (
 from ps_service.api.error_handlers import register_exception_handlers
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
+from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
+from ps_service.invitations.client import create_invitation
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import bind_run_context, facade
@@ -52,7 +67,8 @@ CANARY_TOKEN = "canary-token-1"
 CANARY_PROMPT = "canary-prompt-1"
 CANARY_POLICY = "canary-policy-1"
 CANARY_USER = "canary-user-1"
-CANARIES = (CANARY_TOKEN, CANARY_PROMPT, CANARY_POLICY, CANARY_USER)
+CANARY_EMAIL = "canary-invitee-1@example.com"
+CANARIES = (CANARY_TOKEN, CANARY_PROMPT, CANARY_POLICY, CANARY_USER, CANARY_EMAIL)
 assert all(canary.startswith("canary-") for canary in CANARIES)
 
 _AUDIENCE = "ps-service"
@@ -124,19 +140,22 @@ def test_rejected_bearer_token_when_verified_then_no_canary_in_any_sink(
     _assert_no_canary(_everything_logged(log_file, capfd, caplog))
 
 
-def test_accepted_bearer_token_when_verified_then_token_not_in_any_sink(
+def test_accepted_bearer_token_with_canary_subject_then_neither_token_nor_subject_in_any_sink(
     mock_oidc_provider: MockOidcProvider,
     log_file: Path,
     capfd: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The raw token of a successful authentication is never logged."""
+    """Neither the raw token nor the subject of a successful authentication is logged."""
     caplog.set_level(logging.DEBUG)
-    token = mock_oidc_provider.mint_token(sub="subject-1", aud=_AUDIENCE)
+    token = mock_oidc_provider.mint_token(sub=CANARY_USER, aud=_AUDIENCE)
 
-    assert asyncio.run(_verifier(mock_oidc_provider).verify_token(token)) is not None
+    verified = asyncio.run(_verifier(mock_oidc_provider).verify_token(token))
 
+    assert verified is not None
+    assert verified.subject == CANARY_USER
     blob = _everything_logged(log_file, capfd, caplog)
+    _assert_no_canary(blob)
     assert token not in blob
     assert "Bearer " not in blob
 
@@ -318,3 +337,90 @@ def test_cypher_with_canary_query_then_no_canary_in_any_sink(
     assert result.is_error is False
     assert [(row.action, row.outcome) for row in store.rows] == [("query.cypher", "failed")]
     _assert_no_canary(_everything_logged(log_file, capfd, caplog) + repr(store.rows))
+
+
+class _SeededGraph:
+    """A seeded graph that answers every query with one row."""
+
+    def query(self, q: str, params: object = None, timeout: int | None = None) -> object:
+        del q, params, timeout
+        return _SeededResult()
+
+
+class _SeededDatabase:
+    def select_graph(self, name: str) -> _SeededGraph:
+        del name
+        return _SeededGraph()
+
+
+def _tool_text(result: object) -> str:
+    assert isinstance(result, CallToolResult)
+    block = result.content[0]
+    assert isinstance(block, TextContent)
+    return block.text
+
+
+def test_mcp_tool_calls_by_a_canary_principal_then_no_canary_in_any_sink(
+    monkeypatch: pytest.MonkeyPatch,
+    log_file: Path,
+    capfd: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A verified canary caller's admitted `cypher` call and refused invite are never logged."""
+    caplog.set_level(logging.DEBUG)
+    store = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+
+    def _connect(_config: object) -> _SeededDatabase:
+        return _SeededDatabase()
+
+    monkeypatch.setattr(mcp_server, "connect_from_config", _connect)
+
+    with _verified_actor(sub=CANARY_USER):
+        admitted = asyncio.run(
+            mcp_server.server.call_tool("cypher", {"query": "MATCH (n) RETURN count(n) AS c"})
+        )
+        refused = asyncio.run(mcp_server.server.call_tool("invite-user", {"email": CANARY_EMAIL}))
+
+    assert isinstance(admitted, CallToolResult)
+    assert admitted.is_error is False
+    assert _tool_text(refused) == _ACCESS_DENIED_MESSAGE
+    [cypher_row] = [row for row in store.rows if row.action == "query.cypher"]
+    assert (cypher_row.actor_subject, cypher_row.outcome) == (CANARY_USER, "applied")
+    [gate_row] = [row for row in store.rows if row.action == "access.gate"]
+    assert gate_row.actor_subject == CANARY_USER
+    _assert_no_canary(_everything_logged(log_file, capfd, caplog))
+
+
+def test_invite_user_with_canary_email_then_no_canary_in_any_sink(
+    monkeypatch: pytest.MonkeyPatch,
+    log_file: Path,
+    capfd: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A canary SystemAdmin inviting a canary email puts neither value in any log sink."""
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", "test-authentik-token")
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", "https://authentik.example.com")
+    store = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    roles = _seeded_store()
+    roles.grant(
+        actor=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER),
+        target=(CANARY_USER, _CALLER_ISSUER),
+        access_role=AccessRole.SYSTEM_ADMIN,
+    )
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(roles))
+    transport = _RecordingTransport(json.dumps({"pk": "tok-canary"}).encode())
+    monkeypatch.setattr(
+        mcp_server, "create_invitation", functools.partial(create_invitation, transport=transport)
+    )
+
+    with _verified_actor(sub=CANARY_USER):
+        result = asyncio.run(mcp_server.server.call_tool("invite-user", {"email": CANARY_EMAIL}))
+
+    assert json.loads(_tool_text(result))["itoken"] == "tok-canary"
+    [invite_row] = [row for row in store.rows if row.action == "user.invite"]
+    assert (invite_row.actor_subject, invite_row.resource_id) == (CANARY_USER, CANARY_EMAIL)
+    _assert_no_canary(_everything_logged(log_file, capfd, caplog))

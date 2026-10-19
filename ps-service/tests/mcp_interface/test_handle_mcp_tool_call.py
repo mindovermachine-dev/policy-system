@@ -111,9 +111,7 @@ def test_delegates_to_execute_cypher_query(
     `execute_cypher_query` -- not a reimplementation of its cypher-execution
     logic -- proven by the real `query_engine`/`execute_cypher_query` log
     entry only that function emits, plus the fake `graph` collaborator's own
-    recorded call, rather than spying on the delegate call. Mirrors
-    `test_principal_given_attaches_principal_to_query_engine_log_entry`'s
-    already-established real-execution-plus-state-assertion pattern.
+    recorded call, rather than spying on the delegate call.
     """
     emitter, log_path = make_emitter()
     fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
@@ -134,41 +132,11 @@ def test_delegates_to_execute_cypher_query(
     assert entry["outcome"] == "succeeded"
 
 
-def test_principal_given_attaches_principal_to_query_engine_log_entry(
+def test_query_engine_entry_carries_no_principal_key(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    """`principal` passed into
-    `handle_mcp_tool_call` reaches the `query_engine`/`execute_cypher_query`
-    log entry end to end (not an `mcp_interface` entry -- this layer emits
-    none of its own).
-    """
-    emitter, log_path = make_emitter()
-    fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
-
-    mcp_server.handle_mcp_tool_call(
-        "MATCH (n) RETURN n",
-        graph=fake,
-        emitter=emitter,
-        principal="local-test-bypass",
-        timeout_ms=5000,
-        row_cap=1000,
-    )
-    emitter.flush()
-
-    lines = read_lines(log_path)
-    assert lines, "no entries were written -- wiring bug"
-    entry = lines[-1]
-    assert entry["component"] == "query_engine"
-    assert entry["action"] == "execute_cypher_query"
-    assert entry["principal"] == "local-test-bypass"
-
-
-def test_no_principal_given_omits_principal_key_end_to_end(
-    make_emitter: MakeEmitter, read_lines: ReadLines
-) -> None:
-    """Omitting `principal=` (as every
-    pre-existing caller does) leaves the key absent end to end, matching
-    the default behavior.
+    """The `query_engine`/`execute_cypher_query` entry a call produces carries no `principal`
+    key: this layer emits no entry of its own and passes no caller identity to Query Engine.
     """
     emitter, log_path = make_emitter()
     fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
@@ -181,6 +149,7 @@ def test_no_principal_given_omits_principal_key_end_to_end(
     lines = read_lines(log_path)
     assert lines, "no entries were written -- wiring bug"
     entry = lines[-1]
+    assert (entry["component"], entry["action"]) == ("query_engine", "execute_cypher_query")
     assert "principal" not in entry
 
 

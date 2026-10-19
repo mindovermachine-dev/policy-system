@@ -111,7 +111,7 @@ def _call_get_catalog_listing() -> CallToolResult:
 # --- happy path ---------------------------------------------------
 
 
-def test_happy_path_returns_full_listing_with_principal_logged(
+def test_happy_path_returns_full_listing_and_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """The full curated catalog is returned field-for-field,
@@ -120,7 +120,7 @@ def test_happy_path_returns_full_listing_with_principal_logged(
     transport is the only I/O seam exercised (it takes no `Path` argument at
     all, so no `ps-cli`-style local catalog repo read is possible in this
     path). Also asserts the `mcp_interface` started/succeeded log pair
-    carries the resolved principal (the failed-call case and the real-bearer-token case are
+    carries no caller identity (the failed-call case and the real-bearer-token case are
     proven separately below).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -161,7 +161,7 @@ def test_happy_path_returns_full_listing_with_principal_logged(
     assert all(line["run_id"] for line in mcp_lines)
     assert len({line["run_id"] for line in mcp_lines}) == 1
     for line in mcp_lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+        assert "principal" not in line
 
 
 # --- failure-state completeness -----------------------------------
@@ -260,7 +260,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
-    assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+    assert "principal" not in failed_line
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
     assert failed_line.get("exception_type") == "ValueError"
 
@@ -374,15 +374,14 @@ def _call_get_catalog_listing_over_http(client: TestClient, *, token: str) -> st
     return _sse_result_text(call_response.text)
 
 
-def test_real_verified_token_principal_threads_through_to_audit_log(
+def test_real_verified_token_call_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
     """Under a real, verified bearer token -- driven through
     the actual mounted Streamable HTTP transport, mirroring
     `test_mcp_auth.py`'s own pattern, never a bare in-process
-    `server.call_tool` -- the token's `sub` claim (never
-    `LOCAL_TEST_PRINCIPAL_ID`) reaches the `mcp_interface` log entries'
-    `principal`. Unlike `ingest_regulation`, `get_catalog_listing`'s own
+    `server.call_tool` -- the `mcp_interface` log entries carry no
+    `principal` and not the token's `sub`. Unlike `ingest_regulation`, `get_catalog_listing`'s own
     delegate (`fetch_catalog`) takes no `caller`/principal parameter of its
     own, so there is no second, downstream log entry to assert on here.
     """
@@ -413,21 +412,18 @@ def test_real_verified_token_principal_threads_through_to_audit_log(
         if line.get("component") == "mcp_interface" and line.get("action") == "get_catalog_listing"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
-    assert all(line.get("principal") == token_sub for line in mcp_lines)
-    assert not any(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in mcp_lines)
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(token_sub not in json.dumps(line) for line in mcp_lines)
 
 
-def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(
+def test_local_test_bypass_call_logs_no_principal_when_no_token_is_presented(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """`_resolve_principal`'s existing, unchanged fallback
-    contract -- with no bearer token presented at all (a bare in-process
+    """With no bearer token presented at all (a bare in-process
     `server.call_tool`, like the happy-path and failure-state tests above) and the
-    local-test bypass active, `LOCAL_TEST_PRINCIPAL_ID` still reaches the
-    `mcp_interface` log entries' `principal` (already proven by the
-    happy-path test; re-proven here as a dedicated auth/audit
-    completeness check, mirroring `test_ingest_regulation_tool.py`'s
-    identically-purposed test).
+    local-test bypass active, the `mcp_interface` log entries carry no
+    `principal` and not `LOCAL_TEST_PRINCIPAL_ID`, mirroring
+    `test_ingest_regulation_tool.py`'s identically-purposed test.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -447,16 +443,18 @@ def test_local_test_bypass_principal_still_threads_through_when_no_token_is_pres
         for line in all_lines
         if line.get("component") == "mcp_interface" and line.get("action") == "get_catalog_listing"
     ]
-    assert all(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in mcp_lines)
+    assert mcp_lines
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(LOCAL_TEST_PRINCIPAL_ID not in json.dumps(line) for line in mcp_lines)
 
 
-def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principal(
+def test_failed_call_under_a_real_verified_token_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
     """A FAILED call -- reusing the source-unreachable
-    `CuratedSourceFetchError` branch -- still carries the resolved
-    real-token principal on its `outcome="failed"` `mcp_interface` log
-    entry, not only the succeeded-call case proven above.
+    `CuratedSourceFetchError` branch -- carries no `principal` and not the
+    token's `sub` on its `outcome="failed"` `mcp_interface` log entry, as the
+    succeeded-call case proven above does.
     """
     emitter = configure()
     auth_context = _auth_context(mock_oidc_provider)
@@ -482,4 +480,5 @@ def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principa
         if line.get("component") == "mcp_interface" and line.get("action") == "get_catalog_listing"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "failed"]
-    assert all(line.get("principal") == token_sub for line in mcp_lines)
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(token_sub not in json.dumps(line) for line in mcp_lines)

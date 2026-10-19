@@ -116,19 +116,17 @@ class GateEnvironment:
 
     Attributes:
         load_config: Returns the service configuration.
-        resolve_principal: Returns the caller identity recorded on log entries.
         resolve_actor: Returns the verified `(sub, iss)` pair, or `None`.
         role_store_factory: Builds the access-role store for a configuration.
         audit_store_factory: Builds the audit store for a configuration.
-        run_action: Runs a tool body inside the started/failed log pair.
+        run_action: Runs a tool body inside the run-id-correlated started/terminal log pair.
     """
 
     load_config: Callable[[], ServiceConfig]
-    resolve_principal: Callable[[ServiceConfig], str | None]
     resolve_actor: Callable[[ServiceConfig], tuple[str, str] | None]
     role_store_factory: Callable[[ServiceConfig], AccessRoleStore]
     audit_store_factory: Callable[[ServiceConfig], AuditStore]
-    run_action: Callable[[str, str | None, Callable[[], ToolResult]], ToolResult]
+    run_action: Callable[[str, Callable[[], ToolResult]], ToolResult]
 
 
 TOOL_GATES: dict[str, ToolGate] = {}
@@ -140,19 +138,17 @@ class _GateOutcome:
     """The result of running a gate: a refusal `message`, or `None` plus the admitted `actor`."""
 
     message: str | None
-    principal: str | None
     actor: tuple[str, str] | None
 
 
 def _check_gate(environment: GateEnvironment, name: str, gate: ToolGate) -> _GateOutcome:
     """Run `gate` for the current caller; a `None` message in the outcome means allowed."""
     config = environment.load_config()
-    principal = environment.resolve_principal(config)
     if gate.bypass is BypassPolicy.SKIP and config.is_local_test_bypass_active:
-        return _GateOutcome(None, principal, None)
+        return _GateOutcome(None, None)
     actor = environment.resolve_actor(config)
     if actor is None:
-        return _GateOutcome(gate.unauthenticated_message, principal, None)
+        return _GateOutcome(gate.unauthenticated_message, None)
     assert gate.role is not None  # noqa: S101  # guaranteed by ToolGate.__post_init__ for ROLE and BODY
     try:
         enforce_role_gate(
@@ -163,8 +159,8 @@ def _check_gate(environment: GateEnvironment, name: str, gate: ToolGate) -> _Gat
             audit_store=environment.audit_store_factory(config),
         )
     except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-        return _GateOutcome(f"error: {exc}", principal, actor)
-    return _GateOutcome(None, principal, actor)
+        return _GateOutcome(f"error: {exc}", actor)
+    return _GateOutcome(None, actor)
 
 
 def run_body_gate(environment: GateEnvironment, name: str) -> tuple[str, str] | str:
@@ -249,8 +245,8 @@ def _wrap(
     """Wrap `tool` so `gate` runs before it; a refusal is returned, not raised."""
     log_action = name.replace("-", "_")
 
-    def _refusal(message: str, principal: str | None) -> ToolResult:
-        return environment.run_action(log_action, principal, lambda: message)
+    def _refusal(message: str) -> ToolResult:
+        return environment.run_action(log_action, lambda: message)
 
     if inspect.iscoroutinefunction(tool):
 
@@ -258,7 +254,7 @@ def _wrap(
         async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             outcome = _check_gate(environment, name, gate)
             if outcome.message is not None:
-                return _refusal(outcome.message, outcome.principal)
+                return _refusal(outcome.message)
             return await tool(*args, **kwargs)
 
         return _async_wrapper
@@ -267,7 +263,7 @@ def _wrap(
     def _wrapper(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         outcome = _check_gate(environment, name, gate)
         if outcome.message is not None:
-            return _refusal(outcome.message, outcome.principal)
+            return _refusal(outcome.message)
         return tool(*args, **kwargs)
 
     return _wrapper

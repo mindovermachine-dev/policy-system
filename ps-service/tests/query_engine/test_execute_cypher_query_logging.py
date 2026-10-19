@@ -178,102 +178,37 @@ def test_no_bound_run_context_run_id_absent_and_no_crash(
     assert entry.get("run_id") is None
 
 
-def test_success_with_principal_includes_principal_on_entry(
-    make_emitter: MakeEmitter, read_lines: ReadLines
+@pytest.mark.parametrize(
+    ("query", "graph", "raises", "outcome"),
+    [
+        (_SUCCESS_QUERY, _FakeSuccessGraphHandle(), None, "succeeded"),
+        (_WRITE_QUERY, _FakeSuccessGraphHandle(), WriteClauseRejectedError, "rejected"),
+        (_FAILING_QUERY, _FakeRaisingGraphHandle(), QueryEngineExecutionError, "failed"),
+    ],
+    ids=["succeeded", "rejected", "failed"],
+)
+def test_entry_never_carries_a_principal_key_on_any_outcome(
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    query: str,
+    graph: _FakeSuccessGraphHandle | _FakeRaisingGraphHandle,
+    raises: type[Exception] | None,
+    outcome: str,
 ) -> None:
-    """An opaque `principal` string,
-    when given, is attached to the succeeded-branch log entry.
+    """The log entry carries no `principal` key on any outcome: the caller's identity belongs
+    in the audit trail, not in the operator log.
     """
     emitter, log_path = make_emitter()
-    fake_graph = _FakeSuccessGraphHandle()
 
-    execute_cypher_query(
-        _SUCCESS_QUERY,
-        graph=fake_graph,
-        emitter=emitter,
-        principal="local-test-bypass",
-        timeout_ms=5000,
-        row_cap=1000,
-    )
+    if raises is None:
+        execute_cypher_query(query, graph=graph, emitter=emitter, timeout_ms=5000, row_cap=1000)
+    else:
+        with pytest.raises(raises):
+            execute_cypher_query(query, graph=graph, emitter=emitter, timeout_ms=5000, row_cap=1000)
     emitter.flush()
 
     lines = read_lines(log_path)
     assert lines, "no entries were written -- wiring bug"
     entry = lines[-1]
-    assert entry["outcome"] == "succeeded"
-    assert entry["principal"] == "local-test-bypass"
-
-
-def test_rejected_with_principal_includes_principal_on_entry(
-    make_emitter: MakeEmitter, read_lines: ReadLines
-) -> None:
-    """`principal` is attached on
-    the rejected branch too, not only on success.
-    """
-    emitter, log_path = make_emitter()
-    fake_graph = _FakeSuccessGraphHandle()
-
-    with pytest.raises(WriteClauseRejectedError):
-        execute_cypher_query(
-            _WRITE_QUERY,
-            graph=fake_graph,
-            emitter=emitter,
-            principal="local-test-bypass",
-            timeout_ms=5000,
-            row_cap=1000,
-        )
-    emitter.flush()
-
-    lines = read_lines(log_path)
-    assert lines, "no entries were written -- wiring bug"
-    entry = lines[-1]
-    assert entry["outcome"] == "rejected"
-    assert entry["principal"] == "local-test-bypass"
-
-
-def test_failed_with_principal_includes_principal_on_entry(
-    make_emitter: MakeEmitter, read_lines: ReadLines
-) -> None:
-    """`principal` is attached on
-    the failed branch too, not only on success.
-    """
-    emitter, log_path = make_emitter()
-    fake_graph = _FakeRaisingGraphHandle()
-
-    with pytest.raises(QueryEngineExecutionError):
-        execute_cypher_query(
-            _FAILING_QUERY,
-            graph=fake_graph,
-            emitter=emitter,
-            principal="local-test-bypass",
-            timeout_ms=5000,
-            row_cap=1000,
-        )
-    emitter.flush()
-
-    lines = read_lines(log_path)
-    assert lines, "no entries were written -- wiring bug"
-    entry = lines[-1]
-    assert entry["outcome"] == "failed"
-    assert entry["principal"] == "local-test-bypass"
-
-
-def test_no_principal_given_omits_principal_key(
-    make_emitter: MakeEmitter, read_lines: ReadLines
-) -> None:
-    """The default `principal=None`
-    stays silent -- no `"principal"` key at all -- so no pre-existing test's
-    implicit "extra has no unexpected keys" expectation breaks.
-    """
-    emitter, log_path = make_emitter()
-    fake_graph = _FakeSuccessGraphHandle()
-
-    execute_cypher_query(
-        _SUCCESS_QUERY, graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
-    )
-    emitter.flush()
-
-    lines = read_lines(log_path)
-    assert lines, "no entries were written -- wiring bug"
-    entry = lines[-1]
+    assert entry["outcome"] == outcome
     assert "principal" not in entry

@@ -4,8 +4,8 @@ A `SystemAdmin`-or-above caller succeeds and gets
 `itoken`/`invite_url`; a malformed/missing email is rejected at
 the schema layer before any Authentik call; an
 Authentik-unreachable error is returned sanitized (no token, no stack
-trace substring); a successful invite is recorded to the logging
-output with actor, target email, timestamp, outcome.
+trace substring); a successful invite leaves the invitee's email and
+the actor out of the log, and its `user.invite` audit row records both.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from mcp.types import CallToolResult, TextContent
 from mcp_interface.test_catalog_source_authz_gate import (
     _CALLER_ISSUER,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own gate-test fixtures verbatim rather than re-declaring them
     _NEW_SYSTEM_ADMIN_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _NON_ADMIN_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _SYSTEM_OWNER_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _fake_store_factory,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _seeded_store,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -176,87 +175,29 @@ def test_authentik_unreachable_returns_sanitized_error_no_stack_trace_no_token(
     assert "Traceback" not in text
 
 
-def test_successful_invite_emits_audit_log_entry_with_actor_email_outcome(
+def test_successful_invite_logs_no_invitee_email_and_no_invitations_entry(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """A successful invite records actor, target email, timestamp,
-    and outcome as its own `component="invitations"` audit entry -- distinct
-    from (additional to) the generic `mcp_interface` started/succeeded pair
-    `_run_mcp_action` already emits for every tool call.
+    """A successful invite leaves the invitee's email and the actor out of the log.
+
+    The `user.invite` audit row is the record of who invited whom; the log carries only the
+    generic `mcp_interface` entries for the tool call.
     """
     emitter = configure()
-    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", _TOKEN)
-    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", _BASE_URL)
-    store = _seeded_store()
-    store.grant(
-        actor=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER),
-        target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
-        access_role=AccessRole.SYSTEM_ADMIN,
-    )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-
-    transport = _RecordingTransport(json.dumps({"pk": "tok-audit"}).encode())
-    monkeypatch.setattr(
-        mcp_server,
-        "create_invitation",
-        functools.partial(create_invitation, transport=transport),
-    )
+    _as_admin(monkeypatch)
+    _use_transport(monkeypatch, _RecordingTransport(json.dumps({"pk": "tok-audit"}).encode()))
 
     with _verified_actor(sub=_NEW_SYSTEM_ADMIN_SUBJECT):
         result = _call({"email": _EMAIL})
 
     assert result.is_error is False
-
     emitter.flush()
+    raw = resolve_default_log_path().read_text(encoding="utf-8")
+    assert _EMAIL not in raw
     all_lines = read_lines(resolve_default_log_path())
-    audit_lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "invitations" and line.get("action") == "invite_user"
-    ]
-    assert len(audit_lines) == 1
-    (entry,) = audit_lines
-    assert entry["entity_id"] == _EMAIL
-    assert entry["outcome"] == "created"
-    assert isinstance(entry["timestamp"], float)
-    assert entry["actor"] == _NEW_SYSTEM_ADMIN_SUBJECT
-
-
-def test_denied_caller_does_not_emit_invite_created_audit_entry(
-    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
-) -> None:
-    """The audit entry is emitted from `invite_user`'s success path only --
-    a denied caller (never reaching `create_invitation`) must not produce
-    one.
-    """
-    emitter = configure()
-    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", _TOKEN)
-    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", _BASE_URL)
-    store = _seeded_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-
-    transport = _RecordingTransport(json.dumps({"pk": "unused"}).encode())
-    monkeypatch.setattr(
-        mcp_server,
-        "create_invitation",
-        functools.partial(create_invitation, transport=transport),
-    )
-
-    with _verified_actor(sub=_NON_ADMIN_SUBJECT):
-        result = _call({"email": _EMAIL})
-
-    assert result.is_error is False
-    assert _text(result).startswith("error:")
-    assert transport.requests == []
-
-    emitter.flush()
-    all_lines = read_lines(resolve_default_log_path())
-    audit_lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "invitations" and line.get("action") == "invite_user"
-    ]
-    assert audit_lines == []
+    assert all_lines
+    assert [line for line in all_lines if line.get("component") == "invitations"] == []
+    assert [line for line in all_lines if "actor" in line] == []
 
 
 def _as_admin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -376,13 +317,9 @@ def test_invite_user_rows_never_contain_the_itoken_or_invite_url_or_bearer_token
 
     assert "SECRET-PK-123" in _text(result)  # the caller still receives it
     emitter.flush()
-    haystack = json.dumps([vars(r) for r in audit_store.rows]) + json.dumps(
-        [
-            line
-            for line in read_lines(resolve_default_log_path())
-            if line.get("action") != "invite_user"
-        ]
-    )
+    log_lines = read_lines(resolve_default_log_path())
+    assert any(line.get("action") == "invite_user" for line in log_lines)
+    haystack = json.dumps([vars(r) for r in audit_store.rows]) + json.dumps(log_lines)
     for secret in ("SECRET-PK-123", "itoken=", "/if/flow/ps-invite-enrollment/", _TOKEN):
         assert secret not in haystack
 

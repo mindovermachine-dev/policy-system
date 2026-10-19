@@ -55,7 +55,6 @@ from ps_service.change_monitor.models import (
     ReingestionOutcome,
     TrackedInstrumentNode,
 )
-from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
@@ -91,15 +90,15 @@ def _text(result: CallToolResult) -> str:
     return block.text
 
 
-def test_happy_path_sweep_reports_all_six_outcome_buckets_with_principal_logged(
+def test_happy_path_sweep_reports_all_six_outcome_buckets_and_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """One `check_regulations` call, scripting all six outcome buckets in a
     single sweep: `current`, `poll_failed`, `not_configured`,
     `amendment_reingested`, `skipped`, `reingest_failed`. Asserts the
     returned dict's `instruments` list carries all six verbatim, plus the
-    `mcp_interface` started/succeeded log pair carrying the resolved
-    principal (the sweep itself takes no `caller` parameter at all).
+    `mcp_interface` started/succeeded log pair, which carries no caller
+    identity (the sweep itself takes no `caller` parameter at all).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -243,7 +242,7 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_with_principal_logged(
     assert all(line["run_id"] for line in mcp_lines)
     assert len({line["run_id"] for line in mcp_lines}) == 1
     for line in mcp_lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+        assert "principal" not in line
 
 
 # --- remaining sanitisation rows for this tool ----------
@@ -255,7 +254,7 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
     """Preflight: when `dependency_health.is_healthy(LLM_INTERFACE)` is
     `False`, `check_regulations` fails fast with the exact `handlers.py:72`
     message, before any graph is opened or the sweep is run -- and the
-    failure is still logged with the resolved principal. Mirrors
+    failure is still logged, with no caller identity. Mirrors
     `test_ingest_regulation_tool.py`'s identically-named test for this same
     preflight branch, proven here specifically for `check_regulations`.
     """
@@ -281,7 +280,7 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
         if line.get("component") == "mcp_interface" and line.get("action") == "check_regulations"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
-    assert all(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in lines)
+    assert all("principal" not in line for line in lines)
 
 
 def test_graph_unavailable_returns_named_error_when_single_tenant_graph_open_fails(
@@ -361,7 +360,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
-    assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+    assert "principal" not in failed_line
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
     assert failed_line.get("exception_type") == "ValueError"
 

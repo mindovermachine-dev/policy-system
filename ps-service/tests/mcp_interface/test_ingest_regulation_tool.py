@@ -26,13 +26,14 @@ every test above exercises via a bare in-process `server.call_tool`. It
 drives the actual mounted Streamable HTTP transport against the shared
 `MockOidcProvider` test infra, mirroring `test_mcp_auth.py`'s own
 `_authenticated_test_client`/JSON-RPC-sequence pattern (reused/mirrored, not
-reinvented), proving: (a) a verified token's `sub` reaches both
-`_run_mcp_action`'s `mcp_interface` log entries (`principal`) and
-`run_catalog_ingestion_pipeline`'s own `ingestion_run` log entries
-(`caller`); (b) the local-test-bypass fallback still threads
-`LOCAL_TEST_PRINCIPAL_ID` through both of those same log entries when no
-token is presented; (c) a **failed** call under a real token still carries
-that token's principal on its `outcome="failed"` log entry.
+reinvented), proving: (a) under a verified token, `_run_mcp_action`'s
+`mcp_interface` log entries carry no `principal` and not the token's `sub`,
+while `run_catalog_ingestion_pipeline`'s own `ingestion_run` log entries carry
+the fixed MCP caller label `mcp` as `caller`, never the token's `sub`; (b)
+with no token presented and the local-test bypass active, the `mcp_interface`
+entries carry no `principal` either, and the `ingestion_run` entries carry the
+same `mcp` label; (c) a **failed** call under a real token logs no `principal`
+and not the token's `sub` on its `outcome="failed"` log entry.
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
 `test_cypher_tool.py`'s own convention. The fake `PipelineDependencies`
@@ -1284,13 +1285,11 @@ def test_curated_celex_merge_summary_counts_equal_the_graph_delta(
     assert merge_summary["matched_capabilities"] == 0
 
 
-def test_curated_celex_happy_path_emits_one_started_succeeded_log_pair_with_principal(
+def test_curated_celex_happy_path_emits_one_started_succeeded_log_pair_with_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """D-AUDIT-WRAPPER: `_run_mcp_action` emits exactly one `mcp_interface`
-    started/succeeded log-line pair, carrying the resolved principal (here,
-    the local-test-bypass principal, since no bearer token is presented to
-    a bare `server.call_tool` in-process invocation).
+    started/succeeded log-line pair under one run id, carrying no caller identity.
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1311,7 +1310,7 @@ def test_curated_celex_happy_path_emits_one_started_succeeded_log_pair_with_prin
     assert all(line["run_id"] for line in lines)
     assert len({line["run_id"] for line in lines}) == 1
     for line in lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+        assert "principal" not in line
 
 
 def test_mcp_curated_celex_with_non_catalog_short_name_is_accepted(
@@ -1697,7 +1696,7 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
     """D-PREFLIGHT: when `dependency_health.is_healthy(LLM_INTERFACE)` is
     `False`, the tool fails fast with the exact `handlers.py:72` message,
     before any graph is opened or the pipeline is called -- and the failure
-    is still logged with the resolved principal.
+    is still logged, with no caller identity.
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1719,7 +1718,7 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
         if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
-    assert all(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in lines)
+    assert all("principal" not in line for line in lines)
 
 
 def test_graph_unavailable_returns_named_error_when_native_graph_open_fails(
@@ -1856,7 +1855,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
-    assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+    assert "principal" not in failed_line
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
     assert failed_line.get("exception_type") == "RuntimeError"
     assert "RuntimeError(" not in str(failed_line.get("detail"))
@@ -1890,20 +1889,18 @@ def _grant_compliance_officer(
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
 
 
-def test_real_verified_token_principal_threads_through_to_both_audit_log_and_pipeline_caller(
+def test_real_verified_token_call_logs_no_principal_and_the_pipeline_gets_the_mcp_caller_label(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
     """Under a real, verified bearer token -- driven through the
     actual mounted Streamable HTTP transport, mirroring `test_mcp_auth.py`'s
-    own pattern, never a bare in-process `server.call_tool` -- the token's
-    `sub` claim (never `LOCAL_TEST_PRINCIPAL_ID`) reaches both
-    `_run_mcp_action`'s `mcp_interface` log entries (`principal`) and
-    `run_catalog_ingestion_pipeline`'s own `ingestion_run` log entries
-    (`caller`). Both are wired from the `principal =
-    _resolve_principal(config)` / `caller=principal or "unknown"` plumbing --
-    this test proves it under a real verified token rather
-    than the local-test-bypass principal every other test in this module
-    exercises.
+    own pattern, never a bare in-process `server.call_tool` --
+    `_run_mcp_action`'s `mcp_interface` log entries carry no `principal` and
+    not the token's `sub`, while `run_catalog_ingestion_pipeline`'s own
+    `ingestion_run` log entries carry the fixed MCP caller label `mcp` as
+    `caller` and the token's `sub` appears in none of them. This test proves
+    it under a real verified token rather than the local-test bypass every
+    other test in this module exercises.
 
     The caller must also hold `ComplianceOfficer` because this
     tool is gated, so `_grant_compliance_officer` seeds that grant for this
@@ -1934,8 +1931,8 @@ def test_real_verified_token_principal_threads_through_to_both_audit_log_and_pip
         if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
-    assert all(line.get("principal") == token_sub for line in mcp_lines)
-    assert not any(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in mcp_lines)
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(token_sub not in json.dumps(line) for line in mcp_lines)
 
     run_lines = [
         line
@@ -1943,19 +1940,19 @@ def test_real_verified_token_principal_threads_through_to_both_audit_log_and_pip
         if line.get("component") == "api" and line.get("action") == "ingestion_run"
     ]
     assert len(run_lines) == 2
-    assert all(line.get("caller") == token_sub for line in run_lines)
+    assert all(line.get("caller") == "mcp" for line in run_lines)
+    assert all(token_sub not in json.dumps(line) for line in run_lines)
 
 
-def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(
+def test_local_test_bypass_call_logs_no_principal_and_the_pipeline_gets_the_mcp_caller_label(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """`_resolve_principal`'s existing, unchanged fallback
-    contract -- with no bearer token presented at all (a bare in-process
+    """With no bearer token presented at all (a bare in-process
     `server.call_tool`, like every other test above) and the local-test
-    bypass active, `LOCAL_TEST_PRINCIPAL_ID` still reaches both the
-    `mcp_interface` log entries' `principal` (already proven by the
-    happy-path test) and, proven here, `run_catalog_ingestion_pipeline`'s own
-    `ingestion_run` log entries' `caller`.
+    bypass active, the `mcp_interface` log entries carry no `principal` and
+    not `LOCAL_TEST_PRINCIPAL_ID`, while `run_catalog_ingestion_pipeline`'s
+    own `ingestion_run` log entries carry the fixed MCP caller label `mcp` as
+    `caller` and never the bypass identity.
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1973,7 +1970,8 @@ def test_local_test_bypass_principal_still_threads_through_when_no_token_is_pres
         for line in all_lines
         if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
     ]
-    assert all(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in mcp_lines)
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(LOCAL_TEST_PRINCIPAL_ID not in json.dumps(line) for line in mcp_lines)
 
     run_lines = [
         line
@@ -1981,16 +1979,17 @@ def test_local_test_bypass_principal_still_threads_through_when_no_token_is_pres
         if line.get("component") == "api" and line.get("action") == "ingestion_run"
     ]
     assert len(run_lines) == 2
-    assert all(line.get("caller") == LOCAL_TEST_PRINCIPAL_ID for line in run_lines)
+    assert all(line.get("caller") == "mcp" for line in run_lines)
+    assert all(LOCAL_TEST_PRINCIPAL_ID not in json.dumps(line) for line in run_lines)
 
 
-def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principal(
+def test_failed_call_under_a_real_verified_token_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
     """A FAILED call -- reusing the LLM-unhealthy
-    preflight branch -- still carries the resolved real-token principal on
-    its `outcome="failed"` `mcp_interface` log entry, not only the
-    succeeded-call case proven above. No `ingestion_run` entry is emitted at
+    preflight branch -- carries no `principal` and not the token's `sub` on
+    its `outcome="failed"` `mcp_interface` log entry, as the succeeded-call
+    case proven above does. No `ingestion_run` entry is emitted at
     all here, since the preflight fails before the pipeline is ever called.
 
     The caller must hold `ComplianceOfficer` for this call to
@@ -2024,6 +2023,7 @@ def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principa
         if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "failed"]
-    assert all(line.get("principal") == token_sub for line in mcp_lines)
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(token_sub not in json.dumps(line) for line in mcp_lines)
     run_lines = [line for line in all_lines if line.get("action") == "ingestion_run"]
     assert run_lines == []

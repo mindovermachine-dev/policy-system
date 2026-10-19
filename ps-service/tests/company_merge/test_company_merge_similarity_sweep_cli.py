@@ -5,11 +5,11 @@ Loads the script by path via `importlib.util.spec_from_file_location`, exactly a
 `test_run_live_merge_cli.py` documents doing for `tools/company-merge/run_live_merge.py`
 (same non-package-script-by-path pattern, same `sys.modules` pre-registration).
 
-This file does NOT reuse the full 21-pair
-`DEFAULT_DATASET` to test the CLI itself -- it defines its own small, purpose-built 3-pair
-fixture, scored by a hand-scripted fake `call_embedding` covering only that fixture's
-texts, passed to `main()` via `--dataset`. `DEFAULT_DATASET`'s own 21-pair shape (10 match
-/ 11 non-match) is instead checked directly, as a separate, cheap assertion, never by
+This file does NOT reuse the built-in 21-pair dataset (`build_dataset()`) to test the
+CLI itself -- it defines its own small, purpose-built 3-pair fixture, scored by a
+hand-scripted fake `call_embedding` covering only that fixture's texts, passed to `main()`
+via `--dataset`. The built-in 21-pair dataset's own shape (10 match / 11 non-match) is
+instead checked directly, as a separate, cheap assertion, never by
 running the full dataset through a fake embedding fixture.
 """
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -69,7 +70,7 @@ def _load_cli_module() -> ModuleType:
     return module
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cli_module() -> ModuleType:
     return _load_cli_module()
 
@@ -120,7 +121,7 @@ def _stub_config_loader(embed_model: str | None) -> ServiceConfig:
 
 def _write_small_dataset_fixture(path: Path) -> dict[str, list[float]]:
     """A small, purpose-built 3-pair fixture -- distinct from, and much
-    smaller than, the real 21-pair `DEFAULT_DATASET`. Writes the fixture as the sweep
+    smaller than, the built-in 21-pair dataset (`build_dataset()`). Writes the fixture as the sweep
     script's `--dataset` JSON shape and returns the `vectors_by_text` mapping a hermetic
     fake `call_embedding` needs to cover every unique text this fixture references.
     """
@@ -130,7 +131,7 @@ def _write_small_dataset_fixture(path: Path) -> dict[str, list[float]]:
             "text_b": "Access Control & Authentication",
             "label": "match",
             "cited_node_ids": ["cap_access_control_authentication_151816"],
-            "rationale": "small CLI-test fixture pair -- not drawn from DEFAULT_DATASET",
+            "rationale": "small CLI-test fixture pair -- not drawn from the built-in dataset",
         },
         {
             "text_a": "Supply Chain Security Management",
@@ -140,7 +141,7 @@ def _write_small_dataset_fixture(path: Path) -> dict[str, list[float]]:
                 "cap_supply_chain_security_management_d1f111",
                 "cap_supply_chain_traceability_records_fd07d2",
             ],
-            "rationale": "small CLI-test fixture pair -- not drawn from DEFAULT_DATASET",
+            "rationale": "small CLI-test fixture pair -- not drawn from the built-in dataset",
         },
         {
             "text_a": "alpha",
@@ -260,25 +261,50 @@ def test_cli_exits_1_when_model_unresolvable_and_never_calls_embedding(
 # (checked by length/composition directly -- never by re-scoring it through a fake).
 
 
-def test_default_dataset_is_the_built_in_21_pair_dataset(cli_module: ModuleType) -> None:
-    default_dataset = cli_module.DEFAULT_DATASET
+def test_build_dataset_returns_the_built_in_21_pair_dataset(cli_module: ModuleType) -> None:
+    dataset = cli_module.build_dataset()
 
-    assert len(default_dataset) == 21
-    assert sum(1 for pair in default_dataset if pair.label == "match") == 10
-    assert sum(1 for pair in default_dataset if pair.label == "non_match") == 11
+    assert len(dataset) == 21
+    assert sum(1 for pair in dataset if pair.label == "match") == 10
+    assert sum(1 for pair in dataset if pair.label == "non_match") == 11
 
 
 def test_dataset_flag_defaults_to_none_selecting_the_built_in_dataset(
     cli_module: ModuleType,
 ) -> None:
-    """The `--dataset` flag itself defaults to `None` -- `main()`'s own body (read
-    directly, not re-exercised here) uses `DEFAULT_DATASET`
-    whenever `args.dataset is None`. Checked at the argparse level, cheaply, instead of
-    re-running the full dataset through a fake embedding fixture.
+    """The `--dataset` flag defaults to `None`, and `main()` then calls `build_dataset()`.
+    This is checked at the argparse level instead of running the full dataset through a
+    fake embedding fixture.
     """
     args = cli_module._parse_args([])  # pyright: ignore[reportPrivateUsage] -- internal parser under test
 
     assert args.dataset is None
+
+
+# --- loading the script reads no similarity-corpus file ------
+
+
+def test_sweep_module_loads_when_the_similarity_corpus_is_absent(tmp_path: Path) -> None:
+    """A copy of the script with no `test-data/similarity-corpus` sibling still loads; only
+    `build_dataset()` reads the corpus, and it raises `CuratedContentCorpusError` there.
+    """
+    script_dir = tmp_path / "tools" / "company-merge"
+    script_dir.mkdir(parents=True)
+    script_copy = script_dir / _SCRIPT_PATH.name
+    shutil.copyfile(_SCRIPT_PATH, script_copy)
+    module_name = f"{_MODULE_NAME}_without_corpus"
+    spec = importlib.util.spec_from_file_location(module_name, script_copy)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+
+        with pytest.raises(module.CuratedContentCorpusError):
+            module.build_dataset()
+    finally:
+        del sys.modules[module_name]
 
 
 # --- main() writes the recommendation file ----------

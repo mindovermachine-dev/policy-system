@@ -38,6 +38,11 @@ testpaths = ["ps-service/tests", "ps-cli/tests", "ps-test-support/tests"]
 # single process when `-m` selects a live-marked test (they share external services and are not
 # xdist-safe) unless `-n` is passed explicitly; `ps-service/tests/release/test_release_ci.py`
 # fails if `-n` is ever dropped from here.
+# `-n auto` is sized by memory as well as CPUs: the `ps_test_support.memory_aware_workers` plugin
+# caps the CPU-based worker count at the number of per-worker memory budgets that fit in the
+# available memory (cgroup v2 limit headroom or `MemAvailable`, whichever is smaller) and prints
+# one `xdist workers: N (...)` line saying why. An explicit `-n N` or
+# `PYTEST_XDIST_AUTO_NUM_WORKERS` is used unchanged.
 # Cross-package test imports (`from change_monitor._fakes import ...` inside tests/api, `from api._fakes
 # import ...` inside tests/mcp_interface, ...) are a deliberate convention. Under importlib mode they only
 # resolved by accident of collection order: pytest registers a test package in `sys.modules` as its
@@ -53,6 +58,8 @@ addopts = [
     "--dist=worksteal",
     "-p",
     "ps_test_support.serialize_live_markers",
+    "-p",
+    "ps_test_support.memory_aware_workers",
     "-m",
     "not integration and not llm_live and not cellar_live and not falkordb_live and not postgres_live and not container_image",
 ]

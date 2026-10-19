@@ -11,17 +11,12 @@ same `PsTokenVerifier`, via the MCP SDK's own `MCPServer(token_verifier=...)`
 gate (`RequireAuthMiddleware`/`BearerAuthBackend`) -- not a reimplementation
 in this codebase.
 
-Under a valid token, the `cypher` tool's `principal` is the
-token's `sub` -- never `LOCAL_TEST_PRINCIPAL_ID`, never `None`. Proven by
-reading the real `query_engine`/`execute_cypher_query` log entry the real,
-unmonkeypatched delegate emits end to end (mirrors `test_cypher_tool.py`'s
-already-established real-execution-plus-state-assertion pattern for this
-exact property, e.g.
-`test_cypher_tool_attaches_local_test_principal_when_bypass_active`), rather
-than spying on the `principal=` keyword `handle_mcp_tool_call` threads
-straight through -- and rather than reimplementing a fake `AccessToken`
-context -- the real `get_access_token()` contextvar, populated by the SDK's
-own `AuthContextMiddleware`, is what supplies it end to end.
+Under a valid token, the `cypher` tool's `query_engine` log entry carries no principal and the
+token's `sub` reaches no log line, while the tool's `query.cypher` audit row records that `sub` as
+its actor. Proven by reading the real `query_engine`/`execute_cypher_query` log entry the real,
+unmonkeypatched delegate emits end to end, and the row an in-memory audit store receives. No fake
+`AccessToken` context is built: the real `get_access_token()` contextvar, populated by the SDK's
+own `AuthContextMiddleware`, is what supplies the actor end to end.
 """
 
 from __future__ import annotations
@@ -30,6 +25,7 @@ import contextlib
 import json
 from typing import TYPE_CHECKING, cast
 
+from audit._fakes import InMemoryAuditStore, audit_store_factory
 from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 
@@ -51,6 +47,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import pytest
+    from httpx2 import Response
 
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
@@ -122,6 +119,67 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
     return TestClient(wrapper_app, base_url=_BASE_URL)
 
 
+def _serve_a_seeded_fake_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the `cypher` tool's FalkorDB connection at a seeded fake graph."""
+    fake_db = _FakeFalkorDB(_FakeGraphHandle())
+
+    def _connect_from_config(_config: object) -> _FakeFalkorDB:
+        return fake_db
+
+    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
+
+
+def _call_cypher_tool_over_bearer_http(*, auth_context: AuthContext, token: str) -> Response:
+    """Drive `initialize` -> `notifications/initialized` -> `tools/call cypher` with `token`.
+
+    Every request carries `Authorization: Bearer <token>` against the auth-armed app; returns the
+    `tools/call` response.
+    """
+    with _authenticated_test_client(auth_context=auth_context) as client:
+        init_response = client.post(
+            f"{MCP_HTTP_MOUNT_PATH}/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test-mcp-auth-client", "version": "0.0.1"},
+                },
+            },
+            headers={"Accept": _JSON_RPC_ACCEPT, "Authorization": f"Bearer {token}"},
+        )
+        assert init_response.status_code == 200
+        session_id = init_response.headers["mcp-session-id"]
+
+        notified = client.post(
+            f"{MCP_HTTP_MOUNT_PATH}/",
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers={
+                "Accept": _JSON_RPC_ACCEPT,
+                "Authorization": f"Bearer {token}",
+                "mcp-session-id": session_id,
+            },
+        )
+        assert notified.status_code == 202
+
+        return client.post(
+            f"{MCP_HTTP_MOUNT_PATH}/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "cypher", "arguments": {"query": "MATCH (n) RETURN n"}},
+            },
+            headers={
+                "Accept": _JSON_RPC_ACCEPT,
+                "Authorization": f"Bearer {token}",
+                "mcp-session-id": session_id,
+            },
+        )
+
+
 def test_mcp_request_with_no_authorization_header_is_rejected_with_401(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
@@ -168,75 +226,27 @@ def test_mcp_request_with_an_invalid_token_is_rejected_with_401(
     assert response.status_code == 401
 
 
-def test_cypher_tool_principal_is_the_valid_tokens_sub(
+def test_bearer_authenticated_cypher_call_logs_no_principal_and_audits_the_actor(
     monkeypatch: pytest.MonkeyPatch,
     mock_oidc_provider: MockOidcProvider,
     read_lines: ReadLines,
 ) -> None:
-    """Under a valid token, the `cypher` tool's `principal` is
-    exactly the token's `sub` -- never `LOCAL_TEST_PRINCIPAL_ID`, never
-    `None`. Drives the real mounted transport end to end (`initialize` ->
-    `notifications/initialized` -> `tools/call`), the same JSON-RPC sequence
-    `test_http_transport.py` already establishes, now with a real
-    `Authorization: Bearer <token>` header on every request. `execute_cypher_query`
-    itself is never monkeypatched here -- see the module docstring.
+    """A bearer-authenticated `cypher` call logs its `query_engine` entry with no `principal`
+    key and writes the token's `sub` to no log line, while its single `query.cypher` audit row
+    records that `sub` as the actor. Drives the real mounted transport end to end (`initialize`
+    -> `notifications/initialized` -> `tools/call`) with a real `Authorization: Bearer <token>`
+    header on every request; `execute_cypher_query` itself is never monkeypatched.
     """
     emitter = configure()
+    store = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-42"
     token = mock_oidc_provider.mint_token(sub=token_sub)
 
-    handle = _FakeGraphHandle()
-    fake_db = _FakeFalkorDB(handle)
+    _serve_a_seeded_fake_graph(monkeypatch)
 
-    def _connect_from_config(_config: object) -> _FakeFalkorDB:
-        return fake_db
-
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
-
-    with _authenticated_test_client(auth_context=auth_context) as client:
-        init_response = client.post(
-            f"{MCP_HTTP_MOUNT_PATH}/",
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "clientInfo": {"name": "test-mcp-auth-client", "version": "0.0.1"},
-                },
-            },
-            headers={"Accept": _JSON_RPC_ACCEPT, "Authorization": f"Bearer {token}"},
-        )
-        assert init_response.status_code == 200
-        session_id = init_response.headers["mcp-session-id"]
-
-        notified = client.post(
-            f"{MCP_HTTP_MOUNT_PATH}/",
-            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-            headers={
-                "Accept": _JSON_RPC_ACCEPT,
-                "Authorization": f"Bearer {token}",
-                "mcp-session-id": session_id,
-            },
-        )
-        assert notified.status_code == 202
-
-        call_response = client.post(
-            f"{MCP_HTTP_MOUNT_PATH}/",
-            json={
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {"name": "cypher", "arguments": {"query": "MATCH (n) RETURN n"}},
-            },
-            headers={
-                "Accept": _JSON_RPC_ACCEPT,
-                "Authorization": f"Bearer {token}",
-                "mcp-session-id": session_id,
-            },
-        )
+    call_response = _call_cypher_tool_over_bearer_http(auth_context=auth_context, token=token)
 
     assert call_response.status_code == 200
     result_text = _sse_result_text(call_response.text)
@@ -249,7 +259,44 @@ def test_cypher_tool_principal_is_the_valid_tokens_sub(
         for line in lines
         if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
     )
-    assert entry["principal"] == token_sub
+    assert "principal" not in entry
+    assert all(token_sub not in json.dumps(line) for line in lines)
+    assert [(row.action, row.outcome) for row in store.rows] == [("query.cypher", "applied")]
+    assert store.rows[0].actor_subject == token_sub
+
+
+def test_bearer_authenticated_mcp_request_logs_authentication_without_the_token_subject(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_oidc_provider: MockOidcProvider,
+    read_lines: ReadLines,
+) -> None:
+    """A bearer-authenticated `initialize` -> `tools/call` flow logs each successful
+    `auth`/`authenticate_request` entry with component, action and outcome only: neither the
+    token's subject nor its issuer reaches the log.
+    """
+    emitter = configure()
+    auth_context = _auth_context(mock_oidc_provider)
+    token_sub = "user-42"
+    token = mock_oidc_provider.mint_token(sub=token_sub)
+    _serve_a_seeded_fake_graph(monkeypatch)
+
+    call_response = _call_cypher_tool_over_bearer_http(auth_context=auth_context, token=token)
+
+    assert call_response.status_code == 200
+    emitter.flush()
+    lines = read_lines(resolve_default_log_path())
+    auth_entries = [
+        line
+        for line in lines
+        if line.get("component") == "auth" and line.get("action") == "authenticate_request"
+    ]
+    assert auth_entries, "no authentication entry was written"
+    for entry in auth_entries:
+        assert entry["outcome"] == "success"
+        assert set(entry) - {"run_id"} == {"component", "action", "outcome", "timestamp"}
+        serialized = json.dumps(entry)
+        assert token_sub not in serialized
+        assert mock_oidc_provider.issuer not in serialized
 
 
 def _sse_result_text(response_text: str) -> str:

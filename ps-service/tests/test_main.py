@@ -2472,7 +2472,7 @@ def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
     assert first["text"] == md_file.read_text(encoding="utf-8")
 
 
-def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed_local_principal(
+def test_query_executed_over_mcp_http_transport_with_bypass_active_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
 ) -> None:
     """End-to-end scenario: the flagship test of the MCP transport wiring.
@@ -2482,7 +2482,7 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed
     -- which drives `mcp_server.cypher()` in-process, bypassing transport
     entirely -- to the mounted Streamable HTTP transport
     specifically: the *same* fake-FalkorDB shape and the *same* final
-    principal assertion, but the tool call itself now goes through a real
+    no-principal assertion, but the tool call itself now goes through a real
     JSON-RPC `initialize` -> `notifications/initialized` -> `tools/call`
     exchange over the ASGI transport (`_initialize_mcp_session`, already
     used by `test_cypher_and_domain_concepts_both_reachable_via_mounted_transport`
@@ -2526,7 +2526,7 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed
         for line in lines
         if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
     )
-    assert entry["principal"] == mcp_server.LOCAL_TEST_PRINCIPAL_ID
+    assert "principal" not in entry
 
 
 _REPLAY_START_TIMEOUT_SECONDS = 5.0

@@ -211,7 +211,7 @@ def _load_curated_content_capability_nodes() -> tuple[SerializedNode, ...]:
         if not path.is_file():
             raise CuratedContentCorpusError(
                 f"{path} does not exist -- build_dataset() requires all three "
-                "similarity-corpus baseline.json files (AC-BI-001/AC-BI-003)"
+                "similarity-corpus baseline.json files"
             )
         try:
             graph = parse_serialized_graph_json(path.read_bytes())
@@ -290,8 +290,8 @@ def _assert_dataset_excludes_real_identical_name_pairs(
         violating_ids = tuple(pair.cited_node_ids for pair in violations)
         raise SweepDatasetValidationError(
             f"{len(violations)} dataset pair(s) use a Capability name string shared by "
-            "two or more real corpus nodes as both sides of the same pair -- AC-BI-003 "
-            "requires these be excluded, since they resolve via Company Merge's own "
+            "two or more real corpus nodes as both sides of the same pair -- such pairs "
+            "must be excluded, since they resolve via Company Merge's own "
             f"exact-key match before semantic scoring ever runs: {violating_ids!r}"
         )
 
@@ -776,8 +776,6 @@ def build_dataset() -> tuple[SimilarityPair, ...]:
     return pairs
 
 
-DEFAULT_DATASET: tuple[SimilarityPair, ...] = build_dataset()
-
 DEFAULT_THRESHOLD_START = 0.70
 DEFAULT_THRESHOLD_STOP = 0.95
 DEFAULT_THRESHOLD_STEP = 0.01
@@ -875,7 +873,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to a JSON file of SimilarityPair-shaped objects overriding the built-in "
-        "21-pair DEFAULT_DATASET",
+        "21-pair dataset",
     )
     parser.add_argument(
         "--recommendation-path",
@@ -1014,6 +1012,10 @@ def main(
     Raises:
         SystemExit: Raised by argparse on invalid arguments or `--help`.
         SweepDatasetFileError: If a `--dataset` file has a pair with an invalid label.
+        CuratedContentCorpusError: Without `--dataset`, if a similarity-corpus
+            `baseline.json` is missing or malformed.
+        SweepDatasetValidationError: Without `--dataset`, if the built-in dataset
+            uses a name shared by real nodes on both sides of a pair.
         LlmProviderError: Propagated unchanged from any embedding call; nothing is
             written in that case.
         ValueError: If `--threshold-step` is not positive.
@@ -1021,6 +1023,7 @@ def main(
             cannot be written.
 
     Side Effects:
+        Without `--dataset`, reads the three similarity-corpus `baseline.json` files.
         Configures logging, calls the embedding provider, prints to stdout (or the
         failed model resolution to stderr) and writes the recommendation file.
     """
@@ -1030,7 +1033,7 @@ def main(
     if isinstance(model, int):
         return model
 
-    dataset = DEFAULT_DATASET if args.dataset is None else _load_dataset_from_path(args.dataset)
+    dataset = build_dataset() if args.dataset is None else _load_dataset_from_path(args.dataset)
     thresholds = _threshold_range(args.threshold_start, args.threshold_stop, args.threshold_step)
 
     configure_logging()

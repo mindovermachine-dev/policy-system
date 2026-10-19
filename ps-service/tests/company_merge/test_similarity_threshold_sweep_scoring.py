@@ -42,7 +42,7 @@ import hashlib
 import importlib.util
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import openai
@@ -91,9 +91,15 @@ def _load_sweep_module() -> ModuleType:
     return module
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def sweep_module() -> ModuleType:
     return _load_sweep_module()
+
+
+@pytest.fixture(scope="module")
+def real_dataset(sweep_module: ModuleType) -> tuple[Any, ...]:
+    """The built-in 21-pair dataset, built once per module from the similarity corpus."""
+    return sweep_module.build_dataset()
 
 
 @pytest.fixture
@@ -250,8 +256,8 @@ def test_every_import_in_the_sweep_script_is_stdlib_or_ps_service(sweep_source: 
         assert top_level_package in sys.stdlib_module_names or module_name.startswith(
             "ps_service."
         ), (
-            f"disallowed non-stdlib, non-ps_service import: {module_name!r} -- AC-BI-006 "
-            "forbids a new third-party dependency in the sweep script"
+            f"disallowed non-stdlib, non-ps_service import: {module_name!r} -- the sweep "
+            "script must not add a third-party dependency"
         )
 
 
@@ -352,14 +358,14 @@ def test_scoped_test_files_carry_neither_live_pytest_marker() -> None:
 
 
 def test_build_dataset_returns_no_pair_with_identical_text_a_and_text_b(
-    sweep_module: ModuleType,
+    real_dataset: tuple[Any, ...],
 ) -> None:
     """The full dataset: every pair carries a non-empty
     rationale/cited_node_ids and never scores a Capability name against itself. Length
     and per-node-id coverage are proven at corpus scale by
     `test_similarity_threshold_dataset.py`, not re-asserted here.
     """
-    pairs = sweep_module.build_dataset()
+    pairs = real_dataset
 
     assert all(pair.text_a != pair.text_b for pair in pairs)
     assert all(pair.rationale for pair in pairs)
@@ -389,6 +395,7 @@ def test_assert_dataset_excludes_real_identical_name_pairs_raises_on_a_violation
 
 def test_assert_dataset_excludes_real_identical_name_pairs_passes_the_real_dataset(
     sweep_module: ModuleType,
+    real_dataset: tuple[Any, ...],
 ) -> None:
     """The guard, run against the real 778-node similarity-corpus corpus, raises
     nothing for the shipped dataset -- `build_dataset()` itself already proves this
@@ -396,7 +403,7 @@ def test_assert_dataset_excludes_real_identical_name_pairs_passes_the_real_datas
     here fails loudly and specifically, rather than only failing indirectly via
     `build_dataset()`.
     """
-    pairs = sweep_module.build_dataset()
+    pairs = real_dataset
     repeated_names = sweep_module._repeated_capability_names_from_corpus()  # pyright: ignore[reportPrivateUsage] -- internal helper under test
 
     sweep_module._assert_dataset_excludes_real_identical_name_pairs(  # pyright: ignore[reportPrivateUsage] -- internal guard under test
@@ -467,7 +474,7 @@ class _OnceOnlyCallEmbedding:
         if text in self._already_called_texts:
             raise AssertionError(
                 f"text {text!r} was fetched via route_embedding more than once -- the "
-                "embedding cache should have reused the first result (AC-BI-007)"
+                "embedding cache should have reused the first result"
             )
         self._already_called_texts.add(text)
         self.calls.append(text)
@@ -768,6 +775,7 @@ class _FullDatasetScriptedCallEmbedding:
 
 def test_sweep_dataset_scores_the_full_real_dataset_cleanly_across_the_default_range(
     sweep_module: ModuleType,
+    real_dataset: tuple[Any, ...],
 ) -> None:
     """Calls `sweep_dataset()` directly (no CLI) over the complete,
     real 21-pair dataset (10 match + 11 non-match, `build_dataset()`) with a fully
@@ -784,7 +792,7 @@ def test_sweep_dataset_scores_the_full_real_dataset_cleanly_across_the_default_r
     real cached embedding), so only `text_a` is ever fetched fresh via the fake
     `call_embedding` -- proven below, not merely assumed.
     """
-    pairs = sweep_module.build_dataset()
+    pairs = real_dataset
     assert all(pair.text_b_cached_embedding is not None for pair in pairs), (
         "expected every pair's text_b to carry a real cached embedding"
     )

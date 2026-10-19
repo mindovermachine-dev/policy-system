@@ -92,7 +92,7 @@ def test_run_mcp_action_logs_scrubbed_detail_type_and_run_id(
     run_id = str(uuid.uuid4())
 
     result = mcp_server._run_mcp_action(  # pyright: ignore[reportPrivateUsage]
-        _ACTION, "alice", _raiser(exc), run_id=run_id
+        _ACTION, _raiser(exc), run_id=run_id
     )
     facade.reset_for_tests()
 
@@ -112,7 +112,7 @@ def test_run_mcp_action_logs_scrubbed_detail_type_and_run_id(
 def test_run_mcp_action_detail_is_capped(mirrored: Path) -> None:
     """A 5000-character message is cut to at most 300 characters."""
     mcp_server._run_mcp_action(  # pyright: ignore[reportPrivateUsage]
-        _ACTION, "alice", _raiser(_BoomError("x" * 5000))
+        _ACTION, _raiser(_BoomError("x" * 5000))
     )
     facade.reset_for_tests()
 
@@ -144,7 +144,6 @@ def _run_background(store: InMemoryIngestionRunStore, run_id: str) -> None:
         cast("mcp_server._PreparedCatalogIngestion", object()),  # pyright: ignore[reportPrivateUsage]
         run_id=run_id,
         config=_config(),
-        principal="alice",
         store=store,
     )
 
@@ -179,10 +178,10 @@ def test_background_body_failure_is_scrubbed_and_run_recorded_failed(
     assert row.error == _UNEXPECTED
 
 
-def test_background_last_resort_net_is_scrubbed_and_run_recorded_failed(
+def test_background_last_resort_net_entry_is_scrubbed_carries_no_principal_and_run_recorded_failed(
     mirrored: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An exception escaping ``_run_mcp_action`` is scrubbed; row failed."""
+    """An exception escaping ``_run_mcp_action`` is scrubbed and logged with no principal."""
     exc = _chained(_NOISY)
 
     def _escapes(*_args: object, **_kwargs: object) -> object:
@@ -202,6 +201,7 @@ def test_background_last_resort_net_is_scrubbed_and_run_recorded_failed(
         [entry] = _failed_entries(sink, _BG)
         assert entry["run_id"] == run_id
         assert entry["exception_type"] == "_BoomError"
+        assert "principal" not in entry
         assert 0 < len(str(entry["detail"])) <= STAGE_FAILURE_DETAIL_MAX_LEN
         for leaked in _LEAKS:
             assert leaked not in sink

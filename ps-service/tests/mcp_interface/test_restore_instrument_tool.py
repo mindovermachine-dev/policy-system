@@ -735,13 +735,13 @@ def _mcp_log_lines(all_lines: list[dict[str, object]]) -> list[dict[str, object]
 # --- happy path ----------------------------------------------------
 
 
-def test_happy_path_returns_accepted_response_shape_and_logs_principal(
+def test_happy_path_returns_accepted_response_shape_and_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """The returned `instrument_id`/`stages` match
     `RestorationAcceptedResponse`'s own field-for-field shape. Also asserts the
-    `mcp_interface` started/succeeded log pair carries the resolved
-    principal (restore half only; other tests prove the
+    `mcp_interface` started/succeeded log pair shares one run id and carries no
+    caller identity (restore half only; other tests prove the
     failed-call case and the real-bearer-token case).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -767,7 +767,7 @@ def test_happy_path_returns_accepted_response_shape_and_logs_principal(
     assert all(line["run_id"] for line in mcp_lines)
     assert len({line["run_id"] for line in mcp_lines}) == 1
     for line in mcp_lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+        assert "principal" not in line
 
 
 def test_happy_path_fetches_the_artifact_from_the_curated_source_not_a_local_file(
@@ -932,13 +932,13 @@ def test_no_catalog_match_in_any_case_is_rejected_naming_the_closest_id(
     assert requested_filenames == {"catalog.json"}
 
 
-def test_happy_path_calls_the_restore_delegate_with_the_resolved_principal_as_actor(
+def test_happy_path_calls_the_restore_delegate_with_the_mcp_caller_label_as_actor(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """The REAL `restore_instrument`'s own audit log entries carry `caller` equal to the
-    resolved principal (the delegate's `actor=principal or "unknown"` convention) --
-    a stronger proof than a fake delegate's own recorded kwarg, since it proves the actor
-    genuinely reached the real function's own logging, not just a spy.
+    """The REAL `restore_instrument`'s own log entries carry `caller` equal to the fixed MCP
+    caller label `mcp`, never a caller identity -- a stronger proof than a fake delegate's
+    own recorded kwarg, since it proves the label genuinely reached the real function's own
+    logging, not just a spy.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
@@ -951,7 +951,8 @@ def test_happy_path_calls_the_restore_delegate_with_the_resolved_principal_as_ac
     emitter.flush()
     restore_lines = _restore_log_lines(read_lines(resolve_default_log_path()))
     assert [line["outcome"] for line in restore_lines] == ["started", "succeeded"]
-    assert all(line.get("caller") == LOCAL_TEST_PRINCIPAL_ID for line in restore_lines)
+    assert all(line.get("caller") == "mcp" for line in restore_lines)
+    assert all(LOCAL_TEST_PRINCIPAL_ID not in json.dumps(line) for line in restore_lines)
 
 
 # --- validation  ------------------------
@@ -1126,15 +1127,16 @@ def _grant_compliance_officer(
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
 
 
-def test_real_verified_token_principal_threads_through_to_audit_log_and_delegate_actor(
+def test_real_verified_token_call_logs_no_principal_and_the_delegate_gets_the_mcp_caller_label(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
     """Under a real, verified bearer token -- driven through
     the actual mounted Streamable HTTP transport, mirroring
     `test_get_catalog_listing_tool.py`'s own pattern, never a bare in-process
-    `server.call_tool` -- the token's `sub` claim (never
-    `LOCAL_TEST_PRINCIPAL_ID`) reaches both the `mcp_interface` log entries'
-    `principal` AND the real `restore_instrument`'s own `caller` field.
+    `server.call_tool` -- the `mcp_interface` log entries carry no `principal`
+    and not the token's `sub`, while the real `restore_instrument`'s own
+    entries carry the fixed MCP caller label `mcp` as `caller` and the `sub`
+    in none of them.
 
     The caller must also hold `ComplianceOfficer` because this
     tool is gated, so `_grant_compliance_officer` seeds that grant for this
@@ -1158,12 +1160,13 @@ def test_real_verified_token_principal_threads_through_to_audit_log_and_delegate
     all_lines = read_lines(resolve_default_log_path())
     mcp_lines = _mcp_log_lines(all_lines)
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
-    assert all(line.get("principal") == token_sub for line in mcp_lines)
-    assert not any(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in mcp_lines)
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(token_sub not in json.dumps(line) for line in mcp_lines)
 
     restore_lines = _restore_log_lines(all_lines)
     assert [line["outcome"] for line in restore_lines] == ["started", "succeeded"]
-    assert all(line.get("caller") == token_sub for line in restore_lines)
+    assert all(line.get("caller") == "mcp" for line in restore_lines)
+    assert all(token_sub not in json.dumps(line) for line in restore_lines)
 
 
 def _internal_policy_transport() -> FakeCuratedArtifactTransport:
@@ -1245,16 +1248,13 @@ def test_local_test_bypass_caller_owns_restored_drafts_as_the_bypass_identity(
     assert _restored_policy_owner() == (LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)
 
 
-def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(
+def test_local_test_bypass_call_logs_no_principal_when_no_token_is_presented(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """`_resolve_principal`'s existing, unchanged fallback
-    contract -- with no bearer token presented at all (a bare in-process
-    `server.call_tool`) and the local-test bypass active,
-    `LOCAL_TEST_PRINCIPAL_ID` still reaches the `mcp_interface` log entries'
-    `principal` (already proven by the happy-path test; re-proven here as
-    this slice's own dedicated auth/audit completeness check, mirroring
-    `test_get_catalog_listing_tool.py`'s identically-purposed test).
+    """With no bearer token presented at all (a bare in-process
+    `server.call_tool`) and the local-test bypass active, the `mcp_interface`
+    log entries carry no `principal` and not `LOCAL_TEST_PRINCIPAL_ID`,
+    mirroring `test_get_catalog_listing_tool.py`'s identically-purposed test.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
@@ -1266,15 +1266,17 @@ def test_local_test_bypass_principal_still_threads_through_when_no_token_is_pres
     assert result.is_error is False
     emitter.flush()
     mcp_lines = _mcp_log_lines(read_lines(resolve_default_log_path()))
-    assert all(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in mcp_lines)
+    assert mcp_lines
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(LOCAL_TEST_PRINCIPAL_ID not in json.dumps(line) for line in mcp_lines)
 
 
-def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principal(
+def test_failed_call_under_a_real_verified_token_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
-    """A FAILED call -- a real checksum-mismatched artifact -- still carries the
-    resolved real-token principal on its `outcome="failed"` `mcp_interface` log entry, not
-    only the succeeded-call case proven above.
+    """A FAILED call -- a real checksum-mismatched artifact -- carries no `principal` and not
+    the token's `sub` on its `outcome="failed"` `mcp_interface` log entry, as the
+    succeeded-call case proven above does.
     """
     _set_similarity_threshold(monkeypatch)
     emitter = configure()
@@ -1293,7 +1295,8 @@ def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principa
     all_lines = read_lines(resolve_default_log_path())
     mcp_lines = _mcp_log_lines(all_lines)
     assert [line["outcome"] for line in mcp_lines] == ["started", "failed"]
-    assert all(line.get("principal") == token_sub for line in mcp_lines)
+    assert all("principal" not in line for line in mcp_lines)
+    assert all(token_sub not in json.dumps(line) for line in mcp_lines)
 
 
 # --- failure-state completeness -------------------------------------
@@ -1510,7 +1513,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     lines = _mcp_log_lines(read_lines(resolve_default_log_path()))
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
-    assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+    assert "principal" not in failed_line
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
     assert failed_line.get("exception_type") == "ValueError"
 

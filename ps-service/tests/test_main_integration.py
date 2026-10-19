@@ -593,9 +593,9 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
     credential" is proven by calling the real `mcp_server.cypher` tool
     in-process, straight after startup, passing nothing but the query text
     itself -- no header, token, or credential of any kind exists on this
-    call path to omit. Reading the `query_engine` log entry's `principal`
-    back out ties this same execution to the principal: the composition is real,
-    not two disconnected facts.
+    call path to omit. Reading the `query_engine` log entry back out ties
+    this same execution to the startup, and shows it carries no `principal`:
+    the composition is real, not two disconnected facts.
 
     Dependency connectivity checks (FalkorDB/LLM Interface/Cellar-ELI) are
     stubbed to succeed instantly -- real reachability is out of scope here
@@ -657,4 +657,4 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
         for line in lines
         if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
     )
-    assert entry["principal"] == mcp_server.LOCAL_TEST_PRINCIPAL_ID
+    assert "principal" not in entry

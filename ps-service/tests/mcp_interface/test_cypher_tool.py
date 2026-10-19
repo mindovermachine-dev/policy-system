@@ -206,9 +206,7 @@ def test_delegates_in_process_via_call_tool(
     `execute_cypher_query` (never a subprocess, never a reimplementation) --
     proven by the real `query_engine`/`execute_cypher_query` log entry only
     that function emits, plus the fake `graph` collaborator's own recorded
-    call, mirroring `test_cypher_tool_attaches_local_test_principal_when_bypass_active`'s
-    already-established real-execution-plus-state-assertion pattern, rather
-    than spying on the delegate call.
+    call, rather than spying on the delegate call.
     """
     emitter = configure()
     handle = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
@@ -340,14 +338,12 @@ def test_resolve_graph_wraps_any_failure_as_graph_unavailable(
     assert "6379" not in message
 
 
-def test_cypher_tool_attaches_local_test_principal_when_bypass_active(
+def test_cypher_tool_under_the_local_test_bypass_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """With the bypass active, a
-    query answered successfully through the real `cypher()` tool carries the
-    fixed local principal on its `query_engine` log entry -- the concrete
-    proof, at this boundary, that the bypass answers queries with no
-    credential ever requested or checked anywhere in the call path.
+    """With the bypass active, a query answered successfully through the real `cypher()` tool
+    -- with no credential requested or checked anywhere in the call path -- logs its
+    `query_engine` entry with no `principal` key and without the fixed local principal.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -364,29 +360,6 @@ def test_cypher_tool_attaches_local_test_principal_when_bypass_active(
         for line in lines
         if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
     )
-    assert entry["principal"] == mcp_server.LOCAL_TEST_PRINCIPAL_ID
-
-
-def test_cypher_tool_omits_principal_when_bypass_inactive(
-    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
-) -> None:
-    """With the bypass inactive (the
-    default), the `query_engine` log entry carries no `principal` key at
-    all -- the real `cypher()` tool never invents an identity when the
-    bypass is off.
-    """
-    emitter = configure()
-    handle = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
-    _install_graph(monkeypatch, handle)
-
-    result = _call_cypher("MATCH (n) RETURN n.id")
-
-    assert result.is_error is False
-    emitter.flush()
-    lines = read_lines(resolve_default_log_path())
-    entry = next(
-        line
-        for line in lines
-        if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
-    )
+    assert entry["outcome"] == "succeeded"
     assert "principal" not in entry
+    assert mcp_server.LOCAL_TEST_PRINCIPAL_ID not in json.dumps(entry)

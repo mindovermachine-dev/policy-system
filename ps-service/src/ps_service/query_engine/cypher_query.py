@@ -159,7 +159,6 @@ def execute_cypher_query(
     *,
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
-    principal: str | None = None,
     timeout_ms: int,
     row_cap: int,
     params: dict[str, object] | None = None,
@@ -176,8 +175,6 @@ def execute_cypher_query(
         query: Cypher query text. Must not contain a write keyword.
         graph: Read-only graph handle to run against.
         emitter: Log emitter for the outcome entry; `None` uses the process default emitter.
-        principal: Opaque caller identity attached to the log entry on every outcome; omitted
-            from the entry when `None`. This layer never decides who the principal is.
         timeout_ms: Server-side time limit in milliseconds for the caller's query only (not
             the seed check). Required, so a caller cannot run an unbounded query by omission.
         row_cap: Maximum number of rows returned; rows beyond it are dropped.
@@ -200,29 +197,29 @@ def execute_cypher_query(
     Side Effects:
         Sends one seed-check read and, if seeded, the caller's read to the graph, and emits one
         log entry with outcome `succeeded`, `rejected`, `unseeded`, `failed` or `timeout`,
-        carrying the bound run id, duration, `principal` and (on success) the row count. The
-        query text is never logged.
+        carrying the bound run id, duration and (on success) the row count. The query text and
+        the caller's identity are never logged.
     """
     started = time.perf_counter()
     if is_write_clause(query):
-        _log(outcome="rejected", started=started, emitter=emitter, principal=principal)
+        _log(outcome="rejected", started=started, emitter=emitter)
         raise WriteClauseRejectedError(_WRITE_CLAUSE_REJECTION_MESSAGE)
 
     try:
         seeded = _is_graph_seeded(graph)
     except Exception as exc:
-        _log(outcome="failed", started=started, emitter=emitter, principal=principal)
+        _log(outcome="failed", started=started, emitter=emitter)
         raise QueryEngineExecutionError(str(exc)) from exc
 
     if not seeded:
-        _log(outcome="unseeded", started=started, emitter=emitter, principal=principal)
+        _log(outcome="unseeded", started=started, emitter=emitter)
         raise GraphUnseededError(_GRAPH_UNSEEDED_DETAIL)
 
     try:
         result = graph.query(query, params=params, timeout=timeout_ms)
     except Exception as exc:
         outcome = _classify_execution_failure(exc)
-        _log(outcome=outcome, started=started, emitter=emitter, principal=principal)
+        _log(outcome=outcome, started=started, emitter=emitter)
         raise QueryEngineExecutionError(str(exc)) from exc
 
     columns = [cast("str", c[1]) for c in result.header] if result.header else []
@@ -238,7 +235,6 @@ def execute_cypher_query(
         started=started,
         emitter=emitter,
         row_count=len(rows),
-        principal=principal,
     )
     return QueryResult(columns=columns, rows=rows, row_count=len(rows), truncated=truncated)
 
@@ -249,12 +245,11 @@ def _log(
     started: float,
     emitter: LogEmitter | None,
     row_count: int | None = None,
-    principal: str | None = None,
 ) -> None:
     """Emit one log entry for a completed `execute_cypher_query` call.
 
-    Never logs the query text: `extra` carries only `row_count` (success only) and `principal`
-    (any outcome), each added only when not `None`. `run_id` is never passed explicitly, so
+    Never logs the query text or a caller identity: `extra` carries only `row_count`, added only
+    when not `None` (success only). `run_id` is never passed explicitly, so
     `emit_log_entry` bakes in the currently bound run context.
 
     `outcome` is always one of a small closed vocabulary: `"succeeded"`, `"rejected"`,
@@ -265,8 +260,6 @@ def _log(
     extra: dict[str, object] = {}
     if row_count is not None:
         extra["row_count"] = row_count
-    if principal is not None:
-        extra["principal"] = principal
     emit_log_entry(
         component=_COMPONENT,
         action=_ACTION,

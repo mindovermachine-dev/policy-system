@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import inspect
+import os
 
 import pytest
 
@@ -45,31 +46,11 @@ def test_service_config_field_mutation_raises_frozen_instance_error() -> None:
 def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_SERVICE_*`/`PS_LOGGING_DIR` set → defaults matching the shipped
-    values.
+    """With every `PS_*` environment variable unset, `load_config()` returns
+    the shipped defaults.
     """
-    monkeypatch.delenv("PS_LOGGING_DIR", raising=False)
-    monkeypatch.delenv("PS_SERVICE_HOST", raising=False)
-    monkeypatch.delenv("PS_SERVICE_PORT", raising=False)
-    monkeypatch.delenv("PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS", raising=False)
-    monkeypatch.delenv("PS_LLMINTERFACE_MODEL", raising=False)
-    monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
-    monkeypatch.delenv("PS_FALKORDB_HOST", raising=False)
-    monkeypatch.delenv("PS_FALKORDB_PORT", raising=False)
-    monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
-    monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
-    monkeypatch.delenv("PS_SERVICE_MAX_REQUEST_BODY_BYTES", raising=False)
-    monkeypatch.delenv("PS_QUERY_TIMEOUT_MS", raising=False)
-    monkeypatch.delenv("PS_QUERY_ROW_CAP", raising=False)
-    monkeypatch.delenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", raising=False)
-    monkeypatch.delenv("PS_CURATEDSOURCE_URL", raising=False)
-    monkeypatch.delenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", raising=False)
-    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_HOST", raising=False)
-    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_PORT", raising=False)
-    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_USER", raising=False)
-    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_PASSWORD", raising=False)
-    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_DATABASE", raising=False)
-    monkeypatch.delenv("PS_PASSKEYSIGNING_ALLOWED_ORIGINS", raising=False)
+    for name in [name for name in os.environ if name.startswith("PS_")]:
+        monkeypatch.delenv(name)
 
     result = load_config()
 

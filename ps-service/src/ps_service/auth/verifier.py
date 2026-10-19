@@ -153,9 +153,9 @@ class PsTokenVerifier:
                 configured (a wiring error, not a token failure). Token failures never raise.
 
         Side Effects:
-            Emits one log entry per call: `outcome=success` with `sub` and `iss`, or
-            `outcome=unauthenticated` with a `reason` category. May fetch the issuer's key set
-            over the network.
+            Emits one log entry per call: on success it carries component, action and outcome
+            only, with no token claim; on rejection it is `outcome=unauthenticated` with a
+            `reason` category. May fetch the issuer's key set over the network.
         """
         return await run_in_threadpool(self._verify_token_sync, token)
 
@@ -197,7 +197,6 @@ class PsTokenVerifier:
             component=_COMPONENT,
             action=_ACTION,
             outcome=_OUTCOME_SUCCESS,
-            extra={"sub": sub, "iss": iss},
             emitter=self._emitter,
         )
         return AccessToken(

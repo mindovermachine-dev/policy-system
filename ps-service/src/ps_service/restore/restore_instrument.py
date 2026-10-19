@@ -156,7 +156,8 @@ def _emit_restore_log(
     Args:
         instrument_id: Canonical instrument id; becomes the entry's `entity_id`.
         outcome: `"started"`, `"succeeded"` or `"failed"`.
-        actor: The restoring caller; logged as `extra["caller"]`.
+        actor: The requesting client host (REST) or the fixed MCP caller label; logged as
+            `extra["caller"]`.
         schema_version: The manifest's schema version; logged as `extra["schema_version"]`.
         emitter: Log emitter; `None` uses the default emitter.
         source: Resolved curated-content source URL, or `None` for an upload restore.
@@ -331,7 +332,8 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
         db: Read-only handle used only to read `policy_system`.
         single_tenant_graph_name: Name of the `policy_system` graph (non-empty).
         similarity_threshold: Minimum Capability embedding similarity for convergence.
-        actor: The restoring caller; recorded as `caller` in the audit log entries.
+        actor: The requesting client host (REST) or the fixed MCP caller label; recorded as `caller`
+            in the audit log entries.
         open_gateway: Returns the process's Graph Write Gateway, or raises when there is none;
             called after verification, parsing and content validation, before the first read of
             a live graph.

@@ -47,7 +47,7 @@ Non-facade service sinks: the stdlib fallback in `api/error_handlers.py` (used o
 | LOG-04 | `ps-cli/src` (29 `print`, 1 traceback) | Low | User-facing command output; error and `-v` traceback go to stderr. No access token, refresh token or Authorization header reaches a print call (grep over print arguments finds none). | no action: stdout and stderr are the command-line contract |
 | LOG-05 | `tools` (77 `print`, 7 stderr writes) and `scripts` | Low | Operator-run local tools; output is not shipped. Some print exception text of local connection failures. | no action: operator-run local tool; output not shipped to third parties |
 | LOG-06 | Exception text in operator log entries | Medium | Exception text or a traceback is placed in a log field without the shared sanitising helper at 7 service sites; other sites log the class name only or use the helper. | issue #293 |
-| LOG-07 | User identifiers in operator log entries | Medium | Identifiers of the acting user or principal appear in log fields at 7 service sites, one on every successful authentication. The coding standard now records "no user identifiers in logs" as the target. | issue #294 |
+| LOG-07 | User identifiers in operator log entries | Medium | No log field carries an identifier of the acting user or principal: the 7 service sites that did, one on every successful authentication, log none, and the Audit component records the actor. The coding standard states the rule as current behaviour, and the canary test asserts it on the accepted-token, MCP tool-call and invite paths. | fixed (issue #294) |
 | LOG-08 | Outcome vocabulary | Medium | 20 distinct outcome labels plus 25 passthrough and 4 computed values across 92 calls; success is spelled `succeeded` (15) and `success` (5), failure `failed` (16), `failure` (2) and `error` (2). Only `failed` is mirrored to stderr. | issue #295 |
 | LOG-09 | Expected conditions logged as `failed` | Low | At least one expected user condition (an invalid or expired link) uses the ERROR-equivalent outcome. | issue #295 |
 | LOG-10 | Failure-cause field names | Low | The cause is spelled `reason` (9), `error` (5), `exception_type` (4), `detail` (4), `error_kind` (2), `error_type` (2). | issue #295 |
@@ -61,20 +61,22 @@ Non-facade service sinks: the stdlib fallback in `api/error_handlers.py` (used o
 
 ## Canary test
 
-`ps-service/tests/logging/test_log_leakage_canary.py` holds eight tests. Each uses a per-test `tmp_path` log file with the real `configure()` and failure mirroring, then searches the log file, captured stderr and stdout, and all `logging` records at DEBUG for the fake `canary-` values.
+`ps-service/tests/logging/test_log_leakage_canary.py` holds ten tests. Each uses a per-test `tmp_path` log file with the real `configure()` and failure mirroring, then searches the log file, captured stderr and stdout, and all `logging` records at DEBUG for the fake `canary-` values.
 
 | Flow | Canaries asserted absent |
 | --- | --- |
 | Rejected bearer token (expired token with a canary subject, and a garbage canary token) | token, user |
-| Accepted bearer token | raw token and the `Bearer ` prefix |
+| Accepted bearer token with a canary subject | raw token, `Bearer ` prefix, user |
 | Unhandled request error with key=value, bearer and URL shapes in the message | token |
 | Request rejected by body validation with canary policy text | policy |
 | LLM completion success | prompt, reply text |
 | LLM completion failing with the prompt in the provider error | prompt, token |
 | Denied request with no verified principal and canary values in the body | policy, token, user |
 | `cypher` call whose query text and database error carry canary values | policy, token |
+| MCP tool calls by a canary principal (`cypher`, gate refusal) | user |
+| Invite flow by a canary caller for a canary email | user, email |
 
-Partially met (AC-BI-003): the user-identifier canary is not asserted on the accepted-token path, because that path logs the identifier by design today; this is tracked in #294. Free-text values inside exception text are outside the shapes the sanitising helper covers and are tracked in #293, so no test papers over them.
+Free-text values inside exception text are outside the shapes the sanitising helper covers and are tracked in #293, so no test papers over them.
 
 Mutation proof: the service package was copied to a scratch directory outside the repository, the unhandled-error log field was changed to carry the raw message, and the test run with that copy first on the import path failed with "canary values reached a log sink" (1 failed, 5 passed). The repository tree was not touched.
 
@@ -128,7 +130,8 @@ Enforced rules fail automatically, in the pre-commit hook on the files they watc
 | Secrets do not appear in log entries | enforced | `pytest` (log-leakage canary test) |
 | Logging code passes lint and strict typing | enforced | `ruff-check`, `basedpyright` |
 | One outcome vocabulary and expected conditions not logged as failures | review-only | tracked in #295; a closed-set check in #327 |
-| Exception text and user identifiers in log entries | review-only | tracked in #293 and #294 |
+| Exception text in log entries | review-only | tracked in #293 |
+| User identifiers do not appear in log entries | enforced | `pytest` (log-leakage canary test) |
 | Server request logs in the structured format | review-only | tracked in #296 |
 | Audit records for role-gate denials, passkey enrolment and `cypher` use | enforced | `pytest` (gate-declaration structural test: every registered tool and route declares a role gate or is marked authenticated-only; each declared gate is covered by the denial matrix) |
 | Audit records for other security-relevant actions (failed authentication, unauthenticated denials, passkey rejections, other read tools, audit retention) | review-only | still open under LOG-12 |

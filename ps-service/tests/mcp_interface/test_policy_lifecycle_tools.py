@@ -3,7 +3,7 @@
 `_verified_actor` is a local copy of `test_access_role_tools.py`'s own
 helper -- binds a real `AccessToken`
 onto the MCP SDK's own auth contextvar that `get_access_token()`
-(`_resolve_principal`/`_resolve_policy_lifecycle_actor`) reads.
+(`_resolve_policy_lifecycle_actor`) reads.
 `_install_graph` mirrors `test_cypher_tool.py`'s own
 `connect_from_config`-monkeypatch pattern for installing a fake FalkorDB
 graph handle; `_install_audit_store` mirrors `test_access_role_tools.py`'s
@@ -796,7 +796,7 @@ def test_create_policy_draft_supersede_log_triad_carries_entity_id(
 
     assert {line["outcome"] for line in entity_lines} == {"started", "succeeded", "failed"}
     for line in entity_lines:
-        assert line["principal"] == _ACTOR_SUBJECT
+        assert "principal" not in line
         assert isinstance(line["timestamp"], float)
 
 
@@ -1263,7 +1263,7 @@ def test_update_policy_draft_graph_unavailable_returns_named_error(
     assert "not a patchable field" not in text
 
 
-def test_update_policy_draft_log_triad_carries_actor_action_node_id_and_timestamp(
+def test_update_policy_draft_log_triad_carries_action_node_id_and_timestamp_but_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """`_run_mcp_action`'s log triad threads
@@ -1301,7 +1301,7 @@ def test_update_policy_draft_log_triad_carries_actor_action_node_id_and_timestam
     assert {line["outcome"] for line in success_lines} == {"started", "succeeded"}
     assert {line["outcome"] for line in failure_lines} == {"started", "failed"}
     for line in (*success_lines, *failure_lines):
-        assert line["principal"] == _ACTOR_SUBJECT
+        assert "principal" not in line
         assert isinstance(line["timestamp"], float)
 
 
@@ -1474,7 +1474,7 @@ def test_add_standard_to_draft_graph_unavailable_returns_named_error(
     assert "not a patchable field" not in text
 
 
-def test_add_standard_to_draft_log_triad_carries_actor_action_node_id_and_timestamp(
+def test_add_standard_to_draft_log_triad_carries_action_node_id_and_timestamp_but_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """The log triad carries `entity_id=policy_id` --
@@ -1509,7 +1509,7 @@ def test_add_standard_to_draft_log_triad_carries_actor_action_node_id_and_timest
     assert {line["outcome"] for line in success_lines} == {"started", "succeeded"}
     assert {line["outcome"] for line in failure_lines} == {"started", "failed"}
     for line in (*success_lines, *failure_lines):
-        assert line["principal"] == _ACTOR_SUBJECT
+        assert "principal" not in line
         assert isinstance(line["timestamp"], float)
 
 
@@ -1684,7 +1684,7 @@ def test_update_standard_draft_graph_unavailable_returns_named_error(
     assert "not a patchable field" not in text
 
 
-def test_update_standard_draft_log_triad_carries_actor_action_node_id_and_timestamp(
+def test_update_standard_draft_log_triad_carries_action_node_id_and_timestamp_but_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     emitter = configure()
@@ -1718,7 +1718,7 @@ def test_update_standard_draft_log_triad_carries_actor_action_node_id_and_timest
     assert {line["outcome"] for line in success_lines} == {"started", "succeeded"}
     assert {line["outcome"] for line in failure_lines} == {"started", "failed"}
     for line in (*success_lines, *failure_lines):
-        assert line["principal"] == _ACTOR_SUBJECT
+        assert "principal" not in line
         assert isinstance(line["timestamp"], float)
 
 
@@ -1967,7 +1967,7 @@ def test_add_control_to_draft_graph_unavailable_returns_named_error(
     assert "not a patchable field" not in text
 
 
-def test_add_control_to_draft_log_triad_carries_actor_action_node_id_and_timestamp(
+def test_add_control_to_draft_log_triad_carries_action_node_id_and_timestamp_but_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """The log triad carries `entity_id=standard_id` --
@@ -2002,7 +2002,7 @@ def test_add_control_to_draft_log_triad_carries_actor_action_node_id_and_timesta
     assert {line["outcome"] for line in success_lines} == {"started", "succeeded"}
     assert {line["outcome"] for line in failure_lines} == {"started", "failed"}
     for line in (*success_lines, *failure_lines):
-        assert line["principal"] == _ACTOR_SUBJECT
+        assert "principal" not in line
         assert isinstance(line["timestamp"], float)
 
 
@@ -2256,7 +2256,7 @@ def test_update_control_draft_graph_unavailable_returns_named_error(
     assert "not a patchable field" not in text
 
 
-def test_update_control_draft_log_triad_carries_actor_action_node_id_and_timestamp(
+def test_update_control_draft_log_triad_carries_action_node_id_and_timestamp_but_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     emitter = configure()
@@ -2287,7 +2287,7 @@ def test_update_control_draft_log_triad_carries_actor_action_node_id_and_timesta
     assert {line["outcome"] for line in success_lines} == {"started", "succeeded"}
     assert {line["outcome"] for line in failure_lines} == {"started", "failed"}
     for line in (*success_lines, *failure_lines):
-        assert line["principal"] == _ACTOR_SUBJECT
+        assert "principal" not in line
         assert isinstance(line["timestamp"], float)
 
 

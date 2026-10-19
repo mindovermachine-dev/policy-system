@@ -28,7 +28,7 @@ import importlib.util
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -61,9 +61,15 @@ def _load_sweep_module() -> ModuleType:
     return module
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def sweep_module() -> ModuleType:
     return _load_sweep_module()
+
+
+@pytest.fixture(scope="module")
+def real_dataset(sweep_module: ModuleType) -> tuple[Any, ...]:
+    """The built-in 21-pair dataset, built once per module from the similarity corpus."""
+    return sweep_module.build_dataset()
 
 
 @pytest.fixture(autouse=True)
@@ -116,9 +122,9 @@ def real_identical_name_groups() -> dict[str, int]:
 
 
 def test_dataset_has_at_least_ten_true_match_and_ten_true_non_match_pairs(
-    sweep_module: ModuleType,
+    real_dataset: tuple[Any, ...],
 ) -> None:
-    pairs = sweep_module.build_dataset()
+    pairs = real_dataset
 
     true_match_pairs = [pair for pair in pairs if pair.label == "match"]
     true_non_match_pairs = [pair for pair in pairs if pair.label == "non_match"]
@@ -153,9 +159,9 @@ def test_real_capability_ids_dedupe_to_seven_hundred_sixty_seven_distinct_ids(
 
 
 def test_every_pairs_cited_node_ids_resolve_to_real_capability_ids(
-    sweep_module: ModuleType, real_capability_ids: frozenset[str]
+    real_dataset: tuple[Any, ...], real_capability_ids: frozenset[str]
 ) -> None:
-    pairs = sweep_module.build_dataset()
+    pairs = real_dataset
 
     for pair in pairs:
         assert pair.cited_node_ids, f"pair {pair!r} cites no node ids"
@@ -167,25 +173,23 @@ def test_every_pairs_cited_node_ids_resolve_to_real_capability_ids(
             )
 
 
-def test_true_match_pairs_each_cite_exactly_one_real_node(sweep_module: ModuleType) -> None:
+def test_true_match_pairs_each_cite_exactly_one_real_node(real_dataset: tuple[Any, ...]) -> None:
     """Every true-match pair is (paraphrase, real node's own name) -- exactly one real
     node is the paraphrase's target.
     """
-    true_match_pairs = [pair for pair in sweep_module.build_dataset() if pair.label == "match"]
+    true_match_pairs = [pair for pair in real_dataset if pair.label == "match"]
 
     for pair in true_match_pairs:
         assert len(pair.cited_node_ids) == 1
 
 
 def test_true_non_match_pairs_each_cite_exactly_two_distinct_real_nodes(
-    sweep_module: ModuleType,
+    real_dataset: tuple[Any, ...],
 ) -> None:
     """Every true-non-match pair cites two real, distinct Capability nodes
     -- never the same node cited twice.
     """
-    true_non_match_pairs = [
-        pair for pair in sweep_module.build_dataset() if pair.label == "non_match"
-    ]
+    true_non_match_pairs = [pair for pair in real_dataset if pair.label == "non_match"]
 
     for pair in true_non_match_pairs:
         assert len(pair.cited_node_ids) == 2
@@ -195,8 +199,8 @@ def test_true_non_match_pairs_each_cite_exactly_two_distinct_real_nodes(
 # --- rationale required ------------------------------------------------------
 
 
-def test_every_pair_has_a_non_empty_rationale(sweep_module: ModuleType) -> None:
-    pairs = sweep_module.build_dataset()
+def test_every_pair_has_a_non_empty_rationale(real_dataset: tuple[Any, ...]) -> None:
+    pairs = real_dataset
 
     for pair in pairs:
         assert pair.rationale
@@ -231,7 +235,7 @@ def test_exactly_ten_real_capability_names_are_shared_across_two_or_more_nodes(
     ],
 )
 def test_no_real_identical_name_group_appears_as_a_same_string_pair_in_the_dataset(
-    sweep_module: ModuleType,
+    real_dataset: tuple[Any, ...],
     real_identical_name_groups: dict[str, int],
     shared_name: str,
 ) -> None:
@@ -244,7 +248,7 @@ def test_no_real_identical_name_group_appears_as_a_same_string_pair_in_the_datas
         f"fixture list is stale: {shared_name!r} is no longer one of the corpus's "
         "shared-name groups -- update this parametrize list against the real files"
     )
-    pairs = sweep_module.build_dataset()
+    pairs = real_dataset
 
     violating_pairs = [pair for pair in pairs if pair.text_a == pair.text_b == shared_name]
 

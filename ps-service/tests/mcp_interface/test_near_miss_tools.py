@@ -23,7 +23,7 @@ that function already builds the `ResolveReviewResponse` via
 `_verified_actor()` (this file) binds a real `AccessToken` directly onto the
 MCP SDK's `mcp.server.auth.middleware.auth_context.auth_context_var`
 contextvar -- the same one `get_access_token()`
-(`_resolve_principal`/`_resolve_signing_actor`) reads, normally populated by
+(`_resolve_signing_actor`) reads, normally populated by
 `AuthContextMiddleware` from a real HTTP request (`test_mcp_auth.py` proves
 that wiring end to end). Binding it directly, rather than driving a full
 `initialize`/`notifications/initialized`/`tools/call` JSON-RPC handshake
@@ -98,7 +98,6 @@ from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
 from ps_service.audit import AuditPostgresUnavailableError
-from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
@@ -122,7 +121,7 @@ _ACTOR_ISSUER = "https://issuer.example.com/"
 def _verified_actor(*, sub: str = _ACTOR_SUBJECT, iss: str = _ACTOR_ISSUER) -> Generator[None]:
     """Bind a real, verified `AccessToken` onto the MCP SDK's own auth contextvar.
 
-    `_resolve_signing_actor`/`_resolve_principal` both read `get_access_token()`
+    `_resolve_signing_actor` reads `get_access_token()`
     off this exact contextvar (`mcp.server.auth.middleware.auth_context`),
     normally populated by `AuthContextMiddleware` from a real HTTP request
     (`test_mcp_auth.py`'s own end-to-end proof of that wiring). Binding it
@@ -356,7 +355,7 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
     """Several scripted `PendingReviewRecord`s come
     back field for field (`id`/`kind`/`incoming_text`/
     `nearest_existing_text`/`similarity`), plus the `mcp_interface`
-    started/succeeded log pair carrying the resolved principal.
+    started/succeeded log pair, which carries no caller identity.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -393,7 +392,7 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
     assert all(line["run_id"] for line in mcp_lines)
     assert len({line["run_id"] for line in mcp_lines}) == 1
     for line in mcp_lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+        assert "principal" not in line
 
 
 @pytest.fixture(name="audit_store", autouse=True)
@@ -444,8 +443,8 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
 ) -> None:
     """For keep-separate, the resolved review's
     `winner_id`/`loser_id` stay `None` in the response for this decision,
-    plus the `mcp_interface` started/succeeded log pair carrying the
-    resolved principal.
+    plus the `mcp_interface` started/succeeded log pair, which carries no
+    caller identity.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -500,7 +499,7 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
     assert all(line["run_id"] for line in mcp_lines)
     assert len({line["run_id"] for line in mcp_lines}) == 1
     for line in mcp_lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+        assert "principal" not in line
 
 
 # --- `near_misses_check_approval` visibility ---
@@ -675,7 +674,7 @@ def test_list_residual_unexpected_exception_returns_generic_error_and_logs_detai
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
-    assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+    assert "principal" not in failed_line
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
 
 
@@ -710,7 +709,7 @@ def test_resolve_not_found_or_already_resolved_returns_named_error(
         if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
-    assert all(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in lines)
+    assert all("principal" not in line for line in lines)
 
 
 def test_resolve_graph_unavailable_returns_named_error(
@@ -771,7 +770,7 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
-    assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+    assert "principal" not in failed_line
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
 
 

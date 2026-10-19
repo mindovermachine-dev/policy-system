@@ -61,7 +61,7 @@ def _verified_actor(*, sub: str, iss: str = _CALLER_ISSUER) -> Generator[None]:
     """Bind a real, verified `AccessToken` onto the MCP SDK's own auth contextvar.
 
     Local copy of `test_near_miss_tools.py`'s own `_verified_actor` --
-    `_resolve_authz_actor`/`_resolve_principal` both read
+    `_resolve_authz_actor` reads
     `get_access_token()` off this exact contextvar, normally populated by
     `AuthContextMiddleware` from a real HTTP request. Deliberately never
     sets `PS_SERVICE_LOCAL_TEST_BYPASS`, so `config.is_local_test_bypass_active`

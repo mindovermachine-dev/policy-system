@@ -19,7 +19,7 @@ the same value in any real deployment too.
 pattern's second occurrence, not yet DRY's third-occurrence extraction threshold
 (L2 DRY), and `test_near_miss_tools.py` already documents that these bind a real
 `AccessToken` directly onto the MCP SDK's own `auth_context_var` contextvar, the same one
-`get_access_token()` (`_resolve_principal`/`_resolve_signing_actor`/`_resolve_authz_actor`) reads.
+`get_access_token()` (`_resolve_signing_actor`/`_resolve_authz_actor`) reads.
 
 `FakeAccessRoleStore`/`RaisingAccessRoleStore` (the doubles in
 `tests/authz/_fakes.py`) are monkeypatched onto
@@ -73,7 +73,7 @@ def _verified_actor(*, sub: str, iss: str = _ACTOR_ISSUER) -> Generator[None]:
     """Bind a real, verified `AccessToken` onto the MCP SDK's own auth contextvar.
 
     Local copy of `test_near_miss_tools.py`'s own `_verified_actor` --
-    `_resolve_authz_actor`/`_resolve_principal` both read
+    `_resolve_authz_actor` reads
     `get_access_token()` off this exact contextvar, normally populated by
     `AuthContextMiddleware` from a real HTTP request.
     """

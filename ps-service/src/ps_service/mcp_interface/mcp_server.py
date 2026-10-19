@@ -27,7 +27,7 @@ from datetime import (
 )
 from importlib import resources
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, cast
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -288,6 +288,8 @@ if TYPE_CHECKING:
     from ps_service.logging.emitter import LogEmitter
 
 _COMPONENT = "mcp_interface"
+# The `caller`/`actor` value MCP passes to ingestion and restore logging; not a user identifier.
+_MCP_CALLER_LABEL: Final = "mcp"
 _ACTION = "handle_mcp_tool_call"
 _DEFAULT_GRAPH_NAME = "policy_system"
 _DOMAIN_CONCEPTS_URI = "psdomain://concepts"
@@ -387,13 +389,12 @@ server = MCPServer(
 # (the store classes, the configuration loader) stay the single seam tests and deployments patch.
 _gate_environment = GateEnvironment(
     load_config=lambda: load_config(),  # noqa: PLW0108
-    resolve_principal=lambda config: _resolve_principal(config),  # noqa: PLW0108
     resolve_actor=lambda config: _resolve_authz_actor(config),  # noqa: PLW0108
     role_store_factory=lambda config: PsycopgAccessRoleStore(
         config, audit_store=PsycopgAuditStore(config)
     ),
     audit_store_factory=lambda config: PsycopgAuditStore(config),  # noqa: PLW0108
-    run_action=lambda action, principal, body: _run_mcp_action(action, principal, body),  # noqa: PLW0108
+    run_action=lambda action, body: _run_mcp_action(action, body),  # noqa: PLW0108
 )
 _gated_tool = gated_tool(server, _gate_environment)
 
@@ -421,7 +422,6 @@ def run_cypher_for_tool(
     *,
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
-    principal: str | None = None,
     timeout_ms: int,
     row_cap: int,
 ) -> CypherCallOutcome:
@@ -436,8 +436,6 @@ def run_cypher_for_tool(
         query: Cypher text to execute; it must be read-only.
         graph: Handle of the graph to query.
         emitter: Log emitter forwarded to Query Engine; `None` leaves the choice to Query Engine.
-        principal: Opaque caller identity recorded on the `query_engine` log entry; omitted when
-            `None`.
         timeout_ms: Server-side execution bound in milliseconds, forwarded unchanged.
         row_cap: Maximum number of rows returned, forwarded unchanged.
 
@@ -450,7 +448,7 @@ def run_cypher_for_tool(
 
     Side Effects:
         Binds a run context for the call's duration. Query Engine emits one log entry carrying the
-        run id and `principal`. Nothing is written to the graph or the audit trail.
+        run id. Nothing is written to the graph or the audit trail.
     """
     with bind_run_context():
         try:
@@ -458,7 +456,6 @@ def run_cypher_for_tool(
                 query,
                 graph=graph,
                 emitter=emitter,
-                principal=principal,
                 timeout_ms=timeout_ms,
                 row_cap=row_cap,
             )
@@ -482,7 +479,6 @@ def handle_mcp_tool_call(
     *,
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
-    principal: str | None = None,
     timeout_ms: int,
     row_cap: int,
 ) -> dict[str, object] | str:
@@ -496,8 +492,6 @@ def handle_mcp_tool_call(
         graph: Handle of the graph to query.
         emitter: Log emitter forwarded to Query Engine for its log entry; `None` leaves the choice
             to Query Engine.
-        principal: Opaque caller identity recorded on the `query_engine` log entry; the field is
-            omitted from the entry when `None`.
         timeout_ms: Server-side execution bound in milliseconds, forwarded unchanged.
         row_cap: Maximum number of rows returned, forwarded unchanged; `truncated` reports whether
             it cut the result.
@@ -512,13 +506,12 @@ def handle_mcp_tool_call(
 
     Side Effects:
         Binds a run context for the call's duration. Query Engine emits one log entry carrying the
-        run id and `principal`. Nothing is written to the graph.
+        run id. Nothing is written to the graph.
     """
     return run_cypher_for_tool(
         query,
         graph=graph,
         emitter=emitter,
-        principal=principal,
         timeout_ms=timeout_ms,
         row_cap=row_cap,
     ).response
@@ -553,39 +546,14 @@ def _resolve_graph(config: ServiceConfig) -> GraphHandle:
         raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL) from exc
 
 
-def _resolve_principal(config: ServiceConfig) -> str | None:
-    """Resolve the caller identity recorded on a tool call's log entries.
-
-    A verified bearer token's subject always wins: `get_access_token()` reads the token the MCP
-    SDK's authentication middleware stored for this request, which the SDK installs whenever the
-    transport has a token verifier. Without a token, the fixed local-test principal is used only
-    while the local-test bypass is active. Otherwise there is no principal; that case is unreachable
-    in practice because `ps_service.main.create_app` fails closed at startup when neither real
-    authentication nor the bypass is configured, but this function does not rely on it.
-
-    Args:
-        config: Service configuration; only `is_local_test_bypass_active` is read.
-
-    Returns:
-        The bearer token's subject (`None` if the token carries none), `LOCAL_TEST_PRINCIPAL_ID`
-        when there is no token and the bypass is active, otherwise `None`.
-    """
-    access_token = get_access_token()
-    if access_token is not None:
-        return access_token.subject
-    if config.is_local_test_bypass_active:
-        return LOCAL_TEST_PRINCIPAL_ID
-    return None
-
-
 def _resolve_signing_actor() -> tuple[str, str] | None:
     """Resolve the `(sub, iss)` identity a passkey-signed approval is bound to.
 
     A signed approval is bound to both subject and issuer, not subject alone, which mirrors the
     `sub`/`iss` extraction `RestAuthMiddleware.__call__` performs on the same `AccessToken` shape.
-    Unlike `_resolve_principal` there is deliberately no fallback to `LOCAL_TEST_PRINCIPAL_ID`:
-    under the local-test bypass no real actor exists that a WebAuthn credential could belong to, so
-    no pending approval may be created. Callers treat `None` as a fail-closed condition.
+    There is deliberately no fallback to `LOCAL_TEST_PRINCIPAL_ID`: under the local-test bypass no
+    real actor exists that a WebAuthn credential could belong to, so no pending approval may be
+    created. Callers treat `None` as a fail-closed condition.
 
     Returns:
         The verified `(sub, iss)` pair, or `None` if no verified bearer token is bound to this call,
@@ -606,9 +574,8 @@ _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
 
 # Defensive fallback for a non-bypass call with no verified bearer token bound to it. It is
 # unreachable in practice (`ps_service.main.create_app` fails closed at startup whenever no real
-# authentication is configured and the bypass is off, the invariant `_resolve_principal`
-# documents), but it keeps the gate fail-closed rather than passing `None` through to
-# the role gate should that invariant ever be violated.
+# authentication is configured and the bypass is off), but it keeps the gate fail-closed rather
+# than passing `None` through to the role gate should that startup invariant ever be violated.
 _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: this action requires a real authenticated caller"
 )
@@ -804,7 +771,6 @@ _POLICY_DRAFT_ACCESS_GATE = ToolGate(
 
 def _run_mcp_action(
     action: str,
-    principal: str | None,
     body: Callable[[], dict[str, object] | str],
     *,
     entity_id: str | None = None,
@@ -814,18 +780,18 @@ def _run_mcp_action(
 
     The shared helper for every action-taking tool, so the log triad and the generic-exception
     safety net live in exactly one place. It binds a fresh run id, emits a
-    `component="mcp_interface"` `outcome="started"` entry carrying `principal`, then runs `body`. A
-    `body` that returns a string beginning `"error:"` is a handled failure: it is logged
-    `outcome="failed"` with the (truncated) text as `reason` and returned unchanged. A `body` that
-    raises `Exception` is the residual, not-yet-sanitised case: it is converted to the fixed generic
-    error string, with the full `repr` logged server-side only. Any other return value is a success,
-    logged `outcome="succeeded"` and returned unchanged.
+    `component="mcp_interface"` `outcome="started"` entry, then runs `body`; the started and
+    terminal entries are correlated by that one `run_id` and record no caller identity (the
+    caller is attributed in the audit trail, not the log). A `body` that returns a string
+    beginning `"error:"` is a handled failure: it is logged `outcome="failed"` with the
+    (truncated) text as `reason` and returned unchanged. A `body` that raises `Exception` is the
+    residual, not-yet-sanitised case: it is converted to the fixed generic error string, with the
+    full `repr` logged server-side only. Any other return value is a success, logged
+    `outcome="succeeded"` and returned unchanged.
 
     Args:
         action: The tool's own name (for example `"ingest_regulation"`), used as the log entries'
             `action` field.
-        principal: The caller identity already resolved by `_resolve_principal`; recorded on every
-            log entry (`"unknown"` when `None`).
         body: Zero-argument callable doing the tool's work inside the bound run context; it reads
             its run id through `current_run_id()` because binding happens here, not in `body`.
         entity_id: Id of the node this call acts on (for a not-yet-created node, its parent),
@@ -846,7 +812,6 @@ def _run_mcp_action(
         Binds a run context for the call and emits two log entries (started, then succeeded or
         failed). Running `body` has whatever effects the tool defines.
     """
-    principal_extra = principal or "unknown"
     with bind_run_context(run_id) as bound_run_id:
         emit_log_entry(
             component=_COMPONENT,
@@ -854,7 +819,6 @@ def _run_mcp_action(
             outcome="started",
             run_id=bound_run_id,
             entity_id=entity_id,
-            extra={"principal": principal_extra},
         )
         try:
             result = body()
@@ -866,7 +830,6 @@ def _run_mcp_action(
                 run_id=bound_run_id,
                 entity_id=entity_id,
                 extra={
-                    "principal": principal_extra,
                     "exception_type": type(exc).__name__,
                     "detail": stage_failure_detail(exc),
                 },
@@ -879,7 +842,7 @@ def _run_mcp_action(
                 outcome="failed",
                 run_id=bound_run_id,
                 entity_id=entity_id,
-                extra={"principal": principal_extra, "reason": result[:_STAGE_REASON_MAX_LEN]},
+                extra={"reason": result[:_STAGE_REASON_MAX_LEN]},
             )
             return result
         emit_log_entry(
@@ -888,7 +851,6 @@ def _run_mcp_action(
             outcome="succeeded",
             run_id=bound_run_id,
             entity_id=entity_id,
-            extra={"principal": principal_extra},
         )
         return result
 
@@ -1087,7 +1049,6 @@ def _run_prepared_catalog_ingestion(
     prepared: _PreparedCatalogIngestion,
     *,
     config: ServiceConfig,
-    principal: str | None,
     run_id: str,
     trigger: IngestionTrigger,
     capture: _FailureCapture | None = None,
@@ -1101,8 +1062,6 @@ def _run_prepared_catalog_ingestion(
     Args:
         prepared: The validated request from `_prepare_catalog_ingestion`.
         config: Resolved service configuration.
-        principal: Caller identity; `None` is passed to the pipeline as the caller label
-            `"unknown"`.
         run_id: Run id the pipeline and its log lines are keyed by.
         trigger: Audit trigger recorded for the run.
         capture: Optional collector; when given, a mapped failure stores its classified reason code
@@ -1124,7 +1083,7 @@ def _run_prepared_catalog_ingestion(
             prepared.entry,
             config=config,
             run_id=run_id,
-            caller=principal or "unknown",
+            caller=_MCP_CALLER_LABEL,
             dependencies=prepared.dependencies,
             ingestion_adapter=prepared.ingestion_adapter,
             trigger=trigger,
@@ -1145,7 +1104,6 @@ def _resolve_and_ingest(
     short_name: str,
     *,
     config: ServiceConfig,
-    principal: str | None,
     run_id: str,
     audit: AuditContext,
 ) -> dict[str, object] | str:
@@ -1161,7 +1119,6 @@ def _resolve_and_ingest(
         celex: CELEX identifier of the regulation.
         short_name: Caller-supplied short name, in any letter case.
         config: Resolved service configuration.
-        principal: Caller identity; `None` is passed on as the caller label `"unknown"`.
         run_id: Run id the rows and log lines are keyed by.
         audit: Actor and audit store for the two audit rows.
 
@@ -1182,7 +1139,7 @@ def _resolve_and_ingest(
             short_name,
             config=config,
             run_id=run_id,
-            caller=principal or "unknown",
+            caller=_MCP_CALLER_LABEL,
             dependencies=_sanitize_pipeline_graph_opens(build_default_pipeline_dependencies()),
             audit=audit,
         )
@@ -1243,7 +1200,6 @@ def ingest_regulation(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -1251,17 +1207,14 @@ def ingest_regulation(
             return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
         # `_run_mcp_action` always binds a run_id via `bind_run_context()` before
         # calling this closure, so `current_run_id()` is never actually `None`
-        # here -- the `""` fallback only satisfies the type checker's narrowing,
-        # mirroring `_resolve_principal`'s own "unreachable in practice" idiom.
+        # here -- the `""` fallback only satisfies the type checker's narrowing.
         run_id = current_run_id() or ""
         audit = _audit_context(config, actor)
         if isinstance(audit, str):
             return audit
-        return _resolve_and_ingest(
-            celex, short_name, config=config, principal=principal, run_id=run_id, audit=audit
-        )
+        return _resolve_and_ingest(celex, short_name, config=config, run_id=run_id, audit=audit)
 
-    return _run_mcp_action("ingest_regulation", principal, _body)
+    return _run_mcp_action("ingest_regulation", _body)
 
 
 _BACKGROUND_INGESTION_ACTION = "background_ingestion_run"
@@ -1325,7 +1278,6 @@ def _execute_background_ingestion(
     *,
     run_id: str,
     config: ServiceConfig,
-    principal: str | None,
     store: IngestionRunStore,
 ) -> None:
     """Run the prepared pipeline on the worker thread, then record its outcome.
@@ -1339,11 +1291,9 @@ def _execute_background_ingestion(
     try:
         result = _run_mcp_action(
             _BACKGROUND_INGESTION_ACTION,
-            principal,
             lambda: _run_prepared_catalog_ingestion(
                 prepared,
                 config=config,
-                principal=principal,
                 run_id=run_id,
                 trigger="async_ingest",
                 capture=capture,
@@ -1354,7 +1304,6 @@ def _execute_background_ingestion(
         _emit_best_effort_failure(
             _BACKGROUND_INGESTION_ACTION,
             run_id,
-            principal=principal or "unknown",
             exception_type=type(exc).__name__,
             detail=stage_failure_detail(exc),
         )
@@ -1410,7 +1359,6 @@ def _submit_ingestion_run(
     *,
     run_id: str,
     config: ServiceConfig,
-    principal: str | None,
     actor: tuple[str, str] | None,
     store: IngestionRunStore,
 ) -> dict[str, object] | str:
@@ -1445,7 +1393,6 @@ def _submit_ingestion_run(
                 prepared,
                 run_id=run_id,
                 config=config,
-                principal=principal,
                 store=store,
             ),
         )
@@ -1515,7 +1462,6 @@ def start_ingestion(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -1536,12 +1482,11 @@ def start_ingestion(
             prepared,
             run_id=run_id,
             config=config,
-            principal=principal,
             actor=actor,
             store=PsycopgIngestionRunStore(config, audit_store=PsycopgAuditStore(config)),
         )
 
-    return _run_mcp_action("start_ingestion", principal, _body)
+    return _run_mcp_action("start_ingestion", _body)
 
 
 @_gated_tool("get_ingestion_status", _COMPLIANCE_OFFICER_GATE)
@@ -1577,7 +1522,6 @@ def get_ingestion_status(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         store = PsycopgIngestionRunStore(config, audit_store=PsycopgAuditStore(config))
@@ -1589,7 +1533,7 @@ def get_ingestion_status(
             row = _reconcile_orphaned_run(store, row)
         return _ingestion_run_status_response(run_id, row)
 
-    return _run_mcp_action("get_ingestion_status", principal, _body)
+    return _run_mcp_action("get_ingestion_status", _body)
 
 
 def _run_audited_change_check(
@@ -1669,7 +1613,6 @@ def check_regulations() -> dict[str, object] | str:
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -1681,7 +1624,7 @@ def check_regulations() -> dict[str, object] | str:
         # mirroring `ingest_regulation`'s own identical idiom.
         return _run_audited_change_check(config, actor, current_run_id() or "")
 
-    return _run_mcp_action("check_regulations", principal, _body)
+    return _run_mcp_action("check_regulations", _body)
 
 
 @_gated_tool("near_misses_list", _PLAIN_READ_GATE)
@@ -1707,7 +1650,6 @@ def near_misses_list() -> dict[str, object] | str:
         None on the graph. The call is logged.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         try:
@@ -1723,7 +1665,7 @@ def near_misses_list() -> dict[str, object] | str:
             return f"error: {exc}"
         return result.model_dump()
 
-    return _run_mcp_action("near_misses_list", principal, _body)
+    return _run_mcp_action("near_misses_list", _body)
 
 
 def _resolve_merge_pending_approval(
@@ -1864,7 +1806,6 @@ def near_misses_resolve(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -1895,7 +1836,7 @@ def near_misses_resolve(
             return _GRAPH_UNAVAILABLE_MESSAGE
         return result.model_dump(exclude=_MERGE_ONLY_RESOLVE_FIELDS)
 
-    return _run_mcp_action("near_misses_resolve", principal, _body)
+    return _run_mcp_action("near_misses_resolve", _body)
 
 
 @_gated_tool("near_misses_check_approval", _OWN_APPROVAL_READ_GATE)
@@ -1936,7 +1877,6 @@ def near_misses_check_approval(
         is read-only and logged.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         actor = _resolve_signing_actor()
@@ -1969,7 +1909,7 @@ def near_misses_check_approval(
             "error": status.error,
         }
 
-    return _run_mcp_action("near_misses_check_approval", principal, _body)
+    return _run_mcp_action("near_misses_check_approval", _body)
 
 
 # Fixed, detail-free string for the catalog-source tools' read failures: never host, port,
@@ -2011,7 +1951,6 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -2033,7 +1972,7 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
             return f"error: {exc}"
         return {"url": url, "source": "override"}
 
-    return _run_mcp_action("set_catalog_source", principal, _body)
+    return _run_mcp_action("set_catalog_source", _body)
 
 
 @_gated_tool("reset-catalog-source", _SYSTEM_ADMIN_GATE)
@@ -2062,7 +2001,6 @@ def reset_catalog_source() -> dict[str, object] | str:
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -2078,7 +2016,7 @@ def reset_catalog_source() -> dict[str, object] | str:
             return f"error: {exc}"
         return {"url": config.curated_source_base_url, "source": "default"}
 
-    return _run_mcp_action("reset_catalog_source", principal, _body)
+    return _run_mcp_action("reset_catalog_source", _body)
 
 
 @_gated_tool("get-catalog-source", _SYSTEM_ADMIN_GATE)
@@ -2107,7 +2045,6 @@ def get_catalog_source() -> dict[str, object] | str:
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         try:
@@ -2119,43 +2056,7 @@ def get_catalog_source() -> dict[str, object] | str:
             return _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE
         return {"url": effective.url, "source": "override" if effective.is_override else "default"}
 
-    return _run_mcp_action("get_catalog_source", principal, _body)
-
-
-def _emit_invite_created_audit_entry(
-    *, actor: tuple[str, str] | None, principal: str | None, email: str
-) -> None:
-    """Log the `invitations` / `invite_user` `created` entry that names the invitee's email.
-
-    `_run_mcp_action` already emits the generic started/succeeded/failed triad for every tool call,
-    carrying the principal and a timestamp, but its fixed `extra` shape does not carry the target
-    email. This is an additional emission alongside that triad, in the same shape as the
-    `SystemOwner` floor warning logged by `ps_service.authz.service`. `invite_user` calls it only on
-    the success path.
-
-    Business Rules:
-        - `ps_service.logging.models` tells callers never to put PII in `extra`. Putting the
-          invitee's email in `entity_id` is a deliberate, scoped exception: an invite record with no
-          target identity would be useless.
-        - `LoggingLifecycleError` is swallowed, because a missing log sink must never turn a
-          successful invite into a failed tool call.
-
-    Args:
-        actor: The verified `(sub, iss)` pair resolved for this call, or `None` under the bypass.
-        principal: The resolved principal, used as the actor label when `actor` is `None`.
-        email: The invitee's email address, recorded as the entry's `entity_id`.
-
-    Side Effects:
-        Emits one log entry.
-    """
-    with contextlib.suppress(LoggingLifecycleError):
-        emit_log_entry(
-            component="invitations",
-            action="invite_user",
-            entity_id=email,
-            outcome="created",
-            extra={"actor": actor[0] if actor is not None else (principal or "unknown")},
-        )
+    return _run_mcp_action("get_catalog_source", _body)
 
 
 @_gated_tool("invite-user", _SYSTEM_ADMIN_GATE)
@@ -2185,14 +2086,12 @@ def invite_user(
 
     Side Effects:
         Creates an invitation in Authentik. Writes a `user.invite` audit row before the call, and a
-        follow-up row if the call fails. On success it also logs an `invitations` entry naming the
-        invitee's email.
+        follow-up row if the call fails.
         A caller refused by the role gate gets the unchanged `error: ` string and one
         best-effort `access.gate` audit row for this operation; no row is written for a caller
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -2205,10 +2104,9 @@ def invite_user(
             )
         except (AuthentikInvitationError, AuditTrailUnavailableError) as exc:
             return f"error: {exc}"
-        _emit_invite_created_audit_entry(actor=actor, principal=principal, email=email)
         return {"itoken": result.itoken, "invite_url": result.invite_url}
 
-    return _run_mcp_action("invite_user", principal, _body)
+    return _run_mcp_action("invite_user", _body)
 
 
 @_gated_tool("get-catalog-listing", _PLAIN_READ_GATE)
@@ -2235,7 +2133,6 @@ def get_catalog_listing() -> dict[str, object] | str:
         One network fetch of `catalog.json`; nothing is written. The call is logged.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         dependencies: CuratedCatalogDependencies = build_default_curated_catalog_dependencies()
@@ -2259,7 +2156,7 @@ def get_catalog_listing() -> dict[str, object] | str:
             ]
         ).model_dump()
 
-    return _run_mcp_action("get_catalog_listing", principal, _body)
+    return _run_mcp_action("get_catalog_listing", _body)
 
 
 @_gated_tool("restore_instrument", _COMPLIANCE_OFFICER_GATE)
@@ -2319,7 +2216,6 @@ def restore_instrument(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
     # The restoring caller owns any imported draft Policy. Same resolution as the
     # policy-lifecycle tools (verified `(sub, iss)`, or the local-test bypass identity).
@@ -2337,7 +2233,7 @@ def restore_instrument(
             outcome = run_restoration_from_catalog_source(
                 request_body,
                 config=config,
-                actor=principal or "unknown",
+                actor=_MCP_CALLER_LABEL,
                 dependencies=dependencies,
                 audit=audit,
                 owner=owner,
@@ -2357,7 +2253,7 @@ def restore_instrument(
             return _GRAPH_UNAVAILABLE_MESSAGE
         return outcome.model_dump()
 
-    return _run_mcp_action("restore_instrument", principal, _body)
+    return _run_mcp_action("restore_instrument", _body)
 
 
 # `celex` is a plain node PROPERTY on `RegulatoryInstrument`, never its node id
@@ -2408,7 +2304,6 @@ def check_instrument_ingestion_status(
         One read-only graph query; nothing is written. The call is logged.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object]:
         try:
@@ -2416,7 +2311,6 @@ def check_instrument_ingestion_status(
             result = execute_cypher_query(
                 _INGESTION_STATUS_QUERY,
                 graph=graph,
-                principal=principal,
                 timeout_ms=config.query_timeout_ms,
                 row_cap=config.query_row_cap,
                 params={"celex_ids": celex_ids},
@@ -2436,7 +2330,7 @@ def check_instrument_ingestion_status(
             }
         }
 
-    return _run_mcp_action("check_instrument_ingestion_status", principal, _body)
+    return _run_mcp_action("check_instrument_ingestion_status", _body)
 
 
 def _record_cypher_call(
@@ -2540,7 +2434,6 @@ def cypher(query: str) -> dict[str, object] | str:
     outcome = run_cypher_for_tool(
         query,
         graph=graph,
-        principal=_resolve_principal(config),
         timeout_ms=config.query_timeout_ms,
         row_cap=config.query_row_cap,
     )
@@ -2675,7 +2568,6 @@ def list_access_roles() -> dict[str, object] | str:
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -2689,7 +2581,7 @@ def list_access_roles() -> dict[str, object] | str:
             "system_owner_floor_warning": result.system_owner_floor_warning,
         }
 
-    return _run_mcp_action("list_access_roles", principal, _body)
+    return _run_mcp_action("list_access_roles", _body)
 
 
 _GRANT_REVOKE_ERRORS = (
@@ -2737,7 +2629,6 @@ def grant_access_role(
         Persists the assignment in the authorization store and writes an audit event.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
     issuer = config.auth_issuer
 
@@ -2762,7 +2653,7 @@ def grant_access_role(
             "system_owner_floor_warning": result.system_owner_floor_warning,
         }
 
-    return _run_mcp_action("grant_access_role", principal, _body)
+    return _run_mcp_action("grant_access_role", _body)
 
 
 @_gated_tool("revoke-access-role", _ACCESS_ROLE_CHANGE_GATE)
@@ -2802,7 +2693,6 @@ def revoke_access_role(
         Updates the assignment in the authorization store and writes an audit event.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
     issuer = config.auth_issuer
 
@@ -2827,7 +2717,7 @@ def revoke_access_role(
             "system_owner_floor_warning": result.system_owner_floor_warning,
         }
 
-    return _run_mcp_action("revoke_access_role", principal, _body)
+    return _run_mcp_action("revoke_access_role", _body)
 
 
 def _audit_event_to_dict(row: AuditEventRow) -> dict[str, object]:
@@ -2924,7 +2814,6 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -2956,7 +2845,7 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
             "next_cursor": page.next_cursor,
         }
 
-    return _run_mcp_action("list_audit_events", principal, _body)
+    return _run_mcp_action("list_audit_events", _body)
 
 
 _VERIFY_AUDIT_LOG_ERRORS = (AuthorizationStoreUnavailableError,)
@@ -3017,7 +2906,6 @@ def verify_audit_log() -> dict[str, object] | str:
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3036,7 +2924,7 @@ def verify_audit_log() -> dict[str, object] | str:
             "first_break": _chain_break_to_dict(verification),
         }
 
-    return _run_mcp_action("verify_audit_log", principal, _body)
+    return _run_mcp_action("verify_audit_log", _body)
 
 
 _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
@@ -3302,7 +3190,6 @@ def create_policy_draft(
         event.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3344,7 +3231,7 @@ def create_policy_draft(
             "governed_capability_ids": list(result.capability_ids),
         }
 
-    return _run_mcp_action("create_policy_draft", principal, _body, entity_id=supersedes_policy_id)
+    return _run_mcp_action("create_policy_draft", _body, entity_id=supersedes_policy_id)
 
 
 _UPDATE_POLICY_DRAFT_ERRORS = (
@@ -3393,7 +3280,6 @@ def update_policy_draft(
         a missing `version` and `status` on the Policy tree.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3426,7 +3312,7 @@ def update_policy_draft(
             "updated_fields": list(result.updated_fields),
         }
 
-    return _run_mcp_action("update_policy_draft", principal, _body, entity_id=policy_id)
+    return _run_mcp_action("update_policy_draft", _body, entity_id=policy_id)
 
 
 _ADD_STANDARD_TO_DRAFT_ERRORS = (
@@ -3482,7 +3368,6 @@ def add_standard_to_draft(
         Writes the Standard and its link to the policy graph; no audit event is written.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3522,7 +3407,7 @@ def add_standard_to_draft(
             "status": result.status,
         }
 
-    return _run_mcp_action("add_standard_to_draft", principal, _body, entity_id=policy_id)
+    return _run_mcp_action("add_standard_to_draft", _body, entity_id=policy_id)
 
 
 _UPDATE_STANDARD_DRAFT_ERRORS = (
@@ -3576,7 +3461,6 @@ def update_standard_draft(
         Writes the changed fields to the policy graph; no audit event is written.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3615,7 +3499,7 @@ def update_standard_draft(
             "status": result.status,
         }
 
-    return _run_mcp_action("update_standard_draft", principal, _body, entity_id=standard_id)
+    return _run_mcp_action("update_standard_draft", _body, entity_id=standard_id)
 
 
 _ADD_CONTROL_TO_DRAFT_ERRORS = (
@@ -3685,7 +3569,6 @@ def add_control_to_draft(
         Writes the Control and its link to the policy graph; no audit event is written.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3729,7 +3612,7 @@ def add_control_to_draft(
             "status": result.status,
         }
 
-    return _run_mcp_action("add_control_to_draft", principal, _body, entity_id=standard_id)
+    return _run_mcp_action("add_control_to_draft", _body, entity_id=standard_id)
 
 
 _UPDATE_CONTROL_DRAFT_ERRORS = (
@@ -3785,7 +3668,6 @@ def update_control_draft(
         Writes the changed fields to the policy graph; no audit event is written.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3825,7 +3707,7 @@ def update_control_draft(
             "status": result.status,
         }
 
-    return _run_mcp_action("update_control_draft", principal, _body, entity_id=control_id)
+    return _run_mcp_action("update_control_draft", _body, entity_id=control_id)
 
 
 _GET_POLICY_ERRORS = (
@@ -3862,7 +3744,6 @@ def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, obje
         which writes to the graph; a tree that needs no backfill is not written.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3908,7 +3789,7 @@ def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, obje
             ],
         }
 
-    return _run_mcp_action("get_policy", principal, _body)
+    return _run_mcp_action("get_policy", _body)
 
 
 _PROPOSE_POLICY_ERRORS = (
@@ -3949,7 +3830,6 @@ def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
         graph write and records an audit event.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -3979,7 +3859,7 @@ def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
             "control_ids": list(result.control_ids),
         }
 
-    return _run_mcp_action("propose_policy", principal, _body)
+    return _run_mcp_action("propose_policy", _body)
 
 
 _APPROVE_POLICY_ERRORS = (
@@ -4040,7 +3920,6 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -4073,7 +3952,7 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
             "governed_capability_ids": list(result.governed_capability_ids),
         }
 
-    return _run_mcp_action("approve_policy", principal, _body)
+    return _run_mcp_action("approve_policy", _body)
 
 
 _REJECT_POLICY_ERRORS = (
@@ -4122,7 +4001,6 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -4153,7 +4031,7 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
             "control_ids": list(result.control_ids),
         }
 
-    return _run_mcp_action("reject_policy", principal, _body)
+    return _run_mcp_action("reject_policy", _body)
 
 
 _REVERT_POLICY_TO_DRAFT_ERRORS = (
@@ -4196,7 +4074,6 @@ def revert_policy_to_draft(
         graph write and records an audit event.
     """
     config = load_config()
-    principal = _resolve_principal(config)
     actor = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
@@ -4226,7 +4103,7 @@ def revert_policy_to_draft(
             "control_ids": list(result.control_ids),
         }
 
-    return _run_mcp_action("revert_policy_to_draft", principal, _body)
+    return _run_mcp_action("revert_policy_to_draft", _body)
 
 
 @_gated_tool("find-capability-merge-candidates", _CLEANUP_GATE)
@@ -4273,7 +4150,6 @@ def find_capability_merge_candidates_tool(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         dependencies = build_default_graph_cleanup_dependencies()
@@ -4291,7 +4167,7 @@ def find_capability_merge_candidates_tool(
             return _GRAPH_UNAVAILABLE_MESSAGE
         return result.model_dump()
 
-    return _run_mcp_action("find_capability_merge_candidates", principal, _body)
+    return _run_mcp_action("find_capability_merge_candidates", _body)
 
 
 @_gated_tool("find-duplicate-obligations", _CLEANUP_GATE)
@@ -4328,7 +4204,6 @@ def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, obj
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         dependencies = build_default_graph_cleanup_dependencies()
@@ -4341,7 +4216,7 @@ def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, obj
             return _GRAPH_UNAVAILABLE_MESSAGE
         return result.model_dump()
 
-    return _run_mcp_action("find_duplicate_obligations", principal, _body)
+    return _run_mcp_action("find_duplicate_obligations", _body)
 
 
 @_gated_tool("merge-capabilities", _CLEANUP_GATE)
@@ -4420,7 +4295,6 @@ def merge_capabilities_tool(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
@@ -4453,7 +4327,7 @@ def merge_capabilities_tool(
             "expires_at": approval.expires_at,
         }
 
-    return _run_mcp_action("merge_capabilities", principal, _body)
+    return _run_mcp_action("merge_capabilities", _body)
 
 
 @_gated_tool("merge-obligations", _CLEANUP_GATE)
@@ -4510,7 +4384,6 @@ def merge_obligations_tool(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
@@ -4536,7 +4409,7 @@ def merge_obligations_tool(
             "expires_at": approval.expires_at,
         }
 
-    return _run_mcp_action("merge_obligations", principal, _body)
+    return _run_mcp_action("merge_obligations", _body)
 
 
 @_gated_tool("release-capability-governance", _CLEANUP_GATE)
@@ -4594,7 +4467,6 @@ def release_capability_governance_tool(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
@@ -4619,7 +4491,7 @@ def release_capability_governance_tool(
             "expires_at": approval.expires_at,
         }
 
-    return _run_mcp_action("release_capability_governance", principal, _body)
+    return _run_mcp_action("release_capability_governance", _body)
 
 
 _AUDIT_UNREADABLE_MESSAGE = "error: the audit trail could not be read right now; try again shortly"
@@ -4700,7 +4572,6 @@ def unmerge_tool(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
@@ -4728,7 +4599,7 @@ def unmerge_tool(
             "expires_at": approval.expires_at,
         }
 
-    return _run_mcp_action("unmerge", principal, _body)
+    return _run_mcp_action("unmerge", _body)
 
 
 _CLEANUP_APPROVAL_UNSETTLED_MESSAGE = (
@@ -4787,7 +4658,6 @@ def check_cleanup_approval_tool(
         with no verified identity.
     """
     config = load_config()
-    principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
@@ -4817,4 +4687,4 @@ def check_cleanup_approval_tool(
             "outcome": status.outcome,
         }
 
-    return _run_mcp_action("check_cleanup_approval", principal, _body)
+    return _run_mcp_action("check_cleanup_approval", _body)

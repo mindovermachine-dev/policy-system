@@ -4,8 +4,8 @@ The happy path: a fixed, parameterized
 `UNWIND $celex_ids AS c MATCH (n:RegulatoryInstrument {celex: c}) RETURN
 DISTINCT n.celex AS celex` query, run through `execute_cypher_query` via
 `_resolve_graph` -- exactly like the `cypher` tool's own reliance on those
-two helpers -- and the `_resolve_principal` + `_run_mcp_action` audit triad,
-exactly like `check_regulations`.
+two helpers -- and the `_run_mcp_action` log triad, exactly like
+`check_regulations`.
 
 The degraded path: `_resolve_graph`/`execute_cypher_query`
 failures (`McpGraphUnavailableError`, `GraphUnseededError`,
@@ -21,16 +21,13 @@ trips `_run_mcp_action`'s `outcome="failed"` branch instead.
 Authorization: this tool
 intentionally declares no role gate (`AUTHENTICATED_ONLY`), matching `cypher`/
 `near_misses_list` (both plain graph reads). The tests below prove that
-placement from the tool-gate declarations (`TOOL_GATES`) and prove the resolved
-principal under the local-test bypass matches `check_regulations`'s own audit-log
-parity (`test_check_regulations_tool.py:91-101, 244-245`).
+placement from the tool-gate declarations (`TOOL_GATES`).
 
 `check_regulations` declares a `ComplianceOfficer` `ROLE` gate (a sweep automatically
 re-ingests detected amendments), so it is not used below as an *ungated*-peer comparison
 for test (a) -- it sits in that same test's "gated" contrast alongside
-`set-catalog-source`. Tests (b)/(c) are unaffected: both are about registration
-mechanics and bypass-principal parity, neither of which the gate changed (the gate is
-itself skipped entirely under the local-test bypass).
+`set-catalog-source`. Test (b) is unaffected: it is about registration mechanics, which
+the gate does not change.
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
 `test_cypher_tool.py:47-99`'s own `_FakeQueryResult`/`_FakeGraphHandle`/
@@ -48,11 +45,9 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
-from api._fakes import build_fake_change_check_dependencies
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
-from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
@@ -195,12 +190,11 @@ def test_statuses_split_ingested_from_not_yet_ingested(monkeypatch: pytest.Monke
         assert celex not in query_text
 
 
-def test_audit_log_records_started_then_succeeded_with_resolved_principal(
+def test_audit_log_records_started_then_succeeded_and_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """(b): the `mcp_interface` audit log shows a `started`->`succeeded`
-    pair carrying the resolved principal, mirroring
-    `test_check_regulations_tool.py:234-245`.
+    """(b): the `mcp_interface` log shows a `started`->`succeeded` pair under one run id that
+    carries no caller identity, as `check_regulations` does.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -222,7 +216,7 @@ def test_audit_log_records_started_then_succeeded_with_resolved_principal(
     assert all(line.get("run_id") for line in mcp_lines)
     assert len({line["run_id"] for line in mcp_lines}) == 1
     for line in mcp_lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+        assert "principal" not in line
 
 
 # --- (c): pydantic-schema rejection smoke tests -------------------------------
@@ -361,7 +355,7 @@ def test_degraded_path_audit_log_shows_succeeded_not_failed(
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     for line in mcp_lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
+        assert "principal" not in line
 
 
 # --- authorization parity proof ------------------
@@ -399,45 +393,3 @@ def test_tool_registered_on_server_the_same_ungated_way_as_check_regulations() -
     tool_names = {t.name for t in asyncio.run(mcp_server.server.list_tools())}
     assert "check_instrument_ingestion_status" in tool_names
     assert "check_regulations" in tool_names
-
-
-def test_local_test_bypass_principal_matches_check_regulations_parity(
-    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
-) -> None:
-    """(c): under the local-test bypass, `LOCAL_TEST_PRINCIPAL_ID` appears
-    on this tool's audit-log row exactly as it does for `check_regulations`
-    (`test_check_regulations_tool.py:91-101, 244-245`) -- both tools
-    resolve their caller identity through the same `_resolve_principal`
-    path, proving no additional identity/role resolution branch was
-    silently added for this tool.
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    emitter = configure()
-    handle = _FakeGraphHandle(ingested_celex=("32014R0910",))
-    _install_graph(monkeypatch, handle)
-    fake = build_fake_change_check_dependencies()
-    monkeypatch.setattr(
-        mcp_server, "build_default_change_check_dependencies", lambda: fake.dependencies
-    )
-
-    ingestion_result = _call_check_instrument_ingestion_status(["32014R0910"])
-    regulations_result = asyncio.run(mcp_server.server.call_tool("check_regulations", {}))
-
-    assert ingestion_result.is_error is False
-    assert isinstance(regulations_result, CallToolResult)
-    assert regulations_result.is_error is False
-
-    emitter.flush()
-    all_lines = read_lines(resolve_default_log_path())
-    ingestion_principals = {
-        line.get("principal")
-        for line in all_lines
-        if line.get("component") == "mcp_interface"
-        and line.get("action") == "check_instrument_ingestion_status"
-    }
-    regulations_principals = {
-        line.get("principal")
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "check_regulations"
-    }
-    assert ingestion_principals == regulations_principals == {LOCAL_TEST_PRINCIPAL_ID}

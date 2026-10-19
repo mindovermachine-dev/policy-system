@@ -3,7 +3,7 @@
 `PsTokenVerifier.verify_token` is THE single logging choke point for every
 authentication outcome: on success it emits
 ``component="auth", action="authenticate_request", outcome="success"``
-with ``extra={"sub", "iss"}``; on any rejection it emits
+and no token claim; on any rejection it emits
 ``outcome="unauthenticated"`` with ``extra={"reason": <category>}`` drawn
 from the closed six-category set. Across every one of those
 entries, the raw token string (and the literal ``"Bearer "`` prefix) must
@@ -79,7 +79,7 @@ def _assert_token_never_logged(lines: list[dict[str, object]], token: str) -> No
             assert value != token
 
 
-def test_successful_verification_logs_sub_and_iss(
+def test_successful_verification_logs_component_action_outcome_and_no_token_claim(
     mock_oidc_provider: MockOidcProvider, make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     emitter, log_path = make_emitter()
@@ -96,8 +96,10 @@ def test_successful_verification_logs_sub_and_iss(
     assert entry["component"] == "auth"
     assert entry["action"] == "authenticate_request"
     assert entry["outcome"] == "success"
-    assert entry["sub"] == _DISTINCTIVE_SUB
-    assert entry["iss"] == mock_oidc_provider.issuer
+    assert set(entry) - {"run_id"} == {"component", "action", "outcome", "timestamp"}
+    serialized = json.dumps(entry)
+    assert _DISTINCTIVE_SUB not in serialized
+    assert mock_oidc_provider.issuer not in serialized
     _assert_token_never_logged(lines, token)
 
 

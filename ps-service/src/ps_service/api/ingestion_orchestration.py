@@ -1058,7 +1058,8 @@ def _emit_run(
             ``_INTERNAL_INGESTION_SOURCE_IDENTIFIER`` literal for the
             internal-document path, whose content carries no stable identifier known before
             parsing.
-        caller: The requesting client host (or ``"unknown"``).
+        caller: The requesting client host on REST, or the fixed MCP caller label `"mcp"`
+            (``"unknown"`` when neither is known).
         emitter: Optional explicit emitter; otherwise the process default.
         duration_ms: Wall time for the run so far (omitted on ``"started"``).
         failing_stage: The stage that raised, on the ``"failed"`` entry only.
@@ -1472,7 +1473,8 @@ def run_catalog_ingestion_pipeline(
         entry: The curated catalog entry (CELEX, title, short name, version).
         config: The resolved service configuration.
         run_id: The request-scoped run id.
-        caller: The requesting client host, or ``"unknown"``.
+        caller: The requesting client host on REST, or the fixed MCP caller label `"mcp"`
+            (``"unknown"`` when neither is known).
         dependencies: The injected graph openers, stage functions, and adapter
             factories (``build_default_pipeline_dependencies`` in production; a
             fake in fast tests).
@@ -1653,7 +1655,7 @@ def run_audited_catalog_ingestion(
         short_name: The request's caller-supplied ``short_name`` (any case).
         config: The resolved service configuration.
         run_id: The effective run id (the rows' ``resource_id``).
-        caller: The requesting client host or principal label, for the run log.
+        caller: The requesting client host (REST) or the fixed MCP caller label, for the run log.
         dependencies: The injected graph openers, stages and adapters.
         audit: Who is acting and where the rows go.
         emitter: Optional explicit log emitter.

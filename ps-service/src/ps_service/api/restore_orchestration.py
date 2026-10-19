@@ -205,7 +205,8 @@ class CatalogRestoreStage(Protocol):
             single_tenant_graph_name: Name of the single-tenant (merged) graph; non-empty.
             similarity_threshold: Minimum Capability embedding similarity for convergence, in 0 to
                 1.
-            actor: The requesting client host, recorded as the caller in audit log entries.
+            actor: The requesting client host (REST) or the fixed MCP caller label, recorded as the
+                caller in audit log entries.
             open_gateway: Returns the Graph Write Gateway, or raises when the service has none. The
                 routine calls it only after the artifact verified.
             audit_event_id: Id of the opening ``instrument.restore`` audit row; every log group of
@@ -376,7 +377,8 @@ def _classify_restore_failure(
     Args:
         exc: The exception raised by the restore routine.
         instrument_id: The instrument being restored, recorded on the failure log entry.
-        actor: The requesting client host, recorded as the caller on the failure log entry.
+        actor: The requesting client host (REST) or the fixed MCP caller label, recorded as the
+            caller on the failure log entry.
         emitter: Log emitter, or ``None`` for the process default.
 
     Returns:
@@ -468,7 +470,7 @@ def _perform_restore(
     Args:
         instrument_id: The instrument being restored, used in failure logging.
         config: The resolved service configuration.
-        actor: The requesting client host.
+        actor: The requesting client host (REST) or the fixed MCP caller label.
         dependencies: Source of the database handle, graph name and gateway access.
         audit_event_id: Id of the opening audit row, handed to the restore routine.
         invoke: Calls the restore routine with the values above.
@@ -704,7 +706,8 @@ def run_restoration_from_catalog_source(
     Args:
         request_body: The request: the instrument id to fetch, in any letter case.
         config: The resolved service configuration; supplies the default source URL.
-        actor: The requesting client host, recorded as the caller.
+        actor: The requesting client host (REST) or the fixed MCP caller label, recorded as the
+            caller.
         dependencies: The fetch-and-restore collaborators.
         audit: The acting principal and audit store the ``instrument.restore`` rows are written to.
         owner: The restoring caller's verified ``(sub, iss)`` pair. It owns any imported draft

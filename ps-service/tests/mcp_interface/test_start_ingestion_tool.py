@@ -206,10 +206,12 @@ def test_a_row_is_recorded_for_the_submission_before_the_call_returns(
     assert (row.actor_subject, row.actor_issuer) == _BYPASS_ACTOR
 
 
-def test_the_pipeline_receives_the_submitted_run_id_celex_and_caller(
+def test_the_pipeline_receives_the_submitted_run_id_celex_and_mcp_caller_label(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore, read_lines: ReadLines
 ) -> None:
-    """The pipeline gets the same plain arguments as in the blocking tool."""
+    """The pipeline gets the same plain arguments as in the blocking tool, and its run log
+    carries the fixed MCP caller label rather than the bypass identity.
+    """
     _ = store
     emitter = configure()
     _use_real_pipeline_stages(monkeypatch)
@@ -227,7 +229,8 @@ def test_the_pipeline_receives_the_submitted_run_id_celex_and_caller(
     for line in lines:
         assert line["run_id"] == run_id
         assert line["source_identifier"] == _CELEX
-        assert line["caller"] == LOCAL_TEST_PRINCIPAL_ID
+        assert line["caller"] == "mcp"
+        assert LOCAL_TEST_PRINCIPAL_ID not in json.dumps(line)
 
 
 def test_submission_and_background_run_log_one_correlated_lifecycle_each(
@@ -251,6 +254,7 @@ def test_submission_and_background_run_log_one_correlated_lifecycle_each(
         ]
         assert [line["outcome"] for line in action_lines] == ["started", "succeeded"], action
         assert {line["run_id"] for line in action_lines} == {run_id}, action
+        assert all("principal" not in line for line in action_lines), action
 
 
 def test_run_ids_are_random_uuid4_values_that_differ_between_submissions(
@@ -647,14 +651,14 @@ def test_start_ingestion_audits_the_verified_actor_with_trigger_async_ingest(
         "status": "started",
         "trigger": "async_ingest",
     }
-    # Correlation only (not proof): the operational log line carries the same run_id and caller.
+    # Correlation only (not proof): the operational log line carries the same run_id.
     emitter.flush()
     started = [
         line
         for line in read_lines(resolve_default_log_path())
         if line.get("action") == "start_ingestion" and line.get("outcome") == "started"
     ]
-    assert [(line["run_id"], line["principal"]) for line in started] == [(run_id, _SUBJECT)]
+    assert [line["run_id"] for line in started] == [run_id]
 
 
 def test_the_submission_under_the_local_test_bypass_is_audited_as_the_bypass_actor(

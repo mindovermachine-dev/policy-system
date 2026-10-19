@@ -125,9 +125,11 @@ hook; a violation blocks the commit and fails CI.
 When implementing code use TDD as the default way to ensure appropriate test coverage.
 
 Run the default suite — everything except the slow, environment-dependent marker
-groups. A bare `pytest` already does this and runs in parallel across all cores
-(`pytest-xdist`, configured once in `addopts` in the root `pyproject.toml`, the same
-setting the `trunk-worthy` gate uses):
+groups. A bare `pytest` already does this and runs in parallel (`pytest-xdist`, configured
+once in `addopts` in the root `pyproject.toml`, the same setting the `trunk-worthy` gate
+uses). The worker count is one per core, capped by available memory at one worker per
+800 MiB; the run's first line says the count and which limit set it. An explicit `-n N`
+is used unchanged:
 
 ```bash
 uv run pytest
