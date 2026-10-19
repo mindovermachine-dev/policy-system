@@ -14,6 +14,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from api._audit_fakes import InMemoryAuditStore
 from api._fakes import build_fake_change_check_dependencies, build_fake_pipeline_dependencies
@@ -497,7 +498,8 @@ def test_sweep_resume_records_the_sweep_pair_and_one_gateway_row_with_the_same_r
         app_config,
         llm_interface_model="azure/gpt-4o",
         llm_interface_embed_model="azure/text-embedding-3-large",
-        company_merge_similarity_threshold=0.83,
+        company_merge_capability_merge_threshold=0.83,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
     )
 
     result = _sweep(config, fake, store, emitter, dependencies=deps)

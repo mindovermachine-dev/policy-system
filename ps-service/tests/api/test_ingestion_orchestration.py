@@ -16,6 +16,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from api._fakes import (
     FakeGraphHandle,
@@ -183,7 +184,7 @@ class _CountingFetch:
 
 
 def _complete_config() -> ServiceConfig:
-    """A fully-populated config: LLM model, embed model, and similarity threshold all set."""
+    """A fully-populated config: LLM model, embed model, and merge threshold all set."""
     return ServiceConfig(
         host="127.0.0.1",
         port=8000,
@@ -191,12 +192,13 @@ def _complete_config() -> ServiceConfig:
         logging_dir=None,
         llm_interface_model="azure/gpt-4o",
         llm_interface_embed_model="azure/text-embedding-3-large",
-        company_merge_similarity_threshold=0.83,
+        company_merge_capability_merge_threshold=0.83,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
     )
 
 
 def _incomplete_config() -> ServiceConfig:
-    """A config with no LLM model / embed model / similarity threshold."""
+    """A config with no LLM model / embed model / merge threshold."""
     return ServiceConfig(
         host="127.0.0.1", port=8000, graceful_shutdown_seconds=10, logging_dir=None
     )
@@ -416,6 +418,47 @@ def test_incomplete_llm_config_raises_503_before_any_stage_runs() -> None:
         )
 
     assert fake.recorder.order == []
+
+
+def test_unset_review_threshold_raises_503_naming_it_before_any_stage_runs() -> None:
+    fake = build_fake_pipeline_dependencies()
+
+    with pytest.raises(IngestionConfigIncompleteError) as raised:
+        run_catalog_ingestion_pipeline(
+            _ENTRY,
+            config=replace(_complete_config(), company_merge_capability_review_threshold=None),
+            run_id="run-5",
+            caller="127.0.0.1",
+            dependencies=fake.dependencies,
+        )
+
+    assert "company_merge_capability_review_threshold" in str(raised.value)
+    assert fake.recorder.order == []
+
+
+def test_merge_stage_receives_the_configured_merge_and_review_thresholds(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
+    config = replace(
+        _complete_config(),
+        company_merge_capability_merge_threshold=0.9,
+        company_merge_capability_review_threshold=0.4,
+    )
+
+    run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=config,
+        run_id="run-1",
+        caller="127.0.0.1",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+
+    merge_kwargs = next(call.kwargs for call in fake.recorder.calls if call.stage == "merge")
+    assert merge_kwargs["merge_threshold"] == 0.9
+    assert merge_kwargs["review_threshold"] == 0.4
 
 
 def test_unsafe_stage_exception_is_sanitized_to_generic_reason(
@@ -1182,7 +1225,8 @@ class _StageOrderMerge:
         baseline_graph_name: str,
         audit_event_id: str,
         embed_model: str,
-        similarity_threshold: float | None,
+        merge_threshold: float | None,
+        review_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> MergeResult:
@@ -1195,7 +1239,8 @@ class _StageOrderMerge:
             baseline_graph_name,
             audit_event_id,
             embed_model,
-            similarity_threshold,
+            merge_threshold,
+            review_threshold,
             call_embedding,
             emitter,
         )

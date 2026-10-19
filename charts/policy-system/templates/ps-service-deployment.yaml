@@ -200,8 +200,10 @@ spec:
             - name: PS_AUTHENTIK_PUBLIC_URL
               value: {{ .Values.psService.authentik.publicUrl | quote }}
             {{- end }}
-            - name: PS_COMPANYMERGE_SIMILARITY_THRESHOLD
-              value: {{ .Values.psService.companyMerge.similarityThreshold | quote }}
+            - name: PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD
+              value: {{ .Values.psService.companyMerge.capabilityMergeThreshold | quote }}
+            - name: PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD
+              value: {{ .Values.psService.companyMerge.capabilityReviewThreshold | quote }}
             - name: PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS
               value: {{ .Values.psService.graphGateway.driftCheckIntervalSeconds | quote }}
             - name: PS_SERVICE_LOCAL_TEST_BYPASS

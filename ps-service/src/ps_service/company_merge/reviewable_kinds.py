@@ -95,9 +95,10 @@ class ReviewThresholds:
     Attributes:
         merge: The auto-merge line: an eligible candidate scoring at or above it is merged onto.
             Only a `"merge-above"` kind takes one.
-        review: The near-miss line: a pair scoring at or above it is reviewed. `None` means no
-            floor for a `"merge-above"` kind (every scored best neighbour is reviewed); a
-            `"review-only"` kind requires one.
+        review: The near-miss line: a pair scoring at or above it is reviewed and a pair below it
+            is not. `None` means no floor for a `"merge-above"` kind (each best neighbour that
+            was scored is reviewed; Capability's production path always sets one, built by
+            `capability_config.capability_thresholds`); a `"review-only"` kind requires one.
     """
 
     merge: float | None = None

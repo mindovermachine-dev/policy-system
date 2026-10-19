@@ -18,7 +18,7 @@ test, now seeds a `ComplianceOfficer` grant via `_grant_compliance_officer`)
 and needs no change here.
 
 `_INSTRUMENT_ID`/`_use_fake_restore_infra`/`_valid_transport`/
-`_set_similarity_threshold` are imported directly from
+`_set_merge_threshold` are imported directly from
 `test_restore_instrument_tool.py` rather than re-declared, so this file can
 never silently drift from that file's own restore-artifact fixtures.
 
@@ -53,7 +53,7 @@ from mcp.types import CallToolResult, TextContent
 
 from mcp_interface.test_restore_instrument_tool import (
     _INSTRUMENT_ID,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _set_similarity_threshold,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _set_merge_threshold,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _use_fake_restore_infra,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own "zero changes to that file" fixtures verbatim rather than re-declaring them, mirrors `test_ingest_regulation_authz_gate.py`'s own cross-module private-import convention
     _valid_transport,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
@@ -219,7 +219,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     _use_fake_restore_infra(monkeypatch, _valid_transport())
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):

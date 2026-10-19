@@ -15,6 +15,7 @@ import re
 from typing import TYPE_CHECKING, cast
 
 from company_merge._gateway_fakes import POLICY_SYSTEM, MergeRig, RigReadHandle
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from ps_service.restore.restore_instrument import restore_instrument
 
@@ -78,13 +79,15 @@ class RestoreRig(MergeRig):
         owner: tuple[str, str] | None = None,
         source: str | None = None,
         threshold: float = THRESHOLD,
+        review_threshold: float = REVIEW_THRESHOLD,
     ) -> RestoreOutcome:
         """Run the real `restore_instrument` for `artifact` through this rig."""
         return restore_instrument(
             artifact,
             db=cast("FalkorDB", self.db),
             single_tenant_graph_name=POLICY_SYSTEM,
-            similarity_threshold=threshold,
+            merge_threshold=threshold,
+            review_threshold=review_threshold,
             actor=ACTOR,
             open_gateway=self.open_gateway,
             audit_event_id=self.audit_event_id,

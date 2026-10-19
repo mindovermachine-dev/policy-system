@@ -14,6 +14,7 @@ import json
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.catalog import CuratedInstrumentEntry
@@ -104,7 +105,8 @@ def _config(*, threshold: float | None = 0.83) -> ServiceConfig:
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=None,
-        company_merge_similarity_threshold=threshold,
+        company_merge_capability_merge_threshold=threshold,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
         curated_source_base_url=_SOURCE_URL,
     )
@@ -126,7 +128,8 @@ class _Delegate:
         *,
         db: object,
         single_tenant_graph_name: str,
-        similarity_threshold: float,
+        merge_threshold: float,
+        review_threshold: float,
         actor: str,
         open_gateway: Callable[[], object] | None = None,
         audit_event_id: str = "",
@@ -134,7 +137,16 @@ class _Delegate:
         source: str | None = None,
         owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
-        del db, single_tenant_graph_name, similarity_threshold, actor, emitter, source, owner
+        del (
+            db,
+            single_tenant_graph_name,
+            merge_threshold,
+            review_threshold,
+            actor,
+            emitter,
+            source,
+            owner,
+        )
         self.calls += 1
         self.audit_event_ids.append(audit_event_id)
         if open_gateway is not None:

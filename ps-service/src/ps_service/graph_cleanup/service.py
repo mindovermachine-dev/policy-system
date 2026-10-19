@@ -115,7 +115,7 @@ def find_capability_merge_candidates(
 
     Args:
         graph: Handle on the single-tenant graph, read only.
-        min_similarity: Cosine similarity threshold in [0, 1] above which two cached embeddings
+        min_similarity: Cosine similarity cut-off in [0, 1] above which two cached embeddings
             link their Capabilities.
         emitter: Optional log emitter; None uses the default.
 

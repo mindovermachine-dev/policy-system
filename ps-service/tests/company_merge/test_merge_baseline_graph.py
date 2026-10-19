@@ -32,6 +32,7 @@ import openai
 import pytest
 from litellm.types.utils import Embedding, EmbeddingResponse
 
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge.errors import (
     CompanyMergeConfigurationError,
     CompanyMergePersistenceError,
@@ -632,7 +633,8 @@ def test_everything_new_writes_every_node_type_directly(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -669,7 +671,8 @@ def test_both_dedup_reads_complete_before_any_write_call(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -741,7 +744,8 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -778,8 +782,8 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     }
 
 
-def test_missing_similarity_threshold_raises_before_any_call(merge_rig: MergeRig) -> None:
-    """(d) B1's fix, runtime enforcement: similarity_threshold=None raises
+def test_missing_merge_threshold_raises_before_any_call(merge_rig: MergeRig) -> None:
+    """(d) B1's fix, runtime enforcement: merge_threshold=None raises
     CompanyMergeConfigurationError; both the fake baseline_graph and fake
     single_tenant_graph receive ZERO calls of any kind (the check fires
     before even the Regulation read).
@@ -787,13 +791,62 @@ def test_missing_similarity_threshold_raises_before_any_call(merge_rig: MergeRig
     baseline = _everything_new_baseline_graph()
     single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
 
-    with pytest.raises(CompanyMergeConfigurationError):
+    with pytest.raises(
+        CompanyMergeConfigurationError, match="PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD"
+    ):
         merge_baseline_graph(
             "REG-1.0",
             baseline_graph=baseline,
             single_tenant_graph=single_tenant,
             embed_model=_MODEL,
-            similarity_threshold=None,
+            merge_threshold=None,
+            review_threshold=REVIEW_THRESHOLD,
+            **merge_rig.merge_keywords(),
+        )
+
+    assert baseline.calls == []
+    assert single_tenant.calls == []
+
+
+def test_missing_review_threshold_raises_before_any_call(merge_rig: MergeRig) -> None:
+    """`review_threshold=None` raises `CompanyMergeConfigurationError` naming the review variable;
+    neither graph receives a call of any kind.
+    """
+    baseline = _everything_new_baseline_graph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
+
+    with pytest.raises(
+        CompanyMergeConfigurationError, match="PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD"
+    ):
+        merge_baseline_graph(
+            "REG-1.0",
+            baseline_graph=baseline,
+            single_tenant_graph=single_tenant,
+            embed_model=_MODEL,
+            merge_threshold=_THRESHOLD,
+            review_threshold=None,
+            **merge_rig.merge_keywords(),
+        )
+
+    assert baseline.calls == []
+    assert single_tenant.calls == []
+
+
+def test_review_threshold_above_merge_threshold_raises_before_any_call(
+    merge_rig: MergeRig,
+) -> None:
+    """A review floor above the merge threshold is rejected before either graph is read."""
+    baseline = _everything_new_baseline_graph()
+    single_tenant = _FakeSingleTenantGraph(gateway_graph=merge_rig.policy_system)
+
+    with pytest.raises(CompanyMergeConfigurationError, match="PS_COMPANYMERGE_CAPABILITY_"):
+        merge_baseline_graph(
+            "REG-1.0",
+            baseline_graph=baseline,
+            single_tenant_graph=single_tenant,
+            embed_model=_MODEL,
+            merge_threshold=0.6,
+            review_threshold=0.8,
             **merge_rig.merge_keywords(),
         )
 
@@ -818,7 +871,8 @@ def test_succeeded_log_entry_carries_bound_run_id(
             baseline_graph=baseline,
             single_tenant_graph=single_tenant,
             embed_model=_MODEL,
-            similarity_threshold=_THRESHOLD,
+            merge_threshold=_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
             emitter=emitter,
             **merge_rig.merge_keywords(),
         )
@@ -852,7 +906,8 @@ def test_dedup_decision_log_entries_carry_bound_run_id(
             baseline_graph=baseline,
             single_tenant_graph=single_tenant,
             embed_model=_MODEL,
-            similarity_threshold=_THRESHOLD,
+            merge_threshold=_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
             emitter=emitter,
             **merge_rig.merge_keywords(),
         )
@@ -944,7 +999,8 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
         ),
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -961,7 +1017,8 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
         ),
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1027,7 +1084,8 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
         baseline_graph=first_regulatory_instrument,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1063,7 +1121,8 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
         baseline_graph=second_regulatory_instrument,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1149,7 +1208,8 @@ def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         governance=_GOVERNANCE,
         **merge_rig.merge_keywords(),
@@ -1288,7 +1348,8 @@ def test_practice_area_and_risk_path_nodes_pass_through_to_single_tenant(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1382,7 +1443,8 @@ def test_practice_area_and_risk_path_properties_unchanged_when_node_already_exis
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1445,7 +1507,8 @@ def test_capability_near_miss_persists_pending_review_node(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1509,7 +1572,8 @@ def test_rerun_over_unchanged_input_creates_no_second_review_for_a_pair(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=_ScriptedCallEmbedding({incoming_name: [0.6, 0.8]}),
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1559,7 +1623,8 @@ def test_near_title_policy_is_a_separate_draft_with_no_embedding_call_and_no_rev
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,
@@ -1619,7 +1684,8 @@ def test_pending_review_count_covers_capability_near_misses_only(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,
@@ -1647,7 +1713,8 @@ def test_external_baseline_unaffected_by_policy_pass(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1690,7 +1757,8 @@ def test_external_baseline_unaffected_by_classification_pass(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1747,7 +1815,8 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
         baseline_graph=baseline_a,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1757,7 +1826,8 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
         baseline_graph=baseline_b,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1862,7 +1932,8 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1931,7 +2002,8 @@ def test_missing_classification_edge_endpoint_raises_before_any_classification_e
             baseline_graph=baseline,
             single_tenant_graph=single_tenant,
             embed_model=_MODEL,
-            similarity_threshold=_THRESHOLD,
+            merge_threshold=_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
             emitter=emitter,
             **merge_rig.merge_keywords(),
         )
@@ -2009,7 +2081,8 @@ def test_no_classification_writes_when_capability_embedding_fails(
             baseline_graph=baseline,
             single_tenant_graph=single_tenant,
             embed_model=_MODEL,
-            similarity_threshold=_THRESHOLD,
+            merge_threshold=_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
             call_embedding=call_embedding,
             emitter=emitter,
             **merge_rig.merge_keywords(),
@@ -2083,7 +2156,8 @@ def test_succeeded_log_entry_carries_classification_write_counts(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,

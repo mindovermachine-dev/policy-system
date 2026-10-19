@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from ps_service.company_merge import graph_reader
+from ps_service.company_merge.capability_config import capability_thresholds
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.generated_values import SYSTEM_VALUES
@@ -51,7 +52,7 @@ from ps_service.company_merge.pending_review import (
     drop_already_reviewed,
 )
 from ps_service.company_merge.redirects import compose_with_resolutions, resolve_redirects
-from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.graph_gateway.models import UpsertNode
 from ps_service.logging.facade import emit_log_entry
 from ps_service.restore.baseline_reader import SerializedGraphReader
@@ -188,7 +189,8 @@ def build_policy_system_leg(
     instrument_id: str,
     live: GraphHandle,
     governance: GovernanceImport,
-    similarity_threshold: float,
+    merge_threshold: float | None,
+    review_threshold: float | None,
     emitter: LogEmitter | None,
     values: ValueSource = SYSTEM_VALUES,
 ) -> PolicySystemLeg:
@@ -204,8 +206,8 @@ def build_policy_system_leg(
     Business Rules: Capabilities converge onto an existing one by embedding similarity; a draft
     Policy never converges; nodes a cleanup merge absorbed are redirected to their
     survivor; governance content is created only as a `draft` owned by `governance.owner`; every
-    Capability near miss is recorded as a `PendingReview` in the same leg, so a failed restore
-    leaves none.
+    Capability near miss scoring at or above the review threshold is recorded as a `PendingReview`
+    in the same leg (a pair below it records none), so a failed restore leaves none.
 
     Args:
         baseline_graph: The parsed baseline leg of the artifact.
@@ -214,7 +216,11 @@ def build_policy_system_leg(
         live: Handle on the live `policy_system` graph; read only.
         governance: The restoring caller's `owner` and the artifact's Policy embeddings; an
             artifact with a Policy and no owner is refused before `live` is read.
-        similarity_threshold: Minimum Capability embedding similarity for convergence.
+        merge_threshold: Minimum Capability embedding similarity for convergence. Required:
+            `None` is an error.
+        review_threshold: Minimum similarity at which a Capability near miss is recorded as a
+            `PendingReview`; a pair scoring below it records none. `0.0` hides nothing. Required:
+            `None` is an error, and so is a value above `merge_threshold`.
         emitter: Log emitter for the leg's log entries; `None` uses the default emitter.
         values: Source of generated values (timestamps); defaults to the system clock.
 
@@ -226,6 +232,8 @@ def build_policy_system_leg(
         entries (dedup, redirect and `build_policy_system_leg` success); writes no graph.
 
     Raises:
+        CompanyMergeConfigurationError: `merge_threshold` or `review_threshold` is `None`, or the
+            review threshold is above the merge threshold; raised before either graph is read.
         RestoreOwnerRequiredError: the baseline carries governance content and `governance.owner`
             is `None`.
         ArtifactContentRejectedError: `instrument_id` matches no instrument of an artifact that
@@ -236,6 +244,7 @@ def build_policy_system_leg(
             classification edge endpoint exists nowhere, an edge endpoint has no mapping entry,
             or a read of `live` failed.
     """
+    thresholds = capability_thresholds(merge_threshold, review_threshold)
     read = graph_reader.read_baseline_graph(SerializedGraphReader(baseline_graph), instrument_id)
     if governance.owner is None and (
         read.policy_nodes or read.standard_nodes or read.control_nodes
@@ -252,7 +261,7 @@ def build_policy_system_leg(
         incoming_embeddings=embeddings_by_label(baseline_graph, "Capability"),
         single_tenant_graph=live,
         kind=CAPABILITY,
-        thresholds=ReviewThresholds(merge=similarity_threshold),
+        thresholds=thresholds,
         emitter=emitter,
     )
     canonical_id_by_incoming_id = {r.incoming_id: r.canonical_id for r in dedup_result.resolutions}

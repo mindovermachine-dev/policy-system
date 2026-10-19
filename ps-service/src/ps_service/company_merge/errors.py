@@ -9,10 +9,12 @@ from __future__ import annotations
 
 
 class CompanyMergeConfigurationError(Exception):
-    """`merge_baseline_graph` was called without a resolved similarity threshold.
+    """A Capability merge was attempted without usable merge and review thresholds.
 
-    `similarity_threshold is None` means `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`
-    was never set or resolved via `ServiceConfig`. Also raised by
+    Either threshold being `None` means `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD` or
+    `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` was never set or resolved via
+    `ServiceConfig`; a review threshold above the merge threshold is also refused
+    (`capability_config.capability_thresholds`). Also raised by
     `falkordb_client.check_connectivity` when FalkorDB cannot be reached. `merge.py` raises it
     before any graph call is made. The caller should fix the configuration or start FalkorDB.
     """

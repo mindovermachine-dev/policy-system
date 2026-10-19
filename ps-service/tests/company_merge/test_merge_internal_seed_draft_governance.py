@@ -18,12 +18,13 @@ from graph_gateway._fakes import GatewayRig
 
 from company_merge._seed_merge_graphs import (
     EMBED_MODEL,
-    SIMILARITY_THRESHOLD,
+    MERGE_THRESHOLD,
     BaselineGraphReader,
     OneHotEmbeddingCaller,
     ingest_seed,
     parse_seed,
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge.errors import (
     CompanyMergePersistenceError,
     GovernanceOwnerRequiredError,
@@ -84,7 +85,8 @@ def _merge(
         baseline_graph=baseline,
         single_tenant_graph=store,
         embed_model=EMBED_MODEL,
-        similarity_threshold=SIMILARITY_THRESHOLD,
+        merge_threshold=MERGE_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=call_embedding or OneHotEmbeddingCaller(),
         emitter=emitter,
         governance=governance,

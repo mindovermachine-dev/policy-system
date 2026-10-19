@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.models import InstrumentManifest
@@ -65,7 +66,8 @@ def _restore(artifact: RestoreArtifact) -> None:
         artifact,
         db=_NEVER_TOUCHED_DB,
         single_tenant_graph_name="__never_touched_single_tenant_graph__",
-        similarity_threshold=0.9,
+        merge_threshold=0.9,
+        review_threshold=REVIEW_THRESHOLD,
         actor="test",
         open_gateway=never_open_gateway,
         audit_event_id=UNUSED_EVENT_ID,

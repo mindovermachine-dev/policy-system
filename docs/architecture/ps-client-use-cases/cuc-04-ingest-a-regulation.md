@@ -55,9 +55,10 @@ persisted as its own record.
 7. **Consequences.** The merged graph is immediately queryable (CUC-08). If Company Merge
    left near-miss candidates, those are decisions, not news — they surface as
    system-generated Inbox items (CUC-06), not as part of this run's notification. Near
-   misses are raised for the node kinds that have a review spec (today Capability), and a
-   pair already under review is not reviewed twice, so re-ingesting the same regulation
-   adds no duplicate review.
+   misses are raised for the node kinds that have a review spec (today Capability), only
+   for a pair whose best score is at or above the configured review threshold (a pair
+   below it is kept separate with no review), and a pair already under review is not
+   reviewed twice, so re-ingesting the same regulation adds no duplicate review.
 
 ## Artifacts
 

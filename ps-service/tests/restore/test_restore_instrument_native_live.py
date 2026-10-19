@@ -12,6 +12,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from persistence.provisioned_postgres import Provisioned
 
 _ACTOR = "test-actor"
-_SIMILARITY_THRESHOLD = 0.9
+_MERGE_THRESHOLD = 0.9
 
 
 def _native_graph() -> SerializedGraph:
@@ -103,7 +104,8 @@ def test_restore_instrument_installs_native_leg_with_original_content(
                 artifact,
                 db=live_falkordb,
                 single_tenant_graph_name=single_tenant_graph_name,
-                similarity_threshold=_SIMILARITY_THRESHOLD,
+                merge_threshold=_MERGE_THRESHOLD,
+                review_threshold=REVIEW_THRESHOLD,
                 actor=_ACTOR,
                 open_gateway=live.open_gateway,
                 audit_event_id=live.audit_event_id,

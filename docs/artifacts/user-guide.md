@@ -157,7 +157,8 @@ instrument that is registered under that id. The instrument can be external or
 internal, for example an Engineering Practices standard.
 
 Sometimes a restored Capability nearly matches a Capability that is already in the
-graph. The restore then records a near-miss review and does not merge them. It reports
+graph. The restore then records a near-miss review and does not merge them, as long as
+the pair scores at or above the review threshold. It reports
 how many reviews it opened as `near_miss_reviews_created`. Resolve them with the
 `ps-near-miss-review` skill (see
 [Review near-miss merge candidates](#review-near-miss-merge-candidates)).
@@ -488,7 +489,7 @@ The `ps-list-ingested` skill lists each regulatory instrument that is in the com
 Use the ps-near-miss-review skill to show the pending near-miss reviews.
 ```
 
-Sometimes ingestion or a restore finds two entities that are close but not identical. It then records a near-miss pending review and does not merge them. Reviews exist for the kinds of entity that have a review spec, today Capabilities. The `ps-near-miss-review` skill lists the pending reviews. It resolves a review when you keep the two entities separate or merge them.
+Sometimes ingestion or a restore finds two entities that are close but not identical. It then records a near-miss pending review and does not merge them. Reviews exist for the kinds of entity that have a review spec, today Capabilities. A review is raised only for a pair that scores at or above the review threshold your operator configured (`PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD`). A pair that scores lower is kept separate without a review, so the list holds only pairs worth a look. The `ps-near-miss-review` skill lists the pending reviews. It resolves a review when you keep the two entities separate or merge them.
 
 A merge needs the `ComplianceOfficer` role. It is the same Capability merge as in graph cleanup, so it does not run at the call. The skill returns the merge preview and an approval link. The merge runs when you complete a passkey signing in the browser. The skill can then report if the approval was signed. The absorbed Capability is deleted behind a `MergedCapability` marker that points at the survivor, and its edges move to the survivor. The system therefore does not raise the pair again on a later ingest or restore.
 

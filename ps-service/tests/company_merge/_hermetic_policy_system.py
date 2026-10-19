@@ -23,6 +23,7 @@ from company_merge._live_merge_assertions import (
     _snapshot_node_properties,  # pyright: ignore[reportPrivateUsage]
 )
 from company_merge._seed_merge_graphs import OneHotEmbeddingCaller
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import capability_id, obligation_id, requirement_id, role_id
 from ps_service.graph_gateway.connection import connect_from_config, select_graph
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
 EXISTING_ID = "EXIST-1.0"
 NEW_ID = "NEWREG-1.0"
 SHARED_CAPABILITY = "Hermetic Shared Incident Reporting Capability"
-SIMILARITY_THRESHOLD = 0.9
+MERGE_THRESHOLD = 0.9
 _REGULATIONS = (EXISTING_ID, NEW_ID)
 
 
@@ -188,7 +189,8 @@ def merged_graph_run(
                     details={"trigger": "ll11_hermetic"},
                 ),
                 embed_model="fake-embed-model",
-                similarity_threshold=SIMILARITY_THRESHOLD,
+                merge_threshold=MERGE_THRESHOLD,
+                review_threshold=REVIEW_THRESHOLD,
                 call_embedding=embed,
                 emitter=emitter,
             )

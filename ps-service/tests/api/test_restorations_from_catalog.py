@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 
 from api._audit_fakes import InMemoryAuditStore
@@ -136,7 +137,8 @@ class _FakeCatalogRestoreStage:
         *,
         db: object,
         single_tenant_graph_name: str,
-        similarity_threshold: float,
+        merge_threshold: float,
+        review_threshold: float,
         actor: str,
         open_gateway: Callable[[], object] | None = None,
         audit_event_id: str = "",
@@ -149,7 +151,8 @@ class _FakeCatalogRestoreStage:
             {
                 "instrument_id": artifact.manifest.instrument_id,
                 "single_tenant_graph_name": single_tenant_graph_name,
-                "similarity_threshold": similarity_threshold,
+                "merge_threshold": merge_threshold,
+                "review_threshold": review_threshold,
                 "actor": actor,
                 "source": source,
                 "owner": owner,
@@ -201,7 +204,8 @@ def _app_config() -> ServiceConfig:
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=None,
-        company_merge_similarity_threshold=0.83,
+        company_merge_capability_merge_threshold=0.83,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
         curated_source_base_url="https://example.com/curated-content",
         authentik_api_token="test-authentik-token",

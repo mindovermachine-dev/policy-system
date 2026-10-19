@@ -38,9 +38,10 @@ from company_merge._legacy_reference import (
 )
 from company_merge._seed_merge_graphs import (
     EMBED_MODEL,
-    SIMILARITY_THRESHOLD,
+    MERGE_THRESHOLD,
     BaselineGraphReader,
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge import graph_reader, graph_writer
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.merge import merge_baseline_graph
@@ -146,7 +147,8 @@ def _run_production(
             baseline_graph=BaselineGraphReader(family_a_baseline_graph(step)),
             single_tenant_graph=rig.legacy,
             embed_model=EMBED_MODEL,
-            similarity_threshold=SIMILARITY_THRESHOLD,
+            merge_threshold=MERGE_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
             emitter=emitter,
             **rig.merge_keywords(),
         )

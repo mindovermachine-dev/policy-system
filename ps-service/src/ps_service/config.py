@@ -8,6 +8,7 @@ rather than letting components independently read `os.environ`.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,9 +81,13 @@ class ServiceConfig:
             (`PS_LLMINTERFACE_EMBED_MODEL`); `None` when unset.
         falkordb_host: FalkorDB host (`PS_FALKORDB_HOST`); non-blank, default `127.0.0.1`.
         falkordb_port: FalkorDB port (`PS_FALKORDB_PORT`); 1 to 65535, default 6379.
-        company_merge_similarity_threshold: Minimum embedding similarity for Company Merge to
-            treat two entities as the same (`PS_COMPANYMERGE_SIMILARITY_THRESHOLD`); greater
+        company_merge_capability_merge_threshold: Minimum embedding similarity for Company Merge to
+            treat two entities as the same (`PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`); greater
             than 0.0 and at most 1.0, `None` when unset. Required only when a merge runs.
+        company_merge_capability_review_threshold: Minimum embedding similarity for a Capability
+            near miss to be raised for review (`PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD`);
+            at least 0.0 and at most 1.0, and not above the merge threshold when both are set.
+            `0.0` hides nothing. `None` when unset. Required only when a merge runs.
         is_local_test_bypass_active: Whether authentication is bypassed and every request
             runs as `LOCAL_TEST_PRINCIPAL_ID` (`PS_SERVICE_LOCAL_TEST_BYPASS`); default `False`.
         max_request_body_bytes: Largest accepted request body, checked against the
@@ -159,7 +164,8 @@ class ServiceConfig:
     llm_interface_embed_model: str | None = None
     falkordb_host: str = _DEFAULT_FALKORDB_HOST
     falkordb_port: int = _DEFAULT_FALKORDB_PORT
-    company_merge_similarity_threshold: float | None = None
+    company_merge_capability_merge_threshold: float | None = None
+    company_merge_capability_review_threshold: float | None = None
     is_local_test_bypass_active: bool = False
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
     query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
@@ -193,11 +199,12 @@ class ServiceConfig:
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company Merge) cannot run
 # without, but that `load_config()` itself leaves optional (see `ServiceConfig`). Named once
 # here so both the request-time guard (`ingestion_orchestration._require_ingestion_config`)
-# and the `/ready` startup check stay in lockstep on exactly which three fields that is.
+# and the `/ready` startup check stay in lockstep on exactly which four fields that is.
 INGESTION_REQUIRED_CONFIG_FIELDS = (
     "llm_interface_model",
     "llm_interface_embed_model",
-    "company_merge_similarity_threshold",
+    "company_merge_capability_merge_threshold",
+    "company_merge_capability_review_threshold",
 )
 
 
@@ -292,8 +299,8 @@ def _parse_falkordb_host(raw: str) -> str:
     return raw
 
 
-def _parse_similarity_threshold(raw: str) -> float:
-    """Parse `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`, failing closed on any invalid value.
+def _parse_merge_threshold(raw: str) -> float:
+    """Parse `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`, failing closed on any invalid value.
 
     Mirrors `_parse_falkordb_port`'s exact validation shape (parse, then
     range-check, raising `ServiceConfigurationError` naming the env var and
@@ -308,15 +315,63 @@ def _parse_similarity_threshold(raw: str) -> float:
     try:
         threshold = float(raw)
     except ValueError as exc:
-        message = f"PS_COMPANYMERGE_SIMILARITY_THRESHOLD must be a float, got {raw!r}"
+        message = f"PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD must be a float, got {raw!r}"
         raise ServiceConfigurationError(message) from exc
     if not (0.0 < threshold <= 1.0):
         message = (
-            "PS_COMPANYMERGE_SIMILARITY_THRESHOLD must be greater than 0.0 and at "
+            "PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD must be greater than 0.0 and at "
             f"most 1.0, got {threshold}"
         )
         raise ServiceConfigurationError(message)
     return threshold
+
+
+def _parse_review_threshold(raw: str) -> float:
+    """Parse `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD`, failing closed on any invalid value.
+
+    Unlike the merge threshold, `0.0` is valid: it is the floor that hides nothing. NaN passes
+    every comparison as false, so it is rejected explicitly. Only called when the env var is set.
+
+    Raises:
+        ServiceConfigurationError: `raw` is not a float, or is outside 0.0 to 1.0 inclusive.
+    """
+    try:
+        threshold = float(raw)
+    except ValueError as exc:
+        message = f"PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD must be a float, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if math.isnan(threshold) or not (0.0 <= threshold <= 1.0):
+        message = (
+            "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD must be at least 0.0 and at "
+            f"most 1.0, got {threshold}"
+        )
+        raise ServiceConfigurationError(message)
+    return threshold
+
+
+def _load_capability_thresholds() -> tuple[float | None, float | None]:
+    """Read and validate the Capability merge and review thresholds from the environment.
+
+    Each is `None` when its variable is unset. When both are set, the review threshold must not
+    exceed the merge threshold.
+
+    Returns:
+        The `(merge, review)` thresholds.
+
+    Raises:
+        ServiceConfigurationError: A value is invalid, or review is above merge.
+    """
+    merge_raw = os.environ.get("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD")
+    review_raw = os.environ.get("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD")
+    merge = _parse_merge_threshold(merge_raw) if merge_raw is not None else None
+    review = _parse_review_threshold(review_raw) if review_raw is not None else None
+    if merge is not None and review is not None and review > merge:
+        message = (
+            f"PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD ({review}) must not exceed "
+            f"PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD ({merge})"
+        )
+        raise ServiceConfigurationError(message)
+    return merge, review
 
 
 def _parse_max_request_body_bytes(raw: str) -> int:
@@ -769,11 +824,8 @@ def load_config() -> ServiceConfig:
         os.environ.get("PS_FALKORDB_PORT", str(_DEFAULT_FALKORDB_PORT))
     )
 
-    company_merge_similarity_threshold_raw = os.environ.get("PS_COMPANYMERGE_SIMILARITY_THRESHOLD")
-    company_merge_similarity_threshold = (
-        _parse_similarity_threshold(company_merge_similarity_threshold_raw)
-        if company_merge_similarity_threshold_raw is not None
-        else None
+    company_merge_capability_merge_threshold, company_merge_capability_review_threshold = (
+        _load_capability_thresholds()
     )
 
     is_local_test_bypass_active = _parse_local_test_bypass(
@@ -918,7 +970,8 @@ def load_config() -> ServiceConfig:
         llm_interface_embed_model=llm_interface_embed_model,
         falkordb_host=falkordb_host,
         falkordb_port=falkordb_port,
-        company_merge_similarity_threshold=company_merge_similarity_threshold,
+        company_merge_capability_merge_threshold=company_merge_capability_merge_threshold,
+        company_merge_capability_review_threshold=company_merge_capability_review_threshold,
         is_local_test_bypass_active=is_local_test_bypass_active,
         max_request_body_bytes=max_request_body_bytes,
         query_timeout_ms=query_timeout_ms,

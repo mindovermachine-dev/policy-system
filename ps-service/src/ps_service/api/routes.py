@@ -369,8 +369,8 @@ async def create_restoration(
             schema-version verification (422).
         GraphWriteUnavailableError: The artifact verified but the service has no Graph Write Gateway
             (503); nothing was written.
-        RestoreStageFailedError: Any other restore failure, including a missing similarity-threshold
-            setting (502). The error names the failing stage.
+        RestoreStageFailedError: Any other restore failure, including a missing Capability merge
+            threshold setting (502). The error names the failing stage.
 
     Side Effects:
         Writes an ``instrument.restore`` opening audit row and a terminal row, and writes the
@@ -436,8 +436,8 @@ async def create_restoration_from_catalog(
             verification (422).
         GraphWriteUnavailableError: The artifact verified but the service has no Graph Write Gateway
             (503); nothing was written.
-        RestoreStageFailedError: Any other restore failure, including a missing similarity-threshold
-            setting (502). The error names the failing stage.
+        RestoreStageFailedError: Any other restore failure, including a missing Capability merge
+            threshold setting (502). The error names the failing stage.
 
     Side Effects:
         Makes HTTP requests to the curated-content source, reads the persisted source override,

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from company_merge._gateway_fakes import POLICY_SYSTEM, RigReadHandle
 from company_merge._seed_merge_graphs import BaselineGraphReader, OneHotEmbeddingCaller
+from company_merge._thresholds import REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig, close_all_rigs
 
@@ -108,7 +109,8 @@ def _app_config() -> ServiceConfig:
         logging_dir=None,
         llm_interface_model="azure/gpt-4o",
         llm_interface_embed_model="azure/text-embedding-3-large",
-        company_merge_similarity_threshold=0.83,
+        company_merge_capability_merge_threshold=0.83,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
         authentik_api_token="test-authentik-token",
         authentik_base_url="https://authentik.example.com",
@@ -159,7 +161,8 @@ def _real_stage_dependencies(rig: GatewayRig, store: RigReadHandle) -> PipelineD
         baseline_graph_name: str,
         audit_event_id: str,
         embed_model: str,
-        similarity_threshold: float | None,
+        merge_threshold: float | None,
+        review_threshold: float | None,
         emitter: LogEmitter | None = None,
         governance: GovernanceImport | None = None,
     ) -> MergeResult:
@@ -172,7 +175,8 @@ def _real_stage_dependencies(rig: GatewayRig, store: RigReadHandle) -> PipelineD
             baseline_graph_name=baseline_graph_name,
             audit_event_id=audit_event_id,
             embed_model=embed_model,
-            similarity_threshold=similarity_threshold,
+            merge_threshold=merge_threshold,
+            review_threshold=review_threshold,
             call_embedding=embedder,
             emitter=emitter,
             governance=governance,

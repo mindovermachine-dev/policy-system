@@ -19,6 +19,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.governance_import import GovernanceImport
@@ -88,7 +89,8 @@ def _build(
         instrument_id=instrument_id,
         live=live,
         governance=GovernanceImport(),
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=None,
     )
 

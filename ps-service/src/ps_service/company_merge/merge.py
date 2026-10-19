@@ -6,8 +6,9 @@ It wires together `graph_reader.read_baseline_graph`, `redirects.resolve_redirec
 
 Flow:
 
-0. If `similarity_threshold is None`, raise `CompanyMergeConfigurationError` before any graph call
-   of any kind, including `graph_reader.read_baseline_graph`.
+0. If either Capability threshold is `None`, or the review threshold is above the merge threshold
+   (`capability_thresholds`), raise `CompanyMergeConfigurationError` before any graph call of any
+   kind, including `graph_reader.read_baseline_graph`.
 1. Read the regulation's `{short}_baseline` graph.
 2. Drop nodes that a cleanup merge absorbed and map each to its terminal survivor
    (`redirects.resolve_redirects`); a cycle or a dangling terminal raises here, before any dedup
@@ -62,13 +63,13 @@ from ps_service.company_merge import (
     graph_writer,
     redirects,
 )
-from ps_service.company_merge.errors import CompanyMergeConfigurationError
+from ps_service.company_merge.capability_config import capability_thresholds
 from ps_service.company_merge.generated_values import SYSTEM_VALUES
 from ps_service.company_merge.governance_import import GovernanceImport, governance_count_fields
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import MergeResult
 from ps_service.company_merge.pending_review import drop_already_reviewed, persist_pending_reviews
-from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.logging import LogEmitter, emit_log_entry
 
 if TYPE_CHECKING:
@@ -160,7 +161,8 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     baseline_graph_name: str,
     audit_event_id: str,
     embed_model: str,
-    similarity_threshold: float | None,
+    merge_threshold: float | None,
+    review_threshold: float | None,
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
     governance: GovernanceImport | None = None,
@@ -185,8 +187,11 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
             submitted to.
         audit_event_id: Audit event the run's groups are logged under.
         embed_model: Embedding model name used for the semantic dedup comparison.
-        similarity_threshold: Cosine similarity at or above which a semantic match is accepted.
+        merge_threshold: Cosine similarity at or above which a semantic match is accepted.
             Required: `None` means the configured threshold was never resolved and is an error.
+        review_threshold: Cosine similarity at or above which a Capability near miss is raised
+            for review; a pair scoring below it raises none. `0.0` hides nothing. Required:
+            `None` is an error, and so is a value above `merge_threshold`.
         call_embedding: Embedding caller for the dedup pass, or `None` for the default.
         emitter: Log emitter, or `None` for the default.
         governance: Carries the ingesting caller's `owner` for the Policy/Standard/Control tree of
@@ -201,8 +206,9 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         near-miss pairs, the pending-review count and the new/matched/governance counts.
 
     Raises:
-        CompanyMergeConfigurationError: `similarity_threshold` is `None`; raised before either
-            graph receives a call.
+        CompanyMergeConfigurationError: `merge_threshold` or `review_threshold` is `None`, or the
+            review threshold is above the merge threshold; raised before either graph receives a
+            call.
         GovernanceOwnerRequiredError: The baseline carries a governance tree and `governance`
             has no owner; raised before any governance write.
         LlmProviderError: An embedding call in the dedup pass failed; nothing has been written.
@@ -218,12 +224,7 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         backfills). The graph's legacy edges are stamped before its first group. Emits log
         entries for the run and for each dedup decision.
     """
-    if similarity_threshold is None:
-        raise CompanyMergeConfigurationError(
-            "similarity_threshold is required -- no default is defined; resolve "
-            "PS_COMPANYMERGE_SIMILARITY_THRESHOLD via ServiceConfig before calling "
-            "merge_baseline_graph"
-        )
+    thresholds = capability_thresholds(merge_threshold, review_threshold)
 
     targets = _MergeTargets(
         single_tenant=GraphWriteTarget(submitter, single_tenant_graph_name, audit_event_id),
@@ -243,7 +244,7 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         kind=CAPABILITY,
         single_tenant_graph=single_tenant_graph,
         model=embed_model,
-        thresholds=ReviewThresholds(merge=similarity_threshold),
+        thresholds=thresholds,
         call_embedding=call_embedding,
         emitter=emitter,
     )

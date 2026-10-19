@@ -17,6 +17,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse
 
 from company_merge._gateway_fakes import RigReadHandle
 from company_merge._marker_graph import MarkerGraph
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge.errors import CompanyMergeValidationError
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.company_merge.models import (
@@ -371,7 +372,8 @@ def _ingest(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model="fake-embed-model",
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -584,7 +586,8 @@ def _merge_over_rig(
         baseline_graph=baseline,
         single_tenant_graph=RigReadHandle(merge_rig.policy_system),
         embed_model="fake-embed-model",
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=caller,
         emitter=emitter,
         **merge_rig.merge_keywords(),

@@ -25,11 +25,12 @@ from company_merge._legacy_reference import (
 )
 from company_merge._seed_merge_graphs import (
     EMBED_MODEL,
-    SIMILARITY_THRESHOLD,
+    MERGE_THRESHOLD,
     BaselineGraphReader,
     OneHotEmbeddingCaller,
     SingleTenantStore,
 )
+from company_merge._thresholds import NO_FLOOR_REVIEW_THRESHOLD
 from ps_service.company_merge import dedup, graph_reader
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
@@ -62,7 +63,7 @@ def reference_graph(
             kind=CAPABILITY,
             single_tenant_graph=reads,
             model=EMBED_MODEL,
-            thresholds=ReviewThresholds(merge=SIMILARITY_THRESHOLD),
+            thresholds=ReviewThresholds(merge=MERGE_THRESHOLD),
             call_embedding=embeddings,
             emitter=emitter,
         )
@@ -111,7 +112,8 @@ def production_run(
             baseline_graph=BaselineGraphReader(family_a_baseline_graph(step)),
             single_tenant_graph=rig.legacy,
             embed_model=EMBED_MODEL,
-            similarity_threshold=SIMILARITY_THRESHOLD,
+            merge_threshold=MERGE_THRESHOLD,
+            review_threshold=NO_FLOOR_REVIEW_THRESHOLD,
             call_embedding=embeddings,
             emitter=emitter,
             values=values,

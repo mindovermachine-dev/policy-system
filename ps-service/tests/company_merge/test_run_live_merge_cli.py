@@ -212,7 +212,8 @@ class _RecordingMergeFn:
         baseline_graph_name: str,
         audit_event_id: str,
         embed_model: str,
-        similarity_threshold: float,
+        merge_threshold: float,
+        review_threshold: float,
         call_embedding: object | None = None,
         emitter: object | None = None,
     ) -> object:
@@ -228,7 +229,8 @@ class _RecordingMergeFn:
                 "baseline_graph_name": baseline_graph_name,
                 "audit_event_id": audit_event_id,
                 "embed_model": embed_model,
-                "similarity_threshold": similarity_threshold,
+                "merge_threshold": merge_threshold,
+                "review_threshold": review_threshold,
                 "emitter": emitter,
             }
         )
@@ -438,13 +440,13 @@ def test_precondition_violation_exits_3_with_zero_merge_calls(
     assert approval_path.exists()
 
 
-# --- Case 4: approval valid, preconditions clean, similarity_threshold unset (fail closed) --
+# --- Case 4: approval valid, preconditions clean, merge_threshold unset (fail closed) --
 
 
-def test_similarity_threshold_unset_exits_1_with_zero_merge_calls(
+def test_merge_threshold_unset_exits_1_with_zero_merge_calls(
     cli_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
     approval_path = _write_approval_file(tmp_path)
     single_tenant_graph = _FakeSingleTenantGraph()
@@ -467,13 +469,44 @@ def test_similarity_threshold_unset_exits_1_with_zero_merge_calls(
     assert approval_path.exists()
 
 
+def test_review_threshold_unset_exits_1_naming_it_with_zero_merge_calls(
+    cli_module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", raising=False)
+    monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
+    approval_path = _write_approval_file(tmp_path)
+    provider, _provider_calls = _make_graph_provider(
+        cli_module,
+        baseline_rows_by_short=_CLEAN_BASELINE_ROWS,
+        single_tenant_graph=_FakeSingleTenantGraph(),
+    )
+    merge_fn = _RecordingMergeFn()
+
+    exit_code = cli_module.main(
+        _base_argv(approval_path=approval_path, report_path=tmp_path / "report.json"),
+        graph_provider=provider,
+        merge_fn=merge_fn,
+        clock=_fixed_clock,
+    )
+
+    assert exit_code == 1
+    assert merge_fn.calls == []
+    assert "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD" in capsys.readouterr().err
+    assert approval_path.exists()
+
+
 # --- Case 5: full happy path -----------------------------------------------------------
 
 
 def test_happy_path_calls_merge_fn_three_times_in_order_and_writes_report(
     cli_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.9")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", "0.5")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
     approval_path = _write_approval_file(tmp_path)
     report_path = tmp_path / "report.json"
@@ -512,9 +545,10 @@ def test_happy_path_calls_merge_fn_three_times_in_order_and_writes_report(
     # Each call ran under a distinct, non-None run_id.
     assert len(set(merge_fn.run_ids_seen)) == 3
     assert all(run_id is not None for run_id in merge_fn.run_ids_seen)
-    # similarity_threshold/embed_model reached merge_fn as real ServiceConfig-resolved values.
+    # merge_threshold/embed_model reached merge_fn as real ServiceConfig-resolved values.
     for call in merge_fn.calls:
-        assert call["similarity_threshold"] == pytest.approx(0.9)
+        assert call["merge_threshold"] == pytest.approx(0.9)
+        assert call["review_threshold"] == pytest.approx(0.5)
         assert call["embed_model"] == "azure/text-embedding-3-large"
 
     # Approval file consumed with a `.consumed-<timestamp>` suffix; original path gone.
@@ -561,7 +595,8 @@ def test_happy_path_calls_merge_fn_three_times_in_order_and_writes_report(
 def test_merge_fn_raises_on_second_call_stops_before_third_and_leaves_approval_untouched(
     cli_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.9")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", "0.5")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
     approval_path = _write_approval_file(tmp_path)
     report_path = tmp_path / "report.json"
@@ -605,7 +640,8 @@ def _passing_run(
     write_access: object,
     merge_fn: _RecordingMergeFn,
 ) -> tuple[int, Path]:
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.9")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", "0.5")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
     approval_path = _write_approval_file(tmp_path)
     provider, _calls = _make_graph_provider(

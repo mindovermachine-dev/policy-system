@@ -295,63 +295,167 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_falkordb_
         load_config()
 
 
-def test_load_config_with_no_ps_companymerge_similarity_threshold_set_returns_none(
+def test_load_config_with_no_ps_companymerge_capability_merge_threshold_set_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` set -> `None`, no exception raised at this layer.
+    """No `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD` set -> `None`, no exception at this layer.
 
     "Required" enforcement lives at
     `merge_baseline_graph`'s own call site, not in `load_config()` — every
     other unrelated caller of `load_config()` must keep working with this
     env var unset.
     """
-    monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
 
     result = load_config()
 
-    assert result.company_merge_similarity_threshold is None
+    assert result.company_merge_capability_merge_threshold is None
 
 
-def test_load_config_honors_ps_companymerge_similarity_threshold_override(
+def test_load_config_honors_ps_companymerge_capability_merge_threshold_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`PS_COMPANYMERGE_SIMILARITY_THRESHOLD` override takes effect and parses to a float."""
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.85")
+    """`PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD` override takes effect and parses to a float."""
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.85")
 
-    assert load_config().company_merge_similarity_threshold == 0.85
+    assert load_config().company_merge_capability_merge_threshold == 0.85
 
 
 @pytest.mark.parametrize(
-    "invalid_similarity_threshold",
+    "invalid_merge_threshold",
     ["0.0", "1.5", "-0.1"],
 )
-def test_load_config_raises_for_out_of_range_ps_companymerge_similarity_threshold(
-    invalid_similarity_threshold: str,
+def test_load_config_raises_for_out_of_range_ps_companymerge_capability_merge_threshold(
+    invalid_merge_threshold: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Out-of-range (not `0.0 < value <= 1.0`) `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`
+    """Out-of-range (not `0.0 < value <= 1.0`) `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`
     fails closed, when present.
     """
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", invalid_similarity_threshold)
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", invalid_merge_threshold)
 
     with pytest.raises(ServiceConfigurationError):
         load_config()
 
 
-def test_load_config_raises_for_non_numeric_ps_companymerge_similarity_threshold(
+def test_load_config_raises_for_non_numeric_ps_companymerge_capability_merge_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-numeric `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` fails closed, when present."""
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "high")
+    """Non-numeric `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD` fails closed, when present."""
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "high")
 
     with pytest.raises(ServiceConfigurationError):
         load_config()
+
+
+# The retired variable is spelled in two halves so a repo-wide search for the old name stays empty.
+_RETIRED_MERGE_THRESHOLD_VAR = "PS_COMPANYMERGE_" + "SIMILARITY_" + "THRESHOLD"
+
+
+def test_load_config_ignores_the_retired_merge_threshold_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old variable name is neither read nor aliased: with only it set, the field is `None`."""
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
+    monkeypatch.setenv(_RETIRED_MERGE_THRESHOLD_VAR, "0.85")
+
+    assert load_config().company_merge_capability_merge_threshold is None
+
+
+def test_load_config_retired_variable_does_not_override_the_new_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With both set, only the new variable counts; an invalid old value never fails."""
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.7")
+    monkeypatch.setenv(_RETIRED_MERGE_THRESHOLD_VAR, "not-a-number")
+
+    assert load_config().company_merge_capability_merge_threshold == 0.7
+
+
+@pytest.mark.parametrize("raw", ["high", "0.0", "1.5"])
+def test_load_config_error_names_the_capability_merge_threshold_variable(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rejected merge threshold names the new variable in the startup error."""
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raw)
+
+    with pytest.raises(
+        ServiceConfigurationError, match="PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD"
+    ):
+        load_config()
+
+
+_REVIEW_VAR = "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD"
+
+
+def test_load_config_with_no_review_threshold_set_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset review threshold -> `None` at this layer; the required tuple enforces it."""
+    monkeypatch.delenv(_REVIEW_VAR, raising=False)
+
+    assert load_config().company_merge_capability_review_threshold is None
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0.0", 0.0), ("0.3", 0.3), ("1.0", 1.0)])
+def test_load_config_parses_the_review_threshold_including_both_bounds(
+    raw: str, expected: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
+    monkeypatch.setenv(_REVIEW_VAR, raw)
+
+    assert load_config().company_merge_capability_review_threshold == expected
+
+
+@pytest.mark.parametrize("raw", ["high", "-0.1", "1.01", "nan", "inf", ""])
+def test_load_config_rejects_an_invalid_review_threshold_naming_the_variable(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(_REVIEW_VAR, raw)
+
+    with pytest.raises(ServiceConfigurationError, match=_REVIEW_VAR):
+        load_config()
+
+
+def test_load_config_rejects_a_review_threshold_above_the_merge_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.6")
+    monkeypatch.setenv(_REVIEW_VAR, "0.8")
+
+    with pytest.raises(ServiceConfigurationError) as raised:
+        load_config()
+
+    assert _REVIEW_VAR in str(raised.value)
+    assert "PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD" in str(raised.value)
+
+
+def test_load_config_accepts_a_review_threshold_equal_to_the_merge_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
+    monkeypatch.setenv(_REVIEW_VAR, "0.9")
+
+    assert load_config().company_merge_capability_review_threshold == 0.9
+
+
+def test_load_config_accepts_a_review_threshold_when_the_merge_threshold_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cross-check runs only when both are set; the required tuple catches the gap."""
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
+    monkeypatch.setenv(_REVIEW_VAR, "0.5")
+
+    config = load_config()
+
+    assert config.company_merge_capability_review_threshold == 0.5
+    assert config.company_merge_capability_merge_threshold is None
 
 
 def test_service_config_four_field_construction_still_succeeds_with_none_threshold() -> None:
     """Regression proof: the exact pre-existing 4-positional-field
     `ServiceConfig(...)` construction other tests in this file already use, with no
-    `company_merge_similarity_threshold` argument, still succeeds and the new field
+    `company_merge_capability_merge_threshold` argument, still succeeds and the new field
     defaults to `None` — proving this field's addition does not break any
     pre-existing `ServiceConfig(...)` call site anywhere in the codebase.
     """
@@ -362,11 +466,11 @@ def test_service_config_four_field_construction_still_succeeds_with_none_thresho
         logging_dir=None,
     )
 
-    assert config.company_merge_similarity_threshold is None
+    assert config.company_merge_capability_merge_threshold is None
 
 
-def test_missing_ingestion_config_fields_returns_all_three_names_when_none_are_set() -> None:
-    """A default-constructed `ServiceConfig` (no ingestion fields set) reports all three names,
+def test_missing_ingestion_config_fields_returns_all_four_names_when_none_are_set() -> None:
+    """A default-constructed `ServiceConfig` (no ingestion fields set) reports all four names,
     in `INGESTION_REQUIRED_CONFIG_FIELDS` order.
     """
     config = ServiceConfig(
@@ -379,7 +483,7 @@ def test_missing_ingestion_config_fields_returns_all_three_names_when_none_are_s
     assert missing_ingestion_config_fields(config) == list(INGESTION_REQUIRED_CONFIG_FIELDS)
 
 
-def test_missing_ingestion_config_fields_returns_empty_list_when_all_three_are_set() -> None:
+def test_missing_ingestion_config_fields_returns_empty_list_when_all_four_are_set() -> None:
     config = ServiceConfig(
         host="127.0.0.1",
         port=8000,
@@ -387,7 +491,8 @@ def test_missing_ingestion_config_fields_returns_empty_list_when_all_three_are_s
         logging_dir=None,
         llm_interface_model="azure/gpt-5.4-mini",
         llm_interface_embed_model="azure/text-embedding-3-small",
-        company_merge_similarity_threshold=0.85,
+        company_merge_capability_merge_threshold=0.85,
+        company_merge_capability_review_threshold=0.5,
     )
 
     assert missing_ingestion_config_fields(config) == []
@@ -401,13 +506,29 @@ def test_missing_ingestion_config_fields_names_only_the_unset_ones() -> None:
         logging_dir=None,
         llm_interface_model="azure/gpt-5.4-mini",
         llm_interface_embed_model=None,
-        company_merge_similarity_threshold=None,
+        company_merge_capability_merge_threshold=None,
+        company_merge_capability_review_threshold=None,
     )
 
     assert missing_ingestion_config_fields(config) == [
         "llm_interface_embed_model",
-        "company_merge_similarity_threshold",
+        "company_merge_capability_merge_threshold",
+        "company_merge_capability_review_threshold",
     ]
+
+
+def test_missing_ingestion_config_fields_names_an_unset_review_threshold_alone() -> None:
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        llm_interface_model="azure/gpt-5.4-mini",
+        llm_interface_embed_model="azure/text-embedding-3-small",
+        company_merge_capability_merge_threshold=0.85,
+    )
+
+    assert missing_ingestion_config_fields(config) == ["company_merge_capability_review_threshold"]
 
 
 def test_load_config_local_test_bypass_unset_is_inactive(

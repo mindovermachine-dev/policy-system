@@ -1,7 +1,7 @@
 """Tests for `ps_service.restore.restore_instrument.restore_instrument`'s
 checksum verification.
 
-`restore_instrument` takes `db`/`single_tenant_graph_name`/`similarity_threshold`/
+`restore_instrument` takes `db`/`single_tenant_graph_name`/`merge_threshold`/
 `actor`/`emitter` -- the FalkorDB-touching
 collaborators checksum verification never reaches. Every test below passes
 `db=_NEVER_TOUCHED_DB` (a plain `object()` cast to `FalkorDB`, never a real
@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 import ps_service.restore.restore_instrument as restore_instrument_module
 from ps_service.export.models import InstrumentManifest
@@ -69,7 +70,8 @@ def _restore(artifact: RestoreArtifact) -> None:
         artifact,
         db=_NEVER_TOUCHED_DB,
         single_tenant_graph_name="__never_touched_single_tenant_graph__",
-        similarity_threshold=0.9,
+        merge_threshold=0.9,
+        review_threshold=REVIEW_THRESHOLD,
         actor="test",
         open_gateway=never_open_gateway,
         audit_event_id=UNUSED_EVENT_ID,

@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
 from api._audit_fakes import RecordedAuditRow
+from company_merge._thresholds import REVIEW_THRESHOLD
 from litellm.types.utils import Choices, Embedding, EmbeddingResponse, Message, ModelResponse
 
 from ps_service.api.catalog import CatalogEntry
@@ -439,7 +440,8 @@ def _build_world(
         prov.state_config(),
         llm_interface_model="azure/stub-chat",
         llm_interface_embed_model="azure/stub-embed",
-        company_merge_similarity_threshold=0.83,
+        company_merge_capability_merge_threshold=0.83,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
     )
     db = connect_from_config(config)
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)

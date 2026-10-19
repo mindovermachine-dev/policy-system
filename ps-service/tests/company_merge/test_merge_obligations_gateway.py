@@ -32,10 +32,11 @@ from company_merge._legacy_reference import (
 )
 from company_merge._seed_merge_graphs import (
     EMBED_MODEL,
-    SIMILARITY_THRESHOLD,
+    MERGE_THRESHOLD,
     BaselineGraphReader,
     SingleTenantStore,
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge import graph_reader, graph_writer
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.graph_submission import GraphWriteTarget
@@ -95,7 +96,8 @@ def _merge(rig: MergeRig, baseline: FamilyABaseline, emitter: LogEmitter) -> Non
         baseline_graph=BaselineGraphReader(family_a_baseline_graph(baseline)),
         single_tenant_graph=rig.legacy,
         embed_model=EMBED_MODEL,
-        similarity_threshold=SIMILARITY_THRESHOLD,
+        merge_threshold=MERGE_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **rig.merge_keywords(),
     )
@@ -222,7 +224,8 @@ def test_the_net_new_obligation_count_is_a_delta_the_frozen_reference_gives_too(
             baseline_graph=BaselineGraphReader(family_a_baseline_graph(_CRA)),
             single_tenant_graph=merge_rig.legacy,
             embed_model=EMBED_MODEL,
-            similarity_threshold=SIMILARITY_THRESHOLD,
+            merge_threshold=MERGE_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
             emitter=emitter,
             **merge_rig.merge_keywords(),
         )

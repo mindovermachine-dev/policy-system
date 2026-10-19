@@ -35,6 +35,7 @@ import pytest
 from company_merge._gateway_fakes import (
     MergeRig,  # noqa: TC001 -- pytest resolves the fixture annotation
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge import dedup as dedup_module
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.governance_import import GovernanceImport
@@ -393,15 +394,16 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         governance=GovernanceImport(owner=("sub-1", "https://issuer.example")),
         **merge_rig.merge_keywords(),
     )
 
     assert recorded_kinds == expected_kinds
-    # Capability carries no review floor: every scored best neighbour is a near miss, as before.
-    assert recorded_thresholds == [ReviewThresholds(merge=_THRESHOLD)]
+    # Capability carries the configured merge and review thresholds, built by the one guard.
+    assert recorded_thresholds == [ReviewThresholds(merge=_THRESHOLD, review=REVIEW_THRESHOLD)]
     assert "Role" not in recorded_kinds
     assert "Requirement" not in recorded_kinds
     assert "Obligation" not in recorded_kinds

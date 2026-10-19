@@ -16,6 +16,8 @@ merged with the effect previewed, signed, audited, and reversible.
 - An Inbox item: near-miss reviews are the canonical system-generated assignment —
   Company Merge mints them (CUC-04's consequence path), the Inbox surfaces them. Who they
   are assigned to is Q-12.
+  Company Merge raises a review only for a pair scoring at or above the review threshold,
+  so the queue holds candidates worth a human look rather than every close-ish pair.
 - A new conversation: "any near-misses to review?"
 - The Library (CUC-11): resuming a review session, including one left mid-approval.
 

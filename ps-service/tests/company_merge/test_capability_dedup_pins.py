@@ -19,11 +19,12 @@ import pytest
 from company_merge._gateway_fakes import FamilyABaseline, MergeRig, family_a_baseline_graph
 from company_merge._seed_merge_graphs import (
     EMBED_MODEL,
-    SIMILARITY_THRESHOLD,
+    MERGE_THRESHOLD,
     BaselineGraphReader,
     OneHotEmbeddingCaller,
     SingleTenantStore,
 )
+from company_merge._thresholds import NO_FLOOR_REVIEW_THRESHOLD
 from ps_service.company_merge.dedup import (
     dedupe_canonical_nodes,
     resolve_capability_convergence_offline,
@@ -134,7 +135,7 @@ def _live(scenario: _Scenario) -> DedupResult:
         kind=CAPABILITY,
         single_tenant_graph=_single_tenant(scenario),
         model=EMBED_MODEL,
-        thresholds=ReviewThresholds(merge=SIMILARITY_THRESHOLD),
+        thresholds=ReviewThresholds(merge=MERGE_THRESHOLD),
         call_embedding=_NoEmbeddingCaller(),
     )
 
@@ -148,7 +149,7 @@ def _offline(scenario: _Scenario) -> DedupResult:
         incoming_embeddings={node_id: vector for node_id, _, vector in scenario.incoming},
         single_tenant_graph=_single_tenant(scenario),
         kind=CAPABILITY,
-        thresholds=ReviewThresholds(merge=SIMILARITY_THRESHOLD),
+        thresholds=ReviewThresholds(merge=MERGE_THRESHOLD),
     )
 
 
@@ -219,7 +220,7 @@ def test_live_dedup_embeds_an_uncached_pair_raises_a_near_miss_without_a_floor_a
         kind=CAPABILITY,
         single_tenant_graph=graph,
         model=EMBED_MODEL,
-        thresholds=ReviewThresholds(merge=SIMILARITY_THRESHOLD),
+        thresholds=ReviewThresholds(merge=MERGE_THRESHOLD),
         call_embedding=OneHotEmbeddingCaller(),
         emitter=emitter,
     )
@@ -241,7 +242,7 @@ def test_offline_dedup_skips_an_uncached_candidate_and_logs_one_warning(
         incoming_embeddings={"cap_b": _FAR},
         single_tenant_graph=graph,
         kind=CAPABILITY,
-        thresholds=ReviewThresholds(merge=SIMILARITY_THRESHOLD),
+        thresholds=ReviewThresholds(merge=MERGE_THRESHOLD),
         emitter=emitter,
     )
 
@@ -272,7 +273,8 @@ def test_merge_baseline_graph_persists_one_review_per_near_miss_with_the_pair_an
         baseline_graph=BaselineGraphReader(family_a_baseline_graph(baseline)),
         single_tenant_graph=merge_rig.legacy,
         embed_model=EMBED_MODEL,
-        similarity_threshold=SIMILARITY_THRESHOLD,
+        merge_threshold=MERGE_THRESHOLD,
+        review_threshold=NO_FLOOR_REVIEW_THRESHOLD,
         call_embedding=OneHotEmbeddingCaller(),
         emitter=emitter,
         **merge_rig.merge_keywords(),

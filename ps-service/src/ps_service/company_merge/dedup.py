@@ -152,7 +152,7 @@ def find_best_semantic_match(
     Each entry's embedding is its cached `embedding` when present, otherwise computed with one
     `route_embedding` call for `entry.text`. The incoming embedding is `incoming_embedding` when
     supplied (no call is made for it), otherwise computed once with `route_embedding`.
-    `similarity.cosine_similarity` scores every entry against it. No similarity threshold is
+    `similarity.cosine_similarity` scores every entry against it. No merge or review cut-off is
     applied here; the caller decides merge versus surface.
 
     Two maxima come from the single scan at no extra embedding cost: the overall best
@@ -344,7 +344,10 @@ def _eligible_merge_targets(
 
 
 def _clears_review_floor(similarity: float, thresholds: ReviewThresholds) -> bool:
-    """Report whether a near miss scoring `similarity` is surfaced: no floor, or at or above it."""
+    """Report whether a near miss scoring `similarity` is surfaced: no floor, or at or above it.
+
+    The floor is inclusive: a pair scoring exactly `thresholds.review` is surfaced.
+    """
     return thresholds.review is None or similarity >= thresholds.review
 
 
@@ -371,8 +374,10 @@ def dedupe_canonical_nodes(
     near-duplicate is never merged, only recorded as a `NearMissPair`. Existing embeddings computed
     during a scan are folded into the working index at once and, for pre-existing entries, recorded
     in `embedding_backfills`. No result, no eligible candidate, or an eligible best score below
-    `thresholds.merge` mints a new canonical node, recording a near miss whenever any score was
-    computed and it is at or above `thresholds.review` (no floor when that is `None`).
+    `thresholds.merge` mints a new canonical node. It records a near miss only when the overall
+    best neighbour's score is at or above `thresholds.review`; a lower score records none, and
+    `thresholds.review` of `None` applies no floor (the production Capability path always sets
+    one).
     An eligible best at or above `thresholds.merge` resolves onto that canonical id and may also
     record a second near miss when an ineligible same-run mint scored higher.
 
@@ -388,8 +393,9 @@ def dedupe_canonical_nodes(
         single_tenant_graph: Read handle on the single-tenant graph holding the canonical nodes.
         model: Embedding model name for any `route_embedding` call.
         thresholds: `merge` is the minimum cosine similarity for an eligible candidate to be merged
-            onto; `review` is the floor for surfacing a near miss (`None`: every scored best
-            neighbour is surfaced, which is Capability's behaviour).
+            onto; `review` is the floor for surfacing a near miss: a pair scoring at or above it
+            is surfaced, a pair below it is not (`None`: no floor, so each best neighbour that was
+            scored is surfaced).
         instrument_id: The run's instrument; required by a `"per-instrument"` kind.
         call_embedding: Embedding caller override; None uses the default provider routing.
         emitter: Log sink passed to `route_embedding`; None uses the default emitter.

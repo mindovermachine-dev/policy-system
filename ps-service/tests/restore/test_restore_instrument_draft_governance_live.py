@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
+from company_merge._thresholds import REVIEW_THRESHOLD
 from policy_lifecycle._gateway_fakes import policy_manager_enforcer
 
 from ps_service.audit.store import PsycopgAuditStore
@@ -45,7 +46,7 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
 _INSTRUMENT_DIR = Path(__file__).resolve().parents[3] / "curated-content" / "ENGPRAC-1.0"
-_SIMILARITY_THRESHOLD = 0.9
+_MERGE_THRESHOLD = 0.9
 _OWNER = ("restorer@example.com", "https://idp.example/")
 _MANAGER = ("manager@example.com", "https://idp.example/")
 _ACTOR = "test-actor"
@@ -97,7 +98,8 @@ def _restore(
         _artifact(short_name),
         db=db,
         single_tenant_graph_name=graph_name,
-        similarity_threshold=_SIMILARITY_THRESHOLD,
+        merge_threshold=_MERGE_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         actor=_ACTOR,
         open_gateway=lambda: gateway,
         audit_event_id=audit_event_id,

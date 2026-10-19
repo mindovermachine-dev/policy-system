@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import ast
 import base64
+import dataclasses
 import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.errors import RestoreArtifactRejectedError, RestoreStageFailedError
@@ -116,7 +118,8 @@ class _RestoreCall:
     artifact: RestoreArtifact
     db: object
     single_tenant_graph_name: str
-    similarity_threshold: float
+    merge_threshold: float
+    review_threshold: float
     actor: str
     owner: tuple[str, str] | None = None
 
@@ -133,7 +136,8 @@ class _FakeRestoreStage:
         *,
         db: object,
         single_tenant_graph_name: str,
-        similarity_threshold: float,
+        merge_threshold: float,
+        review_threshold: float,
         actor: str,
         open_gateway: Callable[[], object] | None = None,
         audit_event_id: str = "",
@@ -142,7 +146,15 @@ class _FakeRestoreStage:
     ) -> RestoreOutcome:
         _ = emitter
         self.calls.append(
-            _RestoreCall(artifact, db, single_tenant_graph_name, similarity_threshold, actor, owner)
+            _RestoreCall(
+                artifact,
+                db,
+                single_tenant_graph_name,
+                merge_threshold,
+                review_threshold,
+                actor,
+                owner,
+            )
         )
         if self._error is not None:
             raise self._error
@@ -170,8 +182,26 @@ def _config() -> ServiceConfig:
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=None,
-        company_merge_similarity_threshold=0.8,
+        company_merge_capability_merge_threshold=0.8,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
     )
+
+
+def test_run_restoration_hands_the_restore_both_configured_thresholds() -> None:
+    from dataclasses import replace
+
+    stage = _FakeRestoreStage()
+    config = replace(_config(), company_merge_capability_review_threshold=0.3)
+
+    run_restoration(
+        _valid_request(),
+        config=config,
+        actor="127.0.0.1",
+        dependencies=_build_dependencies(stage),
+    )
+
+    (call,) = stage.calls
+    assert (call.merge_threshold, call.review_threshold) == (0.8, 0.3)
 
 
 def test_run_restoration_success_returns_accepted_response_shape() -> None:
@@ -187,7 +217,7 @@ def test_run_restoration_success_returns_accepted_response_shape() -> None:
     assert len(stage.calls) == 1
     call = stage.calls[0]
     assert call.single_tenant_graph_name == "policy_system"
-    assert call.similarity_threshold == 0.8
+    assert call.merge_threshold == 0.8
     assert call.actor == "127.0.0.1"
 
 
@@ -321,7 +351,7 @@ def test_run_restoration_rejects_malformed_base64_before_calling_the_delegate() 
     assert stage.calls == []
 
 
-def test_run_restoration_raises_stage_failed_when_similarity_threshold_unset() -> None:
+def test_run_restoration_raises_stage_failed_when_merge_threshold_unset() -> None:
     from ps_service.config import ServiceConfig
 
     stage = _FakeRestoreStage()
@@ -331,11 +361,68 @@ def test_run_restoration_raises_stage_failed_when_similarity_threshold_unset() -
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=None,
-        company_merge_similarity_threshold=None,
+        company_merge_capability_merge_threshold=None,
     )
 
     with pytest.raises(RestoreStageFailedError):
         run_restoration(_valid_request(), config=config, actor="x", dependencies=dependencies)
+    assert stage.calls == []
+
+
+def test_run_restoration_raises_stage_failed_naming_the_review_variable_when_unset() -> None:
+    from ps_service.config import ServiceConfig
+
+    stage = _FakeRestoreStage()
+    dependencies = _build_dependencies(stage)
+    opened: list[object] = []
+
+    def _recording_open_db(config: ServiceConfig) -> FalkorDB:
+        opened.append(config)
+        return cast("FalkorDB", _FakeDb())
+
+    dependencies = dataclasses.replace(dependencies, open_db=_recording_open_db)
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        company_merge_capability_merge_threshold=0.8,
+        company_merge_capability_review_threshold=None,
+    )
+
+    with pytest.raises(RestoreStageFailedError) as raised:
+        run_restoration(_valid_request(), config=config, actor="x", dependencies=dependencies)
+
+    assert raised.value.stage == "configuration"
+    assert "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD" in str(raised.value)
+    assert opened == []
+    assert stage.calls == []
+
+
+def test_run_restoration_raises_stage_failed_when_review_threshold_exceeds_merge_threshold() -> (
+    None
+):
+    from ps_service.config import ServiceConfig
+
+    stage = _FakeRestoreStage()
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        company_merge_capability_merge_threshold=0.6,
+        company_merge_capability_review_threshold=0.8,
+    )
+
+    with pytest.raises(
+        RestoreStageFailedError, match="PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD"
+    ):
+        run_restoration(
+            _valid_request(),
+            config=config,
+            actor="x",
+            dependencies=_build_dependencies(stage),
+        )
     assert stage.calls == []
 
 

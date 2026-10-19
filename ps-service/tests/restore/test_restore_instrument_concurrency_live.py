@@ -22,6 +22,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 from ps_service.graph_gateway.models import MutationGroup, UpsertNode
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
     from ps_service.graph_gateway.gateway import GraphWriteGateway
 
 _ACTOR = "test-actor"
-_SIMILARITY_THRESHOLD = 0.9
+_MERGE_THRESHOLD = 0.9
 _CAPABILITY_ID = "cap_concurrency_proof"
 
 
@@ -204,7 +205,8 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
                 artifact,
                 db=live_falkordb,
                 single_tenant_graph_name=single_tenant_graph_name,
-                similarity_threshold=_SIMILARITY_THRESHOLD,
+                merge_threshold=_MERGE_THRESHOLD,
+                review_threshold=REVIEW_THRESHOLD,
                 actor=_ACTOR,
                 open_gateway=lambda: rival,
                 audit_event_id=live.audit_event_id,
@@ -263,7 +265,8 @@ def test_restore_instrument_raises_after_exhausting_retries_leaving_only_concurr
                     artifact,
                     db=live_falkordb,
                     single_tenant_graph_name=single_tenant_graph_name,
-                    similarity_threshold=_SIMILARITY_THRESHOLD,
+                    merge_threshold=_MERGE_THRESHOLD,
+                    review_threshold=REVIEW_THRESHOLD,
                     actor=_ACTOR,
                     open_gateway=lambda: rival,
                     audit_event_id=live.audit_event_id,

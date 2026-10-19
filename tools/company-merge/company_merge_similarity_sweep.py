@@ -4,7 +4,7 @@
 Scores a labeled dataset of Capability-name pairs through the same embedding and cosine
 path Company Merge uses in production, tallies precision, recall and F1 at every
 candidate threshold, and recommends the best one. Use it to validate or re-tune
-`PS_COMPANYMERGE_SIMILARITY_THRESHOLD` against real embeddings.
+`PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD` against real embeddings.
 
 How a pair is scored: `text_a` (the incoming side) is always embedded fresh through
 `ps_service.llm_interface.embedding.route_embedding`; `text_b` (the existing-candidate
@@ -23,6 +23,15 @@ dataset is built, it is checked against every Capability node in
 string and whose string names two or more real nodes is rejected with
 `SweepDatasetValidationError`, because Company Merge resolves identical names by exact
 key before any semantic scoring happens.
+
+Review band: Company Merge raises a near-miss review for a Capability pair whose best
+score is at least `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` (the review floor) and
+below `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`; a pair below the floor is dropped
+without review. The same scores answer where the floor belongs. The tool prints every
+pair's score, then for each candidate floor how many true duplicates the review band
+surfaces, how many distinct pairs it surfaces as noise, and how many true duplicates it
+hides below the floor. A good floor hides no true duplicate: it is at or below the lowest
+true-match score. `--floor X` checks one floor against that rule.
 
 Failure behavior: a `LlmProviderError` from any embedding call propagates unchanged and
 aborts the whole sweep; no partial results are produced or written.
@@ -45,16 +54,31 @@ Options:
                             `cited_node_ids`) replacing the built-in 21-pair dataset.
                             A file dataset is trusted as already curated: the
                             identical-name check runs only for the built-in dataset.
+    --merge-threshold       Merge threshold bounding the review band from above
+                            (default: 0.59, the chart's capabilityMergeThreshold; the
+                            report prints whether the default or the flag was used).
+    --floor-start           First candidate review floor (default: 0.30).
+    --floor-stop            Last candidate review floor, inclusive (default: the merge
+                            threshold).
+    --floor-step            Increment between candidate review floors (default: 0.01).
+    --floor                 One review floor to check: prints PASS when it is at or below
+                            the lowest true-match score and not above the merge
+                            threshold, else FAIL, and exits 1 on FAIL.
     --recommendation-path   Where the rendered recommendation Markdown is written
                             (default: the tool's built-in output location); parent
                             directories are created if needed.
 
 Output: a per-threshold table (threshold, precision, recall, F1, TP, FP, TN, FN) and
-the recommendation block on stdout, and the recommendation file.
+the recommendation block on stdout, then every pair's score (highest first), the review
+band table per floor, the lowest and highest true-match and non-match scores, and the
+`--floor` verdict. The recommendation file carries the same recommendation plus a
+"Review band" section.
 
 Exit codes:
-    0   The sweep completed and the recommendation was written.
-    1   Neither `--model` nor PS_LLMINTERFACE_EMBED_MODEL resolves to a model.
+    0   The sweep completed and the recommendation was written (and `--floor`, if
+        given, PASSed).
+    1   Neither `--model` nor PS_LLMINTERFACE_EMBED_MODEL resolves to a model, or
+        `--floor` was given and FAILed.
 
 Requires a configured embedding provider (its own credentials resolvable by LiteLLM)
 unless the embedding transport is injected, and the similarity-corpus baselines checked
@@ -69,7 +93,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, NamedTuple, cast
 
 from ps_service.company_merge.similarity import cosine_similarity
 from ps_service.config import load_config
@@ -606,6 +630,44 @@ class ThresholdResult:
     false_negative: int
 
 
+class ScoredPair(NamedTuple):
+    """One labelled pair with the cosine similarity Company Merge would compute for it.
+
+    Attributes:
+        pair: The labelled pair.
+        score: Cosine similarity of the two names' embeddings (at most 1.0).
+    """
+
+    pair: SimilarityPair
+    score: float
+
+
+@dataclass(frozen=True, slots=True)
+class FloorResult:
+    """What one candidate review floor does to the labelled pairs.
+
+    The review band is `floor <= score < merge_threshold`: pairs in it are raised as
+    near-miss reviews, pairs at or above the merge threshold are merged without review,
+    and pairs below the floor are silently dropped.
+
+    Attributes:
+        floor: The candidate review floor (inclusive).
+        merge_threshold: The merge threshold bounding the band from above (exclusive).
+        surfaced_true_matches: True duplicates in the band; a reviewer sees them.
+        surfaced_distinct_pairs: Distinct (non-match) pairs in the band; review noise.
+        hidden_true_matches: True duplicates below the floor; no reviewer sees them.
+        matches_missed_by_merge: True duplicates below the merge threshold, whatever the
+            floor. Equals `surfaced_true_matches + hidden_true_matches`.
+    """
+
+    floor: float
+    merge_threshold: float
+    surfaced_true_matches: int
+    surfaced_distinct_pairs: int
+    hidden_true_matches: int
+    matches_missed_by_merge: int
+
+
 def _embed(
     text: str,
     cache: dict[str, tuple[float, ...]],
@@ -635,7 +697,7 @@ def _score_dataset(
     *,
     model: str,
     call_embedding: EmbeddingCaller | None,
-) -> tuple[tuple[SimilarityPair, float], ...]:
+) -> tuple[ScoredPair, ...]:
     """Score every pair once, resolving `text_a` fresh and `text_b` reused-if-cached.
 
     `text_a` (the "incoming" side) is always resolved through `_embed`, which shares one
@@ -646,20 +708,46 @@ def _score_dataset(
     Company Merge's `find_best_semantic_match`.
     """
     cache: dict[str, tuple[float, ...]] = {}
-    scored: list[tuple[SimilarityPair, float]] = []
+    scored: list[ScoredPair] = []
     for pair in pairs:
         embedding_a = _embed(pair.text_a, cache, model=model, call_embedding=call_embedding)
         if pair.text_b_cached_embedding is not None:
             embedding_b = pair.text_b_cached_embedding
         else:
             embedding_b = _embed(pair.text_b, cache, model=model, call_embedding=call_embedding)
-        scored.append((pair, cosine_similarity(embedding_a, embedding_b)))
+        scored.append(ScoredPair(pair, cosine_similarity(embedding_a, embedding_b)))
     return tuple(scored)
 
 
-def _threshold_result(
-    scored_pairs: tuple[tuple[SimilarityPair, float], ...], threshold: float
-) -> ThresholdResult:
+def score_dataset(
+    pairs: tuple[SimilarityPair, ...],
+    *,
+    model: str,
+    call_embedding: EmbeddingCaller | None = None,
+) -> tuple[ScoredPair, ...]:
+    """Score every pair once and return each pair with its cosine similarity.
+
+    Args:
+        pairs: The labelled dataset to score.
+        model: Embedding model identifier passed to `route_embedding`.
+        call_embedding: Embedding transport; `None` uses the real default caller.
+
+    Returns:
+        One `ScoredPair` per input pair, in input order.
+
+    Raises:
+        LlmProviderError: Propagated unchanged from any embedding call; no partial
+            result is returned.
+        LoggingLifecycleError: Propagated from `route_embedding` if no default log
+            emitter has been configured.
+
+    Side Effects:
+        Makes one embedding call per unique text that has no cached vector.
+    """
+    return _score_dataset(pairs, model=model, call_embedding=call_embedding)
+
+
+def _threshold_result(scored_pairs: Sequence[ScoredPair], threshold: float) -> ThresholdResult:
     """Tally the confusion matrix, precision, recall and F1 at one threshold."""
     true_positive = 0
     false_positive = 0
@@ -734,8 +822,72 @@ def sweep_dataset(
     Side Effects:
         Makes one embedding call per unique text that has no cached vector.
     """
-    scored_pairs = _score_dataset(pairs, model=model, call_embedding=call_embedding)
+    scored_pairs = score_dataset(pairs, model=model, call_embedding=call_embedding)
     return [_threshold_result(scored_pairs, threshold) for threshold in thresholds]
+
+
+def review_band_report(
+    scored: Sequence[ScoredPair], floors: Iterable[float], merge_threshold: float
+) -> list[FloorResult]:
+    """Count, per candidate review floor, the pairs the review band surfaces and hides.
+
+    A pair is in the band when `floor <= score < merge_threshold`: the floor is
+    inclusive (as `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` is in Company Merge) and
+    the merge threshold exclusive (a score at the merge threshold merges instead).
+
+    Args:
+        scored: Scored labelled pairs.
+        floors: Candidate review floors, in the order rows should be returned.
+        merge_threshold: The merge threshold bounding the band from above.
+
+    Returns:
+        One `FloorResult` per floor, in input order; empty if `floors` is empty.
+    """
+    missed = sum(
+        1 for item in scored if item.pair.label == "match" and item.score < merge_threshold
+    )
+    results: list[FloorResult] = []
+    for floor in floors:
+        surfaced_matches = 0
+        surfaced_distinct = 0
+        hidden_matches = 0
+        for item in scored:
+            in_band = floor <= item.score < merge_threshold
+            if item.pair.label == "match":
+                if in_band:
+                    surfaced_matches += 1
+                elif item.score < floor:
+                    hidden_matches += 1
+            elif in_band:
+                surfaced_distinct += 1
+        results.append(
+            FloorResult(
+                floor=floor,
+                merge_threshold=merge_threshold,
+                surfaced_true_matches=surfaced_matches,
+                surfaced_distinct_pairs=surfaced_distinct,
+                hidden_true_matches=hidden_matches,
+                matches_missed_by_merge=missed,
+            )
+        )
+    return results
+
+
+def _label_scores(scored: Sequence[ScoredPair], label: str) -> list[float]:
+    return [item.score for item in scored if item.pair.label == label]
+
+
+def floor_passes(floor: float, lowest_true_match: float | None, merge_threshold: float) -> bool:
+    """Report whether `floor` keeps every labelled true duplicate visible.
+
+    A floor passes when it is at or below the lowest true-match score (so none is hidden)
+    and does not exceed the merge threshold (Company Merge rejects a review floor above
+    the merge threshold). With no true match in the dataset only the second condition
+    applies.
+    """
+    if floor > merge_threshold:
+        return False
+    return lowest_true_match is None or floor <= lowest_true_match
 
 
 def build_dataset() -> tuple[SimilarityPair, ...]:
@@ -779,6 +931,12 @@ def build_dataset() -> tuple[SimilarityPair, ...]:
 DEFAULT_THRESHOLD_START = 0.70
 DEFAULT_THRESHOLD_STOP = 0.95
 DEFAULT_THRESHOLD_STEP = 0.01
+
+# Mirrors `psService.companyMerge.capabilityMergeThreshold` in
+# charts/policy-system/values.yaml; a hermetic test fails when the two drift apart.
+DEFAULT_MERGE_THRESHOLD = 0.59
+DEFAULT_FLOOR_START = 0.30
+DEFAULT_FLOOR_STEP = 0.01
 
 _REPO_ROOT = _TOOLS_COMPANY_MERGE_DIR.parent.parent
 _DEFAULT_RECOMMENDATION_PATH = (
@@ -876,6 +1034,39 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "21-pair dataset",
     )
     parser.add_argument(
+        "--merge-threshold",
+        type=float,
+        default=None,
+        help="Merge threshold bounding the review band from above (exclusive). Default: "
+        f"{DEFAULT_MERGE_THRESHOLD}, the chart's capabilityMergeThreshold; the report "
+        "prints which source was used",
+    )
+    parser.add_argument(
+        "--floor-start",
+        type=float,
+        default=DEFAULT_FLOOR_START,
+        help=f"First candidate review floor to report (default: {DEFAULT_FLOOR_START})",
+    )
+    parser.add_argument(
+        "--floor-stop",
+        type=float,
+        default=None,
+        help="Last candidate review floor to report, inclusive (default: the merge threshold)",
+    )
+    parser.add_argument(
+        "--floor-step",
+        type=float,
+        default=DEFAULT_FLOOR_STEP,
+        help=f"Increment between candidate review floors (default: {DEFAULT_FLOOR_STEP})",
+    )
+    parser.add_argument(
+        "--floor",
+        type=float,
+        default=None,
+        help="Check one review floor: print PASS when it is at or below the lowest "
+        "true-match score and not above the merge threshold, else FAIL and exit 1",
+    )
+    parser.add_argument(
         "--recommendation-path",
         type=Path,
         default=_DEFAULT_RECOMMENDATION_PATH,
@@ -928,6 +1119,95 @@ def _print_threshold_table(results: list[ThresholdResult]) -> None:
         )
 
 
+_FLOOR_HEADER = "floor  surfaced_matches  surfaced_distinct  hidden_matches  missed_by_merge"
+
+
+def _format_score(score: float | None) -> str:
+    return "n/a" if score is None else f"{score:.4f}"
+
+
+def _extremes(scored: Sequence[ScoredPair]) -> list[tuple[str, float | None]]:
+    """Lowest and highest true-match and non-match scores, `None` when a label is absent."""
+    matches = _label_scores(scored, "match")
+    non_matches = _label_scores(scored, "non_match")
+    return [
+        ("lowest true-match score", min(matches, default=None)),
+        ("highest true-match score", max(matches, default=None)),
+        ("lowest non-match score", min(non_matches, default=None)),
+        ("highest non-match score", max(non_matches, default=None)),
+    ]
+
+
+def _print_pair_table(scored: Sequence[ScoredPair]) -> None:
+    """Print one row per scored pair, highest score first: score, label, both names."""
+    print("score   label      text_a | text_b")
+    for item in sorted(scored, key=lambda scored_pair: scored_pair.score, reverse=True):
+        print(f"{item.score:<8.4f}{item.pair.label:<11}{item.pair.text_a} | {item.pair.text_b}")
+
+
+def _print_floor_table(rows: Sequence[FloorResult]) -> None:
+    """Print one row per candidate review floor with the review-band counts."""
+    print(_FLOOR_HEADER)
+    for row in rows:
+        print(
+            f"{row.floor:<7.2f}"
+            f"{row.surfaced_true_matches:<18d}"
+            f"{row.surfaced_distinct_pairs:<19d}"
+            f"{row.hidden_true_matches:<16d}"
+            f"{row.matches_missed_by_merge:<d}"
+        )
+
+
+def render_review_band(
+    rows: Sequence[FloorResult],
+    scored: Sequence[ScoredPair],
+    *,
+    merge_threshold: float,
+    merge_source: str,
+    floor_verdict: str | None = None,
+) -> str:
+    """Render the review-band report as a Markdown section.
+
+    Args:
+        rows: One `FloorResult` per candidate floor.
+        scored: The scored pairs, for the true-match score extremes.
+        merge_threshold: The merge threshold bounding the band.
+        merge_source: Where the merge threshold came from (`default` or
+            `--merge-threshold`).
+        floor_verdict: The `--floor` PASS/FAIL line, if a floor was checked.
+
+    Returns:
+        Markdown starting with a `## Review band` heading: the merge threshold and its
+        source, a table with one row per floor, the true-match score extremes, and the
+        verdict line when given.
+    """
+    lines = [
+        "## Review band",
+        "",
+        "A pair is raised for review when `floor <= score < merge threshold`.",
+        "",
+        f"- merge threshold {merge_threshold:g} (source: {merge_source})",
+    ]
+    matches = _label_scores(scored, "match")
+    lines.append(f"- Lowest true-match score: {_format_score(min(matches, default=None))}")
+    lines.append(f"- Highest true-match score: {_format_score(max(matches, default=None))}")
+    missed = rows[0].matches_missed_by_merge if rows else 0
+    lines.append(f"- True duplicates below the merge threshold: {missed}")
+    if floor_verdict is not None:
+        lines.append(f"- {floor_verdict}")
+    lines += [
+        "",
+        "| floor | surfaced true matches | surfaced distinct pairs | hidden true matches |",
+        "|---|---|---|---|",
+    ]
+    lines += [
+        f"| {row.floor:.2f} | {row.surfaced_true_matches} | {row.surfaced_distinct_pairs} "
+        f"| {row.hidden_true_matches} |"
+        for row in rows
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def select_recommendation(results: list[ThresholdResult]) -> ThresholdResult:
     """Pick the recommended threshold from a full sweep's results.
 
@@ -950,11 +1230,13 @@ def select_recommendation(results: list[ThresholdResult]) -> ThresholdResult:
     return max(results, key=lambda result: (result.f1, result.threshold))
 
 
-def render_recommendation(result: ThresholdResult) -> str:
+def render_recommendation(result: ThresholdResult, review_band: str | None = None) -> str:
     """Render `result` as a short Markdown block naming the recommended threshold.
 
     Args:
         result: The chosen `ThresholdResult`.
+        review_band: Markdown from `render_review_band`, appended after a blank line;
+            `None` leaves the block without a review-band section.
 
     Returns:
         Markdown text naming the threshold and its precision, recall and F1 (each to 3
@@ -962,7 +1244,7 @@ def render_recommendation(result: ThresholdResult) -> str:
         ties toward the higher threshold), so a reader of the written recommendation
         file sees exactly what was measured and why the value was chosen.
     """
-    return (
+    block = (
         "# Company Merge similarity-threshold sweep recommendation\n"
         "\n"
         f"**Recommended threshold: {result.threshold:.3f}**\n"
@@ -982,6 +1264,7 @@ def render_recommendation(result: ThresholdResult) -> str:
         "the higher threshold, biasing the recommendation toward precision (fewer "
         "false Capability merges).\n"
     )
+    return block if review_band is None else f"{block}\n{review_band}"
 
 
 def main(
@@ -1007,7 +1290,8 @@ def main(
 
     Returns:
         Process exit code: `0` on success; `1` if `--model` is not given and
-        `PS_LLMINTERFACE_EMBED_MODEL` does not resolve through `config_loader()`.
+        `PS_LLMINTERFACE_EMBED_MODEL` does not resolve through `config_loader()`, or if
+        `--floor` was given and FAILed (the full report and file are still produced).
 
     Raises:
         SystemExit: Raised by argparse on invalid arguments or `--help`.
@@ -1018,7 +1302,7 @@ def main(
             uses a name shared by real nodes on both sides of a pair.
         LlmProviderError: Propagated unchanged from any embedding call; nothing is
             written in that case.
-        ValueError: If `--threshold-step` is not positive.
+        ValueError: If `--threshold-step` or `--floor-step` is not positive.
         OSError: If a `--dataset` file cannot be read or the recommendation file
             cannot be written.
 
@@ -1035,23 +1319,61 @@ def main(
 
     dataset = build_dataset() if args.dataset is None else _load_dataset_from_path(args.dataset)
     thresholds = _threshold_range(args.threshold_start, args.threshold_stop, args.threshold_step)
+    explicit_merge = cast("float | None", args.merge_threshold)
+    merge_threshold = DEFAULT_MERGE_THRESHOLD if explicit_merge is None else explicit_merge
+    merge_source = "default" if explicit_merge is None else "--merge-threshold"
+    floor_stop = merge_threshold if args.floor_stop is None else cast("float", args.floor_stop)
+    floors = _threshold_range(args.floor_start, floor_stop, args.floor_step)
 
     configure_logging()
 
-    results = sweep_dataset(dataset, thresholds, model=model, call_embedding=call_embedding)
+    scored = score_dataset(dataset, model=model, call_embedding=call_embedding)
+    results = [_threshold_result(scored, threshold) for threshold in thresholds]
 
     _print_threshold_table(results)
 
     recommendation = select_recommendation(results)
-    rendered_recommendation = render_recommendation(recommendation)
     print()
-    print(rendered_recommendation)
+    print(render_recommendation(recommendation))
 
+    rows = review_band_report(scored, floors, merge_threshold)
+    lowest_match = min(_label_scores(scored, "match"), default=None)
+    floor_verdict: str | None = None
+    passed = True
+    if args.floor is not None:
+        passed = floor_passes(cast("float", args.floor), lowest_match, merge_threshold)
+        floor_verdict = (
+            f"floor {args.floor:g}: {'PASS' if passed else 'FAIL'} "
+            f"(lowest true-match score {_format_score(lowest_match)}, "
+            f"merge threshold {merge_threshold:g})"
+        )
+
+    print(f"merge threshold {merge_threshold:g} (source: {merge_source})")
+    print()
+    _print_pair_table(scored)
+    print()
+    _print_floor_table(rows)
+    print()
+    for label, value in _extremes(scored):
+        print(f"{label}: {_format_score(value)}")
+    if floor_verdict is not None:
+        print()
+        print(floor_verdict)
+
+    review_band = render_review_band(
+        rows,
+        scored,
+        merge_threshold=merge_threshold,
+        merge_source=merge_source,
+        floor_verdict=floor_verdict,
+    )
     recommendation_path = cast("Path", args.recommendation_path)
     recommendation_path.parent.mkdir(parents=True, exist_ok=True)
-    recommendation_path.write_text(rendered_recommendation, encoding="utf-8")
+    recommendation_path.write_text(
+        render_recommendation(recommendation, review_band), encoding="utf-8"
+    )
 
-    return 0
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

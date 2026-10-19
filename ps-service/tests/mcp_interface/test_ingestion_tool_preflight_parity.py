@@ -62,7 +62,8 @@ _ALREADY_INGESTED_MESSAGE = f"error: CELEX {_CELEX} is already ingested as short
 _NOT_FOUND_MESSAGE = f"error: CELEX {_NONCURATED_CELEX!r} does not exist on Cellar/ELI."
 _CONFIG_INCOMPLETE_MESSAGE = (
     "error: ingestion configuration incomplete: llm_interface_model, "
-    "llm_interface_embed_model, company_merge_similarity_threshold not set"
+    "llm_interface_embed_model, company_merge_capability_merge_threshold, "
+    "company_merge_capability_review_threshold not set"
 )
 _LLM_UNAVAILABLE_MESSAGE = "error: LLM Interface is unavailable."
 _GRAPH_UNREACHABLE_MESSAGE = "error: the policy graph database is not reachable"
@@ -81,10 +82,11 @@ def _call(tool: str, celex: str, short_name: str) -> str:
 
 
 def _configure_incomplete_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unset all three fields `_require_ingestion_config` requires."""
+    """Unset all four fields `_require_ingestion_config` requires."""
     monkeypatch.delenv("PS_LLMINTERFACE_MODEL", raising=False)
     monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
-    monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -165,6 +167,22 @@ def test_valid_curated_celex_with_incomplete_config_returns_config_error(
     _use_fake_graph_openers_only(monkeypatch, fake.dependencies.graphs)
 
     assert _call(tool, _CELEX, _SHORT_NAME) == _CONFIG_INCOMPLETE_MESSAGE
+    assert fake.recorder.calls == []
+
+
+@pytest.mark.parametrize("tool", _TOOLS)
+def test_unset_review_threshold_alone_returns_config_error_naming_it(
+    tool: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", raising=False)
+    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
+    _use_fake_graph_openers_only(monkeypatch, fake.dependencies.graphs)
+
+    assert _call(tool, _CELEX, _SHORT_NAME) == (
+        "error: ingestion configuration incomplete: "
+        "company_merge_capability_review_threshold not set"
+    )
     assert fake.recorder.calls == []
 
 

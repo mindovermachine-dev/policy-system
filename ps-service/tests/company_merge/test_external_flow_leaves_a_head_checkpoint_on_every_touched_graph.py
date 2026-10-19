@@ -17,7 +17,8 @@ from graph_gateway.checkpoint_checks import assert_head_checkpoints
 from ingestion.test_pipeline_gateway import _Adapter  # pyright: ignore[reportPrivateUsage]
 
 from company_merge._gateway_fakes import POLICY_SYSTEM, MergeRig
-from company_merge._seed_merge_graphs import EMBED_MODEL, SIMILARITY_THRESHOLD, BaselineGraphReader
+from company_merge._seed_merge_graphs import EMBED_MODEL, MERGE_THRESHOLD, BaselineGraphReader
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.graph_writer import (
     persist_obligation_and_capability_graph,
@@ -161,7 +162,8 @@ def test_a_full_external_run_leaves_a_head_checkpoint_on_every_graph_it_touched(
         baseline_graph=BaselineGraphReader(merge_rig.graphs.open(_BASELINE)),
         single_tenant_graph=merge_rig.legacy,
         embed_model=EMBED_MODEL,
-        similarity_threshold=SIMILARITY_THRESHOLD,
+        merge_threshold=MERGE_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )

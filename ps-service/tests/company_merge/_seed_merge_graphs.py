@@ -33,7 +33,7 @@ _EMBEDDING_STATE = re.compile(
     r"^MATCH \(n:(\w+)\) WHERE n\.id IN \$ids RETURN n\.id, n\.embedding IS NULL$"
 )
 EMBED_MODEL = "fake-embed-model"
-SIMILARITY_THRESHOLD = 0.85
+MERGE_THRESHOLD = 0.85
 _EMBEDDING_DIMENSION = 512
 
 

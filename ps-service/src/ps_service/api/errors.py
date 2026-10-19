@@ -37,8 +37,9 @@ class InternalSeedValidationError(ApiError):
 class IngestionConfigIncompleteError(ApiError):
     """The resolved `ServiceConfig` is missing a value the pipeline needs.
 
-    One of `llm_interface_model`, `llm_interface_embed_model` or
-    `company_merge_similarity_threshold` is `None`. Raised by the orchestration's config guard
+    One of `llm_interface_model`, `llm_interface_embed_model`,
+    `company_merge_capability_merge_threshold` or `company_merge_capability_review_threshold` is
+    `None`. Raised by the orchestration's config guard
     before any graph or stage call. This is an operator problem, not a caller problem. Handled as
     HTTP 503; `str(exc)` is surfaced verbatim.
     """

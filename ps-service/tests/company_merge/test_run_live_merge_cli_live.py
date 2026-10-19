@@ -6,7 +6,7 @@ ever exercised the runner's REAL `select_graph`/`load_config`/`bind_run_context`
 `Logging.configure()` wiring against a real FalkorDB instance -- the "integration
 wiring never exercised live" gap. This test closes it: real `graph_provider` (real
 `select_graph` against real FalkorDB), real `ps_service.config.load_config()`-resolved
-`similarity_threshold`/`embed_model`, real `bind_run_context`/emitter (`Logging.configure()`)
+`merge_threshold`/`embed_model`, real `bind_run_context`/emitter (`Logging.configure()`)
 -- and ONLY `merge_fn` faked, raising immediately on its FIRST call (recording the exact real
 args it was invoked with) BEFORE any write of any kind occurs. No `--approval-file` points at
 either of the two human-authored `APPROVAL_LIVE_MERGE_*.md` files the real runs consume --
@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
 from ps_service.config import load_config
 from ps_service.logging import facade
@@ -120,7 +121,8 @@ class _RaisingOnFirstCallMergeFn:
         baseline_graph_name: str,
         audit_event_id: str,
         embed_model: str,
-        similarity_threshold: float,
+        merge_threshold: float,
+        review_threshold: float,
         call_embedding: object | None = None,
         emitter: object | None = None,
     ) -> object:
@@ -132,7 +134,8 @@ class _RaisingOnFirstCallMergeFn:
                 "baseline_graph": baseline_graph,
                 "single_tenant_graph": single_tenant_graph,
                 "embed_model": embed_model,
-                "similarity_threshold": similarity_threshold,
+                "merge_threshold": merge_threshold,
+                "review_threshold": review_threshold,
                 "run_id": current_run_id(),
             }
         )
@@ -148,7 +151,8 @@ def test_real_wiring_reaches_merge_fn_with_real_args_and_issues_zero_writes(
     # these values are set here only so the resolution has something real to resolve to,
     # regardless of the ambient shell/.env state; `merge_fn` never uses them for a real
     # embedding/write call, since it raises before doing anything with them.
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.85")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.85")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
 
     approval_path = tmp_path / "approval.md"
@@ -198,7 +202,7 @@ def test_real_wiring_reaches_merge_fn_with_real_args_and_issues_zero_writes(
         "CRA-1.0 is first in run_live_merge.py's fixed run order"
     )
     assert first_call["embed_model"] == "azure/text-embedding-3-large"
-    assert first_call["similarity_threshold"] == pytest.approx(0.85)
+    assert first_call["merge_threshold"] == pytest.approx(0.85)
     assert first_call["run_id"] is not None, "bind_run_context must have bound a real run_id"
     assert first_call["baseline_graph"] is not None
     assert first_call["single_tenant_graph"] is not None

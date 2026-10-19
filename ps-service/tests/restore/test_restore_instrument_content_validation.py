@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from ps_service.export.models import SerializedGraph, SerializedNode
 from ps_service.restore.errors import ArtifactContentRejectedError
@@ -88,7 +89,8 @@ def test_baseline_only_content_violation_is_rejected_before_any_db_call(
             _artifact_with_a_baseline_only_violation(),
             db=cast("FalkorDB", spy_db),
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
-            similarity_threshold=0.9,
+            merge_threshold=0.9,
+            review_threshold=REVIEW_THRESHOLD,
             actor=_ACTOR,
             open_gateway=never_open_gateway,
             audit_event_id=UNUSED_EVENT_ID,
@@ -108,7 +110,8 @@ def test_content_violation_emits_started_then_failed_audit_entries(
             _artifact_with_a_baseline_only_violation(),
             db=cast("FalkorDB", _SpyDb()),
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
-            similarity_threshold=0.9,
+            merge_threshold=0.9,
+            review_threshold=REVIEW_THRESHOLD,
             actor=_ACTOR,
             open_gateway=never_open_gateway,
             audit_event_id=UNUSED_EVENT_ID,
@@ -147,7 +150,8 @@ def test_baseline_with_a_merged_capability_is_rejected_before_any_db_call(
             artifact,
             db=cast("FalkorDB", spy_db),
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
-            similarity_threshold=0.9,
+            merge_threshold=0.9,
+            review_threshold=REVIEW_THRESHOLD,
             actor=_ACTOR,
             open_gateway=never_open_gateway,
             audit_event_id=UNUSED_EVENT_ID,

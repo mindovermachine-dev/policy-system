@@ -13,6 +13,7 @@ import uuid
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ingestion_runs._fakes import InMemoryIngestionRunStore
 
 from ps_service.api.stage_failure_log import STAGE_FAILURE_DETAIL_MAX_LEN
@@ -128,7 +129,8 @@ def _config() -> ServiceConfig:
         logging_dir=None,
         llm_interface_model="azure/gpt-4o",
         llm_interface_embed_model="azure/text-embedding-3-large",
-        company_merge_similarity_threshold=0.83,
+        company_merge_capability_merge_threshold=0.83,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
     )
 

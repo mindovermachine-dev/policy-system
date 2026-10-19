@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter
     from company_merge._gateway_fakes import MergeRig
 
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import (
@@ -428,7 +429,8 @@ def test_uc3_capability_policy_standard_control_query_returns_real_rows(
         baseline_graph=baseline,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
         governance=GovernanceImport(owner=("sub-1", "https://issuer.example")),
         **merge_rig.merge_keywords(),

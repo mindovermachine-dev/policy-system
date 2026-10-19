@@ -31,6 +31,7 @@ from api._gateway_fakes import (
     install_process_gateway,
     installed_process_gateway,
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from graph_gateway._fakes import GatewayRig
 from graph_gateway.checkpoint_checks import assert_head_checkpoints
 
@@ -79,7 +80,8 @@ _CONFIG = ServiceConfig(
     logging_dir=None,
     llm_interface_model="azure/gpt-4o",
     llm_interface_embed_model="azure/text-embedding-3-large",
-    company_merge_similarity_threshold=0.83,
+    company_merge_capability_merge_threshold=0.83,
+    company_merge_capability_review_threshold=REVIEW_THRESHOLD,
 )
 _CONTENT = {
     _PRIOR: VersionContent(obligations=("A",)),

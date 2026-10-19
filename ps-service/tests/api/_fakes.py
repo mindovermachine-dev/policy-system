@@ -449,7 +449,8 @@ class FakeMergeStage:
         baseline_graph_name: str,
         audit_event_id: str,
         embed_model: str,
-        similarity_threshold: float | None,
+        merge_threshold: float | None,
+        review_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
         governance: GovernanceImport | None = None,
@@ -463,7 +464,8 @@ class FakeMergeStage:
         _ = (baseline_graph, call_embedding)
         kwargs: dict[str, object] = {
             "embed_model": embed_model,
-            "similarity_threshold": similarity_threshold,
+            "merge_threshold": merge_threshold,
+            "review_threshold": review_threshold,
             "submitter": submitter,
             "single_tenant_graph_name": single_tenant_graph_name,
             "baseline_graph_name": baseline_graph_name,

@@ -369,7 +369,8 @@ class MergeStage(Protocol):
         baseline_graph_name: str,
         audit_event_id: str,
         embed_model: str,
-        similarity_threshold: float | None,
+        merge_threshold: float | None,
+        review_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
         governance: GovernanceImport | None = None,
@@ -386,8 +387,10 @@ class MergeStage(Protocol):
             baseline_graph_name: Graph the embedding backfills are submitted to.
             audit_event_id: Audit event the groups are logged under.
             embed_model: Embedding model used for the semantic duplicate comparison.
-            similarity_threshold: Cosine similarity at or above which a semantic match is
+            merge_threshold: Cosine similarity at or above which a semantic match is
                 accepted; ``None`` is a configuration error.
+            review_threshold: Cosine similarity at or above which a Capability near miss is
+                raised for review; ``None`` is a configuration error.
             call_embedding: Embedding caller; ``None`` uses the default.
             emitter: Log emitter; ``None`` uses the default.
             governance: The ingesting caller's owner for an internal baseline's Policy tree;
@@ -490,12 +493,14 @@ class _ResolvedPipelineConfig:
     Attributes:
         chat_model: Chat model identifier for extraction and derivation.
         embed_model: Embedding model identifier for the merge's duplicate comparison.
-        similarity_threshold: Cosine similarity threshold for a semantic match.
+        merge_threshold: Cosine similarity at or above which two Capabilities merge.
+        review_threshold: Cosine similarity at or above which a Capability near miss is raised.
     """
 
     chat_model: str
     embed_model: str
-    similarity_threshold: float
+    merge_threshold: float
+    review_threshold: float
 
 
 def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
@@ -508,21 +513,27 @@ def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
         config: The resolved service configuration.
 
     Returns:
-        A ``_ResolvedPipelineConfig`` whose three fields are all non-``None``.
+        A ``_ResolvedPipelineConfig`` whose fields are all non-``None``.
 
     Raises:
         IngestionConfigIncompleteError: If ``llm_interface_model``,
-            ``llm_interface_embed_model``, or ``company_merge_similarity_threshold`` is ``None``.
+            ``llm_interface_embed_model``, or
+            ``company_merge_capability_merge_threshold`` or
+            ``company_merge_capability_review_threshold`` is ``None``.
     """
     chat_model = config.llm_interface_model
     embed_model = config.llm_interface_embed_model
-    threshold = config.company_merge_similarity_threshold
-    if chat_model is None or embed_model is None or threshold is None:
+    threshold = config.company_merge_capability_merge_threshold
+    review_threshold = config.company_merge_capability_review_threshold
+    if chat_model is None or embed_model is None or threshold is None or review_threshold is None:
         missing = ", ".join(missing_ingestion_config_fields(config))
         message = f"ingestion configuration incomplete: {missing} not set"
         raise IngestionConfigIncompleteError(message)
     return _ResolvedPipelineConfig(
-        chat_model=chat_model, embed_model=embed_model, similarity_threshold=threshold
+        chat_model=chat_model,
+        embed_model=embed_model,
+        merge_threshold=threshold,
+        review_threshold=review_threshold,
     )
 
 
@@ -1415,7 +1426,8 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
                 baseline_graph_name=baseline_graph_name,
                 audit_event_id=audit_event_id,
                 embed_model=resolved.embed_model,
-                similarity_threshold=resolved.similarity_threshold,
+                merge_threshold=resolved.merge_threshold,
+                review_threshold=resolved.review_threshold,
             ),
             emitter=emitter,
         )
@@ -1494,7 +1506,7 @@ def run_catalog_ingestion_pipeline(
 
     Raises:
         IngestionConfigIncompleteError: The configuration is missing an LLM model, embed model
-            or similarity threshold (HTTP 503); nothing was opened.
+            or Capability merge threshold (HTTP 503); nothing was opened.
         GraphWriteUnavailableError: The process has no graph write gateway installed (HTTP 503).
         AuditTrailUnavailableError: The run's system audit row could not be written (HTTP 503);
             nothing was written to any graph.
@@ -1929,7 +1941,7 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
         before any graph is opened, because the ``{short}_baseline`` and ``{short}_native`` graph
         names derive from the seed's own ``RegulatoryInstrument.id``; unlike the catalog path,
         the short name is unknown until the document is parsed. The merge needs the Company
-        Merge similarity threshold and an embedding model, so :func:`_require_ingestion_config`
+        Capability merge threshold and an embedding model, so :func:`_require_ingestion_config`
         runs first, before any graph is opened or stage runs, giving the same
         HTTP-503-before-any-I/O guarantee as the catalog pipeline. The gateway is required before
         anything else is opened.
@@ -1958,7 +1970,7 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
 
     Raises:
         IngestionConfigIncompleteError: If the configuration is missing an
-            LLM model / embed model / similarity threshold (HTTP 503).
+            LLM model / embed model / Capability merge threshold (HTTP 503).
         InternalIngestOwnerRequiredError: The seed carries a Policy and ``owner`` is ``None``
             (HTTP 401); nothing ran.
         GraphWriteUnavailableError: ``gateway`` is ``None`` (HTTP 503); nothing ran.
@@ -2023,7 +2035,8 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
                     baseline_graph_name=_baseline_graph_name(short_name),
                     audit_event_id=audit_event_id,
                     embed_model=resolved.embed_model,
-                    similarity_threshold=resolved.similarity_threshold,
+                    merge_threshold=resolved.merge_threshold,
+                    review_threshold=resolved.review_threshold,
                     emitter=emitter,
                     governance=GovernanceImport(owner=owner),
                 ),

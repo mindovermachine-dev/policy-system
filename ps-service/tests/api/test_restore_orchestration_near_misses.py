@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from company_merge._gateway_fakes import POLICY_SYSTEM
+from company_merge._thresholds import REVIEW_THRESHOLD
 from graph_gateway._fakes import close_all_rigs
 from restore._fixtures import build_restore_artifact, small_graphs
 from restore._gateway_fakes import RestoreRig
@@ -102,9 +103,15 @@ def _request(artifact: RestoreArtifact) -> RestorationRequest:
     )
 
 
-def _run(rig: RestoreRig, store: InMemoryAuditStore):
+def _run(rig: RestoreRig, store: InMemoryAuditStore, *, review_threshold: float = REVIEW_THRESHOLD):
     def _restore(artifact: RestoreArtifact, **kwargs: object) -> RestoreOutcome:
-        return rig.restore(artifact, threshold=_THRESHOLD, owner=_ACTOR)
+        # the threshold the route handed the restore routine, not the test's own
+        return rig.restore(
+            artifact,
+            threshold=cast("float", kwargs["merge_threshold"]),
+            review_threshold=cast("float", kwargs["review_threshold"]),
+            owner=_ACTOR,
+        )
 
     dependencies = RestoreDependencies(
         open_db=lambda _config: cast("FalkorDB", rig.db),
@@ -117,7 +124,8 @@ def _run(rig: RestoreRig, store: InMemoryAuditStore):
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=None,
-        company_merge_similarity_threshold=_THRESHOLD,
+        company_merge_capability_merge_threshold=_THRESHOLD,
+        company_merge_capability_review_threshold=review_threshold,
         is_local_test_bypass_active=True,
     )
     return run_restoration(
@@ -152,3 +160,30 @@ def test_AC_BI_001_AC_BI_003_near_misses_are_persisted_and_counted_end_to_end(
     terminal = [r for r in store.rows if r.details["status"] == "succeeded"]
     assert len(terminal) == 1
     assert terminal[0].details["near_miss_reviews_created"] == len(_INCOMING)
+
+
+def test_AC_BI_010_a_review_threshold_below_the_pair_scores_keeps_the_reviews(
+    rig: RestoreRig,
+) -> None:
+    _seed_existing(rig)
+    store = InMemoryAuditStore()
+
+    response = _run(rig, store, review_threshold=0.7)
+
+    reviews = [k for k in rig.graph(POLICY_SYSTEM).nodes if k[0] == "PendingReview"]
+    assert len(reviews) == len(_INCOMING)
+    assert response.near_miss_reviews_created == len(_INCOMING)
+
+
+def test_AC_BI_010_a_review_threshold_above_the_pair_scores_raises_none_and_reports_zero(
+    rig: RestoreRig,
+) -> None:
+    _seed_existing(rig)
+    store = InMemoryAuditStore()
+
+    response = _run(rig, store, review_threshold=0.85)
+
+    assert [k for k in rig.graph(POLICY_SYSTEM).nodes if k[0] == "PendingReview"] == []
+    assert response.near_miss_reviews_created == 0
+    terminal = [r for r in store.rows if r.details["status"] == "succeeded"]
+    assert terminal[0].details["near_miss_reviews_created"] == 0

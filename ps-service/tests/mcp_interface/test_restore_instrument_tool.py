@@ -71,6 +71,7 @@ from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own real-token success test can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
@@ -691,8 +692,9 @@ def _call_restore_instrument(instrument_id: str = _INSTRUMENT_ID) -> CallToolRes
     return result
 
 
-def _set_similarity_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.83")
+def _set_merge_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.83")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
 
 
 @pytest.fixture(name="audit_store", autouse=True)
@@ -745,7 +747,7 @@ def test_happy_path_returns_accepted_response_shape_and_logs_no_principal(
     failed-call case and the real-bearer-token case).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     emitter = configure()
     _use_fake_restore_infra(monkeypatch, _valid_transport())
 
@@ -779,7 +781,7 @@ def test_happy_path_fetches_the_artifact_from_the_curated_source_not_a_local_fil
     artifact (no local-machine dependency).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     transport = _valid_transport()
     _use_fake_restore_infra(monkeypatch, transport)
@@ -803,7 +805,7 @@ def test_lowercase_instrument_id_resolves_and_fetches_the_canonical_id(
 ) -> None:
     """`cra-1.0` resolves against the catalog's `CRA-1.0` and fetches under it."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     transport = _valid_transport()
     _use_fake_restore_infra(monkeypatch, transport)
@@ -823,7 +825,7 @@ def test_catalog_fetch_failure_surfaces_as_the_existing_curated_source_unavailab
 ) -> None:
     """A `catalog.json` fetch failure is the same error, not a masked case error."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, FakeFailingCuratedSourceTransport())
 
@@ -839,7 +841,7 @@ def test_audit_delegate_receives_the_canonical_id_not_the_callers_spelling(
 ) -> None:
     """The real restore delegate's own audit log entries carry the canonical id."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     emitter = configure()
     _use_fake_restore_infra(monkeypatch, _valid_transport())
 
@@ -873,7 +875,7 @@ def test_ambiguous_case_collision_is_rejected_naming_both_colliding_ids(
 ) -> None:
     """Two catalog entries differing only by case -> an `error: ` string naming both."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     transport = _ambiguous_transport()
     _use_fake_restore_infra(monkeypatch, transport)
@@ -917,7 +919,7 @@ def test_no_catalog_match_in_any_case_is_rejected_naming_the_closest_id(
 ) -> None:
     """No catalog entry matches any case -> an `error: ` string naming the closest id."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     transport = _no_match_transport()
     _use_fake_restore_infra(monkeypatch, transport)
@@ -941,7 +943,7 @@ def test_happy_path_calls_the_restore_delegate_with_the_mcp_caller_label_as_acto
     logging, not just a spy.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     emitter = configure()
     _use_fake_restore_infra(monkeypatch, _valid_transport())
 
@@ -976,7 +978,7 @@ def test_malformed_instrument_id_is_rejected_at_the_schema_layer_before_the_body
     CallToolResult` translation that a real transport call goes through.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
 
     class _NeverCalledTransport:
@@ -1142,7 +1144,7 @@ def test_real_verified_token_call_logs_no_principal_and_the_delegate_gets_the_mc
     tool is gated, so `_grant_compliance_officer` seeds that grant for this
     token's own `(sub, iss)` -- orthogonal to what this test itself proves.
     """
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     emitter = configure()
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-restore-42"
@@ -1219,7 +1221,7 @@ def test_verified_token_caller_becomes_the_owner_of_restored_drafts(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
 ) -> None:
     """The token's `(sub, iss)` ends up as the Policy's owner."""
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-restore-owner"
@@ -1238,7 +1240,7 @@ def test_local_test_bypass_caller_owns_restored_drafts_as_the_bypass_identity(
 ) -> None:
     """With the bypass active and no token, the bypass identity owns the drafts."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _internal_policy_transport())
 
@@ -1257,7 +1259,7 @@ def test_local_test_bypass_call_logs_no_principal_when_no_token_is_presented(
     mirroring `test_get_catalog_listing_tool.py`'s identically-purposed test.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     emitter = configure()
     _use_fake_restore_infra(monkeypatch, _valid_transport())
 
@@ -1278,7 +1280,7 @@ def test_failed_call_under_a_real_verified_token_logs_no_principal(
     the token's `sub` on its `outcome="failed"` `mcp_interface` log entry, as the
     succeeded-call case proven above does.
     """
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     emitter = configure()
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-restore-failed-7"
@@ -1312,7 +1314,7 @@ def test_curated_source_unreachable_returns_named_error_and_never_calls_the_dele
     never opened (the restore delegate is never reached).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     open_db_calls: list[object] = []
 
@@ -1340,7 +1342,7 @@ def test_override_read_failure_returns_named_error_and_never_fetches_or_opens_th
     returned as its fixed `error:` string -- neither the default source nor FalkorDB is used.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     open_db_calls: list[object] = []
     transport = _transport_with()
@@ -1377,7 +1379,7 @@ def test_checksum_mismatch_returns_named_error(monkeypatch: pytest.MonkeyPatch) 
     returned as `error: <str(exc)>`.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _transport_with(baseline_sha256="0" * 64))
 
@@ -1395,7 +1397,7 @@ def test_schema_version_mismatch_returns_named_error(monkeypatch: pytest.MonkeyP
     returned verbatim.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     bad_schema_version = "not-" + DOMAIN_SCHEMA_VERSION
     _use_fake_restore_infra(monkeypatch, _transport_with(schema_version=bad_schema_version))
@@ -1416,7 +1418,7 @@ def test_restore_stage_failure_returns_named_error(monkeypatch: pytest.MonkeyPat
     <str(exc)>` naming the failing stage.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _content_violating_transport())
 
@@ -1428,19 +1430,19 @@ def test_restore_stage_failure_returns_named_error(monkeypatch: pytest.MonkeyPat
     assert text != "error: an unexpected error occurred"
 
 
-def test_missing_similarity_threshold_returns_named_configuration_error(
+def test_missing_merge_threshold_returns_named_configuration_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_require_similarity_threshold` raises
+    """`_require_merge_review_thresholds` raises
     `RestoreStageFailedError(stage="configuration", ...)` directly, outside
     any try/except inside `run_restoration_from_catalog_source`, when
-    `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` is unset -- reaches the tool the
+    `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD` is unset -- reaches the tool the
     same uncaught way, and is still caught by this tool's own
     `RestoreStageFailedError` handler. The FalkorDB boundary is never
     opened -- this check runs before `dependencies.open_db` is ever called.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
     configure()
     open_db_calls: list[object] = []
 
@@ -1455,7 +1457,34 @@ def test_missing_similarity_threshold_returns_named_configuration_error(
     assert result.is_error is False
     text = _text(result)
     assert text.startswith("error: ")
-    assert "PS_COMPANYMERGE_SIMILARITY_THRESHOLD" in text
+    assert "PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD" in text
+    assert open_db_calls == []
+
+
+def test_missing_review_threshold_returns_named_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unset `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` fails closed like the merge
+    threshold: a named `error:` string, with the FalkorDB boundary never opened.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.83")
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", raising=False)
+    configure()
+    open_db_calls: list[object] = []
+
+    def _counting_open_db(config: ServiceConfig) -> FalkorDB:
+        open_db_calls.append(config)
+        return cast("FalkorDB", object())
+
+    _use_fake_restore_infra(monkeypatch, _valid_transport(), open_db=_counting_open_db)
+
+    result = _call_restore_instrument()
+
+    assert result.is_error is False
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD" in text
     assert open_db_calls == []
 
 
@@ -1466,7 +1495,7 @@ def test_graph_unavailable_returns_generic_graph_message(monkeypatch: pytest.Mon
     raw driver exception.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
 
     def _raising_open_db(config: ServiceConfig) -> FalkorDB:
@@ -1493,7 +1522,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     logged server-side only.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     emitter = configure()
 
     def _raising_fetch_artifact(base_url: str, instrument_id: str) -> FetchedArtifact:
@@ -1525,7 +1554,7 @@ def test_restore_instrument_audits_verified_actor(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
     """The rows carry the verified caller and the canonical instrument id."""
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _grant_compliance_officer(monkeypatch, subject="user-42", issuer="https://issuer.example.com/")
     _use_fake_restore_infra(monkeypatch, _valid_transport())
@@ -1551,7 +1580,7 @@ def test_restore_instrument_audits_sentinel_under_bypass(
 ) -> None:
     """Under the local-test bypass the actor is `system:local-test-bypass`."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _valid_transport())
 
@@ -1567,7 +1596,7 @@ def test_restore_instrument_returns_error_prefix_when_audit_unavailable_and_rest
 ) -> None:
     """The opening row cannot be written -> `error: ...`, the graph is never opened."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     audit_store.fail_on_outcome["applied"] = AuditPostgresUnavailableError("db.internal down")
     open_db_calls: list[object] = []
@@ -1593,7 +1622,7 @@ def test_restore_instrument_failure_writes_a_failed_row_with_a_reason_code(
 ) -> None:
     """A rejected artifact leaves started + failed(artifact_rejected), no detail."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _transport_with(baseline_sha256="0" * 64))
 
@@ -1615,7 +1644,7 @@ def test_restore_instrument_rows_are_returned_by_list_audit_events_by_instrument
     from ps_service.audit import AuditQueryFilters
 
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _valid_transport())
 
@@ -1639,7 +1668,7 @@ def test_restore_instrument_logs_one_group_per_graph_under_the_opening_rows_even
 ) -> None:
     """The groups carry the id of the `started` audit row."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _internal_policy_transport())
 
@@ -1658,7 +1687,7 @@ def test_restore_instrument_without_a_gateway_fails_closed_and_audits_graph_unav
 ) -> None:
     """No gateway installed: the restore stops after the artifact verifies, nothing is written."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _valid_transport())
     rig = installed_process_gateway().rig
@@ -1681,7 +1710,7 @@ def test_a_corrupt_artifact_is_still_rejected_when_no_gateway_is_installed(
 ) -> None:
     """Verification comes before the gateway is looked for."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    _set_similarity_threshold(monkeypatch)
+    _set_merge_threshold(monkeypatch)
     configure()
     _use_fake_restore_infra(monkeypatch, _transport_with(baseline_sha256="0" * 64))
     install_graph_write_gateway(None)

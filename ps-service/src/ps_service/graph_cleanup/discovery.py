@@ -37,7 +37,7 @@ __all__ = [
 ]
 
 # Advisory default: high enough that a group is nearly always a true duplicate, used only
-# when neither the caller nor `company_merge_similarity_threshold` supplies a value. A wrong
+# when neither the caller nor `company_merge_capability_merge_threshold` supplies a value. A wrong
 # guess costs review time.
 DEFAULT_CAPABILITY_MIN_SIMILARITY = 0.90
 
@@ -65,7 +65,7 @@ def resolve_min_similarity(requested: float | None, configured: float | None) ->
 
     Args:
         requested: Cosine threshold the caller asked for; `None` when not supplied.
-        configured: The configured `company_merge_similarity_threshold`; `None` when unset.
+        configured: The configured `company_merge_capability_merge_threshold`; `None` when unset.
 
     Returns:
         The first of `requested`, `configured` that is not `None`, else

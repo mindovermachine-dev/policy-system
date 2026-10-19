@@ -17,6 +17,7 @@ from api._fakes import (
     build_fake_change_check_dependencies,
     build_fake_pipeline_dependencies,
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from change_monitor._fakes import FakeAdapter, FakeQueryResult
 from change_monitor.test_trigger import (
@@ -44,7 +45,8 @@ _CONFIG = ServiceConfig(
     logging_dir=None,
     llm_interface_model="azure/gpt-4o",
     llm_interface_embed_model="azure/text-embedding-3-large",
-    company_merge_similarity_threshold=0.83,
+    company_merge_capability_merge_threshold=0.83,
+    company_merge_capability_review_threshold=REVIEW_THRESHOLD,
 )
 _NEW_VERSION = "32024R2847C01"
 _NEW_ID = f"CRA-{_NEW_VERSION}"

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 
 from api._fakes import install_compliance_officer_grant
@@ -54,7 +55,7 @@ pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 _INSTRUMENT_DIR = Path(__file__).resolve().parents[3] / "curated-content" / "ENGPRAC-1.0"
 _INSTRUMENT_ID = "ENGPRAC-1.0"
 _RESTORATIONS_ENDPOINT = "/restorations"
-_SIMILARITY_THRESHOLD = 0.9
+_MERGE_THRESHOLD = 0.9
 _EXPECTED_STAGES = ["verified", "staged", "merged_and_finalized"]
 _OWNER_SUBJECT = "restorer@example.com"
 _OWNER_ISSUER = "https://idp.example/"
@@ -154,7 +155,9 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
     baseline_target = f"{short_name.lower()}_baseline"
     single_tenant_graph_name = f"__gh104_engprac_single_tenant_{token}__"
     config = live_app_config(
-        provisioned_graph_log, company_merge_similarity_threshold=_SIMILARITY_THRESHOLD
+        provisioned_graph_log,
+        company_merge_capability_merge_threshold=_MERGE_THRESHOLD,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
     )
     db = connect_from_config(config)
 

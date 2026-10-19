@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
+from company_merge._thresholds import REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 from policy_lifecycle._gateway_fakes import policy_manager_enforcer
 
@@ -132,8 +133,10 @@ def ingest_env(
     saved_atexit_registered = facade._atexit_registered  # pyright: ignore[reportPrivateUsage]
     monkeypatch.setenv("PS_LLMINTERFACE_MODEL", _CHAT_MODEL)
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", _EMBED_MODEL)
-    if not os.environ.get("PS_COMPANYMERGE_SIMILARITY_THRESHOLD"):
-        monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.85")
+    if not os.environ.get("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD"):
+        monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.85")
+    if not os.environ.get("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD"):
+        monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
     monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)
     # Built after the env above is set: layers the provisioned state Postgres (graph log and audit
     # trail) and the local-test auth bypass over `load_config()`.
@@ -196,7 +199,8 @@ def _restore_into(
         ),
         db=db,
         single_tenant_graph_name=graph_name,
-        similarity_threshold=0.9,
+        merge_threshold=0.9,
+        review_threshold=REVIEW_THRESHOLD,
         actor="test-actor",
         open_gateway=lambda: gateway,
         audit_event_id=audit_event_id,

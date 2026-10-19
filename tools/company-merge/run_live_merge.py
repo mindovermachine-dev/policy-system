@@ -80,8 +80,8 @@ addition to FalkorDB.
 
 Requires a running FalkorDB with `cra_baseline`, `gdpr_baseline`, `nis2_baseline` and
 `policy_system` reachable, the PS state Postgres, and
-`PS_COMPANYMERGE_SIMILARITY_THRESHOLD` and `PS_LLMINTERFACE_EMBED_MODEL` resolvable
-through `ps_service.config.load_config()`.
+`PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`, `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` and
+`PS_LLMINTERFACE_EMBED_MODEL` resolvable through `ps_service.config.load_config()`.
 """
 
 from __future__ import annotations
@@ -372,20 +372,28 @@ def _check_precondition_gate(provider: GraphProvider, *, host: str, port: int) -
 
 @dataclass(frozen=True, slots=True)
 class _MergeSettings:
-    """The resolved service config and the two merge values drawn from it."""
+    """The resolved service config and the merge values drawn from it."""
 
     config: ServiceConfig
-    similarity_threshold: float
+    merge_threshold: float
+    review_threshold: float
     embed_model: str
 
 
 def _resolve_merge_config() -> _MergeSettings | int:
     """Fail-closed config resolution, before any write. An `int` return is the exit code."""
     config = load_config()
-    if config.company_merge_similarity_threshold is None:
+    if config.company_merge_capability_merge_threshold is None:
         print(
-            "PS_COMPANYMERGE_SIMILARITY_THRESHOLD is not set -- resolve it via ServiceConfig "
+            "PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD is not set -- resolve it via ServiceConfig "
             "before running a live merge.",
+            file=sys.stderr,
+        )
+        return 1
+    if config.company_merge_capability_review_threshold is None:
+        print(
+            "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD is not set -- resolve it via "
+            "ServiceConfig before running a live merge.",
             file=sys.stderr,
         )
         return 1
@@ -398,7 +406,8 @@ def _resolve_merge_config() -> _MergeSettings | int:
         return 1
     return _MergeSettings(
         config=config,
-        similarity_threshold=config.company_merge_similarity_threshold,
+        merge_threshold=config.company_merge_capability_merge_threshold,
+        review_threshold=config.company_merge_capability_review_threshold,
         embed_model=config.llm_interface_embed_model,
     )
 
@@ -451,7 +460,8 @@ def _run_all_regulations(
                     baseline_graph_name=baseline_graph_name(short_name),
                     audit_event_id=audit_event_id,
                     embed_model=settings.embed_model,
-                    similarity_threshold=settings.similarity_threshold,
+                    merge_threshold=settings.merge_threshold,
+                    review_threshold=settings.review_threshold,
                     emitter=emitter,
                 )
         except Exception as exc:  # noqa: BLE001 -- record and stop, never continue past a failed regulation
@@ -530,10 +540,11 @@ def main(
 
     Returns:
         Process exit code: `0` on full success; `1` on a FalkorDB or query failure during
-        the precondition check, an unset `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` or
-        `PS_LLMINTERFACE_EMBED_MODEL`, or a gateway that cannot be built; `2` on an
-        approval gate failure; `3` on a precondition violation; `4` if `merge_fn` or the
-        per-regulation audit row raises for any regulation partway through the run.
+        the precondition check, an unset `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`,
+        `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` or `PS_LLMINTERFACE_EMBED_MODEL`, or a
+        gateway that cannot be built; `2` on an approval gate failure; `3` on a precondition
+        violation; `4` if `merge_fn` or the per-regulation audit row raises for any regulation
+        partway through the run.
 
     Raises:
         SystemExit: Raised by argparse on invalid arguments or `--help`.

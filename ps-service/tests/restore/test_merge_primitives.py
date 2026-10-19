@@ -8,15 +8,20 @@ primitives. Digest equality on every curated artifact is in `test_restore_legs_e
 
 from __future__ import annotations
 
+import ast
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
 from company_merge._gateway_fakes import MergeRig, stepped_values
 from company_merge._kinds import UNREGISTERED_KIND
 from company_merge._seed_merge_graphs import SingleTenantStore
+from company_merge._thresholds import REVIEW_THRESHOLD
 
+from ps_service.company_merge import merge as company_merge_merge
 from ps_service.company_merge.errors import (
+    CompanyMergeConfigurationError,
     CompanyMergePersistenceError,
     CompanyMergeValidationError,
 )
@@ -118,7 +123,8 @@ def _build(
         instrument_id=_INSTRUMENT,
         live=live,
         governance=governance or GovernanceImport(owner=_OWNER),
-        similarity_threshold=_THRESHOLD,
+        merge_threshold=_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=None,
         values=stepped_values(),
     )
@@ -430,7 +436,8 @@ def test_governance_content_without_an_owner_is_refused_before_any_read() -> Non
             instrument_id=_INSTRUMENT,
             live=cast("GraphHandle", _NoReads()),
             governance=GovernanceImport(owner=None),
-            similarity_threshold=_THRESHOLD,
+            merge_threshold=_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
             emitter=None,
             values=stepped_values(),
         )
@@ -508,7 +515,8 @@ def test_a_manifest_id_matching_no_instrument_in_the_artifact_is_rejected(rig: M
             instrument_id="OTHER-1.0",
             live=rig.legacy,
             governance=GovernanceImport(owner=_OWNER),
-            similarity_threshold=_THRESHOLD,
+            merge_threshold=_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
             emitter=None,
             values=stepped_values(),
         )
@@ -521,3 +529,77 @@ def test_a_baseline_without_any_instrument_is_a_legitimate_empty_leg(rig: MergeR
         isinstance(p, UpsertNode) and p.label in {"Role", "Requirement", "Obligation"}
         for p in leg.primitives
     )
+
+
+def test_an_unset_review_threshold_raises_naming_the_variable_before_any_graph_call() -> None:
+    class _NoReads:
+        def query(self, q: str, params: dict[str, object] | None = None) -> object:
+            raise AssertionError(f"a read reached the graph: {q}")
+
+    with pytest.raises(CompanyMergeConfigurationError) as raised:
+        build_policy_system_leg(
+            _external(),
+            instrument_id=_INSTRUMENT,
+            live=cast("GraphHandle", _NoReads()),
+            governance=GovernanceImport(owner=_OWNER),
+            merge_threshold=_THRESHOLD,
+            review_threshold=None,
+            emitter=None,
+            values=stepped_values(),
+        )
+
+    assert "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD" in str(raised.value)
+
+
+def test_a_review_threshold_above_the_merge_threshold_raises_naming_both() -> None:
+    with pytest.raises(CompanyMergeConfigurationError) as raised:
+        build_policy_system_leg(
+            _external(),
+            instrument_id=_INSTRUMENT,
+            live=cast("GraphHandle", object()),
+            governance=GovernanceImport(owner=_OWNER),
+            merge_threshold=_THRESHOLD,
+            review_threshold=_THRESHOLD + 0.05,
+            emitter=None,
+            values=stepped_values(),
+        )
+
+    message = str(raised.value)
+    assert "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD" in message
+    assert "PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD" in message
+
+
+@pytest.mark.parametrize(("review_threshold", "expected_reviews"), [(0.79, 1), (0.81, 0)])
+def test_the_leg_raises_a_near_miss_review_only_for_a_pair_at_or_above_its_review_threshold(
+    rig: MergeRig, review_threshold: float, expected_reviews: int
+) -> None:
+    _seed_near_miss_target(rig)
+
+    leg = build_policy_system_leg(
+        _near_miss_graph(),
+        instrument_id=_INSTRUMENT,
+        live=rig.legacy,
+        governance=GovernanceImport(owner=_OWNER),
+        merge_threshold=_THRESHOLD,
+        review_threshold=review_threshold,
+        emitter=None,
+        values=stepped_values(),
+    )
+
+    assert len(_nodes(leg, "PendingReview")) == expected_reviews
+    assert leg.counts["near_miss_reviews_created"] == expected_reviews
+    assert [n.id for n in _nodes(leg, "Capability")] == [_CAP]  # minted either way
+
+
+def test_no_production_module_builds_capability_thresholds_without_the_guard() -> None:
+    """`merge.py` and `merge_primitives.py` reach `ReviewThresholds` only through the guard."""
+    for module in (merge_primitives, company_merge_merge):
+        tree = ast.parse(Path(cast("str", module.__file__)).read_text(encoding="utf-8"))
+        constructions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ReviewThresholds"
+        ]
+        assert constructions == [], module.__name__

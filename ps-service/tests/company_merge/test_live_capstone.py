@@ -66,6 +66,7 @@ from company_merge._live_merge_assertions import (
     _snapshot_counts,  # pyright: ignore[reportPrivateUsage]
     _snapshot_embeddings,  # pyright: ignore[reportPrivateUsage]
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from ps_service.company_merge.falkordb_client import GraphHandle, single_tenant_graph_name
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
@@ -82,8 +83,8 @@ from ps_service.logging import bind_run_context
 
 _CAPSTONE_GRAPH_NAME = "policy_system_capstone_test"
 _REAL_SINGLE_TENANT_GRAPH_NAME = "policy_system"
-_SIMILARITY_THRESHOLD = 0.59  # empirically recommended by a labeled sweep -- not
-# read from PS_COMPANYMERGE_SIMILARITY_THRESHOLD/ServiceConfig, passed directly to
+_MERGE_THRESHOLD = 0.59  # empirically recommended by a labeled sweep -- not
+# read from PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD/ServiceConfig, passed directly to
 # merge_baseline_graph.
 _LOG_FILENAME = "company_merge_capstone.jsonl"
 
@@ -439,7 +440,8 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
                     baseline_graph=baseline_graphs[fixture.short_name],
                     single_tenant_graph=single_tenant_graph,
                     embed_model=embed_model,
-                    similarity_threshold=_SIMILARITY_THRESHOLD,
+                    merge_threshold=_MERGE_THRESHOLD,
+                    review_threshold=REVIEW_THRESHOLD,
                     emitter=emitter,
                     submitter=submitter,
                     single_tenant_graph_name=single_tenant_graph_name(),

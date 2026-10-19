@@ -4,7 +4,7 @@ Company Merge runs `check_obligation_has_edge_cardinality` before merging a base
 shared `policy_system` graph. Domain Mapper writes one inbound `HAS` edge per Obligation, but a
 re-run against an already-populated baseline can break that invariant afterwards, so Company
 Merge re-checks it itself rather than trusting upstream. This mirrors how `merge.py` enforces a
-resolved `similarity_threshold` itself.
+resolved `merge_threshold` itself.
 
 Read-only: the single query issued is a `MATCH ... OPTIONAL MATCH ... RETURN ...`, never a
 `MERGE`, `SET` or `DELETE`.

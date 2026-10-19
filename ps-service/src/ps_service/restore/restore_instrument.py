@@ -216,7 +216,8 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
     content_legs: tuple[GraphLeg, ...],
     instrument_id: str,
     governance: GovernanceImport,
-    similarity_threshold: float,
+    merge_threshold: float,
+    review_threshold: float,
     audit_event_id: str,
     emitter: LogEmitter | None,
 ) -> dict[str, int]:
@@ -240,7 +241,8 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
             instrument_id=instrument_id,
             live=live,
             governance=governance,
-            similarity_threshold=similarity_threshold,
+            merge_threshold=merge_threshold,
+            review_threshold=review_threshold,
             emitter=emitter,
         )
         legs = content_legs
@@ -301,7 +303,8 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
     *,
     db: ReadOnlyDatabase,
     single_tenant_graph_name: str,
-    similarity_threshold: float,
+    merge_threshold: float,
+    review_threshold: float,
     actor: str,
     open_gateway: Callable[[], object],
     audit_event_id: str,
@@ -331,7 +334,9 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
         artifact: The artifact to restore; its blobs are verified against its manifest.
         db: Read-only handle used only to read `policy_system`.
         single_tenant_graph_name: Name of the `policy_system` graph (non-empty).
-        similarity_threshold: Minimum Capability embedding similarity for convergence.
+        merge_threshold: Minimum Capability embedding similarity for convergence.
+        review_threshold: Minimum similarity at which a Capability near miss is recorded for
+            review; a pair below it records none. At most `merge_threshold`.
         actor: The requesting client host (REST) or the fixed MCP caller label; recorded as `caller`
             in the audit log entries.
         open_gateway: Returns the process's Graph Write Gateway, or raises when there is none;
@@ -400,7 +405,8 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
             governance=GovernanceImport(
                 owner=owner, policy_embeddings=embeddings_by_label(baseline_graph, "Policy")
             ),
-            similarity_threshold=similarity_threshold,
+            merge_threshold=merge_threshold,
+            review_threshold=review_threshold,
             audit_event_id=audit_event_id,
             emitter=emitter,
         )

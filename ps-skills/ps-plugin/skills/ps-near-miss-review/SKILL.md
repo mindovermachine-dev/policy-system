@@ -24,7 +24,8 @@ has seen and understood what the merge does, and that it needs the
 `ComplianceOfficer` role, before the approval is requested.
 
 A review's `kind` names the node kind under review. Only kinds that have a review
-spec appear (today Capability), and a merge is available for kinds that have a merge
+spec appear (today Capability), a review is raised only for a pair scoring at or above
+the configured review threshold, and a merge is available for kinds that have a merge
 executor (today Capability).
 
 **Deliverable:** every unresolved review's `id`, `kind`, `incoming_text`,

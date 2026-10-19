@@ -22,13 +22,14 @@ import pytest
 from company_merge._gateway_fakes import MergeRig
 from company_merge._seed_merge_graphs import (
     EMBED_MODEL,
-    SIMILARITY_THRESHOLD,
+    MERGE_THRESHOLD,
     BaselineGraphReader,
     OneHotEmbeddingCaller,
     SingleTenantStore,
     ingest_seed,
     parse_seed,
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from graph_gateway._fakes import GatewayRig
 
 from ps_service.company_merge.governance_import import GovernanceImport
@@ -144,7 +145,8 @@ def test_restore_and_live_merge_write_identical_governance_trees(
         baseline_graph=baseline,
         single_tenant_graph=merged,
         embed_model=EMBED_MODEL,
-        similarity_threshold=SIMILARITY_THRESHOLD,
+        merge_threshold=MERGE_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         call_embedding=OneHotEmbeddingCaller(),
         emitter=emitter,
         governance=GovernanceImport(owner=_OWNER),
@@ -156,7 +158,8 @@ def test_restore_and_live_merge_write_identical_governance_trees(
         instrument_id=_RID,
         live=SingleTenantStore(),
         governance=GovernanceImport(owner=_OWNER),
-        similarity_threshold=SIMILARITY_THRESHOLD,
+        merge_threshold=MERGE_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
         emitter=emitter,
     )
 

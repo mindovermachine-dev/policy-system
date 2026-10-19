@@ -2202,7 +2202,7 @@ def restore_instrument(
           every colliding id), or matches no entry (the message names the closest ids); nothing is
           fetched in either case.
         - The artifact fails checksum or `schema_version` verification, or a restore stage fails
-          (including a missing `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` setting).
+          (including a missing `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD` setting).
         - The policy graph database cannot be reached.
         - Any other unexpected failure (a fixed generic message).
 
@@ -4122,8 +4122,8 @@ def find_capability_merge_candidates_tool(
     threshold; no embedding is fetched or computed by this tool.
 
     Args:
-        min_similarity: Similarity threshold, greater than 0.5 and at most 1.0. When omitted, the
-            configured similarity threshold applies, else 0.90.
+        min_similarity: Cosine similarity cut-off, greater than 0.5 and at most 1.0. When omitted,
+            the configured Capability merge threshold applies, else 0.90.
 
     Returns:
         `{"groups": [{"basis", "merge_case", "policies_distinct", "members": [{"id", "name",
@@ -4158,7 +4158,7 @@ def find_capability_merge_candidates_tool(
             result = find_capability_merge_candidates(
                 graph,
                 min_similarity=resolve_min_similarity(
-                    min_similarity, config.company_merge_similarity_threshold
+                    min_similarity, config.company_merge_capability_merge_threshold
                 ),
             )
         except McpGraphUnavailableError:

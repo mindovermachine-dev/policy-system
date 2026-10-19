@@ -22,6 +22,7 @@ from change_monitor._gateway_fakes import RigKeyedGraph, SuccessionRig
 from change_monitor.test_trigger import (
     _structure,  # pyright: ignore[reportPrivateUsage]  -- reuse the trigger tests' canned metadata
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 
 from api._fakes import (
     LedgerStageRecorder,
@@ -52,7 +53,8 @@ _CONFIG = ServiceConfig(
     logging_dir=None,
     llm_interface_model="azure/gpt-4o",
     llm_interface_embed_model="azure/text-embedding-3-large",
-    company_merge_similarity_threshold=0.83,
+    company_merge_capability_merge_threshold=0.83,
+    company_merge_capability_review_threshold=REVIEW_THRESHOLD,
 )
 # (short name, base-act CELEX, detected consolidated CELEX = the new version)
 _CRA = ("CRA", "32024R2847", "32024R2847C01")
@@ -291,7 +293,12 @@ def _writes(world: _World, short: str) -> list[object]:
 
 @pytest.mark.parametrize(
     "unset",
-    ["llm_interface_model", "llm_interface_embed_model", "company_merge_similarity_threshold"],
+    [
+        "llm_interface_model",
+        "llm_interface_embed_model",
+        "company_merge_capability_merge_threshold",
+        "company_merge_capability_review_threshold",
+    ],
 )
 def test_missing_pipeline_config_reports_reingest_failed_before_any_graph_write(
     unset: str, make_emitter: MakeEmitter

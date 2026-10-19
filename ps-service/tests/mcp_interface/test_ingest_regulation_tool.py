@@ -71,6 +71,7 @@ from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own two real-token tests can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
+from company_merge._thresholds import REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 from litellm.types.utils import Choices, Embedding, EmbeddingResponse, Message, ModelResponse
 from mcp.types import CallToolResult, TextContent
@@ -200,10 +201,11 @@ publication. It shall apply from 1 January 2030.</div>
 
 
 def _configure_complete_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set the three config fields `_require_ingestion_config` needs to be non-`None`."""
+    """Set the four config fields `_require_ingestion_config` needs to be non-`None`."""
     monkeypatch.setenv("PS_LLMINTERFACE_MODEL", "azure/gpt-4o")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
-    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.83")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.83")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
 
 
 def _call_ingest_regulation(celex: str, short_name: str) -> CallToolResult:
@@ -917,7 +919,8 @@ def _use_real_pipeline_stages(
         baseline_graph_name: str,
         audit_event_id: str,
         embed_model: str,
-        similarity_threshold: float | None,
+        merge_threshold: float | None,
+        review_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: object = None,
         governance: GovernanceImport | None = None,
@@ -932,7 +935,8 @@ def _use_real_pipeline_stages(
             baseline_graph_name=baseline_graph_name,
             audit_event_id=audit_event_id,
             embed_model=embed_model,
-            similarity_threshold=similarity_threshold,
+            merge_threshold=merge_threshold,
+            review_threshold=review_threshold,
             call_embedding=_fake_call_embedding,
             emitter=emitter,  # pyright: ignore[reportArgumentType]
             governance=governance,
@@ -1521,7 +1525,8 @@ def _rest_app_config() -> ServiceConfig:
         logging_dir=None,
         llm_interface_model="azure/gpt-4o",
         llm_interface_embed_model="azure/text-embedding-3-large",
-        company_merge_similarity_threshold=0.83,
+        company_merge_capability_merge_threshold=0.83,
+        company_merge_capability_review_threshold=REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
         authentik_api_token="test-authentik-token",
         authentik_base_url="https://authentik.example.com",
@@ -1637,7 +1642,8 @@ def test_ingestion_config_incomplete_returns_named_error_before_any_stage_runs(
     """
     monkeypatch.delenv("PS_LLMINTERFACE_MODEL", raising=False)
     monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
-    monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", raising=False)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     fake = build_fake_pipeline_dependencies(rid="cra-1.0")
@@ -1648,7 +1654,8 @@ def test_ingestion_config_incomplete_returns_named_error_before_any_stage_runs(
     assert result.is_error is False
     assert _text(result) == (
         "error: ingestion configuration incomplete: llm_interface_model, "
-        "llm_interface_embed_model, company_merge_similarity_threshold not set"
+        "llm_interface_embed_model, company_merge_capability_merge_threshold, "
+        "company_merge_capability_review_threshold not set"
     )
     assert fake.recorder.calls == []
 

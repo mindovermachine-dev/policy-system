@@ -40,6 +40,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
+from company_merge._thresholds import REVIEW_THRESHOLD
 from export.live_gateway import live_write_target
 from litellm.types.utils import Embedding, EmbeddingResponse
 
@@ -61,7 +62,7 @@ if TYPE_CHECKING:
     from persistence.provisioned_postgres import Provisioned
 
 _ACTOR = "test-actor-5-10"
-_SIMILARITY_THRESHOLD = 0.9
+_MERGE_THRESHOLD = 0.9
 _BASELINE_GRAPH_NAME = "curated_rt_baseline"
 _NATIVE_GRAPH_NAME = "curated_rt_native"
 _SHORT_NAME = "curated_rt"
@@ -79,7 +80,7 @@ class _FakeEmbeddingCaller:
     `len(text) % 7`-based fake (fine there -- that test never compares two
     different Capability names against each other), this seeds an 8-dim
     vector from `text` itself (`random.Random(text)`) so unrelated names
-    reliably score well below this test's 0.9 similarity threshold, while
+    reliably score well below this test's 0.9 merge threshold, while
     staying fully deterministic (repeated calls for the same text return
     the same vector, matching a real embedding model's own determinism).
     """
@@ -270,7 +271,8 @@ def test_export_then_restore_reproduces_native_exactly_and_baseline_correctly(
                 artifact,
                 db=live_falkordb,
                 single_tenant_graph_name=single_tenant_graph_name,
-                similarity_threshold=_SIMILARITY_THRESHOLD,
+                merge_threshold=_MERGE_THRESHOLD,
+                review_threshold=REVIEW_THRESHOLD,
                 actor=_ACTOR,
                 open_gateway=live.open_gateway,
                 audit_event_id=live.audit_event_id,
