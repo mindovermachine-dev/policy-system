@@ -46,9 +46,6 @@ _RELEASE_TOOL = "release-capability-governance"
 
 def _require_active(node: CapabilityNodeState, role: str) -> None:
     """Raise unless the Capability is `active`; `role` names the side in the message."""
-    if node.status == "merged":
-        message = f"the {role} capability {node.id!r} is a merged tombstone and cannot be merged"
-        raise GraphCleanupValidationError(message)
     if node.status != "active":
         message = f"the {role} capability {node.id!r} is not active (status {node.status!r})"
         raise GraphCleanupValidationError(message)
@@ -103,8 +100,8 @@ def validate_capability_merge(state: MergeState) -> tuple[CapabilityNodeState, C
         The survivor and absorbed Capability nodes, both `active`.
 
     Raises:
-        GraphCleanupValidationError: self-merge, a nonexistent side, a `merged`
-            tombstone or other non-active side, a side with more than one governing
+        GraphCleanupValidationError: self-merge, a nonexistent side (an absorbed
+            Capability no longer exists), a non-active side, a side with more than one governing
             policy (a data fault), or both sides governed by different policies.
     """
     survivor, absorbed = state.survivor, state.absorbed
@@ -269,8 +266,8 @@ def plan_capability_merge(state: MergeState) -> CapabilityMergePlan:
 
     Every `REQUIRES` / `COVERS` / `MITIGATED_BY` edge of the absorbed Capability moves
     onto the survivor; an endpoint already linked to the survivor collapses into the
-    existing edge (no duplicate). The absorbed node is kept as a `merged` tombstone with
-    a `MERGED_INTO` edge to the survivor. In case 2 the governing `GOVERNED_BY` edge of an
+    existing edge (no duplicate). The absorbed node is deleted and a `MergedCapability` marker
+    naming the survivor remains. In case 2 the governing `GOVERNED_BY` edge of an
     absorbed governed capability moves to the survivor; a governed survivor keeps its own. In
     case 3 the absorbed edge is dropped. The state digest hashes the before snapshot, so an
     approval only applies to the state previewed.
@@ -285,9 +282,9 @@ def plan_capability_merge(state: MergeState) -> CapabilityMergePlan:
         snapshots and the state digest.
 
     Raises:
-        GraphCleanupValidationError: self-merge, a nonexistent side, a `merged` tombstone or other
-            non-active side, a side with more than one governing policy (a data fault), or both
-            sides governed by different policies.
+        GraphCleanupValidationError: self-merge, a nonexistent side (an absorbed Capability no
+            longer exists), a non-active side, a side with more than one governing policy (a
+            data fault), or both sides governed by different policies.
     """
     survivor, absorbed = validate_capability_merge(state)
     incident = [e for e in state.edges if e.target_id in {survivor.id, absorbed.id}]
@@ -313,15 +310,6 @@ def plan_capability_merge(state: MergeState) -> CapabilityMergePlan:
             )
             for source in sorted(on_survivor | set(on_absorbed))
         )
-    after_edges.append(
-        EdgeRecord(
-            rel_type="MERGED_INTO",
-            source_label="Capability",
-            source_id=absorbed.id,
-            target_label="Capability",
-            target_id=survivor.id,
-        )
-    )
     governance = _governance(state, survivor.id, absorbed.id)
     policies = tuple(
         {p.id: p for p in (*state.survivor_policies, *state.absorbed_policies)}.values()
@@ -345,7 +333,11 @@ def plan_capability_merge(state: MergeState) -> CapabilityMergePlan:
     after = GraphSnapshot(
         nodes=(
             _snapshot_node(survivor, status=survivor.status),
-            _snapshot_node(absorbed, status="merged"),
+            NodeRecord(
+                label="MergedCapability",
+                id=absorbed.id,
+                properties={"merged_into": survivor.id},
+            ),
             *policy_nodes,
         ),
         edges=_sorted_edges(after_edges),

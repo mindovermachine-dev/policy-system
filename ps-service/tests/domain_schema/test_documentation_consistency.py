@@ -29,7 +29,7 @@ _RESOURCE_VERBATIM_WHITELIST = {
         'description="The canonical PS compliance-graph vocabulary and schema, served verbatim."',
     ): "MCP resource description: the RESOURCE is the verbatim document",
     (
-        "ps-service/tests/mcp_interface/test_domain_concepts_merged_tombstone.py",
+        "ps-service/tests/mcp_interface/test_domain_concepts_marker_text.py",
         "served verbatim by the `psdomain://concepts` resource",
     ): "module docstring: these assertions read the RESOURCE text, not the tool",
 }

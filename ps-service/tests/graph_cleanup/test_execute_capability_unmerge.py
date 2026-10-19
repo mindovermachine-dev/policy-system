@@ -129,8 +129,11 @@ def test_the_audit_row_reverses_the_merge_and_lists_restored_and_survivor_added_
     assert details["approval_id"] == "approval-2"
     assert details["reverses_approval_id"] == "merge-approval-1"
     assert details["policy_case"] == 1
-    assert ("MERGED_INTO", ABSORBED, SURVIVOR) in _edge_keys(details["before"])
-    assert ("MERGED_INTO", ABSORBED, SURVIVOR) not in _edge_keys(details["after"])
+    before_nodes = cast("dict[str, list[dict[str, object]]]", details["before"])["nodes"]
+    after_nodes = cast("dict[str, list[dict[str, object]]]", details["after"])["nodes"]
+    assert ("MergedCapability", ABSORBED) in {(n["label"], n["id"]) for n in before_nodes}
+    assert ("Capability", ABSORBED) in {(n["label"], n["id"]) for n in after_nodes}
+    assert ("MergedCapability", ABSORBED) not in {(n["label"], n["id"]) for n in after_nodes}
     assert _edge_keys({"edges": details["restored_edges"]}) == {
         ("REQUIRES", "obl_1", ABSORBED),
         ("REQUIRES", "obl_2", ABSORBED),
@@ -262,9 +265,9 @@ def test_a_conflict_that_arose_since_the_preview_is_rejected_with_its_explanatio
 ) -> None:
     rig = _world(cleanup_rig)
     row = _row(rig)
-    rig.graph.nodes[("Capability", SURVIVOR)]["status"] = "merged"
+    del rig.graph.nodes[("Capability", SURVIVOR)]
     rig.seed_capability("cap_winner", status="active")
-    rig.seed_edge(("MERGED_INTO", "Capability", SURVIVOR, "Capability", "cap_winner"), legacy=False)
+    rig.seed_endpoint("MergedCapability", SURVIVOR, merged_into="cap_winner")
 
     outcome = execute_unmerge(row, _CONFIG, _deps(rig))
 
@@ -347,10 +350,12 @@ def test_malformed_normalized_args_are_a_generic_error_with_no_work_done(
     assert rig.audit.rows == []
 
 
-def test_the_effect_verifier_needs_the_tombstone_to_be_gone(cleanup_rig: CleanupRig) -> None:
+def test_verify_unmerge_effect_requires_the_node_and_no_marker(cleanup_rig: CleanupRig) -> None:
     rig = _world(cleanup_rig)
     row = _row(rig)
 
-    assert verify_unmerge_effect(row, rig.read) is False  # still a tombstone
+    assert verify_unmerge_effect(row, rig.read) is False  # still only a marker
     run_capability_unmerge(rig, row=row)
-    assert verify_unmerge_effect(row, rig.read) is True  # active and no MERGED_INTO edge
+    assert verify_unmerge_effect(row, rig.read) is True  # the node exists and the marker is gone
+    rig.seed_endpoint("MergedCapability", ABSORBED, merged_into=SURVIVOR)
+    assert verify_unmerge_effect(row, rig.read) is False  # a marker is back

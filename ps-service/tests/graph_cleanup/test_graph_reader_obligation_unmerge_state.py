@@ -44,7 +44,8 @@ def test_reads_the_marker_the_survivor_the_role_the_endpoints_and_the_survivors_
     assert state.marker_targets == {OBL_ABSORBED: (OBL_SURVIVOR,)}
     assert state.role_exists is True
     assert state.existing_requirements == ("req_1", "req_2")
-    assert state.capability_statuses == {"cap_1": "active"}
+    assert state.existing_capabilities == ("cap_1",)
+    assert state.merged_capability_targets == {}
     assert {(e.rel_type, e.source_id, e.target_id) for e in state.survivor_edges} == {
         ("SATISFIED_BY", "req_1", OBL_SURVIVOR),
         ("SATISFIED_BY", "req_2", OBL_SURVIVOR),
@@ -73,7 +74,7 @@ def test_missing_things_are_reported_as_absent() -> None:
     assert state.marker_targets == {}
     assert state.role_exists is False
     assert state.existing_requirements == ("req_2",)
-    assert state.capability_statuses == {}
+    assert state.existing_capabilities == ()
 
 
 def test_every_read_is_a_literal_parameterised_query_with_no_write_keyword() -> None:

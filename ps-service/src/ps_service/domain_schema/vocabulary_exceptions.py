@@ -21,13 +21,21 @@ SYSTEM_MINTED_EDGE_TYPES: Mapping[str, str] = MappingProxyType(
     {
         "SUPERSEDED_BY": "minted by change monitor / policy lifecycle, never in an intake document",
         "TRANSPOSES": "minted by the domain mapper from legislation, never submitted",
-        "MERGED_INTO": "minted by graph cleanup / company merge as a tombstone pointer",
     }
 )
 
+MERGE_MARKER_LABELS: Mapping[str, str] = MappingProxyType(
+    dict.fromkeys(
+        ("MergedCapability", "MergedObligation", "MergedRole"),
+        "graph-cleanup marker node, not a domain node",
+    )
+)
+"""One `{id, merged_into}` marker per absorbed id and kind. A marker belongs to the deployment's
+own graph: no export artifact carries one and no restore allow-list admits one."""
+
 OPERATIONAL_LABELS: Mapping[str, str] = MappingProxyType(
     {
-        "MergedObligation": "graph-cleanup marker node, not a domain node",
+        **MERGE_MARKER_LABELS,
         "PendingReview": "near-miss review store, not a domain node",
         "ReingestProgress": (
             "change-monitor re-ingest stage marker in the native graph; "

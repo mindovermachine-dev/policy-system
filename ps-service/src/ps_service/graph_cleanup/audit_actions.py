@@ -63,7 +63,7 @@ type CapabilityMergeFailedReason = Literal[
 
 
 class CapabilityMergeDetails(AuditDetails):
-    """`capability.merge`: one Compliance Officer capability merge (tombstone).
+    """`capability.merge`: one Compliance Officer capability merge (delete with marker).
 
     `outcome='applied'`: `reason_code` is absent and `before`/`after` are present.
     `outcome='failed'`: `reason_code` names why the edit did not happen (or, for
@@ -145,7 +145,7 @@ register_audit_action(CAPABILITY_RELEASE_GOVERNANCE_ACTION, CapabilityReleaseGov
 class CapabilityUnmergeDetails(AuditDetails):
     """`capability.unmerge`: one Compliance Officer reversal of a capability merge.
 
-    `outcome='applied'`: `before` is the tombstone and survivor state, `after` the restored
+    `outcome='applied'`: `before` is the marker and survivor state, `after` the restored
     state; `restored_edges` are exactly the edges put back on the absorbed node and
     `survivor_added_edges` those the survivor gained since the merge, which stay in place.
     `reverses_approval_id` is the approval of the merge being reversed and `policy_case` that

@@ -153,7 +153,8 @@ def test_with_the_acknowledgment_the_winner_is_governed_by_the_one_policy_afterw
     assert approval.preview.policy_case == 2
     assert outcome == {"survivor_id": SURVIVOR, "absorbed_id": ABSORBED, "merged": True}
     assert _governing(rig, SURVIVOR) == ["pol_1"]
-    assert rig.graph.nodes[("Capability", ABSORBED)]["status"] == "merged"
+    assert ("Capability", ABSORBED) not in rig.graph.nodes
+    assert rig.graph.nodes[("MergedCapability", ABSORBED)]["merged_into"] == SURVIVOR
     assert ("PendingReview", _REVIEW) not in rig.graph.nodes
 
 
@@ -242,12 +243,13 @@ def test_a_missing_review_is_not_found_and_creates_no_approval(cleanup_rig: Clea
     assert approval_row_count(store) == 0
 
 
-def test_a_review_whose_node_is_a_tombstone_is_stale_and_creates_no_approval(
+def test_a_review_whose_node_was_absorbed_is_stale_and_creates_no_approval(
     cleanup_rig: CleanupRig,
 ) -> None:
     rig = cleanup_rig
     _world(rig)
-    rig.graph.nodes[("Capability", ABSORBED)]["status"] = "merged"
+    del rig.graph.nodes[("Capability", ABSORBED)]
+    rig.graph.seed_node(("MergedCapability",), ABSORBED, {"merged_into": SURVIVOR})
     store = FakeApprovalStore()
 
     with pytest.raises(PendingReviewNotFoundError, match="stale"):
@@ -270,10 +272,10 @@ def test_a_policy_review_cannot_be_merged_and_creates_no_approval(
     assert approval_row_count(store) == 0
 
 
-def test_a_near_miss_merge_moves_requires_covers_and_mitigated_by_and_leaves_only_merged_into(
+def test_a_near_miss_merge_moves_requires_covers_and_mitigated_by_and_leaves_only_a_marker(
     cleanup_rig: CleanupRig,
 ) -> None:
-    """Every inbound edge class of the loser ends on the winner; the tombstone keeps one edge."""
+    """Every inbound edge class of the loser ends on the winner; a marker replaces the loser."""
     rig = cleanup_rig
     _world(rig)
     rig.seed_endpoint("RiskPath", "rp_1")
@@ -296,5 +298,6 @@ def test_a_near_miss_merge_moves_requires_covers_and_mitigated_by_and_leaves_onl
         ("MITIGATED_BY", "rp_1"),
     }
     assert _edges_of(ABSORBED) == set()
-    assert [key[0] for key in rig.graph.edges if ABSORBED in (key[2], key[4])] == ["MERGED_INTO"]
-    assert rig.graph.nodes[("Capability", ABSORBED)]["status"] == "merged"
+    assert [key[0] for key in rig.graph.edges if ABSORBED in (key[2], key[4])] == []
+    assert ("Capability", ABSORBED) not in rig.graph.nodes
+    assert rig.graph.nodes[("MergedCapability", ABSORBED)]["merged_into"] == SURVIVOR

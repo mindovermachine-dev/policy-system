@@ -47,6 +47,7 @@ _WRITE = CapabilityUnmergeWrite(
     remove_mitigated_ids=("rp1",),
     restore_policy_id=None,
     remove_policy_edge=False,
+    properties={},
 )
 
 

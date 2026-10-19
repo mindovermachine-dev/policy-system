@@ -6,9 +6,12 @@ executor over the gateway rig on the other, and compares the two graphs by `cano
 "Modulo edge identity": the legacy graph's edges are stamped by the same
 `{type}:{source}->{target}` formula before the comparison, as the gateway stamps its own.
 
-Shapes covered: release governance, capability merge (all four governance cases), obligation
-merge, capability unmerge (with and without a restored policy, with edges the survivor gained
-since the merge) and obligation unmerge, each also as a merge-then-unmerge round trip. Met
+Shapes covered: release governance, obligation merge and obligation unmerge, the latter also as a
+merge-then-unmerge round trip. The Capability merge and unmerge are not compared with the frozen
+legacy statements: they intentionally diverge (the absorbed node is deleted and a
+`MergedCapability` marker remains, where the legacy writer kept a `merged` tombstone), so they are
+proven on their own terms in `test_capability_merge_gateway.py`,
+`test_capability_unmerge_gateway.py` and `test_cleanup_round_trip.py`. Met
 modulo edge identity; the live digest and live interpreter agreement are not verifiable here (no
 FalkorDB in this sandbox): the `falkordb_live` tests stay as the live anchor.
 """
@@ -22,34 +25,25 @@ import pytest
 from authz._fakes import FakeAccessRoleStore
 
 from graph_cleanup._fakes import (
-    ABSORBED,
     OBL_ABSORBED,
     OBL_SURVIVOR,
     SURVIVOR,
-    capability_merge_history,
     obligation_merge_history,
 )
 from graph_cleanup._gateway_fakes import OTHER_CAPABILITY, POLICY, CleanupRig
 from graph_cleanup._legacy_reference import (
     LegacyRecordingGraph,
-    legacy_merge_capabilities,
     legacy_merge_obligations,
     legacy_release_governance,
-    legacy_unmerge_capability,
     legacy_unmerge_obligation,
 )
 from graph_cleanup._merge_runs import (
-    capability_plan,
-    capability_row,
     obligation_plan,
     obligation_row,
-    run_capability_merge,
     run_obligation_merge,
 )
 from graph_cleanup._unmerge_runs import (
-    capability_unmerge_world,
     obligation_unmerge_world,
-    run_capability_unmerge,
     run_obligation_unmerge,
     unmerge_plan,
     unmerge_row,
@@ -58,7 +52,7 @@ from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.graph_cleanup.executors import TOOL_RELEASE_GOVERNANCE, execute_release_governance
 from ps_service.graph_cleanup.graph_reader import read_release_state
-from ps_service.graph_cleanup.models import CapabilityUnmergePlan, ObligationUnmergePlan
+from ps_service.graph_cleanup.models import ObligationUnmergePlan
 from ps_service.graph_cleanup.release_planner import plan_release_governance
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.logging import configure
@@ -194,105 +188,6 @@ def test_a_guard_miss_writes_nothing_as_the_frozen_statement_matches_nothing(
     assert canonical_digest(cleanup_rig.graph) == after_the_change[0]
 
 
-# -- merge-capabilities (S3): the four governance cases -------------------------------------------
-
-_CAPABILITY_CASES = {
-    "case1-neither-governed": ((), False),
-    "case2-absorbed-governed": (((ABSORBED, POLICY, "approved"),), True),
-    "case2-survivor-governed": (((SURVIVOR, POLICY, "draft"),), True),
-    "case3-same-policy": (((SURVIVOR, POLICY, "approved"), (ABSORBED, POLICY, "approved")), False),
-}
-
-
-def _legacy_capability_merge(rig: CleanupRig) -> Callable[[LegacyRecordingGraph], bool]:
-    expected = capability_plan(rig).expected
-    return lambda legacy: legacy_merge_capabilities(
-        legacy, survivor_id=SURVIVOR, absorbed_id=ABSORBED, expected=expected
-    )
-
-
-@pytest.mark.parametrize("legacy_edges", [True, False], ids=["legacy-edges", "identified-edges"])
-@pytest.mark.parametrize("case", sorted(_CAPABILITY_CASES))
-def test_a_capability_merge_leaves_the_graph_the_frozen_legacy_statement_left(
-    cleanup_rig: CleanupRig, case: str, *, legacy_edges: bool
-) -> None:
-    governed, acknowledged = _CAPABILITY_CASES[case]
-    cleanup_rig.seed_capability_merge_world(governed=governed, legacy=legacy_edges)
-    expected = _legacy_digest(cleanup_rig, _legacy_capability_merge(cleanup_rig))
-
-    outcome = run_capability_merge(cleanup_rig, acknowledged=acknowledged)
-
-    assert outcome["merged"] is True
-    assert canonical_digest(cleanup_rig.graph) == expected
-
-
-def test_a_capability_merge_of_an_absorbed_capability_with_no_edges_leaves_the_same_graph(
-    cleanup_rig: CleanupRig,
-) -> None:
-    cleanup_rig.seed_capability_merge_world(legacy=True)
-    for key in [k for k in cleanup_rig.graph.edges if k[4] == ABSORBED]:
-        del cleanup_rig.graph.edges[key]
-    expected = _legacy_digest(cleanup_rig, _legacy_capability_merge(cleanup_rig))
-
-    run_capability_merge(cleanup_rig)
-
-    assert canonical_digest(cleanup_rig.graph) == expected
-
-
-def test_a_capability_merge_with_every_edge_already_on_the_survivor_leaves_the_same_graph(
-    cleanup_rig: CleanupRig,
-) -> None:
-    cleanup_rig.seed_capability_merge_world(legacy=True)
-    cleanup_rig.seed_edge(("REQUIRES", "Obligation", "obl_1", "Capability", SURVIVOR), legacy=True)
-    cleanup_rig.seed_edge(("COVERS", "PracticeArea", "pa_1", "Capability", SURVIVOR), legacy=True)
-    expected = _legacy_digest(cleanup_rig, _legacy_capability_merge(cleanup_rig))
-
-    run_capability_merge(cleanup_rig)
-
-    assert canonical_digest(cleanup_rig.graph) == expected
-
-
-def test_a_capability_merge_leaves_siblings_and_other_policies_alone_as_the_statement_did(
-    cleanup_rig: CleanupRig,
-) -> None:
-    cleanup_rig.seed_capability_merge_world(governed=((ABSORBED, POLICY, "approved"),), legacy=True)
-    _seed_siblings(cleanup_rig)
-    expected = _legacy_digest(cleanup_rig, _legacy_capability_merge(cleanup_rig))
-
-    run_capability_merge(cleanup_rig, acknowledged=True)
-
-    assert canonical_digest(cleanup_rig.graph) == expected
-
-
-def test_a_capability_merge_guard_miss_writes_nothing_as_the_frozen_statement_matches_nothing(
-    cleanup_rig: CleanupRig,
-) -> None:
-    cleanup_rig.seed_capability_merge_world(legacy=True)
-    previewed = capability_plan(cleanup_rig).expected
-    row = capability_row(cleanup_rig)
-    changed: list[str] = []
-
-    def _a_requirer_appears() -> None:
-        cleanup_rig.seed_endpoint("Obligation", "obl_new")
-        cleanup_rig.seed_edge(
-            ("REQUIRES", "Obligation", "obl_new", "Capability", ABSORBED), legacy=True
-        )
-        changed.append(canonical_digest(cleanup_rig.graph))
-
-    cleanup_rig.read.flip_before("RETURN c.id, c.name", 2, _a_requirer_appears)
-    outcome = run_capability_merge(cleanup_rig, row=row)
-
-    assert "error" in outcome
-    assert canonical_digest(cleanup_rig.graph) == changed[0]
-    legacy = LegacyRecordingGraph.copy_of(cleanup_rig.graph)
-    assert (
-        legacy_merge_capabilities(
-            legacy, survivor_id=SURVIVOR, absorbed_id=ABSORBED, expected=previewed
-        )
-        is False
-    )
-
-
 # -- merge-obligations (S4) -----------------------------------------------------------------------
 
 
@@ -389,146 +284,6 @@ def test_an_obligation_merge_guard_miss_writes_nothing_as_the_frozen_statement_m
         )
         is False
     )
-
-
-# -- unmerge-capability (S5) ----------------------------------------------------------------------
-
-
-def _legacy_capability_unmerge(rig: CleanupRig) -> Callable[[LegacyRecordingGraph], bool]:
-    plan = unmerge_plan(rig, ABSORBED)
-    assert isinstance(plan, CapabilityUnmergePlan)
-    return lambda legacy: legacy_unmerge_capability(
-        legacy, survivor_id=SURVIVOR, absorbed_id=ABSORBED, write=plan.write
-    )
-
-
-def _survivor_gains_requirer(rig: CleanupRig, *, legacy: bool) -> None:
-    rig.seed_endpoint("Obligation", "obl_new")
-    rig.seed_edge(("REQUIRES", "Obligation", "obl_new", "Capability", SURVIVOR), legacy=legacy)
-
-
-@pytest.mark.parametrize("policy", [None, "moved", "kept"], ids=["case1", "case2", "case3"])
-@pytest.mark.parametrize("legacy_edges", [True, False], ids=["legacy-edges", "identified-edges"])
-@pytest.mark.parametrize("added", [False, True], ids=["plain", "survivor-added-edge"])
-def test_a_capability_unmerge_leaves_the_graph_the_frozen_legacy_statement_left(
-    cleanup_rig: CleanupRig, policy: str | None, *, legacy_edges: bool, added: bool
-) -> None:
-    capability_unmerge_world(cleanup_rig, policy=policy, legacy=legacy_edges)
-    if added:
-        _survivor_gains_requirer(cleanup_rig, legacy=legacy_edges)
-    expected = _legacy_digest(cleanup_rig, _legacy_capability_unmerge(cleanup_rig))
-
-    outcome = run_capability_unmerge(cleanup_rig)
-
-    assert outcome["unmerged"] is True
-    assert canonical_digest(cleanup_rig.graph) == expected
-    if added:
-        assert ("REQUIRES", "obl_new", SURVIVOR) in {
-            (k[0], k[2], k[4]) for k in cleanup_rig.graph.edges
-        }
-
-
-def test_a_capability_unmerge_leaves_other_capabilities_and_policies_alone_as_the_statement_did(
-    cleanup_rig: CleanupRig,
-) -> None:
-    capability_unmerge_world(cleanup_rig, policy="moved", legacy=True)
-    cleanup_rig.seed_capability("cap_sibling", name="Sibling", status="active")
-    cleanup_rig.seed_governs("cap_sibling", "pol_1", legacy=True)
-    cleanup_rig.seed_edge(
-        ("REQUIRES", "Obligation", "obl_1", "Capability", "cap_sibling"), legacy=True
-    )
-    expected = _legacy_digest(cleanup_rig, _legacy_capability_unmerge(cleanup_rig))
-
-    run_capability_unmerge(cleanup_rig)
-
-    assert canonical_digest(cleanup_rig.graph) == expected
-
-
-def test_a_capability_unmerge_guard_miss_writes_nothing_as_the_frozen_statement_matches_nothing(
-    cleanup_rig: CleanupRig,
-) -> None:
-    capability_unmerge_world(cleanup_rig, legacy=True)
-    row = unmerge_row(cleanup_rig, ABSORBED)
-    plan = unmerge_plan(cleanup_rig, ABSORBED)
-    assert isinstance(plan, CapabilityUnmergePlan)
-    changed: list[str] = []
-
-    def _a_moved_edge_disappears() -> None:
-        del cleanup_rig.graph.edges[
-            next(k for k in cleanup_rig.graph.edges if k[:3] == ("REQUIRES", "Obligation", "obl_1"))
-        ]
-        changed.append(canonical_digest(cleanup_rig.graph))
-
-    cleanup_rig.read.flip_before("RETURN c.id, c.name", 2, _a_moved_edge_disappears)
-    outcome = run_capability_unmerge(cleanup_rig, row=row)
-
-    assert "error" in outcome
-    assert canonical_digest(cleanup_rig.graph) == changed[0]
-    legacy = LegacyRecordingGraph.copy_of(cleanup_rig.graph)
-    assert (
-        legacy_unmerge_capability(
-            legacy, survivor_id=SURVIVOR, absorbed_id=ABSORBED, write=plan.write
-        )
-        is False
-    )
-
-
-def _capability_premerge_world(rig: CleanupRig, *, legacy: bool) -> None:
-    """The graph `capability_merge_history()` is the merge of: both active, edges on both."""
-    rig.seed_capability(
-        SURVIVOR, name="Survivor", status="active", properties={"description": "desc"}
-    )
-    rig.seed_capability(
-        ABSORBED, name="Absorbed", status="active", properties={"type": "technical"}
-    )
-    for label, node_id in (
-        ("Obligation", "obl_1"),
-        ("Obligation", "obl_2"),
-        ("PracticeArea", "pa_1"),
-        ("RiskPath", "rp_1"),
-    ):
-        rig.seed_endpoint(label, node_id)
-    for edge in (
-        ("REQUIRES", "Obligation", "obl_1", "Capability", ABSORBED),
-        ("REQUIRES", "Obligation", "obl_2", "Capability", ABSORBED),
-        ("REQUIRES", "Obligation", "obl_2", "Capability", SURVIVOR),
-        ("COVERS", "PracticeArea", "pa_1", "Capability", ABSORBED),
-        ("MITIGATED_BY", "RiskPath", "rp_1", "Capability", ABSORBED),
-    ):
-        rig.seed_edge(edge, legacy=legacy)
-
-
-@pytest.mark.parametrize("added", [False, True], ids=["plain", "survivor-added-edge"])
-def test_a_capability_merge_then_unmerge_round_trip_matches_the_frozen_round_trip(
-    cleanup_rig: CleanupRig, *, added: bool
-) -> None:
-    _capability_premerge_world(cleanup_rig, legacy=True)
-    original = LegacyRecordingGraph.copy_of(cleanup_rig.graph)
-    frozen = LegacyRecordingGraph.copy_of(cleanup_rig.graph)
-    assert legacy_merge_capabilities(
-        frozen,
-        survivor_id=SURVIVOR,
-        absorbed_id=ABSORBED,
-        expected=capability_plan(cleanup_rig).expected,
-    )
-    if added:
-        frozen.nodes[("Obligation", "obl_new")] = {}
-        frozen.edges[("REQUIRES", "Obligation", "obl_new", "Capability", SURVIVOR)] = {}
-    assert run_capability_merge(cleanup_rig)["merged"] is True
-    cleanup_rig.audit.history = capability_merge_history()
-    if added:
-        _survivor_gains_requirer(cleanup_rig, legacy=False)
-    plan = unmerge_plan(cleanup_rig, ABSORBED)
-    assert isinstance(plan, CapabilityUnmergePlan)
-    assert legacy_unmerge_capability(
-        frozen, survivor_id=SURVIVOR, absorbed_id=ABSORBED, write=plan.write
-    )
-
-    assert run_capability_unmerge(cleanup_rig)["unmerged"] is True
-
-    assert canonical_digest(cleanup_rig.graph) == canonical_digest(frozen.as_gateway_graph())
-    if not added:
-        assert canonical_digest(cleanup_rig.graph) == canonical_digest(original.as_gateway_graph())
 
 
 # -- unmerge-obligation (S6) ----------------------------------------------------------------------

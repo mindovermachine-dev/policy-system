@@ -11,7 +11,7 @@ from graph_cleanup._fakes import ABSORBED, SURVIVOR, ScriptedMergeGraph
 from ps_service.graph_cleanup.errors import GraphCleanupPersistenceError
 from ps_service.graph_cleanup.graph_reader import (
     read_capability_merge_state,
-    read_capability_tombstone,
+    read_capability_merged,
 )
 
 _WRITE_KEYWORD = re.compile(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DETACH)\b")
@@ -37,7 +37,7 @@ def test_state_carries_nodes_edges_and_properties_without_embedding() -> None:
 
 
 def test_a_missing_node_is_reported_as_none() -> None:
-    graph = ScriptedMergeGraph(nodes=[[SURVIVOR, "Survivor", "active", None, None, None]])
+    graph = ScriptedMergeGraph(nodes=[[SURVIVOR, "Survivor", "active", None, None, None, None]])
 
     state = read_capability_merge_state(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
 
@@ -57,7 +57,7 @@ def test_every_read_query_is_write_free_and_parameterised() -> None:
     graph = ScriptedMergeGraph()
 
     read_capability_merge_state(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
-    read_capability_tombstone(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
+    read_capability_merged(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
 
     assert graph.queries
     for query, params in graph.queries:
@@ -76,11 +76,17 @@ def test_a_driver_failure_is_a_generic_persistence_error() -> None:
     assert "10.1.2.3" not in str(excinfo.value)
 
 
-@pytest.mark.parametrize(("count", "expected"), [(1, True), (0, False)])
-def test_tombstone_read(count: int, *, expected: bool) -> None:
-    graph = ScriptedMergeGraph(tombstone_count=count)
+@pytest.mark.parametrize(
+    ("markers", "present", "expected"),
+    [(1, 0, True), (0, 0, False), (1, 1, False), (0, 1, False)],
+    ids=["marked-and-gone", "no-marker", "re-minted-under-the-id", "live-capability"],
+)
+def test_merged_read_needs_the_marker_and_the_absence(
+    markers: int, present: int, *, expected: bool
+) -> None:
+    graph = ScriptedMergeGraph(marker_count=markers, absorbed_count=present)
 
-    assert read_capability_tombstone(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED) is expected
+    assert read_capability_merged(graph, survivor_id=SURVIVOR, absorbed_id=ABSORBED) is expected
 
 
 def test_governed_sets_list_every_capability_a_governing_policy_governs() -> None:

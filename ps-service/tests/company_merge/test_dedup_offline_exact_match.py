@@ -47,8 +47,6 @@ class _ScriptedSingleTenantGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
-        if "MERGED_INTO" in q:
-            return _FakeQueryResult([])
         if "(n:Capability) RETURN" in q:
             return _FakeQueryResult(self._capability_rows)
         raise AssertionError(f"unexpected query issued: {q!r}")
@@ -98,8 +96,8 @@ def test_exact_match_issues_no_write_query() -> None:
         threshold=_THRESHOLD,
     )
 
-    assert len(graph.calls) == 2  # index read + tombstone redirect read
-    assert all("MERGED_INTO" in c or "RETURN n.id, n.name" in c for c in graph.calls)
+    assert len(graph.calls) == 1  # the index read
+    assert all("RETURN n.id, n.name" in c for c in graph.calls)
 
 
 def test_exact_match_produces_no_near_miss_and_no_backfill() -> None:

@@ -7,8 +7,8 @@ outright, never soft-status-changed).
 The read is nevertheless a *filtered* one: being
 unresolved is not the same as being resolvable, so the query also requires
 both referenced nodes to still exist under the review's own `kind` and
-neither to be a `merged` tombstone -- the same predicate the merge path
-enforces. The scripted tests below cannot prove that filtering works (a fake
+neither to have been absorbed by a merge (an absorbed node is deleted) -- the same predicate
+the merge path enforces. The scripted tests below cannot prove that filtering works (a fake
 cannot execute Cypher); the `falkordb_live` test at the end of this file does.
 """
 
@@ -19,8 +19,9 @@ from typing import cast
 
 import pytest
 
+from ps_service.company_merge.errors import StalePendingReviewError
 from ps_service.company_merge.models import PendingReviewRecord
-from ps_service.company_merge.pending_review import list_pending_reviews
+from ps_service.company_merge.pending_review import list_pending_reviews, read_review_merge_sides
 from ps_service.config import load_config
 from ps_service.graph_gateway.connection import connect_from_config, select_graph
 
@@ -124,6 +125,27 @@ def test_list_pending_reviews_orders_by_created_at_ascending_in_the_query() -> N
     assert "ORDER BY r.created_at ASC" in graph.calls[0].query
 
 
+def test_the_list_query_filters_on_existence_alone_not_on_a_status() -> None:
+    graph = _FakeGraph(rows=[])
+
+    list_pending_reviews(graph)
+
+    assert "status" not in graph.calls[0].query
+    assert "coalesce" not in graph.calls[0].query
+
+
+def test_review_naming_an_absorbed_capability_is_reported_stale_by_the_merge_sides_read() -> None:
+    """An absorbed Capability is deleted: the optional match yields null for that side."""
+    graph = _FakeGraph(
+        rows=[["Capability", "cap_absorbed", "cap_survivor", False, True, None, "2026-01-01"]]
+    )
+
+    with pytest.raises(StalePendingReviewError):
+        read_review_merge_sides(graph, "review_aaa")
+
+    assert "status" not in graph.calls[0].query
+
+
 # --- falkordb_live: the list and the merge must agree ---------
 
 _LIVE_TEST_GRAPH = "policy_system_issue196_stale_review_live_test"
@@ -134,7 +156,7 @@ def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -
     """The list agrees with the merge path, against a REAL FalkorDB instance.
 
     `_MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE` requires both referenced nodes to
-    exist *and* not be a `merged` tombstone, so `list_pending_reviews` must
+    exist (a merge deletes the absorbed one), so `list_pending_reviews` must
     not offer a review only the list would accept: it would consume a
     passkey approval and raise `StalePendingReviewError` at sign time, and,
     because the stale path deliberately makes no graph changes, would stay
@@ -142,7 +164,7 @@ def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -
 
     Only a live instance can prove this: a scripted `_FakeGraph` cannot
     execute Cypher, so it can neither show the query over-reporting nor
-    that `labels()`/`coalesce(status, 'active')` behave as assumed here.
+    that `labels()` behaves as assumed here.
 
     Writes into a dedicated, disposable graph name, NEVER the real shared
     `policy_system` graph (nor any `*_baseline`/`*_native`) -- mirrors this
@@ -156,9 +178,12 @@ def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -
     try:
         graph = select_graph(db, _LIVE_TEST_GRAPH)
         graph.query("CREATE (:Capability {id: 'cap_live_a', status: 'active'})")
-        # No `status` property at all -- the coalesce(…, 'active') default path.
+        # No `status` property at all.
         graph.query("CREATE (:Capability {id: 'cap_live_b'})")
-        graph.query("CREATE (:Capability {id: 'cap_live_merged', status: 'merged'})")
+        # An absorbed Capability is deleted and leaves only its marker.
+        graph.query(
+            "CREATE (:MergedCapability {id: 'cap_live_absorbed', merged_into: 'cap_live_a'})"
+        )
         graph.query("CREATE (:Policy {id: 'pol_live_a'})")
         graph.query("CREATE (:Policy {id: 'pol_live_b'})")
 
@@ -166,10 +191,10 @@ def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -
             ("review_live_resolvable", "Capability", "cap_live_a", "cap_live_b", "2024-01-01"),
             ("review_live_node_gone", "Capability", "cap_live_absent", "cap_live_b", "2024-01-02"),
             (
-                "review_live_merged_side",
+                "review_live_absorbed_side",
                 "Capability",
                 "cap_live_a",
-                "cap_live_merged",
+                "cap_live_absorbed",
                 "2024-01-03",
             ),
             ("review_live_policy_ok", "Policy", "pol_live_a", "pol_live_b", "2024-01-04"),

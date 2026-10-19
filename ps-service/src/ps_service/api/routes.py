@@ -695,7 +695,7 @@ async def resolve_near_miss(
     approval: the graph-cleanup ``merge-capabilities`` approval, bound to the pair, the previewed
     state and the review id. Signing it merges the two Capabilities in one audited graph write and
     deletes the review. The survivor is the Capability with the earlier ``created_at``. The absorbed
-    one stays as a ``merged`` tombstone with one ``MERGED_INTO`` edge to the survivor, and its
+    one is deleted behind a ``MergedCapability`` marker naming the survivor, and its
     ``REQUIRES``, ``COVERS`` and ``MITIGATED_BY`` edges move to the survivor. A Capability keeps at
     most one governing Policy: when exactly one of the two is governed (``preview.policy_case``
     2) the response carries ``acknowledgment_required`` and no approval until the request repeats

@@ -208,7 +208,7 @@ def test_merge_returns_the_preview_and_an_approval_link_and_leaves_the_graph_unc
     assert env.snapshot() == before
 
 
-def test_signing_the_approval_tombstones_the_loser_deletes_the_review_and_check_reports_the_pair(
+def test_signing_the_approval_marks_the_loser_deletes_the_review_and_check_reports_the_pair(
     env: _Env,
 ) -> None:
     approval_id = json.loads(env.resolve_merge())["pending_approval_id"]
@@ -230,8 +230,8 @@ def test_signing_the_approval_tombstones_the_loser_deletes_the_review_and_check_
     assert signed["status"] == "signed"
     assert (signed["winner_id"], signed["loser_id"]) == (SURVIVOR, ABSORBED)
     assert signed["error"] is None
-    assert env.rig.graph.nodes[("Capability", ABSORBED)]["status"] == "merged"
-    assert [key for key in env.rig.graph.edges if key[0] == "MERGED_INTO"]
+    assert ("Capability", ABSORBED) not in env.rig.graph.nodes
+    assert env.rig.graph.nodes[("MergedCapability", ABSORBED)] == {"merged_into": SURVIVOR}
     assert ("PendingReview", _REVIEW) not in env.rig.graph.nodes
 
 
@@ -482,12 +482,12 @@ def test_the_resolve_schema_offers_the_acknowledgment_flag_and_still_hides_ctx()
     assert set(schema["required"]) == {"review_id", "decision"}
 
 
-def test_the_resolve_text_describes_the_cleanup_merge_and_not_a_deleted_loser() -> None:
+def test_the_resolve_text_describes_the_cleanup_merge_and_its_marker() -> None:
     description = _tool("near_misses_resolve").description or ""
 
-    assert "deletes the loser" not in description
-    assert "tombstone" in description
-    assert "MERGED_INTO" in description
+    assert "tombstone" not in description
+    assert "MERGED_INTO" not in description
+    assert "`MergedCapability` marker" in description
     assert "ComplianceOfficer" in description
     assert "acknowledge_governance_change" in description
 

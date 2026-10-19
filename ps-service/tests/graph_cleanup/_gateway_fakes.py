@@ -65,7 +65,9 @@ class CleanupReadGraph:
             graph_reader._CAPABILITY_GOVERNORS_QUERY: self._capability_governors,
             graph_reader._POLICY_GOVERNED_SETS_QUERY: self._policy_governed_sets,
             graph_reader._GOVERNED_EDGE_QUERY: self._governed_edge_count,
-            graph_reader._CAPABILITY_TOMBSTONE_QUERY: self._capability_tombstone,
+            graph_reader._CAPABILITY_MARKER_QUERY: self._capability_marker,
+            graph_reader._CAPABILITY_ANY_MARKER_QUERY: self._capability_any_marker,
+            graph_reader._CAPABILITY_PRESENT_QUERY: self._capability_present,
             graph_reader._OBLIGATION_NODES_QUERY: self._obligation_nodes,
             graph_reader._OBLIGATION_ROLES_QUERY: self._obligation_roles,
             graph_reader._OBLIGATION_SATISFIED_QUERY: self._obligation_satisfied,
@@ -74,13 +76,12 @@ class CleanupReadGraph:
             graph_reader._OBLIGATION_MARKER_QUERY: self._obligation_marker,
             graph_reader._OBLIGATION_ANY_MARKER_QUERY: self._obligation_any_marker,
             graph_reader._OBLIGATION_PRESENT_QUERY: self._obligation_present,
-            graph_reader._CAPABILITY_REDIRECTS_QUERY: self._capability_redirects,
+            graph_reader._CAPABILITY_MARKERS_QUERY: self._capability_markers,
             graph_reader._POLICY_EXISTS_QUERY: self._policy_exists,
-            graph_reader._CAPABILITY_UNMERGED_QUERY: self._capability_unmerged,
             graph_reader._OBLIGATION_MARKERS_QUERY: self._obligation_markers,
             graph_reader._ROLE_EXISTS_QUERY: self._role_exists,
             graph_reader._REQUIREMENTS_EXIST_QUERY: self._requirements_exist,
-            graph_reader._CAPABILITY_STATUSES_QUERY: self._capability_statuses,
+            graph_reader._CAPABILITIES_EXIST_QUERY: self._capabilities_exist,
             pending_review._REVIEW_MERGE_SIDES_QUERY: self._review_merge_sides,
             pending_review._GET_REVIEW_QUERY: self._get_review,
         }
@@ -123,10 +124,11 @@ class CleanupReadGraph:
             [
                 node_id,
                 props.get("name"),
-                props.get("status", "active"),
+                props.get("status"),
                 props.get("description"),
                 props.get("type"),
                 props.get("confidence"),
+                props.get("created_at"),
             ]
             for (label, node_id), props in self._graph.nodes.items()
             if label == "Capability" and node_id in wanted
@@ -160,9 +162,7 @@ class CleanupReadGraph:
             self._graph.nodes.get(("Capability", cast("str", review[key])))
             for key in ("incoming_id", "nearest_existing_id")
         ]
-        live = [
-            side if side and side.get("status", "active") != "merged" else None for side in sides
-        ]
+        live = sides
         return [
             [
                 review["kind"],
@@ -225,19 +225,17 @@ class CleanupReadGraph:
 
         return read
 
-    def _capability_tombstone(self, params: dict[str, object]) -> list[object]:
-        absorbed_id, survivor_id = params["absorbed_id"], params["survivor_id"]
-        absorbed = self._graph.nodes.get(("Capability", cast("str", absorbed_id)))
-        merged = absorbed is not None and absorbed.get("status") == "merged"
-        return [
-            [
-                sum(
-                    1
-                    for edge in self._edges("MERGED_INTO", "Capability", "Capability")
-                    if merged and edge == (absorbed_id, survivor_id)
-                )
-            ]
-        ]
+    def _capability_marker(self, params: dict[str, object]) -> list[object]:
+        marker = self._graph.nodes.get(("MergedCapability", cast("str", params["absorbed_id"])))
+        return [[1 if marker and marker.get("merged_into") == params["survivor_id"] else 0]]
+
+    def _capability_any_marker(self, params: dict[str, object]) -> list[object]:
+        marker = self._graph.nodes.get(("MergedCapability", cast("str", params["capability_id"])))
+        return [[1 if marker is not None else 0]]
+
+    def _capability_present(self, params: dict[str, object]) -> list[object]:
+        present = ("Capability", cast("str", params["capability_id"])) in self._graph.nodes
+        return [[1 if present else 0]]
 
     def _obligation_nodes(self, params: dict[str, object]) -> list[object]:
         wanted = set(cast("list[str]", params["ids"]))
@@ -304,14 +302,6 @@ class CleanupReadGraph:
 
     # -- the unmerge reads ---------------------------------------------------------------------
 
-    def _capability_redirects(self, params: dict[str, object]) -> list[object]:
-        wanted = set(cast("list[str]", params["ids"]))
-        return [
-            [source, target]
-            for source, target in self._edges("MERGED_INTO", "Capability", "Capability")
-            if source in wanted and ("Capability", target) in self._graph.nodes
-        ]
-
     def _existing_nodes(self, label: str) -> Callable[[dict[str, object]], list[object]]:
         def read(params: dict[str, object]) -> list[object]:
             wanted = set(cast("list[str]", params["ids"]))
@@ -323,13 +313,13 @@ class CleanupReadGraph:
         policy_id = cast("str", params["policy_id"])
         return [[policy_id]] if ("Policy", policy_id) in self._graph.nodes else []
 
-    def _capability_unmerged(self, params: dict[str, object]) -> list[object]:
-        absorbed_id = cast("str", params["absorbed_id"])
-        node = self._graph.nodes.get(("Capability", absorbed_id))
-        if node is None or node.get("status", "active") != "active":
-            return [[0, 0]]
-        redirects = self._edges("MERGED_INTO", "Capability", "Capability")
-        return [[1, sum(1 for source, _ in redirects if source == absorbed_id)]]
+    def _capability_markers(self, params: dict[str, object]) -> list[object]:
+        wanted = set(cast("list[str]", params["ids"]))
+        return [
+            [node_id, props.get("merged_into")]
+            for (label, node_id), props in self._graph.nodes.items()
+            if label == "MergedCapability" and node_id in wanted
+        ]
 
     def _obligation_markers(self, params: dict[str, object]) -> list[object]:
         wanted = set(cast("list[str]", params["ids"]))
@@ -346,13 +336,8 @@ class CleanupReadGraph:
     def _requirements_exist(self, params: dict[str, object]) -> list[object]:
         return self._existing_nodes("Requirement")(params)
 
-    def _capability_statuses(self, params: dict[str, object]) -> list[object]:
-        wanted = set(cast("list[str]", params["ids"]))
-        return [
-            [node_id, props.get("status", "active")]
-            for (label, node_id), props in self._graph.nodes.items()
-            if label == "Capability" and node_id in wanted
-        ]
+    def _capabilities_exist(self, params: dict[str, object]) -> list[object]:
+        return self._existing_nodes("Capability")(params)
 
 
 class CleanupGraphSeeder:
@@ -513,11 +498,11 @@ class CleanupGraphSeeder:
     ) -> None:
         """The aftermath of the merge `capability_merge_history()` records.
 
-        `ABSORBED` is a tombstone.
+        `ABSORBED` is deleted and a `MergedCapability` marker points at `SURVIVOR`.
 
         `SURVIVOR` holds the moved edges (`REQUIRES` `obl_1`/`obl_2`, `COVERS` `pa_1`,
-        `MITIGATED_BY` `rp_1`; `obl_2` was already there) and `ABSORBED` redirects to it with
-        `MERGED_INTO`. `policy` is the history's governance: `None` (case 1), `"moved"` (case 2:
+        `MITIGATED_BY` `rp_1`; `obl_2` was already there). `policy` is the history's governance:
+        `None` (case 1), `"moved"` (case 2:
         the survivor now holds the absorbed Capability's `GOVERNED_BY` edge) or `"kept"` (case 3:
         the survivor was governed by the same Policy before the merge and still is).
         """
@@ -527,12 +512,7 @@ class CleanupGraphSeeder:
             status="active",
             properties={"description": "desc", "confidence": 0.9},
         )
-        self.seed_capability(
-            ABSORBED,
-            name="Absorbed",
-            status="merged",
-            properties={"type": "technical", "confidence": 0.8},
-        )
+        self.seed_endpoint("MergedCapability", ABSORBED, merged_into=SURVIVOR)
         for label, node_id in (
             ("Obligation", "obl_1"),
             ("Obligation", "obl_2"),
@@ -546,7 +526,6 @@ class CleanupGraphSeeder:
             ("REQUIRES", "Obligation", "obl_2", "Capability", SURVIVOR),
             ("COVERS", "PracticeArea", "pa_1", "Capability", SURVIVOR),
             ("MITIGATED_BY", "RiskPath", "rp_1", "Capability", SURVIVOR),
-            ("MERGED_INTO", "Capability", ABSORBED, "Capability", SURVIVOR),
         ):
             self.seed_edge(edge, legacy=legacy)
         if policy is not None:

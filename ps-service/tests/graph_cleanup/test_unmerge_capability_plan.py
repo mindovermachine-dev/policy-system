@@ -16,7 +16,9 @@ from ps_service.graph_cleanup.models import (
     CapabilityUnmergeState,
     EdgeRecord,
     GoverningPolicy,
+    GraphSnapshot,
     MergeState,
+    NodeRecord,
 )
 from ps_service.graph_cleanup.unmerge_planner import (
     derive_capability_unmerge_inputs,
@@ -28,9 +30,15 @@ _A = "cap_absorbed"
 _POLICY = GoverningPolicy(id="pol_1", title="Incident Policy", status="approved")
 
 
+_CREATED_AT = "2026-10-01T09:00:00+00:00"
+
+
 def _node(node_id: str, *, status: str = "active") -> CapabilityNodeState:
     return CapabilityNodeState(
-        id=node_id, name=f"name of {node_id}", status=status, properties={"description": "d"}
+        id=node_id,
+        name=f"name of {node_id}",
+        status=status,
+        properties={"description": "d", "created_at": _CREATED_AT},
     )
 
 
@@ -81,8 +89,8 @@ def _details(
 def _live(
     *,
     survivor_status: str = "active",
-    absorbed_status: str = "merged",
-    redirects: dict[str, tuple[str, ...]] | None = None,
+    absorbed_status: str | None = None,
+    marker_targets: dict[str, tuple[str, ...]] | None = None,
     survivor_edges: tuple[EdgeRecord, ...] | None = None,
     survivor_policy_ids: tuple[str, ...] = (),
     missing_endpoints: tuple[str, ...] = (),
@@ -103,9 +111,9 @@ def _live(
         "MITIGATED_BY": tuple(x for x in ("rp_1",) if x not in missing_endpoints),
     }
     return CapabilityUnmergeState(
-        absorbed=_node(_A, status=absorbed_status),
+        absorbed_status=absorbed_status,
         survivor=_node(_S, status=survivor_status),
-        redirects=redirects if redirects is not None else {_A: (_S,)},
+        marker_targets=marker_targets if marker_targets is not None else {_A: (_S,)},
         survivor_edges=after_survivor,
         survivor_policy_ids=survivor_policy_ids,
         existing_endpoints=endpoints,
@@ -188,11 +196,73 @@ def test_the_snapshots_reverse_the_merge() -> None:
     absorbed_before = {(e.rel_type, e.source_id) for e in details.before.edges if e.target_id == _A}
     absorbed_after = {(e.rel_type, e.source_id) for e in plan.after.edges if e.target_id == _A}
     assert absorbed_after == absorbed_before
-    assert all(e.rel_type != "MERGED_INTO" for e in plan.after.edges)
-    assert any(e.rel_type == "MERGED_INTO" for e in plan.before.edges)
     statuses = {n.id: n.properties["status"] for n in plan.after.nodes if n.label == "Capability"}
     assert statuses[_A] == "active"
-    assert {n.properties["status"] for n in plan.before.nodes if n.id == _A} == {"merged"}
+    assert [n.properties for n in plan.before.nodes if n.id == _A] == [{"merged_into": _S}]
+    assert [n.label for n in plan.before.nodes if n.id == _A] == ["MergedCapability"]
+    assert all(n.label != "MergedCapability" for n in plan.after.nodes)
+
+
+def test_the_recreated_node_carries_the_original_properties_and_created_at() -> None:
+    plan = plan_capability_unmerge(derive_capability_unmerge_inputs(_details()), _live())
+
+    assert plan.write.properties == {
+        "name": f"name of {_A}",
+        "description": "d",
+        "created_at": _CREATED_AT,
+        "status": "active",
+    }
+    [restored] = [n for n in plan.after.nodes if n.id == _A]
+    assert restored.properties == plan.write.properties
+
+
+def _old_shape(details: CapabilityMergeDetails) -> CapabilityMergeDetails:
+    """The `after` snapshot as a merge recorded it before markers existed: tombstone + edge."""
+    assert details.after is not None
+    nodes = tuple(
+        NodeRecord(
+            label="Capability", id=n.id, properties={**_node(_A).properties, "status": "merged"}
+        )
+        if n.id == _A
+        else n
+        for n in details.after.nodes
+    )
+    redirect = _edge("MERGED_INTO", "Capability", _A, _S)
+    after = GraphSnapshot(nodes=nodes, edges=(*details.after.edges, redirect))
+    return details.model_copy(update={"after": after})
+
+
+def test_plans_from_a_snapshot_whose_absorbed_node_is_marked_merged() -> None:
+    new = derive_capability_unmerge_inputs(_details())
+
+    old = derive_capability_unmerge_inputs(_old_shape(_details()))
+
+    assert old == new
+    assert (
+        plan_capability_unmerge(old, _live()).write == plan_capability_unmerge(new, _live()).write
+    )
+
+
+def test_plans_from_a_snapshot_with_a_marker_node() -> None:
+    details = _details()
+    assert details.after is not None
+    assert [n.label for n in details.after.nodes if n.id == _A] == ["MergedCapability"]
+
+    plan = plan_capability_unmerge(derive_capability_unmerge_inputs(details), _live())
+
+    assert plan.write.restore_requires_ids == ("obl_1", "obl_2")
+    assert plan.write.properties["name"] == f"name of {_A}"
+
+
+def test_a_merge_record_that_lacks_the_absorbed_node_cannot_be_reversed() -> None:
+    details = _details()
+    assert details.before is not None
+    before = GraphSnapshot(
+        nodes=tuple(n for n in details.before.nodes if n.id != _A), edges=details.before.edges
+    )
+
+    with pytest.raises(GraphCleanupValidationError, match="absorbed capability"):
+        derive_capability_unmerge_inputs(details.model_copy(update={"before": before}))
 
 
 def test_the_digest_binds_the_current_state() -> None:
@@ -296,9 +366,11 @@ def test_a_restore_policy_that_no_longer_exists_is_a_conflict() -> None:
 # --- conflicts, each explained -------------------------------------------------------------------
 
 
-def test_a_survivor_that_was_merged_away_is_a_conflict_naming_where_it_went() -> None:
+def test_refuses_when_the_survivor_was_merged_away_naming_where() -> None:
     inputs = derive_capability_unmerge_inputs(_details())
-    live = _live(survivor_status="merged", redirects={_A: (_S,), _S: ("cap_winner",)})
+    live = _live(marker_targets={_A: (_S,), _S: ("cap_winner",)}).model_copy(
+        update={"survivor": None}
+    )
 
     with pytest.raises(GraphCleanupValidationError, match="cap_winner") as caught:
         plan_capability_unmerge(inputs, live)
@@ -306,9 +378,16 @@ def test_a_survivor_that_was_merged_away_is_a_conflict_naming_where_it_went() ->
     assert _S in str(caught.value)
 
 
-def test_a_tombstone_redirected_elsewhere_by_a_near_miss_merge_names_the_current_target() -> None:
+def test_a_survivor_that_is_no_longer_active_is_a_conflict() -> None:
     inputs = derive_capability_unmerge_inputs(_details())
-    live = _live(redirects={_A: ("cap_winner",)})
+
+    with pytest.raises(GraphCleanupValidationError, match="no longer active"):
+        plan_capability_unmerge(inputs, _live(survivor_status="deprecated"))
+
+
+def test_refuses_when_the_marker_was_repointed() -> None:
+    inputs = derive_capability_unmerge_inputs(_details())
+    live = _live(marker_targets={_A: ("cap_winner",)})
 
     with pytest.raises(GraphCleanupValidationError, match="cap_winner"):
         plan_capability_unmerge(inputs, live)
@@ -331,23 +410,27 @@ def test_a_missing_snapshot_endpoint_is_a_conflict_listing_it() -> None:
     assert "no longer exists" in str(caught.value)
 
 
-def test_an_absorbed_capability_that_is_already_active_has_nothing_to_unmerge() -> None:
+def test_refuses_when_the_absorbed_capability_exists_again() -> None:
     inputs = derive_capability_unmerge_inputs(_details())
 
-    with pytest.raises(GraphCleanupValidationError, match="not a merged tombstone"):
-        plan_capability_unmerge(inputs, _live(absorbed_status="active", redirects={}))
+    with pytest.raises(GraphCleanupValidationError, match="already exists again"):
+        plan_capability_unmerge(inputs, _live(absorbed_status="active", marker_targets={}))
 
 
-def test_a_missing_absorbed_capability_is_a_conflict() -> None:
-    inputs = derive_capability_unmerge_inputs(_details())
-    live = _live().model_copy(update={"absorbed": None})
-
-    with pytest.raises(GraphCleanupValidationError, match="no longer exists"):
-        plan_capability_unmerge(inputs, live)
-
-
-def test_a_tombstone_without_a_redirect_is_a_conflict() -> None:
+def test_refuses_a_capability_that_exists_with_a_non_active_status() -> None:
     inputs = derive_capability_unmerge_inputs(_details())
 
-    with pytest.raises(GraphCleanupValidationError, match="MERGED_INTO"):
-        plan_capability_unmerge(inputs, _live(redirects={}))
+    with pytest.raises(GraphCleanupValidationError) as caught:
+        plan_capability_unmerge(inputs, _live(absorbed_status="merged"))
+
+    message = str(caught.value)
+    assert "exists with status 'merged'" in message
+    assert "reset and re-ingest" in message
+    assert "already exists again" not in message
+
+
+def test_refuses_when_no_marker_remains() -> None:
+    inputs = derive_capability_unmerge_inputs(_details())
+
+    with pytest.raises(GraphCleanupValidationError, match="no MergedCapability marker"):
+        plan_capability_unmerge(inputs, _live(marker_targets={}))

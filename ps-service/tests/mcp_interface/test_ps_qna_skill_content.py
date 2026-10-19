@@ -57,15 +57,17 @@ def test_guardrails_section_names_null_status_fallback() -> None:
     assert "The null-status fallback" in text
 
 
-def test_active_only_default_lists_merged_capability_status() -> None:
+def test_active_only_default_lists_the_capability_status_enum_without_a_merge_value() -> None:
     text = _skill_text()
 
-    assert "Capability (active\\|deprecated\\|merged)" in text
+    assert "Capability (active\\|deprecated) —" in text
+    assert "deprecated\\|merged" not in text
 
 
-def test_active_only_default_excludes_merged_tombstones() -> None:
+def test_active_only_default_explains_an_absorbed_capability_is_deleted() -> None:
     text = _skill_text()
 
-    assert "`merged` is a tombstone" in text
-    assert "the default excludes it from every answer" in text
-    assert "Include tombstones only when the user explicitly asks" in text
+    assert "tombstone" not in text
+    assert "is deleted, so a Capability query never returns it" in " ".join(text.split())
+    assert "`MergedCapability` node" in text
+    assert "merge history" in text

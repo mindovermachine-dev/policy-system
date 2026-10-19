@@ -95,7 +95,7 @@ def test_tool_lists_spine_labels_with_enum_values_and_presence_marks() -> None:
         assert label in lines
     assert "  source_type: enum(external|internal) !" in lines
     assert "  instrument_type: enum(regulation|directive|national_transposition) ?" in lines
-    assert "  status: enum(active|deprecated|merged)" in lines
+    assert "  status: enum(active|deprecated)" in lines
 
 
 def test_tool_lists_all_ten_labels_and_policy_proposed_status() -> None:

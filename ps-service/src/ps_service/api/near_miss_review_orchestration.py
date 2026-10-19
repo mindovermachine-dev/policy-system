@@ -12,9 +12,10 @@ and :func:`check_near_miss_merge_approval`.
 A Capability near-miss merge is not a separate write. :func:`run_request_near_miss_merge` picks the
 survivor, builds the graph-cleanup `merge-capabilities` preview for the pair and creates that
 approval with the review id signed into it; the registered cleanup executor then runs the merge when
-the approval is signed (tombstone with `MERGED_INTO`, `REQUIRES`/`COVERS`/`MITIGATED_BY` edges
-moved, the one-Policy rule enforced, a `capability.merge` audit row with snapshots) and deletes
-the `PendingReview` in the same write group. This module is the glue between the two components,
+the approval is signed (`REQUIRES`/`COVERS`/`MITIGATED_BY` edges moved, the absorbed
+Capability deleted and a `MergedCapability` marker left, the one-Policy rule enforced, a
+`capability.merge` audit row with snapshots) and deletes the `PendingReview` in the same write
+group. This module is the glue between the two components,
 because `ps_service.company_merge` must not import `ps_service.graph_cleanup`.
 
 The production wiring imports `ps_service.company_merge` function-locally, so importing
@@ -212,8 +213,8 @@ def run_resolve_near_miss(
 
     Deletes only the `PendingReview` record. A Capability merge is not decided here:
     :func:`run_request_near_miss_merge` creates the graph-cleanup `merge-capabilities` approval and
-    the cleanup executor writes the merge (tombstone, `MERGED_INTO`, edges moved, one Policy rule)
-    when it is signed.
+    the cleanup executor writes the merge (edges moved, the absorbed Capability deleted behind a
+    `MergedCapability` marker, one Policy rule) when it is signed.
 
     Args:
         review_id: The `PendingReview` id to resolve (the route's path parameter).
@@ -435,7 +436,7 @@ def run_request_near_miss_merge(
 
     Raises:
         PendingReviewNotFoundError: `review_id` does not exist or was already resolved, or one of
-            its Capabilities no longer exists or is a tombstone (stale review, own message).
+            its Capabilities no longer exists (stale review, own message).
         GraphCleanupValidationError: The review is not a Capability review, or the cleanup merge
             refuses the pair (different governing Policies, a side that is not active).
         GraphCleanupAcknowledgmentRequiredError: Case 2 without the acknowledgment; carries the

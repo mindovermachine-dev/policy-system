@@ -488,12 +488,13 @@ def test_forking_an_approved_policy_leaves_the_graph_the_frozen_legacy_writer_le
     assert canonical_digest(lifecycle_rig.graph) == expected
 
 
-@pytest.mark.parametrize("merged", [False, True], ids=["two-ungoverned-capabilities", "one-merged"])
+@pytest.mark.parametrize("absent", [False, True], ids=["two-ungoverned-capabilities", "one-absent"])
 def test_a_claim_leaves_the_graph_the_frozen_legacy_writer_left(
-    lifecycle_rig: LifecycleRig, *, merged: bool
+    lifecycle_rig: LifecycleRig, *, absent: bool
 ) -> None:
     lifecycle_rig.seed_capability("cap_a")
-    lifecycle_rig.seed_capability("cap_b", status="merged" if merged else None)
+    if not absent:
+        lifecycle_rig.seed_capability("cap_b")
     lifecycle_rig.seed_policy("pol_other", owner=_OWNER, standards=(SeedStandard("s", "S"),))
     new_id = compute_policy_id(_CREATE_TITLE)
     claimed: list[bool] = []
@@ -509,7 +510,7 @@ def test_a_claim_leaves_the_graph_the_frozen_legacy_writer_left(
             )
         ),
     )
-    assert claimed == [not merged]
+    assert claimed == [not absent]
 
     def _claim() -> None:
         create_policy_draft(
@@ -521,7 +522,7 @@ def test_a_claim_leaves_the_graph_the_frozen_legacy_writer_left(
             submitter=lifecycle_rig.gateway,
         )
 
-    if merged:
+    if absent:
         with pytest.raises(PolicyCapabilityNotFoundError):
             _claim()
         # The legacy statement matched nothing; the pre-read refused earlier: both wrote nothing.

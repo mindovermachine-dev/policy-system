@@ -152,3 +152,17 @@ def test_policy_converges_by_semantic_match(make_emitter: MakeEmitter) -> None:
     assert resolution.match_kind == "semantic"
     assert resolution.canonical_id == existing_id
     assert resolution.canonical_id != incoming_id
+
+
+def test_policy_dedup_issues_exactly_one_read() -> None:
+    graph = _ScriptedSingleTenantGraph(policy_rows=[])
+
+    dedupe_canonical_nodes(
+        (_policy_node("pol_1", "P"),),
+        kind="Policy",
+        single_tenant_graph=graph,
+        model=_MODEL,
+        threshold=_THRESHOLD,
+    )
+
+    assert len(graph.calls) == 1

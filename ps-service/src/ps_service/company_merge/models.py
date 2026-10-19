@@ -207,15 +207,14 @@ class CanonicalResolution:
         incoming_id: Baseline-local id of the incoming node.
         canonical_id: Id of the canonical node it resolved to (its own when newly minted).
         match_kind: `exact` (same key as an existing node), `semantic` (embedding match), `new`
-            (minted), or `redirected` (the incoming id is a cleanup-merge
-            tombstone, resolved through `MERGED_INTO` to its survivor).
+            (minted).
         embedding: The node's own embedding, written into its properties at mint time; meaningful
             only when `match_kind` is `new`, and None when no comparison produced one.
     """
 
     incoming_id: str
     canonical_id: str
-    match_kind: Literal["exact", "semantic", "new", "redirected"]
+    match_kind: Literal["exact", "semantic", "new"]
     embedding: tuple[float, ...] | None
 
 
@@ -342,15 +341,18 @@ class MergeResult:
 
     Attributes:
         regulatory_instrument_id: Id of the merged instrument.
-        obligation_ids: Ids of the Obligations passed through (never deduped).
-        capability_canonical_ids: Canonical ids the incoming Capabilities resolved to.
+        obligation_ids: Ids of the Obligations passed through (never deduped). An Obligation a
+            cleanup merge absorbed is not listed: nothing is minted for it.
+        capability_canonical_ids: Canonical ids the incoming Capabilities resolved to, those a
+            cleanup merge absorbed included (each resolves to its survivor), because the run
+            summary counts every Capability the baseline matched.
         near_misses: Capability near-miss pairs surfaced for review.
         pending_review_count: Number of `PendingReview` nodes this call persisted, which is
             `len(near_misses)`: one create per near miss, never a fresh read of all unresolved
             reviews in the graph.
         new_capability_count: Capabilities the dedup pass minted (`match_kind == "new"`).
-        matched_capability_count: Capabilities resolved onto an existing node (`exact`, `semantic`
-            or `redirected`).
+        matched_capability_count: Capabilities resolved onto an existing node (`exact` or
+            `semantic`), plus the Capabilities a cleanup-merge marker redirected.
         new_obligation_count: Obligations this call wrote that did not already exist in the
             single-tenant graph, read before the write; ids dropped by a cleanup-merge redirect are
             never counted.

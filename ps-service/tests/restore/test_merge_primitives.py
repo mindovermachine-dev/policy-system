@@ -479,7 +479,7 @@ class _MarkedLive(SingleTenantStore):
             self.nodes[("Obligation", _SURVIVOR)] = {"text": "Do the thing"}
 
     def _read(self, q: str, params: dict[str, object] | None) -> list[object]:
-        if "MergedObligation" in q:
+        if "(m:MergedObligation)" in q:
             return [[_OBLIGATION, _SURVIVOR]]
         return super()._read(q, params)
 

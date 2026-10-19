@@ -241,7 +241,7 @@ class CapabilityNodeState(BaseModel):
     Attributes:
         id: Capability id.
         name: Capability name.
-        status: Effective status, such as `active` or `merged`.
+        status: Effective status, `active` when the node has no `status`.
         properties: Scalar properties of the node.
     """
 
@@ -328,7 +328,7 @@ class CapabilityMergePreview(BaseModel):
     Attributes:
         survivor_id: Id of the Capability that remains.
         survivor_name: Name of the surviving Capability.
-        absorbed_id: Id of the Capability that becomes a tombstone.
+        absorbed_id: Id of the Capability that is deleted and replaced by a marker.
         absorbed_name: Name of the absorbed Capability.
         policy_case: Governance case: 1 none governed, 2 exactly one governed, 3 both governed
             by the same Policy.
@@ -603,7 +603,9 @@ class CapabilityUnmergeInputs(BaseModel):
     Attributes:
         merge_approval_id: Approval id of the merge being reversed.
         survivor_id: Id of the surviving Capability.
-        absorbed_id: Id of the tombstoned Capability.
+        absorbed_id: Id of the deleted Capability the merge left a marker for.
+        absorbed_properties: The absorbed Capability's scalar properties as the merge's `before`
+            snapshot recorded them (`name`, `created_at` and the optional ones; id excluded).
         policy_case: Governance case of the merge being reversed.
         restore_requires: Endpoint ids of `REQUIRES` edges the merge moved off the absorbed node.
         restore_covers: The same for `COVERS` edges.
@@ -624,6 +626,7 @@ class CapabilityUnmergeInputs(BaseModel):
     merge_approval_id: str
     survivor_id: str
     absorbed_id: str
+    absorbed_properties: dict[str, PropertyValue]
     policy_case: MergeCase
     restore_requires: tuple[str, ...]
     restore_covers: tuple[str, ...]
@@ -637,12 +640,14 @@ class CapabilityUnmergeInputs(BaseModel):
 
 
 class CapabilityUnmergeState(BaseModel):
-    """The live graph around a tombstone, as `unmerge` needs it.
+    """The live graph around a merge's marker, as `unmerge` needs it.
 
     Attributes:
-        absorbed: The tombstoned Capability; None when it does not exist.
+        absorbed_status: Effective status of a Capability that exists under the absorbed id;
+            None when no such node exists (the state a merge leaves).
         survivor: The surviving Capability; None when it does not exist.
-        redirects: Maps a Capability id to the ids its `MERGED_INTO` edges currently point at.
+        marker_targets: Maps a Capability id to the `merged_into` ids of its `MergedCapability`
+            markers.
         survivor_edges: The survivor's current in-scope incoming edges.
         survivor_policy_ids: Ids of Policies governing the survivor.
         existing_endpoints: Maps each edge class to the snapshot endpoint ids that still exist.
@@ -651,9 +656,9 @@ class CapabilityUnmergeState(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    absorbed: CapabilityNodeState | None
+    absorbed_status: str | None
     survivor: CapabilityNodeState | None
-    redirects: dict[str, tuple[str, ...]]
+    marker_targets: dict[str, tuple[str, ...]]
     survivor_edges: tuple[EdgeRecord, ...]
     survivor_policy_ids: tuple[str, ...]
     existing_endpoints: dict[str, tuple[str, ...]]
@@ -683,7 +688,7 @@ class CapabilityUnmergePreview(BaseModel):
 
     Attributes:
         kind: Always `capability`; tells a client which unmerge preview it holds.
-        merged_id: Id of the tombstoned Capability to restore.
+        merged_id: Id of the deleted Capability to recreate.
         merged_name: Name of that Capability.
         survivor_id: Id of the surviving Capability.
         survivor_name: Name of the survivor.
@@ -720,6 +725,8 @@ class CapabilityUnmergeWrite(BaseModel):
         remove_mitigated_ids: The same as `remove_requires_ids` for `MITIGATED_BY`.
         restore_policy_id: Policy whose `GOVERNED_BY` edge is put back; None for none.
         remove_policy_edge: True when the survivor's `GOVERNED_BY` edge is removed.
+        properties: Scalar properties set on the recreated Capability, `status` forced to
+            `active`.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -732,6 +739,7 @@ class CapabilityUnmergeWrite(BaseModel):
     remove_mitigated_ids: tuple[str, ...]
     restore_policy_id: str | None
     remove_policy_edge: bool
+    properties: dict[str, PropertyValue]
 
 
 class CapabilityUnmergePlan(BaseModel):
@@ -741,7 +749,7 @@ class CapabilityUnmergePlan(BaseModel):
         preview: What the officer is shown.
         write: Parameters the guarded write applies.
         restored_edges: Exactly the edges put back on the restored Capability.
-        before: Snapshot of the tombstone and survivor state.
+        before: Snapshot of the marker and survivor state.
         after: Snapshot of the restored state.
         state_digest: sha256 of the previewed state.
         inputs: What the merge's audit snapshot said to reverse.
@@ -800,7 +808,9 @@ class ObligationUnmergeState(BaseModel):
             markers.
         role_exists: True when the Role still exists.
         existing_requirements: Ids of the snapshot Requirements that still exist.
-        capability_statuses: Effective status of each snapshot Capability that still exists.
+        existing_capabilities: Ids of the snapshot Capabilities that still exist.
+        merged_capability_targets: Maps a snapshot Capability that no longer exists to the
+            `merged_into` ids of its `MergedCapability` markers (empty when it simply vanished).
         survivor_edges: The survivor's current `SATISFIED_BY` / `REQUIRES` edges.
     """
 
@@ -812,7 +822,8 @@ class ObligationUnmergeState(BaseModel):
     marker_targets: dict[str, tuple[str, ...]]
     role_exists: bool
     existing_requirements: tuple[str, ...]
-    capability_statuses: dict[str, str]
+    existing_capabilities: tuple[str, ...]
+    merged_capability_targets: dict[str, tuple[str, ...]]
     survivor_edges: tuple[EdgeRecord, ...]
 
 

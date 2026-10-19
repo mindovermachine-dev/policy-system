@@ -201,3 +201,24 @@ def test_serialize_graph_refuses_a_graph_with_an_unfinished_replay_record() -> N
 
     with pytest.raises(ExportSourceGraphError, match="replay"):
         serialize_graph(graph)
+
+
+@pytest.mark.parametrize("marker", ["MergedCapability", "MergedObligation", "MergedRole"])
+def test_serialize_graph_leaves_a_merge_marker_out_of_the_artifact(marker: str) -> None:
+    """A merge marker belongs to the deployment's own graph, never to an export."""
+    graph = _ScriptedFakeGraphQueryHandle(
+        labels=[["Capability"], [marker]],
+        relationship_types=[],
+        node_rows_by_label={
+            "Capability": [[["Capability"], {"id": "cap_b"}]],
+            marker: [[[marker], {"id": "cap_a", "merged_into": "cap_b"}]],
+        },
+        edge_rows_by_type={},
+        total_node_count=2,
+    )
+
+    result = serialize_graph(graph)
+
+    assert [(node.label, node.properties["id"]) for node in result.nodes] == [
+        ("Capability", "cap_b")
+    ]

@@ -1,4 +1,4 @@
-"""Reader for capability `unmerge`: live state around a tombstone.
+"""Reader for capability `unmerge`: live state around a marker.
 
 Pure reads with literal parameterised queries; a driver failure is a generic error.
 """
@@ -11,8 +11,8 @@ import redis.exceptions
 from graph_cleanup._fakes import ABSORBED, SURVIVOR, ScriptedUnmergeGraph
 from ps_service.graph_cleanup.errors import GraphCleanupPersistenceError
 from ps_service.graph_cleanup.graph_reader import (
+    read_capability_present_without_marker,
     read_capability_unmerge_state,
-    read_capability_unmerged,
 )
 from ps_service.graph_cleanup.models import CapabilityUnmergeInputs
 
@@ -24,6 +24,7 @@ def _inputs(**overrides: object) -> CapabilityUnmergeInputs:
         "merge_approval_id": "merge-approval-1",
         "survivor_id": SURVIVOR,
         "absorbed_id": ABSORBED,
+        "absorbed_properties": {"name": "Absorbed"},
         "policy_case": 1,
         "restore_requires": ("obl_1", "obl_2"),
         "restore_covers": ("pa_1",),
@@ -38,16 +39,15 @@ def _inputs(**overrides: object) -> CapabilityUnmergeInputs:
     return CapabilityUnmergeInputs.model_validate({**base, **overrides})
 
 
-def test_reads_both_nodes_the_redirects_the_survivor_edges_and_the_endpoints() -> None:
+def test_reads_the_survivor_the_markers_the_survivor_edges_and_the_endpoints() -> None:
     graph = ScriptedUnmergeGraph()
 
     state = read_capability_unmerge_state(graph, inputs=_inputs())
 
-    assert state.absorbed is not None
-    assert (state.absorbed.id, state.absorbed.status) == (ABSORBED, "merged")
+    assert state.absorbed_status is None
     assert state.survivor is not None
     assert state.survivor.status == "active"
-    assert state.redirects == {ABSORBED: (SURVIVOR,)}
+    assert state.marker_targets == {ABSORBED: (SURVIVOR,)}
     assert {(e.rel_type, e.source_id) for e in state.survivor_edges} == {
         ("REQUIRES", "obl_1"),
         ("REQUIRES", "obl_2"),
@@ -93,12 +93,22 @@ def test_the_governing_policy_is_read_only_when_the_snapshot_needs_it() -> None:
 
 
 def test_missing_nodes_are_reported_as_none() -> None:
-    graph = ScriptedUnmergeGraph(nodes=[], redirects=[])
+    graph = ScriptedUnmergeGraph(nodes=[], markers=[])
 
     state = read_capability_unmerge_state(graph, inputs=_inputs())
 
-    assert state.absorbed is None
+    assert state.absorbed_status is None
     assert state.survivor is None
+    assert state.marker_targets == {}
+
+
+def test_a_node_under_the_absorbed_id_is_reported_with_its_status() -> None:
+    graph = ScriptedUnmergeGraph()
+    graph.nodes.append([ABSORBED, "Absorbed", "merged", None, None, None, None])
+
+    state = read_capability_unmerge_state(graph, inputs=_inputs())
+
+    assert state.absorbed_status == "merged"
 
 
 def test_every_read_is_a_literal_parameterised_query_with_no_write_keyword() -> None:
@@ -125,13 +135,13 @@ def test_a_driver_failure_is_a_generic_persistence_error() -> None:
     assert "10.1.2.3" not in str(caught.value)
 
 
-def test_unmerged_is_true_for_an_active_node_without_a_redirect_only() -> None:
-    assert read_capability_unmerged(
-        ScriptedUnmergeGraph(unmerged_row=[1, 0]), capability_id=ABSORBED
+def test_present_without_marker_needs_the_node_and_no_marker() -> None:
+    assert read_capability_present_without_marker(
+        ScriptedUnmergeGraph(marker_count=0, absorbed_count=1), capability_id=ABSORBED
     )
-    assert not read_capability_unmerged(
-        ScriptedUnmergeGraph(unmerged_row=[1, 1]), capability_id=ABSORBED
+    assert not read_capability_present_without_marker(
+        ScriptedUnmergeGraph(marker_count=1, absorbed_count=1), capability_id=ABSORBED
     )
-    assert not read_capability_unmerged(
-        ScriptedUnmergeGraph(unmerged_row=[0, 0]), capability_id=ABSORBED
+    assert not read_capability_present_without_marker(
+        ScriptedUnmergeGraph(marker_count=0, absorbed_count=0), capability_id=ABSORBED
     )

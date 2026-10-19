@@ -198,14 +198,14 @@ def preview_capability_merge(
     Args:
         graph: Handle on the single-tenant graph, read only.
         survivor_id: Id of the Capability that remains; must differ from `absorbed_id`.
-        absorbed_id: Id of the Capability that becomes a `merged` tombstone.
+        absorbed_id: Id of the Capability that is deleted and replaced by a marker.
 
     Returns:
         The merge preview: what moves, the policy case and, when a policy is involved, the
         governance effect and acknowledgment text.
 
     Raises:
-        GraphCleanupValidationError: self-merge, a nonexistent or `merged` side, or two
+        GraphCleanupValidationError: self-merge, a nonexistent or non-active side, or two
             Capabilities governed by different policies.
         GraphCleanupPersistenceError: the graph database could not be read.
     """
@@ -257,7 +257,7 @@ def create_capability_merge_approval(  # noqa: PLR0913 -- the pair, the acknowle
     Args:
         graph: Handle on the single-tenant graph, read only.
         survivor_id: Id of the Capability that remains; must differ from `absorbed_id`.
-        absorbed_id: Id of the Capability that becomes a `merged` tombstone.
+        absorbed_id: Id of the Capability that is deleted and replaced by a marker.
         acknowledge_governance_change: True when the officer accepts the governance change a
             case-2 merge makes.
         actor: `(subject, issuer)` of the requesting officer; the approval is bound to them.
@@ -271,9 +271,9 @@ def create_capability_merge_approval(  # noqa: PLR0913 -- the pair, the acknowle
         The preview with the approval id, signing URL and expiry.
 
     Raises:
-        GraphCleanupValidationError: self-merge, a nonexistent side, a `merged` tombstone or other
-            non-active side, a side with more than one governing policy, or both sides governed
-            by different policies; no approval is created.
+        GraphCleanupValidationError: self-merge, a nonexistent or non-active side, a side with
+            more than one governing policy, or both sides governed by different policies; no
+            approval is created.
         GraphCleanupAcknowledgmentRequiredError: case 2 without the acknowledgment; carries the
             preview, no approval is created.
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -456,7 +456,7 @@ def preview_release_governance(graph: GraphHandle, *, capability_id: str) -> Rel
         The release preview: the governing policy and the Capabilities it governs.
 
     Raises:
-        GraphCleanupValidationError: the Capability does not exist, is a tombstone, is not
+        GraphCleanupValidationError: the Capability does not exist, is not active, is not
             governed, or its governing policy is not a draft.
         GraphCleanupPersistenceError: the graph database could not be read.
     """
@@ -506,7 +506,7 @@ def create_release_governance_approval(
         The preview with the approval id, signing URL and expiry.
 
     Raises:
-        GraphCleanupValidationError: the Capability does not exist, is a tombstone, is not
+        GraphCleanupValidationError: the Capability does not exist, is not active, is not
             governed, or its governing policy is not a draft; no approval is created.
         GraphCleanupPersistenceError: the graph database could not be read.
 

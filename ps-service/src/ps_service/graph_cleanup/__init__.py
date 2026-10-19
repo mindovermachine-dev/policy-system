@@ -8,7 +8,7 @@ Capability from a draft governing policy, or reverses an earlier merge. Domain p
 
 The component is separate from Company Merge, which only adds and merges during the pipeline
 (`docs/architecture/ps-service-container-architecture.md`, Company Merge). Company Merge
-follows the `merged` tombstones this component writes but never creates them.
+follows the `Merged<Kind>` markers this component writes but never creates them.
 """
 
 from __future__ import annotations

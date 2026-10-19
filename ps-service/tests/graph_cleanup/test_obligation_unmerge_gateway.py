@@ -293,8 +293,9 @@ def _capability_gone(rig: CleanupRig) -> None:
     del rig.graph.nodes[("Capability", "cap_1")]
 
 
-def _capability_tombstone(rig: CleanupRig) -> None:
-    rig.graph.nodes[("Capability", "cap_1")]["status"] = "merged"
+def _capability_merged_away(rig: CleanupRig) -> None:
+    del rig.graph.nodes[("Capability", "cap_1")]
+    rig.graph.seed_node(("MergedCapability",), "cap_1", {"merged_into": "cap_winner"})
 
 
 @pytest.mark.parametrize(
@@ -306,7 +307,7 @@ def _capability_tombstone(rig: CleanupRig) -> None:
         _role_gone,
         _requirement_gone,
         _capability_gone,
-        _capability_tombstone,
+        _capability_merged_away,
     ],
 )
 def test_the_guard_is_false_when_the_marker_the_obligation_the_role_or_an_endpoint_changed(
@@ -318,7 +319,7 @@ def test_the_guard_is_false_when_the_marker_the_obligation_the_role_or_an_endpoi
 
 
 @pytest.mark.parametrize(
-    "break_it", [_exists_again, _requirement_gone, _capability_tombstone, _role_gone]
+    "break_it", [_exists_again, _requirement_gone, _capability_merged_away, _role_gone]
 )
 def test_a_guard_miss_between_the_replan_and_the_write_logs_nothing(
     cleanup_rig: CleanupRig, break_it: Callable[[CleanupRig], None]

@@ -147,7 +147,8 @@ def test_skill_documents_the_named_merge_errors() -> None:
     text = _text()
 
     assert "error: a capability cannot be merged into itself" in text
-    assert "merged tombstone" in text
+    assert "tombstone" not in text
+    assert "`MergedCapability` marker" in text
     assert "`applied` audit row followed by a `failed` row" in text
 
 
@@ -204,7 +205,7 @@ def test_skill_walks_the_obligation_merge_flow_in_order() -> None:
     assert positions == sorted(positions)
 
 
-def test_skill_explains_what_an_obligation_merge_does_and_cannot_undo_by_a_tombstone() -> None:
+def test_skill_explains_what_an_obligation_merge_does_and_that_a_marker_remains() -> None:
     section = _text()[_text().index("### Merging two obligations") :]
 
     assert "same role" in section.lower()
@@ -294,7 +295,8 @@ def test_skill_explains_what_a_capability_unmerge_restores_and_leaves_alone() ->
     section = _ref("unmerge.md")
 
     assert "`active`" in section
-    assert "`MERGED_INTO`" in section
+    assert "`MergedCapability`" in section
+    assert "tombstone" not in section
     assert "exactly the edges" in section
     assert "survivor_added_edges" in section
     assert "stay" in section
@@ -341,7 +343,7 @@ def test_skill_names_the_obligation_unmerge_conflicts() -> None:
     assert "already exists again" in section
     assert "no `MergedObligation` marker" in section or "no MergedObligation marker" in section
     assert "survivor obligation" in section
-    assert "tombstone" in section
+    assert "merged away" in section
 
 
 # --- skill finalisation (case table, error table, E1 limitation, reconciliation) ----

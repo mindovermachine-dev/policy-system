@@ -86,6 +86,7 @@ from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.authz.models import AccessRole
 from ps_service.company_merge.falkordb_client import single_tenant_graph_name
+from ps_service.company_merge.graph_writer import ANY_LABEL_EXISTENCE_READ
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.curated_source.artifact_client import fetch_artifact
 from ps_service.curated_source.catalog_client import fetch_catalog
@@ -439,7 +440,7 @@ class _FakeSingleTenantGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append((q, params))
-        if "MERGED_INTO" in q or "MergedObligation" in q:  # no tombstones/markers
+        if "MERGED_INTO" in q or "(m:Merged" in q:  # no tombstones/markers
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
@@ -469,7 +470,7 @@ class _FakeSingleTenantGraph:
         if "MATCH (n:Policy {id: $id}) WHERE n.embedding IS NULL" in q:
             self._backfill(self._policies, params)
             return _FakeQueryResult([])
-        if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
+        if q == ANY_LABEL_EXISTENCE_READ:
             assert params is not None
             requested_ids = cast("list[str]", params["ids"])
             known_ids = (

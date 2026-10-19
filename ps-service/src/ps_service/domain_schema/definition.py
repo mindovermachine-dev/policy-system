@@ -163,9 +163,9 @@ _CAPABILITY = Node(
         Property("type", _STRING, _OPTIONAL, "e.g. `technical`, `organizational`"),
         Property(
             "status",
-            EnumType(("active", "deprecated", "merged")),
+            EnumType(("active", "deprecated")),
             _OPTIONAL,
-            "merged marks a tombstone with an outbound MERGED_INTO edge; no status means active.",
+            "No status means active. An absorbed Capability is deleted, not marked.",
         ),
         Property(
             "confidence",
@@ -527,18 +527,6 @@ _EDGES = (
         _CLASSIFICATION,
         note="Connects risk exposure to concrete verification evidence paths.",
         provenance_rule=_CLASSIFICATION_RULE,
-    ),
-    _edge(
-        "MERGED_INTO",
-        "Capability",
-        "Capability",
-        "0..1 : 0..*",
-        note=("Present only on a `merged` tombstone; points at the survivor that absorbed it."),
-        provenance_rule=(
-            "n/a \u2014 redirect marker from a `merged` tombstone to its survivor, not a "
-            "provenance fact; parallels `SUPERSEDED_BY`. Chains (a survivor later absorbed "
-            "itself) are followed to the terminal Capability."
-        ),
     ),
     _edge(
         "GOVERNED_BY",

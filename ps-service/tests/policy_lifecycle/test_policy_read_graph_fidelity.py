@@ -124,17 +124,17 @@ def test_read_fork_governance_lists_the_priors_governed_capabilities(
     assert graph_writer.read_fork_governance(lifecycle_rig.read, "prior") is None
 
 
-def test_read_capability_governors_omits_unknown_and_merged_and_maps_ungoverned_to_none(
+def test_read_capability_governors_omits_unknown_and_absorbed_and_maps_ungoverned_to_none(
     lifecycle_rig: LifecycleRig,
 ) -> None:
     lifecycle_rig.seed_policy("P")
     lifecycle_rig.seed_capability("governed")
     lifecycle_rig.seed_capability("free")
-    lifecycle_rig.seed_capability("tombstone", status="merged")
+    lifecycle_rig.graph.seed_node(("MergedCapability",), "absorbed", {"merged_into": "governed"})
     lifecycle_rig.seed_governs("governed", "P")
 
     governors = graph_writer.read_capability_governors(
-        lifecycle_rig.read, ("governed", "free", "tombstone", "missing")
+        lifecycle_rig.read, ("governed", "free", "absorbed", "missing")
     )
 
     assert governors == {"governed": "P", "free": None}

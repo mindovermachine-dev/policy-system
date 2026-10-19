@@ -8,9 +8,9 @@ between a review and the instrument's baseline Capabilities finds exactly the in
 reviews without walking the regulatory spine.
 
 "Unresolved" is the predicate `near_misses_list` uses, because this gate reads the reviews
-through `list_pending_reviews`: both referenced nodes exist under the review's kind and neither
-is a `merged` tombstone. The gate issues no Cypher of its own for reviews, so the predicate has
-one definition and cannot drift.
+through `list_pending_reviews`: both referenced nodes exist under the review's kind (an absorbed
+node is deleted, so a review naming one is not unresolved). The gate issues no Cypher of its own
+for reviews, so the predicate has one definition and cannot drift.
 
 Public functions:
     `unresolved_near_miss_review_ids`: the sorted ids of the reviews that block an export.

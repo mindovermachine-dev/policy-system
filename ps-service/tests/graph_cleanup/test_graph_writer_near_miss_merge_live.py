@@ -2,9 +2,9 @@
 
 Scripted fakes prove only call shape; this proves on a real FalkorDB that the review-sides read is
 valid Cypher, that the real merge group built with `review_id` applies as written (edges move
-without duplicates, the loser stays as a `merged` tombstone with one `MERGED_INTO`, the
-`PendingReview` is gone) and that the offline convergence read then resolves the loser id to the
-survivor ("redirected") with no near miss. The group is applied with the gateway's own applier on
+without duplicates, the loser node is deleted and a `MergedCapability` marker names the survivor,
+the `PendingReview` is gone) and that `resolve_redirects` then resolves the loser id to the
+survivor. The group is applied with the gateway's own applier on
 the throwaway graph; no Postgres log is involved, so the gateway's log and audit linkage is not
 part of this proof (the rig tests cover it). UNVERIFIED where no FalkorDB is available (collected,
 deselected by default).
@@ -21,9 +21,9 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.company_merge.dedup import resolve_capability_convergence_offline
-from ps_service.company_merge.models import BaselineNode
+from ps_service.company_merge.models import BaselineGraph, BaselineNode
 from ps_service.company_merge.pending_review import choose_survivor, read_review_merge_sides
+from ps_service.company_merge.redirects import resolve_redirects
 from ps_service.graph_cleanup.graph_reader import read_capability_merge_state
 from ps_service.graph_cleanup.group_builders import build_capability_merge_group
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
@@ -81,7 +81,7 @@ def _rows(graph: GraphHandle, query: str) -> list[list[object]]:
     return cast("list[list[object]]", graph.query(query).result_set)
 
 
-def test_a_near_miss_merge_applies_on_a_real_graph_and_the_loser_id_is_then_redirected(
+def test_a_near_miss_merge_applies_on_a_real_graph_and_the_loser_id_is_then_resolved(
     graph: GraphHandle,
 ) -> None:
     sides = read_review_merge_sides(cast("CompanyMergeGraph", graph), _REVIEW)
@@ -112,20 +112,24 @@ def test_a_near_miss_merge_applies_on_a_real_graph_and_the_loser_id_is_then_redi
         ("pa1", "COVERS"),
     ]
     assert _rows(graph, "MATCH (x)-[r:REQUIRES|COVERS]->(:Capability {id:'new'}) RETURN x.id") == []
-    assert _rows(
-        graph,
-        "MATCH (a:Capability {id:'new'})-[r:MERGED_INTO]->(s:Capability {id:'old'}) "
-        "RETURN a.status, count(r)",
-    ) == [["merged", 1]]
+    assert _rows(graph, "MATCH (a:Capability {id:'new'}) RETURN count(a)") == [[0]]
+    assert _rows(graph, "MATCH (m:MergedCapability {id:'new'}) RETURN m.merged_into") == [["old"]]
     assert _rows(graph, "MATCH (p:PendingReview) RETURN count(p)") == [[0]]
 
-    result = resolve_capability_convergence_offline(
-        (BaselineNode(id="new", properties={"name": "New", "confidence": 0.9}),),
-        incoming_embeddings={"new": (0.8, 0.6)},
-        single_tenant_graph=cast("CompanyMergeGraph", graph),
-        threshold=0.85,
+    resolution = resolve_redirects(
+        cast("CompanyMergeGraph", graph),
+        BaselineGraph(
+            regulatory_instrument_id="reg_live",
+            regulatory_instrument_properties={"id": "reg_live"},
+            role_nodes=(),
+            requirement_nodes=(),
+            obligation_nodes=(),
+            capability_nodes=(
+                BaselineNode(id="new", properties={"name": "New", "confidence": 0.9}),
+            ),
+            provenance_edges=(),
+            bare_edges=(),
+        ),
     )
-    assert [(r.incoming_id, r.canonical_id, r.match_kind) for r in result.resolutions] == [
-        ("new", "old", "redirected")
-    ]
-    assert result.near_misses == ()
+    assert resolution.mapping == {"new": "old"}
+    assert resolution.baseline.capability_nodes == ()

@@ -95,7 +95,11 @@ class RestoreRig(MergeRig):
 
 
 _IDS_READ = re.compile(r"^MATCH \(n:(?P<label>\w+)\) WHERE n\.id IN \$ids RETURN n\.id$")
-_ANY_LABEL_READ = "UNWIND $ids AS id MATCH (n {id: id}) RETURN id"
+_ANY_LABEL_READ = re.compile(
+    r"^UNWIND \$ids AS id MATCH \(n \{id: id\}\) "
+    r"WHERE (?P<excluded>NOT n:\w+(?: AND NOT n:\w+)*) RETURN id$"
+)
+_EXCLUDED_LABEL = re.compile(r"NOT n:(\w+)")
 
 
 class _Rows:
@@ -135,10 +139,13 @@ class ScriptedLive:
         if matched is not None:
             held = self._existing.get(matched.group("label"), set())
             return _Rows([[i] for i in ids if i in held])
-        if q == _ANY_LABEL_READ:
+        any_label = _ANY_LABEL_READ.match(q)
+        if any_label is not None:
             everything: set[str] = set()
-            for held_ids in self._existing.values():
-                everything |= held_ids
+            excluded = set(_EXCLUDED_LABEL.findall(any_label.group("excluded")))
+            for label, held_ids in self._existing.items():
+                if label not in excluded:
+                    everything |= held_ids
             return _Rows([[i] for i in ids if i in everything])
         return _Rows([])
 

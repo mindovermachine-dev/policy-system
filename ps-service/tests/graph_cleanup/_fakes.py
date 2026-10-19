@@ -26,6 +26,8 @@ _WRITE_KEYWORD = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|DETACH|DROP)\b")
 
 SURVIVOR = "cap_survivor"
 ABSORBED = "cap_absorbed"
+ABSORBED_CREATED_AT = "2026-09-01T08:00:00+00:00"
+"""The `created_at` the merge history records on the absorbed Capability."""
 
 
 @dataclass
@@ -39,8 +41,8 @@ class ScriptedMergeGraph:
 
     nodes: list[list[object]] = field(
         default_factory=lambda: [
-            [SURVIVOR, "Survivor", "active", "desc", None, 0.9],
-            [ABSORBED, "Absorbed", "active", None, "technical", 0.8],
+            [SURVIVOR, "Survivor", "active", "desc", None, 0.9, None],
+            [ABSORBED, "Absorbed", "active", None, "technical", 0.8, None],
         ]
     )
     requires: list[list[object]] = field(
@@ -52,7 +54,10 @@ class ScriptedMergeGraph:
     # `[policy_id, capability_id]` rows; `None` derives them from `governors` plus an
     # unrelated `cap_other` per policy, so the policy's governed set is never just the pair.
     governed_sets: list[list[object]] | None = None
-    tombstone_count: int = 0
+    marker_count: int = 0
+    """Rows the `MergedCapability` marker read finds (1 once the merge has landed)."""
+    absorbed_count: int = 0
+    """Rows the `Capability` presence read finds for the absorbed id (0 once it was deleted)."""
     read_error: Exception | None = None
     queries: list[tuple[str, dict[str, object] | None]] = field(default_factory=list)
 
@@ -68,8 +73,10 @@ class ScriptedMergeGraph:
             raise AssertionError(message)
         if self.read_error is not None:
             raise self.read_error
-        if "RETURN count(a)" in q:
-            return QueryResult([[self.tombstone_count]])
+        if "MergedCapability" in q and "RETURN count(m)" in q:
+            return QueryResult([[self.marker_count]])
+        if "RETURN count(c)" in q:
+            return QueryResult([[self.absorbed_count]])
         if "RETURN c.id, c.name" in q:
             return QueryResult(list(self.nodes))
         if "p.id IN $policy_ids" in q:
@@ -392,7 +399,7 @@ class ScriptedReleaseGraph(ScriptedMergeGraph):
 
 @dataclass
 class ScriptedUnmergeGraph:
-    """Graph for capability `unmerge`: `ABSORBED` is a tombstone of `SURVIVOR`.
+    """Graph for capability `unmerge`: `ABSORBED` is deleted and marked as merged into `SURVIVOR`.
 
     Queries are dispatched by their text. Read-only: an unmerge writes through the
     gateway (`CleanupRig`), so a write statement here is a failure of the test.
@@ -400,11 +407,10 @@ class ScriptedUnmergeGraph:
 
     nodes: list[list[object]] = field(
         default_factory=lambda: [
-            [SURVIVOR, "Survivor", "active", "desc", None, 0.9],
-            [ABSORBED, "Absorbed", "merged", None, "technical", 0.8],
+            [SURVIVOR, "Survivor", "active", "desc", None, 0.9, None],
         ]
     )
-    redirects: list[list[object]] = field(default_factory=lambda: [[ABSORBED, SURVIVOR]])
+    markers: list[list[object]] = field(default_factory=lambda: [[ABSORBED, SURVIVOR]])
     requires: list[list[object]] = field(
         default_factory=lambda: [["obl_1", SURVIVOR], ["obl_2", SURVIVOR]]
     )
@@ -419,7 +425,10 @@ class ScriptedUnmergeGraph:
         }
     )
     policy_rows: list[list[object]] = field(default_factory=lambda: [["pol_1"]])
-    unmerged_row: list[object] = field(default_factory=lambda: [1, 0])
+    marker_count: int = 1
+    """Rows the any-marker read finds for the absorbed id (0 once the unmerge has landed)."""
+    absorbed_count: int = 0
+    """Rows the `Capability` presence read finds for the absorbed id (1 once it is recreated)."""
     read_error: Exception | None = None
     queries: list[tuple[str, dict[str, object] | None]] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
@@ -437,10 +446,12 @@ class ScriptedUnmergeGraph:
         if self.read_error is not None:
             raise self.read_error
         ids = cast("list[str]", (params or {}).get("ids", []))
-        if "count(m)" in q:
-            return QueryResult([list(self.unmerged_row)])
-        if "MERGED_INTO" in q:
-            return QueryResult([r for r in self.redirects if r[0] in ids])
+        if "RETURN count(m)" in q:
+            return QueryResult([[self.marker_count]])
+        if "RETURN count(c)" in q:
+            return QueryResult([[self.absorbed_count]])
+        if "MATCH (m:MergedCapability) WHERE m.id IN $ids" in q:
+            return QueryResult([r for r in self.markers if r[0] in ids])
         if "RETURN c.id, c.name" in q:
             return QueryResult([r for r in self.nodes if r[0] in ids])
         if "RETURN c.id, p.id, p.title, p.status" in q:
@@ -497,7 +508,10 @@ def capability_merge_history(
             id=SURVIVOR, name="Survivor", status="active", properties={"description": "desc"}
         ),
         absorbed=CapabilityNodeState(
-            id=ABSORBED, name="Absorbed", status="active", properties={"type": "technical"}
+            id=ABSORBED,
+            name="Absorbed",
+            status="active",
+            properties={"type": "technical", "created_at": ABSORBED_CREATED_AT},
         ),
         edges=(
             edge("REQUIRES", "Obligation", "obl_1", ABSORBED),
@@ -561,7 +575,8 @@ class ScriptedObligationUnmergeGraph:
     markers: list[list[object]] = field(default_factory=lambda: [[OBL_ABSORBED, OBL_SURVIVOR]])
     roles: list[list[object]] = field(default_factory=lambda: [[ROLE_ID]])
     requirements: list[list[object]] = field(default_factory=lambda: [["req_1"], ["req_2"]])
-    capabilities: list[list[object]] = field(default_factory=lambda: [["cap_1", "active"]])
+    capabilities: list[list[object]] = field(default_factory=lambda: [["cap_1"]])
+    capability_markers: list[list[object]] = field(default_factory=list)
     satisfied: list[list[object]] = field(
         default_factory=lambda: [["req_1", OBL_SURVIVOR], ["req_2", OBL_SURVIVOR]]
     )
@@ -597,7 +612,9 @@ class ScriptedObligationUnmergeGraph:
             return QueryResult(list(self.roles))
         if "MATCH (q:Requirement) WHERE q.id IN $ids" in q:
             return QueryResult([r for r in self.requirements if r[0] in ids])
-        if "MATCH (c:Capability) WHERE c.id IN $ids RETURN c.id, coalesce" in q:
+        if "MATCH (m:MergedCapability) WHERE m.id IN $ids" in q:
+            return QueryResult([r for r in self.capability_markers if r[0] in ids])
+        if "MATCH (c:Capability) WHERE c.id IN $ids RETURN c.id" in q:
             return QueryResult([r for r in self.capabilities if r[0] in ids])
         if "[:SATISFIED_BY]" in q:
             return QueryResult([r for r in self.satisfied if r[1] in ids])

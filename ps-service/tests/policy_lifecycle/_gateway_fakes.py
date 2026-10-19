@@ -56,7 +56,6 @@ _READ_FORK_GOVERNANCE = (
 _FIND_EXISTING_POLICY = "MATCH (p:Policy {id: $policy_id}) RETURN p.id, p.title"
 _READ_CAPABILITY_GOVERNORS = (
     "MATCH (cap:Capability) WHERE cap.id IN $capability_ids "
-    "AND coalesce(cap.status,'active') <> 'merged' "
     "OPTIONAL MATCH (cap)-[:GOVERNED_BY]->(g:Policy) "
     "RETURN cap.id, g.id"
 )
@@ -174,10 +173,8 @@ class PolicyReadGraph:
     def _read_capability_governors(self, params: dict[str, object]) -> list[object]:
         wanted = set(cast("list[str]", params["capability_ids"]))
         rows: list[object] = []
-        for (label, node_id), props in self._graph.nodes.items():
+        for label, node_id in self._graph.nodes:
             if label != "Capability" or node_id not in wanted:
-                continue
-            if props.get("status", "active") == "merged":
                 continue
             governors = self._targets("GOVERNED_BY", ("Capability", node_id), "Policy")
             rows.extend([node_id, governor] for governor in governors)
@@ -474,7 +471,7 @@ class PolicyGraphSeeder:
     def seed_capability(
         self, capability_id: str, *, name: str | None = None, status: str | None = None
     ) -> None:
-        """Seed a Capability (`status="merged"` is a tombstone; `None` leaves it unset)."""
+        """Seed a Capability (`status=None` leaves it unset)."""
         properties: dict[str, object] = {"name": name or capability_id}
         if status is not None:
             properties["status"] = status

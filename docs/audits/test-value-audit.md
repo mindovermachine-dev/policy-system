@@ -86,7 +86,7 @@ Method: `mutmut` 3.x in a scratch copy outside the repository (`ps_service` or `
 | `ps_service/company_merge/similarity.py` (company_merge)      | 32      | 28 / 28               | 4              | `zip(strict=...)` x3 equivalent (length check runs first); one message text |
 | `ps_service/policy_lifecycle/rules.py` (policy_lifecycle)     | 40      | 28 / 40               | 0              | Closed: `allowed` value and every denial reason now asserted |
 | `ps_service/graph_cleanup/unmerge_locator.py` (graph_cleanup) | 68      | 57 / 61 (+3 timeouts counted as killed) | 7 | Message text x3; default approval id x3 (equivalent: an applied row cannot lack it); `resource_id` filter: fake ignores filters, #269 |
-| `ps_service/restore/schema_allowlist.py` (restore)            | 43      | 36 / 36               | 7              | Message text only (edge label naming, tombstone wording) |
+| `ps_service/restore/schema_allowlist.py` (restore)            | 43      | 36 / 36               | 7              | Message text only (edge label naming, status wording) |
 | `ps_cli/intake_validation.py` (ps-cli)                        | 66      | 37 / 51               | 15             | `cast(...)` strings and `None` x11 and `encoding` default/case x2: equivalent at runtime; location and hint text now asserted |
 | `ps_test_support/serialize_live_markers.py` (ps-test-support), hand mutation | 7 | 4 / 5          | 2              | `_matching_only` equality (#269); `tryfirst` flag equivalent here |
 | `scripts/check_mock_boundaries.py` (scripts), hand mutation   | 101     | 73 / 73               | 28             | #269 |

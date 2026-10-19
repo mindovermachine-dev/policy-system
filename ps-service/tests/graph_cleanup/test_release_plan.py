@@ -106,14 +106,10 @@ def test_an_ungoverned_capability_is_rejected() -> None:
     assert "not governed" in _error(_state(policies=(), governed_set=()))
 
 
-def test_a_nonexistent_capability_is_rejected() -> None:
+def test_releasing_an_absent_capability_is_rejected_as_missing() -> None:
     state = ReleaseState(capability=None, policies=(), governed_set=())
 
     assert "does not exist" in _error(state)
-
-
-def test_a_merged_tombstone_is_rejected() -> None:
-    assert "merged" in _error(_state(capability=_node("merged")))
 
 
 def test_a_non_active_capability_is_rejected() -> None:

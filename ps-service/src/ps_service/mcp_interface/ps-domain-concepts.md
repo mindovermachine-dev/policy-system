@@ -99,7 +99,6 @@ graph LR
     PracticeArea -->|"OWNS"| Policy
     RiskPath -->|"MITIGATED_BY"| Capability
     Capability -->|"GOVERNED_BY"| Policy
-    Capability -->|"MERGED_INTO"| Capability
     Policy -->|"SUPPORTED_BY"| Standard
     Standard -->|"IMPLEMENTED_BY"| Control
     RiskPath -->|"VERIFIED_BY"| Control
@@ -188,7 +187,6 @@ Cardinality reads `S : T`: `S` source nodes per target node, `T` target nodes pe
 | `OWNS` | PracticeArea → Policy | 1..\* : 0..* | — | 3 — classification layer |
 | `MITIGATED_BY` | RiskPath → Capability | 1..\* : 0..* | — | 3 — classification layer |
 | `VERIFIED_BY` | RiskPath → Control | 1..\* : 0..* | — | 3 — classification layer |
-| `MERGED_INTO` | Capability → Capability | 0..1 : 0..* | — | n/a — redirect marker from a `merged` tombstone to its survivor, not a provenance fact; parallels `SUPERSEDED_BY`. Chains (a survivor later absorbed itself) are followed to the terminal Capability. |
 | `GOVERNED_BY` | Capability → Policy | 0..* : 0..1 | — | 3 if Policy is human-authored; 2 (recoverable via `REQUIRES`→`SATISFIED_BY`→`EXPRESSES`) if Policy is internal-SoP-derived. |
 | `SUPPORTED_BY` | Policy → Standard | 1 : 1..* | — | 3 if Standard is human-authored; 2 (recoverable via `GOVERNED_BY` onward) if internal-SoP-derived |
 | `IMPLEMENTED_BY` | Standard → Control | 1 : 0..* | — | 3 if Control is human-authored; 2 (recoverable via `SUPPORTED_BY` onward) if internal-SoP-derived |
@@ -482,7 +480,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 **Description:** A technical or organizational capacity that must exist to fulfill Obligations — e.g. "Data Encryption," "Access Control System," "Security Logging." Capability is the "how" to Obligation's "what": it lets an organization see commonalities across obligations that look different on paper, e.g. recognizing that both "Maintain Security Monitoring" (CRA) and "Ensure Logging of Access" (GDPR) require the same "Security Logging" capability. This is exactly the cross-regulation convergence the identity design below protects — hashing on `name` alone is what lets one Capability be required by many Obligations instead of fragmenting. Capability is the **first canonical, regulation-independent node on the compliance spine**: RegulatoryInstrument, Role, Requirement, and Obligation upstream are all regulation-scoped, and cross-source duties first meet here.
 
-**Lifecycle:** Either pre-populated as part of a canonical capability taxonomy, or minted when an Obligation requires a capability type that doesn't yet exist. A Capability is reused for a further Obligation only when its description covers that Obligation's whole duty — a broader description that already includes the duty counts, and a domain qualifier alone (e.g. "ICT") does not make an otherwise identical Capability distinct; otherwise a more specific Capability is minted. Stable reference data once created — governed by Policy (not yet in this document), potentially across many business contexts. Company Merge never deletes a Capability. A Compliance Officer cleanup merge absorbs a duplicate by tombstoning it (`status` `merged`, `MERGED_INTO` edge to the survivor); Company Merge resolves a Capability id that matches a tombstone to its survivor, so a later ingest or restore that regenerates the absorbed name attaches to the survivor instead of recreating the duplicate, and tombstones are never semantic-match candidates. Reversing the merge (unmerge) returns the tombstone to `active` and removes its `MERGED_INTO` edge.
+**Lifecycle:** Either pre-populated as part of a canonical capability taxonomy, or minted when an Obligation requires a capability type that doesn't yet exist. A Capability is reused for a further Obligation only when its description covers that Obligation's whole duty — a broader description that already includes the duty counts, and a domain qualifier alone (e.g. "ICT") does not make an otherwise identical Capability distinct; otherwise a more specific Capability is minted. Stable reference data once created — governed by Policy (not yet in this document), potentially across many business contexts. Company Merge never deletes a Capability. A Compliance Officer cleanup merge (including one started from a near-miss review) absorbs a duplicate by moving its edges onto the survivor and deleting the absorbed Capability (its full node and edge snapshot is held in the audit trail). The delete leaves a `MergedCapability` marker — a node carrying the absorbed `id` and `merged_into`, the survivor's id — so that a later ingest or restore that regenerates the absorbed Capability resolves it to its survivor (following a chain of markers to the terminal survivor) instead of recreating the duplicate; the marker is never counted as a Capability, is never a semantic-match candidate, never appears in an artifact, and is removed when the merge is reversed. Reversing the merge (unmerge) recreates the absorbed Capability from the audit snapshot and deletes its marker.
 
 **Node label:** `Capability`
 **Identity:** `cap_{slug}_{hash}` (e.g. `cap_data_encryption_a8f3b1`) — content-derived from `name` alone, deliberately excluding any specific requiring Obligation. `ps-domain-concepts.md` describes this ID as derived from "capability name and related obligation content," but that would work against its own stated goal: Capability is required by 0..* Obligations (many-to-many), so baking one Obligation's content into the hash would fragment equivalent capabilities pulled in under different Obligations instead of collapsing them onto the same node. Deriving from `name` alone is what actually delivers cross-regulation convergence.
@@ -496,14 +494,14 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `name` | string | Yes | |
 | `description` | string | No | |
 | `type` | string | No | e.g. `technical`, `organizational` |
-| `status` | enum: `active` \| `deprecated` \| `merged` | No | merged marks a tombstone with an outbound MERGED_INTO edge; no status means active. |
+| `status` | enum: `active` \| `deprecated` | No | No status means active. An absorbed Capability is deleted, not marked. |
 | `confidence` | float, 0.0–1.0 | Yes | Extractor's certainty in reusing or minting this Capability; always recorded. |
 
 <!-- END GENERATED properties:Capability -->
 
 **Property notes.** The Notes cells above are kept short; the full explanations are here.
 
-- `status`: `merged` marks a tombstone: a duplicate absorbed by a Compliance Officer cleanup merge (including one started from a near-miss review), kept in the graph and never deleted. A tombstone has an outbound `MERGED_INTO` edge to its survivor and is not a live Capability. A Capability with no `status` is treated as `active`. Unmerging returns a tombstone to `active`. Queries that count or list live Capabilities filter on `status = 'active'`.
+- `status`: `active` or `deprecated`; a Capability with no `status` is treated as `active`. A duplicate absorbed by a Compliance Officer cleanup merge is deleted, not marked, and leaves a `MergedCapability` marker, so every `Capability` node is a live Capability and no query needs a status filter to exclude absorbed ones.
 - `confidence`: The extracting LLM's own certainty in this decision — whether reusing an existing Capability for an Obligation, or minting a new one because none of the existing candidates fit. Always recorded, unconditionally.
 
 #### Relationships
@@ -515,15 +513,9 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `REQUIRES` (inbound) | Obligation | 0..\* : 1..* | — | See [Obligation → REQUIRES](#obligation). |
 | `COVERS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → COVERS](#practicearea). |
 | `MITIGATED_BY` (inbound) | RiskPath | 0..\* : 1..* | — | See [RiskPath → MITIGATED_BY](#riskpath). |
-| `MERGED_INTO` (inbound) | Capability | 0..* : 0..1 | — | See [Capability → MERGED_INTO](#capability). |
-| `MERGED_INTO` (outbound) | Capability | 0..1 : 0..* | — | Present only on a `merged` tombstone; points at the survivor that absorbed it. |
 | `GOVERNED_BY` (outbound) | Policy | 0..* : 0..1 | — | See [Policy → GOVERNED_BY](#policy). A Capability has exactly one governing Policy at any time, including while its Policy is being superseded. |
 
 <!-- END GENERATED relationships:Capability -->
-
-**Relationship notes.** The Note cells above are kept short; the full explanations are here.
-
-- `MERGED_INTO` (inbound): Tombstones that were absorbed into this Capability.
 
 ---
 

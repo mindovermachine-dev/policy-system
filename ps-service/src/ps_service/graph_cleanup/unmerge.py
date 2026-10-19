@@ -41,7 +41,7 @@ def plan_unmerge(graph: GraphHandle, audit_store: AuditStore, *, merged_id: str)
     Args:
         graph: Handle used to read the live graph; only read queries are issued.
         audit_store: Audit trail searched for the merge row to reverse.
-        merged_id: Id of the merged (tombstoned) Capability or Obligation to restore; must
+        merged_id: Id of the merged (deleted, marked) Capability or Obligation to restore; must
             match the `resource_id` of a recorded merge.
 
     Returns:

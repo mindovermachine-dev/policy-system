@@ -83,7 +83,7 @@ class ArtifactContentRejectedError(Exception):
 
     - `schema_allowlist.validate_serialized_graph`, when a node or edge label or a
       relationship type falls outside its allow-list, a node's `properties["id"]` is missing or
-      not a string, or a `Capability` is a merge tombstone.
+      not a string, or a `Capability` carries a `status` outside the schema enum.
     - `leg_primitives`, when an edge carries an identity other than `TYPE:source->target` or a
       node or edge holds a value the gateway cannot store.
     - `merge_primitives.build_policy_system_leg`, when the manifest's `instrument_id` matches no

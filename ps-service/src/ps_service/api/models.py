@@ -517,8 +517,8 @@ class ResolveReviewResponse(BaseModel):
         review_id: Identifier of the resolved review; non-empty.
         decision: The decision taken, ``"keep-separate"`` or ``"merge"``.
         winner_id: Id of the surviving entity; ``None`` in the responses this route returns.
-        loser_id: Id of the absorbed Capability, which remains as a merged tombstone; ``None``
-            in the responses this route returns.
+        loser_id: Id of the absorbed Capability, which is deleted and replaced by a
+            ``MergedCapability`` marker; ``None`` in the responses this route returns.
         pending_approval_id: Id of the pending passkey approval for a merge; ``None`` otherwise,
             including a merge that still needs its acknowledgment.
         approval_url: URL where the approver signs the merge; ``None`` unless a merge is
@@ -558,8 +558,8 @@ class PendingApprovalStatusResponse(BaseModel):
         review_id: Review the approval belongs to; ``None`` when not reported.
         decision: Decision the approval authorises; ``None`` when not reported.
         winner_id: Id of the surviving Capability once the merge ran; otherwise ``None``.
-        loser_id: Id of the absorbed Capability (kept as a ``merged`` tombstone) once the merge
-            ran; otherwise ``None``.
+        loser_id: Id of the absorbed Capability (deleted behind a ``MergedCapability`` marker)
+            once the merge ran; otherwise ``None``.
         error: Sanitised failure text when the approved merge failed; otherwise ``None``.
     """
 

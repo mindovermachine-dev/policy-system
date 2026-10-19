@@ -68,20 +68,18 @@ __all__ = [
 ]
 
 # The two plain `MATCH`es apply the predicate `_REVIEW_MERGE_SIDES_QUERY` enforces:
-# both referenced nodes still exist under the review's own `kind`, and neither is a `merged`
-# tombstone. Listing a review the merge path would refuse would let it consume a passkey
+# both referenced nodes still exist under the review's own `kind` (a cleanup merge deletes the
+# node it absorbs). Listing a review the merge path would refuse would let it consume a passkey
 # approval and fail as stale at sign time. That failure makes no graph change, so the review
 # would stay listed and every retry would fail the same way.
 #
 # A plain (not OPTIONAL) `MATCH` does the filtering: a review whose node is gone yields no row.
 # The label cannot be a static `:{kind}` because one query spans both kinds, so it is tested
-# with `r.kind IN labels(a)`. `coalesce(status, 'active')` covers a node with no `status`.
+# with `r.kind IN labels(a)`.
 _LIST_PENDING_REVIEWS_QUERY = (
     "MATCH (r:PendingReview) "
     "MATCH (a) WHERE a.id = r.incoming_id AND r.kind IN labels(a) "
-    "AND coalesce(a.status, 'active') <> 'merged' "
     "MATCH (b) WHERE b.id = r.nearest_existing_id AND r.kind IN labels(b) "
-    "AND coalesce(b.status, 'active') <> 'merged' "
     "RETURN r.id, r.kind, r.incoming_id, r.incoming_text, "
     "r.nearest_existing_id, r.nearest_existing_text, r.similarity, r.created_at "
     "ORDER BY r.created_at ASC"
@@ -109,15 +107,13 @@ _GET_REVIEW_QUERY = (
 _FIND_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind"
 
 # One read of a review's kind and its two sides for the near-miss merge request: the review's own
-# ids, whether each side is still a live (non-`merged`) Capability, and each side's `created_at`.
+# ids, whether each side still exists as a Capability, and each side's `created_at`.
 # The label is static because only a Capability review can be merged; a review of another kind
 # still yields its row (with both sides absent), so the caller can name the kind.
 _REVIEW_MERGE_SIDES_QUERY = (
     "MATCH (r:PendingReview {id: $review_id}) "
     "OPTIONAL MATCH (a:Capability {id: r.incoming_id}) "
-    "WHERE coalesce(a.status, 'active') <> 'merged' "
     "OPTIONAL MATCH (b:Capability {id: r.nearest_existing_id}) "
-    "WHERE coalesce(b.status, 'active') <> 'merged' "
     "RETURN r.kind, r.incoming_id, r.nearest_existing_id, "
     "a IS NOT NULL, b IS NOT NULL, a.created_at, b.created_at"
 )
@@ -265,7 +261,7 @@ def list_pending_reviews(single_tenant_graph: GraphHandle) -> tuple[PendingRevie
     Every `PendingReview` node is unresolved by construction, so no status filter is applied,
     although `status` is still written at persist time for anyone inspecting the graph. Unresolved
     is not the same as resolvable: only reviews whose incoming and existing nodes both still
-    exist, under the review's kind and not as `merged` tombstones, are returned. This matches
+    exist, under the review's kind, are returned. This matches
     what the merge path enforces, so a Compliance Officer is never offered a review that would
     fail as stale. An excluded review is not deleted; the next similarity sweep recreates the
     candidate if it still applies.
@@ -440,7 +436,7 @@ def read_review_merge_sides(
 
     Raises:
         StalePendingReviewError: A Capability review whose incoming or existing node no longer
-            exists or is a `merged` tombstone. Nothing is changed.
+            exists (a cleanup merge deletes the node it absorbs). Nothing is changed.
     """
     result = single_tenant_graph.query(_REVIEW_MERGE_SIDES_QUERY, params={"review_id": review_id})
     rows = cast("list[list[object]]", result.result_set)

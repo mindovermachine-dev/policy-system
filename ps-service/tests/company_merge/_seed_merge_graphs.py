@@ -166,6 +166,12 @@ class SingleTenantStore:
     _EMBEDDING_STATE_READ = re.compile(
         r"^MATCH \(n:(\w+)\) WHERE n\.id IN \$ids RETURN n\.id, n\.embedding IS NULL$"
     )
+    _ANY_LABEL_READ = re.compile(
+        r"^UNWIND \$ids AS id MATCH \(n \{id: id\}\) "
+        r"WHERE (NOT n:\w+(?: AND NOT n:\w+)*) RETURN id$"
+    )
+    _EXCLUDED_LABEL = re.compile(r"NOT n:(\w+)")
+    _MARKER_READ = re.compile(r"^MATCH \(m:Merged(\w+)\) RETURN m\.id, m\.merged_into$")
     _INDEX_READ = re.compile(r"^MATCH \(n:(\w+)\) RETURN n\.id, n\.(\w+), n\.embedding$")
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
@@ -177,10 +183,19 @@ class SingleTenantStore:
         return _Result(self._read(q, params))
 
     def _read(self, q: str, params: dict[str, object] | None) -> list[object]:
-        if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
+        any_label = self._ANY_LABEL_READ.match(q)
+        if any_label is not None:
             requested = cast("list[str]", (params or {})["ids"])
-            known = {node_id for _, node_id in self.nodes}
+            excluded = set(self._EXCLUDED_LABEL.findall(any_label.group(1)))
+            known = {node_id for label, node_id in self.nodes if label not in excluded}
             return [[node_id] for node_id in requested if node_id in known]
+        marker_read = self._MARKER_READ.match(q)
+        if marker_read is not None:
+            return [
+                [node_id, props.get("merged_into")]
+                for (label, node_id), props in self.nodes.items()
+                if label == f"Merged{marker_read.group(1)}"
+            ]
         embedding_state = self._EMBEDDING_STATE_READ.match(q)
         if embedding_state is not None:
             requested = cast("list[str]", (params or {})["ids"])
@@ -205,7 +220,7 @@ class SingleTenantStore:
                 for (node_label, node_id), props in self.nodes.items()
                 if node_label == label
             ]
-        if "MERGED_INTO" in q or "MergedObligation" in q:
+        if "MERGED_INTO" in q:
             return []
         return [[0]]
 

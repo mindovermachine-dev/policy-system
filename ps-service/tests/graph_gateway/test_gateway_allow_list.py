@@ -88,6 +88,12 @@ def test_allow_list_is_union_of_domain_schema_and_named_sets() -> None:
     assert {"ReingestProgress", "MergedObligation", "PendingReview"} <= expected_nodes
 
 
+@pytest.mark.parametrize("label", ["MergedCapability", "MergedObligation", "MergedRole"])
+def test_marker_labels_for_every_mergeable_kind_are_accepted(label: str) -> None:
+    assert label in label_allow_list.ALLOWED_NODE_LABELS
+    assert label in exceptions.OPERATIONAL_LABELS
+
+
 def test_allow_list_has_no_runtime_registration_api() -> None:
     public = [name for name in vars(label_allow_list) if not name.startswith("_")]
 

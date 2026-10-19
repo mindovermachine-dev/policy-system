@@ -75,8 +75,8 @@ Read the rows with `ps-list-audit-events`.
   done before `near_misses_check_approval` reports it signed.
 - State what the merge does, in these terms, before proposing it: the
   Capability with the earlier `created_at` survives (a missing one counts
-  earliest, a tie goes to the incoming node). The other is kept as a
-  `merged` tombstone with a `MERGED_INTO` edge to the survivor, so a later
+  earliest, a tie goes to the incoming node). The other is deleted and a
+  `MergedCapability` marker naming the survivor remains, so a later
   ingest or restore resolves to the survivor and raises no new near miss. Its
   `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the survivor, and the
   review record is deleted. The merge is one all-or-nothing write and can be
@@ -153,8 +153,8 @@ Read the rows with `ps-list-audit-events`.
 ### Resolving a review with `merge`
 
 1. **Explain the effect first, in plain language, before proposing or
-   confirming this path with the user:** the tombstone and `MERGED_INTO`
-   redirect, the edges that move, the one-Policy rule, the passkey approval
+   confirming this path with the user:** the deleted Capability and the
+   `MergedCapability` redirect marker, the edges that move, the one-Policy rule, the passkey approval
    and the `ComplianceOfficer` requirement (see Core Principles). Do this even
    if the user already said "merge" — the point is that they have seen the
    effect stated, not merely typed the word.
@@ -179,7 +179,7 @@ Read the rows with `ps-list-audit-events`.
 5. **Follow the approval.** When the user says they have signed, call
    `near_misses_check_approval` with the `pending_approval_id` and report
    `status` (`pending`, `expired` or `signed`). Once `signed`, `winner_id` and
-   `loser_id` name the survivor and the tombstone; a non-null `error` means the
+   `loser_id` name the survivor and the absorbed Capability; a non-null `error` means the
    signature was valid but the merge was not carried out and nothing changed.
    Never retry silently; a new `near_misses_resolve` call creates a new
    approval.

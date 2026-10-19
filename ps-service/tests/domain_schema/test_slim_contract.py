@@ -14,10 +14,10 @@ from ps_service.domain_schema import DOMAIN_SCHEMA, Edge, Node, Presence, render
 
 _GOLDEN = Path(__file__).resolve().parent / "golden" / "slim.txt"
 _LEGEND = (
-    'Capability status "merged" is a tombstone (see MERGED_INTO to its survivor); '
-    'readers filter status = "active" unless they want tombstones.'
+    "A Capability without status is active. An absorbed Capability is deleted, so every "
+    "Capability node is live."
 )
-_MEASURED_SLIM_CHARS = 3512  # `python -m ps_service.domain_schema measure`, after=
+_MEASURED_SLIM_CHARS = 3480  # `python -m ps_service.domain_schema measure`, after=
 _CEILING_FACTOR = 1.25
 _PRESENCE_MARK = {Presence.REQUIRED: " !", Presence.CONDITIONAL: " ?", Presence.OPTIONAL: ""}
 
@@ -99,8 +99,8 @@ def test_slim_output_matches_golden() -> None:
     assert render_slim_schema(DOMAIN_SCHEMA) == _GOLDEN.read_text(encoding="utf-8")
 
 
-def test_legend_states_tombstone_and_active_default() -> None:
-    """The legend explains `merged` tombstones and the `status = "active"` default."""
+def test_legend_states_the_active_default_and_that_an_absorbed_capability_is_deleted() -> None:
+    """The legend states the missing-status default and that an absorbed Capability is gone."""
     lines = render_slim_schema(DOMAIN_SCHEMA).splitlines()
 
     assert _LEGEND in lines

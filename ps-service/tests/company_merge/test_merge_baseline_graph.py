@@ -37,6 +37,7 @@ from ps_service.company_merge.errors import (
     CompanyMergePersistenceError,
 )
 from ps_service.company_merge.governance_import import GovernanceImport
+from ps_service.company_merge.graph_writer import ANY_LABEL_EXISTENCE_READ
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import (
     capability_id,
@@ -318,15 +319,11 @@ class _FakeSingleTenantGraph:
         policy_rows: list[object] | None = None,
         practice_area_rows: list[object] | None = None,
         risk_path_rows: list[object] | None = None,
-        merged_rows: list[object] | None = None,
         gateway_graph: InMemoryGraph | None = None,
     ) -> None:
         # The Obligation nodes a merge submits through the gateway live in the rig's
         # `policy_system` graph; the existence reads below are answered from it too.
         self._gateway_graph = gateway_graph
-        # `[tombstone_id, survivor_id]` rows answering the
-        # tombstone redirect read; empty by default (no tombstones).
-        self._merged_rows: list[object] = merged_rows or []
         self._obligations: dict[str, list[object]] = {}
         for row in obligation_rows or []:
             row_list = list(cast("list[object]", row))
@@ -377,9 +374,7 @@ class _FakeSingleTenantGraph:
         self.calls.append(call)
         if self._gateway_graph is not None and _is_read_call(call):
             self._gateway_graph.events.append(_DEDUP_READ_EVENT)
-        if "MERGED_INTO" in q:
-            return _FakeQueryResult([list(cast("list[object]", row)) for row in self._merged_rows])
-        if "MergedObligation" in q:  # no cleanup-merge obligation markers
+        if "(m:Merged" in q:  # no cleanup-merge obligation markers
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult(self._capability_index_rows())
@@ -408,7 +403,7 @@ class _FakeSingleTenantGraph:
                     if i in table or (state_read.group(1), i) in self._gateway_nodes()
                 ]
             )
-        if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
+        if q == ANY_LABEL_EXISTENCE_READ:
             # `validate_classification_edge_endpoints`'s
             # batched existence check -- answer with whichever requested ids
             # are actually present in ANY of this fake's tracked node tables
@@ -656,10 +651,10 @@ def test_both_dedup_reads_complete_before_any_write_call(
     )
 
     read_positions = [i for i, call in enumerate(single_tenant.calls) if _is_read_call(call)]
-    assert len(read_positions) == 3  # index + tombstone + obligation-marker reads
+    assert len(read_positions) == 4  # index + one marker read per kind
     # A write is a gateway group: its first log append must come after the last read
     events = merge_rig.events
-    assert events.count(_DEDUP_READ_EVENT) == 3
+    assert events.count(_DEDUP_READ_EVENT) == 4
     assert max(i for i, event in enumerate(events) if event == _DEDUP_READ_EVENT) < events.index(
         "log_append"
     )
@@ -2062,57 +2057,3 @@ def _classification_only_baseline_graph(
         risk_path_rows=risk_path_rows or [],
         covers_rows=covers_rows,
     )
-
-
-def test_incoming_capability_matching_a_tombstone_attaches_requires_to_the_survivor(
-    make_emitter: MakeEmitter,
-    merge_rig: MergeRig,
-) -> None:
-    """The baseline regenerates a Capability whose id
-    is a `merged` tombstone in the single-tenant graph. No node is minted for it and the
-    incoming `REQUIRES` edge lands on the survivor.
-    """
-    emitter, _log_path = make_emitter()
-    absorbed_name = "Vulnerability Remediation Process"
-    absorbed_id = capability_id(absorbed_name)
-    survivor_name = "Vulnerability Remediation"
-    survivor_id = capability_id(survivor_name)
-    single_tenant = _FakeSingleTenantGraph(
-        gateway_graph=merge_rig.policy_system,
-        capability_rows=[
-            [absorbed_id, absorbed_name, None],
-            [survivor_id, survivor_name, None],
-        ],
-        merged_rows=[[absorbed_id, survivor_id]],
-    )
-    role_id = "role_h_operator"
-    obligation_text = "Remediate vulnerabilities without delay."
-    obl_id = obligation_id(role_id, obligation_text)
-    baseline = _FakeBaselineGraph(
-        regulatory_instrument_properties={"id": "REG-H", "title": "Test Regulation REG-H"},
-        role_rows=[[role_id, "Operator", 0.9]],
-        requirement_rows=[["REG-H_req_art_1.1", "Must remediate.", "requirement", 0.9, role_id]],
-        obligation_rows=[[obl_id, obligation_text, 0.9]],
-        capability_rows=[[absorbed_id, absorbed_name, 0.8, None]],
-        defines_rows=[[role_id, "Article 1(1)"]],
-        expresses_rows=[["REG-H_req_art_1.1", "Article 1(1)"]],
-        has_rows=[[role_id, obl_id]],
-        satisfied_by_rows=[["REG-H_req_art_1.1", obl_id]],
-        requires_rows=[[obl_id, absorbed_id]],
-    )
-
-    result = merge_baseline_graph(
-        "REG-H",
-        baseline_graph=baseline,
-        single_tenant_graph=single_tenant,
-        embed_model=_MODEL,
-        similarity_threshold=_THRESHOLD,
-        emitter=emitter,
-        **merge_rig.merge_keywords(),
-    )
-
-    assert result.capability_canonical_ids == (survivor_id,)
-    assert _minted_capability_ids(merge_rig) == []
-    requires_writes = single_tenant.edges_of("REQUIRES")
-    assert any(c == {"source_id": obl_id, "target_id": survivor_id} for c in requires_writes)
-    assert not any(c["target_id"] == absorbed_id for c in requires_writes)

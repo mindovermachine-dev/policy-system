@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, cast
 import redis.exceptions
 
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+from ps_service.graph_cleanup.capability_status import active_capability_status
 from ps_service.graph_cleanup.errors import GraphCleanupPersistenceError
 from ps_service.graph_cleanup.models import (
     CapabilityNodeState,
@@ -41,9 +42,9 @@ __all__ = [
     "query_rows",
     "read_active_capabilities",
     "read_capability_merge_state",
-    "read_capability_tombstone",
+    "read_capability_merged",
+    "read_capability_present_without_marker",
     "read_capability_unmerge_state",
-    "read_capability_unmerged",
     "read_governed_by_edge_present",
     "read_obligation_marker",
     "read_obligation_marker_present",
@@ -54,10 +55,10 @@ __all__ = [
     "read_release_state",
 ]
 
-# `merged` tombstones and `deprecated` Capabilities are not merge candidates; a node with no
-# `status` property counts as active.
+# `deprecated` Capabilities are not merge candidates; a node with no `status` property counts as
+# active.
 _ACTIVE_CAPABILITIES_QUERY = (
-    "MATCH (c:Capability) WHERE coalesce(c.status,'active') = 'active' "
+    "MATCH (c:Capability) WHERE c.status IS NULL OR c.status <> 'deprecated' "
     "OPTIONAL MATCH (c)-[:GOVERNED_BY]->(p:Policy) "
     "OPTIONAL MATCH (o:Obligation)-[:REQUIRES]->(c) "
     "RETURN c.id, c.name, c.embedding, p.id, p.title, p.status, count(DISTINCT o)"
@@ -196,7 +197,8 @@ def read_active_capabilities(graph: GraphHandle) -> tuple[CapabilityRecord, ...]
 # not read (it is large, derived, and never part of an audit snapshot).
 _CAPABILITY_NODES_QUERY = (
     "MATCH (c:Capability) WHERE c.id IN $ids "
-    "RETURN c.id, c.name, coalesce(c.status,'active'), c.description, c.type, c.confidence"
+    "RETURN c.id, c.name, c.status, c.description, c.type, c.confidence, "
+    "c.created_at"
 )
 _CAPABILITY_GOVERNORS_QUERY = (
     "MATCH (c:Capability)-[:GOVERNED_BY]->(p:Policy) WHERE c.id IN $ids "
@@ -222,24 +224,26 @@ _INCOMING_EDGE_QUERIES: tuple[tuple[str, str, str], ...] = (
         "MATCH (x:RiskPath)-[:MITIGATED_BY]->(c:Capability) WHERE c.id IN $ids RETURN x.id, c.id",
     ),
 )
-_CAPABILITY_TOMBSTONE_QUERY = (
-    "MATCH (a:Capability {id: $absorbed_id, status: 'merged'})"
-    "-[:MERGED_INTO]->(s:Capability {id: $survivor_id}) RETURN count(a)"
+_CAPABILITY_MARKER_QUERY = (
+    "MATCH (m:MergedCapability {id: $absorbed_id}) WHERE m.merged_into = $survivor_id "
+    "RETURN count(m)"
 )
-_NODE_PROPERTY_NAMES = ("description", "type", "confidence")
+_CAPABILITY_ANY_MARKER_QUERY = "MATCH (m:MergedCapability {id: $capability_id}) RETURN count(m)"
+_CAPABILITY_PRESENT_QUERY = "MATCH (c:Capability {id: $capability_id}) RETURN count(c)"
+_NODE_PROPERTY_NAMES = ("description", "type", "confidence", "created_at")
 
 
 def _node_state(row: list[object]) -> CapabilityNodeState:
     """Build a Capability node state from a node-query row, skipping null properties."""
     properties: dict[str, PropertyValue] = {
         name: cast("PropertyValue", value)
-        for name, value in zip(_NODE_PROPERTY_NAMES, row[3:6], strict=True)
+        for name, value in zip(_NODE_PROPERTY_NAMES, row[3:7], strict=True)
         if value is not None
     }
     return CapabilityNodeState(
         id=cast("str", row[0]),
         name=cast("str", row[1]),
-        status=cast("str", row[2]),
+        status=cast("str | None", row[2]) or active_capability_status(),
         properties=properties,
     )
 
@@ -304,25 +308,32 @@ def read_capability_merge_state(
     )
 
 
-def read_capability_tombstone(graph: GraphHandle, *, survivor_id: str, absorbed_id: str) -> bool:
-    """Whether `absorbed_id` is a `merged` tombstone with a `MERGED_INTO` edge to `survivor_id`.
+def read_capability_merged(graph: GraphHandle, *, survivor_id: str, absorbed_id: str) -> bool:
+    """Whether `absorbed_id` is merged into `survivor_id`: its marker exists and its node is gone.
 
     Args:
         graph: Handle for the policy graph.
-        survivor_id: Id of the expected merge target.
-        absorbed_id: Id of the Capability expected to be the tombstone.
+        survivor_id: Id the `MergedCapability` marker must name in `merged_into`.
+        absorbed_id: Id of the marker, and of the Capability that must no longer exist.
 
     Returns:
-        True when such a tombstone exists, False otherwise.
+        True when such a marker exists and no Capability has the absorbed id, False otherwise.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
     """
     rows = query_rows(
         graph,
-        _CAPABILITY_TOMBSTONE_QUERY,
+        _CAPABILITY_MARKER_QUERY,
         {"survivor_id": survivor_id, "absorbed_id": absorbed_id},
     )
+    marked = bool(rows) and cast("int", rows[0][0]) > 0
+    return marked and not _capability_present(graph, capability_id=absorbed_id)
+
+
+def _capability_present(graph: GraphHandle, *, capability_id: str) -> bool:
+    """Whether a `Capability` node with `capability_id` exists."""
+    rows = query_rows(graph, _CAPABILITY_PRESENT_QUERY, {"capability_id": capability_id})
     return bool(rows) and cast("int", rows[0][0]) > 0
 
 
@@ -560,11 +571,12 @@ def read_governed_by_edge_present(
     return bool(rows) and cast("int", rows[0][0]) > 0
 
 
-# Capability-unmerge reads: the tombstone and survivor, their live redirects, the survivor's
-# current in-scope incoming edges and governing Policies (reusing the merge-state queries), and
-# whether each snapshot endpoint and the restored Policy still exist.
-_CAPABILITY_REDIRECTS_QUERY = (
-    "MATCH (c:Capability)-[:MERGED_INTO]->(t:Capability) WHERE c.id IN $ids RETURN c.id, t.id"
+# Capability-unmerge reads: the survivor and any node under the absorbed id, the
+# `MergedCapability` markers of both ids, the survivor's current in-scope incoming edges and
+# governing Policies (reusing the merge-state queries), and whether each snapshot endpoint and
+# the restored Policy still exist.
+_CAPABILITY_MARKERS_QUERY = (
+    "MATCH (m:MergedCapability) WHERE m.id IN $ids RETURN m.id, m.merged_into"
 )
 _ENDPOINT_QUERIES: tuple[tuple[str, str], ...] = (
     ("REQUIRES", "MATCH (x:Obligation) WHERE x.id IN $ids RETURN x.id"),
@@ -572,18 +584,15 @@ _ENDPOINT_QUERIES: tuple[tuple[str, str], ...] = (
     ("MITIGATED_BY", "MATCH (x:RiskPath) WHERE x.id IN $ids RETURN x.id"),
 )
 _POLICY_EXISTS_QUERY = "MATCH (p:Policy {id: $policy_id}) RETURN p.id"
-_CAPABILITY_UNMERGED_QUERY = (
-    "MATCH (a:Capability {id: $absorbed_id}) WHERE coalesce(a.status,'active') = 'active' "
-    "OPTIONAL MATCH (a)-[m:MERGED_INTO]->(:Capability) RETURN count(DISTINCT a), count(m)"
-)
 
 
 def read_capability_unmerge_state(
     graph: GraphHandle, *, inputs: CapabilityUnmergeInputs
 ) -> CapabilityUnmergeState:
-    """Read the live graph around the tombstone `inputs.absorbed_id` for an unmerge, a pure read.
+    """Read the live graph around the marker `inputs.absorbed_id` for an unmerge, a pure read.
 
-    A missing node is `None`; validation is the planner's job.
+    A missing node is `None` (the survivor) or an absent status (the absorbed side); validation
+    is the planner's job.
 
     Args:
         graph: Handle for the policy graph.
@@ -591,9 +600,10 @@ def read_capability_unmerge_state(
             Policy to restore.
 
     Returns:
-        The live state: both nodes (`None` when absent), redirects, the survivor's incoming
-        edges and governing Policy ids, which snapshot endpoints still exist, and whether the
-        Policy to restore exists.
+        The live state: the absorbed id's status (`None` when no node has it), the survivor
+        (`None` when absent), the markers' targets, the survivor's incoming edges and governing
+        Policy ids, which snapshot endpoints still exist, and whether the Policy to restore
+        exists.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
@@ -603,9 +613,9 @@ def read_capability_unmerge_state(
         cast("str", row[0]): _node_state(row)
         for row in query_rows(graph, _CAPABILITY_NODES_QUERY, params)
     }
-    redirects: dict[str, list[str]] = {}
-    for row in query_rows(graph, _CAPABILITY_REDIRECTS_QUERY, params):
-        redirects.setdefault(cast("str", row[0]), []).append(cast("str", row[1]))
+    markers: dict[str, list[str]] = {}
+    for row in query_rows(graph, _CAPABILITY_MARKERS_QUERY, params):
+        markers.setdefault(cast("str", row[0]), []).append(cast("str", row[1]))
     survivor_params: dict[str, object] = {"ids": [inputs.survivor_id]}
     survivor_edges = [
         EdgeRecord(
@@ -641,10 +651,11 @@ def read_capability_unmerge_state(
     policy_exists = inputs.restore_policy_id is None or bool(
         query_rows(graph, _POLICY_EXISTS_QUERY, {"policy_id": inputs.restore_policy_id})
     )
+    absorbed = nodes.get(inputs.absorbed_id)
     return CapabilityUnmergeState(
-        absorbed=nodes.get(inputs.absorbed_id),
+        absorbed_status=absorbed.status if absorbed is not None else None,
         survivor=nodes.get(inputs.survivor_id),
-        redirects={cap: tuple(targets) for cap, targets in redirects.items()},
+        marker_targets={cap: tuple(targets) for cap, targets in markers.items()},
         survivor_edges=tuple(survivor_edges),
         survivor_policy_ids=survivor_policy_ids,
         existing_endpoints=existing,
@@ -652,21 +663,22 @@ def read_capability_unmerge_state(
     )
 
 
-def read_capability_unmerged(graph: GraphHandle, *, capability_id: str) -> bool:
-    """Whether `capability_id` is an active Capability with no `MERGED_INTO` edge (unmerged).
+def read_capability_present_without_marker(graph: GraphHandle, *, capability_id: str) -> bool:
+    """Whether `capability_id` exists again and no `MergedCapability` marker remains for it.
 
     Args:
         graph: Handle for the policy graph.
         capability_id: Id of the previously absorbed Capability.
 
     Returns:
-        True when it is active and has no `MERGED_INTO` edge, False otherwise.
+        True when the Capability exists and its marker is gone, False otherwise.
 
     Raises:
         GraphCleanupPersistenceError: the graph database could not be read.
     """
-    rows = query_rows(graph, _CAPABILITY_UNMERGED_QUERY, {"absorbed_id": capability_id})
-    return bool(rows) and cast("int", rows[0][0]) > 0 and cast("int", rows[0][1]) == 0
+    rows = query_rows(graph, _CAPABILITY_ANY_MARKER_QUERY, {"capability_id": capability_id})
+    marked = bool(rows) and cast("int", rows[0][0]) > 0
+    return not marked and _capability_present(graph, capability_id=capability_id)
 
 
 # Obligation-unmerge reads: whether the absorbed id exists again, the `MergedObligation` markers of
@@ -677,9 +689,7 @@ _OBLIGATION_MARKERS_QUERY = (
 )
 _ROLE_EXISTS_QUERY = "MATCH (r:Role {id: $role_id}) RETURN r.id"
 _REQUIREMENTS_EXIST_QUERY = "MATCH (q:Requirement) WHERE q.id IN $ids RETURN q.id"
-_CAPABILITY_STATUSES_QUERY = (
-    "MATCH (c:Capability) WHERE c.id IN $ids RETURN c.id, coalesce(c.status,'active')"
-)
+_CAPABILITIES_EXIST_QUERY = "MATCH (c:Capability) WHERE c.id IN $ids RETURN c.id"
 
 
 def read_obligation_unmerge_state(
@@ -740,14 +750,21 @@ def read_obligation_unmerge_state(
                 graph, _REQUIREMENTS_EXIST_QUERY, {"ids": list(inputs.satisfied_by_ids)}
             )
         )
-    statuses: dict[str, str] = {}
+    existing_capabilities: list[str] = []
     if inputs.requires_ids:
-        statuses = {
-            cast("str", row[0]): cast("str", row[1])
+        existing_capabilities = sorted(
+            cast("str", row[0])
             for row in query_rows(
-                graph, _CAPABILITY_STATUSES_QUERY, {"ids": list(inputs.requires_ids)}
+                graph, _CAPABILITIES_EXIST_QUERY, {"ids": list(inputs.requires_ids)}
             )
-        }
+        )
+    gone_capabilities = [c for c in inputs.requires_ids if c not in existing_capabilities]
+    merged_capability_targets: dict[str, list[str]] = {}
+    if gone_capabilities:
+        for row in query_rows(graph, _CAPABILITY_MARKERS_QUERY, {"ids": gone_capabilities}):
+            merged_capability_targets.setdefault(cast("str", row[0]), []).append(
+                cast("str", row[1])
+            )
     survivor = nodes.get(inputs.survivor_id)
     return ObligationUnmergeState(
         absorbed_exists=inputs.absorbed_id in nodes,
@@ -756,6 +773,9 @@ def read_obligation_unmerge_state(
         marker_targets={obl: tuple(targets) for obl, targets in markers.items()},
         role_exists=role_exists,
         existing_requirements=tuple(requirements),
-        capability_statuses=statuses,
+        existing_capabilities=tuple(existing_capabilities),
+        merged_capability_targets={
+            cap: tuple(targets) for cap, targets in merged_capability_targets.items()
+        },
         survivor_edges=tuple(survivor_edges),
     )

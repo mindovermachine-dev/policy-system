@@ -143,7 +143,8 @@ is candidate -> preview -> confirm -> passkey -> result; never skip a step.
 1. **Candidate.** The pair comes from `find-capability-merge-candidates` or from
    the Compliance Officer. A candidate group is a suggestion, never a verdict.
    Ask which Capability **survives** and which is **absorbed**: the absorbed one
-   is kept as a `merged` tombstone pointing at the survivor, so the choice matters.
+   is deleted and replaced by a `MergedCapability` marker pointing at the survivor, so the choice
+   matters.
    Never choose for the user.
 2. **Preview.** Call `merge-capabilities` with `survivor_id` and `absorbed_id`. This
    call never edits the graph. It returns `preview` (`edges_to_move` per class —
@@ -196,7 +197,6 @@ Named states for `merge-capabilities`, never collapsed into each other:
 | the gate and graph errors listed in the discovery table above                                    | the same named states as discovery                                                                                                                           |
 | `error: a capability cannot be merged into itself`                                               | "Same node" — pick two different Capabilities                                                                                                                |
 | `error: the survivor capability does not exist` (or `absorbed`)                                  | "Capability not found" — check the id                                                                                                                        |
-| `error: ... is a merged tombstone and cannot be merged`                                          | "Already merged" — a tombstone cannot be a side of a merge                                                                                                   |
 | `error: ... is not active`                                                                       | "Not active" — only active Capabilities can be merged                                                                                                        |
 | `error: cannot merge: capability ... is governed by policy ... and capability ... by policy ...` | "Different policies" — nothing was created; relay both policies and the release-governance step, or the no-completion-path statement when neither is a draft |
 | `acknowledgment_required: true` (no approval created)                                            | "Acknowledgment needed" — present the governance change and ask; do not repeat the call until the officer agrees                                             |
@@ -215,9 +215,9 @@ roles before creating any approval. The flow is candidate -> preview -> confirm 
 passkey -> result; never skip a step.
 
 1. **Candidate.** The pair comes from `find-duplicate-obligations` or from the Compliance
-   Officer. Ask which Obligation **survives** and which is **absorbed**. Unlike a
-   Capability merge the absorbed Obligation is **deleted**, not kept as a tombstone, so
-   say so plainly. Never choose for the user.
+   Officer. Ask which Obligation **survives** and which is **absorbed**. The
+   absorbed Obligation is **deleted** and leaves a `MergedObligation` marker, exactly as an
+   absorbed Capability leaves a `MergedCapability` marker, so say so plainly. Never choose for the user.
 2. **Preview.** Call `merge-obligations` with `survivor_id` and `absorbed_id`. This call
    never edits the graph. It returns `preview` (`role_id` and `role_name`, `edges_to_move`
    with the `satisfied_by` requirement ids and `requires` capability ids that will union

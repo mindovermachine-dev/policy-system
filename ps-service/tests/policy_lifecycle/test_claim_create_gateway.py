@@ -167,15 +167,16 @@ def test_a_capability_that_becomes_governed_after_the_pre_read_refuses_the_claim
     _assert_refused_without_a_trace(lifecycle_rig, position)
 
 
-def test_a_capability_that_becomes_merged_after_the_pre_read_refuses_the_claim_and_logs_nothing(
+def test_a_capability_absorbed_by_a_merge_after_the_pre_read_refuses_the_claim_and_logs_nothing(
     lifecycle_rig: LifecycleRig,
 ) -> None:
-    """A tombstone is not a governable Capability."""
+    """An absorbed Capability no longer exists, so it cannot be governed."""
     _seed_caps(lifecycle_rig, legacy_edges=True)
     position = lifecycle_rig.store.last_position("policy_system")
 
     def _merge() -> None:
-        lifecycle_rig.graph.nodes[("Capability", "cap_b")]["status"] = "merged"
+        del lifecycle_rig.graph.nodes[("Capability", "cap_b")]
+        lifecycle_rig.graph.seed_node(("MergedCapability",), "cap_b", {"merged_into": "cap_a"})
 
     with pytest.raises(PolicyCapabilityAlreadyGovernedError):
         _claim(

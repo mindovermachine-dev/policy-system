@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from ps_service.graph_gateway.models import Primitive
 
 __all__ = [
+    "ANY_LABEL_EXISTENCE_READ",
     "backfill_canonical_embeddings",
     "build_obligation_primitives",
     "build_practice_area_and_risk_path_primitives",
@@ -79,6 +80,13 @@ __all__ = [
     "unresolved_classification_endpoint_ids",
     "validate_classification_edge_endpoints",
 ]
+
+# Which of `$ids` exist as a node under any label. A `Merged<Kind>` marker carries the id of a
+# node that no longer exists, so it never counts; one `AND NOT` per marker label.
+ANY_LABEL_EXISTENCE_READ = (
+    "UNWIND $ids AS id MATCH (n {id: id}) "
+    "WHERE NOT n:MergedObligation AND NOT n:MergedRole AND NOT n:MergedCapability RETURN id"
+)
 
 _REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
 _ROLE_LABEL = "Role"
@@ -764,7 +772,7 @@ def validate_classification_edge_endpoints(
         return
     rows = read_rows(
         single_tenant_graph,
-        "UNWIND $ids AS id MATCH (n {id: id}) RETURN id",
+        ANY_LABEL_EXISTENCE_READ,
         {"ids": sorted(unresolved_ids)},
     )
     existing_ids = {cast("str", row[0]) for row in rows}

@@ -139,11 +139,9 @@
 | `ps-service/tests/company_merge/test_dedup_exact_match.py` | 6 | keep | Tests for `ps_service.company_merge.dedup`: `read_existing_canonical_index` and |
 | `ps-service/tests/company_merge/test_dedup_false_convergence.py` | 1 | keep | Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`: |
 | `ps-service/tests/company_merge/test_dedup_incoming_embedding_cache.py` | 4 | keep | Tests for caching the INCOMING side of Company Merge's |
-| `ps-service/tests/company_merge/test_dedup_merged_redirect.py` | 5 | keep | Live exact-key redirect over `merged` Capability tombstones. |
 | `ps-service/tests/company_merge/test_dedup_near_miss.py` | 1 | keep | Tests for `ps_service.company_merge.dedup.dedupe_canonical_nodes`: near-miss surfacing -- |
 | `ps-service/tests/company_merge/test_dedup_offline_exact_match.py` | 4 | keep | Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`: |
 | `ps-service/tests/company_merge/test_dedup_offline_in_batch_convergence.py` | 2 | keep | Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`: |
-| `ps-service/tests/company_merge/test_dedup_offline_merged_redirect.py` | 4 | keep | Offline exact-key redirect over `merged` Capability tombstones. |
 | `ps-service/tests/company_merge/test_dedup_offline_no_route_embedding_import.py` | 4 | keep | AST-scan proof that |
 | `ps-service/tests/company_merge/test_dedup_offline_policy_convergence.py` | 3 | keep | Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline` |
 | `ps-service/tests/company_merge/test_dedup_offline_semantic_match.py` | 4 | keep | Tests for `ps_service.company_merge.dedup.resolve_capability_convergence_offline`: |
@@ -166,7 +164,6 @@
 | `ps-service/tests/company_merge/test_graph_writer_primitive_builders.py` | 6 | keep | The pure builders `graph_writer` exposes for Restore. |
 | `ps-service/tests/company_merge/test_identity_reuse.py` | 6 | keep | Identity-reuse proof: |
 | `ps-service/tests/company_merge/test_legacy_reference_characterisation.py` | 7 | keep | The frozen legacy reference and today's production build the same graph. |
-| `ps-service/tests/company_merge/test_legacy_resolve_reference.py` | 13 | keep | The frozen near-miss resolution statements and their interpreter. |
 | `ps-service/tests/company_merge/test_live_capstone.py` | 1 | keep | The live 3-regulation Company Merge capstone. |
 | `ps-service/tests/company_merge/test_live_merge_approval.py` | 8 | keep | Tests for ps_service.company_merge.live_merge_approval. |
 | `ps-service/tests/company_merge/test_live_merge_assertions.py` | 4 | keep | Tests for the 3 snapshot functions in `_live_merge_assertions.py`: |
@@ -188,12 +185,11 @@
 | `ps-service/tests/company_merge/test_merge_writer_failure_matrix.py` | 3 | keep | Every Company Merge stage writer maps a gateway failure the same way. |
 | `ps-service/tests/company_merge/test_models.py` | 25 | keep | Tests for ps_service.company_merge.models. |
 | `ps-service/tests/company_merge/test_no_graph_write_path.py` | 9 | keep | Company Merge holds no write path to FalkorDB. |
-| `ps-service/tests/company_merge/test_obligation_redirect.py` | 15 | keep | Company Merge follows `MergedObligation` markers. |
+| `ps-service/tests/company_merge/test_redirects.py` | 16 | keep | Company Merge follows `Merged<Kind>` markers through one resolver. |
 | `ps-service/tests/company_merge/test_pending_review_get.py` | 3 | keep | `pending_review.get_pending_review`: a single review by id, WITHOUT the resolvable |
 | `ps-service/tests/company_merge/test_pending_review_list.py` | 5 | keep | Tests for `ps_service.company_merge.pending_review.list_pending_reviews`: |
 | `ps-service/tests/company_merge/test_pending_review_persist.py` | 11 | keep | Tests for `ps_service.company_merge.pending_review.persist_pending_reviews`. |
 | `ps-service/tests/company_merge/test_pending_review_resolve.py` | 27 | keep | Tests for `ps_service.company_merge.pending_review.resolve_review`: |
-| `ps-service/tests/company_merge/test_pending_review_resolve_tombstone.py` | 5 | keep | Near-miss merge and `merged` Capability tombstones. |
 | `ps-service/tests/company_merge/test_preconditions.py` | 5 | keep | Tests for `ps_service.company_merge.preconditions`. |
 | `ps-service/tests/company_merge/test_preconditions_live.py` | 1 | keep | Live regression test for `check_obligation_has_edge_cardinality`. |
 | `ps-service/tests/company_merge/test_resolve_failure_matrix.py` | 3 | keep | Both `resolve_review` decisions map a gateway failure like every stage writer. |
@@ -359,7 +355,7 @@
 | `ps-service/tests/graph_cleanup/test_graph_reader_obligation_merge_state.py` | 5 | keep | Reader for `merge-obligations` : pure reads. |
 | `ps-service/tests/graph_cleanup/test_graph_reader_obligation_unmerge_state.py` | 5 | keep | Reader for obligation `unmerge`: live state around a marker. |
 | `ps-service/tests/graph_cleanup/test_graph_reader_release_state.py` | 5 | keep | Reader for `release-capability-governance` : pure reads. |
-| `ps-service/tests/graph_cleanup/test_graph_reader_unmerge_state.py` | 7 | keep | Reader for capability `unmerge`: live state around a tombstone. |
+| `ps-service/tests/graph_cleanup/test_graph_reader_unmerge_state.py` | 7 | keep | Reader for capability `unmerge`: live state around a merge marker. |
 | `ps-service/tests/graph_cleanup/test_graph_submission.py` | 16 | keep | The Graph Cleanup side of the gateway seam. |
 | `ps-service/tests/graph_cleanup/test_graph_writer_capability_merge_live.py` | 11 | keep | Live FalkorDB proof of the FROZEN capability-merge statement. |
 | `ps-service/tests/graph_cleanup/test_graph_writer_obligation_merge_live.py` | 4 | keep | Live FalkorDB proof of the FROZEN obligation-merge statement. |
@@ -558,7 +554,7 @@
 | `ps-service/tests/mcp_interface/test_create_policy_draft_gateway.py` | 4 | keep | The `create-policy-draft` MCP tool writes through the Graph Write Gateway. |
 | `ps-service/tests/mcp_interface/test_cypher_tool.py` | 12 | keep | Tests for the registered `cypher` MCP tool driven through |
 | `ps-service/tests/mcp_interface/test_dev_cli_retired.py` | 3 | keep | Tests that the retired Query Engine dev CLI module is fully gone. |
-| `ps-service/tests/mcp_interface/test_domain_concepts_merged_tombstone.py` | 8 | keep | The domain-concepts document describes the Capability `merged` tombstone. |
+| `ps-service/tests/mcp_interface/test_domain_concepts_marker_text.py` | 6 | keep | The domain-concepts document describes the merge markers. |
 | `ps-service/tests/mcp_interface/test_domain_concepts_resource.py` | 13 | keep | Tests for the `GetDomainConcepts` MCP resource. |
 | `ps-service/tests/mcp_interface/test_domain_concepts_tool.py` | 10 | keep | Tests for the `domain_concepts` MCP tool. |
 | `ps-service/tests/mcp_interface/test_errors.py` | 4 | keep | Tests for `ps_service.mcp_interface.errors`. |
@@ -639,7 +635,7 @@
 | `ps-service/tests/policy_lifecycle/test_audit_actions.py` | 14 | keep | Tests for `ps_service.policy_lifecycle.audit_actions`. |
 | `ps-service/tests/policy_lifecycle/test_audit_consistency.py` | 5 | keep | Cross-action audit-vocabulary consistency check. |
 | `ps-service/tests/policy_lifecycle/test_backfill_gateway.py` | 13 | keep | The governance backfill is a read-resolve-write through the gateway. |
-| `ps-service/tests/policy_lifecycle/test_capability_tombstone.py` | 1 | keep | Policy Lifecycle ignores `merged` Capability tombstones. |
+| `ps-service/tests/policy_lifecycle/test_capability_absorbed_by_a_merge.py` | 2 | keep | Policy Lifecycle treats an absorbed (deleted) Capability as nonexistent. |
 | `ps-service/tests/policy_lifecycle/test_cascade_gateway.py` | 9 | keep | Propose, reject and revert cascade a Policy's tree as ONE gateway group. |
 | `ps-service/tests/policy_lifecycle/test_child_identity.py` | 6 | keep | Child ids derive from the parent and a re-add is idempotent. |
 | `ps-service/tests/policy_lifecycle/test_claim_create_gateway.py` | 12 | keep | Creating a Policy that claims Capabilities is a guarded gateway group. |
@@ -711,9 +707,8 @@
 | `ps-service/tests/restore/test_restore_instrument_draft_governance_live.py` | 2 | keep | Live FalkorDB proof that a restored internal tree is a normal draft. |
 | `ps-service/tests/restore/test_restore_instrument_integrity.py` | 5 | keep | Tests for `ps_service.restore.restore_instrument.restore_instrument`'s |
 | `ps-service/tests/restore/test_restore_instrument_interruption_live.py` | 1 | keep | Live proof that an interruption before the group is submitted leaves nothing behind. |
-| `ps-service/tests/restore/test_restore_instrument_merged_redirect.py` | 2 | keep | Offline restore follows `MERGED_INTO` tombstone redirects. |
 | `ps-service/tests/restore/test_restore_instrument_native_live.py` | 1 | keep | Live FalkorDB proof for `restore_instrument`'s native leg. |
-| `ps-service/tests/restore/test_restore_instrument_obligation_redirect.py` | 4 | keep | Offline restore follows `MergedObligation` markers. |
+| `ps-service/tests/restore/test_restore_redirects.py` | 7 | keep | Offline restore follows `Merged<Kind>` markers. |
 | `ps-service/tests/restore/test_restore_instrument_schema_mismatch.py` | 3 | keep | Tests for `ps_service.restore.restore_instrument.restore_instrument`'s |
 | `ps-service/tests/restore/test_restore_instrument_uses_the_gateway.py` | 4 | keep | `restore_instrument` writes only through the Graph Write Gateway. |
 | `ps-service/tests/restore/test_restore_merge_governance_parity.py` | 1 | keep | Restore and live merge import a policy tree through one function. |

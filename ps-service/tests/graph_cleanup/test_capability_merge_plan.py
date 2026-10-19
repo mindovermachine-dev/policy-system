@@ -102,21 +102,22 @@ def test_before_snapshot_holds_both_nodes_and_every_incident_edge() -> None:
     assert len(before.edges) == 6
 
 
-def test_after_snapshot_moves_edges_without_duplicates_and_adds_the_tombstone() -> None:
+def test_after_snapshot_replaces_the_absorbed_node_with_a_marker() -> None:
     plan = plan_capability_merge(_full_state())
 
     after = plan.after
-    absorbed = next(n for n in after.nodes if n.id == _A)
-    assert absorbed.properties["status"] == "merged"
+    [absorbed] = [n for n in after.nodes if n.id == _A]
+    assert (absorbed.label, absorbed.properties) == ("MergedCapability", {"merged_into": _S})
+    assert [n.label for n in after.nodes if n.label == "Capability"] == ["Capability"]
     edges = {(e.rel_type, e.source_id, e.target_id) for e in after.edges}
     assert len(edges) == len(after.edges)
-    assert ("MERGED_INTO", _A, _S) in edges
+    assert not any(rel == "MERGED_INTO" for rel, _s, _t in edges)
     assert ("REQUIRES", "obl_1", _S) in edges
     assert ("REQUIRES", "obl_2", _S) in edges
     assert ("REQUIRES", "obl_3", _S) in edges
     assert ("COVERS", "pa_1", _S) in edges
     assert ("MITIGATED_BY", "rp_1", _S) in edges
-    assert not any(target == _A and rel != "MERGED_INTO" for rel, _s, target in edges)
+    assert not any(_A in (source, target) for _rel, source, target in edges)
 
 
 def test_state_digest_is_stable_and_changes_when_an_edge_changes() -> None:
@@ -158,15 +159,6 @@ def test_missing_either_side_is_rejected() -> None:
         )
         with pytest.raises(GraphCleanupValidationError, match="does not exist"):
             plan_capability_merge(state)
-
-
-@pytest.mark.parametrize("side", ["survivor", "absorbed"])
-def test_a_merged_tombstone_on_either_side_is_rejected(side: str) -> None:
-    tombstone = _node(_S if side == "survivor" else _A, status="merged")
-    state = _state(survivor=tombstone) if side == "survivor" else _state(absorbed=tombstone)
-
-    with pytest.raises(GraphCleanupValidationError, match="merged"):
-        plan_capability_merge(state)
 
 
 def test_a_deprecated_capability_is_rejected_as_not_active() -> None:

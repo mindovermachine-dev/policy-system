@@ -81,7 +81,7 @@ def test_the_scan_covers_the_company_merge_package() -> None:
         "merge.py",
         "dedup.py",
         "graph_reader.py",
-        "obligation_redirect.py",
+        "redirects.py",
         "falkordb_client.py",
         "governance_import.py",
     } <= names

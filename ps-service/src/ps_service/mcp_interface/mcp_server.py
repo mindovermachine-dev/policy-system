@@ -1805,8 +1805,8 @@ def near_misses_resolve(
     review id signed into it. The merge runs only when the officer opens `approval_url` in a browser
     and signs with a passkey; use `near_misses_check_approval` to learn whether that happened.
 
-    On execution the absorbed Capability stays as a tombstone (`status` `merged`, one `MERGED_INTO`
-    edge to the survivor), so a later ingest or restore resolves to the survivor and raises no new
+    On execution the absorbed Capability is deleted and a `MergedCapability` marker naming the
+    survivor remains, so a later ingest or restore resolves to the survivor and raises no new
     near miss. Its `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the survivor. The change is
     one all-or-nothing graph write, audited first (`capability.merge`, linked to the review id and
     reversible with `unmerge`), that also deletes the `PendingReview`. A Capability keeps at most
@@ -1905,9 +1905,9 @@ def near_misses_check_approval(
         `{"pending_approval_id", "status", "review_id", "decision", "winner_id", "loser_id",
         "error"}`. `status` is `"pending"`, `"expired"` (the signing window elapsed unsigned;
         derived live, never stored) or `"signed"`. `winner_id` (the surviving Capability) and
-        `loser_id` (the absorbed one, kept as a `merged` tombstone) are populated once the signed
-        merge has run, and `error` when the signed approval could not be carried out; otherwise
-        they are `None`.
+        `loser_id` (the absorbed one, deleted behind a `MergedCapability` marker) are populated
+        once the signed merge has run, and `error` when the signed approval could not be carried
+        out; otherwise they are `None`.
 
     Errors (returned as a string beginning `error: `, never raised):
         - No such pending approval is visible to this caller.
@@ -4348,10 +4348,9 @@ def merge_capabilities_tool(
     `check-cleanup-approval` reports the outcome.
 
     On execution the absorbed Capability's `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the
-    survivor with no duplicate edges, and the absorbed node is kept as a tombstone (`status`
-    `merged`,
-    `MERGED_INTO` the survivor). The change is one all-or-nothing graph write that is audited first
-    (`capability.merge`).
+    survivor with no duplicate edges, and the absorbed node is deleted, leaving a
+    `MergedCapability` marker that names the survivor. The change is one all-or-nothing graph write
+    that is audited first (`capability.merge`).
 
     Merge case 1 (neither Capability has a governing Policy) needs nothing more. Case 2 (exactly one
     is
@@ -4393,8 +4392,7 @@ def merge_capabilities_tool(
     Errors (returned as a string beginning `error: `, never raised; no approval is created on any
     error):
         - The caller is not an authenticated Compliance Officer.
-        - A side is the same node as the other, does not exist, is a `merged` tombstone, or is not
-          active.
+        - A side is the same node as the other, does not exist, or is not active.
         - The two Capabilities are governed by different Policies.
         - The policy graph database or the approval store cannot be reached.
         - Any other unexpected failure (a fixed generic message).
@@ -4568,7 +4566,7 @@ def release_capability_governance_tool(
     Errors (returned as a string beginning `error: `, never raised; no approval is created on any
     error):
         - The caller is not an authenticated Compliance Officer.
-        - The Capability does not exist, is a `merged` tombstone, is not active, or is not governed.
+        - The Capability does not exist, is not active, or is not governed.
         - Its governing Policy is not a draft.
         - The policy graph database or the approval store cannot be reached.
         - Any other unexpected failure (a fixed generic message).
@@ -4632,8 +4630,8 @@ def unmerge_tool(
     `check-cleanup-approval`
     reports the outcome.
 
-    Capability merge: the tombstone returns to `active` with its `MERGED_INTO` edge removed, and
-    exactly
+    Capability merge: the deleted Capability is recreated under its original id with its properties
+    and its `MergedCapability` marker is removed, and exactly
     the edges the merge moved off it are restored from the audit snapshot (the survivor keeps any
     edge it
     already had before the merge). Edges added to the survivor since the merge stay in place and are
@@ -4654,7 +4652,7 @@ def unmerge_tool(
     or `obligation.unmerge`, with a before and after snapshot).
 
     Args:
-        merged_id: Id absorbed by `merge-capabilities` (a `merged` Capability tombstone) or by
+        merged_id: Id absorbed by `merge-capabilities` (a deleted Capability) or by
             `merge-obligations` (a deleted Obligation); at least 1 character.
         ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
 

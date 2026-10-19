@@ -94,8 +94,8 @@ def _remove_absorbed(rig: CleanupRig) -> None:
     del rig.graph.nodes[("Capability", ABSORBED)]
 
 
-def _tombstone_absorbed(rig: CleanupRig) -> None:
-    rig.graph.nodes[("Capability", ABSORBED)]["status"] = "merged"
+def _deprecate_absorbed(rig: CleanupRig) -> None:
+    rig.graph.nodes[("Capability", ABSORBED)]["status"] = "deprecated"
 
 
 def _add_requirer(rig: CleanupRig) -> None:
@@ -125,7 +125,7 @@ def _turn_review_into_a_policy_review(rig: CleanupRig) -> None:
     ("change", "reason"),
     [
         pytest.param(_remove_absorbed, "revalidation_rejected", id="capability-gone"),
-        pytest.param(_tombstone_absorbed, "revalidation_rejected", id="status-changed"),
+        pytest.param(_deprecate_absorbed, "revalidation_rejected", id="status-changed"),
         pytest.param(_add_requirer, "state_digest_mismatch", id="edge-count-changed"),
         pytest.param(_govern_survivor, "acknowledgment_missing", id="governing-policy-appeared"),
         pytest.param(_delete_review, "review_missing_or_changed", id="review-deleted"),
@@ -171,7 +171,7 @@ def test_a_review_that_is_gone_or_repointed_is_reported_as_stale(
 
     assert _STALE_TEXT in str(outcome["error"])
     assert ("Capability", ABSORBED) in cleanup_rig.graph.nodes
-    assert cleanup_rig.graph.nodes[("Capability", ABSORBED)].get("status") != "merged"
+    assert cleanup_rig.graph.nodes[("Capability", ABSORBED)].get("status") != "deprecated"
 
 
 def test_a_review_naming_the_pair_in_the_other_order_is_still_the_same_review(

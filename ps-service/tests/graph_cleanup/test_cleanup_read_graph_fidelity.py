@@ -8,8 +8,6 @@ taught) fails loudly instead of returning nothing.
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 
 from graph_cleanup._fakes import ABSORBED, OBL_ABSORBED, OBL_SURVIVOR, ROLE_ID, SURVIVOR
@@ -22,9 +20,9 @@ from graph_cleanup._unmerge_runs import (
 from ps_service.graph_cleanup import graph_reader
 from ps_service.graph_cleanup.graph_reader import (
     read_capability_merge_state,
-    read_capability_tombstone,
+    read_capability_merged,
+    read_capability_present_without_marker,
     read_capability_unmerge_state,
-    read_capability_unmerged,
     read_governed_by_edge_present,
     read_obligation_marker,
     read_obligation_marker_present,
@@ -45,17 +43,20 @@ def test_the_capability_node_read_returns_id_name_status_and_the_scalar_properti
         graph_reader._CAPABILITY_NODES_QUERY, {"ids": [SURVIVOR, "cap_missing"]}
     ).result_set
 
-    assert rows == [[SURVIVOR, "Survivor", "active", "desc", None, 0.9]]
+    assert rows == [[SURVIVOR, "Survivor", "active", "desc", None, 0.9, None]]
 
 
 def test_a_node_without_a_status_reads_as_active(cleanup_rig: CleanupRig) -> None:
     cleanup_rig.seed_capability(ABSORBED)
+    cleanup_rig.seed_capability(SURVIVOR)
 
-    [row] = cleanup_rig.read.query(
-        graph_reader._CAPABILITY_NODES_QUERY, {"ids": [ABSORBED]}
-    ).result_set
+    state = read_capability_merge_state(
+        cleanup_rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED
+    )
 
-    assert cast("list[object]", row)[2] == "active"
+    assert state.absorbed is not None
+    assert state.absorbed.status == "active"
+    assert "coalesce" not in graph_reader._CAPABILITY_NODES_QUERY
 
 
 def test_the_governors_read_returns_one_row_per_governed_by_edge(cleanup_rig: CleanupRig) -> None:
@@ -141,22 +142,21 @@ def test_the_real_capability_merge_read_over_the_double_sees_edges_and_governors
     assert state.governed_sets == {POLICY: (ABSORBED, OTHER_CAPABILITY)}
 
 
-def test_the_tombstone_count_needs_a_merged_node_and_the_merged_into_edge(
+def test_the_merged_read_needs_the_marker_and_the_absence_of_the_node(
     cleanup_rig: CleanupRig,
 ) -> None:
     cleanup_rig.seed_capability_merge_world()
 
-    assert not read_capability_tombstone(
+    assert not read_capability_merged(cleanup_rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
+    cleanup_rig.seed_endpoint("MergedCapability", ABSORBED, merged_into=SURVIVOR)
+    assert not read_capability_merged(  # the node is still there
         cleanup_rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED
     )
-    cleanup_rig.graph.nodes[("Capability", ABSORBED)]["status"] = "merged"
-    assert not read_capability_tombstone(
-        cleanup_rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED
+    del cleanup_rig.graph.nodes[("Capability", ABSORBED)]
+    assert read_capability_merged(cleanup_rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
+    assert not read_capability_merged(
+        cleanup_rig.read, survivor_id="cap_else", absorbed_id=ABSORBED
     )
-    cleanup_rig.seed_edge(
-        ("MERGED_INTO", "Capability", ABSORBED, "Capability", SURVIVOR), legacy=False
-    )
-    assert read_capability_tombstone(cleanup_rig.read, survivor_id=SURVIVOR, absorbed_id=ABSORBED)
 
 
 def test_the_real_obligation_merge_read_over_the_double_sees_roles_edges_and_source_refs(
@@ -220,7 +220,7 @@ def test_the_marker_and_presence_counts_follow_the_graph(cleanup_rig: CleanupRig
     )
 
 
-def test_the_real_capability_unmerge_read_over_the_double_sees_redirects_endpoints_and_policy(
+def test_the_real_capability_unmerge_read_over_the_double_sees_markers_endpoints_and_policy(
     cleanup_rig: CleanupRig,
 ) -> None:
     capability_unmerge_world(cleanup_rig, policy="moved")
@@ -229,11 +229,10 @@ def test_the_real_capability_unmerge_read_over_the_double_sees_redirects_endpoin
 
     state = read_capability_unmerge_state(cleanup_rig.read, inputs=plan.inputs)
 
-    assert state.absorbed is not None
-    assert state.absorbed.status == "merged"
+    assert state.absorbed_status is None
     assert state.survivor is not None
     assert state.survivor.status == "active"
-    assert state.redirects == {ABSORBED: (SURVIVOR,)}
+    assert state.marker_targets == {ABSORBED: (SURVIVOR,)}
     assert {(e.rel_type, e.source_id) for e in state.survivor_edges} == {
         ("REQUIRES", "obl_1"),
         ("REQUIRES", "obl_2"),
@@ -260,18 +259,18 @@ def test_an_endpoint_read_returns_only_nodes_of_its_own_label(cleanup_rig: Clean
     assert rows == {"REQUIRES": [["obl_1"]], "COVERS": [["pa_1"]], "MITIGATED_BY": [["rp_1"]]}
 
 
-def test_the_unmerged_read_counts_an_active_node_and_its_merged_into_edges(
+def test_the_present_without_marker_read_follows_the_node_and_its_marker(
     cleanup_rig: CleanupRig,
 ) -> None:
     capability_unmerge_world(cleanup_rig)
 
-    assert not read_capability_unmerged(cleanup_rig.read, capability_id=ABSORBED)  # a tombstone
-    cleanup_rig.graph.nodes[("Capability", ABSORBED)]["status"] = "active"
-    assert not read_capability_unmerged(
+    assert not read_capability_present_without_marker(cleanup_rig.read, capability_id=ABSORBED)
+    cleanup_rig.seed_capability(ABSORBED, name="Absorbed", status="active")
+    assert not read_capability_present_without_marker(  # still marked
         cleanup_rig.read, capability_id=ABSORBED
-    )  # still redirected
-    del cleanup_rig.graph.edges[next(k for k in cleanup_rig.graph.edges if k[0] == "MERGED_INTO")]
-    assert read_capability_unmerged(cleanup_rig.read, capability_id=ABSORBED)
+    )
+    del cleanup_rig.graph.nodes[("MergedCapability", ABSORBED)]
+    assert read_capability_present_without_marker(cleanup_rig.read, capability_id=ABSORBED)
 
 
 def test_the_real_obligation_unmerge_read_over_the_double_sees_marker_role_and_endpoints(
@@ -289,7 +288,8 @@ def test_the_real_obligation_unmerge_read_over_the_double_sees_marker_role_and_e
     assert state.marker_targets == {OBL_ABSORBED: (OBL_SURVIVOR,)}
     assert state.role_exists is True
     assert state.existing_requirements == ("req_1", "req_2")
-    assert state.capability_statuses == {"cap_1": "active"}
+    assert state.existing_capabilities == ("cap_1",)
+    assert state.merged_capability_targets == {}
     assert {(e.rel_type, e.source_id, e.target_id) for e in state.survivor_edges} == {
         ("SATISFIED_BY", "req_1", OBL_SURVIVOR),
         ("SATISFIED_BY", "req_2", OBL_SURVIVOR),

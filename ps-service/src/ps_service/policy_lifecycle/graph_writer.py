@@ -564,15 +564,15 @@ def read_capability_governors(
 ) -> dict[str, str | None]:
     """Read which Policy, if any, currently governs each of `capability_ids`.
 
-    A pure read. A Capability that does not exist, or is a `merged` tombstone, is absent from the
-    result; an existing but ungoverned one maps to `None`.
+    A pure read. A Capability that does not exist (a cleanup merge deletes the one it absorbs) is
+    absent from the result; an existing but ungoverned one maps to `None`.
 
     Args:
         graph: The single-tenant policy graph handle.
         capability_ids: The Capability ids a fresh draft wants to claim; may be empty.
 
     Returns:
-        `{capability_id: governing_policy_id | None}` for every id that exists and is not merged.
+        `{capability_id: governing_policy_id | None}` for every id that exists.
 
     Raises:
         redis.exceptions.RedisError: the read failed (the dependency is also marked unhealthy).
@@ -583,7 +583,6 @@ def read_capability_governors(
     result = _read_query(
         graph,
         "MATCH (cap:Capability) WHERE cap.id IN $capability_ids "
-        "AND coalesce(cap.status,'active') <> 'merged' "
         "OPTIONAL MATCH (cap)-[:GOVERNED_BY]->(g:Policy) "
         "RETURN cap.id, g.id",
         params={"capability_ids": list(capability_ids)},
@@ -741,10 +740,10 @@ def create_claimed_policy_draft(
     """Mint a draft Policy that CLAIMS `capability_ids`, as one guarded gateway group.
 
     In order: the graph must be caught up; the log position P0 is read; `read_capability_governors`
-    re-resolves every claimed Capability in Python (it exists, is not a `merged` tombstone and has
-    no governing Policy). A claim that no longer holds returns `False` with NOTHING logged, not
-    even a legacy-edge stamp. Only then are the graph's legacy edges stamped (a group with no audit
-    link) and the group submitted with `ExpectedPosition(P0 + stamped)`. A write that landed
+    re-resolves every claimed Capability in Python (it exists and has no governing Policy). A claim
+    that no longer holds returns `False` with NOTHING logged, not even a legacy-edge stamp. Only
+    then are the graph's legacy edges stamped (a group with no audit link) and the group submitted
+    with `ExpectedPosition(P0 + stamped)`. A write that landed
     between the position read and the submit trips that precondition and also returns `False`, with
     nothing of this group logged (a stamp group ahead of it carries no audit link and changes no
     data, and may stay in the log). The position guard is coarser than a statement-level guard: an

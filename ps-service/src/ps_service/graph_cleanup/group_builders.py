@@ -39,7 +39,6 @@ from ps_service.graph_gateway.models import (
     DeleteEdge,
     DeleteNode,
     ExpectedPosition,
-    MergeProperty,
     NodeRef,
     UpsertEdge,
     UpsertNode,
@@ -253,26 +252,27 @@ def capability_merge_guard_holds(
 def build_capability_merge_group(
     state: MergeState, *, survivor_id: str, absorbed_id: str, review_id: str | None = None
 ) -> tuple[Primitive, ...]:
-    """The edit: move the absorbed Capability's edges onto the survivor and tombstone it.
+    """The edit: move the absorbed Capability's edges onto the survivor, mark it, delete it.
 
     In order: every incoming `REQUIRES` / `COVERS` / `MITIGATED_BY` edge is upserted onto the
     survivor (an endpoint already linked collapses into the existing edge, by identity); the
     absorbed side's `GOVERNED_BY` edge is upserted onto the survivor only when the survivor has no
-    governing Policy; the moved edges and the absorbed `GOVERNED_BY` edge are deleted; the
-    absorbed node becomes a `merged` tombstone with a `MERGED_INTO` edge to the survivor. When
-    `review_id` is given, the near-miss `PendingReview` it names is deleted last, in the same group.
+    governing Policy; the `MergedCapability` marker is upserted; the absorbed node is deleted.
+    The marker comes before the `DeleteNode` in the same group, so a delete without a redirect
+    cannot be logged. `DeleteNode` removes every remaining edge of the absorbed Capability, so no
+    per-edge delete is named. When `review_id` is given, the near-miss `PendingReview` it names
+    is deleted last, in the same group.
 
     Args:
         state: Merge state the edges and Policies are taken from.
         survivor_id: Id of the Capability that remains.
-        absorbed_id: Id of the Capability that is tombstoned.
+        absorbed_id: Id of the Capability that is deleted.
         review_id: Id of the `PendingReview` this merge resolves; None when there is none.
 
     Returns:
         The ordered primitives of the group.
     """
     survivor = NodeRef(label="Capability", id=survivor_id)
-    absorbed = NodeRef(label="Capability", id=absorbed_id)
     moved = [
         (rel_type, source_label, source_id)
         for rel_type, source_label in EDGE_CLASSES
@@ -298,35 +298,12 @@ def build_capability_merge_group(
             )
             for policy in governing_absorbed
         )
-    primitives.extend(
-        DeleteEdge(
-            type=rel_type,
-            identity=edge_identity(rel_type, source_id, absorbed_id),
-            source=NodeRef(label=source_label, id=source_id),
-            target=absorbed,
-        )
-        for rel_type, source_label, source_id in moved
-    )
-    primitives.extend(
-        DeleteEdge(
-            type="GOVERNED_BY",
-            identity=edge_identity("GOVERNED_BY", absorbed_id, policy.id),
-            source=absorbed,
-            target=NodeRef(label="Policy", id=policy.id),
-        )
-        for policy in governing_absorbed
-    )
     primitives.append(
-        MergeProperty(label="Capability", id=absorbed_id, properties={"status": "merged"})
-    )
-    primitives.append(
-        UpsertEdge(
-            type="MERGED_INTO",
-            identity=edge_identity("MERGED_INTO", absorbed_id, survivor_id),
-            source=absorbed,
-            target=survivor,
+        UpsertNode(
+            label="MergedCapability", id=absorbed_id, properties={"merged_into": survivor_id}
         )
     )
+    primitives.append(DeleteNode(label="Capability", id=absorbed_id))
     if review_id is not None:
         primitives.append(DeleteNode(label="PendingReview", id=review_id))
     return tuple(primitives)
@@ -342,14 +319,14 @@ def write_capability_merge(
     expected: ExpectedCounts,
     review_id: str | None = None,
 ) -> None:
-    """Tombstone `absorbed_id` into `survivor_id` as one gateway group.
+    """Merge `absorbed_id` into `survivor_id`, leaving a marker, as one gateway group.
 
     Args:
         graph: Handle used for the guard read.
         target: Gateway and graph the group goes to.
         audit_event_id: Id of the `applied` audit row the group is linked to.
         survivor_id: Id of the Capability that remains.
-        absorbed_id: Id of the Capability that is tombstoned.
+        absorbed_id: Id of the Capability that is deleted.
         expected: Edge counts and Policy ids/statuses captured in the preview.
         review_id: Id of the near-miss `PendingReview` deleted in the same group; None when none.
 
@@ -547,25 +524,24 @@ def capability_unmerge_guard_holds(
 ) -> bool:
     """Whether a fresh read still matches the state the unmerge was planned against.
 
-    The absorbed node is a `merged` tombstone with a `MERGED_INTO` edge to the survivor, the
-    survivor is active, every endpoint to restore exists, every edge to remove is still on the
+    The absorbed Capability does not exist and its `MergedCapability` marker names the survivor,
+    the survivor is active, every endpoint to restore exists, every edge to remove is still on the
     survivor, the Policy to restore exists and, when the merge moved the policy edge, the survivor
     holds exactly one `GOVERNED_BY` edge to it.
 
     Args:
         state: Fresh unmerge state from `read_capability_unmerge_state`.
         write: The planned restore and remove parameters.
-        absorbed_id: Id of the tombstoned Capability.
+        absorbed_id: Id of the deleted Capability.
         survivor_id: Id of the Capability it was merged into.
 
     Returns:
         True when the guard holds and the unmerge may proceed; False when the state moved.
     """
     if (
-        state.absorbed is None
+        state.absorbed_status is not None
         or state.survivor is None
-        or state.absorbed.status != "merged"
-        or survivor_id not in state.redirects.get(absorbed_id, ())
+        or survivor_id not in state.marker_targets.get(absorbed_id, ())
         or state.survivor.status != "active"
     ):
         return False
@@ -588,17 +564,19 @@ def capability_unmerge_guard_holds(
 def build_capability_unmerge_group(
     write: CapabilityUnmergeWrite, *, absorbed_id: str, survivor_id: str
 ) -> tuple[Primitive, ...]:
-    """The edit: put the moved edges back on the absorbed Capability and un-tombstone it.
+    """The edit: recreate the absorbed Capability with its edges and delete the marker.
 
-    In order: every planned edge is upserted back onto the absorbed node; ONLY the planned edges
-    are deleted from the survivor (an edge it gained since the merge is never named); the
-    `GOVERNED_BY` edge to the restored Policy is upserted on the absorbed node and deleted from
-    the survivor when the merge had moved it; the node becomes `active` and its `MERGED_INTO` edge
-    is deleted.
+    In order: the node is upserted by id with its original properties (so replaying the logged
+    group, or a retry of a half-applied append, finds it already there instead of adding a
+    second copy); every planned edge is upserted back onto it; ONLY the planned edges are deleted
+    from the survivor (an edge it gained since the merge is never named); the `GOVERNED_BY` edge
+    to the restored Policy is upserted on it and deleted from the survivor when the merge had
+    moved it; the `MergedCapability` marker is deleted last, in the same group, so a recreate
+    without the marker removal cannot be logged.
 
     Args:
-        write: The planned restore and remove parameters.
-        absorbed_id: Id of the tombstoned Capability to restore.
+        write: The planned restore and remove parameters and the node's properties.
+        absorbed_id: Id of the deleted Capability to recreate.
         survivor_id: Id of the Capability it was merged into.
 
     Returns:
@@ -608,6 +586,9 @@ def build_capability_unmerge_group(
     absorbed = NodeRef(label="Capability", id=absorbed_id)
     classes = _unmerge_ids(write)
     primitives: list[Primitive] = [
+        UpsertNode(label="Capability", id=absorbed_id, properties=dict(write.properties))
+    ]
+    primitives.extend(
         UpsertEdge(
             type=rel_type,
             identity=edge_identity(rel_type, source_id, absorbed_id),
@@ -616,7 +597,7 @@ def build_capability_unmerge_group(
         )
         for rel_type, label, restore_ids, _ in classes
         for source_id in restore_ids
-    ]
+    )
     primitives.extend(
         DeleteEdge(
             type=rel_type,
@@ -646,17 +627,7 @@ def build_capability_unmerge_group(
                     target=policy,
                 )
             )
-    primitives.append(
-        MergeProperty(label="Capability", id=absorbed_id, properties={"status": "active"})
-    )
-    primitives.append(
-        DeleteEdge(
-            type="MERGED_INTO",
-            identity=edge_identity("MERGED_INTO", absorbed_id, survivor_id),
-            source=absorbed,
-            target=survivor,
-        )
-    )
+    primitives.append(DeleteNode(label="MergedCapability", id=absorbed_id))
     return tuple(primitives)
 
 
@@ -679,9 +650,9 @@ def write_capability_unmerge(
         May log an edge-identity stamp group, then submits one group through the gateway.
 
     Raises:
-        GraphCleanupStaleStateError: the guard did not hold (the tombstone or its redirect, the
-            survivor's status, an endpoint, an edge or the Policy differs from the plan) or the
-            log position moved; nothing of the unmerge group was logged.
+        GraphCleanupStaleStateError: the guard did not hold (the marker, the absorbed id existing
+            again, the survivor's status, an endpoint, an edge or the Policy differs from the
+            plan) or the log position moved; nothing of the unmerge group was logged.
         GraphCleanupPersistenceError: the graph could not be read or the gateway failed.
     """
     absorbed_id, survivor_id = plan.preview.merged_id, plan.preview.survivor_id
@@ -719,7 +690,7 @@ def obligation_unmerge_guard_holds(
     """Whether the marker, the Obligation's absence and every endpoint to link still hold.
 
     The `MergedObligation` marker points at the survivor, the Obligation does not exist again, the
-    Role exists, every Requirement exists and every Capability exists and is not a tombstone.
+    Role exists, every Requirement exists and every Capability exists.
 
     Args:
         state: Fresh unmerge state from `read_obligation_unmerge_state`.
@@ -735,8 +706,7 @@ def obligation_unmerge_guard_holds(
         and not state.absorbed_exists
         and state.role_exists
         and set(write.satisfied_by_ids) <= set(state.existing_requirements)
-        and set(write.requires_ids) <= set(state.capability_statuses)
-        and all(state.capability_statuses[c] != "merged" for c in write.requires_ids)
+        and set(write.requires_ids) <= set(state.existing_capabilities)
     )
 
 
@@ -810,7 +780,7 @@ def write_obligation_unmerge(
     Raises:
         GraphCleanupStaleStateError: the guard did not hold (the marker is gone or re-pointed, the
             Obligation exists again, the Role, a Requirement or a Capability is gone or a
-            Capability is a tombstone) or the log position moved; nothing of the unmerge group
+            Capability has been merged away) or the log position moved; nothing of the unmerge group
             was logged.
         GraphCleanupPersistenceError: the graph could not be read or the gateway failed.
     """

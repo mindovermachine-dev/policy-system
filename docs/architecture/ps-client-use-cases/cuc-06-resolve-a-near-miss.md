@@ -35,8 +35,8 @@ reversible.
 2. **Open one.** Selecting a review renders a **comparison artifact**: the two entities
    side by side, and the effect of each decision previewed explicitly before anything is
    asked — keep-separate deletes only the review record and touches neither entity;
-   merge is the CUC-07 Capability merge: the loser stays as a `merged` tombstone with one
-   `MERGED_INTO` edge to the winner, its `REQUIRES`, `COVERS` and `MITIGATED_BY` edges
+   merge is the CUC-07 Capability merge: the loser is deleted behind a `MergedCapability`
+   marker naming the winner, its `REQUIRES`, `COVERS` and `MITIGATED_BY` edges
    move to the winner, and the review record is deleted in the same write. The preview
    names the winner (the Capability with the earlier `created_at`; a tie goes to the
    incoming node), the edge counts and the Policy case. The controls live on the
@@ -77,8 +77,8 @@ reversible.
 - **Passkey ceremony on merge only** — the review/resolve instance of the lifecycle-only
   ceremony rule; the signing summary binds to the exact pair and review state.
   Keep-separate never triggers one.
-- **Reversible.** `unmerge` (CUC-07) restores the tombstone from the `capability.merge`
-  snapshot. It does not recreate the deleted review: the pair is not offered for review
+- **Reversible.** `unmerge` (CUC-07) recreates the loser from the `capability.merge`
+  snapshot and removes its marker. It does not recreate the deleted review: the pair is not offered for review
   again unless a later ingest or restore detects it anew.
 - Resolving clears the review's Inbox item. No new notifications are emitted.
 

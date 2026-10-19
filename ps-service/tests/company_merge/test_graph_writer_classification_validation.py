@@ -18,8 +18,10 @@ from typing import cast
 
 import pytest
 
+from company_merge._seed_merge_graphs import SingleTenantStore
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.graph_writer import (
+    ANY_LABEL_EXISTENCE_READ,
     classification_write_counts,
     validate_classification_edge_endpoints,
 )
@@ -53,7 +55,7 @@ class _FakeGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
-        assert q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id"
+        assert q == ANY_LABEL_EXISTENCE_READ
         assert params is not None
         requested_ids = cast("list[str]", params["ids"])
         return _FakeQueryResult([[rid] for rid in requested_ids if rid in self._existing_ids])
@@ -203,3 +205,12 @@ def _pa(node_id: str) -> BaselineNode:
 
 def _rp(node_id: str) -> BaselineNode:
     return BaselineNode(id=node_id, properties={"name": node_id, "status": "active"})
+
+
+def test_endpoint_that_only_a_merge_marker_holds_is_reported_missing() -> None:
+    """An absorbed id has a marker but no node, so a classification edge cannot point at it."""
+    graph = SingleTenantStore(nodes={("MergedObligation", "obl_gone"): {"merged_into": "obl_s"}})
+    edge = BareEdge(relationship_type="COVERS", source_id="obl_gone", target_id="cap_x")
+
+    with pytest.raises(CompanyMergePersistenceError, match="obl_gone"):
+        validate_classification_edge_endpoints(graph, (edge,), {"cap_x": "cap_x"})

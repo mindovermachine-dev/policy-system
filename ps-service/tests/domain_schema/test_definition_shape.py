@@ -6,7 +6,7 @@ from ps_service.domain_schema import DOMAIN_SCHEMA
 
 _CLASSIFICATION_EDGES = ("COVERS", "OWNS", "MITIGATED_BY", "VERIFIED_BY")
 _POLICY_SUPERSEDED_BY = ("SUPERSEDED_BY", "Policy", "Policy")
-_EXPECTED_EDGE_COUNT = 16
+_EXPECTED_EDGE_COUNT = 15
 _EXPECTED_LABEL_COUNT = 10
 
 
@@ -17,7 +17,7 @@ def test_policy_superseded_by_edge_exists() -> None:
     assert str(edges[_POLICY_SUPERSEDED_BY].cardinality) == "0..1 : 0..1"
 
 
-def test_schema_has_sixteen_edges_and_ten_labels() -> None:
+def test_schema_has_fifteen_edges_and_ten_labels() -> None:
     """The full vocabulary, no duplicates by (type, source, target)."""
     assert len(DOMAIN_SCHEMA.edges) == _EXPECTED_EDGE_COUNT
     assert len(DOMAIN_SCHEMA.nodes) == _EXPECTED_LABEL_COUNT

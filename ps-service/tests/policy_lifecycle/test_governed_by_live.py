@@ -274,11 +274,12 @@ def test_repoint_of_a_policy_with_no_standards_still_sets_its_status(
     assert _governors(graph)["cap_live_a"] == ["pol_bare_fork"]
 
 
-def test_fresh_create_naming_a_merged_tombstone_writes_nothing_and_reads_it_as_absent(
+def test_fresh_create_naming_an_absorbed_capability_writes_nothing_and_reads_it_as_absent(
     live: LiveGraph,
 ) -> None:
     graph = live.handle
-    graph.query("MATCH (c:Capability {id: 'cap_live_a'}) SET c.status = 'merged'")
+    graph.query("MATCH (c:Capability {id: 'cap_live_a'}) DETACH DELETE c")
+    graph.query("CREATE (:MergedCapability {id: 'cap_live_a', merged_into: 'cap_live_b'})")
 
     assert read_capability_governors(graph, _CAPS) == {"cap_live_b": None}
     written = _claim(live, "pol_tomb", "Tomb")

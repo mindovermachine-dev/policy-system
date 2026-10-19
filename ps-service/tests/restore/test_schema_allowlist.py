@@ -15,9 +15,10 @@ from typing import get_args
 
 import pytest
 
-from ps_service.domain_schema import DOMAIN_SCHEMA
+from ps_service.domain_schema import DOMAIN_SCHEMA, EnumType
 from ps_service.domain_schema.vocabulary_exceptions import (
     CELLAR_ELI_NATIVE_LABELS,
+    MERGE_MARKER_LABELS,
     SYSTEM_MINTED_EDGE_TYPES,
     find_unpinned,
 )
@@ -392,21 +393,35 @@ def test_validate_serialized_graph_makes_no_graph_query_calls_before_raising() -
         )
 
 
-def test_merged_into_is_in_no_allow_list() -> None:
-    """Tombstones and redirects are never part of an artifact vocabulary."""
+def test_merged_into_is_not_a_schema_edge_and_in_no_allow_list() -> None:
+    """The redirect pointer no longer exists: a merge leaves a marker node, never an edge."""
+    assert "MERGED_INTO" not in _SCHEMA_EDGE_TYPES
     assert "MERGED_INTO" not in BASELINE_ALLOWED_RELATIONSHIP_TYPES
     assert "MERGED_INTO" not in NATIVE_ALLOWED_RELATIONSHIP_TYPES
-    assert "MergedObligation" not in BASELINE_ALLOWED_LABELS
-    assert "MergedObligation" not in NATIVE_ALLOWED_LABELS
 
 
-@pytest.mark.parametrize("status", ["merged"])
-def test_validate_serialized_graph_rejects_a_merged_capability_tombstone(status: str) -> None:
+@pytest.mark.parametrize("marker", sorted(MERGE_MARKER_LABELS))
+def test_a_merge_marker_label_is_in_no_allow_list(marker: str) -> None:
+    assert marker not in BASELINE_ALLOWED_LABELS
+    assert marker not in NATIVE_ALLOWED_LABELS
+
+
+def test_the_capability_status_values_are_the_schema_enum() -> None:
+    """The hand-written literal is pinned to the schema's `Capability.status` enum."""
+    [capability] = [node for node in DOMAIN_SCHEMA.nodes if node.label == "Capability"]
+    [status] = [p for p in capability.properties if p.name == "status"]
+    assert isinstance(status.type, EnumType)
+
+    assert frozenset(status.type.values) == schema_allowlist.CAPABILITY_STATUSES
+
+
+@pytest.mark.parametrize("status", ["merged", "bogus"])
+def test_a_capability_with_a_status_outside_the_enum_is_rejected(status: str) -> None:
     graph = _graph(
         nodes=(SerializedNode(label="Capability", properties={"id": "cap_x", "status": status}),)
     )
 
-    with pytest.raises(ArtifactContentRejectedError, match=r"merged"):
+    with pytest.raises(ArtifactContentRejectedError, match=rf"unsupported status '{status}'"):
         validate_serialized_graph(
             graph,
             allowed_labels=BASELINE_ALLOWED_LABELS,
@@ -415,7 +430,7 @@ def test_validate_serialized_graph_rejects_a_merged_capability_tombstone(status:
 
 
 @pytest.mark.parametrize("status", ["active", "deprecated", None])
-def test_validate_serialized_graph_accepts_a_non_merged_capability(status: str | None) -> None:
+def test_a_capability_with_an_enum_status_or_none_is_accepted(status: str | None) -> None:
     properties: dict[str, SerializedPropertyValue] = {"id": "cap_x"}
     if status is not None:
         properties["status"] = status

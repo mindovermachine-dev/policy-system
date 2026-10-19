@@ -86,7 +86,8 @@ def _live(**overrides: object) -> ObligationUnmergeState:
         "marker_targets": {_A: (_S,)},
         "role_exists": True,
         "existing_requirements": ("req_1", "req_2"),
-        "capability_statuses": {"cap_1": "active"},
+        "existing_capabilities": ("cap_1",),
+        "merged_capability_targets": {},
         "survivor_edges": (_sat("req_1", _S), _sat("req_2", _S), _req(_S, "cap_1")),
     }
     return ObligationUnmergeState.model_validate({**base, **overrides})
@@ -131,7 +132,7 @@ def test_edges_added_to_the_survivor_since_the_merge_stay_and_are_listed() -> No
     added = _req(_S, "cap_new")
     live = _live(
         survivor_edges=(_sat("req_1", _S), _sat("req_2", _S), _req(_S, "cap_1"), added),
-        capability_statuses={"cap_1": "active", "cap_new": "active"},
+        existing_capabilities=("cap_1", "cap_new"),
     )
 
     plan = plan_obligation_unmerge(derive_obligation_unmerge_inputs(_details()), live)
@@ -223,11 +224,16 @@ def test_a_missing_requirement_is_a_conflict_listing_it() -> None:
         plan_obligation_unmerge(inputs, _live(existing_requirements=("req_2",)))
 
 
-@pytest.mark.parametrize("statuses", [{}, {"cap_1": "merged"}])
-def test_a_capability_endpoint_that_is_gone_or_a_tombstone_is_a_conflict(
-    statuses: dict[str, str],
-) -> None:
+def test_a_capability_endpoint_that_is_gone_is_a_conflict() -> None:
     inputs = derive_obligation_unmerge_inputs(_details())
 
-    with pytest.raises(GraphCleanupValidationError, match="cap_1"):
-        plan_obligation_unmerge(inputs, _live(capability_statuses=statuses))
+    with pytest.raises(GraphCleanupValidationError, match="capability 'cap_1' no longer exists"):
+        plan_obligation_unmerge(inputs, _live(existing_capabilities=()))
+
+
+def test_a_capability_endpoint_merged_away_is_a_conflict_naming_its_survivor() -> None:
+    inputs = derive_obligation_unmerge_inputs(_details())
+    live = _live(existing_capabilities=(), merged_capability_targets={"cap_1": ("cap_winner",)})
+
+    with pytest.raises(GraphCleanupValidationError, match="merged into 'cap_winner'"):
+        plan_obligation_unmerge(inputs, live)

@@ -1,7 +1,7 @@
 PS domain schema (generated from code; prose lives in the psdomain://concepts resource)
 Every node has a string id. Property marks: ! required, ? conditional, none optional.
 Cardinality "S : T": S source nodes per target node, T target nodes per source node.
-Capability status "merged" is a tombstone (see MERGED_INTO to its survivor); readers filter status = "active" unless they want tombstones.
+A Capability without status is active. An absorbed Capability is deleted, so every Capability node is live.
 
 NODES
 RegulatoryInstrument
@@ -42,7 +42,7 @@ Capability
   name: string !
   description: string
   type: string
-  status: enum(active|deprecated|merged)
+  status: enum(active|deprecated)
   confidence: float[0.0..1.0] !
 Policy
   title: string !
@@ -100,7 +100,6 @@ EDGES
 (:PracticeArea)-[:OWNS]->(:Policy)  1..* : 0..*
 (:RiskPath)-[:MITIGATED_BY]->(:Capability)  1..* : 0..*
 (:RiskPath)-[:VERIFIED_BY]->(:Control)  1..* : 0..*
-(:Capability)-[:MERGED_INTO]->(:Capability)  0..1 : 0..*
 (:Capability)-[:GOVERNED_BY]->(:Policy)  0..* : 0..1
 (:Policy)-[:SUPPORTED_BY]->(:Standard)  1 : 1..*
 (:Standard)-[:IMPLEMENTED_BY]->(:Control)  1 : 0..*

@@ -79,14 +79,15 @@ def test_no_duplicates_yields_no_groups() -> None:
     assert find_capability_merge_candidates(graph).groups == ()
 
 
-def test_the_read_excludes_merged_tombstones_and_includes_null_status() -> None:
+def test_deprecated_capability_is_not_a_merge_candidate() -> None:
     graph = _Graph([])
 
     find_capability_merge_candidates(graph)
 
     assert len(graph.queries) == 1
     query = graph.queries[0]
-    assert "coalesce(c.status,'active') = 'active'" in query
+    assert "WHERE c.status IS NULL OR c.status <> 'deprecated'" in query
+    assert "coalesce" not in query
     assert not any(kw in query for kw in ("MERGE ", "CREATE", "SET ", "DELETE"))
 
 

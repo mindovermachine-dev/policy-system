@@ -118,11 +118,11 @@ class RigReadHandle(SingleTenantStore):
         ]
 
     def _resolvable_review_rows(self) -> list[object]:
-        """The list read: reviews whose two nodes exist, are not `merged`, oldest first."""
+        """The list read: reviews whose two nodes exist, oldest first."""
 
         def _live(kind: object, node_id: object) -> bool:
             node = self._graph.nodes.get((cast("str", kind), cast("str", node_id)))
-            return node is not None and node.get("status", "active") != "merged"
+            return node is not None
 
         resolvable = [
             {**props, "id": review_id}

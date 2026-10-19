@@ -17,6 +17,7 @@ import hashlib
 import json
 from typing import TYPE_CHECKING
 
+from ps_service.graph_cleanup.capability_status import active_capability_status
 from ps_service.graph_cleanup.errors import GraphCleanupValidationError
 from ps_service.graph_cleanup.merge_planner import EDGE_CLASSES
 from ps_service.graph_cleanup.models import (
@@ -35,6 +36,7 @@ from ps_service.graph_cleanup.models import (
     ObligationUnmergePreview,
     ObligationUnmergeState,
     ObligationUnmergeWrite,
+    PropertyValue,
     UnmergeEdgeSet,
 )
 
@@ -70,13 +72,26 @@ def derive_capability_unmerge_inputs(details: CapabilityMergeDetails) -> Capabil
         The ids and edges to restore, the survivor edges to remove, the Policy to restore
         (or `None`) and the survivor's incoming edges at merge time.
 
+    Both snapshot shapes derive the same inputs: a merge recorded before markers existed has the
+    absorbed node in `after` as a placeholder Capability, a later one a `MergedCapability` marker.
+    Only `before` (the absorbed node as it was) and the edges are read.
+
     Raises:
-        GraphCleanupValidationError: the audit record carries no snapshot.
+        GraphCleanupValidationError: the audit record carries no snapshot or no absorbed node.
     """
     if details.before is None or details.after is None:
         message = "the merge's audit record carries no snapshot, so it cannot be reversed"
         raise GraphCleanupValidationError(message)
     survivor_id, absorbed_id = details.survivor_id, details.absorbed_id
+    absorbed_node = next(
+        (n for n in details.before.nodes if n.label == "Capability" and n.id == absorbed_id), None
+    )
+    if absorbed_node is None:
+        message = (
+            "the merge's audit record does not hold the absorbed capability, "
+            "so it cannot be reversed"
+        )
+        raise GraphCleanupValidationError(message)
     restore: dict[str, tuple[str, ...]] = {}
     remove: dict[str, tuple[str, ...]] = {}
     for rel in _REL_FIELDS:
@@ -112,6 +127,7 @@ def derive_capability_unmerge_inputs(details: CapabilityMergeDetails) -> Capabil
         merge_approval_id=details.approval_id,
         survivor_id=survivor_id,
         absorbed_id=absorbed_id,
+        absorbed_properties={k: v for k, v in absorbed_node.properties.items() if k != "status"},
         policy_case=details.policy_case,
         restore_requires=restore["REQUIRES"],
         restore_covers=restore["COVERS"],
@@ -143,31 +159,32 @@ def _remove_candidates(inputs: CapabilityUnmergeInputs) -> dict[str, tuple[str, 
     }
 
 
-def _check_tombstone(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeState) -> None:
-    """Raise unless the absorbed Capability is a `merged` tombstone redirecting to the survivor."""
-    absorbed, survivor_id = state.absorbed, inputs.survivor_id
-    if absorbed is None:
-        message = f"capability {inputs.absorbed_id!r} no longer exists, so it cannot be unmerged"
+def _check_marker_state(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeState) -> None:
+    """Raise unless the absorbed Capability is absent and its marker names the survivor."""
+    absorbed_id, survivor_id = inputs.absorbed_id, inputs.survivor_id
+    status = state.absorbed_status
+    if status is not None:
+        if status == active_capability_status():
+            message = f"capability {absorbed_id!r} already exists again; nothing to unmerge"
+        else:
+            message = (
+                f"capability {absorbed_id!r} exists with status {status!r}; reset and re-ingest "
+                "the graph, it cannot be unmerged"
+            )
         raise GraphCleanupValidationError(message)
-    if absorbed.status != "merged":
-        message = (
-            f"capability {absorbed.id!r} is not a merged tombstone (status {absorbed.status!r}); "
-            "there is nothing to unmerge"
-        )
-        raise GraphCleanupValidationError(message)
-    targets = state.redirects.get(absorbed.id, ())
+    targets = state.marker_targets.get(absorbed_id, ())
     if survivor_id in targets:
         return
     if targets:
         message = (
-            f"capability {absorbed.id!r} was merged into {survivor_id!r}, but its redirect now "
+            f"capability {absorbed_id!r} was merged into {survivor_id!r}, but its marker now "
             f"points at {', '.join(repr(t) for t in targets)} (a later merge re-pointed it), "
             "so reversing the original merge would conflict"
         )
     else:
         message = (
-            f"capability {absorbed.id!r} is marked merged but has no MERGED_INTO edge; "
-            "its state is inconsistent and it cannot be unmerged safely"
+            f"capability {absorbed_id!r} has no MergedCapability marker; "
+            "there is nothing to unmerge"
         )
     raise GraphCleanupValidationError(message)
 
@@ -176,19 +193,18 @@ def _check_survivor(inputs: CapabilityUnmergeInputs, state: CapabilityUnmergeSta
     """Raise unless the survivor Capability still exists and is active."""
     survivor = state.survivor
     if survivor is None:
+        moved_to = state.marker_targets.get(inputs.survivor_id, ())
+        where = f" (it was merged into {', '.join(repr(t) for t in moved_to)})" if moved_to else ""
         message = (
-            f"the survivor capability {inputs.survivor_id!r} no longer exists, "
+            f"the survivor capability {inputs.survivor_id!r} no longer exists{where}, "
             "so the merge cannot be reversed"
         )
         raise GraphCleanupValidationError(message)
-    if survivor.status == "active":
+    if survivor.status == active_capability_status():
         return
-    moved_to = state.redirects.get(survivor.id, ())
-    where = f" into {', '.join(repr(t) for t in moved_to)}" if moved_to else ""
     message = (
         f"the survivor capability {survivor.id!r} is no longer active (status "
-        f"{survivor.status!r}; it was merged{where} after this merge), so the merge cannot be "
-        "reversed"
+        f"{survivor.status!r}), so the merge cannot be reversed"
     )
     raise GraphCleanupValidationError(message)
 
@@ -308,25 +324,32 @@ def plan_capability_unmerge(
     Args:
         inputs: What the merge's audit snapshot says to reverse, from
             `derive_capability_unmerge_inputs`.
-        state: The live graph around the tombstone and survivor, from the graph reader.
+        state: The live graph around the marker and survivor, from the graph reader.
 
     Returns:
         A `CapabilityUnmergePlan`: the preview, the guarded write parameters, the restored
         edges, the before/after snapshots, the state digest and the inputs.
 
     Raises:
-        GraphCleanupValidationError: the tombstone is missing, not merged or re-pointed, the
-            survivor is gone or no longer active, a snapshot endpoint is gone, or the survivor's
-            governance changed in a way that makes the restore contradictory.
+        GraphCleanupValidationError: the absorbed Capability exists again (or under another
+            status), its marker is missing or re-pointed, the survivor is gone or no longer
+            active, a snapshot endpoint is gone, or the survivor's governance changed in a way
+            that makes the restore contradictory.
     """
-    _check_tombstone(inputs, state)
+    _check_marker_state(inputs, state)
     _check_survivor(inputs, state)
     _check_endpoints(inputs, state)
     _check_governance(inputs, state)
-    absorbed, survivor = state.absorbed, state.survivor
-    if absorbed is None or survivor is None:  # pragma: no cover -- narrowed by the checks above
-        message = "the capabilities no longer exist"
+    survivor = state.survivor
+    if survivor is None:  # pragma: no cover -- narrowed by the checks above
+        message = "the survivor capability no longer exists"
         raise GraphCleanupValidationError(message)
+    absorbed_id = inputs.absorbed_id
+    restored_properties: dict[str, PropertyValue] = {
+        **inputs.absorbed_properties,
+        "status": active_capability_status(),
+    }
+    absorbed_name = str(inputs.absorbed_properties.get("name", absorbed_id))
     restore = _restore_ids(inputs)
     current: dict[str, set[str]] = {rel: set() for rel in _REL_FIELDS}
     for edge in state.survivor_edges:
@@ -345,6 +368,7 @@ def plan_capability_unmerge(
         remove_mitigated_ids=remove["MITIGATED_BY"],
         restore_policy_id=inputs.restore_policy_id,
         remove_policy_edge=inputs.remove_policy_edge,
+        properties=restored_properties,
     )
     snapshot_keys = {(e.rel_type, e.source_id) for e in inputs.snapshot_survivor_edges}
     added = _sorted_edges(
@@ -357,8 +381,8 @@ def plan_capability_unmerge(
         ]
     )
     restored = _sorted_edges(
-        [_edge(rel, source, absorbed.id) for rel, ids in restore.items() for source in ids]
-        + ([_governed(absorbed.id, inputs.restore_policy_id)] if inputs.restore_policy_id else [])
+        [_edge(rel, source, absorbed_id) for rel, ids in restore.items() for source in ids]
+        + ([_governed(absorbed_id, inputs.restore_policy_id)] if inputs.restore_policy_id else [])
     )
     survivor_before = [e for e in state.survivor_edges if e.rel_type in _REL_FIELDS]
     survivor_governed_before = [_governed(survivor.id, p) for p in state.survivor_policy_ids]
@@ -374,29 +398,21 @@ def plan_capability_unmerge(
         if inputs.restore_policy_id
         else ()
     )
+    marker = NodeRecord(
+        label="MergedCapability", id=absorbed_id, properties={"merged_into": survivor.id}
+    )
+    restored_node = NodeRecord(label="Capability", id=absorbed_id, properties=restored_properties)
     before = GraphSnapshot(
         nodes=(
-            _snapshot_node(absorbed, status="merged"),
+            marker,
             _snapshot_node(survivor, status=survivor.status),
             *policy_nodes,
         ),
-        edges=_sorted_edges(
-            [
-                EdgeRecord(
-                    rel_type="MERGED_INTO",
-                    source_label="Capability",
-                    source_id=absorbed.id,
-                    target_label="Capability",
-                    target_id=survivor.id,
-                ),
-                *survivor_before,
-                *survivor_governed_before,
-            ]
-        ),
+        edges=_sorted_edges([*survivor_before, *survivor_governed_before]),
     )
     after = GraphSnapshot(
         nodes=(
-            _snapshot_node(absorbed, status="active"),
+            restored_node,
             _snapshot_node(survivor, status=survivor.status),
             *policy_nodes,
         ),
@@ -404,8 +420,8 @@ def plan_capability_unmerge(
     )
     digest = _digest(before, inputs, write)
     preview = CapabilityUnmergePreview(
-        merged_id=absorbed.id,
-        merged_name=absorbed.name,
+        merged_id=absorbed_id,
+        merged_name=absorbed_name,
         survivor_id=survivor.id,
         survivor_name=survivor.name,
         merge_approval_id=inputs.merge_approval_id,
@@ -502,6 +518,15 @@ def derive_obligation_unmerge_inputs(details: ObligationMergeDetails) -> Obligat
     )
 
 
+def _capability_gone_message(capability_id: str, state: ObligationUnmergeState) -> str:
+    """Say a snapshot Capability no longer exists, naming where a merge moved it when known."""
+    moved_to = state.merged_capability_targets.get(capability_id, ())
+    if not moved_to:
+        return f"capability {capability_id!r} no longer exists"
+    targets = ", ".join(repr(t) for t in moved_to)
+    return f"capability {capability_id!r} no longer exists (it was merged into {targets})"
+
+
 def _check_obligation_state(inputs: ObligationUnmergeInputs, state: ObligationUnmergeState) -> None:
     """Raise unless the Obligation can be recreated: marker intact, endpoints still existing."""
     absorbed_id, survivor_id = inputs.absorbed_id, inputs.survivor_id
@@ -536,11 +561,9 @@ def _check_obligation_state(inputs: ObligationUnmergeInputs, state: ObligationUn
     missing_requirements = [
         r for r in inputs.satisfied_by_ids if r not in state.existing_requirements
     ]
-    gone = [c for c in inputs.requires_ids if c not in state.capability_statuses]
-    tombstones = [c for c in inputs.requires_ids if state.capability_statuses.get(c) == "merged"]
+    gone = [c for c in inputs.requires_ids if c not in state.existing_capabilities]
     problems = [f"requirement {r!r} no longer exists" for r in missing_requirements]
-    problems += [f"capability {c!r} no longer exists" for c in gone]
-    problems += [f"capability {c!r} is now a merged tombstone" for c in tombstones]
+    problems += [_capability_gone_message(c, state) for c in gone]
     if problems:
         message = f"{'; '.join(problems)}, so its edge cannot be restored"
         raise GraphCleanupValidationError(message)
@@ -610,7 +633,7 @@ def plan_obligation_unmerge(
     Raises:
         GraphCleanupValidationError: the Obligation exists again, its marker is missing or
             re-pointed, the survivor, the Role, a Requirement or a Capability endpoint is gone
-            (or a Capability is now a tombstone), each with an explanation.
+            (or a Capability has been merged away), each with an explanation.
     """
     _check_obligation_state(inputs, state)
     absorbed_id, survivor_id = inputs.absorbed_id, inputs.survivor_id

@@ -154,14 +154,14 @@ def test_an_id_with_no_merge_in_the_audit_trail_is_rejected_with_no_approval(env
 
 
 def test_a_conflict_is_rejected_with_its_explanation_and_no_approval(env: _Env) -> None:
-    env.graph.nodes[0][2] = "merged"
-    env.graph.redirects = [[ABSORBED, SURVIVOR], [SURVIVOR, "cap_winner"]]
+    env.graph.nodes = [row for row in env.graph.nodes if row[0] != SURVIVOR]
+    env.graph.markers = [[ABSORBED, SURVIVOR], [SURVIVOR, "cap_winner"]]
 
     text = env.call("unmerge", _ARGS)
 
     assert text.startswith("error: ")
     assert "cap_winner" in text
-    assert "no longer active" in text
+    assert "no longer exists" in text
     assert approval_row_count(env.pending) == 0
     assert env.graph.write_calls == []
 

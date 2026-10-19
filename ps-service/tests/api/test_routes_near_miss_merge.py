@@ -411,7 +411,8 @@ def test_the_status_route_reports_pending_then_the_winner_and_loser_once_signed(
     assert body["status"] == "signed"
     assert (body["winner_id"], body["loser_id"]) == (SURVIVOR, ABSORBED)
     assert body["error"] is None
-    assert env.rig.graph.nodes[("Capability", ABSORBED)]["status"] == "merged"
+    assert ("Capability", ABSORBED) not in env.rig.graph.nodes
+    assert env.rig.graph.nodes[("MergedCapability", ABSORBED)] == {"merged_into": SURVIVOR}
     assert ("PendingReview", _REVIEW) not in env.rig.graph.nodes
 
 

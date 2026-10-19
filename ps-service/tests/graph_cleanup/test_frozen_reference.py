@@ -337,6 +337,7 @@ def _unmerge_write(**changes: object) -> CapabilityUnmergeWrite:
         "remove_mitigated_ids": (),
         "restore_policy_id": None,
         "remove_policy_edge": False,
+        "properties": {},
         **changes,
     }
     return CapabilityUnmergeWrite.model_validate(fields)

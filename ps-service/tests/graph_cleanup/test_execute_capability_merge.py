@@ -148,7 +148,9 @@ def test_the_audit_row_snapshots_are_sufficient_to_reverse_the_merge(
     after_edges = _edge_keys(details["after"])
     assert ("REQUIRES", "obl_1", ABSORBED) in before_edges
     assert ("REQUIRES", "obl_1", SURVIVOR) in after_edges
-    assert ("MERGED_INTO", ABSORBED, SURVIVOR) in after_edges
+    assert not [e for e in after_edges if ABSORBED in e[1:]]
+    after_nodes = cast("dict[str, list[dict[str, object]]]", details["after"])["nodes"]
+    assert {(n["label"], n["id"]) for n in after_nodes} >= {("MergedCapability", ABSORBED)}
 
 
 def test_audit_failure_means_no_graph_write_at_all(cleanup_rig: CleanupRig) -> None:
@@ -342,10 +344,21 @@ def test_malformed_normalized_args_are_a_generic_error_with_no_work_done(
     assert rig.audit.rows == []
 
 
-def test_the_effect_verifier_sees_a_tombstone(cleanup_rig: CleanupRig) -> None:
+def test_verify_merge_effect_reads_the_marker_and_the_absence(cleanup_rig: CleanupRig) -> None:
     rig = _world(cleanup_rig)
     row = _row(rig)
 
     assert verify_capability_merge_effect(row, rig.read) is False
     execute_capability_merge(row, _CONFIG, _deps(rig))
     assert verify_capability_merge_effect(row, rig.read) is True
+    rig.seed_capability(ABSORBED, name="Absorbed", status="active")  # re-minted under the id
+    assert verify_capability_merge_effect(row, rig.read) is False
+
+
+def test_executed_merge_leaves_no_capability_with_the_absorbed_id(cleanup_rig: CleanupRig) -> None:
+    rig = _world(cleanup_rig)
+
+    execute_capability_merge(_row(rig), _CONFIG, _deps(rig))
+
+    assert [k for k in rig.graph.nodes if k == ("Capability", ABSORBED)] == []
+    assert rig.graph.nodes[("MergedCapability", ABSORBED)] == {"merged_into": SURVIVOR}

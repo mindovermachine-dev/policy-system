@@ -97,7 +97,7 @@ def test_the_group_deletes_the_pending_review_last(cleanup_rig: CleanupRig) -> N
     assert with_review[-1] == DeleteNode(label="PendingReview", id=_REVIEW)
 
 
-def test_executing_the_approval_tombstones_the_loser_and_deletes_the_review(
+def test_executing_the_approval_replaces_the_loser_with_a_marker_and_deletes_the_review(
     cleanup_rig: CleanupRig,
 ) -> None:
     rig = _world_with_review(cleanup_rig)
@@ -106,9 +106,9 @@ def test_executing_the_approval_tombstones_the_loser_and_deletes_the_review(
 
     assert outcome == {"survivor_id": SURVIVOR, "absorbed_id": ABSORBED, "merged": True}
     assert ("PendingReview", _REVIEW) not in rig.graph.nodes
-    assert rig.graph.nodes[("Capability", ABSORBED)]["status"] == "merged"
-    merged_into = [key for key in rig.graph.edges if key[0] == "MERGED_INTO"]
-    assert len(merged_into) == 1
+    assert ("Capability", ABSORBED) not in rig.graph.nodes
+    assert rig.graph.nodes[("MergedCapability", ABSORBED)]["merged_into"] == SURVIVOR
+    assert not [key for key in rig.graph.edges if ABSORBED in (key[2], key[4])]
     # Characterization: COVERS moves with the merge (the legacy near-miss write dropped it).
     assert any(key[0] == "COVERS" and key[4] == SURVIVOR for key in rig.graph.edges)
 
@@ -150,7 +150,8 @@ def test_a_non_string_review_id_is_a_malformed_approval(
 
     assert "error" in outcome
     assert rig.audit.rows == []
-    assert rig.graph.nodes[("Capability", ABSORBED)].get("status") != "merged"
+    assert ("MergedCapability", ABSORBED) not in rig.graph.nodes
+    assert ("Capability", ABSORBED) in rig.graph.nodes
 
 
 def _create_with_review(store: FakeApprovalStore) -> str:
@@ -174,7 +175,7 @@ def _check(store: FakeApprovalStore, approval_id: str, audit: RecordingAuditStor
         store=store,
         config=CONFIG,
         dependencies=GraphCleanupDependencies(
-            open_single_tenant_graph=lambda _c: ScriptedMergeGraph(tombstone_count=0),
+            open_single_tenant_graph=lambda _c: ScriptedMergeGraph(marker_count=0),
             audit_store=lambda _c: audit,
             graph_write_gateway=lambda _c: CleanupRig().gateway,
         ),

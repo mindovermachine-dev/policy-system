@@ -4,7 +4,7 @@ The offline baseline merge is built from reads of the live graph and an overlay 
 own writes; the only thing a later step reads of an earlier step's writes is node existence by
 id (the provenance edges', classification edges' and rewired edges' endpoints):
 
-- every decision that depends on graph content (Capability convergence, `MergedObligation`
+- every decision that depends on graph content (Capability convergence, merge-marker
   redirects, which ids already exist) is read from `live` and made before anything is built;
 - an id counts as existing when `live` holds it or an earlier primitive of this same leg creates
   it (`_Overlay`);
@@ -32,6 +32,7 @@ from ps_service.company_merge.governance_import import (
 )
 from ps_service.company_merge.graph_submission import read_rows
 from ps_service.company_merge.graph_writer import (
+    ANY_LABEL_EXISTENCE_READ,
     build_canonical_node_primitives,
     build_draft_governance_primitives,
     build_obligation_primitives,
@@ -45,11 +46,11 @@ from ps_service.company_merge.graph_writer import (
     unresolved_classification_endpoint_ids,
 )
 from ps_service.company_merge.models import GovernanceDraftCounts
-from ps_service.company_merge.obligation_redirect import resolve_obligation_redirects
 from ps_service.company_merge.pending_review import (
     build_pending_review_primitives,
     read_unresolved_review_pairs,
 )
+from ps_service.company_merge.redirects import compose_with_resolutions, resolve_redirects
 from ps_service.graph_gateway.models import UpsertNode
 from ps_service.logging.facade import emit_log_entry
 from ps_service.restore.baseline_reader import SerializedGraphReader
@@ -71,7 +72,6 @@ __all__ = ["PolicySystemLeg", "build_policy_system_leg"]
 
 _COMPONENT = "restore"
 _ACTION = "build_policy_system_leg"
-_ANY_LABEL_EXISTENCE_READ = "UNWIND $ids AS id MATCH (n {id: id}) RETURN id"
 _NODE_LABELS = (
     "Role",
     "Requirement",
@@ -164,6 +164,10 @@ def _candidate_ids(
         label: {n.id for n in found} for label, found in nodes.items()
     }
     candidates["Capability"] = set(new_capability_ids)
+    # A `DEFINES` edge may name a Role that only the live graph holds (a redirect's terminal).
+    candidates["Role"] |= {
+        e.target_id for e in read.provenance_edges if e.relationship_type == "DEFINES"
+    }
     for label, ids in endpoint_ids.items():
         candidates.setdefault(label, set()).update(ids)
     return candidates
@@ -173,7 +177,7 @@ def _read_known_ids_of_unresolved_endpoints(live: GraphHandle, unresolved: set[s
     """The subset of `unresolved` ids that exist in `live` under any label."""
     if not unresolved:
         return set()
-    rows = read_rows(live, _ANY_LABEL_EXISTENCE_READ, {"ids": sorted(unresolved)})
+    rows = read_rows(live, ANY_LABEL_EXISTENCE_READ, {"ids": sorted(unresolved)})
     return {cast("str", row[0]) for row in rows}
 
 
@@ -197,7 +201,7 @@ def build_policy_system_leg(
     governance and classification), then one `PendingReview` per Capability near miss.
 
     Business Rules: Capabilities converge onto an existing one by embedding similarity; a draft
-    Policy never converges; Obligations a cleanup merge absorbed are redirected to their
+    Policy never converges; nodes a cleanup merge absorbed are redirected to their
     survivor; governance content is created only as a `draft` owned by `governance.owner`; every
     Capability near miss is recorded as a `PendingReview` in the same leg, so a failed restore
     leaves none.
@@ -225,7 +229,8 @@ def build_policy_system_leg(
             is `None`.
         ArtifactContentRejectedError: `instrument_id` matches no instrument of an artifact that
             holds some.
-        CompanyMergeValidationError: an Obligation redirect's survivor does not exist.
+        CompanyMergeValidationError: a merge-marker chain has a cycle or ends at a node that
+            exists nowhere.
         CompanyMergePersistenceError: a node carries a property the gateway cannot store, a
             classification edge endpoint exists nowhere, an edge endpoint has no mapping entry,
             or a read of `live` failed.
@@ -237,6 +242,10 @@ def build_policy_system_leg(
         raise RestoreOwnerRequiredError
     _check_instrument(baseline_graph, read, instrument_id)
 
+    # Drop nodes a cleanup merge absorbed before any build, and map them to their terminal
+    # survivor so the rewiring below re-targets their edges.
+    resolution = resolve_redirects(live, read, emitter=emitter)
+    read = resolution.baseline
     dedup_result = resolve_capability_convergence_offline(
         read.capability_nodes,
         incoming_embeddings=embeddings_by_label(baseline_graph, "Capability"),
@@ -244,11 +253,10 @@ def build_policy_system_leg(
         threshold=similarity_threshold,
         emitter=emitter,
     )
-    # Drop Obligations a cleanup merge absorbed before any build, and map them to their terminal
-    # survivor so the rewiring below re-targets their edges.
-    read, obligation_redirects = resolve_obligation_redirects(live, read, emitter=emitter)
     canonical_id_by_incoming_id = {r.incoming_id: r.canonical_id for r in dedup_result.resolutions}
-    canonical_id_by_incoming_id.update(obligation_redirects)
+    canonical_id_by_incoming_id.update(
+        compose_with_resolutions(resolution.mapping, dedup_result.resolutions)
+    )
     for policy in read.policy_nodes:
         canonical_id_by_incoming_id[policy.id] = policy.id  # a draft never converges
 

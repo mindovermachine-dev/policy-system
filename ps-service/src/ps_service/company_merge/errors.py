@@ -44,7 +44,7 @@ class CompanyMergeValidationError(Exception):
 
     For example, `similarity.cosine_similarity` was given vectors of
     mismatched length, or a zero-magnitude vector for which cosine similarity
-    is undefined. Also raised by `dedup.py` and `obligation_redirect.py` for malformed
+    is undefined. Also raised by `dedup.py` and `redirects.py` for malformed
     inputs. `pending_review.resolve_review` raises it for a decision other than `keep-separate`.
     It is raised before any result is computed; the caller should correct the input.
     """

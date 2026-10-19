@@ -400,9 +400,8 @@ that is bound to that exact pair and state. Confirm, open the approval link, and
 with your passkey. The approval is valid for 15 minutes. Then the skill checks the
 outcome.
 
-The merge does not delete the absorbed Capability. It stays in the graph as a `merged`
-tombstone with a `MERGED_INTO` link to the survivor. A later ingest or restore can
-regenerate its name. That name then attaches to the survivor, and the system does not
+The merge deletes the absorbed Capability. A `MergedCapability` marker that names the
+survivor stays in the graph. A later ingest or restore can regenerate its name. That name then attaches to the survivor, and the system does not
 recreate the duplicate. The case that applies depends on the governing policies:
 
 | Case | Situation | What you do |
@@ -430,9 +429,8 @@ Standard or Control.
 
 **Reversing a merge.** `unmerge` takes the id that the merge absorbed. It restores that
 id from the snapshot in the audit record of the merge. It first does the same preview,
-confirmation and passkey approval. A Capability tombstone returns to `active`, and the
-tool removes its `MERGED_INTO` link. The tool recreates a deleted Obligation under its
-original id and removes its marker. The tool restores exactly the edges that the merge
+confirmation and passkey approval. The tool recreates a deleted Capability or
+Obligation under its original id and removes its marker. The tool restores exactly the edges that the merge
 moved. Edges that you added to the survivor after the merge stay where they are. The
 preview lists them.
 
@@ -466,11 +464,11 @@ cannot drop one Capability. The tool says this plainly and does not offer a work
 A separate item tracks a follow-on change that lets a fork draft drop a single
 Capability.
 
-**Tombstones and raw Cypher.** Queries through `ps-qna` count only active Capabilities.
-A tombstone therefore never shows as a live Capability. If you query the graph directly
-with the `cypher` tool, filter Capabilities on `status = 'active'`. A Capability with no
-`status` is also live. Without that filter, `merged` tombstones show in the results.
-The packaged domain concepts describe the `merged` status and the `MERGED_INTO` edge.
+**Merged duplicates and raw Cypher.** An absorbed Capability is deleted, so a query for
+Capabilities never returns it and needs no status filter for merges. If you query the
+graph directly with the `cypher` tool, the `MergedCapability`, `MergedObligation` and
+`MergedRole` nodes (each with `id` and `merged_into`) record which node replaced an
+absorbed id. The packaged domain concepts describe the markers.
 
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-graph-cleanup skill."_
@@ -491,7 +489,7 @@ Use the ps-near-miss-review skill to show the pending near-miss reviews.
 
 Sometimes ingestion or a restore finds two entities that are close but not identical. It then records a near-miss pending review and does not merge them. The `ps-near-miss-review` skill lists the pending reviews. It resolves a review when you keep the two entities separate or merge them.
 
-A merge needs the `ComplianceOfficer` role. It is the same Capability merge as in graph cleanup, so it does not run at the call. The skill returns the merge preview and an approval link. The merge runs when you complete a passkey signing in the browser. The skill can then report if the approval was signed. The absorbed Capability stays as a `merged` tombstone that points at the survivor, and its edges move to the survivor. The system therefore does not raise the pair again on a later ingest or restore.
+A merge needs the `ComplianceOfficer` role. It is the same Capability merge as in graph cleanup, so it does not run at the call. The skill returns the merge preview and an approval link. The merge runs when you complete a passkey signing in the browser. The skill can then report if the approval was signed. The absorbed Capability is deleted behind a `MergedCapability` marker that points at the survivor, and its edges move to the survivor. The system therefore does not raise the pair again on a later ingest or restore.
 
 If a Policy governs exactly one of the two, you must acknowledge the governance change. If they have different governing Policies, the system refuses the merge until you release one with `release-capability-governance`. You can reverse a merge with `unmerge`. This does not bring back the deleted review.
 

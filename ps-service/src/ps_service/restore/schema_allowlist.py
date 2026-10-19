@@ -100,6 +100,10 @@ NATIVE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
     }
 )  # = internal-seed EdgeType (Cellar/ELI's HAS is already a member)
 
+CAPABILITY_STATUSES: frozenset[str] = frozenset({"active", "deprecated"})
+# = the `Capability.status` enum of the domain schema, pinned by
+# `tests/restore/test_schema_allowlist.py`.
+
 
 def _validate_node_id(node_label: str, properties: Mapping[str, object]) -> None:
     """Reject a node whose `id` property is missing or not a string."""
@@ -110,19 +114,19 @@ def _validate_node_id(node_label: str, properties: Mapping[str, object]) -> None
         )
 
 
-def _validate_no_tombstone(node_label: str, properties: Mapping[str, object]) -> None:
-    """Reject a `Capability` carrying `status = 'merged'`.
+def _validate_capability_status(node_label: str, properties: Mapping[str, object]) -> None:
+    """Reject a `Capability` whose `status` is present and outside the schema enum.
 
-    A tombstone exists only in a deployment's own graph, written by a Compliance
-    Officer cleanup merge. An artifact that carried one would mint an orphan
-    tombstone (`ON CREATE SET n += properties`) with no `MERGED_INTO` edge. Label
-    and relationship allow-lists already exclude `MERGED_INTO` and
-    `MergedObligation`; this is the one property-level rule.
+    An absorbed Capability is deleted and leaves a `MergedCapability` marker, so no
+    artifact legitimately carries a merge status. Any value the schema does not define
+    would reach the graph through `ON CREATE SET n += properties`; this is the one
+    property-level rule. Label and relationship allow-lists already exclude the
+    `Merged*` markers.
     """
-    if node_label == "Capability" and properties.get("status") == "merged":
+    status = properties.get("status")
+    if node_label == "Capability" and status is not None and status not in CAPABILITY_STATUSES:
         raise ArtifactContentRejectedError(
-            f"Capability {properties.get('id')!r} has status 'merged': tombstones are never "
-            "part of an artifact"
+            f"Capability {properties.get('id')!r} has unsupported status {status!r}"
         )
 
 
@@ -148,7 +152,7 @@ def validate_serialized_graph(
     Raises:
         ArtifactContentRejectedError: a node or edge label, or a relationship type, is outside
             its allow-list; a node's `properties["id"]` is missing or not a string; or a
-            `Capability` has `status = 'merged'` (a tombstone never belongs in an artifact).
+            `Capability` has a `status` outside the schema enum.
     """
     for node in graph.nodes:
         if node.label not in allowed_labels:
@@ -156,7 +160,7 @@ def validate_serialized_graph(
                 f"node label {node.label!r} is not in the allow-list {sorted(allowed_labels)!r}"
             )
         _validate_node_id(node.label, node.properties)
-        _validate_no_tombstone(node.label, node.properties)
+        _validate_capability_status(node.label, node.properties)
 
     for edge in graph.edges:
         if edge.relationship_type not in allowed_relationship_types:

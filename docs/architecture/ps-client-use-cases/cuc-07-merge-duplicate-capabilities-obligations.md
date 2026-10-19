@@ -39,10 +39,9 @@ the direction*.
 2. **Judge.** A candidate group is a suggestion, never a verdict. The officer picks the
    pair and the direction: which node **survives**, which is **absorbed**. The client
    never chooses; chat never recommends on group evidence alone. The comparison artifact
-   states the kind-specific fate plainly — an absorbed Capability remains as a `merged`
-   tombstone pointing at the survivor; an absorbed Obligation is **deleted** (its
-   snapshot held in the audit row, a marker left so re-ingestion attaches to the
-   survivor instead of recreating it).
+   states the fate plainly — an absorbed Capability or Obligation is **deleted** (its
+   snapshot held in the audit row, a `MergedCapability` or `MergedObligation` marker
+   left so re-ingestion attaches to the survivor instead of recreating it).
 3. **Preview.** The preview call never edits the graph. The comparison artifact renders
    its full effect: edges to move per class, duplicates collapsed, obligations affected,
    and the governance consequence.
@@ -104,4 +103,4 @@ the direction*.
   Artifact Pane design has not pinned down.
 - Survivor/absorbed direction choice on the comparison artifact — CUC-06's pairs arrive
   ordered by the review; here direction is the officer's input, and the kind-specific
-  fate (tombstone vs delete) must be impossible to miss at the moment of choice.
+  fate (the absorbed node is deleted, a marker names the survivor) must be impossible to miss at the moment of choice.

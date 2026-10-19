@@ -358,7 +358,7 @@ class _MiniGraph:
             return _FakeQueryResult([] if row is None else [[_FakeGraphNode(dict(row))]])
         if q == _DERIVATION_READ_QUERY:
             return self._read_requirements_by_role()
-        if "MERGED_INTO" in q or "MergedObligation" in q:
+        if "MERGED_INTO" in q or "(m:Merged" in q:
             # the tombstone and obligation-marker reads -- no tombstones here.
             return _FakeQueryResult([])
         existing = _EXISTING_NODE_READ.match(q)

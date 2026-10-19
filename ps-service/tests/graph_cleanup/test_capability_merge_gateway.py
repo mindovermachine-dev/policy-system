@@ -1,9 +1,9 @@
 """`merge-capabilities` writes through the Graph Write Gateway.
 
 One approved merge is one gateway group: the absorbed Capability's edges move onto the survivor
-(an upsert per edge, a delete per old one), the absorbed node becomes a `merged` tombstone with a
-`MERGED_INTO` edge. The group is linked to the `applied` audit row and guarded by the log position
-read BEFORE the guard reads. The guard is the statement's `WHERE` condition,
+(an upsert per edge), a `MergedCapability` marker is upserted and the absorbed node is deleted
+(which removes its remaining edges). The group is linked to the `applied` audit row and guarded
+by the log position read BEFORE the guard reads. The guard is the statement's `WHERE` condition,
 evaluated in Python on a fresh read, for each of the four governance cases.
 """
 
@@ -31,12 +31,12 @@ from ps_service.graph_cleanup.group_builders import (
 )
 from ps_service.graph_gateway.errors import GraphUnavailableError, GraphWriteRejectedError
 from ps_service.graph_gateway.models import (
-    DeleteEdge,
+    DeleteNode,
     ExpectedPosition,
-    MergeProperty,
     NodeRef,
     Primitive,
     UpsertEdge,
+    UpsertNode,
 )
 
 if TYPE_CHECKING:
@@ -65,11 +65,6 @@ def _upsert(edge_type: str, source: NodeRef, target: NodeRef) -> UpsertEdge:
     return UpsertEdge(type=kind, identity=identity, source=src, target=tgt)
 
 
-def _delete(edge_type: str, source: NodeRef, target: NodeRef) -> DeleteEdge:
-    kind, identity, src, tgt = _edge(edge_type, source, target)
-    return DeleteEdge(type=kind, identity=identity, source=src, target=tgt)
-
-
 def _obl(obligation_id: str) -> NodeRef:
     return NodeRef(label="Obligation", id=obligation_id)
 
@@ -82,34 +77,27 @@ _MOVES_IN = (
     _upsert("REQUIRES", _obl("obl_2"), _cap(SURVIVOR)),
     _upsert("COVERS", _AREA, _cap(SURVIVOR)),
 )
-_MOVES_OUT = (
-    _delete("REQUIRES", _obl("obl_1"), _cap(ABSORBED)),
-    _delete("REQUIRES", _obl("obl_2"), _cap(ABSORBED)),
-    _delete("COVERS", _AREA, _cap(ABSORBED)),
-)
-_TOMBSTONE = (
-    MergeProperty(label="Capability", id=ABSORBED, properties={"status": "merged"}),
-    _upsert("MERGED_INTO", _cap(ABSORBED), _cap(SURVIVOR)),
+_MARK_AND_DELETE = (
+    UpsertNode(label="MergedCapability", id=ABSORBED, properties={"merged_into": SURVIVOR}),
+    DeleteNode(label="Capability", id=ABSORBED),
 )
 _CASES: dict[str, tuple[tuple[tuple[str, str, str], ...], tuple[Primitive, ...]]] = {
-    "case1-neither-governed": ((), (*_MOVES_IN, *_MOVES_OUT, *_TOMBSTONE)),
+    "case1-neither-governed": ((), (*_MOVES_IN, *_MARK_AND_DELETE)),
     "case2-absorbed-governed": (
         ((ABSORBED, POLICY, "approved"),),
         (
             *_MOVES_IN,
             _upsert("GOVERNED_BY", _cap(SURVIVOR), _POLICY),
-            *_MOVES_OUT,
-            _delete("GOVERNED_BY", _cap(ABSORBED), _POLICY),
-            *_TOMBSTONE,
+            *_MARK_AND_DELETE,
         ),
     ),
     "case2-survivor-governed": (
         ((SURVIVOR, POLICY, "draft"),),
-        (*_MOVES_IN, *_MOVES_OUT, *_TOMBSTONE),
+        (*_MOVES_IN, *_MARK_AND_DELETE),
     ),
     "case3-same-policy": (
         ((SURVIVOR, POLICY, "approved"), (ABSORBED, POLICY, "approved")),
-        (*_MOVES_IN, *_MOVES_OUT, _delete("GOVERNED_BY", _cap(ABSORBED), _POLICY), *_TOMBSTONE),
+        (*_MOVES_IN, *_MARK_AND_DELETE),
     ),
 }
 
@@ -158,6 +146,17 @@ def test_the_pure_build_names_the_same_primitives(cleanup_rig: CleanupRig, case:
     )
 
 
+def test_marker_is_upserted_before_the_delete_in_the_same_group(cleanup_rig: CleanupRig) -> None:
+    _world(cleanup_rig)
+
+    run_capability_merge(cleanup_rig)
+
+    [group] = cleanup_rig.hooked.groups
+    kinds = [type(p).__name__ for p in group.primitives]
+    assert kinds.index("UpsertNode") < kinds.index("DeleteNode")
+    assert kinds.count("DeleteNode") == 1
+
+
 def test_the_groups_audit_event_id_is_the_applied_rows_id(cleanup_rig: CleanupRig) -> None:
     _world(cleanup_rig)
 
@@ -191,7 +190,7 @@ def test_the_position_is_read_before_the_guard_reads_and_the_guard_before_the_su
 
 
 @pytest.mark.parametrize("case", sorted(_CASES))
-def test_the_graph_after_the_group_has_the_edges_moved_and_the_tombstone(
+def test_merge_deletes_the_absorbed_capability_and_leaves_a_marker(
     cleanup_rig: CleanupRig, case: str
 ) -> None:
     _world(cleanup_rig, case)
@@ -199,12 +198,10 @@ def test_the_graph_after_the_group_has_the_edges_moved_and_the_tombstone(
     run_capability_merge(cleanup_rig, acknowledged=_acknowledged(case))
 
     graph = cleanup_rig.graph
-    assert graph.nodes[("Capability", ABSORBED)]["status"] == "merged"
-    assert {k[:5] for k in graph.edges if k[0] == "MERGED_INTO"} == {
-        ("MERGED_INTO", "Capability", ABSORBED, "Capability", SURVIVOR)
-    }
-    assert not [k for k in graph.edges if k[4] == ABSORBED and k[0] != "MERGED_INTO"]
-    assert {(k[0], k[2]) for k in graph.edges if k[4] == SURVIVOR and k[0] != "MERGED_INTO"} == {
+    assert ("Capability", ABSORBED) not in graph.nodes
+    assert graph.nodes[("MergedCapability", ABSORBED)]["merged_into"] == SURVIVOR
+    assert not [k for k in graph.edges if ABSORBED in (k[2], k[4])]
+    assert {(k[0], k[2]) for k in graph.edges if k[4] == SURVIVOR} == {
         ("REQUIRES", "obl_1"),
         ("REQUIRES", "obl_2"),
         ("COVERS", "pa_1"),
@@ -226,7 +223,9 @@ def test_an_endpoint_already_linked_to_the_survivor_collapses_into_its_edge(
     assert len(requires_obl_2) == 1
 
 
-def test_an_absorbed_capability_with_no_edges_is_only_tombstoned(cleanup_rig: CleanupRig) -> None:
+def test_an_absorbed_capability_with_no_edges_is_only_marked_and_deleted(
+    cleanup_rig: CleanupRig,
+) -> None:
     _world(cleanup_rig)
     for key in [k for k in cleanup_rig.graph.edges if k[4] == ABSORBED]:
         del cleanup_rig.graph.edges[key]
@@ -234,7 +233,7 @@ def test_an_absorbed_capability_with_no_edges_is_only_tombstoned(cleanup_rig: Cl
     run_capability_merge(cleanup_rig)
 
     [group] = cleanup_rig.hooked.groups
-    assert group.primitives == _TOMBSTONE
+    assert group.primitives == _MARK_AND_DELETE
 
 
 # -- the guard: the WHERE condition, in Python ----------------------------------------------
@@ -292,8 +291,8 @@ def _drop_a_requirer(rig: CleanupRig) -> None:
     ]
 
 
-def _survivor_tombstone(rig: CleanupRig) -> None:
-    rig.graph.nodes[("Capability", SURVIVOR)]["status"] = "merged"
+def _survivor_not_active(rig: CleanupRig) -> None:
+    rig.graph.nodes[("Capability", SURVIVOR)]["status"] = "deprecated"
 
 
 def _absorbed_deprecated(rig: CleanupRig) -> None:
@@ -315,7 +314,7 @@ def _survivor_gone(rig: CleanupRig) -> None:
         _add_coverer,
         _add_mitigator,
         _drop_a_requirer,
-        _survivor_tombstone,
+        _survivor_not_active,
         _absorbed_deprecated,
         _absorbed_gone,
         _survivor_gone,
@@ -407,8 +406,8 @@ def test_the_guard_is_false_when_the_sides_are_governed_by_different_policies(
 
 @pytest.mark.parametrize(
     "break_it",
-    [_add_requirer, _survivor_tombstone, _policy_status_changes],
-    ids=["edge-count", "tombstone", "policy-status"],
+    [_add_requirer, _survivor_not_active, _policy_status_changes],
+    ids=["edge-count", "survivor-status", "policy-status"],
 )
 def test_a_guard_miss_between_the_replan_and_the_write_logs_nothing(
     cleanup_rig: CleanupRig, break_it: Callable[[CleanupRig], None]
@@ -436,6 +435,7 @@ def test_an_unrelated_write_between_the_position_read_and_the_append_is_refused(
     assert "changed" in str(outcome["error"])
     assert cleanup_rig.audit.rows[1].details["reason_code"] == "graph_guard_missed"
     assert len(cleanup_rig.logged_groups) == 1  # only the unrelated group
+    assert ("MergedCapability", ABSORBED) not in cleanup_rig.graph.nodes
     assert cleanup_rig.graph.nodes[("Capability", ABSORBED)]["status"] == "active"
 
 
@@ -470,6 +470,7 @@ def test_a_refused_position_may_leave_the_legacy_stamp_in_the_log_and_no_merge_g
     event_id = cleanup_rig.audit.event_ids[0]
     links = [cleanup_rig.store.links[g.group_id] for g in cleanup_rig.logged_groups]
     assert links == [event_id, None]  # one stamp under the applied row; the rest is unrelated
+    assert ("MergedCapability", ABSORBED) not in cleanup_rig.graph.nodes
     assert cleanup_rig.graph.nodes[("Capability", ABSORBED)]["status"] == "active"
 
 

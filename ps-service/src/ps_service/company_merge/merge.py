@@ -1,17 +1,19 @@
 """`merge_baseline_graph` -- fold one regulation's baseline graph into the single-tenant graph.
 
-It wires together `graph_reader.read_baseline_graph`, `dedup.dedupe_canonical_nodes` (Capability),
-`obligation_redirect.resolve_obligation_redirects`, `governance_import.import_draft_governance`
-and the `graph_writer` functions. Every write is submitted through the Graph Write Gateway.
+It wires together `graph_reader.read_baseline_graph`, `redirects.resolve_redirects`,
+`dedup.dedupe_canonical_nodes` (Capability), `governance_import.import_draft_governance` and the
+`graph_writer` functions. Every write is submitted through the Graph Write Gateway.
 
 Flow:
 
 0. If `similarity_threshold is None`, raise `CompanyMergeConfigurationError` before any graph call
    of any kind, including `graph_reader.read_baseline_graph`.
 1. Read the regulation's `{short}_baseline` graph.
-2. Dedupe Capability nodes against the single-tenant graph. Obligation is Role-scoped (a weak
+2. Drop nodes that a cleanup merge absorbed and map each to its terminal survivor
+   (`redirects.resolve_redirects`); a cycle or a dangling terminal raises here, before any dedup
+   embedding call and before any write.
+3. Dedupe Capability nodes against the single-tenant graph. Obligation is Role-scoped (a weak
    entity of exactly one Role, never deduped across sources), so there is no Obligation dedup pass.
-3. Drop Obligations that a cleanup merge absorbed and map each to its surviving Obligation.
 4. Persist RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` as one gateway group (a
    Role/Requirement the graph already holds is left out of the group, so it keeps its properties)
    and Obligation (create-only); persist canonical Capability nodes for every
@@ -27,7 +29,7 @@ Flow:
    classification-layer content skips this step.
 7. Persist `HAS`/`SATISFIED_BY`/`REQUIRES`/`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`/`COVERS`/
    `OWNS`/`MITIGATED_BY`/`VERIFIED_BY` edges in one `persist_rewired_edges` call, using the
-   combined Capability, Policy and redirected-Obligation canonical-id mapping (a Capability target
+   combined Capability, Policy and redirected-node canonical-id mapping (a Capability target
    is rewritten; a Policy maps onto itself). Then backfill Capability embeddings onto the
    single-tenant graph's canonical nodes, and freshly computed incoming Capability embeddings onto
    this regulation's own `{short}_baseline` graph.
@@ -57,7 +59,7 @@ from ps_service.company_merge import (
     governance_import,
     graph_reader,
     graph_writer,
-    obligation_redirect,
+    redirects,
 )
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
 from ps_service.company_merge.generated_values import SYSTEM_VALUES
@@ -203,8 +205,8 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         LlmProviderError: An embedding call in the dedup pass failed; nothing has been written.
         CompanyMergePersistenceError: A read failed, the gateway did not take a group, or a
             classification edge endpoint exists nowhere.
-        CompanyMergeValidationError: An Obligation redirect chain has a cycle or ends at an
-            Obligation that exists nowhere.
+        CompanyMergeValidationError: A merge-marker chain has a cycle or ends at a node that
+            exists nowhere.
 
     Side Effects:
         Submits gateway groups to the single-tenant graph (Role/Requirement/Obligation/Capability
@@ -227,6 +229,12 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     graph = graph_reader.read_baseline_graph(baseline_graph, regulatory_instrument_id)
     governance = governance or GovernanceImport()
 
+    # A node a Compliance Officer cleanup merge absorbed is dropped from the baseline before any
+    # dedup call or write and mapped to its terminal survivor, so the rewiring below lands its
+    # edges there instead of minting the duplicate again.
+    resolution = redirects.resolve_redirects(single_tenant_graph, graph, emitter=emitter)
+    graph = resolution.baseline
+
     capability_dedup = dedup.dedupe_canonical_nodes(
         graph.capability_nodes,
         kind="Capability",
@@ -235,13 +243,6 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         threshold=similarity_threshold,
         call_embedding=call_embedding,
         emitter=emitter,
-    )
-
-    # An Obligation a Compliance Officer cleanup merge absorbed is dropped from the baseline
-    # before any write and mapped to its terminal survivor, so the rewiring below lands its edges
-    # there instead of minting the duplicate again.
-    graph, obligation_redirects = obligation_redirect.resolve_obligation_redirects(
-        single_tenant_graph, graph, emitter=emitter
     )
 
     # Read before any write so the count is the delta the passthrough below makes (ids a cleanup
@@ -275,13 +276,15 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     )
 
     # persist_rewired_edges only rewrites a Capability or Policy target, and Standard/Control are
-    # passthrough nodes, so the mapping carries Capability, redirected-Obligation and (below)
-    # Policy entries alone.
+    # passthrough nodes, so the mapping carries Capability, redirected-node and (below) Policy
+    # entries alone.
     canonical_id_by_incoming_id: dict[str, str] = {
         resolution.incoming_id: resolution.canonical_id
         for resolution in capability_dedup.resolutions
     }
-    canonical_id_by_incoming_id.update(obligation_redirects)
+    canonical_id_by_incoming_id.update(
+        redirects.compose_with_resolutions(resolution.mapping, capability_dedup.resolutions)
+    )
 
     # The draft-governance import (shared with restore) is a no-op for an external-sourced
     # baseline; otherwise Policy/Standard/Control are written `draft`, owned by the caller,
@@ -333,8 +336,16 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         embeddings=capability_dedup.incoming_embedding_backfills,
     )
 
+    # A redirected Capability is a matched one: it resolved onto its (composed) survivor.
+    redirected_capability_ids = tuple(
+        redirects.compose_with_resolutions(
+            resolution.by_kind["Capability"], capability_dedup.resolutions
+        ).values()
+    )
     new_capability_count = sum(1 for r in capability_dedup.resolutions if r.match_kind == "new")
-    matched_capability_count = len(capability_dedup.resolutions) - new_capability_count
+    matched_capability_count = (
+        len(capability_dedup.resolutions) - new_capability_count + len(redirected_capability_ids)
+    )
     emit_log_entry(
         component=_COMPONENT,
         action=_MERGE_ACTION,
@@ -360,7 +371,10 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     return MergeResult(
         regulatory_instrument_id=regulatory_instrument_id,
         obligation_ids=tuple(node.id for node in graph.obligation_nodes),
-        capability_canonical_ids=tuple(r.canonical_id for r in capability_dedup.resolutions),
+        capability_canonical_ids=(
+            *(r.canonical_id for r in capability_dedup.resolutions),
+            *redirected_capability_ids,
+        ),
         near_misses=capability_dedup.near_misses,
         pending_review_count=len(capability_dedup.near_misses),
         new_capability_count=new_capability_count,

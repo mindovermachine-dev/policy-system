@@ -130,8 +130,9 @@ def _requirement_gone(graph: ScriptedObligationUnmergeGraph) -> None:
     graph.requirements = [["req_2"]]
 
 
-def _capability_tombstone(graph: ScriptedObligationUnmergeGraph) -> None:
-    graph.capabilities = [["cap_1", "merged"]]
+def _capability_merged_away(graph: ScriptedObligationUnmergeGraph) -> None:
+    graph.capabilities = []
+    graph.capability_markers = [["cap_1", "cap_winner"]]
 
 
 @pytest.mark.parametrize(
@@ -142,7 +143,7 @@ def _capability_tombstone(graph: ScriptedObligationUnmergeGraph) -> None:
         (_no_marker, "MergedObligation"),
         (_role_gone, ROLE_ID),
         (_requirement_gone, "req_1"),
-        (_capability_tombstone, "cap_1"),
+        (_capability_merged_away, "cap_winner"),
     ],
 )
 def test_a_conflict_is_explained_and_creates_no_approval(

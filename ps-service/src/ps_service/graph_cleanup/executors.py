@@ -58,8 +58,8 @@ from ps_service.graph_cleanup.errors import (
 )
 from ps_service.graph_cleanup.graph_reader import (
     read_capability_merge_state,
-    read_capability_tombstone,
-    read_capability_unmerged,
+    read_capability_merged,
+    read_capability_present_without_marker,
     read_governed_by_edge_present,
     read_obligation_marker,
     read_obligation_marker_present,
@@ -568,10 +568,11 @@ def execute_capability_merge(
         write).
 
     Side Effects:
-        Writes an `applied` `capability.merge` audit row, then one gateway group that tombstones
-        the absorbed Capability. When the guard or the write fails, or the merge is refused
-        before the write (lost authority, drift, a changed review, an unreachable graph), records
-        a `failed` row with the same `approval_id` (best effort). Emits a structured log entry.
+        Writes an `applied` `capability.merge` audit row, then one gateway group that deletes
+        the absorbed Capability and leaves a `MergedCapability` marker. When the guard or the
+        write fails, or the merge is refused before the write (lost authority, drift, a changed
+        review, an unreachable graph), records a `failed` row with the same `approval_id` (best
+        effort). Emits a structured log entry.
     """
     survivor_id = _string_arg(row, "survivor_id")
     absorbed_id = _string_arg(row, "absorbed_id")
@@ -622,14 +623,14 @@ def verify_capability_merge_effect(row: PendingApprovalRow, graph: GraphHandle) 
         graph: Handle on the single-tenant graph, read only.
 
     Returns:
-        True when the absorbed Capability is a tombstone with a `MERGED_INTO` edge to the
-        survivor; False when it is not, or when either id is missing from the arguments.
+        True when a `MergedCapability` marker names the survivor and no Capability has the
+        absorbed id any more; False when not, or when either id is missing from the arguments.
     """
     survivor_id = _string_arg(row, "survivor_id")
     absorbed_id = _string_arg(row, "absorbed_id")
     if survivor_id is None or absorbed_id is None:
         return False
-    return read_capability_tombstone(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
+    return read_capability_merged(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
 
 
 def _obligation_details(
@@ -1237,7 +1238,8 @@ def verify_unmerge_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
         graph: Handle on the single-tenant graph, read only.
 
     Returns:
-        For a Capability, True when it is active again with no redirect. For an Obligation, True
+        For a Capability, True when it exists again and its `MergedCapability` marker is gone. For
+        an Obligation, True
         when it exists again and its `MergedObligation` marker is gone. False otherwise, or when
         `merged_id` is missing.
     """
@@ -1248,7 +1250,7 @@ def verify_unmerge_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
         return read_obligation_present(
             graph, obligation_id=merged_id
         ) and not read_obligation_marker_present(graph, obligation_id=merged_id)
-    return read_capability_unmerged(graph, capability_id=merged_id)
+    return read_capability_present_without_marker(graph, capability_id=merged_id)
 
 
 def _execute_unmerge_registered(

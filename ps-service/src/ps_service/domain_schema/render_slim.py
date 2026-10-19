@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     )
 
 LEGEND = (
-    'Capability status "merged" is a tombstone (see MERGED_INTO to its survivor); '
-    'readers filter status = "active" unless they want tombstones.'
+    "A Capability without status is active. An absorbed Capability is deleted, so every "
+    "Capability node is live."
 )
 _HEADER = (
     "PS domain schema (generated from code; prose lives in the psdomain://concepts resource)\n"

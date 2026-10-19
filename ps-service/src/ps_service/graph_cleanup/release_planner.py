@@ -50,16 +50,13 @@ def validate_release_governance(state: ReleaseState) -> tuple[CapabilityNodeStat
         The Capability and the single `draft` Policy governing it, when the release is allowed.
 
     Raises:
-        GraphCleanupValidationError: the capability does not exist, is a `merged` tombstone or
-            not active, is not governed, has more than one governing policy (a data fault), or
-            its governing policy is not a `draft`.
+        GraphCleanupValidationError: the capability does not exist, is not active, is not
+            governed, has more than one governing policy (a data fault), or its governing policy
+            is not a `draft`.
     """
     capability = state.capability
     if capability is None:
         message = "the capability does not exist"
-        raise GraphCleanupValidationError(message)
-    if capability.status == "merged":
-        message = f"capability {capability.id!r} is a merged tombstone and cannot be released"
         raise GraphCleanupValidationError(message)
     if capability.status != "active":
         message = f"capability {capability.id!r} is not active (status {capability.status!r})"
@@ -103,9 +100,9 @@ def plan_release_governance(state: ReleaseState) -> ReleasePlan:
         and the state digest.
 
     Raises:
-        GraphCleanupValidationError: the capability does not exist, is a `merged` tombstone or not
-            active, is not governed, has more than one governing policy (a data fault), or its
-            governing policy is not a `draft`.
+        GraphCleanupValidationError: the capability does not exist, is not active, is not
+            governed, has more than one governing policy (a data fault), or its governing policy
+            is not a `draft`.
     """
     capability, policy = validate_release_governance(state)
     nodes = (

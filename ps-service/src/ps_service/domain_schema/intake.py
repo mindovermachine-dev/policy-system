@@ -86,7 +86,6 @@ _SYSTEM_MINTED_EDGES = (
     ("SUPERSEDED_BY", "RegulatoryInstrument", "RegulatoryInstrument"),
     ("SUPERSEDED_BY", "Policy", "Policy"),
     ("TRANSPOSES", "RegulatoryInstrument", "RegulatoryInstrument"),
-    ("MERGED_INTO", "Capability", "Capability"),
 )
 
 # Layout quirk of the committed file: every label lists required properties first except

@@ -4,7 +4,8 @@ Read on demand from `SKILL.md`. Every Guardrail in `SKILL.md` still applies.
 
 `unmerge` reverses a merge made with `merge-capabilities` or `merge-obligations`, from the audit
 snapshot (`capability.merge` or `obligation.merge`) that merge recorded. It takes only
-`merged_id`: the id that was absorbed (a `merged` Capability tombstone, or a deleted Obligation).
+`merged_id`: the id that was absorbed (a deleted Capability with a `MergedCapability` marker, or a deleted Obligation with a
+`MergedObligation` marker).
 The tool works out which kind it is from the audit trail; `preview.kind` says so. The flow is
 locate -> preview -> confirm -> passkey -> result; never skip a step.
 
@@ -16,7 +17,8 @@ locate -> preview -> confirm -> passkey -> result; never skip a step.
    - **Capability** (`kind` `capability`): the preview has `merged_id`, `survivor_id`,
      `merge_approval_id`, `edges_to_restore` and `edges_removed_from_survivor` per class
      (`requires`, `covers`, `mitigated_by`, `governed_by`) and `survivor_added_edges`. The
-     tombstone returns to `active` and its `MERGED_INTO` edge is removed; exactly the edges the
+     deleted Capability is recreated under its original id with its properties (`active` if it had no
+     status) and its `MergedCapability` marker is removed; exactly the edges the
      merge moved off it come back from the snapshot (an edge the survivor already had before the
      merge stays on the survivor); edges added to the survivor since the merge stay in place and
      are listed in `survivor_added_edges`, so the officer can see what the survivor gained.
@@ -43,28 +45,30 @@ locate -> preview -> confirm -> passkey -> result; never skip a step.
 A conflict is rejected before any approval exists, with an explanation; pass it on verbatim.
 There is no approval, and nothing is forced. Conflicts for a Capability include: the survivor
 is no longer active (it was merged away or removed; the message names where it went), the
-tombstone was re-pointed by a later merge (the message names the current target), the survivor's
+marker was re-pointed by a later merge (the message names the current target), the survivor's
 governance changed since the merge so restoring the governing policy would contradict it, a
-restored edge's endpoint no longer exists, or the Capability is not (or no longer) a merged
-tombstone. Conflicts for an Obligation include: the Obligation already exists again, it has no
+restored edge's endpoint no longer exists, or the Capability has no `MergedCapability`
+marker, already exists again, or exists with a status other than `active` (a graph that was not
+reset and re-ingested). Conflicts for an Obligation include: the Obligation already exists again, it has no
 `MergedObligation` marker or the marker now points elsewhere, the survivor obligation no longer
 exists (the message names where it went), the Role, a Requirement or a Capability endpoint is
-gone, or a Capability endpoint is now a merged tombstone. If no merge of the id is in the audit
+gone, or a Capability endpoint was merged away (the message names where it went). If no merge of the id is in the audit
 trail the tool says so. Do not invent a workaround, do not edit the graph another way and do not
 retry.
 
 Named states for `unmerge`, never collapsed into each other:
 
-| Tool result                                                                                                                | Named state to report                                                                         |
-| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| the gate and graph errors listed in the discovery table above                                                              | the same named states as discovery                                                            |
-| `error: the audit trail could not be read right now; try again shortly`                                                    | "Audit trail unavailable" — nothing changed; try again later                                  |
-| `error: no merge of ... was found in the audit trail; ...`                                                                 | "No merge to reverse" — check the id; only merges made with the cleanup tools can be unmerged |
-| `error: capability ... is not a merged tombstone ...`                                                                      | "Not merged" — nothing to unmerge (never merged, or already unmerged)                         |
-| `error: obligation ... already exists again; ...`                                                                          | "Obligation exists again" — nothing to unmerge                                                |
-| `error: obligation ... has no MergedObligation marker ...`                                                                 | "No marker" — a conflict; report it, nothing is forced                                        |
-| `error: the survivor capability ... is no longer active ...` or `error: the survivor obligation ... no longer exists ...`  | "Survivor changed" — a conflict; relay where it went; no approval exists                      |
-| `error: capability ... was merged into ..., but its redirect now points at ...`                                            | "Redirect changed" — a conflict; relay the current target; no approval exists                 |
-| `error: the survivor's governance changed since the merge ...`                                                             | "Governance conflict" — relay both policies; no approval exists                               |
-| `error: ... no longer exists ...` for a Role, Requirement, Capability or edge endpoint, or `... is now a merged tombstone` | "Endpoint gone" — a conflict; relay the ids; no approval exists                               |
-| `outcome.error` of a signed approval                                                                                       | Report the message; the approval is spent, so a retry needs a new preview and approval        |
+| Tool result                                                                                                               | Named state to report                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| the gate and graph errors listed in the discovery table above                                                             | the same named states as discovery                                                                    |
+| `error: the audit trail could not be read right now; try again shortly`                                                   | "Audit trail unavailable" — nothing changed; try again later                                          |
+| `error: no merge of ... was found in the audit trail; ...`                                                                | "No merge to reverse" — check the id; only merges made with the cleanup tools can be unmerged         |
+| `error: capability ... has no MergedCapability marker ...` or `... already exists again ...`                              | "Not merged" — nothing to unmerge (never merged, or already unmerged)                                 |
+| `error: capability ... exists with status ...; reset and re-ingest the graph ...`                                         | "Old-format merge" — cannot be unmerged; the graph predates markers and must be reset and re-ingested |
+| `error: obligation ... already exists again; ...`                                                                         | "Obligation exists again" — nothing to unmerge                                                        |
+| `error: obligation ... has no MergedObligation marker ...`                                                                | "No marker" — a conflict; report it, nothing is forced                                                |
+| `error: the survivor capability ... is no longer active ...` or `error: the survivor obligation ... no longer exists ...` | "Survivor changed" — a conflict; relay where it went; no approval exists                              |
+| `error: capability ... was merged into ..., but its marker now points at ...`                                             | "Redirect changed" — a conflict; relay the current target; no approval exists                         |
+| `error: the survivor's governance changed since the merge ...`                                                            | "Governance conflict" — relay both policies; no approval exists                                       |
+| `error: ... no longer exists ...` for a Role, Requirement, Capability or edge endpoint                                    | "Endpoint gone" — a conflict; relay the ids; no approval exists                                       |
+| `outcome.error` of a signed approval                                                                                      | Report the message; the approval is spent, so a retry needs a new preview and approval                |

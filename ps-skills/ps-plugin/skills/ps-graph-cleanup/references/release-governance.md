@@ -41,7 +41,6 @@ Named states for `release-capability-governance`, never collapsed into each othe
 | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | the gate and graph errors listed in the discovery table above                                                        | the same named states as discovery                                                      |
 | `error: the capability does not exist`                                                                               | "Capability not found" — check the id                                                   |
-| `error: capability ... is a merged tombstone and cannot be released`                                                 | "Already merged" — a tombstone cannot be released                                       |
 | `error: capability ... is not governed by any policy; nothing to release`                                            | "Not governed" — nothing to do                                                          |
 | `error: release-capability-governance works only on a draft policy ...` and the policy is `proposed`                 | "Policy proposed" — relay the `revert-policy-to-draft` pointer                          |
 | `error: release-capability-governance works only on a draft policy ...` and the policy is `approved` or `deprecated` | "Policy not a draft" — relay the lifecycle pointer and the no-completion-path statement |

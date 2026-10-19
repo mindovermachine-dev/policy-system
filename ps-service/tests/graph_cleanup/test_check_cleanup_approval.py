@@ -178,7 +178,7 @@ def test_a_signed_row_with_an_outcome_reports_it() -> None:
 def test_a_signed_row_inside_the_grace_window_is_left_untouched() -> None:
     store = FakeApprovalStore()
     row = _seed(store, signed=True, expired_for=timedelta(seconds=10))
-    graph = ScriptedMergeGraph(tombstone_count=1)
+    graph = ScriptedMergeGraph(marker_count=1)
     audit = RecordingAuditStore()
 
     status = _check(store, row, graph=graph, audit=audit)
@@ -192,7 +192,7 @@ def test_a_signed_row_inside_the_grace_window_is_left_untouched() -> None:
 def test_an_orphan_signed_row_whose_effect_is_present_is_reconciled_as_applied() -> None:
     store = FakeApprovalStore()
     row = _seed(store, signed=True, expired_for=RECONCILE_GRACE + timedelta(seconds=5))
-    graph = ScriptedMergeGraph(tombstone_count=1)
+    graph = ScriptedMergeGraph(marker_count=1)
     audit = RecordingAuditStore()
 
     status = _check(store, row, graph=graph, audit=audit)
@@ -208,7 +208,7 @@ def test_an_orphan_signed_row_whose_effect_is_present_is_reconciled_as_applied()
 def test_an_orphan_signed_row_without_effect_records_a_failed_row_then_a_failed_outcome() -> None:
     store = FakeApprovalStore()
     row = _seed(store, signed=True, expired_for=RECONCILE_GRACE + timedelta(seconds=5))
-    graph = ScriptedMergeGraph(tombstone_count=0)
+    graph = ScriptedMergeGraph(marker_count=0)
     audit = RecordingAuditStore()
 
     status = _check(store, row, graph=graph, audit=audit)
@@ -227,7 +227,7 @@ def test_an_orphan_signed_row_without_effect_records_a_failed_row_then_a_failed_
 def test_repeated_checks_are_idempotent() -> None:
     store = FakeApprovalStore()
     row = _seed(store, signed=True, expired_for=RECONCILE_GRACE + timedelta(seconds=5))
-    graph = ScriptedMergeGraph(tombstone_count=0)
+    graph = ScriptedMergeGraph(marker_count=0)
     audit = RecordingAuditStore()
 
     first = _check(store, row, graph=graph, audit=audit)
@@ -246,7 +246,7 @@ def test_a_failed_reconciliation_audit_write_leaves_the_outcome_unset_so_it_can_
     audit.raise_on_outcome["failed"] = AuditPostgresUnavailableError("down")
 
     with pytest.raises(AuditPostgresUnavailableError):
-        _check(store, row, graph=ScriptedMergeGraph(tombstone_count=0), audit=audit)
+        _check(store, row, graph=ScriptedMergeGraph(marker_count=0), audit=audit)
 
     stored = store.get_by_id(row.id)
     assert stored is not None
@@ -282,7 +282,7 @@ def test_an_orphan_case_two_row_without_effect_keeps_the_policy_case_in_its_fail
     )
     audit = RecordingAuditStore()
 
-    _check(store, row, graph=ScriptedMergeGraph(tombstone_count=0), audit=audit)
+    _check(store, row, graph=ScriptedMergeGraph(marker_count=0), audit=audit)
 
     [recorded] = audit.rows
     assert recorded.details["policy_case"] == 2
@@ -299,7 +299,7 @@ def test_an_orphan_case_three_row_without_effect_keeps_the_policy_case_in_its_fa
     )
     audit = RecordingAuditStore()
 
-    _check(store, row, graph=ScriptedMergeGraph(tombstone_count=0), audit=audit)
+    _check(store, row, graph=ScriptedMergeGraph(marker_count=0), audit=audit)
 
     [recorded] = audit.rows
     assert recorded.details["policy_case"] == 3
@@ -330,7 +330,7 @@ def test_a_graph_behind_its_log_defers_the_check_and_leaves_the_row_untouched() 
     row = _orphan(store)
     rig = CleanupRig()
     _behind_its_log(rig)
-    graph = ScriptedMergeGraph(tombstone_count=0)
+    graph = ScriptedMergeGraph(marker_count=0)
     audit = RecordingAuditStore()
 
     status = _check(store, row, graph=graph, audit=audit, gateway=rig.gateway)
@@ -352,14 +352,14 @@ def test_the_next_check_reconciles_once_the_graph_has_caught_up() -> None:
     _behind_its_log(rig)
     audit = RecordingAuditStore()
     deferred = _check(
-        store, row, graph=ScriptedMergeGraph(tombstone_count=1), audit=audit, gateway=rig.gateway
+        store, row, graph=ScriptedMergeGraph(marker_count=1), audit=audit, gateway=rig.gateway
     )
     assert deferred is not None
     assert deferred.outcome is None
 
     _catch_up(rig)
     settled = _check(
-        store, row, graph=ScriptedMergeGraph(tombstone_count=1), audit=audit, gateway=rig.gateway
+        store, row, graph=ScriptedMergeGraph(marker_count=1), audit=audit, gateway=rig.gateway
     )
 
     assert settled is not None
@@ -371,7 +371,7 @@ def test_a_caught_up_graph_without_the_effect_records_the_failed_row_as_before()
     row = _orphan(store)
     audit = RecordingAuditStore()
 
-    status = _check(store, row, graph=ScriptedMergeGraph(tombstone_count=0), audit=audit)
+    status = _check(store, row, graph=ScriptedMergeGraph(marker_count=0), audit=audit)
 
     assert status is not None
     assert status.outcome is not None
@@ -399,7 +399,7 @@ class _UnavailableGateway:
 def test_a_gateway_that_cannot_answer_defers_the_check_without_raising(error: Exception) -> None:
     store = FakeApprovalStore()
     row = _orphan(store)
-    graph = ScriptedMergeGraph(tombstone_count=0)
+    graph = ScriptedMergeGraph(marker_count=0)
     audit = RecordingAuditStore()
 
     status = _check(
@@ -419,7 +419,7 @@ def test_a_gateway_that_cannot_answer_defers_the_check_without_raising(error: Ex
 def test_no_installed_gateway_defers_the_check_without_raising() -> None:
     store = FakeApprovalStore()
     row = _orphan(store)
-    graph = ScriptedMergeGraph(tombstone_count=0)
+    graph = ScriptedMergeGraph(marker_count=0)
     audit = RecordingAuditStore()
 
     def _none(_config: ServiceConfig) -> CleanupSubmitter:
@@ -447,7 +447,7 @@ def test_the_catch_up_check_comes_before_the_graph_is_opened_or_read() -> None:
     store = FakeApprovalStore()
     row = _orphan(store)
     rig = CleanupRig()
-    graph = ScriptedMergeGraph(tombstone_count=1)
+    graph = ScriptedMergeGraph(marker_count=1)
     order: list[str] = []
 
     def _open(_config: ServiceConfig) -> ScriptedMergeGraph:

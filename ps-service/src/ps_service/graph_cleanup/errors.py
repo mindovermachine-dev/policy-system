@@ -30,7 +30,7 @@ class GraphCleanupPersistenceError(CompanyMergePersistenceError):
 class GraphCleanupValidationError(Exception):
     """A requested cleanup operation is not allowed on the current graph state.
 
-    Raised for a self-merge, a missing node, a tombstoned node or an unsupported governance
+    Raised for a self-merge, a missing node, a non-active node or an unsupported governance
     case. The message is written for the Compliance Officer and contains no internal detail; the
     caller should show it and not retry unchanged.
     """

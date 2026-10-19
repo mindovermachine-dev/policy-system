@@ -110,12 +110,12 @@ def test_a_clean_unmerge_creates_an_approval_bound_to_the_merge_and_the_state() 
 
 
 def _survivor_merged_away(graph: ScriptedUnmergeGraph) -> None:
-    graph.nodes[0][2] = "merged"
-    graph.redirects = [[ABSORBED, SURVIVOR], [SURVIVOR, "cap_winner"]]
+    graph.nodes = [row for row in graph.nodes if row[0] != SURVIVOR]
+    graph.markers = [[ABSORBED, SURVIVOR], [SURVIVOR, "cap_winner"]]
 
 
 def _redirected_by_near_miss(graph: ScriptedUnmergeGraph) -> None:
-    graph.redirects = [[ABSORBED, "cap_winner"]]
+    graph.markers = [[ABSORBED, "cap_winner"]]
 
 
 def _endpoint_gone(graph: ScriptedUnmergeGraph) -> None:
@@ -123,8 +123,16 @@ def _endpoint_gone(graph: ScriptedUnmergeGraph) -> None:
 
 
 def _already_unmerged(graph: ScriptedUnmergeGraph) -> None:
-    graph.nodes[1][2] = "active"
-    graph.redirects = []
+    graph.nodes.append([ABSORBED, "Absorbed", "active", None, "technical", 0.8, None])
+    graph.markers = []
+
+
+def _left_over_tombstone(graph: ScriptedUnmergeGraph) -> None:
+    graph.nodes.append([ABSORBED, "Absorbed", "merged", None, "technical", 0.8, None])
+
+
+def _marker_gone(graph: ScriptedUnmergeGraph) -> None:
+    graph.markers = []
 
 
 @pytest.mark.parametrize(
@@ -133,7 +141,9 @@ def _already_unmerged(graph: ScriptedUnmergeGraph) -> None:
         (_survivor_merged_away, "cap_winner"),
         (_redirected_by_near_miss, "cap_winner"),
         (_endpoint_gone, "obl_1"),
-        (_already_unmerged, "not a merged tombstone"),
+        (_already_unmerged, "already exists again"),
+        (_left_over_tombstone, "exists with status 'merged'"),
+        (_marker_gone, "no MergedCapability marker"),
     ],
 )
 def test_a_conflict_is_explained_and_creates_no_approval(
@@ -214,12 +224,12 @@ def _check(
     )
 
 
-def test_an_orphan_unmerge_with_the_node_active_again_is_reconciled_as_applied() -> None:
+def test_an_orphan_unmerge_with_the_node_back_and_no_marker_is_reconciled_as_applied() -> None:
     store = FakeApprovalStore()
     row = _seed(store, expired_for=RECONCILE_GRACE + timedelta(seconds=5))
     audit = RecordingAuditStore()
 
-    status = _check(store, row, ScriptedUnmergeGraph(unmerged_row=[1, 0]), audit)
+    status = _check(store, row, ScriptedUnmergeGraph(marker_count=0, absorbed_count=1), audit)
 
     assert status is not None
     assert status.tool_name == TOOL_UNMERGE
@@ -227,12 +237,12 @@ def test_an_orphan_unmerge_with_the_node_active_again_is_reconciled_as_applied()
     assert audit.rows == []
 
 
-def test_an_orphan_unmerge_with_the_tombstone_still_present_records_a_failed_row() -> None:
+def test_an_orphan_unmerge_with_the_marker_still_present_records_a_failed_row() -> None:
     store = FakeApprovalStore()
     row = _seed(store, expired_for=RECONCILE_GRACE + timedelta(seconds=5))
     audit = RecordingAuditStore()
 
-    status = _check(store, row, ScriptedUnmergeGraph(unmerged_row=[1, 1]), audit)
+    status = _check(store, row, ScriptedUnmergeGraph(marker_count=1, absorbed_count=1), audit)
 
     assert status is not None
     assert status.outcome is not None
@@ -252,7 +262,9 @@ def test_an_in_grace_unmerge_row_is_left_untouched() -> None:
     store = FakeApprovalStore()
     row = _seed(store, expired_for=timedelta(seconds=5))
 
-    status = _check(store, row, ScriptedUnmergeGraph(unmerged_row=[1, 1]), RecordingAuditStore())
+    status = _check(
+        store, row, ScriptedUnmergeGraph(marker_count=1, absorbed_count=1), RecordingAuditStore()
+    )
 
     assert status is not None
     assert status.outcome is None

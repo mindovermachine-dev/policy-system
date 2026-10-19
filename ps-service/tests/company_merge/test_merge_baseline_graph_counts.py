@@ -120,7 +120,7 @@ class _SingleTenant:
         self.calls.append((q, params))
         if "MERGED_INTO" in q:
             return _Result([[k, v] for k, v in self._tombstones.items()])
-        if "MergedObligation" in q:
+        if "(m:Merged" in q:
             return _Result([[k, v] for k, v in self._markers.items()])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _Result(self._capability_index_rows())
