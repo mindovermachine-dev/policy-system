@@ -57,7 +57,7 @@ split, because Authentik's `aud` claim is always the bare OAuth2 Provider
 
 | Value | Resolves to | Where it comes from |
 | --- | --- | --- |
-| `psService.auth.issuer` | Production: `https://<hostname>/auth/application/o/ps-cli/`. Evaluator: `https://<hostname>:30443/auth/application/o/ps-cli/` (default hostname `ps.test`) | Production: `<hostname>` is PS Service's own resolved public DNS-label hostname (the same one its own Ingress uses); `/auth` is the path prefix Authentik's Ingress is mounted at (not a second hostname — see `docs/architecture/customer-azure-deployment.md`'s [Authentik](../architecture/customer-azure-deployment.md#authentik) section for why). Evaluator: the name given to `deploy-ps-eval.sh --hostname` and Authentik's HTTPS NodePort `30443` (the issuer includes the port); `/auth` is the web path Authentik serves under, as in production. A `.local` hostname is rejected by `deploy-ps-eval.sh` because Claude Code cannot resolve it. `/application/o/ps-cli/` is Authentik's own fixed issuer-path shape, filled by the blueprint's Application `slug`. |
+| `psService.auth.issuer` | Production: `https://<hostname>/auth/application/o/ps-cli/`. Evaluator: `https://<hostname>:30443/auth/application/o/ps-cli/` (default hostname `ps.test`) | Production: `<hostname>` is PS Service's own resolved public DNS-label hostname (the same one its own Ingress uses); `/auth` is the path prefix Authentik's Ingress is mounted at (not a second hostname — see `docs/architecture/customer-azure-deployment.md`'s [Authentik](../architecture/customer-azure-deployment.md#authentik) section for why). Evaluator: the name given to `deploy-ps-eval.sh --hostname` and the proxy's port `30443` (the issuer includes the port); `/auth` is the web path Authentik serves under, as in production. A `.local` hostname is rejected by `deploy-ps-eval.sh` because Claude Code cannot resolve it. `/application/o/ps-cli/` is Authentik's own fixed issuer-path shape, filled by the blueprint's Application `slug`. |
 | `psService.auth.audience` | `ps-cli` | The blueprint's fixed OAuth2 Provider `client_id` literal. |
 | `psService.auth.cliClientId` | `ps-cli` | The same literal — Authentik has no separate public-client registration to distinguish. |
 | `psService.auth.scopes` | `openid profile email offline_access` | The blueprint's own explicit `property_mappings` on the Provider. `offline_access` is included deliberately: a blueprint-created Provider gets **no** scope mappings by default, and PS-Cli's device flow always requests `offline_access` for its refresh token — omitting it here would silently drop that scope from every login. |
@@ -65,7 +65,7 @@ split, because Authentik's `aud` claim is always the bare OAuth2 Provider
 `scripts/deploy-ps-prod.sh` sets all four via `ensure_release`'s `--set`
 overrides, as fixed script constants computed once the hostname resolves —
 never fetched from a live API call. `scripts/deploy-ps-eval.sh` sets the same four
-from the hostname and the fixed HTTPS NodePort. See `docs/architecture/customer-azure-deployment.md`'s [Helm
+from the hostname and the fixed proxy port `30443`. See `docs/architecture/customer-azure-deployment.md`'s [Helm
 release and chart hardening
 profile](../architecture/customer-azure-deployment.md#helm-release-and-chart-hardening-profile)
 section for the exact `--set` list.
@@ -117,7 +117,7 @@ bootstrap](./installation-guide.md#systemowner-bootstrap)).
 `ps-cli` refuses to send credentials to an issuer,
 device-authorization endpoint or token endpoint that is neither `https://` nor a loopback address
 (`_assert_secure_or_loopback` in `oidc_discovery.py`); this rule is unchanged. The evaluator
-profile therefore serves Authentik over HTTPS, with a certificate from a local certificate
+profile therefore serves Authentik over HTTPS behind the evaluator proxy, with a certificate from a local certificate
 authority created by `scripts/deploy-ps-eval.sh`. PS Service's pod trusts that CA through
 `SSL_CERT_FILE` (a bundle of the system CAs plus the local CA, mounted by the chart); nothing
 disables TLS verification. `ps-cli` verifies the certificate against the

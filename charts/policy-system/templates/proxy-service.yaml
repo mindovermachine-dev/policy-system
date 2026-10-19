@@ -1,0 +1,19 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "policy-system.fullname" . }}-proxy
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  type: NodePort
+  selector:
+    {{- include "policy-system.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      nodePort: {{ .Values.proxy.service.nodePort }}
+{{- end }}

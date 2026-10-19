@@ -21,7 +21,6 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FILES_DIR = REPO_ROOT / "charts" / "policy-system" / "files"
 MAIN_BLUEPRINT = FILES_DIR / "authentik-blueprint.yaml"
-LOCAL_TLS_BLUEPRINT = FILES_DIR / "authentik-local-tls-blueprint.yaml"
 
 PASSWORD_MODELS = {
     "authentik_stages_password.passwordstage",
@@ -317,8 +316,8 @@ def test_ps_cli_provider_accepts_authorization_code_with_claude_redirect_uris(
 # --- blueprint hygiene ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", [MAIN_BLUEPRINT, LOCAL_TLS_BLUEPRINT], ids=lambda p: p.name)
-def test_keyof_targets_are_defined_earlier_in_the_same_blueprint(path: Path) -> None:
+def test_keyof_targets_are_defined_earlier_in_the_same_blueprint() -> None:
+    path = MAIN_BLUEPRINT
     entries = _entries(path)
     seen_ids: set[str] = set()
     for entry in entries:
@@ -329,43 +328,11 @@ def test_keyof_targets_are_defined_earlier_in_the_same_blueprint(path: Path) -> 
             seen_ids.add(entry["id"])
 
 
-@pytest.mark.parametrize("path", [MAIN_BLUEPRINT, LOCAL_TLS_BLUEPRINT], ids=lambda p: p.name)
-def test_blueprint_declares_version_1_and_a_name(path: Path) -> None:
-    doc = _load(path)
+def test_blueprint_declares_version_1_and_a_name() -> None:
+    doc = _load(MAIN_BLUEPRINT)
 
     assert doc["version"] == 1
     assert doc["metadata"]["name"]
-
-
-# --- 2D: local certificate blueprint ---------------------------------------
-
-
-def test_local_tls_blueprint_registers_the_mounted_certificate_from_files() -> None:
-    entries = _entries(LOCAL_TLS_BLUEPRINT)
-    keypair = _by_id(entries, "ps-local-tls-keypair")
-
-    assert keypair["model"] == "authentik_crypto.certificatekeypair"
-    assert keypair["identifiers"] == {"name": "ps-local-tls"}
-    cert = keypair["attrs"]["certificate_data"]
-    key = keypair["attrs"]["key_data"]
-    # Two-element form: a missing mount only warns and never aborts on an absent file.
-    assert cert == Tag(tag="File", value=["/ps-tls/tls.crt", ""])
-    assert key == Tag(tag="File", value=["/ps-tls/tls.key", ""])
-
-
-def test_local_tls_blueprint_sets_the_brand_web_certificate_to_that_keypair() -> None:
-    entries = _entries(LOCAL_TLS_BLUEPRINT)
-    brands = [e for e in entries if e["model"] == "authentik_brands.brand"]
-
-    assert len(brands) == 1
-    assert brands[0]["identifiers"] == {"domain": "authentik-default"}
-    assert _keyof_target(brands[0]["attrs"]["web_certificate"]) == "ps-local-tls-keypair"
-
-
-def test_local_tls_blueprint_never_embeds_key_material() -> None:
-    text = LOCAL_TLS_BLUEPRINT.read_text(encoding="utf-8")
-
-    assert "BEGIN" not in text
 
 
 # --- default-brand race (found live) -----------------------------------------
@@ -375,10 +342,7 @@ def _first_brand_index(entries: list[dict[str, Any]]) -> int:
     return next(i for i, e in enumerate(entries) if e["model"] == "authentik_brands.brand")
 
 
-@pytest.mark.parametrize("path", [MAIN_BLUEPRINT, LOCAL_TLS_BLUEPRINT], ids=["main", "local-tls"])
-def test_blueprints_that_patch_the_default_brand_apply_the_shipped_default_brand_first(
-    path: Path,
-) -> None:
+def test_blueprints_that_patch_the_default_brand_apply_the_shipped_default_brand_first() -> None:
     """Authentik's `Default - Brand` blueprint creates the `authentik-default` brand (with
     `default: true` and the four default flows) only when no default brand exists. Blueprint
     tasks run concurrently, so a patch keyed on `domain: authentik-default` that wins the race
@@ -387,7 +351,7 @@ def test_blueprints_that_patch_the_default_brand_apply_the_shipped_default_brand
     certificate. Applying `Default - Brand` through a MetaApplyBlueprint entry before the first
     brand entry makes the order deterministic.
     """
-    entries = _entries(path)
+    entries = _entries(MAIN_BLUEPRINT)
 
     meta_indexes = [
         i

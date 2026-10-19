@@ -1,0 +1,92 @@
+suite: proxy routing
+release:
+  name: policy-system
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+  proxy.enabled: true
+  proxy.tls.secretName: policy-system-local-tls
+  psService.authentikHostname: ps.test
+  authentik.enabled: true
+templates:
+  - proxy-configmap.yaml
+  - proxy-deployment.yaml
+  - proxy-service.yaml
+tests:
+  - it: renders a Deployment running the pinned official nginx image
+    template: proxy-deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^nginx:[0-9]+\.[0-9]+\.[0-9]+-alpine$
+
+  - it: renders a NodePort Service on 30443 targeting the TLS listener
+    template: proxy-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: NodePort
+      - equal:
+          path: spec.ports[0].nodePort
+          value: 30443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 8443
+
+  - it: renders a ConfigMap holding nginx.conf
+    template: proxy-configmap.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - exists:
+          path: data["nginx.conf"]
+
+  - it: server_name equals psService.authentikHostname
+    template: proxy-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "server_name ps\\.test;"
+
+  - it: routes the Authentik OIDC prefix to the authentik upstream and everything else to ps-service
+    template: proxy-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /auth/application/o/ \\{([^{}]|\\{[^{}]*\\})*proxy_pass http://authentik;"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location / \\{([^{}]|\\{[^{}]*\\})*proxy_pass http://ps_service;"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "server policy-system-ps-service:8000;"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "server policy-system-authentik-server:80;"
+
+  - it: speaks HTTP/1.1 to the upstreams
+    template: proxy-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_http_version 1\\.1;"
+
+  - it: every line of the shared path file becomes a location
+    template: proxy-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location = /auth/device \\{"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /auth/device/ \\{"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /auth/static/ \\{"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /auth/api/v3/core/brands/current/ \\{"

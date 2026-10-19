@@ -1,0 +1,14 @@
+# Authentik paths reachable by an end user's browser and ps-cli: OIDC discovery, authorize and
+# token under /application/o/, the device-code entry, the default flows, the flow UI with its
+# executor, config and brand endpoints, and static assets. One path per line; a trailing slash
+# matches that path element prefix, no trailing slash matches that exact path and everything
+# below it. Every other Authentik path (the admin UI, the admin and core APIs, the invitation
+# API) is not on this list.
+/auth/application/o/
+/auth/device
+/auth/flows/-/default/
+/auth/if/flow/
+/auth/api/v3/flows/executor/
+/auth/api/v3/root/config/
+/auth/api/v3/core/brands/current/
+/auth/static/

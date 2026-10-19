@@ -113,6 +113,13 @@ podman info
 
 > **Why 4 CPUs and 8 GB:** kind under Podman needs enough headroom to run a control plane and
 > both Policy System containers. 4 CPUs and 8 GB is the tested minimum.
+>
+> **Proxy footprint: to be measured.** The evaluator proxy adds one more container. Its memory
+> and CPU use has not been measured yet, so the minimum above is unchanged. The `proxy.resources`
+> requests and limits in the chart values are declared settings, not a measurement. To measure
+> the footprint on your machine, follow [Operations Guide: Measuring the proxy
+> footprint](./operations-guide.md#measuring-the-proxy-footprint-evaluator) with
+> `scripts/measure-proxy-footprint.sh`.
 
 ### 3. Download the deploy bundle
 
@@ -154,7 +161,7 @@ Tell kind to use Podman:
 export KIND_EXPERIMENTAL_PROVIDER=podman
 ```
 
-Check that this machine is safe to expose. The cluster publishes Authentik on every network
+Check that this machine is safe to expose. The cluster publishes the proxy on every network
 interface of the machine (port `30443`), so the check lists the machine's addresses and fails
 when one is outside the loopback, link-local and private ranges:
 
@@ -339,17 +346,25 @@ The script does these things, in this order:
    (`https://<hostname>:30443/auth/application/o/ps-cli/`) and the bootstrap owner together. The
    bootstrap owner is the owner's email as `sub`, with that issuer. There is no second
    deployment. The script runs the upgrade again only when its values change.
-6. It waits until Authentik and PS Service are Ready. It makes Authentik serve the local
-   certificate.
+6. It waits until Authentik, the proxy and PS Service are Ready. The proxy serves the local
+   certificate. The script then checks from inside the PS Service pod that the issuer's OIDC
+   discovery document can be fetched through the proxy, and stops with the cause when it cannot.
+   Last, it checks from this machine, through port `30443` and verifying the CA, that `/health`
+   answers, that the discovery document reports exactly the issuer the release was given, and that
+   a request to `/mcp/` without a bearer token is refused with `401`.
 7. It creates the owner as an Authentik administrator. The username and email are the address
    you gave. **No password is set, prompted for, or logged.** It prints a single-use,
    time-limited link to register a passkey.
 
 The script ends with these items, in this order:
 
-1. What is left to do on this machine.
-2. The `ps-cli` login command.
-3. The enrolment link.
+1. The client values for any machine that uses the evaluator: the hosts line (this machine's LAN
+   address and the name), the `ca.pem` path, the `ps-cli config set-context` command and the
+   `PS_MCP_URL` value.
+2. What is left to do on this machine. On Linux this lists the Debian/Ubuntu and Fedora/RHEL
+   trust commands and never the macOS keychain command.
+3. The `ps-cli` login command.
+4. The enrolment link.
 
 Check the pods:
 
@@ -360,13 +375,13 @@ kubectl get pods
 Check that PS Service is healthy:
 
 ```bash
-curl http://127.0.0.1:8000/health
+curl --cacert ~/.config/policy-system/eval-tls/ca.pem https://ps.test:30443/health
 ```
 
 Check that PS Service is ready:
 
 ```bash
-curl http://127.0.0.1:8000/ready
+curl --cacert ~/.config/policy-system/eval-tls/ca.pem https://ps.test:30443/ready
 ```
 
 Open the FalkorDB web UI. Use it to explore the graph database:
@@ -382,6 +397,25 @@ To upgrade to a newer release later, see the [Operations
 Guide](./operations-guide.md#updating-to-the-latest-version). Your graph data stays across
 upgrades. Download the bundle again before you re-run `scripts/deploy-ps-eval.sh` after an
 upgrade, because an old bundle installs the chart of its own release.
+
+#### Upgrading an existing evaluator
+
+Re-run `scripts/deploy-ps-eval.sh` with the new bundle. The upgrade changes what a cluster
+created earlier exposes:
+
+- Authentik and PS Service are `ClusterIP` Services and the proxy holds port `30443`. Re-running
+  is the recovery if Helm reports the port as allocated while the Services switch over.
+- The script creates a second Secret, `policy-system-local-ca`, that holds only the CA
+  certificate. `policy-system-local-tls` holds the certificate and key, and only the proxy
+  mounts it.
+- Authentik no longer serves the local certificate. If its keypair `ps-local-tls` is still
+  registered, the script prints how to remove it from the admin UI (System > Brands, then
+  System > Certificates).
+- A cluster created earlier keeps its `127.0.0.1:8000` host mapping. Nothing listens behind it
+  any more, and the evaluator is no longer reached on `http://127.0.0.1:8000`: use
+  `https://<hostname>:30443`, also on the evaluator machine.
+- Signing credentials that were enrolled on the relying party `localhost` do not work on the new
+  origin. Enrol them again after the upgrade.
 
 #### Recover the owner
 
@@ -474,14 +508,14 @@ in.
 #### Log in with ps-cli
 
 The script already pointed `ps-cli` at the instance. It set and selected the `eval` context
-(`http://127.0.0.1:8000`), unless that context was already correct. The script cannot log in
+(`https://ps.test:30443`, or your `--hostname`), unless that context was already correct. The script cannot log in
 for you, because the login needs the passkey you just registered.
 
 If the script printed the context commands instead, run them first. This happens when `ps-cli`
 was not on `PATH` while the script ran (see step 6):
 
 ```bash
-ps-cli config set-context eval --url http://127.0.0.1:8000
+ps-cli config set-context eval --url https://ps.test:30443
 ```
 
 ```bash
@@ -601,14 +635,14 @@ Add the marketplace first. Then install the plugin from it.
    ```json
    {
      "env": {
-       "PS_MCP_URL": "http://127.0.0.1:8000/mcp/"
+       "PS_MCP_URL": "https://ps.test:30443/mcp/"
      }
    }
    ```
 
-   - The evaluator's PS Service is published on host port `8000`, so the URL is
-     `http://127.0.0.1:8000/mcp/`. The trailing slash is part of the URL. Do not use
-     `ps.test`. It is the Authentik login server and does not serve `/mcp/`.
+   - The evaluator's PS Service is served by the proxy on port `30443`, so the URL is
+     `https://<hostname>:30443/mcp/` (`https://ps.test:30443/mcp/` by default). The trailing slash
+     is part of the URL. The script prints this value as `PS_MCP_URL=...` in its closing summary.
    - If `PS_MCP_URL` is not set, `/mcp` shows `ps-mcp` as failed with
      `Missing environment variables: PS_MCP_URL`. Set it, then start a new Claude Code session.
    - The plugin does not use `userConfig` for the URL. A `${user_config.*}` value never reached
@@ -643,24 +677,25 @@ To ask a question, see the [User Guide](./user-guide.md#using-claude-desktop---c
 
 ### What is exposed (evaluator)
 
-The evaluator profile runs on one machine. It exposes Authentik to the local network on
-purpose, so colleagues on the LAN can log in. This table shows what is reachable and by whom:
+The evaluator profile runs on one machine. It exposes one reverse proxy (nginx) to the local
+network on purpose, so colleagues on the LAN can log in. The proxy serves PS Service and the
+allowlisted Authentik login paths on one port. This table shows what is reachable and by whom:
 
 | Listener | Address | Reachable by | What it serves |
 | --- | --- | --- | --- |
-| Authentik over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`). `deploy/kind/cluster.yaml` maps it to the HTTPS NodePort of the Authentik server. | Anyone who can reach port `30443` of this machine. On a shared LAN, this is everyone on the LAN. | **All of Authentik**: the login, enrolment, and device-code pages, the whole API, and the **admin UI** (`https://<hostname>:30443/auth/if/admin/`). Only the Authentik login (a passkey) protects it. This is on purpose: it lets a colleague on the LAN log in. |
-| Authentik over plain HTTP | NodePort `30080` inside the kind node only | Nobody outside the node. It is not mapped to the host and not reachable from the LAN. | The deploy script uses it through a loopback `kubectl port-forward` while it sets up the certificate. |
-| PS Service | `127.0.0.1:8000` | This machine only | The REST API and the MCP endpoint. Every call needs an Authentik-issued bearer token. |
+| Proxy over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`). `deploy/kind/cluster.yaml` maps it to the proxy's NodePort. | Anyone who can reach port `30443` of this machine. On a shared LAN, this is everyone on the LAN. | PS Service (the REST API and the MCP endpoint, every call needs an Authentik-issued bearer token) and the Authentik paths on the allowlist (`charts/policy-system/files/authentik-public-paths.txt`): the login, enrolment and device-code pages. |
+| Authentik | ClusterIP only | Pods in the cluster only. | The deploy script reaches its API through a loopback `kubectl port-forward`. |
+| PS Service | ClusterIP only | Pods in the cluster, and clients through the proxy. | The REST API and the MCP endpoint. |
 | FalkorDB Browser | `127.0.0.1:3001` | This machine only | The graph explorer UI. Authentik does not protect it. |
 | FalkorDB (Redis) | ClusterIP only | Pods in the cluster only. It is never mapped. | The graph database. |
 
 **To reach the Authentik admin UI:**
 
-1. Open `https://<hostname>:30443/auth/if/admin/` in a browser that trusts the CA. The default is
-   `https://ps.test:30443/auth/if/admin/`.
-2. Sign in as the owner.
+1. Forward the Authentik server to this machine:
+   `kubectl port-forward svc/policy-system-authentik-server 9000:80`.
+2. Open `http://127.0.0.1:9000/auth/if/admin/` and sign in as the owner.
 
-The admin UI uses the same HTTPS listener as everything else. You do not need a port-forward.
+The admin UI is not served through the proxy.
 
 **The exposure preflight.** `scripts/deploy-ps-eval.sh` stops before any cluster call when an
 interface of the machine holds a public address, and `scripts/deploy-ps-eval.sh --check-exposure`
@@ -671,16 +706,33 @@ private addresses pass: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.25
 accepts the exposure.
 
 **Approval-page names.** The deploy script sets `psService.passkeySigning.allowedOrigins` to
-`http://localhost:8000`. That origin is the WebAuthn relying party for signing approvals
-(`rp_id` `localhost`), whatever hostname you pass to `--hostname`, and a POST to an approval
-route (`/approvals/<id>/...`) on any other `Host` is answered `421`. Approve from this machine
-at `localhost:8000`. The approval link the service hands out is built from the `Host` of the
-request that created it, so a client that reached PS Service under a name that is not listed
-receives a link that answers `421`; open it on `http://localhost:8000` instead.
+`https://<hostname>:30443`, where `<hostname>` is the name you pass to `--hostname` (`ps.test` by
+default). That origin is the WebAuthn relying party for signing approvals (`rp_id` is the
+hostname), and a POST to an approval route (`/approvals/<id>/...`) on any other `Host` is answered
+`421`. Open the approval page on `https://<hostname>:30443`, on this machine or any other that
+maps the name and trusts the CA. The approval link the service hands out is built from the `Host`
+of the request that created it, so a client that reached PS Service under a name that is not
+listed receives a link that answers `421`; open it on `https://<hostname>:30443` instead.
 
 **To limit access to your own machine:**
 
 - Block port `30443` of the laptop from the LAN with the host firewall.
+
+**Transport and accepted risks.** The proxy accepts TLS 1.2 and TLS 1.3 only, every listener
+speaks TLS, and plain HTTP to port `30443` gets an nginx error page, never an API response.
+It sets `Secure` and `SameSite=Lax` on every cookie it relays and adds `HttpOnly` to all but
+Authentik's CSRF cookie, which the login page reads from JavaScript. A flag the upstream already
+set is not repeated. It sends no HSTS header, because the certificate comes from a local CA. Only
+the proxy pod mounts the private key of the local certificate. These risks remain on a shared LAN:
+
+- **A rogue host on the LAN.** Anyone who can reach port `30443` can attempt logins and probe the
+  allowlisted paths. Every PS Service call still needs an Authentik-issued bearer token.
+- **Device-code phishing.** A user can be tricked into approving a device code that an attacker
+  started. Approve a code only when you started the login yourself.
+- **One shared origin.** PS Service and the Authentik login pages are served from one origin, so a
+  script injected into one can read what the other sets for that origin.
+- **MCP and DNS rebinding.** The MCP endpoint is protected by its bearer token alone; the loopback
+  restriction of the former `127.0.0.1:8000` mapping no longer applies.
 
 Things to know:
 
@@ -1043,7 +1095,7 @@ deployment has a public hostname. See [What is exposed (production)](#what-is-ex
 
 | Surface | Public deployment | Non-public deployment | Status |
 | --- | --- | --- | --- |
-| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (Claude Code 2.1.236). Non-public: Expected (inferred, not run). Evaluator on `ps.test`, `PS_MCP_URL` set to `http://127.0.0.1:8000/mcp/`: pending, not yet verified on this name. |
+| Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (Claude Code 2.1.236). Non-public: Expected (inferred, not run). Evaluator on `ps.test`, `PS_MCP_URL` set to `https://ps.test:30443/mcp/`: pending, not yet verified on this name. |
 | Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (not tested). Login in the Desktop Code tab: Expected, not yet verified for a public deployment. Evaluator on `ps.test`: pending, not yet verified on this name. Sign in from the Claude Code CLI first. Then a new Desktop Code session is signed in. |
 | Claude Desktop Chat and Cowork | Works as a manually added custom connector (URL plus Client ID `ps-cli`): GO | Does not work (needs public PS Service and Authentik) | Expected for everything beyond the login result. |
 | claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested). |
@@ -1378,7 +1430,7 @@ before you rely on a claim for a real deployment.
   - Certificate refresh without a manual restart.
   - This run used an earlier hostname. The evaluator on `ps.test` is untested, and so is the migration from the former name.
 - **A second machine on the LAN: simulated, not tried on physical hardware.**
-  - A separate container with the CA in its trust store reached Authentik over HTTPS through
+  - A separate container with the CA in its trust store reached the proxy over HTTPS through
     the `0.0.0.0:30443` mapping of the host.
   - A second browser profile completed a passkey device login. The hostname was mapped to the
     LAN address.

@@ -238,7 +238,7 @@ def test_installation_guide_step_9_documents_ps_mcp_url_setup() -> None:
     for needle in (
         "PS_MCP_URL",
         '"env"',
-        "http://127.0.0.1:8000/mcp/",
+        "https://ps.test:30443/mcp/",
         _PS_MCP_URL_ERROR,
         "userConfig",
         "prompt=consent",

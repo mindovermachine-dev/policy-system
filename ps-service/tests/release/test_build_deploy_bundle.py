@@ -72,3 +72,23 @@ def test_build_script_rejects_missing_arguments() -> None:
     )
     assert result.returncode == 2
     assert "usage:" in result.stderr
+
+
+def test_bundle_pins_chart_and_script_versions_together(unpacked: Path) -> None:
+    """The one VERSION file that says which release the scripts are from also selects the chart
+    both deploy scripts install and read the shared path list from.
+    """
+    bundle_version = (unpacked / "VERSION").read_text().strip()
+    probe = (
+        f'source "{unpacked}/scripts/lib/chart-version.sh"; '
+        f'set_chart_version_args "{unpacked}/scripts" oci://example.test/charts/policy-system; '
+        'printf "%s " "${chart_version_args[@]}"'
+    )
+    result = subprocess.run(  # noqa: S603 - the repo's own script and test literals
+        ["/bin/bash", "-c", probe], capture_output=True, text=True, check=True, timeout=30
+    )
+    assert result.stdout.split() == ["--version", bundle_version]
+    for name in ("deploy-ps-prod.sh", "deploy-ps-eval.sh"):
+        script = (unpacked / "scripts" / name).read_text()
+        assert 'source "${SCRIPT_DIR}/lib/chart-version.sh"' in script, name
+        assert "set_chart_version_args" in script, name

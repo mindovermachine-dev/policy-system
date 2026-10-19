@@ -735,6 +735,30 @@ case "$verb" in
     release="$3"
     cat "$state/releases/${release}.json"
     ;;
+  pull)
+    # pull <chart-ref> [--version V] --untar --untardir <dir> -- unpacks the chart into
+    # <dir>/policy-system. PS_TEST_CHART_DIR is the chart tree to serve; PS_TEST_HELM_PULL_OLD_CHART
+    # serves a chart that predates the shared path file (Chart.yaml only); PS_TEST_HELM_PULL_FAIL
+    # makes the pull itself fail.
+    if [[ -n "${PS_TEST_HELM_PULL_FAIL:-}" ]]; then
+      echo 'Error: failed to fetch the chart' >&2
+      exit 1
+    fi
+    untardir=""
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --untardir) untardir="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    mkdir -p "$untardir/policy-system"
+    if [[ -n "${PS_TEST_HELM_PULL_OLD_CHART:-}" ]]; then
+      printf 'name: policy-system\n' > "$untardir/policy-system/Chart.yaml"
+    else
+      cp -R "$PS_TEST_CHART_DIR/." "$untardir/policy-system/"
+    fi
+    ;;
   status)
     # status <release> [--namespace <ns>] -- exit 0 if the release file exists, else 1.
     release="$2"
@@ -829,6 +853,7 @@ class DeployPsFixture:
             "PS_TEST_KUBECTL_STATE_DIR": str(self.kubectl_state),
             "PS_TEST_HELM_STATE_DIR": str(self.helm_state),
             "PS_TEST_HELM_LOG": str(self.helm_log),
+            "PS_TEST_CHART_DIR": str(REPO_ROOT / "charts" / "policy-system"),
             # The owner-creation step's fake Authentik API (`curl`) and the shared
             # token the fake kubectl serves as base64 (a real Secret's data field).
             "PS_TEST_CURL_STATE": str(self.curl_state),

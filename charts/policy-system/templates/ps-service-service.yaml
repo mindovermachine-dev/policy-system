@@ -16,6 +16,6 @@ spec:
     - name: http
       port: 8000
       targetPort: http
-      {{- if eq .Values.psService.service.type "NodePort" }}
+      {{- if and (eq .Values.psService.service.type "NodePort") .Values.psService.service.nodePort }}
       nodePort: {{ .Values.psService.service.nodePort }}
       {{- end }}

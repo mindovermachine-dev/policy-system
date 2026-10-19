@@ -15,6 +15,7 @@ import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import Any
 
     from conftest import EvalFixture, ScriptRun
 
@@ -29,6 +30,8 @@ MACOS_TRUST = (
 )
 ISSUER = f"https://{HOST}:30443/auth/application/o/ps-cli/"
 AUTH_BASE = f"https://{HOST}:30443/auth"
+IN_CLUSTER_AUTH = "http://policy-system-authentik-server/auth"
+PF_PORT = "41999"
 OPENSSL_TIMEOUT_SECONDS = 30
 SECONDS_PER_DAY = 86400
 
@@ -64,10 +67,15 @@ def _leaf_sans(fixture: EvalFixture) -> list[str]:
     return [entry.strip() for entry in names.split(",") if entry.strip()]
 
 
+def _api_calls(fixture: EvalFixture) -> list[dict[str, Any]]:
+    """The curl calls that provision Authentik, not the closing probes of the proxy."""
+    return [c for c in fixture.curl_calls() if ":30443/" not in str(c["url"])]
+
+
 def _mutations(fixture: EvalFixture) -> list[str]:
     """Anything that changes state: helm, a kubectl apply, or an Authentik API call."""
     kubectl = [c for c in fixture.kubectl_calls() if "apply" in c or "create secret" in c]
-    return [*fixture.helm_upgrades(), *kubectl, *fixture.curl_urls()]
+    return [*fixture.helm_upgrades(), *kubectl, *(str(c["url"]) for c in _api_calls(fixture))]
 
 
 # --- happy path: one deploy sets everything -----------------------------------------------------
@@ -88,22 +96,25 @@ def test_fresh_run_deploys_once_with_owner_subject_issuer_and_base_url(
         "scopes": "openid profile email offline_access",
     }
     assert ps["authzBootstrapOwner"] == {"subject": OWNER_EMAIL, "issuer": ISSUER}
-    assert ps["authentik"] == {"baseUrl": AUTH_BASE}
+    assert ps["authentik"] == {"baseUrl": IN_CLUSTER_AUTH, "publicUrl": AUTH_BASE}
     assert ps["authentikHostname"] == HOST
     assert ps["authentikHostAliasIP"] == NODE_IP
     assert ps["localTestBypass"] == {"enabled": False}
     assert values["authentik"]["enabled"] is True
-    assert values["localTls"] == {"secretName": "policy-system-local-tls"}
+    assert ps["localCa"] == {"secretName": "policy-system-local-ca"}
+    assert values["proxy"]["tls"] == {"secretName": "policy-system-local-tls"}
+    assert "localTls" not in values
     assert values["llm"] == {"existingSecret": "policy-system-llm-credentials"}
 
 
-def test_the_release_pins_the_signing_origin_to_localhost_whatever_the_hostname(
+def test_the_release_pins_the_signing_origin_to_the_configured_name_and_proxy_port(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", "ps.example.test")
 
     ps = eval_fixture.deployed_values()["psService"]
-    assert ps["passkeySigning"] == {"allowedOrigins": ["http://localhost:8000"]}
+    assert ps["passkeySigning"] == {"allowedOrigins": ["https://ps.example.test:30443"]}
+    assert "localhost:8000" not in json.dumps(eval_fixture.deployed_values())
 
 
 def test_default_hostname_is_the_single_evaluator_name_everywhere(
@@ -116,24 +127,21 @@ def test_default_hostname_is_the_single_evaluator_name_everywhere(
     assert ps["authentikHostname"] == HOST
     assert ps["auth"]["issuer"] == ISSUER
     assert ps["authzBootstrapOwner"]["issuer"] == ISSUER
-    assert ps["authentik"]["baseUrl"] == AUTH_BASE
+    assert ps["authentik"]["publicUrl"] == AUTH_BASE
     assert _leaf_sans(eval_fixture) == [f"DNS:{HOST}"]
     assert ".local" not in json.dumps(values)
 
 
-def test_authentik_pods_get_the_tls_secret_mount_and_a_certificate_checksum(
+def test_only_the_proxy_gets_the_tls_secret_and_a_certificate_checksum(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
-    global_values = eval_fixture.deployed_values()["authentik"]["global"]
-    assert global_values["volumes"] == [
-        {"name": "ps-tls", "secret": {"secretName": "policy-system-local-tls"}}
-    ]
-    assert global_values["volumeMounts"] == [
-        {"name": "ps-tls", "mountPath": "/ps-tls", "readOnly": True}
-    ]
-    assert len(global_values["podAnnotations"]["checksum/local-tls"]) >= 32
+    values = eval_fixture.deployed_values()
+    assert values["proxy"]["tls"] == {"secretName": "policy-system-local-tls"}
+    assert len(values["proxy"]["podAnnotations"]["checksum/local-tls"]) >= 32
+    assert "global" not in values["authentik"]
+    assert "policy-system-local-tls" not in json.dumps(values["psService"])
 
 
 def test_helm_installs_the_chart_named_by_ps_chart_ref(eval_fixture: EvalFixture) -> None:
@@ -162,7 +170,8 @@ def test_custom_hostname_drives_issuer_base_url_and_certificate(
 
     values = eval_fixture.deployed_values()["psService"]
     assert values["auth"]["issuer"] == "https://ps.example.test:30443/auth/application/o/ps-cli/"
-    assert values["authentik"]["baseUrl"] == "https://ps.example.test:30443/auth"
+    assert values["authentik"]["baseUrl"] == IN_CLUSTER_AUTH
+    assert values["authentik"]["publicUrl"] == "https://ps.example.test:30443/auth"
     assert _leaf_sans(eval_fixture) == ["DNS:ps.example.test"]
 
 
@@ -249,18 +258,19 @@ def test_owner_user_is_created_and_the_link_is_printed_once_with_the_https_host(
     assert "flow_token=" in links[0]
 
 
-def test_authentik_api_is_called_through_the_external_host_with_the_local_ca(
+def test_authentik_api_is_called_through_the_loopback_port_forward(
     eval_fixture: EvalFixture,
 ) -> None:
-    eval_fixture.run("--owner-email", OWNER_EMAIL)
+    eval_fixture.run("--owner-email", OWNER_EMAIL, PS_TEST_PF_PORT=PF_PORT)
 
-    calls = eval_fixture.curl_calls()
+    calls = _api_calls(eval_fixture)
     assert calls
     for call in calls:
-        assert call["url"].startswith(f"{AUTH_BASE}/api/v3/")
-        argv = call["argv"]
-        assert argv[argv.index("--cacert") + 1] == str(eval_fixture.state_dir / "ca.pem")
-        assert argv[argv.index("--resolve") + 1] == f"{HOST}:30443:127.0.0.1"
+        assert call["url"].startswith(f"http://127.0.0.1:{PF_PORT}/auth/api/v3/")
+        assert "--resolve" not in call["argv"]
+    forwards = [c for c in eval_fixture.kubectl_calls() if "port-forward" in c]
+    assert len(forwards) == 1
+    assert "svc/policy-system-authentik-server :80" in forwards[0]
 
 
 def test_owner_link_carries_the_auth_prefix_once(eval_fixture: EvalFixture) -> None:
@@ -336,7 +346,7 @@ def test_the_shared_token_never_reaches_output_argv_or_logs(eval_fixture: EvalFi
 # --- local TLS ---------------------------------------------------------------------------------
 
 
-def test_the_tls_secret_carries_leaf_key_and_ca_and_is_applied_before_helm(
+def test_the_tls_secret_carries_leaf_and_key_only_and_is_applied_before_helm(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL)
@@ -345,8 +355,21 @@ def test_the_tls_secret_carries_leaf_key_and_ca_and_is_applied_before_helm(
     create = next(c for c in kube if "create secret generic policy-system-local-tls" in c)
     assert f"--from-file=tls.crt={eval_fixture.state_dir}/leaf.pem" in create
     assert f"--from-file=tls.key={eval_fixture.state_dir}/leaf.key" in create
-    assert f"--from-file=ca.crt={eval_fixture.state_dir}/ca.pem" in create
+    assert "ca.crt" not in create
     assert kube.index(create) < next(i for i, c in enumerate(kube) if "rollout status" in c)
+
+
+def test_the_ca_secret_carries_the_ca_certificate_only(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    create = next(
+        c
+        for c in eval_fixture.kubectl_calls()
+        if "create secret generic policy-system-local-ca" in c
+    )
+    assert f"--from-file=ca.crt={eval_fixture.state_dir}/ca.pem" in create
+    assert "tls.key" not in create
+    assert "leaf.key" not in create
 
 
 def test_only_the_ca_certificate_is_referenced_for_distribution_never_its_key(
@@ -375,48 +398,6 @@ def test_ca_is_created_once_and_reused_by_a_rerun(eval_fixture: EvalFixture) -> 
     text = _x509_text(ca)
     assert f"X509v3 Name Constraints: critical Permitted: DNS:{HOST} " in text
     assert _expires_within_days(ca, 730)
-
-
-def test_no_certificate_refresh_when_authentik_already_serves_the_local_leaf(
-    eval_fixture: EvalFixture,
-) -> None:
-    eval_fixture.served("local")
-
-    eval_fixture.run("--owner-email", OWNER_EMAIL)
-
-    assert not any(u.endswith("/apply/") for u in eval_fixture.curl_urls())
-    assert not [c for c in eval_fixture.kubectl_calls() if "port-forward" in c]
-
-
-def test_cert_refresh_goes_through_the_auth_prefixed_loopback_port_forward(
-    eval_fixture: EvalFixture,
-) -> None:
-    eval_fixture.served("other", "other", "local")
-
-    eval_fixture.run("--owner-email", OWNER_EMAIL, PS_TEST_PF_PORT="41999")
-
-    urls = eval_fixture.curl_urls()
-    applies = [u for u in urls if u.endswith("/apply/")]
-    assert len(applies) == 1
-    assert applies[0].startswith("http://127.0.0.1:41999/auth/api/v3/managed/blueprints/")
-    assert not any(
-        "rollout restart deployment/policy-system-authentik" in c
-        for c in eval_fixture.kubectl_calls()
-    )
-    forwards = [c for c in eval_fixture.kubectl_calls() if "port-forward" in c]
-    assert len(forwards) == 1
-    assert "svc/policy-system-authentik-server :80" in forwards[0]
-    # once the certificate is right, the owner is provisioned through the external https host
-    assert any(u.startswith(f"{AUTH_BASE}/api/v3/core/users/") for u in urls)
-
-
-def test_a_certificate_that_never_arrives_fails_with_a_fix(eval_fixture: EvalFixture) -> None:
-    eval_fixture.served("other")
-
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
-
-    assert "not serving the local certificate" in run.stderr
-    assert eval_fixture.curl_users() == {}
 
 
 # --- prerequisites and guard rails (including the missing-tool path) ---------------------------
@@ -603,14 +584,88 @@ def test_closing_output_prints_the_issuer_and_the_auth_url(eval_fixture: EvalFix
     assert f"OIDC issuer: {ISSUER}" in run.stdout
 
 
-def test_closing_output_points_ps_service_and_ps_cli_at_the_loopback_address(
+def test_summary_prints_hosts_line_ca_path_set_context_and_mcp_url(
     eval_fixture: EvalFixture,
 ) -> None:
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+    ca = eval_fixture.state_dir / "ca.pem"
 
-    assert "PS Service: http://127.0.0.1:8000" in run.stdout
-    assert "ps-cli config set-context eval --url http://127.0.0.1:8000" in run.stdout
-    assert "/mcp/" not in run.stdout.split("OIDC issuer:")[0]
+    default = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert f"PS Service: https://{HOST}:30443" in default.stdout
+    assert f"hosts line:  {LAN} {HOST}" in default.stdout
+    assert f"CA file:     {ca}" in default.stdout
+    assert f"ps-cli config set-context eval --url https://{HOST}:30443" in default.stdout
+    assert f"PS_MCP_URL=https://{HOST}:30443/mcp/" in default.stdout
+    assert "127.0.0.1:8000" not in default.stdout
+
+
+def test_summary_values_follow_a_custom_name_and_lan_address(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run(
+        "--owner-email",
+        OWNER_EMAIL,
+        "--hostname",
+        "ps.example.test",
+        "--lan-address",
+        "10.20.30.40",
+        PS_HOSTS_FILE=_hosts_file(eval_fixture),
+    )
+
+    assert "hosts line:  10.20.30.40 ps.example.test" in run.stdout
+    assert "ps-cli config set-context eval --url https://ps.example.test:30443" in run.stdout
+    assert "PS_MCP_URL=https://ps.example.test:30443/mcp/" in run.stdout
+    assert f"{HOST}:30443/mcp/" not in run.stdout
+
+
+def test_final_probe_hits_health_and_issuer_through_the_proxy(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    probes = [c for c in eval_fixture.curl_calls() if ":30443/" in c["url"]]
+    urls = [c["url"] for c in probes]
+    assert f"https://{HOST}:30443/health" in urls
+    assert f"{ISSUER}.well-known/openid-configuration" in urls
+    for call in probes:
+        argv = call["argv"]
+        assert f"{HOST}:30443:127.0.0.1" in argv
+        assert str(eval_fixture.state_dir / "ca.pem") in argv
+
+
+def test_final_probe_fails_when_the_proxy_reports_another_issuer(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.seed_curl(proxy_issuer="https://ps.test:8443/auth/application/o/ps-cli/")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None)
+
+    assert run.returncode == 1
+    assert "issuer" in run.stderr
+    assert "Fix:" in run.stderr
+
+
+def test_final_probe_fails_when_health_does_not_answer(eval_fixture: EvalFixture) -> None:
+    eval_fixture.seed_curl(proxy_health_status=502)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None)
+
+    assert run.returncode == 1
+    assert "/health" in run.stderr
+    assert "Fix:" in run.stderr
+
+
+def test_final_probe_requires_401_without_a_bearer_token(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+    assert f"https://{HOST}:30443/mcp/" in eval_fixture.curl_urls()
+    mcp = next(c for c in eval_fixture.curl_calls() if c["url"].endswith("/mcp/"))
+    assert not any("authorization" in part.lower() for part in mcp["argv"])
+
+    eval_fixture.seed_curl(proxy_mcp_status=200)
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None)
+
+    assert run.returncode == 1
+    assert "401" in run.stderr
 
 
 def _fake_ps_cli(fixture: EvalFixture, *, current: str = "") -> Path:
@@ -631,16 +686,16 @@ def test_ps_cli_context_is_set_and_selected_when_missing(eval_fixture: EvalFixtu
     run = eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     calls = log.read_text().splitlines()
-    assert "config set-context eval --url http://127.0.0.1:8000" in calls
+    assert f"config set-context eval --url https://{HOST}:30443" in calls
     assert "config use-context eval" in calls
     assert "  ps-cli auth login" in run.stdout
     assert "SSL_CERT_FILE" not in run.stdout
-    assert "ps-cli config set-context" not in run.stdout
+    assert "ps-cli config use-context" not in run.stdout
 
 
 def test_ps_cli_context_is_left_alone_when_already_current(eval_fixture: EvalFixture) -> None:
     """set-context deletes the stored login, so a re-run must not repeat it."""
-    log = _fake_ps_cli(eval_fixture, current="│ *  │ eval │ http://127.0.0.1:8000 │ - │")
+    log = _fake_ps_cli(eval_fixture, current=f"│ *  │ eval │ https://{HOST}:30443 │ - │")
 
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
@@ -650,7 +705,7 @@ def test_ps_cli_context_is_left_alone_when_already_current(eval_fixture: EvalFix
 def test_without_ps_cli_the_closing_output_prints_the_commands(eval_fixture: EvalFixture) -> None:
     run = eval_fixture.run("--owner-email", OWNER_EMAIL)
 
-    assert "ps-cli config set-context eval --url http://127.0.0.1:8000" in run.stdout
+    assert f"ps-cli config set-context eval --url https://{HOST}:30443" in run.stdout
     assert "ps-cli config use-context eval" in run.stdout
     assert "  ps-cli auth login" in run.stdout
     assert "SSL_CERT_FILE" not in run.stdout
@@ -749,7 +804,7 @@ def test_a_loopback_mapping_of_the_name_is_reported_not_duplicated(
 
 
 def test_provisioning_does_not_depend_on_the_hosts_file(eval_fixture: EvalFixture) -> None:
-    """The script's own calls name the loopback address themselves.
+    """The script's own calls go to the loopback port-forward.
 
     A missing hosts file (the machine has not been set up yet) does not stop the deploy.
     """
@@ -757,9 +812,9 @@ def test_provisioning_does_not_depend_on_the_hosts_file(eval_fixture: EvalFixtur
 
     eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=absent)
 
-    calls = eval_fixture.curl_calls()
+    calls = _api_calls(eval_fixture)
     assert calls
-    assert all("--resolve" in call["argv"] for call in calls)
+    assert all(call["url"].startswith("http://127.0.0.1:") for call in calls)
     assert eval_fixture.curl_users()
 
 
@@ -906,6 +961,45 @@ def test_trust_commands_on_linux_are_printed_for_debian_and_fedora_families(
     assert "name constraint" in squashed
     assert "extended key usage" in squashed
     assert "TLS server authentication" in squashed
+
+
+def test_linux_run_never_prints_or_runs_keychain_commands(eval_fixture: EvalFixture) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+    eval_fixture.set_platform("Linux")
+    security_log = eval_fixture.add_security(trusted=False)
+    sudo_log = _fake_sudo(eval_fixture)
+    hosts = _hosts_file(eval_fixture)
+
+    first = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts
+    )
+    second = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts
+    )
+
+    for text in (first.output, second.output, sudo_log.read_text()):
+        assert "add-trusted-cert" not in text
+        assert "remove-trusted-cert" not in text
+        assert "System.keychain" not in text
+        assert "security " not in text
+    assert not security_log.exists()
+    assert "replaced" in first.stderr
+
+
+def test_linux_summary_shows_debian_and_fedora_trust_methods(eval_fixture: EvalFixture) -> None:
+    _seed_legacy_evaluator(eval_fixture)
+    eval_fixture.set_platform("Linux")
+    ca = eval_fixture.state_dir / "ca.pem"
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    summary = run.stdout
+    assert f"sudo cp {ca} /usr/local/share/ca-certificates/ps-local-ca.crt" in summary
+    assert "sudo update-ca-certificates" in summary
+    assert f"sudo cp {ca} /etc/pki/ca-trust/source/anchors/ps-local-ca.pem" in summary
+    assert "sudo update-ca-trust" in summary
+    assert "sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt" in summary
+    assert "sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem" in summary
 
 
 def test_ca_trust_check_uses_the_ssl_policy_and_is_skipped_when_already_trusted(
@@ -1220,6 +1314,7 @@ def test_migration_moves_the_release_to_the_new_name_and_issuer_in_one_upgrade(
 def test_migration_replaces_the_unconstrained_ca_and_names_the_old_ca_to_remove(
     eval_fixture: EvalFixture,
 ) -> None:
+    eval_fixture.set_platform("Darwin")
     _seed_legacy_evaluator(eval_fixture)
     old_ca = eval_fixture.state_dir / "ca.pem"
     sha1, sha256 = _ca_hash(old_ca, "sha1"), _ca_hash(old_ca, "sha256")
@@ -1399,54 +1494,61 @@ def test_a_leaf_without_the_name_san_is_reissued_on_rerun(eval_fixture: EvalFixt
     assert (state / "ca.pem").read_text() == ca_before
 
 
-# --- order: Authentik first, then the certificate, then PS Service (found live at LC2) ---------
+# --- order and in-cluster discovery probe -----------------------------------------------------
 
 
 def _index(calls: list[str], needle: str) -> int:
     return next(i for i, c in enumerate(calls) if needle in c)
 
 
-def test_ps_service_is_awaited_only_after_authentik_serves_the_certificate(
+def test_discovery_probe_runs_in_the_ps_service_pod_after_rollout(
     eval_fixture: EvalFixture,
 ) -> None:
-    """PS Service discovers the OIDC issuer at startup and crash-loops until Authentik serves the
-    local certificate, so the script must not block on PS Service before that certificate is
-    served (a fresh install applies it through the port-forward first).
-    """
-    eval_fixture.served("other", "other", "local")
-
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     kube = eval_fixture.kubectl_calls()
-    authentik = _index(kube, "rollout status deployment/policy-system-authentik-worker")
-    forward = _index(kube, "port-forward")
-    ps_service = _index(kube, "rollout status deployment/policy-system-ps-service")
-    assert authentik < forward < ps_service
+    probe = next(c for c in kube if " exec " in f" {c} ")
+    assert "deploy/policy-system-ps-service" in probe
+    assert f"{ISSUER}.well-known/openid-configuration" in probe
+    assert "/ps-trust/bundle.crt" in probe
+    assert _index(kube, "rollout status deployment/policy-system-ps-service") < kube.index(probe)
 
 
-def test_ps_service_is_restarted_when_the_certificate_had_to_be_refreshed(
+def test_discovery_probe_failure_names_the_issuer_and_exits_1(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, PS_TEST_EXEC_FAIL="1", PS_DISCOVERY_ATTEMPTS="1", expect=1
+    )
+
+    assert ISSUER in run.stderr
+    assert "Fix:" in run.stderr
+    assert eval_fixture.curl_users() == {}
+
+
+def test_ps_service_is_awaited_without_any_certificate_refresh_or_restart(
     eval_fixture: EvalFixture,
 ) -> None:
-    """It may be in CrashLoopBackOff from the window before the certificate was served; a restart
-    skips the remaining back-off instead of waiting minutes.
-    """
-    eval_fixture.served("other", "other", "local")
-
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     kube = eval_fixture.kubectl_calls()
-    restart = _index(kube, "rollout restart deployment/policy-system-ps-service")
-    assert restart < _index(kube, "rollout status deployment/policy-system-ps-service")
+    assert not any("rollout restart" in c for c in kube)
+    assert _index(kube, "rollout status deployment/policy-system-proxy") < _index(
+        kube, "rollout status deployment/policy-system-ps-service"
+    )
 
 
-def test_ps_service_is_not_restarted_when_the_certificate_was_already_served(
-    eval_fixture: EvalFixture,
-) -> None:
-    eval_fixture.served("local")
+def test_a_leftover_local_tls_keypair_in_authentik_prints_a_fix(eval_fixture: EvalFixture) -> None:
+    eval_fixture.seed_curl(stale_tls_keypair=True)
 
-    eval_fixture.run("--owner-email", OWNER_EMAIL)
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
 
-    assert not any("rollout restart" in c for c in eval_fixture.kubectl_calls())
+    assert "ps-local-tls" in run.stderr
+    assert "Fix:" in run.stderr
+
+
+def test_no_leftover_keypair_prints_no_certificate_fix(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert "ps-local-tls" not in run.stderr
 
 
 # --- exposure preflight: the LAN-facing listener must not meet a public address -----------------

@@ -1,0 +1,26 @@
+suite: authentik trusts only the proxy network
+# The evaluator profile sets the trusted proxy CIDRs on every Authentik workload explicitly.
+release:
+  name: policy-system
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+  authentik.enabled: true
+templates:
+  - charts/authentik/templates/server/deployment.yaml
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
+tests:
+  - it: the server sets the trusted proxy CIDRs
+    template: charts/authentik/templates/server/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS")].value
+          value: 10.244.0.0/16
+
+  - it: the worker sets the trusted proxy CIDRs
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS")].value
+          value: 10.244.0.0/16

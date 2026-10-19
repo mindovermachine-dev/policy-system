@@ -460,7 +460,7 @@ readonly PS_SERVICE_NAME="${HELM_RELEASE_NAME}-ps-service"
 # the full derivation and the exact `helm template` output this was read from.
 readonly AUTHENTIK_SERVICE_NAME="${HELM_RELEASE_NAME}-authentik-server"
 # Issue #165. PS Service calls Authentik in-cluster: the Ingress routes only the login/enrolment
-# paths (AUTHENTIK_PUBLIC_PATHS below), so the invitation API PS Service needs for `invite_user`
+# paths (the shared path file, see read_authentik_public_paths), so the invitation API PS Service needs for `invite_user`
 # is reachable only through the Service. `/auth` is Authentik's web path (AUTHENTIK_WEB__PATH in
 # values-prod.yaml); the Service's port 80 is the default and needs no port here.
 readonly AUTHENTIK_IN_CLUSTER_BASE_URL="http://${AUTHENTIK_SERVICE_NAME}/auth"
@@ -1365,22 +1365,55 @@ EOF
   return 0
 }
 
-# The only Authentik paths the public Ingress routes (issue #165): what an end user's browser and
-# ps-cli need to log in and enroll -- OIDC discovery/authorize/token under /application/o/, the
-# device-code entry, the default flows, the flow UI and its executor/config/brand endpoints, and
-# static assets. Everything else -- the admin UI (/auth/if/admin/), the admin and core APIs, the
-# invitation API PS Service calls in-cluster -- is simply not routed: PS Service's own catch-all
-# Ingress answers those, never Authentik. One list, rendered into the manifest below.
-readonly AUTHENTIK_PUBLIC_PATHS=(
-  /auth/application/o/
-  /auth/device
-  /auth/flows/-/default/
-  /auth/if/flow/
-  /auth/api/v3/flows/executor/
-  /auth/api/v3/root/config/
-  /auth/api/v3/core/brands/current/
-  /auth/static/
-)
+# The Authentik paths the public Ingress routes are defined once, in the chart
+# (files/authentik-public-paths.txt), and read from the chart version this script installs: the
+# same file the evaluator's proxy renders its locations from. They are what an end user's browser
+# and ps-cli need to log in and enroll -- OIDC discovery/authorize/token, the device-code entry, the
+# default flows, the flow UI with its executor/config/brand endpoints, and static assets.
+# Everything else -- the admin UI, the admin and core APIs, the invitation API PS Service calls
+# in-cluster -- is simply not routed here: PS Service's own catch-all Ingress answers those, never
+# Authentik. This Ingress keeps that fall-through; only the evaluator proxy rejects them with 403.
+readonly AUTHENTIK_PUBLIC_PATHS_FILE="files/authentik-public-paths.txt"
+
+# read_authentik_public_paths: prints the shared path list, one path per line, for the chart
+# version set_chart_version_args selects (the bundle's VERSION) or the newest published chart when
+# there is none. The Ingress is applied before the release exists, so the list is read from the
+# chart itself: a local chart directory directly, an OCI reference through `helm pull`. Stops
+# before the Ingress is touched when the chart cannot be fetched, predates the shared file, or the
+# file lists no path -- an Ingress without its paths would hide the login flow.
+read_authentik_public_paths() {
+  local chart_dir="$CHART_REF" pull_dir="" version_label="the newest published chart" lines path
+  set_chart_version_args "$SCRIPT_DIR" "$CHART_REF"
+  if ((${#chart_version_args[@]} == 2)); then
+    version_label="chart version ${chart_version_args[1]}"
+  fi
+  if [[ ! -d "$CHART_REF" ]]; then
+    pull_dir="$(mktemp -d)"
+    if ! helm pull "$CHART_REF" ${chart_version_args[@]+"${chart_version_args[@]}"} \
+        --untar --untardir "$pull_dir" >/dev/null; then
+      rm -rf "$pull_dir"
+      print_error 'Could not fetch %s of %s to read the Authentik public paths. Fix: check network access to the chart registry, then re-run.\n' \
+        "$version_label" "$CHART_REF"
+      exit "$EXIT_FAILURE"
+    fi
+    chart_dir="$pull_dir/policy-system"
+  fi
+  lines=""
+  if [[ -f "$chart_dir/$AUTHENTIK_PUBLIC_PATHS_FILE" ]]; then
+    while IFS= read -r path || [[ -n "$path" ]]; do
+      path="${path//[[:space:]]/}"
+      [[ -z "$path" || "$path" == \#* ]] && continue
+      lines+="${path}"$'\n'
+    done <"$chart_dir/$AUTHENTIK_PUBLIC_PATHS_FILE"
+  fi
+  [[ -n "$pull_dir" ]] && rm -rf "$pull_dir"
+  if [[ -z "$lines" ]]; then
+    print_error '%s of %s defines no Authentik public paths (%s is missing or empty), so the Authentik Ingress cannot be built. Fix: run the script from a deploy bundle whose VERSION matches a published chart that has this file, or point PS_CHART_REF at a current chart, then re-run.\n' \
+      "$version_label" "$CHART_REF" "$AUTHENTIK_PUBLIC_PATHS_FILE"
+    exit "$EXIT_FAILURE"
+  fi
+  printf '%s' "$lines"
+}
 
 # ensure_authentik_ingress <hostname>: create-if-absent a SECOND Ingress object exposing
 # Authentik's own server Service at the SAME <hostname> ensure_ps_service_ingress already resolved
@@ -1389,7 +1422,7 @@ readonly AUTHENTIK_PUBLIC_PATHS=(
 # exactly one `dnsSettings.domainNameLabel`, so a second `ensure_dns_label` call would steal PS
 # Service's own label rather than add a second hostname).
 #
-# Routes only the AUTHENTIK_PUBLIC_PATHS prefixes to $AUTHENTIK_SERVICE_NAME (the upstream
+# Routes only the shared public path prefixes to $AUTHENTIK_SERVICE_NAME (the upstream
 # `authentik` dependency chart's own rendered server Service, confirmed via `helm template` -- see
 # this script's own AUTHENTIK_SERVICE_NAME comment and IMPL_SLICE_5.md), leaving PS Service's
 # existing Ingress (ensure_ps_service_ingress) to keep handling every other path on the same host.
@@ -1405,8 +1438,9 @@ readonly AUTHENTIK_PUBLIC_PATHS=(
 #
 # Idempotent via the same apply_output_changed detection ensure_ps_service_ingress uses.
 ensure_authentik_ingress() {
-  local hostname="$1" apply_output path paths_yaml="" newline=$'\n'
-  for path in "${AUTHENTIK_PUBLIC_PATHS[@]}"; do
+  local hostname="$1" apply_output path paths_yaml="" newline=$'\n' public_paths
+  public_paths="$(read_authentik_public_paths)"
+  while IFS= read -r path; do
     paths_yaml+="          - path: ${path}
             pathType: Prefix
             backend:
@@ -1415,7 +1449,7 @@ ensure_authentik_ingress() {
                 port:
                   name: http
 "
-  done
+  done <<<"$public_paths"
   apply_output="$(kubectl apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress

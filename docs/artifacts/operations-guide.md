@@ -9,6 +9,7 @@
   - [Updating or reinstalling the Policy System Plugin](#updating-or-reinstalling-the-policy-system-plugin)
   - [Owner recovery, certificate renewal and re-running the script](#owner-recovery-certificate-renewal-and-re-running-the-script)
   - [Reaching the Authentik admin UI (evaluator)](#reaching-the-authentik-admin-ui-evaluator)
+  - [Measuring the proxy footprint (evaluator)](#measuring-the-proxy-footprint-evaluator)
   - [Allowed approval origins](#allowed-approval-origins)
   - [Recreating the kind cluster](#recreating-the-kind-cluster)
   - [Cleanup / teardown](#cleanup--teardown)
@@ -166,12 +167,37 @@ email as before:
 
 ### Reaching the Authentik admin UI (evaluator)
 
-In the evaluator profile the admin UI is on the same HTTPS listener as the login pages, reachable
-from any machine that can reach this laptop's port `30443` — by design. Open
-`https://ps.test:30443/auth/if/admin/` (your `--hostname`) in a browser that trusts the local
-CA and sign in as the owner. To keep it to your own machine, block port `30443` from the LAN in the
-host firewall. See [Installation Guide: What is exposed
-(evaluator)](./installation-guide.md#what-is-exposed-evaluator).
+In the evaluator profile the proxy does not serve the admin UI. Forward the Authentik server to
+your machine with `kubectl port-forward svc/policy-system-authentik-server 9000:80`, open
+`http://127.0.0.1:9000/auth/if/admin/` and sign in as the owner. See [Installation Guide: What is
+exposed (evaluator)](./installation-guide.md#what-is-exposed-evaluator).
+
+### Measuring the proxy footprint (evaluator)
+
+The evaluator proxy's memory and CPU use is not yet measured, so no figure appears in the
+guides and the minimum host size in [Installation Guide: Evaluator
+installation](./installation-guide.md#evaluator-installation) is unchanged. The `proxy.resources`
+values are declared requests and limits, not measurements. Run this procedure on a running
+evaluator to produce a measurement. It only reads the cluster.
+
+1. Install the Kubernetes metrics API if `kubectl top pod` fails with "Metrics API not
+   available". kind does not ship metrics-server; it needs the `--kubelet-insecure-tls` argument
+   on kind. Without it the script falls back to the proxy pod's cgroup files, which give memory
+   and mean CPU but no node row.
+2. Let the evaluator settle, then run the script from a clone of the repository (the deploy
+   bundle does not include it), with the evaluator URL and the CA file the deploy script wrote:
+
+   ```bash
+   scripts/measure-proxy-footprint.sh --url https://<hostname>:30443 \
+     --cacert <ca.pem> --idle-seconds 120 --load-seconds 60 --concurrency 8 \
+     --output proxy-footprint.md
+   ```
+
+3. The script takes one sample after the idle window, then one while `--concurrency` workers
+   request `/health` through the proxy for `--load-seconds`, and prints a Markdown table of idle
+   and load rows, plus a whole-node row when metrics-server answers.
+4. Keep the table with the date, the host size and the proxy image tag. Until a table is
+   recorded, the guides claim no measured figure.
 
 ### Allowed approval origins
 
@@ -182,7 +208,7 @@ is what the browser must present. A POST to an approval route (`/approvals/<id>/
 `enroll/options`, `enroll/verify`, `sign/options`, `sign/verify`) whose `Host` matches no entry
 is answered `421`, before the approval is read and without issuing a challenge. `Host` and the
 entries are compared case-insensitively, a missing port counts as the scheme's default, and
-`X-Forwarded-Host` is ignored. The evaluator script sets it to `http://localhost:8000`.
+`X-Forwarded-Host` is ignored. The evaluator script sets it to `https://<hostname>:30443`, the proxy address of the configured name.
 
 - With no entry set, the relying party is derived from each request's own `Host`, and a startup
   warning is logged unless the local-test bypass is active. Set it on every deployment that is
@@ -523,7 +549,7 @@ replay-gate `503` on every other path carries the status only. `ps-cli get healt
 login automatically. To read the detail by hand:
 
 ```bash
-curl -s -H "Authorization: Bearer $ACCESS_TOKEN" http://127.0.0.1:8000/ready
+curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://ps.test:30443/ready
 ```
 
 The local-test bypass has no verifier, so it never returns the detail; read the startup log

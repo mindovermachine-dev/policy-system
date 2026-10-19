@@ -291,7 +291,9 @@ is unsupported. Because Authentik's issuer is now a path under PS Service's own 
 hostname/DNS-label resolution step had to move earlier in `main()` — see [above](#deploy-ps-prodsh).
 
 The Ingress routes **only the eight path prefixes an end user's login and
-enrolment need** (`AUTHENTIK_PUBLIC_PATHS` in the script): `/auth/application/o/`, `/auth/device`,
+enrolment need**, listed once in the chart (`charts/policy-system/files/authentik-public-paths.txt`;
+the script reads that file from the chart version it installs, so the two cannot disagree):
+`/auth/application/o/`, `/auth/device`,
 `/auth/flows/-/default/`, `/auth/if/flow/`, `/auth/api/v3/flows/executor/`,
 `/auth/api/v3/root/config/`, `/auth/api/v3/core/brands/current/` and `/auth/static/`. Everything
 else — notably the admin UI (`/auth/if/admin/`), the admin and core APIs, and the invitation API —
@@ -305,17 +307,20 @@ authority to the public host. The user-facing `/auth/if/user/` page is deliberat
 allowlisted (an enrolment ends on `/auth/`, which PS Service answers). Verified on ingress-nginx
 under `kind`, **not** on AKS's managed NGINX add-on (see [Open Risks](#open-risks--follow-ups)).
 
-**The evaluator counterpart.** `deploy-ps-eval.sh` keeps the whole Authentik server, admin UI
-included, reachable on `0.0.0.0:30443` (the kind cluster maps Authentik's HTTPS NodePort to the
-host) — deliberately, so a LAN colleague can log in — and serves it over HTTPS with a
-certificate from a name-constrained local CA the script creates (a critical name constraint
-for the one evaluator hostname, at most 730 days of validity, limited to TLS server
-authentication), because browsers only offer passkeys in a secure
-context and `ps-cli` refuses credentials over a non-`https`, non-loopback issuer. Authentik's
-plain-HTTP NodePort stays inside the node. PS Service's pod trusts the local CA through
-`SSL_CERT_FILE`; `ps-cli` instead verifies against the operating-system trust
-store (via `truststore`), which the host setup adds the CA to. The exposure of each profile is stated in the installation guide's
-"What is exposed" sections.
+**The evaluator counterpart.** `deploy-ps-eval.sh` serves PS Service and Authentik through one
+nginx proxy on `0.0.0.0:30443` over HTTPS, with a certificate from a name-constrained local CA the
+script creates (a critical name constraint for the one evaluator hostname, at most 730 days of
+validity, limited to TLS server authentication), because browsers only offer passkeys in a secure
+context and `ps-cli` refuses credentials over a non-`https`, non-loopback issuer. The proxy
+routes `/auth/` to Authentik only for the paths in the same chart file the production Ingress
+reads. The path list is defined once; the two consumers differ in what happens to every other
+`/auth/` path. The production Ingress keeps Kubernetes `Prefix` matching and falls through to
+PS Service's catch-all, so it is not deny-by-default. The evaluator proxy is deny-by-default
+and matches whole path elements: any other `/auth/` request gets 403 and never reaches
+Authentik. PS Service's pod trusts the local CA through `SSL_CERT_FILE`; `ps-cli` instead
+verifies against the operating-system trust store (via `truststore`), which the host setup adds
+the CA to. The exposure of each profile is stated in the installation guide's "What is exposed"
+sections.
 
 **Secret provisioning and rotation (Helm-native, no Key Vault).** Authentik's Django
 `secret_key` and its own Postgres password have no external (Azure) source of truth to re-derive

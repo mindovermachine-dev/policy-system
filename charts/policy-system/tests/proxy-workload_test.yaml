@@ -1,0 +1,117 @@
+suite: proxy workload
+release:
+  name: policy-system
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+  proxy.enabled: true
+  proxy.tls.secretName: policy-system-local-tls
+  psService.authentikHostname: ps.test
+templates:
+  - proxy-deployment.yaml
+  - proxy-configmap.yaml
+tests:
+  - it: takes resources from values
+    template: proxy-deployment.yaml
+    set:
+      proxy.resources.requests.cpu: 11m
+      proxy.resources.requests.memory: 12Mi
+      proxy.resources.limits.cpu: 13m
+      proxy.resources.limits.memory: 14Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 11m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 12Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 13m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 14Mi
+
+  - it: takes probe timings from values
+    template: proxy-deployment.yaml
+    set:
+      proxy.probes.readiness.periodSeconds: 7
+      proxy.probes.liveness.failureThreshold: 9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 7
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 9
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.tcpSocket.port
+          value: 8443
+
+  - it: runs non-root with a read-only root filesystem and no capabilities
+    template: proxy-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 101
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          value: [ALL]
+
+  - it: mounts the whole TLS Secret and the config, with a writable temp volume
+    template: proxy-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tls
+            secret:
+              secretName: policy-system-local-tls
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tmp
+            emptyDir: {}
+      - exists:
+          path: spec.template.spec.volumes[?(@.name=="config")].configMap
+
+  - it: a changed config restarts the proxy through a checksum annotation
+    template: proxy-deployment.yaml
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
+
+  - it: caller pod annotations are applied so a rotated leaf restarts the proxy
+    template: proxy-deployment.yaml
+    set:
+      proxy.podAnnotations:
+        checksum/local-tls: abc123
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/local-tls"]
+          value: abc123
+
+  - it: fails naming the setting when enabled without a TLS Secret
+    template: proxy-deployment.yaml
+    set:
+      proxy.tls.secretName: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: proxy\.tls\.secretName
+
+  - it: fails naming the setting when enabled without a hostname
+    template: proxy-deployment.yaml
+    set:
+      psService.authentikHostname: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.authentikHostname

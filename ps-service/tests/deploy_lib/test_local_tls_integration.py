@@ -294,24 +294,6 @@ def test_python_tls_client_rejects_a_leaf_for_another_name(lib_harness: LibHarne
     assert "permitted subtree violation" in rejection
 
 
-def test_served_fingerprint_equals_the_leaf_fingerprint(lib_harness: LibHarness) -> None:
-    _ensure(lib_harness)
-    state = _state(lib_harness)
-    server = _TlsServer(state / "leaf.pem", state / "leaf.key")
-    try:
-        proc = lib_harness.run(
-            PRELUDE
-            + 'want="$(leaf_fingerprint)"; '
-            + f'have="$(served_fingerprint {HOST} {server.port} '
-            + f'"{state}/ca.pem" 127.0.0.1)"; '
-            + '[[ -n "$want" && "$want" == "$have" ]]'
-        )
-    finally:
-        server.close()
-
-    assert proc.returncode == 0, proc.stderr
-
-
 def test_second_run_is_a_no_op(lib_harness: LibHarness) -> None:
     _ensure(lib_harness)
     state = _state(lib_harness)

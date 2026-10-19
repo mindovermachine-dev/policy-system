@@ -161,7 +161,8 @@ def test_exposed_section_explains_the_configured_approval_origins() -> None:
 
     assert "psService.passkeySigning.allowedOrigins" in section
     assert "421" in section
-    assert "http://localhost:8000" in section
+    assert "https://<hostname>:30443" in section
+    assert "localhost:8000" not in section
 
 
 def test_operations_guide_documents_the_allowed_approval_origins() -> None:
@@ -235,10 +236,13 @@ def test_docs_state_the_evaluator_issuer_under_the_auth_prefix(path: Path) -> No
 
 
 @pytest.mark.parametrize("path", _DOCS[:2], ids=lambda p: p.name)
-def test_guides_open_the_evaluator_admin_ui_under_the_auth_prefix(path: Path) -> None:
+def test_guides_open_the_evaluator_admin_ui_through_a_port_forward_under_the_auth_prefix(
+    path: Path,
+) -> None:
     text = _squash(path.read_text())
 
-    assert "https://ps.test:30443/auth/if/admin/" in text
+    assert "http://127.0.0.1:9000/auth/if/admin/" in text
+    assert "https://ps.test:30443/auth/if/admin/" not in text
 
 
 def test_values_reference_gives_the_evaluator_authentik_base_url_under_the_auth_prefix() -> None:

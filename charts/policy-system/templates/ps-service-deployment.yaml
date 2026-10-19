@@ -43,7 +43,7 @@ spec:
         {{- end }}
       {{- end }}
       initContainers:
-        {{- if .Values.localTls.secretName }}
+        {{- if .Values.psService.localCa.secretName }}
         # Builds PS Service's trust bundle: the image's system CAs plus the local CA.
         # SSL_CERT_FILE REPLACES the default trust store, so pointing it at the local CA
         # alone would break every other HTTPS call (Azure OpenAI, Cellar). Same image as
@@ -132,7 +132,7 @@ spec:
             timeoutSeconds: {{ .Values.psService.probes.liveness.timeoutSeconds }}
             periodSeconds: {{ .Values.psService.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.psService.probes.liveness.failureThreshold }}
-          {{- if .Values.localTls.secretName }}
+          {{- if .Values.psService.localCa.secretName }}
           volumeMounts:
             - name: ps-trust
               mountPath: /ps-trust
@@ -242,18 +242,15 @@ spec:
             - name: PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER
               value: {{ .Values.psService.authzBootstrapOwner.issuer | quote }}
             {{- end }}
-            {{- if .Values.localTls.secretName }}
+            {{- if .Values.psService.localCa.secretName }}
             - name: SSL_CERT_FILE
               value: /ps-trust/bundle.crt
             {{- end }}
-      {{- if .Values.localTls.secretName }}
+      {{- if .Values.psService.localCa.secretName }}
       volumes:
         - name: ps-ca
           secret:
-            secretName: {{ .Values.localTls.secretName | quote }}
-            items:
-              - key: ca.crt
-                path: ca.crt
+            secretName: {{ .Values.psService.localCa.secretName | quote }}
         - name: ps-trust
           emptyDir: {}
       {{- end }}

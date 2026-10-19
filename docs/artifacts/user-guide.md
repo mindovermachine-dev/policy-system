@@ -79,10 +79,11 @@ need a clone.
 
 ### Point ps-cli at your instance
 
-**Evaluator instance**: PS Service listens on `http://127.0.0.1:8000`. This is a local
+**Evaluator instance**: PS Service is served by the proxy on `https://ps.test:30443` (or your
+`--hostname`). This is a local
 `kind` deployment (see [Installation Guide: Evaluator
 installation](./installation-guide.md#evaluator-installation)). It **requires login**
-through the bundled Authentik. Authentik uses HTTPS with a certificate that was issued
+through the bundled Authentik. The proxy uses HTTPS with a certificate that was issued
 locally. `ps-cli` verifies the certificate against the operating system trust store.
 On the machine that ran `scripts/deploy-ps-eval.sh --apply-host-setup`, that script
 has already added the local CA to the trust store. Therefore, you do not need an
@@ -91,7 +92,7 @@ environment variable. On another machine, first trust the CA certificate (see
 8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli)).
 
 ```bash
-ps-cli config set-context eval --url http://127.0.0.1:8000
+ps-cli config set-context eval --url https://ps.test:30443
 ```
 
 ```bash

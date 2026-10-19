@@ -60,7 +60,7 @@ tests:
           path: spec.template.spec.initContainers[0].envFrom
   - it: runs after build-ca-bundle when local TLS is on, so that init stays first (AC-BI-005)
     set:
-      localTls.secretName: policy-system-local-tls
+      psService.localCa.secretName: policy-system-local-ca
     asserts:
       - equal:
           path: spec.template.spec.initContainers[0].name

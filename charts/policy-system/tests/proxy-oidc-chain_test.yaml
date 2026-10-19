@@ -1,0 +1,103 @@
+suite: proxy OIDC discovery chain
+# Renders with the value set the evaluator script supplies and checks that the issuer URL,
+# the PS Service host alias, the proxy Service node port and the proxy server_name all describe
+# the same endpoint.
+release:
+  name: policy-system
+chart:
+  appVersion: 9.9.9
+set:
+  llm.provider: ollama
+  authentik.enabled: true
+  proxy.enabled: true
+  proxy.tls.secretName: policy-system-local-tls
+  psService.localCa.secretName: policy-system-local-ca
+  psService.authentikHostname: ps.test
+  psService.authentikHostAliasIP: 172.18.0.2
+  psService.auth.issuer: https://ps.test:30443/auth/application/o/ps-cli/
+  psService.auth.audience: ps-cli
+  psService.authzBootstrapOwner.subject: owner@example.test
+  psService.authzBootstrapOwner.issuer: https://ps.test:30443/auth/application/o/ps-cli/
+  psService.authentik.baseUrl: http://policy-system-authentik-server/auth
+  psService.authentik.publicUrl: https://ps.test:30443/auth
+templates:
+  - proxy-configmap.yaml
+  - proxy-service.yaml
+  - ps-service-deployment.yaml
+tests:
+  - it: issuer host, hostAlias entry, proxy Service nodePort and server_name agree
+    asserts:
+      - equal:
+          path: spec.template.spec.hostAliases[0].hostnames[0]
+          value: ps.test
+        template: ps-service-deployment.yaml
+      - equal:
+          path: spec.template.spec.hostAliases[0].ip
+          value: 172.18.0.2
+        template: ps-service-deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_ISSUER")].value
+          value: https://ps.test:30443/auth/application/o/ps-cli/
+        template: ps-service-deployment.yaml
+      - equal:
+          path: spec.ports[0].nodePort
+          value: 30443
+        template: proxy-service.yaml
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "server_name ps\\.test;"
+        template: proxy-configmap.yaml
+
+  - it: PS Service trusts the local CA through a bundle built from the CA-only Secret
+    template: ps-service-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="SSL_CERT_FILE")].value
+          value: /ps-trust/bundle.crt
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ps-ca
+            secret:
+              secretName: policy-system-local-ca
+
+  - it: PS Service calls the Authentik API in-cluster and hands out the public address
+    template: ps-service-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHENTIK_BASE_URL")].value
+          value: http://policy-system-authentik-server/auth
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHENTIK_PUBLIC_URL")].value
+          value: https://ps.test:30443/auth
+
+  - it: forwarded host keeps the public port
+    template: proxy-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_set_header Host +\\$http_host;"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_set_header X-Forwarded-Host +\\$http_host;"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_set_header X-Forwarded-Port +30443;"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_set_header X-Forwarded-Proto +\\$scheme;"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_set_header X-Forwarded-For +\\$remote_addr;"
+      - notMatchRegex:
+          path: data["nginx.conf"]
+          pattern: proxy_add_x_forwarded_for
+
+  - it: X-Forwarded-Port follows a changed proxy node port
+    template: proxy-configmap.yaml
+    set:
+      proxy.service.nodePort: 31443
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_set_header X-Forwarded-Port +31443;"

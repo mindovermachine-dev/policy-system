@@ -97,6 +97,7 @@ case "$line" in
     printf 'secret/applied configured\n'
     ;;
   "rollout status"*) exit "${PS_TEST_ROLLOUT_EXIT:-0}" ;;
+  exec*) [[ -z "${PS_TEST_EXEC_FAIL:-}" ]] || { echo 'urlopen error' >&2; exit 1; } ;;
   port-forward*)
     if [[ -n "${PS_TEST_PF_FAIL:-}" ]]; then echo 'error: unable to forward port' >&2; exit 1; fi
     printf 'Forwarding from 127.0.0.1:%s -> 9000\n' "${PS_TEST_PF_PORT:-45678}"
@@ -132,23 +133,10 @@ exit 0
 """
 
 FAKE_OPENSSL = r"""#!/usr/bin/env bash
-# Fake openssl. `s_client` answers from $PS_TEST_SERVED_SEQUENCE (local|other|none, one per call,
-# the last repeats). When $PS_TEST_REAL_OPENSSL names the real binary (the fixture default), every
+# Fake openssl. When $PS_TEST_REAL_OPENSSL names the real binary (the fixture default), every
 # other subcommand runs it. Without it, `req`/`x509`/`verify` write and read tiny stand-in files
 # (a PEM-looking body plus the SAN line) instead of real cryptography.
 printf '%s\n' "$*" >> "$PS_TEST_OPENSSL_LOG"
-if [[ "${1:-}" == "s_client" ]]; then
-  seq="$PS_TEST_SERVED_SEQUENCE"
-  line="$(head -n 1 "$seq")"
-  if [[ "$(wc -l < "$seq")" -gt 1 ]]; then
-    tail -n +2 "$seq" > "$seq.next" && mv "$seq.next" "$seq"
-  fi
-  case "$line" in
-    local) cat "$PS_EVAL_STATE_DIR/leaf.pem" ;;
-    other) cat "$PS_EVAL_STATE_DIR/ca.pem" ;;
-  esac
-  exit 0
-fi
 if [[ -n "${PS_TEST_REAL_OPENSSL:-}" ]]; then exec "$PS_TEST_REAL_OPENSSL" "$@"; fi
 cmd="$1"; shift
 # val <flag> args... : the argument following <flag>
@@ -301,10 +289,6 @@ class EvalFixture:
         current.update(state)
         self.curl_state.write_text(json.dumps(current))
 
-    def served(self, *sequence: str) -> None:
-        """Script what a TLS handshake against Authentik's NodePort returns, call by call."""
-        (self.root / "served-sequence.txt").write_text("\n".join(sequence) + "\n", encoding="utf-8")
-
     def remove_tool(self, name: str) -> None:
         (self.bin_dir / name).unlink()
 
@@ -427,8 +411,8 @@ class EvalFixture:
             "PS_TEST_IPCONFIG_ADDRESS": str(self.root / "ipconfig-address.txt"),
             "PS_TEST_SECURITY_LOG": str(self.root / "security.log"),
             "PS_TEST_OPENSSL_LOG": str(self.root / "openssl.log"),
-            "PS_TEST_SERVED_SEQUENCE": str(self.root / "served-sequence.txt"),
             "PS_TEST_SECRET_B64": base64.b64encode(TOKEN.encode()).decode(),
+            "PS_PROXY_PROBE_ATTEMPTS": "1",
             "PS_TLS_REFRESH_ATTEMPTS": "5",
             "PS_TLS_REFRESH_INTERVAL_SECONDS": "0.05",
             "PS_PORT_FORWARD_INTERVAL_SECONDS": "0.05",
@@ -476,7 +460,6 @@ def eval_fixture(tmp_path: Path) -> EvalFixture:
     fixture.add_container_engine("podman")
     fixture.set_addresses(*DEFAULT_HOST_ADDRESSES)
     fixture.seed_curl()
-    fixture.served("local")
     fixture.use_real_openssl()
     fixture.env_extra["PS_TEST_PODMAN_NODE_IP"] = NODE_IP
     return fixture

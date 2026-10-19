@@ -35,7 +35,6 @@ def test_script_generated_leaf_chains_to_the_local_ca_and_names_the_host(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.use_real_openssl()
-    eval_fixture.served("other", "other", "local")
 
     run = eval_fixture.run("--owner-email", "owner@example.com")
 

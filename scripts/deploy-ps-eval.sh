@@ -32,7 +32,7 @@
 #                  that maps the hostname to another address is reported, never edited.
 #   --allow-public-host
 #                  Accept a machine that has a non-private address. The cluster publishes
-#                  Authentik on every interface of the host (port 30443), so the run stops
+#                  the proxy on every interface of the host (port 30443), so the run stops
 #                  before any cluster call when an interface holds an address outside the
 #                  loopback, link-local and private ranges (10/8, 172.16/12, 192.168/16,
 #                  169.254/16, fc00::/7, fe80::/10). VPN addresses such as Tailscale's
@@ -91,17 +91,17 @@ readonly DEFAULT_CHART_REF="oci://ghcr.io/mindovermachine-dev/charts/policy-syst
 readonly EVALUATOR_HOSTNAME="ps.test"
 readonly LLM_SECRET_NAME="policy-system-llm-credentials"
 readonly TLS_SECRET_NAME="policy-system-local-tls"
+readonly CA_SECRET_NAME="policy-system-local-ca"
 readonly API_TOKEN_SECRET_NAME="policy-system-authentik-api-token"
 readonly AUTHENTIK_SERVER_SERVICE="${HELM_RELEASE_NAME}-authentik-server"
-# The kind cluster maps this host port to Authentik's HTTPS NodePort (deploy/kind/cluster.yaml,
-# authentik.server.service.nodePortHttps in the chart): the only Authentik port on the host.
-readonly AUTHENTIK_HTTPS_PORT=30443
+# The kind cluster maps this host port to the proxy's NodePort (deploy/kind/cluster.yaml,
+# proxy.service.nodePort in the chart): the proxy serves PS Service and Authentik on it.
+readonly PROXY_PORT=30443
 # Authentik serves every page under this path (the chart's AUTHENTIK_WEB__PATH), so the issuer,
 # the API base, the enrolment link and the admin UI all sit below it.
 readonly AUTHENTIK_WEB_PATH="/auth"
 readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
-readonly PS_SERVICE_LOCAL_URL="http://127.0.0.1:8000"
 readonly PS_CLI_CONTEXT="eval"
 readonly INSTALL_GUIDE="docs/artifacts/installation-guide.md"
 readonly INSTALL_GUIDE_TRUST_STEP="${INSTALL_GUIDE}#8-register-your-passkey-and-log-in-with-ps-cli"
@@ -120,7 +120,6 @@ kind_context=""
 namespace="default"
 node_ip=""
 made_release_change=false
-cert_refreshed=false
 apply_host_setup=false
 allow_public_host=false
 check_exposure_only=false
@@ -329,7 +328,7 @@ detect_lan_address() {
 }
 
 # check_host_exposure: hard-stops (before any tool check or cluster call) when an interface of this
-# machine holds a public address, because the kind cluster publishes Authentik on all of them.
+# machine holds a public address, because the kind cluster publishes the proxy on all of them.
 # --allow-public-host accepts that. Fails closed when the addresses cannot be listed.
 check_host_exposure() {
   local addresses address offending=()
@@ -349,7 +348,7 @@ check_host_exposure() {
     for address in "${offending[@]}"; do
       print_error 'exposure: public address %s on this machine\n' "$address"
     done
-    print_error 'The cluster publishes Authentik (port 30443) on every interface of this machine, so it would be reachable from those addresses. Fix: disconnect or firewall them, or re-run with --allow-public-host to accept the exposure (see %s, What is exposed).\n' \
+    print_error 'The cluster publishes the proxy (port 30443) on every interface of this machine, so it would be reachable from those addresses. Fix: disconnect or firewall them, or re-run with --allow-public-host to accept the exposure (see %s, What is exposed).\n' \
       "$INSTALL_GUIDE"
     exit "$EXIT_FAILURE"
   fi
@@ -496,10 +495,12 @@ print_replaced_ca_steps() {
   printf '  Old CA subject: %s\n  SHA-1:          %s\n  SHA-256:        %s\n  Kept at:        %s\n' \
     "$LOCAL_TLS_REPLACED_CA_SUBJECT" "$LOCAL_TLS_REPLACED_CA_SHA1" "$LOCAL_TLS_REPLACED_CA_SHA256" \
     "$LOCAL_TLS_REPLACED_CA_PEM"
-  printf '  macOS (the first command clears the admin trust settings, the second deletes the certificate):\n'
-  printf '    sudo security remove-trusted-cert -d %s\n' "$LOCAL_TLS_REPLACED_CA_PEM"
-  printf '    sudo security delete-certificate -Z %s -t /Library/Keychains/System.keychain\n' \
-    "$LOCAL_TLS_REPLACED_CA_SHA1"
+  if [[ "$(host_os)" == Darwin ]]; then
+    printf '  macOS (the first command clears the admin trust settings, the second deletes the certificate):\n'
+    printf '    sudo security remove-trusted-cert -d %s\n' "$LOCAL_TLS_REPLACED_CA_PEM"
+    printf '    sudo security delete-certificate -Z %s -t /Library/Keychains/System.keychain\n' \
+      "$LOCAL_TLS_REPLACED_CA_SHA1"
+  fi
   printf '  Debian/Ubuntu: sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt && sudo update-ca-certificates --fresh\n'
   printf '  Fedora/RHEL:   sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust\n'
   printf 'New CA to trust: %s/ca.pem\n\n' "$(local_tls_state_dir)"
@@ -583,7 +584,19 @@ announce_migration() {
 # and without a trailing slash. The issuer, PS Service's Authentik base URL and the owner API
 # base are all this value plus a suffix.
 authentik_base_url() {
-  printf 'https://%s:%s%s' "$1" "$AUTHENTIK_HTTPS_PORT" "$AUTHENTIK_WEB_PATH"
+  printf 'https://%s:%s%s' "$1" "$PROXY_PORT" "$AUTHENTIK_WEB_PATH"
+}
+
+# ps_service_url <host>: prints the address clients use for PS Service (REST and MCP), the proxy
+# on the configured name, without a trailing slash.
+ps_service_url() {
+  printf 'https://%s:%s' "$1" "$PROXY_PORT"
+}
+
+# authentik_cluster_base_url: prints the in-cluster Authentik address PS Service calls, with the
+# web path and without a trailing slash.
+authentik_cluster_base_url() {
+  printf 'http://%s%s' "$AUTHENTIK_SERVER_SERVICE" "$AUTHENTIK_WEB_PATH"
 }
 
 # authentik_issuer <host>: prints the OIDC issuer of the ps-cli application, which ends in a slash.
@@ -593,29 +606,30 @@ authentik_issuer() {
 
 # release_values_json <host> <issuer> <checksum>: prints the complete set of user values this
 # script gives the chart, in the JSON shape `helm get values -o json` returns (so the release
-# comparison is exact). Sets, in ONE deploy: the local-TLS Secret, the Authentik pods' mount of
-# it (the chart cannot make that conditional), the issuer/audience/client for ps-cli, the
-# bootstrap owner (subject == the owner's email, issuer == the issuer above), the in-reach
-# Authentik base URL PS Service calls for invitations and the one origin the approval page is
-# served from (http://localhost:8000, the same relying party for every hostname).
+# comparison is exact). Sets, in ONE deploy: the proxy and its TLS Secret (with a certificate
+# checksum that restarts it on a rotated leaf), PS Service's CA-only Secret, the issuer/audience/
+# client for ps-cli, the bootstrap owner (subject == the owner's email, issuer == the issuer
+# above), the in-cluster Authentik base URL PS Service calls for invitations with the public
+# address handed to invitees, and the one origin the approval page is served from (the proxy
+# on the configured name).
 release_values_json() {
   local host="$1" issuer="$2" checksum="$3"
-  jq -n --arg llm "$LLM_SECRET_NAME" --arg tls "$TLS_SECRET_NAME" --arg host "$host" \
-    --arg ip "$node_ip" --arg issuer "$issuer" --arg app "$AUTHENTIK_APP_SLUG" \
+  jq -n --arg llm "$LLM_SECRET_NAME" --arg tls "$TLS_SECRET_NAME" --arg ca "$CA_SECRET_NAME" \
+    --arg host "$host" --arg ip "$node_ip" --arg issuer "$issuer" --arg app "$AUTHENTIK_APP_SLUG" \
     --arg scopes "$AUTHENTIK_SCOPES" --arg owner "$OWNER_EMAIL" \
-    --arg base "$(authentik_base_url "$host")" --arg sum "$checksum" \
+    --arg base "$(authentik_cluster_base_url)" --arg public "$(authentik_base_url "$host")" \
+    --arg sum "$checksum" --arg origin "$(ps_service_url "$host")" \
     '{llm: {existingSecret: $llm},
-      localTls: {secretName: $tls},
-      authentik: {enabled: true,
-        global: {volumes: [{name: "ps-tls", secret: {secretName: $tls}}],
-          volumeMounts: [{name: "ps-tls", mountPath: "/ps-tls", readOnly: true}],
-          podAnnotations: {"checksum/local-tls": $sum}}},
+      proxy: {enabled: true, lanExposure: {enabled: true}, tls: {secretName: $tls},
+        podAnnotations: {"checksum/local-tls": $sum}},
+      authentik: {enabled: true},
       psService: {localTestBypass: {enabled: false},
-        passkeySigning: {allowedOrigins: ["http://localhost:8000"]},
+        localCa: {secretName: $ca},
+        passkeySigning: {allowedOrigins: [$origin]},
         authentikHostname: $host, authentikHostAliasIP: $ip,
         auth: {issuer: $issuer, audience: $app, cliClientId: $app, scopes: $scopes},
         authzBootstrapOwner: {subject: $owner, issuer: $issuer},
-        authentik: {baseUrl: $base}}}'
+        authentik: {baseUrl: $base, publicUrl: $public}}}'
 }
 
 # ensure_release <values-json>: write-if-changed. Plain `helm upgrade --install` always creates a
@@ -653,30 +667,82 @@ wait_for_rollouts() {
   done
 }
 
-# ensure_authentik_serves_local_cert <host>: Authentik must serve the local leaf on the HTTPS
-# NodePort before the owner is provisioned through it. Nothing is done when it already does; when
-# it does not (a regenerated certificate), the local-TLS blueprint is applied through the loopback
-# HTTP port-forward (the HTTPS listener cannot be trusted yet) and the new certificate awaited,
-# without restarting Authentik. Sets cert_refreshed when it had to act.
-ensure_authentik_serves_local_cert() {
-  local host="$1" ca want have
-  ca="$(local_tls_state_dir)/ca.pem"
-  want="$(leaf_fingerprint)"
-  have="$(served_fingerprint "$host" "$AUTHENTIK_HTTPS_PORT" "$ca" 127.0.0.1)"
-  if [[ "$have" == "$want" ]]; then
-    return 0
+# probe_issuer_discovery <issuer>: PS Service's own pod fetches the issuer's discovery document
+# through the proxy, verifying the certificate against the pod's trust bundle. This is the path
+# PS Service needs at startup, so a failure here is reported with its cause instead of surfacing
+# later as a crash loop. Bounded by PS_DISCOVERY_ATTEMPTS (default 5) two seconds apart.
+probe_issuer_discovery() {
+  local url="${1}.well-known/openid-configuration" i
+  local attempts="${PS_DISCOVERY_ATTEMPTS:-5}"
+  local code='import ssl, sys, urllib.request; urllib.request.urlopen(sys.argv[1], context=ssl.create_default_context(cafile="/ps-trust/bundle.crt"), timeout=10).read()'
+  for ((i = 0; i < attempts; i++)); do
+    if kubectl -n "$namespace" exec "deploy/${HELM_RELEASE_NAME}-ps-service" -- \
+      python -c "$code" "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  print_error 'PS Service cannot reach the OIDC issuer %s through the proxy. Fix: check the proxy and Authentik pods (kubectl get pods; kubectl logs deploy/%s-proxy), that %s resolves to the node inside the PS Service pod, and that the local CA is in its trust bundle, then re-run.\n' \
+    "$1" "$HELM_RELEASE_NAME" "$hostname_arg"
+  return 1
+}
+
+# proxy_get <host> <url>: one request to the proxy from this machine, resolving <host> to the
+# loopback address the cluster publishes the proxy on and verifying against the evaluator CA. Sets
+# proxy_status (000 when nothing answered) and proxy_body. No credentials are sent.
+proxy_get() {
+  local out
+  proxy_status=000
+  proxy_body=""
+  out="$(curl -sS --max-time 10 --cacert "$(local_tls_state_dir)/ca.pem" \
+    --resolve "${1}:${PROXY_PORT}:127.0.0.1" -w $'\n%{http_code}' "$2" 2>/dev/null)" || return 0
+  proxy_status="${out##*$'\n'}"
+  proxy_body="${out%$'\n'*}"
+}
+
+# proxy_expect <host> <url> <status> <what>: requests <url> through the proxy until it answers
+# <status> (PS_PROXY_PROBE_ATTEMPTS tries, default 5, two seconds apart). Leaves proxy_body
+# of the last answer. Prints the failure with its fix and returns 1 otherwise.
+proxy_expect() {
+  local i attempts="${PS_PROXY_PROBE_ATTEMPTS:-5}"
+  for ((i = 0; i < attempts; i++)); do
+    proxy_get "$1" "$2"
+    [[ "$proxy_status" == "$3" ]] && return 0
+    sleep 2
+  done
+  print_error '%s through the proxy answered %s, expected %s (%s). Fix: check the proxy and PS Service pods (kubectl get pods; kubectl logs deploy/%s-proxy) and that port %s of this machine reaches the cluster, then re-run.\n' \
+    "$4" "$proxy_status" "$3" "$2" "$HELM_RELEASE_NAME" "$PROXY_PORT"
+  return 1
+}
+
+# probe_proxy_from_host <host> <issuer>: the closing end-to-end check, through the published proxy
+# port with the evaluator CA verifying the certificate: PS Service answers /health, the issuer
+# discovery document reports exactly the issuer the release was given, and PS Service refuses a
+# request that carries no bearer token with 401.
+probe_proxy_from_host() {
+  local host="$1" issuer="$2" reported
+  proxy_expect "$host" "$(ps_service_url "$host")/health" 200 "/health" || return 1
+  proxy_expect "$host" "${issuer}.well-known/openid-configuration" 200 "The issuer discovery document" \
+    || return 1
+  reported="$(jq -r '.issuer // empty' <<<"$proxy_body" 2>/dev/null || true)"
+  if [[ "$reported" != "$issuer" ]]; then
+    print_error 'The issuer discovery document through the proxy reports issuer "%s", not "%s". Fix: the proxy must pass the Host and port the browser used to Authentik; check the proxy ConfigMap and the Authentik trusted-proxy setting, then re-run.\n' \
+      "$reported" "$issuer"
+    return 1
   fi
-  log_step "Refreshing the certificate Authentik serves"
-  cert_refreshed=true
-  start_authentik_port_forward "$namespace" "$AUTHENTIK_SERVER_SERVICE" 80 || exit "$EXIT_FAILURE"
-  AUTHENTIK_API_BASE="http://127.0.0.1:${AUTHENTIK_PF_LOCAL_PORT}${AUTHENTIK_WEB_PATH}"
-  AUTHENTIK_CURL_ARGS=()
-  if ! check_token_accepted \
-    || ! refresh_authentik_cert_if_differs "$host" "$AUTHENTIK_HTTPS_PORT" "$ca" 127.0.0.1; then
-    stop_authentik_port_forward
-    exit "$EXIT_FAILURE"
-  fi
-  stop_authentik_port_forward
+  proxy_expect "$host" "$(ps_service_url "$host")/mcp/" 401 "An unauthenticated request to /mcp/" || return 1
+}
+
+# warn_stale_tls_keypair: an earlier version of this script registered the local certificate in
+# Authentik and set it as the default brand's certificate. Nothing serves it now; when the keypair
+# is still there, print how to remove it (a brand pointing at a deleted certificate is not safe to
+# edit automatically). Needs the loopback API base; never fails the run.
+warn_stale_tls_keypair() {
+  authentik_api GET "/crypto/certificatekeypairs/?name=ps-local-tls" || return 0
+  [[ "$AUTHENTIK_HTTP_STATUS" == "200" ]] || return 0
+  jq -e '(.results | length) > 0' <<<"$AUTHENTIK_HTTP_BODY" >/dev/null 2>&1 || return 0
+  printf 'Authentik still holds the certificate keypair ps-local-tls from an earlier install, which nothing serves now. Fix: open the admin UI through a port-forward (kubectl port-forward svc/%s 9000:80, then http://127.0.0.1:9000%s/if/admin/), set System > Brands > the default brand'"'"'s Default certificate to empty, then delete the keypair under System > Certificates.\n' \
+    "$AUTHENTIK_SERVER_SERVICE" "$AUTHENTIK_WEB_PATH" >&2
 }
 
 # hosts_file: the file checked and edited for the hostname mapping.
@@ -708,11 +774,16 @@ missing_host_mapping() {
   printf '%s %s\n' "$lan_address" "$1"
 }
 
+# host_os: prints the operating system name (`uname -s`: Darwin, Linux, ...).
+host_os() {
+  uname -s
+}
+
 # ca_is_trusted <ca.pem>: 0 when the macOS system trust settings accept the CA for TLS server
 # authentication. Other systems cannot be checked, so they report "not trusted" and get the
 # commands to run.
 ca_is_trusted() {
-  [[ "$(uname -s)" == Darwin ]] && command -v security >/dev/null 2>&1 \
+  [[ "$(host_os)" == Darwin ]] && command -v security >/dev/null 2>&1 \
     && security verify-cert -c "$1" -p ssl >/dev/null 2>&1
 }
 
@@ -720,7 +791,7 @@ ca_is_trusted() {
 # to TLS server authentication, with what bounds the trust where the system has no switch for it.
 print_trust_commands() {
   local ca="$1"
-  if [[ "$(uname -s)" == Darwin ]]; then
+  if [[ "$(host_os)" == Darwin ]]; then
     printf '  sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain %s\n' "$ca"
     return 0
   fi
@@ -771,27 +842,28 @@ setup_local_access() {
     log_step "Mapping ${host} to ${lan_address} in $(hosts_file) (sudo)"
     missing_host_mapping "$host" | sudo tee -a "$(hosts_file)" >/dev/null || true
   fi
-  if [[ "$needs_trust" == true && "$(uname -s)" == Darwin ]]; then
+  if [[ "$needs_trust" == true && "$(host_os)" == Darwin ]]; then
     log_step "Trusting the local CA for TLS server authentication in the system keychain (sudo)"
     sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain "$ca" || true
   fi
   check_local_access "$host" "$ca"
 }
 
-# configure_ps_cli_context: points ps-cli's "eval" context at PS Service and selects it, unless it
+# configure_ps_cli_context <host>: points ps-cli's "eval" context at PS Service and selects it, unless it
 # already is (set-context deletes the context's stored login, so a re-run must not repeat it).
 # Sets ps_cli_context_ready; any failure leaves it false and the summary prints the commands.
 configure_ps_cli_context() {
   ps_cli_context_ready=false
   command -v ps-cli >/dev/null 2>&1 || return 0
-  local contexts
+  local contexts url
+  url="$(ps_service_url "$1")"
   contexts="$(ps-cli config get-contexts 2>/dev/null || true)"
-  if grep -Eq "\*.*[[:space:]]${PS_CLI_CONTEXT}[[:space:]].*${PS_SERVICE_LOCAL_URL//./\\.}[[:space:]]" <<<"$contexts"; then
+  if grep -Eq "\*.*[[:space:]]${PS_CLI_CONTEXT}[[:space:]].*${url//./\\.}[[:space:]]" <<<"$contexts"; then
     ps_cli_context_ready=true
     return 0
   fi
-  log_step "Pointing ps-cli's ${PS_CLI_CONTEXT} context at ${PS_SERVICE_LOCAL_URL}"
-  if ps-cli config set-context "$PS_CLI_CONTEXT" --url "$PS_SERVICE_LOCAL_URL" >/dev/null \
+  log_step "Pointing ps-cli's ${PS_CLI_CONTEXT} context at ${url}"
+  if ps-cli config set-context "$PS_CLI_CONTEXT" --url "$url" >/dev/null \
     && ps-cli config use-context "$PS_CLI_CONTEXT" >/dev/null; then
     ps_cli_context_ready=true
   fi
@@ -825,6 +897,18 @@ print_colleague_steps() {
   printf 'DHCP settings (a reserved DHCP address); a new address breaks every colleague until their hosts line is updated.\n\n'
 }
 
+# print_client_values <host> <ca>: the values a machine needs to use this evaluator, all derived
+# from the configured name, this machine's LAN address and the proxy port.
+print_client_values() {
+  local host="$1" ca="$2" url
+  url="$(ps_service_url "$host")"
+  printf 'Client values (every machine that uses this evaluator):\n'
+  printf '  hosts line:  %s %s\n' "$lan_address" "$host"
+  printf '  CA file:     %s\n' "$ca"
+  printf '  ps-cli:      ps-cli config set-context %s --url %s\n' "$PS_CLI_CONTEXT" "$url"
+  printf '  MCP URL:     PS_MCP_URL=%s/mcp/\n\n' "$url"
+}
+
 # print_closing_summary <host>: what the evaluator does next. Only the steps this machine still
 # lacks are listed; ps-cli and other-machine setup live in the installation guide. The
 # enrolment link is printed last, exactly once (it is a single-use credential-equivalent).
@@ -837,15 +921,15 @@ print_closing_summary() {
     printf 'Policy System (evaluator profile) already up to date.\n'
   fi
   printf '\nAuthentik:  %s/\nOIDC issuer: %s\nPS Service: %s\n\n' \
-    "$(authentik_base_url "$host")" "$(authentik_issuer "$host")" "$PS_SERVICE_LOCAL_URL"
+    "$(authentik_base_url "$host")" "$(authentik_issuer "$host")" "$(ps_service_url "$host")"
+  print_client_values "$host" "$ca"
   print_local_steps "$host" "$ca"
   print_replaced_ca_steps
   if [[ "$ps_cli_context_ready" == true ]]; then
-    printf 'ps-cli is pointed at %s. After you register the passkey, log in with:\n' "$PS_SERVICE_LOCAL_URL"
+    printf 'ps-cli is pointed at %s. After you register the passkey, log in with:\n' "$(ps_service_url "$host")"
   else
-    printf 'Point ps-cli at this instance, then log in once the passkey is registered:\n'
-    printf '  ps-cli config set-context %s --url %s\n  ps-cli config use-context %s\n' \
-      "$PS_CLI_CONTEXT" "$PS_SERVICE_LOCAL_URL" "$PS_CLI_CONTEXT"
+    printf 'Select the ps-cli context set above, then log in once the passkey is registered:\n'
+    printf '  ps-cli config use-context %s\n' "$PS_CLI_CONTEXT"
   fi
   printf '  ps-cli auth login\n\n'
   print_colleague_steps "$host" "$ca"
@@ -871,37 +955,36 @@ main() {
   log_step "Preparing local TLS for ${hostname_arg}"
   ensure_local_leaf "$hostname_arg" || exit "$EXIT_FAILURE"
   announce_migration "$hostname_arg" "$issuer" "$(local_tls_state_dir)/ca.pem"
-  apply_local_tls_secret "$namespace" "$TLS_SECRET_NAME"
+  apply_local_tls_secret "$namespace" "$TLS_SECRET_NAME" "$CA_SECRET_NAME"
 
   checksum="$(leaf_fingerprint | tr -d ':' | tr '[:upper:]' '[:lower:]')"
   log_step "Reconciling the Helm release"
   ensure_release "$(release_values_json "$hostname_arg" "$issuer" "$checksum")"
 
-  # Authentik first: PS Service discovers the OIDC issuer at startup and crash-loops until
-  # Authentik serves the local certificate, so it is awaited only after that.
-  log_step "Waiting for Authentik to become Ready"
-  wait_for_rollouts authentik-server authentik-worker
+  # Authentik and the proxy first: PS Service discovers the OIDC issuer through the proxy at
+  # startup and crash-loops until both answer.
+  log_step "Waiting for Authentik and the proxy to become Ready"
+  wait_for_rollouts authentik-server authentik-worker proxy
 
   read_bootstrap_token "$namespace" "$API_TOKEN_SECRET_NAME" || exit "$EXIT_FAILURE"
-  ensure_authentik_serves_local_cert "$hostname_arg"
-
-  if [[ "$cert_refreshed" == true ]]; then
-    # It may sit in CrashLoopBackOff from the window before the certificate was served; a new
-    # pod skips the remaining back-off.
-    kubectl -n "$namespace" rollout restart "deployment/${HELM_RELEASE_NAME}-ps-service" >/dev/null
-  fi
   log_step "Waiting for PS Service to become Ready"
   wait_for_rollouts ps-service
+  log_step "Checking OIDC discovery from inside the cluster"
+  probe_issuer_discovery "$issuer" || exit "$EXIT_FAILURE"
+  log_step "Checking the proxy from this machine"
+  probe_proxy_from_host "$hostname_arg" "$issuer" || exit "$EXIT_FAILURE"
 
   log_step "Creating the owner and issuing the enrolment link"
-  AUTHENTIK_API_BASE="$(authentik_base_url "$hostname_arg")"
-  AUTHENTIK_LINK_BASE="$AUTHENTIK_API_BASE"
-  AUTHENTIK_CURL_ARGS=(--cacert "$(local_tls_state_dir)/ca.pem"
-    --resolve "${hostname_arg}:${AUTHENTIK_HTTPS_PORT}:127.0.0.1")
+  start_authentik_port_forward "$namespace" "$AUTHENTIK_SERVER_SERVICE" 80 || exit "$EXIT_FAILURE"
+  AUTHENTIK_API_BASE="http://127.0.0.1:${AUTHENTIK_PF_LOCAL_PORT}${AUTHENTIK_WEB_PATH}"
+  AUTHENTIK_LINK_BASE="$(authentik_base_url "$hostname_arg")"
+  AUTHENTIK_CURL_ARGS=()
+  warn_stale_tls_keypair
   provision_owner "$OWNER_EMAIL" || exit "$EXIT_FAILURE"
+  stop_authentik_port_forward
 
   setup_local_access "$hostname_arg"
-  configure_ps_cli_context
+  configure_ps_cli_context "$hostname_arg"
   print_closing_summary "$hostname_arg"
 }
 

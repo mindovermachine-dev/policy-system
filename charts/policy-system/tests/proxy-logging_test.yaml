@@ -1,0 +1,33 @@
+suite: proxy logging
+release:
+  name: policy-system
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+  proxy.enabled: true
+  proxy.tls.secretName: policy-system-local-tls
+  psService.authentikHostname: ps.test
+  authentik.enabled: true
+templates:
+  - proxy-configmap.yaml
+tests:
+  - it: access log format excludes query and credentials
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "log_format ps_proxy '\\$remote_addr \\$host \"\\$request_method \\$uri\" \\$status \\$body_bytes_sent';"
+      - notMatchRegex:
+          path: data["nginx.conf"]
+          pattern: "log_format[^;]*\\$(request|args|query_string|http_authorization|http_cookie|request_uri)\\b"
+
+  - it: the access log uses the restricted format
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "access_log /dev/stdout ps_proxy;"
+
+  - it: the error log level is warn
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "error_log /dev/stderr warn;"

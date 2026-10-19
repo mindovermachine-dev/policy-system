@@ -1,8 +1,7 @@
 # shellcheck shell=bash disable=SC2034
 # Local TLS for the evaluator profile: a name-constrained, short-lived local CA plus a leaf
 # certificate for the evaluator hostname, kept outside the repo, delivered to the cluster as a
-# Secret, and served by Authentik through the `authentik-local-tls-blueprint.yaml` blueprint. No
-# mkcert; only `openssl` (OpenSSL or LibreSSL: config files, never `-addext`).
+# Secret, and served by the evaluator proxy. No mkcert; only `openssl` (OpenSSL or LibreSSL: config files, never `-addext`).
 #
 # Sourced, never executed (mode 100644):
 #   source "$script_dir/lib/local-tls.sh"
@@ -17,8 +16,7 @@
 # the CA, or when less than 30 days remain.
 # Certificate verification is never disabled anywhere in this file.
 #
-# Bash 3.2 compatible. Needs the caller's print_error; refresh_authentik_cert_if_differs also
-# needs lib/authentik-owner.sh sourced first (authentik_api).
+# Bash 3.2 compatible. Needs the caller's print_error.
 
 if [[ -n "${LOCAL_TLS_LIB_LOADED:-}" ]]; then
   return 0
@@ -37,7 +35,6 @@ fi
 readonly LOCAL_TLS_CA_SUBJECT="Policy System local CA"
 readonly LOCAL_TLS_CA_VALID_DAYS=730
 readonly LOCAL_TLS_RENEW_BEFORE_SECONDS=$((30 * 86400))
-readonly LOCAL_TLS_BLUEPRINT_NAME="Policy System local TLS"
 # One day of slack above the maximum validity: a CA valid longer than this is not ours.
 readonly LOCAL_TLS_CA_MAX_REMAINING_SECONDS=$(((LOCAL_TLS_CA_VALID_DAYS + 1) * 86400))
 
@@ -241,14 +238,17 @@ CNF
   rm -f "$dir/leaf.csr"
 }
 
-# apply_local_tls_secret <namespace> <secret-name>: (over)writes the Secret holding tls.crt,
-# tls.key (Authentik) and ca.crt (PS Service trust bundle), via the create --dry-run | apply idiom.
+# apply_local_tls_secret <namespace> <tls-secret> <ca-secret>: (over)writes two Secrets via the
+# create --dry-run | apply idiom: <tls-secret> holds tls.crt and tls.key (mounted by the proxy
+# only), <ca-secret> holds ca.crt only (the PS Service trust bundle).
 apply_local_tls_secret() {
-  local namespace="$1" secret_name="$2" dir
+  local namespace="$1" tls_secret="$2" ca_secret="$3" dir
   dir="$(local_tls_state_dir)"
-  kubectl -n "$namespace" create secret generic "$secret_name" \
+  kubectl -n "$namespace" create secret generic "$tls_secret" \
     --from-file=tls.crt="$dir/leaf.pem" \
     --from-file=tls.key="$dir/leaf.key" \
+    --dry-run=client -o yaml | kubectl -n "$namespace" apply -f - >/dev/null
+  kubectl -n "$namespace" create secret generic "$ca_secret" \
     --from-file=ca.crt="$dir/ca.pem" \
     --dry-run=client -o yaml | kubectl -n "$namespace" apply -f - >/dev/null
 }
@@ -256,61 +256,4 @@ apply_local_tls_secret() {
 # leaf_fingerprint: prints the sha256 fingerprint of the local leaf.
 leaf_fingerprint() {
   openssl x509 -in "$(local_tls_state_dir)/leaf.pem" -noout -fingerprint -sha256 | sed 's/.*=//'
-}
-
-# served_fingerprint <host> <port> <ca> [connect-address]: prints the sha256 fingerprint of the
-# certificate a TLS endpoint presents (empty when nothing answers). The handshake passes -CAfile;
-# the security decision is the fingerprint comparison against our own leaf, not this handshake.
-served_fingerprint() {
-  local host="$1" port="$2" ca="$3" address="${4:-$1}"
-  # `|| true`: with nothing answering, the `x509` stage fails; under the callers' `set -e -o pipefail`
-  # that would abort the whole script silently instead of yielding the documented empty value.
-  { openssl s_client -connect "${address}:${port}" -servername "$host" -CAfile "$ca" </dev/null 2>/dev/null \
-    | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//'; } || true
-}
-
-# refresh_authentik_cert_if_differs <host> <port> <ca> [connect-address]: when Authentik serves
-# something other than the local leaf, applies the local-TLS blueprint through the API and waits
-# (bounded) for the new certificate. No restart needed (verified on Authentik 2026.8.3, D-C); a
-# matching certificate makes no API call. Needs authentik_api (lib/authentik-owner.sh).
-refresh_authentik_cert_if_differs() {
-  local host="$1" port="$2" ca="$3" address="${4:-$1}"
-  local attempts="${PS_TLS_REFRESH_ATTEMPTS:-60}" interval="${PS_TLS_REFRESH_INTERVAL_SECONDS:-2}"
-  local want have pk i
-  want="$(leaf_fingerprint)"
-  have="$(served_fingerprint "$host" "$port" "$ca" "$address")"
-  if [[ "$have" == "$want" ]]; then
-    return 0
-  fi
-
-  pk=""
-  for ((i = 0; i < attempts; i++)); do
-    if authentik_api GET "/managed/blueprints/?name=$(jq -rn --arg v "$LOCAL_TLS_BLUEPRINT_NAME" '$v | @uri')" \
-      && [[ "$AUTHENTIK_HTTP_STATUS" == "200" ]]; then
-      pk="$(printf '%s' "$AUTHENTIK_HTTP_BODY" | jq -r --arg n "$LOCAL_TLS_BLUEPRINT_NAME" \
-        '[.results[]? | select(.name == $n)][0].pk // empty')"
-      [[ -n "$pk" ]] && break
-    fi
-    sleep "$interval"
-  done
-  if [[ -z "$pk" ]]; then
-    print_error 'Authentik has no "%s" blueprint instance yet, so its certificate cannot be refreshed. Fix: check the chart was installed with localTls.secretName set and the Authentik worker is Running (kubectl get pods), then re-run.\n' "$LOCAL_TLS_BLUEPRINT_NAME"
-    return 1
-  fi
-
-  if ! authentik_api POST "/managed/blueprints/${pk}/apply/" || [[ "$AUTHENTIK_HTTP_STATUS" != "200" ]]; then
-    print_error 'Applying the "%s" blueprint failed (HTTP %s). Fix: check the Authentik worker logs (kubectl logs deploy/policy-system-authentik-worker), then re-run.\n' \
-      "$LOCAL_TLS_BLUEPRINT_NAME" "$AUTHENTIK_HTTP_STATUS"
-    return 1
-  fi
-
-  for ((i = 0; i < attempts; i++)); do
-    have="$(served_fingerprint "$host" "$port" "$ca" "$address")"
-    if [[ "$have" == "$want" ]]; then
-      return 0
-    fi
-    sleep "$interval"
-  done
-  print_error 'Authentik is still not serving the local certificate on %s:%s after applying the blueprint. Fix: inspect the blueprint status in the Authentik admin UI and the Secret mount (/ps-tls), then re-run.\n' "$host" "$port"
-  return 1
 }

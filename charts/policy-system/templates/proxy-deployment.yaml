@@ -1,0 +1,83 @@
+{{- if and .Values.proxy.lanExposure.enabled .Values.psService.localTestBypass.enabled }}
+{{- fail "proxy.lanExposure.enabled=true and psService.localTestBypass.enabled=true cannot be combined: LAN clients would reach PS Service without authentication. Turn off psService.localTestBypass.enabled (configure real OIDC auth), or turn off proxy.lanExposure.enabled." }}
+{{- end }}
+{{- if .Values.proxy.enabled }}
+{{- if not .Values.proxy.tls.secretName }}
+{{- fail "proxy.tls.secretName must be set when proxy.enabled=true: the name of a Secret with keys tls.crt and tls.key that the proxy serves." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "policy-system.fullname" . }}-proxy
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "policy-system.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: proxy
+  template:
+    metadata:
+      labels:
+        {{- include "policy-system.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: proxy
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/proxy-configmap.yaml") . | sha256sum }}
+        {{- with .Values.proxy.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      containers:
+        - name: proxy
+          image: "{{ .Values.proxy.image.repository }}:{{ .Values.proxy.image.tag }}"
+          command: ["nginx", "-c", "/etc/nginx/proxy/nginx.conf", "-g", "daemon off;"]
+          securityContext:
+            runAsUser: 101
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: https
+              containerPort: 8443
+          resources:
+            requests:
+              cpu: {{ .Values.proxy.resources.requests.cpu | quote }}
+              memory: {{ .Values.proxy.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.proxy.resources.limits.cpu | quote }}
+              memory: {{ .Values.proxy.resources.limits.memory | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: 8443
+            timeoutSeconds: {{ .Values.proxy.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.proxy.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.proxy.probes.readiness.failureThreshold }}
+          livenessProbe:
+            tcpSocket:
+              port: 8443
+            timeoutSeconds: {{ .Values.proxy.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.proxy.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.proxy.probes.liveness.failureThreshold }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/proxy
+              readOnly: true
+            - name: tls
+              mountPath: /etc/nginx/tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "policy-system.fullname" . }}-proxy
+        - name: tls
+          secret:
+            secretName: {{ .Values.proxy.tls.secretName | quote }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

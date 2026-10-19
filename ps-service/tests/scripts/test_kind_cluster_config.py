@@ -1,20 +1,14 @@
 """Structural regression test for `deploy/kind/cluster.yaml`.
 
-Pure YAML load — no `kind`/`helm`/container runtime needed, hermetic, no marker required
-(same tier as `test_verify_chart_independence.py`'s home directory, but that one is marked
-`integration` because it spawns a real `helm` subprocess; this one only parses a static
-YAML file on disk).
+Pure YAML load: no `kind`/`helm`/container runtime needed, hermetic, no marker required.
 
-Guards two things together:
-  - The two pre-existing loopback-only `extraPortMappings` entries (ps-service NodePort,
-    falkordb-browser NodePort) are untouched — a regression guard that no
-    *other* port is newly reachable.
-  - The new third entry (Authentik's server Service HTTPS NodePort; the
-    plain-HTTP 30080 is no longer host-mapped) has
-    `hostPort == containerPort` and `listenAddress: "0.0.0.0"` — the exact shape
-    needed so the issuer URL is byte-identical for LAN clients (who
-    traverse the host-port mapping) and in-cluster pods (who reach the node's own
-    container IP directly on the NodePort, bypassing the mapping entirely).
+Guards the host exposure of the evaluator cluster:
+  - exactly one mapping listens off-loopback, and it points at the proxy's NodePort with
+    `hostPort == containerPort`, so the issuer URL's port is byte-identical for LAN clients
+    (who traverse the host-port mapping) and in-cluster pods (who reach the node's own container
+    IP directly on the NodePort, bypassing the mapping);
+  - the only other mapping is the FalkorDB Browser, on loopback;
+  - no database, Redis or direct Authentik / PS Service port is mapped.
 """
 
 from __future__ import annotations
@@ -26,9 +20,12 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLUSTER_CONFIG_PATH = REPO_ROOT / "deploy" / "kind" / "cluster.yaml"
+VALUES_PATH = REPO_ROOT / "charts" / "policy-system" / "values.yaml"
 
-AUTHENTIK_NODE_PORT = 30443
-PLAIN_HTTP_NODE_PORT = 30080
+LOOPBACK = {"127.0.0.1", "::1"}
+DATABASE_AND_REDIS_PORTS = {5432, 6379}
+REMOVED_AUTHENTIK_NODE_PORTS = {30080}
+REMOVED_PS_SERVICE_NODE_PORT = 30800
 
 
 def _load_extra_port_mappings() -> list[dict[str, Any]]:
@@ -38,50 +35,55 @@ def _load_extra_port_mappings() -> list[dict[str, Any]]:
     return mappings
 
 
-def test_cluster_config_has_exactly_three_port_mappings() -> None:
-    mappings = _load_extra_port_mappings()
-    assert len(mappings) == 3, (
-        f"expected exactly 3 extraPortMappings entries (ps-service, falkordb-browser, "
-        f"authentik), found {len(mappings)}: {mappings}"
+def _proxy_node_port() -> int:
+    with VALUES_PATH.open(encoding="utf-8") as f:
+        values = yaml.safe_load(f)
+    return int(values["proxy"]["service"]["nodePort"])
+
+
+def _off_loopback(mappings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [m for m in mappings if m.get("listenAddress", "0.0.0.0") not in LOOPBACK]
+
+
+def test_exactly_one_non_loopback_mapping() -> None:
+    off_loopback = _off_loopback(_load_extra_port_mappings())
+
+    assert len(off_loopback) == 1, f"expected one off-loopback mapping, found {off_loopback}"
+    proxy_mapping = off_loopback[0]
+    assert proxy_mapping["containerPort"] == _proxy_node_port()
+    assert proxy_mapping["hostPort"] == proxy_mapping["containerPort"], (
+        "hostPort must equal containerPort so the issuer URL's port is the same for LAN clients "
+        "and for in-cluster pods that bypass the mapping"
     )
+    assert proxy_mapping["listenAddress"] == "0.0.0.0"
+    assert proxy_mapping["protocol"] == "TCP"
 
 
-def test_first_two_port_mappings_are_unchanged_loopback_entries() -> None:
-    mappings = _load_extra_port_mappings()
+def test_the_only_other_mapping_is_the_falkordb_browser_on_loopback() -> None:
+    loopback = [
+        m
+        for m in _load_extra_port_mappings()
+        if m not in _off_loopback(_load_extra_port_mappings())
+    ]
 
-    ps_service_entry = mappings[0]
-    assert ps_service_entry["containerPort"] == 30800
-    assert ps_service_entry["hostPort"] == 8000
-    assert ps_service_entry["listenAddress"] == "127.0.0.1"
-    assert ps_service_entry["protocol"] == "TCP"
-
-    falkordb_browser_entry = mappings[1]
-    assert falkordb_browser_entry["containerPort"] == 30300
-    assert falkordb_browser_entry["hostPort"] == 3001
-    assert falkordb_browser_entry["listenAddress"] == "127.0.0.1"
-    assert falkordb_browser_entry["protocol"] == "TCP"
+    assert loopback == [
+        {"containerPort": 30300, "hostPort": 3001, "listenAddress": "127.0.0.1", "protocol": "TCP"}
+    ]
 
 
-def test_no_plain_http_authentik_host_mapping_remains() -> None:
-    # The plain-HTTP NodePort 30080 stays reachable inside the node only;
-    # only the HTTPS NodePort is mapped to the host.
-    mappings = _load_extra_port_mappings()
-    assert all(m["containerPort"] != PLAIN_HTTP_NODE_PORT for m in mappings)
-    assert all(m["hostPort"] != PLAIN_HTTP_NODE_PORT for m in mappings)
+def test_no_database_or_redis_mapping() -> None:
+    for mapping in _load_extra_port_mappings():
+        assert mapping["containerPort"] not in DATABASE_AND_REDIS_PORTS
+        assert mapping["hostPort"] not in DATABASE_AND_REDIS_PORTS
 
 
-def test_third_port_mapping_exposes_authentik_https_on_the_lan() -> None:
-    mappings = _load_extra_port_mappings()
-    authentik_entry = mappings[2]
+def test_no_mapping_to_removed_authentik_nodeport() -> None:
+    for mapping in _load_extra_port_mappings():
+        assert mapping["containerPort"] not in REMOVED_AUTHENTIK_NODE_PORTS
+        assert mapping["hostPort"] not in REMOVED_AUTHENTIK_NODE_PORTS
 
-    assert authentik_entry["containerPort"] == AUTHENTIK_NODE_PORT
-    assert authentik_entry["hostPort"] == AUTHENTIK_NODE_PORT, (
-        "hostPort must equal containerPort so the issuer URL's port is byte-identical "
-        "for LAN clients (traversing this mapping) and in-cluster pods (reaching the "
-        "node's own container IP directly on the NodePort, bypassing this mapping)"
-    )
-    assert authentik_entry["listenAddress"] == "0.0.0.0", (
-        "must be LAN-reachable (not loopback-only like the other two entries), since "
-        "LAN clients must reach Authentik through this mapping"
-    )
-    assert authentik_entry["protocol"] == "TCP"
+
+def test_no_mapping_to_removed_ps_service_nodeport() -> None:
+    for mapping in _load_extra_port_mappings():
+        assert mapping["containerPort"] != REMOVED_PS_SERVICE_NODE_PORT
+        assert mapping["hostPort"] != 8000
