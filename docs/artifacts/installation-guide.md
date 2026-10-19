@@ -116,9 +116,10 @@ podman info
 
 ### 3. Download the deploy bundle
 
-The bundle holds the few files that steps 4 to 7 run: the kind cluster config and the
-deploy scripts. (The production path uses the same bundle.) You do not need git or a clone of the repo. Each release attaches the bundle,
-and it installs the chart of the same release, so the scripts and the chart always match.
+The bundle holds the few files that steps 4 to 7 use: the kind cluster config and the deploy
+scripts. The production path uses the same bundle. You do not need git or a clone of the repo.
+Each release attaches the bundle. The bundle installs the chart of the same release, so the
+scripts and the chart always match.
 
 Go to the folder where you want the bundle. Download and unpack it:
 
@@ -196,7 +197,8 @@ This step creates these resources in your own Azure subscription:
 - Two model deployments.
 - A Key Vault.
 
-It then syncs the credentials into the kind cluster from step 4. You can run both scripts again safely. They do nothing when nothing changed.
+It then syncs the credentials into the kind cluster from step 4. You can run both scripts
+again safely. They do nothing when nothing changed.
 
 Your signed-in Azure identity needs the `Owner` or `Contributor` role at subscription scope.
 
@@ -216,7 +218,8 @@ The script does these things:
 
 1. It prints a confirmation table. The table shows the region candidates, resource group,
    account, both model deployments, and the Key Vault. The script reads all values from
-   `scripts/llm-defaults.conf`. To use other model names or capacities, edit that file first.
+   `scripts/llm-defaults.conf`. To use other model names or capacities, edit that file before
+you run the script.
 2. It asks `Proceed with these values? [Y/n]`.
 3. It checks your subscription permissions.
 4. It checks the configured region and quota.
@@ -268,9 +271,9 @@ is not deployed yet. The command still exits with code 0.
 **To upgrade:** run `install.sh` again. It installs over the version that is on your `PATH`.
 There is no separate upgrade command.
 
-**Linux only:** `ps-cli auth login`, `auth status`, and `auth logout` need `gir1.2-secret-1`
-to use the OS Secret Service for encrypted credential storage. On Debian or Ubuntu, install
-it:
+**Linux only:** `ps-cli auth login`, `auth status`, and `auth logout` need `gir1.2-secret-1`.
+They use it to reach the OS Secret Service for encrypted credential storage. On Debian or
+Ubuntu, install it:
 
 ```bash
 sudo apt install python3-gi gir1.2-secret-1
@@ -548,7 +551,7 @@ Add the marketplace first. Then install the plugin from it.
 
    - The evaluator's PS Service is published on host port `8000`, so the URL is
      `http://127.0.0.1:8000/mcp/`. The trailing slash is part of the URL. Do not use
-     `authentik.test`: Authentik is only the login server and does not serve `/mcp/`.
+     `authentik.test`. Authentik is only the login server and does not serve `/mcp/`.
    - If `PS_MCP_URL` is not set, `/mcp` shows `ps-mcp` as failed with
      `Missing environment variables: PS_MCP_URL`. Set it, then start a new Claude Code session.
    - The plugin does not use `userConfig` for the URL. A `${user_config.*}` value never reached
@@ -565,7 +568,7 @@ Add the marketplace first. Then install the plugin from it.
      pre-registered `ps-cli` OAuth client, so you enter no token and need no `ps-cli` install.
      PS Service attributes your calls to your own identity-provider `sub`.
    - Authentik shows its consent screen, because Claude Code sends `prompt=consent`. This is
-     expected; approve it.
+     expected. Approve it.
    - The callback port `53682` must be free on your machine.
    - If a server you added by hand has the same URL as the plugin server, Claude Code does not
      load the plugin server, and `/mcp` shows no error. Remove one of the two.
@@ -583,7 +586,7 @@ To ask a question, see the [User Guide](./user-guide.md#using-claude-desktop---c
 
 ### What is exposed (evaluator)
 
-The evaluator profile runs on one machine and exposes Authentik to the local network on
+The evaluator profile runs on one machine. It exposes Authentik to the local network on
 purpose, so colleagues on the LAN can log in. This table shows what is reachable and by whom:
 
 | Listener | Address | Reachable by | What it serves |
@@ -619,6 +622,11 @@ Things to know:
 
 ## Production installation
 
+**Experimental: this production path is not verified on AKS.** It was verified on `kind`
+only. The AKS managed NGINX add-on, real Let's Encrypt issuance and real Azure resources
+were not verified. Do not rely on it for a real deployment. See
+[Verification status](#verification-status).
+
 > [!NOTE]
 > **This path is for production and customer-tenant deployments** to a real Azure
 > subscription. It uses [`scripts/deploy-ps-prod.sh`](../../scripts/deploy-ps-prod.sh).
@@ -652,8 +660,8 @@ script checks this before it changes anything.
 
 The bundle holds the files `deploy-ps-prod.sh` needs: the script, `scripts/ps-defaults.conf` and
 the production Helm values. You do not need git or a clone of the repo. Each release attaches
-the bundle, and it installs the chart of the same release, so the script and the chart always
-match.
+the bundle. The bundle installs the chart of the same release, so the script and the chart
+always match.
 
 Go to the folder where you want the bundle. Download and unpack it:
 
@@ -697,11 +705,11 @@ The file `scripts/ps-defaults.conf` holds the defaults that you can tune:
 - Capacities.
 - `TLS_CONTACT_EMAIL`. Let's Encrypt sends expiry and revocation notices to this address. Leave
   it blank to be prompted.
-- `AUTHZ_OWNER_EMAIL`. This is the owner's email: the first `SystemOwner` and Authentik
-  administrator. Leave it blank to be prompted, or pass `--owner-email`.
+- `AUTHZ_OWNER_EMAIL`. This is the owner's email. The owner is the first `SystemOwner` and
+  Authentik administrator. Leave it blank to be prompted, or pass `--owner-email`.
 
-The script does not read `AUTHZ_BOOTSTRAP_OWNER_SUBJECT` and `AUTHZ_BOOTSTRAP_OWNER_ISSUER`;
-it derives the owner's identity from the email and the public hostname. There is no
+The script does not read `AUTHZ_BOOTSTRAP_OWNER_SUBJECT` and `AUTHZ_BOOTSTRAP_OWNER_ISSUER`.
+It derives the owner's identity from the email and the public hostname. There is no
 placeholder identity and no second deployment. See [SystemOwner
 bootstrap](#systemowner-bootstrap).
 
@@ -736,8 +744,8 @@ with `--owner-email` or `AUTHZ_OWNER_EMAIL`.
 
 The whole run is idempotent. A new run with no changes does no work and reports this.
 
-The summary names the secrets that the script wrote (never their values), the resulting URL,
-and a single-use passkey-enrolment link. The script prints the link last, once:
+The summary names the secrets that the script wrote, but never their values. It also gives the
+resulting URL and a single-use passkey-enrolment link. The script prints the link last, once:
 
 ```
 Policy System provisioned. Wrote secrets: AZURE-API-BASE, AZURE-API-KEY, AZURE-API-VERSION.
@@ -936,7 +944,7 @@ Things to know:
   invitee has **no password set** (an empty hash). All of them register passkeys instead.
   - The shipped login flow still contains a password stage.
   - An administrator can set a user's password in the admin UI.
-  - Therefore "passkey-only" applies to enrolment and recovery. It does not come from removing
+  - So "passkey-only" applies to enrolment and recovery. It does not come from removing
     the password stage.
   - Live checks showed that Authentik rejected a submitted password for both the owner and an
     invitee.
@@ -953,28 +961,28 @@ see the [Helm Chart Values Reference](./helm-chart-values-reference.md).
 
 ## Which Claude surfaces reach your deployment
 
-Claude Chat and Cowork call a remote connector from Anthropic's cloud, so they can only reach a
+Claude Chat and Cowork call a remote connector from Anthropic's cloud. So they can only reach a
 PS Service and an Authentik that are public on the internet. Claude Code runs on your machine,
 so it connects from there. The evaluator is a non-public deployment (local `kind`, Authentik on
-the LAN only; see [What is exposed (evaluator)](#what-is-exposed-evaluator)). A production
-deployment has a public hostname (see [What is exposed (production)](#what-is-exposed-production)).
+the LAN only). See [What is exposed (evaluator)](#what-is-exposed-evaluator). A production
+deployment has a public hostname. See [What is exposed (production)](#what-is-exposed-production).
 
 | Surface | Public deployment | Non-public deployment | Status |
 | --- | --- | --- | --- |
 | Claude Code (CLI) | Works | Works (connects from your machine) | Login, refresh and plugin-declared server: Verified (Claude Code 2.1.236). Non-public: Expected (inferred, not run). Evaluator on `authentik.test`, `PS_MCP_URL` set to `http://127.0.0.1:8000/mcp/`: login verified (Claude Code 2.1.302). |
-| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (not tested). Login in the Desktop Code tab: Expected, not yet verified for a public deployment. Evaluator on `authentik.test`: verified (Desktop app 2.42304.0). Sign in from the Claude Code CLI first; a new Desktop Code session is then signed in. |
+| Claude Desktop - Code tab | Expected to work | Expected to work (runs locally) | Verified for the `PS_MCP_URL` setting path (Desktop app 2.31226.1, bundled Claude Code 2.1.295), against a stub with no authentication. A plugin-declared `oauth.clientId` in Desktop is untested (not tested). Login in the Desktop Code tab: Expected, not yet verified for a public deployment. Evaluator on `authentik.test`: verified (Desktop app 2.42304.0). Sign in from the Claude Code CLI first. Then a new Desktop Code session is signed in. |
 | Claude Desktop Chat and Cowork | Works as a manually added custom connector (URL plus Client ID `ps-cli`): GO | Does not work (needs public PS Service and Authentik) | Expected for everything beyond the login result. |
 | claude.ai | Expected to work | Does not work (same reason) | Expected, not yet verified (not tested). |
 
 This describes the direct connector: a remote connector that logs in against Authentik. The
-plugin declares it as a remote HTTP server with no local process. What is verified is listed per
-row by issue; everything else here is expected. Chat and Cowork support is a later, separate
+plugin declares it as a remote HTTP server with no local process. The table lists what is verified per
+row by issue. Everything else here is expected. Chat and Cowork support is a later, separate
 plugin, because the skills accept only the tool names of `plugin:ps-plugin:ps-mcp`. The plugin
 declaration in Claude Desktop (`oauth.clientId`) is untested, and claude.ai is not tested.
 
 **The connector must use the existing `ps-cli` client**, not a new one. The token's `aud` is the
 client ID, and PS Service accepts it only when `PS_AUTH_AUDIENCE` equals that client ID.
-The chart provisions the client; the grants and redirect URIs are in the
+The chart provisions the client. The grants and redirect URIs are in the
 [IdP configuration contract](./idp-configuration-contract.md#grants-and-redirect-uris-of-the-ps-cli-provider).
 For an identity provider other than Authentik, see
 [Other identity providers](./idp-configuration-contract.md#other-identity-providers).
@@ -984,7 +992,7 @@ Desktop Code tab, but not separately verified there. They are not claimed for Ch
 claude.ai:
 
 - **Consent screen.** Claude Code sends `prompt=consent`, so Authentik shows its consent screen
-  at login even though the authorization flow is implicit consent. This is expected; approve it.
+  at login even though the authorization flow is implicit consent. This is expected. Approve it.
 - **Same URL hides the plugin server.** If a plugin server has the same URL as a server you added
   by hand, Claude Code does not load the plugin server, and `/mcp` shows no error. Remove one of
   the two. An unresolved `${user_config.*}` value also drops the server silently. `userConfig` does
@@ -1019,13 +1027,13 @@ To become `SystemOwner`:
 1. **Register a passkey** from the link that the script printed
    ([evaluator](#8-register-your-passkey-and-log-in-with-ps-cli),
    [production](#5-enrol-the-owners-passkey)).
-2. **Log in with `ps-cli`** (`ps-cli auth login`). Claude Desktop plugin sign-in is separate;
-   see [step 9](#9-install-the-policy-system-plugin).
+2. **Log in with `ps-cli`** (`ps-cli auth login`). Claude Desktop plugin sign-in is separate.
+   See [step 9](#9-install-the-policy-system-plugin).
 3. **Make the first role-gated call** as the owner. For example, list the access roles with the
    `ps-manage-access-roles` skill. That call wins the bootstrap and makes you `SystemOwner`.
    For what to do next, see the [User Guide's Role System](./user-guide.md#role-system).
 
-`SystemOwner` counts as `SystemAdmin` or above. The owner can therefore invite users directly
+`SystemOwner` counts as `SystemAdmin` or above. So the owner can invite users directly
 with the `ps-invite-user` skill. The owner does not need `SystemAdmin` first.
 
 The owner is both the Authentik administrator and the PS `SystemOwner`. This is acceptable for
@@ -1174,7 +1182,7 @@ issuer and the WebAuthn relying-party ID, so moving an install changes all three
 8. Everyone using `ps-cli` runs `ps-cli auth login` again. The stored tokens belong to the old
    issuer.
 
-This procedure has not been verified on a live cluster; treat the steps as unverified.
+This procedure has not been verified on a live cluster. Treat the steps as unverified.
 
 ### Recording verification evidence
 
@@ -1189,10 +1197,10 @@ Nothing in this guide may claim a verified result for this change until that is 
 3. Claude Desktop, Code tab: do the same login. Record the Desktop app version and the bundled
    Claude Code version.
 4. Run `ps-cli auth login` and record the result.
-5. Upgrade rehearsal: take an evaluator installed under a `.local` name, follow
-   [Moving an existing evaluator off a .local hostname](#moving-an-existing-evaluator-off-a-local-hostname),
-   and record whether the owner got an enrolment link, registered a new passkey, and still holds
-   `SystemOwner`. Prove `SystemOwner` with an owner-only call and record the command and result.
+5. Do an upgrade rehearsal. Take an evaluator installed under a `.local` name. Follow
+   [Moving an existing evaluator off a .local hostname](#moving-an-existing-evaluator-off-a-local-hostname).
+   Record whether the owner got an enrolment link, registered a new passkey, and still holds
+   `SystemOwner`. Prove `SystemOwner` with an owner-only call. Record the command and result.
 6. Fill in the template below and keep it with your deployment records.
 
 ```text
@@ -1208,12 +1216,12 @@ Evaluator hostname:               authentik.test
    SystemOwner confirmed by an owner-only call (command and result):
 ```
 
-**After evidence is recorded.** Update the [surface table](#which-claude-surfaces-reach-your-deployment): in each of the CLI row and the Desktop row, replace the pending sentence with the verified result and the recorded versions (Claude Code version for the CLI row; Desktop app version and bundled Claude Code version for the Desktop row), and change the Desktop non-public status from "Expected" to "Verified" only with recorded evidence.
+**After evidence is recorded.** Update the [surface table](#which-claude-surfaces-reach-your-deployment). In the CLI row and in the Desktop row, replace the pending sentence with the verified result and the recorded versions. For the CLI row, give the Claude Code version. For the Desktop row, give the Desktop app version and the bundled Claude Code version. Change the Desktop non-public status from "Expected" to "Verified" only with recorded evidence.
 
 **Graph mutation log.** Upgrading to a version with the graph mutation log also runs a
-provisioning Job that applies the ordinary `ps_state` migrations and creates the owner-protected
-`graph_log` tables in `ps_state`. The Postgres init script cannot do this on an existing cluster. The upgrade command must pass
-`--wait --wait-for-jobs`. See the [Operations Guide: Upgrading to the graph mutation
+provisioning Job. The Job applies the ordinary `ps_state` migrations. It also creates the
+owner-protected `graph_log` tables in `ps_state`. The Postgres init script cannot do this on an
+existing cluster. The upgrade command must pass `--wait --wait-for-jobs`. See the [Operations Guide: Upgrading to the graph mutation
 log](./operations-guide.md#upgrading-to-the-graph-mutation-log).
 
 ## Verification status
@@ -1230,7 +1238,7 @@ before you rely on a claim for a real deployment.
   - A second user invited and enrolled.
   - Owner re-run recovery.
   - Certificate refresh without a manual restart.
-  - This run used an earlier hostname; the evaluator on `authentik.test` is untested.
+  - This run used an earlier hostname. The evaluator on `authentik.test` is untested.
 - **A second machine on the LAN: simulated, not tried on physical hardware.**
   - A separate container with the CA in its trust store reached Authentik over HTTPS through
     the `0.0.0.0:30443` mapping of the host.
@@ -1239,8 +1247,8 @@ before you rely on a claim for a real deployment.
   - Browser trust in that run used a test flag. It did not use an imported CA. The macOS
     keychain was untouched.
 - **Production path: verified on `kind`, not on AKS.** The real `deploy-ps-prod.sh` and
-  `values-prod.yaml` ran against `kind`. The run used `ingress-nginx`, a stand-in Azure CLI,
-  and skipped the cert-manager and Let's Encrypt steps.
+  `values-prod.yaml` ran against `kind`. The run used `ingress-nginx` and a stand-in Azure CLI.
+  It skipped the cert-manager and Let's Encrypt steps.
   - **Verified:**
     - The Ingress routes exactly the eight paths above.
     - The Ingress blocks the admin UI and the admin APIs.
@@ -1251,7 +1259,7 @@ before you rely on a claim for a real deployment.
     - The AKS managed NGINX add-on.
     - Real Let's Encrypt issuance through this flow.
     - Real Azure resources.
-- **Direct Claude connector: partly verified.** The Claude Code CLI (2.1.236) logged in as the `ps-cli` client and refreshed across sessions against a standalone Authentik, using the plugin-declared server. The Desktop Code tab read the `PS_MCP_URL` setting from `settings.json` against a stub with no authentication (Desktop app 2.31226.1). A manually added custom connector in Claude Desktop Chat and Cowork logged in against a public deployment (GO). None of this was run through these scripts. Not verified: the plugin-declared `oauth.clientId` in Desktop, claude.ai, and the plugin on a live deployment until a result is recorded. See [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
+- **Direct Claude connector: partly verified.** The Claude Code CLI (2.1.236) logged in as the `ps-cli` client against a standalone Authentik, using the plugin-declared server. It also refreshed across sessions. The Desktop Code tab read the `PS_MCP_URL` setting from `settings.json` against a stub with no authentication (Desktop app 2.31226.1). A manually added custom connector in Claude Desktop Chat and Cowork logged in against a public deployment (GO). None of this was run through these scripts. Not verified: the plugin-declared `oauth.clientId` in Desktop, claude.ai, and the plugin on a live deployment until a result is recorded. See [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).
 - **The invitation link on production is built on the public address.**
   - `invite_user` calls Authentik in-cluster, so it builds the invitee's link from
     `PS_AUTHENTIK_PUBLIC_URL`, which `deploy-ps-prod.sh` sets through `psService.authentik.publicUrl`.
@@ -1263,4 +1271,4 @@ before you rely on a claim for a real deployment.
   - `invite_user` through PS Service on production was **not** exercised end to end.
 - **A checkout chart.** To run the scripts against the chart in a checkout instead of the
   published chart, set `PS_CHART_REF=./charts/policy-system`. `deploy-ps-eval.sh` and
-  `deploy-ps-prod.sh` both honour it.
+  `deploy-ps-prod.sh` both use it.

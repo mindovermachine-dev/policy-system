@@ -117,6 +117,18 @@ parse_args() {
   done
 }
 
+# print_experimental_notice: states on stderr that this production path is experimental and not
+# verified on AKS, and where the evidence lives (issue #353). Printed before any Azure resource is
+# created; the wording matches the production banner in docs/artifacts/installation-guide.md.
+print_experimental_notice() {
+  {
+    printf 'EXPERIMENTAL: this production path is not verified on AKS.\n'
+    printf 'It was verified on kind only: the AKS managed NGINX add-on, real Let'"'"'s Encrypt issuance\n'
+    printf 'and real Azure resources were not. Do not rely on it for a real deployment.\n'
+    printf 'See docs/artifacts/installation-guide.md#verification-status\n\n'
+  } >&2
+}
+
 # load_config: sources the checked-in defaults file, failing fast if it is missing.
 load_config() {
   if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -1576,6 +1588,8 @@ main() {
     rotate_key_main
     return
   fi
+
+  print_experimental_notice
 
   check_required_tools kubectl helm curl
 

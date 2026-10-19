@@ -34,6 +34,13 @@ policy content that was retrieved. AI is used to analyze questions, derive inten
 If you want to try Policy System and evaluate it on your own computer this is documented in the installation guide's
 [Evaluator installation](./docs/artifacts/installation-guide.md#evaluator-installation) section.
 
+### Installation paths
+
+| Path                                                                         | Support level                                 | Verified                                                                                                              |
+| ---------------------------------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [Evaluator](./docs/artifacts/installation-guide.md#evaluator-installation)   | Supported for evaluation on your own computer | Live on a clean `kind` cluster; see [Verification status](./docs/artifacts/installation-guide.md#verification-status) |
+| [Production](./docs/artifacts/installation-guide.md#production-installation) | **Experimental**, not verified on AKS         | On `kind` only; see [Verification status](./docs/artifacts/installation-guide.md#verification-status)                 |
+
 ### Contributing to Policy Systems codebase
 
 If you want to help develop and evolve Policy System we welcome your contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for
