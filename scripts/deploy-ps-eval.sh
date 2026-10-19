@@ -104,7 +104,7 @@ readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
 readonly PS_CLI_CONTEXT="eval"
 readonly INSTALL_GUIDE="docs/artifacts/installation-guide.md"
-readonly INSTALL_GUIDE_TRUST_STEP="${INSTALL_GUIDE}#8-register-your-passkey-and-log-in-with-ps-cli"
+readonly INSTALL_GUIDE_TRUST_STEP="${INSTALL_GUIDE}#b2-map-the-name-and-trust-the-ca-evaluator-only"
 
 # Process-wide state, plain assignment only (never inside $(...), so writes reach the caller).
 # OWNER_EMAIL, SKIP_OWNER_PROMPT, AUTHENTIK_API_BASE, AUTHENTIK_LINK_BASE and AUTHENTIK_CURL_ARGS
@@ -391,7 +391,7 @@ require_kind_context() {
 # require_llm_secret: the chart's PS Service reads its LLM credentials from this Secret.
 require_llm_secret() {
   if ! kubectl -n "$namespace" get secret "$LLM_SECRET_NAME" -o name >/dev/null 2>&1; then
-    print_error 'Secret %s not found in namespace %s. Fix: create it first (scripts/sync-llm-secrets-to-kind.sh, see %s step 5), then re-run.\n' \
+    print_error 'Secret %s not found in namespace %s. Fix: create it first (scripts/sync-llm-secrets-to-kind.sh, see %s step 4), then re-run.\n' \
       "$LLM_SECRET_NAME" "$namespace" "$INSTALL_GUIDE"
     exit "$EXIT_FAILURE"
   fi

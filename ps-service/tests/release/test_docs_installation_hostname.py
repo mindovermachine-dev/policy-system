@@ -118,7 +118,7 @@ _KIND_CREATE = "kind create cluster --config"
 
 
 def test_install_guide_runs_the_exposure_check_before_creating_the_cluster() -> None:
-    step = _text().split("### 4. Create the local cluster", 1)[1].split("\n### 5.", 1)[0]
+    step = _text().split("### 3. Create the local cluster", 1)[1].split("\n### 4.", 1)[0]
 
     assert _CHECK in step
     assert step.index(_CHECK) < step.index(_KIND_CREATE)
@@ -150,7 +150,7 @@ def test_exposed_section_describes_the_preflight_and_the_flag() -> None:
 
 
 def test_guide_says_a_multi_homed_rerun_needs_the_flag_on_both_calls() -> None:
-    step = _squash(_text().split("### 4. Create the local cluster", 1)[1].split("\n### 5.", 1)[0])
+    step = _squash(_text().split("### 3. Create the local cluster", 1)[1].split("\n### 4.", 1)[0])
 
     assert "both" in step
 
@@ -254,11 +254,11 @@ def test_values_reference_gives_the_evaluator_authentik_base_url_under_the_auth_
 
 def _this_machine_and_another_machine_sections() -> tuple[str, str]:
     text = _squash(_text())
-    this_machine = text.split("#### This machine: hostname and certificate", 1)[1].split(
-        "#### Register the owner's passkey", 1
+    this_machine = text.split("### The server machine", 1)[1].split(
+        "### Another machine (a colleague on the LAN)", 1
     )[0]
-    another = text.split("#### Another machine (a colleague on the LAN)", 1)[1].split(
-        "### 9. Install the Policy System Plugin", 1
+    another = text.split("### Another machine (a colleague on the LAN)", 1)[1].split(
+        "## B3. Install ps-cli", 1
     )[0]
     return this_machine, another
 

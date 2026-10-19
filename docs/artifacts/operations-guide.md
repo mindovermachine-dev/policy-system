@@ -55,7 +55,7 @@ Guide](./installation-guide.md). For day-to-day usage (`ps-cli`, Claude Desktop)
 the [User Guide](./user-guide.md).
 
 Run the `scripts/` commands in this guide from the folder you unpacked the deploy bundle into
-(see [Installation Guide: Download the deploy bundle](./installation-guide.md#3-download-the-deploy-bundle)),
+(see [Installation Guide: Download the deploy bundle](./installation-guide.md#2-download-the-deploy-bundle)),
 or from the repo root if you cloned it. Download the bundle again before an upgrade: the scripts
 in it install the chart of their own release. The bundle holds `ps-upgrade.sh`,
 `ps-reset-data.sh`, `grant-access-role.sh` and `ps-aks.sh`. It does not hold
@@ -226,7 +226,7 @@ See [Helm Chart Values Reference](./helm-chart-values-reference.md).
 `deploy/kind/cluster.yaml`'s port mappings are fixed when a cluster is created. A `policy-system`
 cluster created before Authentik was served over HTTPS lacks the `30443` mapping (it had a
 plain-HTTP `30080` one), so it must be deleted and recreated — `kind delete cluster --name
-policy-system`, then step 4 of the installation guide again: first `scripts/deploy-ps-eval.sh
+policy-system`, then step 3 of the installation guide again: first `scripts/deploy-ps-eval.sh
 --check-exposure` (add `--allow-public-host` only if you accept a public address on this machine),
 then the `kind create cluster` command. This destroys
 the cluster's PVC data (FalkorDB graph, PS Postgres, Authentik's Postgres), so load curated
@@ -1185,8 +1185,8 @@ decision and not part of this procedure.
 | Ingestion fails at the first stage with a Cellar/ELI error | The EU publication service is unreachable or returned an unparseable document. `cellar_eli` can appear in `unhealthy_dependencies`; readiness is unaffected. Retry later. |
 | The `ps-service` pod restarts repeatedly with `OOMKilled` | The container exceeded its memory limit. Raise `psService.resources` in the chart values (see [Helm Chart Values Reference](./helm-chart-values-reference.md)). |
 | `ingest document`, or an `ingest_regulation` / `start_ingestion` / `check_regulations` tool call, fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/ready` endpoint with a valid access token (`ps-cli get health` while logged in) and its LLM provider configuration. |
-| `ps-cli auth login` against the evaluator reports "Could not verify the TLS certificate of ..." | The issuer is HTTPS with a locally issued certificate and the CA is not in the OS trust store, which `ps-cli` verifies against. Trust the CA there (`scripts/deploy-ps-eval.sh --apply-host-setup` does this on the evaluator's own machine). A plain "Could not reach ..." means the host is unreachable instead. See [Installation Guide, step 8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli). |
-| A browser shows a certificate warning, or passkey registration is refused, on the evaluator | The browser does not trust the local CA, or the hostname is not mapped in `/etc/hosts` on that machine. Passkeys need a trusted HTTPS origin. Trust `ca.pem` and map the hostname (see step 8). |
+| `ps-cli auth login` against the evaluator reports "Could not verify the TLS certificate of ..." | The issuer is HTTPS with a locally issued certificate and the CA is not in the OS trust store, which `ps-cli` verifies against. Trust the CA there (`scripts/deploy-ps-eval.sh --apply-host-setup` does this on the evaluator's own machine). A plain "Could not reach ..." means the host is unreachable instead. See [Installation Guide, B2](./installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only). |
+| A browser shows a certificate warning, or passkey registration is refused, on the evaluator | The browser does not trust the local CA, or the hostname is not mapped in `/etc/hosts` on that machine. Passkeys need a trusted HTTPS origin. Trust `ca.pem` and map the hostname (see [Installation Guide, B2](./installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only)). |
 | The deploy script stops with "Authentik rejected the shared API token" | Authentik's bootstrap token never rotates and the Secret no longer matches it. See [Installation Guide: Upgrading an existing install](./installation-guide.md#upgrading-an-existing-install). |
 | An owner or invite link says "No recovery flow set" or the script waited for the blueprint | The bundled Authentik blueprint had not applied yet (about a minute on a fresh install). The scripts wait for it; re-run once Authentik's worker is Ready. |
 | Referencing a context that doesn't exist | `ps-cli` exits non-zero and lists valid context names — see [User Guide: ps-cli Troubleshooting](./user-guide.md#troubleshooting). |

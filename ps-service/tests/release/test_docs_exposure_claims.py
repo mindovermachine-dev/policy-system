@@ -141,7 +141,7 @@ def test_upgrade_note_appears_exactly_once() -> None:
 
 
 def test_installation_guide_gives_linux_ca_trust_steps() -> None:
-    section = _section("#### This machine: hostname and certificate")
+    section = _section("### The server machine")
 
     assert "On Linux" in section
     assert "update-ca-certificates" in section

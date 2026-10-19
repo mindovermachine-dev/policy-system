@@ -210,7 +210,7 @@ _BANNED_STRINGS = (
     "upstream_latency",
     "no stored credentials",
 )
-_STEP_9 = "### 9. Install the Policy System Plugin"
+_STEP_9 = "## B5. Install the Policy System Plugin"
 _USER_PLUGIN_HEADING = "## Using Claude Desktop - Code"
 _USER_SETTINGS_HEADING = "### Plugin (`ps-mcp`) settings"
 _PS_MCP_URL_ERROR = "Missing environment variables: PS_MCP_URL"
@@ -256,7 +256,7 @@ def test_user_guide_documents_ps_mcp_url_and_error() -> None:
     section = _squash(_section(_USER, _USER_PLUGIN_HEADING))
     settings = _squash(_section(_USER, _USER_SETTINGS_HEADING))
     assert "PS_MCP_URL" in section
-    assert "./installation-guide.md#9-install-the-policy-system-plugin" in section
+    assert "./installation-guide.md#b5-install-the-policy-system-plugin" in section
     for needle in (
         "PS_MCP_URL",
         _PS_MCP_URL_ERROR,

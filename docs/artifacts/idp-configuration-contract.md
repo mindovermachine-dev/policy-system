@@ -129,7 +129,7 @@ the fallback. A failed certificate check is reported as such, not as an unreacha
 Browsers need the CA imported into the OS or browser store too, and passkeys only work over such
 a trusted HTTPS origin. Production uses a public Let's Encrypt
 certificate, so none of this applies there. See the [Installation
-Guide](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli).
+Guide, B2](./installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only).
 
 ### Passkey-only enrolment and recovery
 

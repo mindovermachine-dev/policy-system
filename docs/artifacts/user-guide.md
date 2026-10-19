@@ -3,8 +3,7 @@
 ## Table of Contents
 
 - [Using ps-cli](#using-ps-cli)
-  - [Install ps-cli](#install-ps-cli)
-  - [Point ps-cli at your instance](#point-ps-cli-at-your-instance)
+  - [Set up ps-cli](#set-up-ps-cli)
   - [Load curated content](#load-curated-content)
   - [Find and ingest a regulation from EUR-Lex](#find-and-ingest-a-regulation-from-eur-lex)
 - [Using Claude Desktop - Code](#using-claude-desktop---code)
@@ -58,81 +57,23 @@ With `ps-cli`, you ingest internal policies and administer an instance.
 ## Using ps-cli
 
 `ps-cli` is a command-line client for Policy System. This section shows the steps
-that a new user does: install it, point it at an instance, load some content, and
-ingest a regulation. For all the commands and the advanced configuration, see the
-[Appendix](#appendix-ps-cli-reference).
+that a new user does: set it up, load some content, and ingest a regulation. For all the
+commands and the advanced configuration, see the [Appendix](#appendix-ps-cli-reference).
 
-### Install ps-cli
+### Set up ps-cli
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | bash
-```
+Installing `ps-cli`, pointing it at your instance and logging in are client setup. They
+are the same for the evaluator and for production, and they live in one place: [Installation
+Guide, Part B](./installation-guide.md#part-b-client-install).
 
-```bash
-ps-cli --version
-```
+- [B3. Install ps-cli](./installation-guide.md#b3-install-ps-cli), including the Linux
+  prerequisites.
+- [B4. Point ps-cli at the instance and log
+  in](./installation-guide.md#b4-point-ps-cli-at-the-instance-and-log-in).
 
-For the prerequisites and for what this command does, see
-[Installation Guide: Install ps-cli](./installation-guide.md#6-install-ps-cli). It
-installs a release that is verified with a checksum. It uses `uv`, and you do not
-need a clone.
-
-### Point ps-cli at your instance
-
-**Evaluator instance**: PS Service is served by the proxy on `https://ps.test:30443` (or your
-`--hostname`). This is a local
-`kind` deployment (see [Installation Guide: Evaluator
-installation](./installation-guide.md#evaluator-installation)). It **requires login**
-through the bundled Authentik. The proxy uses HTTPS with a certificate that was issued
-locally. `ps-cli` verifies the certificate against the operating system trust store.
-On the machine that ran `scripts/deploy-ps-eval.sh --apply-host-setup`, that script
-has already added the local CA to the trust store. Therefore, you do not need an
-environment variable. On another machine, first trust the CA certificate (see
-[Installation Guide, step
-8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli)).
-
-```bash
-ps-cli config set-context eval --url https://ps.test:30443
-```
-
-```bash
-ps-cli config use-context eval
-```
-
-```bash
-ps-cli auth login
-```
-
-The account that you sign in with must first have a passkey. The owner registers a
-passkey from the link that the deploy script printed. Everyone else registers a passkey
-from an invitation (see [Invite a new user](#invite-a-new-user)). Neither person
-sets a password.
-
-**Production instance**: first find the URL. The person who ran
-`scripts/deploy-ps-prod.sh` has it. The script prints it at the end of that run
-(`PS Service: https://<label>.<region>.cloudapp.azure.com`).
-
-If you do not have the URL, run `scripts/deploy-ps-prod.sh` again. The script is
-idempotent. It makes no changes if nothing is different. It always prints the URL
-again, also on that run with no changes. Then:
-
-```bash
-ps-cli config set-context prod --url https://<label>.<region>.cloudapp.azure.com
-```
-
-```bash
-ps-cli config use-context prod
-```
-
-```bash
-ps-cli auth login
-```
-
-`auth login` runs an OIDC device-authorization flow. `ps-cli` prints a verification
-URL and a code. You complete the sign-in in a browser. `ps-cli` then stores the token
-under the current context. Both the evaluator instance and the production instance
-are deployed with the bundled Authentik identity provider. Therefore, this step is
-necessary on both.
+The account that you sign in with must first have a passkey. The owner registers one from the
+link that the deploy script printed. Everyone else registers one from an invitation (see
+[Invite a new user](#invite-a-new-user)). Neither person sets a password.
 
 Each later `ps-cli` command uses the context that is current. For how to switch
 between multiple environments, how to override a context for one command, and how
@@ -214,8 +155,8 @@ action requires `ComplianceOfficer`. See [Role System](#role-system).
 
 ## Using Claude Desktop - Code
 
-Install the Policy System Plugin (see [Installation Guide: Install the
-Policy System Plugin](./installation-guide.md#9-install-the-policy-system-plugin))
+Install the Policy System Plugin (see [Installation Guide: B5. Install the
+Policy System Plugin](./installation-guide.md#b5-install-the-policy-system-plugin))
 with:
 
 ```text
@@ -223,7 +164,7 @@ with:
 ```
 
 The Policy System MCP connector (`ps-mcp`) of the plugin reaches the PS Service in `PS_MCP_URL`
-(see [Install the Policy System Plugin](./installation-guide.md#9-install-the-policy-system-plugin)).
+(see [Install the Policy System Plugin](./installation-guide.md#b5-install-the-policy-system-plugin)).
 The connector can need a moment to connect. If a query fails, try again.
 
 To see which Claude surfaces can reach your instance, and which are verified, see [Which Claude surfaces reach your deployment](./installation-guide.md#which-claude-surfaces-reach-your-deployment).
@@ -278,9 +219,8 @@ System](#role-system).
 
 The invitee opens the link, enters a username, a name, and an email, and registers a
 passkey. There is no password field, and the account has no password. On the evaluator
-instance, the machine of the invitee needs the same CA trust and hostname mapping.
-These are the same as on the machine of the owner (see [Installation Guide, step
-8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli)).
+instance, the machine of the invitee needs the hostname mapping and the CA trust (see
+[Installation Guide, B2](./installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only)).
 On production, `invite_url` has the public address only when the deployed PS Service
 release supports `PS_AUTHENTIK_PUBLIC_URL`. See [Installation Guide: Verification
 status](./installation-guide.md#verification-status).
@@ -773,8 +713,8 @@ Sometimes `ps-cli auth login` against an evaluator instance fails with `Could no
 <issuer>.` while Authentik is running. The issuer uses HTTPS with a certificate that
 was issued locally, and `ps-cli` verifies it against the operating system trust store.
 If the message says that it could not verify the TLS certificate, the machine does not
-trust the local CA. Trust it as described in [Installation Guide, step
-8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli). Then try
+trust the local CA. Trust it as described in [Installation Guide,
+B2](./installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only). Then try
 again. A plain `Could not reach` message means that the host is not reachable. It is not
 a certificate problem. On Linux, `SSL_CERT_FILE` or `SSL_CERT_DIR` also work. On macOS
 and Windows, `ps-cli` ignores them.

@@ -569,7 +569,7 @@ def test_closing_output_lists_the_missing_local_steps_and_points_at_the_guide(
     assert f"echo '{LAN} {HOST}' | sudo tee -a {hosts}" in run.stdout
     assert MACOS_TRUST in run.stdout
     assert str(eval_fixture.state_dir / "ca.pem") in run.stdout
-    assert "installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli" in run.stdout
+    assert "installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only" in run.stdout
     assert "--apply-host-setup" in run.stdout
     # The LAN-colleague walkthrough lives in the guide, not in the script output.
     assert "LAN colleagues" in run.stdout
