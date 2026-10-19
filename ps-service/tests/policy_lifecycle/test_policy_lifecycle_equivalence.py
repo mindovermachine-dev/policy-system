@@ -32,6 +32,7 @@ from policy_lifecycle._gateway_fakes import (
     PolicyReadGraph,
     SeedControl,
     SeedStandard,
+    policy_manager_enforcer,
 )
 from policy_lifecycle._legacy_reference import (
     LegacyRecordingGraph,
@@ -583,7 +584,7 @@ def test_a_cascade_leaves_the_graph_the_frozen_legacy_cascade_left(
             policy_id=_POLICY,
             graph=graph,
             audit_store=audit,
-            access_role_store=_managers(),
+            enforce_policy_manager=policy_manager_enforcer(_managers()),
             submitter=submitter,
         )
     else:
@@ -628,7 +629,7 @@ def test_approving_a_fork_leaves_the_graph_the_frozen_legacy_repoint_and_cascade
         policy_id="pol_new",
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
-        access_role_store=_managers(),
+        enforce_policy_manager=policy_manager_enforcer(_managers()),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -649,7 +650,7 @@ def test_approving_a_plain_policy_leaves_the_graph_the_frozen_legacy_cascade_lef
         policy_id=_POLICY,
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
-        access_role_store=_managers(),
+        enforce_policy_manager=policy_manager_enforcer(_managers()),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -673,7 +674,7 @@ def _approve(rig: LifecycleRig, policy_id: str) -> None:
         policy_id=policy_id,
         graph=rig.read,
         audit_store=rig.audit,
-        access_role_store=_managers(),
+        enforce_policy_manager=policy_manager_enforcer(_managers()),
         submitter=rig.gateway,
     )
 
@@ -846,7 +847,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         policy_id=new_id,
         graph=rig.read,
         audit_store=rig.audit,
-        access_role_store=_managers(),
+        enforce_policy_manager=policy_manager_enforcer(_managers()),
         submitter=rig.gateway,
     )
     _propose(rig, new_id)

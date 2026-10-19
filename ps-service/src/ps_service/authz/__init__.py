@@ -2,8 +2,8 @@
 
 Shared authorization component used by both the MCP interface and the REST API. It owns
 the operational access roles (`AccessRole`), their persisted assignments, the role-gating
-checks (`require_role`), the grant/revoke operations with their attribute rules, and the
-audit-event listing. Its domain path is `ps.service.authz`
+checks (`check_role`, `enforce_role_gate`), the grant/revoke operations with their attribute
+rules, and the audit-event listing. Its domain path is `ps.service.authz`
 (`docs/architecture/ps-service-container-architecture.md`).
 
 Re-exports the service functions, the store seam and its PostgreSQL implementation, the
@@ -26,6 +26,7 @@ from ps_service.authz.errors import (
     AccessRoleSystemOwnerFloorRaceError,
 )
 from ps_service.authz.models import AccessRole, AccessRoleAssignmentRow, AccessRoleGrantEvent
+from ps_service.authz.request_gate import RoleGate, enforce_role_gate
 from ps_service.authz.rules import (
     AccessRule,
     AccessRuleContext,
@@ -37,10 +38,11 @@ from ps_service.authz.service import (
     GrantResult,
     ListAssignmentsResult,
     RevokeResult,
+    RoleDecision,
+    check_role,
     grant_role,
     list_assignments,
     list_audit_events,
-    require_role,
     resolve_active_roles,
     revoke_role,
 )
@@ -69,13 +71,16 @@ __all__ = [
     "ListAssignmentsResult",
     "PsycopgAccessRoleStore",
     "RevokeResult",
+    "RoleDecision",
+    "RoleGate",
     "block_self_target",
+    "check_role",
+    "enforce_role_gate",
     "enforce_system_owner_floor",
     "grant_role",
     "list_assignments",
     "list_audit_events",
     "require_bootstrap_owner_configured",
-    "require_role",
     "resolve_active_roles",
     "revoke_role",
 ]

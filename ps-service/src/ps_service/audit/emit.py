@@ -39,6 +39,22 @@ Conventions (the audit trail's row-shape contract):
   signs, with the approver as actor, the review id and before/after snapshots. If that row cannot
   be written the merge does not run and the single-use approval is already consumed, so a new
   approval is needed.
+- `access.gate`. A verified caller denied by a request gate (an MCP tool or a REST route) gets one
+  best-effort row: outcome `rejected`, the denied principal as actor, resource type `operation`,
+  the gated operation's name as `resource_id` and only the required role in the details. A denial
+  of a caller with no verified identity, and the internal role checks (the sign-time re-check, the
+  service-layer assertions), write no `access.gate` row; `grant` and `revoke` keep their own
+  `access_role.*` `rejected` row and no second one.
+- `passkey.enroll`. One best-effort row after a passkey is stored: outcome `applied`, the actor is
+  the `(sub, iss)` bound to the pending approval (the caller is identified by the approval code, not
+  by authentication, hence `proof='approval_code'` in the details), resource type
+  `pending_approval`. A rejected ceremony step writes no row and a signed action writes no
+  `passkey.sign` row: the action's own effect row records the signing.
+- `query.cypher`. One best-effort row per `cypher` tool call, written by the tool and never by the
+  query engine or another in-process caller: outcome `applied`, `rejected` (a write clause) or
+  `failed`, details limited to the row count, the truncation flag and an enumerated `reason_code`,
+  never the query text or a database error text. Under the local-test bypass the actor is the
+  bypass sentinel.
 - Reading. `list-audit-events` returns these rows; its `details` filter (celex,
   regulatory_instrument_id, instrument_id; see `AUDIT_DETAILS_FILTER_KEYS`) answers "who ingested
   or restored X".

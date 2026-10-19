@@ -21,6 +21,7 @@ The HTTP ceremony lives in `ps_service.passkey_signing.router`, the WebAuthn hel
 
 from __future__ import annotations
 
+import ps_service.passkey_signing.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- registers `passkey.enroll` on package import
 from ps_service.passkey_signing.errors import (
     MigrationApplyError,
     PasskeySigningPostgresConnectionError,

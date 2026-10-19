@@ -15,7 +15,7 @@ import ...` is safe here too.
 
 Every test here binds a real, non-bypass `AccessToken` (`_verified_actor`), so
 `config.is_local_test_bypass_active` is `False` and the new
-`authz_service.require_role(...)` check in `ingest_regulation`'s body actually
+declarative role gate (`tool_gates`) in `ingest_regulation`'s body actually
 runs -- distinct from every test in `test_ingest_regulation_tool.py`, which
 drives the tool under the local-test bypass (or, for its own two real-token
 tests, now seeds a `ComplianceOfficer` grant via
@@ -140,7 +140,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     configure()
     store = _seeded_store()
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    # No pipeline-dependencies patch needed: `require_role` denies inside
+    # No pipeline-dependencies patch needed: the role gate denies inside
     # `_body()` before `_resolve_and_ingest`/`build_default_pipeline_dependencies`
     # is ever reached, so the real, unpatched factory is simply never called.
 
@@ -152,7 +152,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
 
 
 def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`require_role`'s own non-hierarchical contract for
+    """The role gate's own non-hierarchical contract for
     `ComplianceOfficer` -- a caller holding `SystemAdmin` (but never
     separately granted `ComplianceOfficer`) is still denied, proving no
     implicit admin override reaches this gate.

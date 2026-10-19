@@ -1,4 +1,4 @@
-"""Typed `details` models for the four `access_role.*` audit actions.
+"""Typed `details` models for the `access_role.*` and `access.gate` audit actions.
 
 Registers each model with `ps_service.audit.models.register_audit_action` at import
 time, and registers the `principal` audit resource type. Registration happens on import
@@ -7,11 +7,14 @@ of this module, the same way `@server.tool()` decorators populate the tool regis
 
 `ps_service.authz.store` imports this module for its side effect, so the actions are
 registered before any grant, revoke or bootstrap call reaches `AuditStore.record`.
+`ps_service.authz.request_gate` imports it too, so `access.gate` is registered before the
+request gate writes a denial row.
 
 Side Effects:
     Importing this module registers `access_role.bootstrap`,
-    `access_role.bootstrap_rejected`, `access_role.grant` and `access_role.revoke` as audit
-    actions and `principal` as an audit resource type. Registration is process-global.
+    `access_role.bootstrap_rejected`, `access_role.grant`, `access_role.revoke` and
+    `access.gate` as audit actions and `principal` and `operation` as audit resource types.
+    Registration is process-global.
 
 Raises:
     ValueError: at import time if one of the action names is already registered (raised
@@ -92,14 +95,31 @@ class AccessRoleRevokeDetails(AuditDetails):
     ) = None
 
 
+class AccessGateDetails(AuditDetails):
+    """Details of an `access.gate` audit event: a request gate denied a verified caller.
+
+    Recorded only with `outcome='rejected'`. The row's resource is the gated operation
+    (resource type `operation`, resource id the operation name); the refusal itself is carried
+    by `outcome`, not by the action name.
+
+    Attributes:
+        required_role: The minimum role the operation requires.
+    """
+
+    required_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"]
+
+
 register_audit_action("access_role.bootstrap", AccessRoleBootstrapDetails)
 register_audit_action("access_role.bootstrap_rejected", AccessRoleBootstrapRejectedDetails)
 register_audit_action("access_role.grant", AccessRoleGrantDetails)
 register_audit_action("access_role.revoke", AccessRoleRevokeDetails)
+register_audit_action("access.gate", AccessGateDetails)
 register_audit_resource_type("principal")
+register_audit_resource_type("operation")
 
 
 __all__ = [
+    "AccessGateDetails",
     "AccessRoleBootstrapDetails",
     "AccessRoleBootstrapRejectedDetails",
     "AccessRoleGrantDetails",

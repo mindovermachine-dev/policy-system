@@ -34,7 +34,7 @@ import redis.exceptions
 import ps_service.policy_lifecycle.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers this component's own audit actions before any lifecycle call can reach AuditStore.record
 from ps_service.audit.store import EventIdAuditStore
 from ps_service.authz.models import AccessRole
-from ps_service.authz.service import require_role, resolve_active_roles
+from ps_service.authz.service import resolve_active_roles
 from ps_service.domain_mapper.identity import control_id, standard_id
 from ps_service.domain_mapper.identity import policy_id as compute_policy_id
 from ps_service.domain_schema import enum_values, patchable_fields
@@ -1351,7 +1351,7 @@ def approve_policy(
     policy_id: str,
     graph: GraphHandle,
     audit_store: AuditStore,
-    access_role_store: AccessRoleStore,
+    enforce_policy_manager: Callable[[tuple[str, str]], None],
     submitter: LifecycleSubmitter,
 ) -> PolicyApproveResult:
     """Approve a proposed Policy, moving its whole tree to `status="approved"`.
@@ -1361,7 +1361,7 @@ def approve_policy(
 
     Business Rules:
         - The caller must hold `PolicyManager` or above. This check runs after the Policy is read
-          (so an unknown id is reported first) and records no audit event.
+          (so an unknown id is reported first); the injected enforcer audits a denial.
         - A caller may never approve a Policy they own; the owner comparison uses the full
           `(subject, issuer)` pair, so the same subject under another issuer is a different person.
         - The Policy must be `"proposed"`.
@@ -1378,8 +1378,9 @@ def approve_policy(
         graph: The single-tenant policy graph handle.
         audit_store: Where `policy.approve` and `policy.auto_deprecate` events are recorded as
             standalone rows.
-        access_role_store: Where `actor`'s active roles are resolved from, for the
-            `PolicyManager` check.
+        enforce_policy_manager: Called with `actor` to enforce the `PolicyManager` role. It raises
+            `AccessDeniedError` (or `AuthorizationStoreUnavailableError`) and may audit the denial.
+            The caller supplies it, so this service builds no role store or audit context.
         submitter: The Graph Write Gateway used for the cascades and for backfilling a legacy
             tree; the backfill only writes when some node needs it.
 
@@ -1391,7 +1392,8 @@ def approve_policy(
         PolicyNotFoundError: no Policy has `policy_id`.
         AccessDeniedError: `actor` does not hold `PolicyManager` or above
             (`ps_service.api.errors.AccessDeniedError`).
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        AuthorizationStoreUnavailableError: the enforcer could not read the access-role store
+            (propagated).
         PolicySelfApprovalBlockedError: `actor` owns the Policy.
         PolicyInvalidStatusTransitionError: the Policy is not currently `"proposed"`.
         PolicyGovernanceConflictError: the prior's governed Capabilities changed between the read
@@ -1418,9 +1420,9 @@ def approve_policy(
         actor=actor, owner=owner, action="approve", current_status=current_status
     )
 
-    # The role check raises `AccessDeniedError` itself and records no audit event, so it is
-    # deliberately not one of the audited `gates` below.
-    require_role(actor, minimum=AccessRole.POLICY_MANAGER, store=access_role_store)
+    # The injected enforcer raises `AccessDeniedError` itself (and the request gate it wraps audits
+    # the denial as `access.gate`), so it is deliberately not one of the audited `gates` below.
+    enforce_policy_manager(actor)
 
     gates = (
         _TransitionGate(
@@ -1507,7 +1509,7 @@ def reject_policy(
     policy_id: str,
     graph: GraphHandle,
     audit_store: AuditStore,
-    access_role_store: AccessRoleStore,
+    enforce_policy_manager: Callable[[tuple[str, str]], None],
     submitter: LifecycleSubmitter,
 ) -> PolicyRejectResult:
     """Reject a proposed Policy, returning its whole tree to `status="draft"`.
@@ -1516,7 +1518,7 @@ def reject_policy(
 
     Business Rules:
         - The caller must hold `PolicyManager` or above. This check runs after the Policy is read
-          and records no audit event.
+          (so an unknown id is reported first); the injected enforcer audits a denial.
         - A caller may never reject a Policy they own; the owner comparison uses the full
           `(subject, issuer)` pair.
         - The Policy must be `"proposed"`.
@@ -1528,8 +1530,9 @@ def reject_policy(
         policy_id: Id of the Policy to reject.
         graph: The single-tenant policy graph handle.
         audit_store: Where `policy.reject` events are recorded as standalone rows.
-        access_role_store: Where `actor`'s active roles are resolved from, for the
-            `PolicyManager` check.
+        enforce_policy_manager: Called with `actor` to enforce the `PolicyManager` role. It raises
+            `AccessDeniedError` (or `AuthorizationStoreUnavailableError`) and may audit the denial.
+            The caller supplies it, so this service builds no role store or audit context.
         submitter: The Graph Write Gateway used for the cascade and for backfilling a legacy tree;
             the backfill only writes when some node needs it.
 
@@ -1540,7 +1543,8 @@ def reject_policy(
         PolicyNotFoundError: no Policy has `policy_id`.
         AccessDeniedError: `actor` does not hold `PolicyManager` or above
             (`ps_service.api.errors.AccessDeniedError`).
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        AuthorizationStoreUnavailableError: the enforcer could not read the access-role store
+            (propagated).
         PolicySelfApprovalBlockedError: `actor` owns the Policy.
         PolicyInvalidStatusTransitionError: the Policy is not currently `"proposed"`.
         PolicyLifecycleGraphUnavailableError: a graph write failed after its `applied` event; a
@@ -1563,9 +1567,9 @@ def reject_policy(
         actor=actor, owner=owner, action="reject", current_status=current_status
     )
 
-    # The role check raises `AccessDeniedError` itself and records no audit event, so it is
-    # deliberately not one of the audited `gates` below.
-    require_role(actor, minimum=AccessRole.POLICY_MANAGER, store=access_role_store)
+    # The injected enforcer raises `AccessDeniedError` itself (and the request gate it wraps audits
+    # the denial as `access.gate`), so it is deliberately not one of the audited `gates` below.
+    enforce_policy_manager(actor)
 
     gates = (
         _TransitionGate(
@@ -1728,7 +1732,8 @@ def _authorize_draft_edit(
         PolicyDraftAccessDeniedError: `context.actor` is neither the owner nor a `SystemOwner` or
             `SystemAdmin`.
         PolicyInvalidStatusTransitionError: `context.current_status` is not `"draft"`.
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        AuthorizationStoreUnavailableError: the enforcer could not read the access-role store
+            (propagated).
     """
     if not require_owner(context).allowed:
         active_roles = resolve_active_roles(context.actor, store=access_role_store)
@@ -1789,7 +1794,8 @@ def update_policy_draft(
         PolicyInvalidStatusTransitionError: the Policy is not currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
             with the gateway error chained); no audit event is recorded.
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        AuthorizationStoreUnavailableError: the enforcer could not read the access-role store
+            (propagated).
         redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
 
     Side Effects:
@@ -1868,7 +1874,8 @@ def add_standard_to_draft(
         PolicyInvalidStatusTransitionError: the Policy is not currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
             with the gateway error chained).
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        AuthorizationStoreUnavailableError: the enforcer could not read the access-role store
+            (propagated).
         redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
 
     Side Effects:
@@ -1969,7 +1976,8 @@ def update_standard_draft(
         PolicyInvalidStatusTransitionError: the Standard is not currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
             with the gateway error chained).
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        AuthorizationStoreUnavailableError: the enforcer could not read the access-role store
+            (propagated).
         redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
 
     Side Effects:
@@ -2059,7 +2067,8 @@ def add_control_to_draft(
         PolicyInvalidStatusTransitionError: the Standard is not currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
             with the gateway error chained).
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        AuthorizationStoreUnavailableError: the enforcer could not read the access-role store
+            (propagated).
         redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
 
     Side Effects:
@@ -2170,7 +2179,8 @@ def update_control_draft(
         PolicyInvalidStatusTransitionError: the Control is not currently `"draft"`.
         PolicyLifecycleGraphUnavailableError: the graph write failed (`FalkorDB write failed: ...`,
             with the gateway error chained).
-        AuthorizationStoreUnavailableError: the access-role store could not be read (propagated).
+        AuthorizationStoreUnavailableError: the enforcer could not read the access-role store
+            (propagated).
         redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
 
     Side Effects:

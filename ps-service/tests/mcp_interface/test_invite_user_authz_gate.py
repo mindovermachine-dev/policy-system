@@ -3,7 +3,7 @@ tool: a non-`SystemAdmin` caller is denied (`error:`-
 prefixed, without contacting Authentik), the local-test bypass
 skips the role check entirely, and a store-outage fail-closed case mirroring
 `test_catalog_source_authz_gate.py`'s own coverage of the same
-`require_role`/`PsycopgAccessRoleStore` gate shape.
+declarative role gate (`tool_gates`) and `PsycopgAccessRoleStore` shape.
 
 `_verified_actor`/`_fake_store_factory`/`_seeded_store` and the subject/issuer
 constants are reused via cross-module import from

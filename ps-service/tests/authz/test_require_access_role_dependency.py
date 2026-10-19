@@ -11,8 +11,8 @@ HTTP round trip (there is no route to hit).
 the way `mcp_interface.mcp_server.PsycopgAccessRoleStore` already is in
 `tests/mcp_interface/test_access_role_tools.py`/`test_catalog_source_authz_gate.py`
 -- the same fakes (`tests/authz/_fakes.py`), proving `require_access_role`
-drives the identical shared `ps_service.authz.service.require_role` function
-those MCP tools call (one shared component, both surfaces).
+drives the identical shared `ps_service.authz.request_gate.enforce_role_gate` function
+those MCP tools' wrapper calls (one shared component, both surfaces).
 
 Lives under `tests/authz/` (alongside `test_service.py`) rather than
 `tests/api/`: `--import-mode=importlib` (workspace root `pyproject.toml`)
@@ -31,6 +31,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from audit._fakes import InMemoryAuditStore
 from starlette.requests import Request
 
 from authz._fakes import FakeAccessRoleStore, RaisingAccessRoleStore
@@ -84,11 +85,11 @@ def test_no_verified_principal_is_denied(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         dependencies, "PsycopgAccessRoleStore", _fake_store_factory(FakeAccessRoleStore())
     )
-    dependency = require_access_role(AccessRole.SYSTEM_ADMIN)
+    dependency = require_access_role(AccessRole.SYSTEM_ADMIN, operation="GET /probe")
     request = _fake_request(principal=None)
 
     with pytest.raises(AccessDeniedError) as exc_info:
-        dependency(request)
+        dependency(request, InMemoryAuditStore())
 
     assert str(exc_info.value) == "You do not have the required access role for this action."
 
@@ -98,11 +99,11 @@ def test_principal_without_the_required_role_is_denied(monkeypatch: pytest.Monke
     store = FakeAccessRoleStore(expected_owner=(_OTHER_SUBJECT, _ISSUER))
     store.bootstrap_first_owner((_OTHER_SUBJECT, _ISSUER))  # a distinct SystemOwner already exists
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    dependency = require_access_role(AccessRole.SYSTEM_ADMIN)
+    dependency = require_access_role(AccessRole.SYSTEM_ADMIN, operation="GET /probe")
     request = _fake_request(principal=Principal(sub=_SUBJECT, iss=_ISSUER))
 
     with pytest.raises(AccessDeniedError):
-        dependency(request)
+        dependency(request, InMemoryAuditStore())
 
 
 def test_principal_holding_the_required_role_passes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,10 +115,10 @@ def test_principal_holding_the_required_role_passes(monkeypatch: pytest.MonkeyPa
         access_role=AccessRole.SYSTEM_ADMIN,
     )
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    dependency = require_access_role(AccessRole.SYSTEM_ADMIN)
+    dependency = require_access_role(AccessRole.SYSTEM_ADMIN, operation="GET /probe")
     request = _fake_request(principal=Principal(sub=_SUBJECT, iss=_ISSUER))
 
-    assert dependency(request) is None  # passes cleanly -- never raises
+    assert dependency(request, InMemoryAuditStore()) is None  # passes cleanly -- never raises
 
 
 def test_sole_system_owner_also_satisfies_a_system_admin_minimum(
@@ -125,16 +126,16 @@ def test_sole_system_owner_also_satisfies_a_system_admin_minimum(
 ) -> None:
     """The role hierarchy applies to the REST dependency too: `SystemOwner` satisfies
     a `SystemAdmin` minimum -- proving `require_access_role` calls the identical
-    `require_role` function `mcp_server.py`'s own gated tools call, not a
+    `enforce_role_gate` function `mcp_server.py`'s own gated tools call, not a
     parallel, potentially-divergent gating mechanism.
     """
     store = FakeAccessRoleStore(expected_owner=(_SUBJECT, _ISSUER))
     store.bootstrap_first_owner((_SUBJECT, _ISSUER))
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    dependency = require_access_role(AccessRole.SYSTEM_ADMIN)
+    dependency = require_access_role(AccessRole.SYSTEM_ADMIN, operation="GET /probe")
     request = _fake_request(principal=Principal(sub=_SUBJECT, iss=_ISSUER))
 
-    assert dependency(request) is None
+    assert dependency(request, InMemoryAuditStore()) is None
 
 
 def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,10 +145,10 @@ def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         dependencies, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
-    dependency = require_access_role(AccessRole.SYSTEM_ADMIN)
+    dependency = require_access_role(AccessRole.SYSTEM_ADMIN, operation="GET /probe")
     request = _fake_request(principal=Principal(sub=_SUBJECT, iss=_ISSUER))
 
     with pytest.raises(AuthorizationStoreUnavailableError) as exc_info:
-        dependency(request)
+        dependency(request, InMemoryAuditStore())
 
     assert str(exc_info.value) == "The authorization store is temporarily unavailable."

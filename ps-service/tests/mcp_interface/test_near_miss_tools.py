@@ -416,6 +416,25 @@ def _call_near_misses_resolve(review_id: str, decision: str) -> CallToolResult:
     return result
 
 
+def test_keep_separate_decision_needs_no_role_and_writes_no_access_gate_row(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """Only the merge decision is role-gated, so a keep-separate call never writes a gate row."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]]])
+    _use_scripted_graph(monkeypatch, graph)
+    installed_process_gateway().rig.graphs.open("policy_system").seed_node(
+        ("PendingReview",), "review_aaa", {"kind": "Capability"}
+    )
+
+    result = _call_near_misses_resolve("review_aaa", "keep-separate")
+
+    assert json.loads(_text(result))["decision"] == "keep-separate"
+    assert "access.gate" not in {row.action for row in audit_store.rows}
+    assert "near_miss.resolve" in {row.action for row in audit_store.rows}
+
+
 def test_keep_separate_resolves_with_winner_and_loser_left_none(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines, audit_store: InMemoryAuditStore
 ) -> None:

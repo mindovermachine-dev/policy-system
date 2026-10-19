@@ -13,8 +13,15 @@ denied), policy lifecycle and supersede-fork actions, and (issue #195) the
 business operations `ingestion_run.submit` / `ingestion_run.complete`
 (regulation ingestion, sync, async and `check_regulations` re-ingests,
 distinguished by `details.trigger`), `instrument.restore`, `near_miss.resolve`
-(keep-separate; a near-miss merge writes `capability.merge`) and `user.invite`, with more joining over time as each feature adopts the
-same store (issue #147). The MCP-tool-backed front end to `list-audit-events` — there is
+(keep-separate; a near-miss merge writes `capability.merge`) and `user.invite`, and three
+cross-cutting actions: `access.gate` (a verified caller denied by a role-gated tool or route; resource
+type `operation`, the operation name as the resource id, the required role in the details),
+`passkey.enroll` (a passkey enrolled for the approver bound to a pending approval; resource type
+`pending_approval`) and `query.cypher` (one row per `cypher` tool call with its outcome, row count and
+an enumerated reason code, never the query text; resource type `query`), with more joining over time as each feature adopts the
+same store (issue #147). The trail does not hold authentication outcomes (the identity provider
+records those) or passkey rejections, and a denial of a caller with no verified identity writes no row.
+The MCP-tool-backed front end to `list-audit-events` — there is
 no other read path; the underlying Postgres is not directly reachable by any
 client this skill serves.
 
@@ -54,7 +61,7 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
   exactly what the tool returned.
 - Never guess or invent an `action` or `resource_type` filter value the user
   hasn't named — if they want to filter by one but don't know the exact
-  string (e.g. `access_role.grant`, `principal`), ask them or run one
+  string (e.g. `access_role.grant`, `access.gate`, `principal`), ask them or run one
   unfiltered call first and let them narrow from what comes back.
 - `cursor` is opaque — pass back exactly the `next_cursor` a prior call
   returned to advance to the next page; never construct or guess one.
@@ -78,6 +85,10 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    `trigger` (`sync_ingest`, `async_ingest` or `amendment_check`), the
    outcome and the counts of new Obligations, new Capabilities and matched
    Capabilities. Never invent a `details` key: any other key is rejected.
+   To answer "who was denied?", filter by `action` `access.gate` (the
+   `resource_id` is the operation that was refused); "whose passkey was enrolled?"
+   by `action` `passkey.enroll`; "who ran a query?" by `action` `query.cypher`.
+   Each also combines with `actor_subject` and the time range.
 3. **Report the result**, distinguishing every non-success outcome into one
    of the following named states — never collapsed into a generic
    "listing failed":

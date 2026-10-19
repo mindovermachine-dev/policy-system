@@ -8,6 +8,7 @@ transport lives in `ps_service.mcp_interface.http_transport`.
 
 from __future__ import annotations
 
+import ps_service.mcp_interface.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- registers `query.cypher` on package import
 from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
     McpResourceUnavailableError,

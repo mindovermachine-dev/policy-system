@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -31,6 +30,7 @@ from ps_service.authz.models import AccessRole
 from ps_service.graph_cleanup import audit_actions
 from ps_service.logging import configure
 from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -98,9 +98,11 @@ def _roles() -> FakeAccessRoleStore:
 
 def test_exactly_the_seven_documented_tools_sit_behind_the_cleanup_gate() -> None:
     gated = {
-        tool.name
-        for tool in mcp_server.server._tool_manager.list_tools()
-        if "_require_cleanup_actor" in inspect.getsource(tool.fn)
+        name
+        for name, gate in TOOL_GATES.items()
+        if gate.kind is GateKind.ROLE
+        and gate.role is AccessRole.COMPLIANCE_OFFICER
+        and gate.bypass is BypassPolicy.REFUSE
     }
 
     assert gated == CLEANUP_TOOLS

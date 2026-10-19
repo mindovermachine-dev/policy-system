@@ -33,6 +33,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 )
 from pydantic import ValidationError
 
+from policy_lifecycle._gateway_fakes import policy_manager_enforcer
 from ps_service.authz.models import AccessRole
 from ps_service.policy_lifecycle.audit_actions import PolicyTransitionDetails
 from ps_service.policy_lifecycle.errors import (
@@ -108,7 +109,7 @@ def test_self_approval_blocked_reason_code_is_identical_across_approve_and_rejec
             policy_id="pol_x",
             graph=_tree(lifecycle_rig, status="proposed", owner=_OWNER),
             audit_store=approve_audit,
-            access_role_store=_manager_store(subject_pair=_OWNER),
+            enforce_policy_manager=policy_manager_enforcer(_manager_store(subject_pair=_OWNER)),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -119,7 +120,7 @@ def test_self_approval_blocked_reason_code_is_identical_across_approve_and_rejec
             policy_id="pol_x",
             graph=_tree(lifecycle_rig, status="proposed", owner=_OWNER),
             audit_store=reject_audit,
-            access_role_store=_manager_store(subject_pair=_OWNER),
+            enforce_policy_manager=policy_manager_enforcer(_manager_store(subject_pair=_OWNER)),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -159,7 +160,7 @@ def test_invalid_status_reason_code_is_identical_across_all_four_transitions(
             policy_id="pol_x",
             graph=_tree(lifecycle_rig, status="draft", owner=_OWNER),
             audit_store=approve_audit,
-            access_role_store=_manager_store(),
+            enforce_policy_manager=policy_manager_enforcer(_manager_store()),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -170,7 +171,7 @@ def test_invalid_status_reason_code_is_identical_across_all_four_transitions(
             policy_id="pol_x",
             graph=_tree(lifecycle_rig, status="draft", owner=_OWNER),
             audit_store=reject_audit,
-            access_role_store=_manager_store(),
+            enforce_policy_manager=policy_manager_enforcer(_manager_store()),
             submitter=lifecycle_rig.gateway,
         )
 

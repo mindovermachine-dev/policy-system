@@ -40,3 +40,22 @@ def _approval_executor_registry_restored() -> Iterator[None]:  # pyright: ignore
     finally:
         executors._EXECUTORS.clear()  # pyright: ignore[reportPrivateUsage]
         executors._EXECUTORS.update(snapshot)  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture(autouse=True)
+def _no_postgres_audit_store(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]  # autouse
+    """Give `provide_audit_store` an in-memory store so no ceremony test reaches Postgres.
+
+    A test that asserts on audit rows overrides `provide_audit_store` with its own store. The
+    import is lazy for the importlib cross-package reason of `_process_gateway`.
+    """
+    try:
+        fakes = importlib.import_module("audit._fakes")
+    except ModuleNotFoundError:
+        return
+
+    def _in_memory_store(_config: object) -> object:
+        return fakes.InMemoryAuditStore()
+
+    # detroit-exception: the production store would open a real Postgres connection
+    monkeypatch.setattr("ps_service.api.dependencies.PsycopgAuditStore", _in_memory_store)

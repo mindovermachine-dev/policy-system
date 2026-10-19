@@ -12,7 +12,7 @@ copies of those files' own helpers.
 
 Every test here binds a real, non-bypass `AccessToken` (`_verified_actor`), so
 `config.is_local_test_bypass_active` is `False` and the new
-`authz_service.require_role(...)` check in `check_regulations`'s body
+declarative role gate (`tool_gates`) in `check_regulations`'s body
 actually runs -- distinct from every test in `test_check_regulations_tool.py`,
 which drives the tool entirely under the local-test bypass and needs no
 change here (that file has no real-bearer-token test at all, unlike
@@ -142,7 +142,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
 
 
 def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`require_role`'s own non-hierarchical contract for
+    """The role gate's own non-hierarchical contract for
     `ComplianceOfficer` -- a caller holding `SystemAdmin` (but never
     separately granted `ComplianceOfficer`) is still denied, proving no
     implicit admin override reaches this gate.

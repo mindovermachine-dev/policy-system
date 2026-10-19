@@ -261,6 +261,17 @@ def test_a_revoked_compliance_officer_cannot_execute(cleanup_rig: CleanupRig) ->
     assert "after" not in details
 
 
+def test_revoked_officer_at_sign_time_writes_no_access_gate_row_and_only_the_failed_row(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+
+    execute_capability_merge(_row(rig), _CONFIG, _deps(rig, _roles(officer=False)))
+
+    assert [(r.action, r.outcome) for r in rig.audit.rows] == [("capability.merge", "failed")]
+    assert all(r.action != "access.gate" for r in rig.audit.rows)
+
+
 def test_an_authorization_store_outage_fails_closed(cleanup_rig: CleanupRig) -> None:
     rig = _world(cleanup_rig)
 

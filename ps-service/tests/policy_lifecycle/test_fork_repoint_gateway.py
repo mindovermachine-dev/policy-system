@@ -18,7 +18,12 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
     FakeAccessRoleStore,
 )
 
-from policy_lifecycle._gateway_fakes import FlippingRead, PolicyReadGraph, SeedStandard
+from policy_lifecycle._gateway_fakes import (
+    FlippingRead,
+    PolicyReadGraph,
+    SeedStandard,
+    policy_manager_enforcer,
+)
 from ps_service.authz.models import AccessRole
 from ps_service.policy_lifecycle.errors import (
     PolicyGovernanceConflictError,
@@ -75,7 +80,7 @@ def _approve(
         policy_id=policy_id,
         graph=rig.read if graph is None else graph,
         audit_store=rig.audit,
-        access_role_store=roles,
+        enforce_policy_manager=policy_manager_enforcer(roles),
         submitter=rig.gateway if submitter is None else submitter,
     )
 

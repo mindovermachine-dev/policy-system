@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from authz._fakes import FakeAccessRoleStore
 from fastapi.testclient import TestClient
+from policy_lifecycle._gateway_fakes import policy_manager_enforcer
 
 from api._fakes import install_compliance_officer_grant
 from api._live_config import live_app_config
@@ -289,7 +290,7 @@ def test_reingest_after_approval_leaves_the_approved_tree_untouched(
         policy_id=target,
         graph=graph,
         audit_store=audit,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=submitter,
     )
     before = _governance_state(graph)

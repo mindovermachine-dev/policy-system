@@ -5,12 +5,18 @@ Capstone: every new emitter (sync ingest, restore, near-miss resolve,
 through a FAILING path whose exception message and inputs are full of sentinel secrets. None of
 the sentinels may appear in any recorded audit row or in any emitted log line.
 
+The role-gate denial (`access.gate`) and `query.cypher` are swept here too, each with an audit
+store that raises sentinel text and, for `cypher`, a database error full of sentinels. The
+`passkey.enroll` sweep lives in `passkey_signing/test_enrollment_audit.py` because it needs that
+directory's ceremony rig (the importlib collection order forbids importing it from here).
+
 Sibling suites already pin each operation's row shape; this file only sweeps for leaks. It reuses
 their private fixtures (the cross-package idiom of `test_ingest_regulation_audit.py`).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING
 
@@ -39,16 +45,27 @@ from api.test_restore_orchestration_audit import (
     _Delegate,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _run_catalog,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
+from audit._fakes import InMemoryAuditStore as GateAuditStore
+from audit._fakes import audit_store_factory
+from authz._fakes import FakeAccessRoleStore
 
+from mcp_interface.test_cypher_tool import (
+    _FakeGraphHandle,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _install_graph,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
 from ps_service.api.change_check_orchestration import run_change_check_sweep
-from ps_service.api.errors import RestoreStageFailedError
+from ps_service.api.errors import AccessDeniedError, RestoreStageFailedError
 from ps_service.audit import AuditContext, AuditPersistenceError
+from ps_service.authz.models import AccessRole
+from ps_service.authz.request_gate import RoleGate, enforce_role_gate
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.ingestion_runs.audit_actions import completion_audit_entry
 from ps_service.invitations.errors import AuthentikInvitationError
 from ps_service.invitations.service import invite_user_audited
+from ps_service.logging import configure
+from ps_service.mcp_interface import mcp_server
 
 if TYPE_CHECKING:
     from api._fakes import MakeEmitter, ReadLines
@@ -205,3 +222,92 @@ def test_async_completion_entry_cannot_carry_text_from_a_result_or_failure() -> 
 
     for sentinel in _SENTINELS:
         assert sentinel not in json.dumps(failed.details)
+
+
+def _failure_log_text(logged: list[dict[str, object]]) -> str:
+    return json.dumps(logged, default=str)
+
+
+def _capture_audit_failure_logs(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """Record every entry the audit emit helpers log (their failure entries)."""
+    logged: list[dict[str, object]] = []
+
+    def _record(**kwargs: object) -> None:
+        logged.append(kwargs)
+
+    # detroit-exception: capturing the log call's args IS the spec here
+    monkeypatch.setattr("ps_service.audit.emit.emit_log_entry", _record)
+    return logged
+
+
+def test_access_gate_denial_with_a_leaking_audit_store_logs_no_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged = _capture_audit_failure_logs(monkeypatch)
+    store = GateAuditStore(fail_on_action={"access.gate": AuditPersistenceError(_LEAK)})
+    roles = FakeAccessRoleStore(expected_owner=_ACTOR)
+    roles.bootstrap_first_owner(_ACTOR)
+
+    with pytest.raises(AccessDeniedError) as denied:
+        enforce_role_gate(
+            RoleGate(operation="set-catalog-source", minimum=AccessRole.COMPLIANCE_OFFICER),
+            principal=("someone", _ACTOR[1]),
+            audit_actor=("someone", _ACTOR[1]),
+            role_store=roles,
+            audit_store=store,
+        )
+
+    assert logged, "the failed audit write must be logged"
+    assert store.rows == []
+    for sentinel in _SENTINELS:
+        assert sentinel not in _failure_log_text(logged), sentinel
+        assert sentinel not in str(denied.value), sentinel
+
+
+def test_access_gate_row_for_a_denial_carries_no_secret_beyond_the_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _capture_audit_failure_logs(monkeypatch)
+    store = GateAuditStore()
+    roles = FakeAccessRoleStore(expected_owner=_ACTOR)
+    roles.bootstrap_first_owner(_ACTOR)
+
+    with pytest.raises(AccessDeniedError):
+        enforce_role_gate(
+            RoleGate(operation="set-catalog-source", minimum=AccessRole.SYSTEM_ADMIN),
+            principal=("someone", _ACTOR[1]),
+            audit_actor=("someone", _ACTOR[1]),
+            role_store=roles,
+            audit_store=store,
+        )
+
+    (row,) = store.rows
+    assert row.details == {"required_role": "SystemAdmin"}
+
+
+@pytest.mark.parametrize("failing", ["database", "audit_store"])
+def test_cypher_failure_rows_and_logs_contain_no_secret(
+    failing: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configure()
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    logged = _capture_audit_failure_logs(monkeypatch)
+    store = GateAuditStore(
+        fail_on_action={"query.cypher": AuditPersistenceError(_LEAK)}
+        if failing == "audit_store"
+        else {}
+    )
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    _install_graph(monkeypatch, _FakeGraphHandle(error=RuntimeError(_LEAK)))
+
+    asyncio.run(mcp_server.server.call_tool("cypher", {"query": f"MATCH (n) RETURN n // {_LEAK}"}))
+
+    if failing == "database":
+        (row,) = store.rows
+        assert (row.outcome, row.details) == ("failed", {"reason_code": "query_failed"})
+    else:
+        assert logged, "the failed audit write must be logged"
+    haystack = json.dumps([(r.action, r.details) for r in store.rows], default=str)
+    haystack += _failure_log_text(logged)
+    for sentinel in _SENTINELS:
+        assert sentinel not in haystack, sentinel

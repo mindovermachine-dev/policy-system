@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
+from policy_lifecycle._gateway_fakes import policy_manager_enforcer
 
 from ps_service.audit.store import PsycopgAuditStore
 from ps_service.authz.models import AccessRole
@@ -133,7 +134,7 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str, config: ServiceC
             policy_id=target,
             graph=graph,
             audit_store=audit,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=submitter,
         )
     approve_policy(
@@ -141,7 +142,7 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str, config: ServiceC
         policy_id=target,
         graph=graph,
         audit_store=audit,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=submitter,
     )
     return target

@@ -261,7 +261,7 @@ class RaisingAfterGateAccessRoleStore(FakeAccessRoleStore):
 
     Isolates `ps_service.authz.service.list_assignments`'s *second*
     fail-closed try/except (wrapping `list_all_assignments`/
-    `count_active_system_owners`, reached only after `require_role`'s own
+    `count_active_system_owners`, reached only after `check_role`'s own
     gate already succeeded) from `RaisingAccessRoleStore`'s own coverage of
     the *first* one (`resolve_active_roles`, reached before any gate check).
     """
@@ -383,10 +383,11 @@ class RaisingAccessRoleStore:
 class FakeAuditStore:
     """In-memory `AuditStore` stub for `ps_service.authz.service.list_audit_events` tests.
 
-    `record`/`record_standalone` are present only for `Protocol` conformance
+    `record` is present only for `Protocol` conformance
     (mirrors `RaisingAccessRoleStore`'s own "narrower than the full
     `Protocol`, only what this fake's own call sites reach" convention) --
-    `list_audit_events`'s own tests never call either. `query` is a spy:
+    `list_audit_events`'s own tests never call it. `record_standalone` collects the action of each
+    denial row written (`standalone_actions`). `query` is a spy:
     every call is appended to `query_calls` (the exact `filters`/`cursor`/
     `page_size` it was called with), so the "query was
     never called" assertions can check `query_calls == []`. Returns
@@ -408,6 +409,8 @@ class FakeAuditStore:
     raise_on_verify: Exception | None = None
     verify_calls: list[None] = field(default_factory=list)
     """One entry per `verify_integrity` call, so a gate test can assert `verify_calls == []`."""
+    standalone_actions: list[str] = field(default_factory=list)
+    """The `action` of each `record_standalone` call, e.g. the `access.gate` denial rows."""
 
     def record(
         self,
@@ -436,9 +439,9 @@ class FakeAuditStore:
         outcome: str,
         details: Mapping[str, object],
     ) -> None:
-        """Not exercised here -- present only for `Protocol` conformance."""
-        del actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
-        raise NotImplementedError
+        """Record the action written, so a gate test can assert which rows a denial produced."""
+        del actor_subject, actor_issuer, resource_type, resource_id, outcome, details
+        self.standalone_actions.append(action)
 
     def query(
         self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int

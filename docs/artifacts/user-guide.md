@@ -288,6 +288,13 @@ What is recorded:
 | Instrument restore (`restore_instrument`, `POST /restorations`) | `instrument.restore` opening and terminal rows | The instrument id, the source (`catalog` or `upload`) and the outcome: `succeeded`, `failed` (with a `reason_code`), `rejected` (`group_rejected`: the graph write was refused and nothing was written) or `committed_apply_pending` (the restore is recorded in the graph log and is applied on recovery). The `succeeded` row also carries `near_miss_reviews_created`, the number of near-miss reviews the restore opened; the `committed_apply_pending` row omits it |
 | Near-miss resolution | `near_miss.resolve` (keep-separate), `capability.merge` (merge) | A keep-separate row carries both entity ids and the decision. A near-miss merge writes the same `capability.merge` row as a graph cleanup merge, when the approver signs with their passkey: the approver is the actor, and the row carries the survivor, the absorbed Capability, the review id and before/after graph snapshots |
 | `invite-user` | `user.invite` | The invitee email. The invite token and URL are never recorded |
+| A role-gated tool or route refusing a caller | `access.gate` | The denied caller, the operation that was refused (`resource_id`, for example `set-catalog-source` or `POST /change-checks`) and the role it requires. Written only for a caller whose identity is verified. `grant-access-role` and `revoke-access-role` keep their own `access_role.*` denied row |
+| Passkey enrolment | `passkey.enroll` | The person the approval is bound to and the approval id. The row records that the passkey was added; it does not hold the passkey itself. Signing a change writes no row of its own: the change's own row (for example `capability.merge`) is the record |
+| `cypher` | `query.cypher` | One row per call: the caller, whether it succeeded, was rejected (a write clause) or failed, the row count and whether the result was truncated. The query text is never recorded |
+
+Not recorded: sign-in and failed sign-in (your identity provider's event log is
+the record), denials of a request that carries no verified identity, rejected passkey
+steps (passkey rejections stay in the service's operator log) and the other read-only tools.
 
 If the audit trail cannot record the opening row, the operation does not run
 and you get `error: The audit trail is temporarily unavailable; the operation

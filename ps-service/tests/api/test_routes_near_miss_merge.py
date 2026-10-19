@@ -200,6 +200,39 @@ def test_an_unauthenticated_merge_is_401_and_writes_nothing(
     assert environment.snapshot() == before
 
 
+def test_merge_denial_over_rest_writes_one_access_gate_row(
+    monkeypatch: pytest.MonkeyPatch, cleanup_rig: CleanupRig
+) -> None:
+    environment = _Env(monkeypatch, cleanup_rig, principal=_PLAIN)
+
+    status, _body = environment.merge()
+
+    assert status == 403
+    (row,) = environment.audit.rows
+    assert (row.actor_subject, row.actor_issuer) == _PLAIN
+    assert (row.action, row.outcome, row.resource_type) == ("access.gate", "rejected", "operation")
+    assert row.resource_id == "POST /near-misses/{review_id}/resolve"
+    assert row.details == {"required_role": "ComplianceOfficer"}
+
+
+def test_merge_without_a_verified_principal_writes_no_access_gate_row(
+    monkeypatch: pytest.MonkeyPatch, cleanup_rig: CleanupRig
+) -> None:
+    environment = _Env(monkeypatch, cleanup_rig, principal=None)
+
+    status, _body = environment.merge()
+
+    assert status == 401
+    assert environment.audit.rows == []
+
+
+def test_permitted_merge_over_rest_writes_no_access_gate_row(env: _Env) -> None:
+    status, _body = env.merge()
+
+    assert status == 200
+    assert env.audit.rows == []
+
+
 # --- case 1 ---------------------------------------------------------------------------------
 
 

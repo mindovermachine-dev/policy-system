@@ -29,6 +29,7 @@ from starlette.requests import (
     Request,  # noqa: TC002 -- FastAPI resolves the annotation at runtime to inject the request
 )
 
+from api._audit_fakes import InMemoryAuditStore
 from ps_service.api import dependencies
 from ps_service.api.change_check_orchestration import ChangeCheckDependencies
 from ps_service.api.dependencies import get_principal as _declared_get_principal
@@ -1301,7 +1302,7 @@ class _FakeComplianceAccessRoleStore:
     ordering hazard `tests/authz/test_require_access_role_dependency.py`'s own
     docstring documents, and why *that* file lives under `tests/authz/`
     instead of here). Implements only `active_roles_for` -- the one
-    `AccessRoleStore` method `require_role`'s `resolve_active_roles` reaches
+    `AccessRoleStore` method the request gate's `resolve_active_roles` reaches
     when the caller's own roster is already non-empty, which every use below
     always is (so `bootstrap_first_owner` is never reached).
     """
@@ -1312,6 +1313,12 @@ class _FakeComplianceAccessRoleStore:
         """Return the scripted role set, ignoring which principal was asked for."""
         _ = principal
         return self.roles
+
+
+def _in_memory_audit_store_factory(config: object) -> InMemoryAuditStore:
+    """Stand-in for `PsycopgAuditStore(config)`: a fresh in-memory store, no database."""
+    _ = config
+    return InMemoryAuditStore()
 
 
 def compliance_officer_principal() -> Principal:
@@ -1398,6 +1405,8 @@ def install_compliance_officer_grant(
     # detroit-exception: called as a raw function inside require_access_role's own closure
     monkeypatch.setattr(dependencies, "get_principal", _get_principal)
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _store_factory)
+    # A denial now writes its `access.gate` audit row; keep that write in memory, never Postgres.
+    monkeypatch.setattr(dependencies, "PsycopgAuditStore", _in_memory_audit_store_factory)
 
 
 def install_compliance_officer_caller(

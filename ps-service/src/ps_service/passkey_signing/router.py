@@ -30,7 +30,11 @@ Execution: a signed approval runs the executor registered for its `tool_name`
 consumed by `mark_signed` before the executor runs, so a failed action never leaves it reusable:
 the stored outcome is the executor's sanitized error and the approver must request a new
 approval. An approval whose `tool_name` has no registered executor is rejected before
-`mark_signed` and stays pending until it expires. No audit row is written by this router.
+`mark_signed` and stays pending until it expires.
+
+Audit: only a successful enrolment writes a row, `passkey.enroll`, attributed to the approval's
+bound actor with `proof="approval_code"` (the caller is identified by the code, not by
+authentication). Rejected steps stay in the operator log, and signing writes no row of its own.
 
 Exports:
     build_passkey_signing_router: builds the `APIRouter` that `ps_service.main.create_app`
@@ -52,13 +56,24 @@ from webauthn.helpers import base64url_to_bytes
 
 from ps_service.api.dependencies import (
     get_service_config,
+    provide_audit_store,
     provide_pending_approval_store,
 )
 from ps_service.api.errors import PendingApprovalInvalidOrExpiredError
+from ps_service.audit import (
+    AuditContext,
+    AuditStore,
+    AuditTarget,
+    record_follow_up_row,
+)
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
 from ps_service.logging import emit_log_entry
+from ps_service.passkey_signing.audit_actions import (
+    PASSKEY_ENROLL_ACTION,
+    PENDING_APPROVAL_RESOURCE_TYPE,
+)
 from ps_service.passkey_signing.error_handlers import reject, reject_on_webauthn_failure
 from ps_service.passkey_signing.executors import resolve_approval_executor
 from ps_service.passkey_signing.service import (
@@ -458,6 +473,7 @@ async def post_enroll_verify(
     http_request: Request,
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     credential_store: Annotated[SigningCredentialStore, Depends(provide_signing_credential_store)],
+    audit_store: Annotated[AuditStore, Depends(provide_audit_store)],
 ) -> dict[str, object]:
     """Verify a WebAuthn registration response and store the new passkey for the approver.
 
@@ -473,6 +489,7 @@ async def post_enroll_verify(
             `rp_id` and origin the response is verified against.
         store: Pending-approval store (injected).
         credential_store: Signing-credential store (injected).
+        audit_store: Audit store the `passkey.enroll` row is written to (injected).
 
     Returns:
         `{"status": "enrolled"}`.
@@ -486,8 +503,10 @@ async def post_enroll_verify(
 
     Side Effects:
         Inserts one row into the signing-credential table (credential id, public key, sign
-        count, actor, `rp_id`) and logs a failed-outcome entry on rejection. The approval
-        itself stays pending.
+        count, actor, `rp_id`), then writes one `passkey.enroll` audit row attributed to the
+        approval's bound actor (best-effort: a failed audit write is logged by class name and
+        the enrolment still succeeds). A rejection writes no audit row and logs a failed-outcome
+        entry. The approval itself stays pending.
     """
     row = _verify_code(
         store=store,
@@ -509,6 +528,13 @@ async def post_enroll_verify(
         public_key=verified.credential_public_key,
         sign_count=verified.sign_count,
         rp_id=enrolled_rp_id,
+    )
+    record_follow_up_row(
+        AuditContext((row.actor_subject, row.actor_issuer), audit_store),
+        AuditTarget(PASSKEY_ENROLL_ACTION, PENDING_APPROVAL_RESOURCE_TYPE, pending_approval_id),
+        component="passkey_signing",
+        outcome="applied",
+        details={"proof": "approval_code"},
     )
     return {"status": "enrolled"}
 

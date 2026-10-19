@@ -13,18 +13,31 @@ import logging
 from typing import TYPE_CHECKING
 
 import pytest
+from api._fakes import build_fake_change_check_dependencies, install_no_principal
+from audit._fakes import InMemoryAuditStore, audit_store_factory
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from litellm.types.utils import Choices, Message, ModelResponse
+from mcp.types import CallToolResult
 from pydantic import BaseModel
 
-from ps_service.api.dependencies import provide_run_id
+from ps_service.api.dependencies import (
+    provide_audit_store,
+    provide_change_check_dependencies,
+    provide_run_id,
+)
 from ps_service.api.error_handlers import register_exception_handlers
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
+from ps_service.config import ServiceConfig
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import bind_run_context, facade
+from ps_service.main import create_app
+from ps_service.mcp_interface import mcp_server
+from ps_service.query_engine.cypher_query import (
+    _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # the seeded-graph probe the fake must answer
+)
 from ps_test_support.mock_oidc_provider import (
     mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
@@ -221,3 +234,87 @@ def test_llm_completion_failing_with_canary_prompt_in_error_then_not_in_any_sink
         )
 
     _assert_no_canary(_everything_logged(log_file, capfd, caplog))
+
+
+def test_denied_unverified_rest_request_with_canary_in_body_then_no_canary_in_any_sink(
+    monkeypatch: pytest.MonkeyPatch,
+    log_file: Path,
+    capfd: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unverified, denied request logs no part of its body, and writes no audit row."""
+    caplog.set_level(logging.DEBUG)
+    install_no_principal(monkeypatch)
+    store = InMemoryAuditStore()
+    fake = build_fake_change_check_dependencies(tracked=())
+    app = create_app(
+        ServiceConfig(
+            host="127.0.0.1",
+            port=8000,
+            graceful_shutdown_seconds=10,
+            logging_dir=None,
+            is_local_test_bypass_active=True,
+            authentik_api_token="test-authentik-token",
+            authentik_base_url="https://authentik.example.com",
+        )
+    )
+    app.dependency_overrides[provide_change_check_dependencies] = lambda: fake.dependencies
+    app.dependency_overrides[provide_audit_store] = lambda: store
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/change-checks", json={"note": CANARY_POLICY, "token": CANARY_TOKEN, "who": CANARY_USER}
+    )
+
+    assert response.status_code == 403
+    assert store.rows == []
+    _assert_no_canary(_everything_logged(log_file, capfd, caplog) + response.text)
+
+
+class _SeededResult:
+    header: list[list[object]] = [[0, "c"]]  # noqa: RUF012
+    result_set: list[object] = [[1]]  # noqa: RUF012
+
+
+class _FailingGraph:
+    """A seeded graph whose user query fails with text that echoes the query and a secret."""
+
+    def query(self, q: str, params: object = None, timeout: int | None = None) -> object:
+        del params, timeout
+        if q == _SEED_CHECK_QUERY:
+            return _SeededResult()
+        raise RuntimeError(f"syntax error in {q} api_key={CANARY_TOKEN}")
+
+
+class _FailingDatabase:
+    def select_graph(self, name: str) -> _FailingGraph:
+        del name
+        return _FailingGraph()
+
+
+def test_cypher_with_canary_query_then_no_canary_in_any_sink(
+    monkeypatch: pytest.MonkeyPatch,
+    log_file: Path,
+    capfd: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The `cypher` tool's query text and database error text reach no log sink or audit row."""
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    store = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+
+    def _connect(_config: object) -> _FailingDatabase:
+        return _FailingDatabase()
+
+    monkeypatch.setattr(mcp_server, "connect_from_config", _connect)
+
+    result = asyncio.run(
+        mcp_server.server.call_tool(
+            "cypher", {"query": f"MATCH (n) WHERE n.name = '{CANARY_POLICY}' RETURN n"}
+        )
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is False
+    assert [(row.action, row.outcome) for row in store.rows] == [("query.cypher", "failed")]
+    _assert_no_canary(_everything_logged(log_file, capfd, caplog) + repr(store.rows))

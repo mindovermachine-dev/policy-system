@@ -11,11 +11,13 @@ Could not be run in the authoring environment
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
 
+import ps_service.authz.audit_actions  # pyright: ignore[reportUnusedImport] -- side-effect import, registers `access.gate`
+import ps_service.passkey_signing.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers `passkey.enroll`
 from ps_service.audit import AuditQueryFilters, PsycopgAuditStore
 from ps_service.authz.service import list_audit_events
 from ps_service.config import ServiceConfig, load_config
@@ -25,6 +27,7 @@ from ps_service.ingestion_runs.audit_actions import (
     submission_audit_entry,
 )
 from ps_service.invitations.audit_actions import USER_INVITE_ACTION
+from ps_service.mcp_interface.audit_actions import QUERY_CYPHER_ACTION
 
 if TYPE_CHECKING:
     from persistence.provisioned_postgres import Provisioned
@@ -234,3 +237,49 @@ def test_audit_rows_for_a_failed_ingestion_contain_no_secret_or_path_markers(
     assert failed.details["reason_code"] == "pipeline_stage_failed"
     text = json.dumps(failed.details)
     assert not any(marker in text for marker in _MARKERS)
+
+
+@pytest.mark.postgres_live
+def test_access_gate_passkey_enroll_and_query_cypher_rows_round_trip_with_typed_details(
+    live_config: ServiceConfig,
+) -> None:
+    """The three actions of the role gate work are accepted by the real store and read back."""
+    store = PsycopgAuditStore(live_config)
+    rows: tuple[
+        tuple[str, str, str, Literal["applied", "rejected", "failed"], dict[str, object]], ...
+    ] = (
+        (
+            "access.gate",
+            "operation",
+            "set-catalog-source",
+            "rejected",
+            {"required_role": "SystemAdmin"},
+        ),
+        ("passkey.enroll", "pending_approval", "approval-1", "applied", {"proof": "approval_code"}),
+        (QUERY_CYPHER_ACTION, "query", "cypher", "applied", {"row_count": 3, "truncated": False}),
+        (QUERY_CYPHER_ACTION, "query", "cypher", "failed", {"reason_code": "query_failed"}),
+    )
+    for action, resource_type, resource_id, outcome, details in rows:
+        store.record_standalone(
+            actor_subject=_ACTOR[0],
+            actor_issuer=_ACTOR[1],
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            details=details,
+        )
+
+    for action, resource_type, expected in (
+        ("access.gate", "operation", 1),
+        ("passkey.enroll", "pending_approval", 1),
+        (QUERY_CYPHER_ACTION, "query", 2),
+    ):
+        by_action = _list(store, AuditQueryFilters(action=action))
+        by_resource_type = _list(store, AuditQueryFilters(resource_type=resource_type))
+        assert len(by_action) == expected, action
+        assert {e.action for e in by_resource_type} == {action}
+        assert {e.actor_subject for e in by_action} == {_ACTOR[0]}
+    by_actor = _list(store, AuditQueryFilters(actor_subject=_ACTOR[0]))
+    assert len(by_actor) == 4
+    assert not any(marker in json.dumps(e.details) for e in by_actor for marker in _MARKERS)

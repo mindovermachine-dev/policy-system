@@ -8,7 +8,7 @@ Under the local-test bypass, the gate is skipped entirely --
 that behavior is covered by the bypass-active tests in
 `test_catalog_source_skills.py`. Every test here instead binds a real, non-bypass
 `AccessToken` (`_verified_actor`, below), so `config.is_local_test_bypass_active`
-is `False` and the new `authz_service.require_role(...)` check in each
+is `False` and the new declarative role gate (`tool_gates`) around each
 tool's body actually runs.
 
 `_verified_actor`/`_fake_store_factory` are local copies of
@@ -209,7 +209,7 @@ def test_store_outage_fails_closed_instead_of_defaulting_or_succeeding(
 def test_sole_bootstrapped_system_owner_also_satisfies_the_system_admin_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`require_role`'s own `SystemAdmin`-or-above hierarchy fix
+    """The role gate's own `SystemAdmin`-or-above hierarchy fix
     reaches this gate too: the very first-ever caller, auto-bootstrapped to
     `SystemOwner` alone (never separately granted `SystemAdmin`), still
     passes `set-catalog-source`'s gate -- otherwise the sole `SystemOwner`

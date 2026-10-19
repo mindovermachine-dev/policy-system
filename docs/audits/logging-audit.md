@@ -52,7 +52,7 @@ Non-facade service sinks: the stdlib fallback in `api/error_handlers.py` (used o
 | LOG-09 | Expected conditions logged as `failed` | Low | At least one expected user condition (an invalid or expired link) uses the ERROR-equivalent outcome. | issue #295 |
 | LOG-10 | Failure-cause field names | Low | The cause is spelled `reason` (9), `error` (5), `exception_type` (4), `detail` (4), `error_kind` (2), `error_type` (2). | issue #295 |
 | LOG-11 | Server request log | Medium | The server's own request log is unstructured text with no correlation identifier and bypasses the facade. | issue #296 |
-| LOG-12 | Audit-row coverage | Medium | Rows are written for graph cleanup, runtime configuration, ingestion runs, near-miss resolution, export, restore, access roles, policy lifecycle and invitations (7 `audit_actions.py` registries plus orchestration writers). Authentication outcomes, authorization denials, passkey enrolment and signing steps, and read-only query tool use have no audit row. Columns present: actor subject and issuer, action, resource, outcome, details, `occurred_at`. | issue #297 |
+| LOG-12 | Audit-row coverage | Medium | Rows are written for graph cleanup, runtime configuration, ingestion runs, near-miss resolution, export, restore, access roles, policy lifecycle and invitations, and, since this change, for role-gate denials (`access.gate`), passkey enrolment (`passkey.enroll`) and `cypher` use (`query.cypher`). Authentication outcomes, denials of callers with no verified identity, rejected passkey steps and read tools other than `cypher` have no audit row. Columns present: actor subject and issuer, action, resource, outcome, details, `occurred_at`. | fixed in this change for role-gate denials, passkey enrolment and `cypher` use; still open: failed authentication and unauthenticated denials (the identity provider's event log is the record; there is no verified actor), passkey rejections, other read tools, audit retention (issue #297) |
 | LOG-13 | Logging convention not documented | Low | `logging/models.py` was the only field definition; the Python coding standard had no logging convention. | fixed in this change (section "Logging Conventions" in `docs/coding-standards/level2-python-instructions.md`) |
 | LOG-14 | No regression test for log leakage | Medium | No test drove representative flows with fake secrets and searched all sinks. | fixed in this change (new canary test) |
 | LOG-15 | Log file in the container filesystem | Low | `PS_LOGGING_DIR` is set in the image; a grep of the chart templates and values finds no log volume, rotation or level setting, and `emitter.py` appends without rotation. | no action: retention and shipping belong to #259 (cross-reference only) |
@@ -61,7 +61,7 @@ Non-facade service sinks: the stdlib fallback in `api/error_handlers.py` (used o
 
 ## Canary test
 
-`ps-service/tests/logging/test_log_leakage_canary.py` holds six tests. Each uses a per-test `tmp_path` log file with the real `configure()` and failure mirroring, then searches the log file, captured stderr and stdout, and all `logging` records at DEBUG for the fake `canary-` values.
+`ps-service/tests/logging/test_log_leakage_canary.py` holds eight tests. Each uses a per-test `tmp_path` log file with the real `configure()` and failure mirroring, then searches the log file, captured stderr and stdout, and all `logging` records at DEBUG for the fake `canary-` values.
 
 | Flow | Canaries asserted absent |
 | --- | --- |
@@ -71,6 +71,8 @@ Non-facade service sinks: the stdlib fallback in `api/error_handlers.py` (used o
 | Request rejected by body validation with canary policy text | policy |
 | LLM completion success | prompt, reply text |
 | LLM completion failing with the prompt in the provider error | prompt, token |
+| Denied request with no verified principal and canary values in the body | policy, token, user |
+| `cypher` call whose query text and database error carry canary values | policy, token |
 
 Partially met (AC-BI-003): the user-identifier canary is not asserted on the accepted-token path, because that path logs the identifier by design today; this is tracked in #294. Free-text values inside exception text are outside the shapes the sanitising helper covers and are tracked in #293, so no test papers over them.
 
@@ -128,4 +130,5 @@ Enforced rules fail automatically, in the pre-commit hook on the files they watc
 | One outcome vocabulary and expected conditions not logged as failures | review-only | tracked in #295; a closed-set check in #327 |
 | Exception text and user identifiers in log entries | review-only | tracked in #293 and #294 |
 | Server request logs in the structured format | review-only | tracked in #296 |
-| Audit records for security-relevant actions | review-only | tracked in #297 |
+| Audit records for role-gate denials, passkey enrolment and `cypher` use | enforced | `pytest` (gate-declaration structural test: every registered tool and route declares a role gate or is marked authenticated-only; each declared gate is covered by the denial matrix) |
+| Audit records for other security-relevant actions (failed authentication, unauthenticated denials, passkey rejections, other read tools, audit retention) | review-only | still open under LOG-12 |

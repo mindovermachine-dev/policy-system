@@ -1,6 +1,6 @@
 """Tests for `ps_service.authz.service`.
 
-Direct unit-level coverage of `resolve_active_roles`/`require_role`/
+Direct unit-level coverage of `resolve_active_roles`/`check_role`/
 `list_assignments`/`grant_role`/`revoke_role` against
 `FakeAccessRoleStore`/`RaisingAccessRoleStore` (`tests/authz/_fakes.py`) --
 complements `tests/mcp_interface/test_access_role_tools.py`'s own
@@ -60,10 +60,10 @@ from ps_service.audit.models import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.authz.service import (
+    check_role,
     grant_role,
     list_assignments,
     list_audit_events,
-    require_role,
     resolve_active_roles,
     revoke_role,
     verify_audit_log,
@@ -125,7 +125,7 @@ def test_resolve_active_roles_still_lets_the_configured_owner_bootstrap_after_a_
     assert roles == {AccessRole.AUTHENTICATED_USER, AccessRole.SYSTEM_OWNER}
 
 
-def test_require_role_system_owner_satisfies_a_system_admin_minimum() -> None:
+def test_check_role_system_owner_satisfies_a_system_admin_minimum() -> None:
     """The role hierarchy: the sole bootstrapped SystemOwner passes a SystemAdmin gate.
 
     Without the hierarchy, the bootstrap and self-grant rules jointly describe a
@@ -135,38 +135,38 @@ def test_require_role_system_owner_satisfies_a_system_admin_minimum() -> None:
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- SystemOwner only
 
-    require_role(_FIRST_CALLER, minimum=AccessRole.SYSTEM_ADMIN, store=store)  # must not raise
+    check_role(
+        _FIRST_CALLER, minimum=AccessRole.SYSTEM_ADMIN, store=store
+    ).raise_if_denied()  # must not raise
 
 
-def test_require_role_denies_a_principal_with_only_authenticated_user() -> None:
+def test_check_role_denies_a_principal_with_only_authenticated_user() -> None:
     """A principal holding only the AuthenticatedUser default is denied a SystemAdmin gate."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # first caller bootstraps
 
     with pytest.raises(AccessDeniedError) as exc_info:
-        require_role(_SECOND_CALLER, minimum=AccessRole.SYSTEM_ADMIN, store=store)
+        check_role(_SECOND_CALLER, minimum=AccessRole.SYSTEM_ADMIN, store=store).raise_if_denied()
 
     assert str(exc_info.value) == "You do not have the required access role for this action."
 
 
-def test_require_role_never_lets_system_owner_satisfy_a_policy_manager_minimum_by_accident() -> (
-    None
-):
+def test_check_role_never_lets_system_owner_satisfy_a_policy_manager_minimum_by_accident() -> None:
     """The hierarchy fix is scoped to SystemAdmin only, never PolicyManager.
 
     Confirms the fix is not accidentally a generic "SystemOwner satisfies
     everything" rule -- a bare AuthenticatedUser-only principal (never
     granted PolicyManager) is still denied a PolicyManager gate even though
-    nothing else calls `require_role` with that minimum.
+    nothing else calls `check_role` with that minimum.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- SystemOwner, not PolicyManager
 
     with pytest.raises(AccessDeniedError):
-        require_role(_FIRST_CALLER, minimum=AccessRole.POLICY_MANAGER, store=store)
+        check_role(_FIRST_CALLER, minimum=AccessRole.POLICY_MANAGER, store=store).raise_if_denied()
 
 
-def test_require_role_never_lets_system_owner_satisfy_compliance_officer_minimum_by_accident() -> (
+def test_check_role_never_lets_system_owner_satisfy_compliance_officer_minimum_by_accident() -> (
     None
 ):
     """Mirrors the PolicyManager non-hierarchy proof above.
@@ -174,14 +174,16 @@ def test_require_role_never_lets_system_owner_satisfy_compliance_officer_minimum
     Confirms the SystemAdmin-only hierarchy fix does not accidentally extend
     to ComplianceOfficer either -- a bare AuthenticatedUser-only principal
     (never granted ComplianceOfficer) is still denied a ComplianceOfficer
-    gate even though nothing else calls `require_role` with
+    gate even though nothing else calls `check_role` with
     that minimum.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps SystemOwner only
 
     with pytest.raises(AccessDeniedError):
-        require_role(_FIRST_CALLER, minimum=AccessRole.COMPLIANCE_OFFICER, store=store)
+        check_role(
+            _FIRST_CALLER, minimum=AccessRole.COMPLIANCE_OFFICER, store=store
+        ).raise_if_denied()
 
 
 def test_list_assignments_returns_every_row_and_the_floor_warning() -> None:
@@ -1226,6 +1228,7 @@ def test_verify_audit_log_never_falls_open_on_an_access_role_store_error() -> No
 
 def test_verify_audit_log_returns_the_store_verification_to_a_system_owner() -> None:
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)  # the surface gate bootstraps
     expected = AuditChainVerification(
         intact=True, rows_checked=3, head_chain_seq=3, first_break=None
     )
@@ -1246,6 +1249,7 @@ def test_verify_audit_log_maps_an_audit_store_failure_to_store_unavailable(
     failure: Exception,
 ) -> None:
     access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)  # the surface gate bootstraps
     audit_store = FakeAuditStore(raise_on_verify=failure)
 
     with pytest.raises(AuthorizationStoreUnavailableError) as exc_info:

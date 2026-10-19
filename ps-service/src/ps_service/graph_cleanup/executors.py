@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from ps_service.api.errors import AccessDeniedError, AuthorizationStoreUnavailableError
+from ps_service.api.errors import AuthorizationStoreUnavailableError
 from ps_service.audit.errors import (
     AuditInvalidDetailsError,
     AuditPersistenceError,
@@ -36,7 +36,7 @@ from ps_service.audit.errors import (
 )
 from ps_service.audit.store import EventIdAuditStore
 from ps_service.authz.models import AccessRole
-from ps_service.authz.service import require_role
+from ps_service.authz.service import check_role
 from ps_service.graph_cleanup.audit_actions import (
     CAPABILITY_MERGE_ACTION,
     CAPABILITY_RELEASE_GOVERNANCE_ACTION,
@@ -330,14 +330,13 @@ def _actor_is_still_authorised(
     row: PendingApprovalRow, dependencies: GraphCleanupDependencies, config: ServiceConfig
 ) -> bool:
     try:
-        require_role(
+        return check_role(
             (row.actor_subject, row.actor_issuer),
             minimum=AccessRole.COMPLIANCE_OFFICER,
             store=dependencies.access_role_store(config),
-        )
-    except AccessDeniedError, AuthorizationStoreUnavailableError:
+        ).allowed
+    except AuthorizationStoreUnavailableError:
         return False
-    return True
 
 
 def _write_after_audit(

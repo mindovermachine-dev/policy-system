@@ -21,6 +21,7 @@ from policy_lifecycle._gateway_fakes import (
     PolicyReadGraph,
     SeedControl,
     SeedStandard,
+    policy_manager_enforcer,
 )
 from ps_service.authz.models import AccessRole
 from ps_service.policy_lifecycle.errors import (
@@ -234,7 +235,7 @@ def test_a_rejection_cascades_the_tree_back_to_draft_under_its_own_applied_row(
         policy_id="pol_x",
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
-        access_role_store=roles,
+        enforce_policy_manager=policy_manager_enforcer(roles),
         submitter=lifecycle_rig.gateway,
     )
 

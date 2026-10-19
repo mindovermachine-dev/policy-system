@@ -19,6 +19,8 @@ from ps_service.api.change_check_orchestration import (
     run_change_check_sweep,
 )
 from ps_service.api.dependencies import (
+    authenticated_only,
+    body_gate,
     enforce_access_role,
     get_principal,
     get_service_config,
@@ -118,6 +120,9 @@ from ps_service.runtime_config import RuntimeConfigError
 
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import IngestionOutcome
+
+_RESOLVE_OPERATION = "POST /near-misses/{review_id}/resolve"
+"""The name a merge denial on the resolve route is audited under: `<METHOD> <path template>`."""
 
 
 def _to_accepted_response(run_id: str, outcome: IngestionOutcome) -> IngestionAcceptedResponse:
@@ -617,6 +622,7 @@ def _request_merge(
     dependencies: NearMissReviewDependencies,
     store: PendingApprovalStore,
     principal: Principal | None,
+    audit: AuditContext,
 ) -> ResolveReviewResponse:
     """Run the merge branch of `resolve_near_miss`: caller checks, then the cleanup approval.
 
@@ -628,7 +634,13 @@ def _request_merge(
         raise MergeApprovalRequiresAuthenticatedCallerError(
             "a signed passkey approval requires a real authenticated caller"
         )
-    enforce_access_role(principal, config, AccessRole.COMPLIANCE_OFFICER)
+    enforce_access_role(
+        principal,
+        config,
+        AccessRole.COMPLIANCE_OFFICER,
+        operation=_RESOLVE_OPERATION,
+        audit_store=audit.store,
+    )
     try:
         approval = run_request_near_miss_merge(
             review_id,
@@ -743,7 +755,7 @@ async def resolve_near_miss(
             audit=audit,
         )
     return _request_merge(
-        review_id, request_body, http_request, config, dependencies, store, principal
+        review_id, request_body, http_request, config, dependencies, store, principal, audit
     )
 
 
@@ -840,53 +852,113 @@ def build_api_router() -> APIRouter:
         An ``APIRouter`` holding all of the routes above, ready for ``include_router``.
     """
     router = APIRouter()
-    router.add_api_route("/catalog", list_curated_catalog, methods=["GET"])
+    router.add_api_route(
+        "/catalog",
+        list_curated_catalog,
+        methods=["GET"],
+        dependencies=[
+            Depends(
+                authenticated_only(
+                    "a read of the curated catalog listing; any authenticated caller"
+                )
+            )
+        ],
+    )
     router.add_api_route(
         "/ingestions",
         create_ingestion,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
-        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
+        dependencies=[
+            Depends(
+                require_access_role(AccessRole.COMPLIANCE_OFFICER, operation="POST /ingestions")
+            )
+        ],
     )
-    router.add_api_route("/ingestions/{run_id}", get_ingestion_status, methods=["GET"])
+    router.add_api_route(
+        "/ingestions/{run_id}",
+        get_ingestion_status,
+        methods=["GET"],
+        dependencies=[
+            Depends(authenticated_only("a best-effort progress read; any authenticated caller"))
+        ],
+    )
     router.add_api_route(
         "/restorations",
         create_restoration,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
-        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
+        dependencies=[
+            Depends(
+                require_access_role(AccessRole.COMPLIANCE_OFFICER, operation="POST /restorations")
+            )
+        ],
     )
     router.add_api_route(
         "/restorations/from-catalog",
         create_restoration_from_catalog,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
-        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
+        dependencies=[
+            Depends(
+                require_access_role(
+                    AccessRole.COMPLIANCE_OFFICER, operation="POST /restorations/from-catalog"
+                )
+            )
+        ],
     )
     router.add_api_route(
         "/exports",
         create_export,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
-        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
+        dependencies=[
+            Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER, operation="POST /exports"))
+        ],
     )
     router.add_api_route(
         "/change-checks",
         create_change_check,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
-        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
+        dependencies=[
+            Depends(
+                require_access_role(AccessRole.COMPLIANCE_OFFICER, operation="POST /change-checks")
+            )
+        ],
     )
-    router.add_api_route("/near-misses", list_near_misses, methods=["GET"])
+    router.add_api_route(
+        "/near-misses",
+        list_near_misses,
+        methods=["GET"],
+        dependencies=[
+            Depends(authenticated_only("a plain read of open reviews; any authenticated caller"))
+        ],
+    )
     router.add_api_route(
         "/near-misses/{review_id}/resolve",
         resolve_near_miss,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
+        dependencies=[
+            Depends(
+                body_gate(
+                    AccessRole.COMPLIANCE_OFFICER,
+                    operation=_RESOLVE_OPERATION,
+                )
+            )
+        ],
     )
     router.add_api_route(
         "/near-misses/approvals/{pending_approval_id}",
         check_merge_pending_approval,
         methods=["GET"],
+        dependencies=[
+            Depends(
+                authenticated_only(
+                    "reads only an approval the caller created; the handler checks the creator"
+                )
+            )
+        ],
     )
     return router

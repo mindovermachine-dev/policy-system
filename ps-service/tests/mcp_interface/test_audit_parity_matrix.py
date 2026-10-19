@@ -25,6 +25,12 @@ from api._fakes import (
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from fastapi.testclient import TestClient
 
+from mcp_interface.test_catalog_source_authz_gate import (
+    _NON_ADMIN_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- reuse this file family's fixtures verbatim
+    _fake_store_factory,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _seeded_store,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _verified_actor,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
 from ps_service.api.catalog import CatalogEntry
 from ps_service.api.change_check_orchestration import run_change_check_sweep
 from ps_service.api.dependencies import (
@@ -38,6 +44,7 @@ from ps_service.api.restore_orchestration import (
     run_restoration_from_catalog_source,
 )
 from ps_service.audit import AuditActorUnresolvedError, resolve_audit_actor
+from ps_service.authz.request_gate import enforce_role_gate
 from ps_service.change_monitor.models import (
     AmendmentFinding,
     PollReport,
@@ -49,6 +56,7 @@ from ps_service.invitations.service import invite_user_audited
 from ps_service.logging import configure
 from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
+from ps_service.passkey_signing.router import post_enroll_verify
 
 _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 
@@ -156,3 +164,63 @@ def test_every_new_emitter_uses_the_system_local_test_bypass_actor_under_bypass(
 def test_no_actor_and_no_bypass_is_refused_instead_of_attributed_to_the_sentinel() -> None:
     with pytest.raises(AuditActorUnresolvedError):
         resolve_audit_actor(None, is_local_test_bypass_active=False)
+
+
+def test_every_new_gate_emitter_requires_an_audit_store_argument() -> None:
+    """The request gate cannot be called without saying who acts and where the row goes.
+
+    `audit_actor` and `audit_store` (and the role store) are keyword-only with no default, so a
+    transport cannot forget to audit a denial; the enrolment route takes its audit store as a
+    dependency.
+    """
+    parameters = inspect.signature(enforce_role_gate).parameters
+    for name in ("principal", "audit_actor", "role_store", "audit_store"):
+        assert parameters[name].default is inspect.Parameter.empty, name
+        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY, name
+    assert "audit_store" in inspect.signature(post_enroll_verify).parameters
+
+
+def test_mcp_and_rest_denials_record_the_same_row_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ComplianceOfficer-gated operation denied over MCP and over REST records the same row.
+
+    Both rows are `access.gate` / `rejected` / `operation` with the single `required_role`
+    detail; only the actor and the operation name (the tool name or `METHOD path`) differ.
+    """
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    rest_store = RestAuditStore()
+    app = create_app(
+        ServiceConfig(
+            host="127.0.0.1",
+            port=8000,
+            graceful_shutdown_seconds=10,
+            logging_dir=None,
+            is_local_test_bypass_active=True,
+            authentik_api_token="test-authentik-token",
+            authentik_base_url="https://authentik.example.com",
+        )
+    )
+    fake_rest = _amended_fake()
+    app.dependency_overrides[provide_change_check_dependencies] = lambda: fake_rest.dependencies
+    app.dependency_overrides[provide_audit_store] = lambda: rest_store
+    assert TestClient(app).post("/change-checks").status_code == 403
+
+    mcp_store = InMemoryAuditStore()
+    monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(mcp_store))
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    configure()
+    with _verified_actor(sub=_NON_ADMIN_SUBJECT):
+        asyncio.run(mcp_server.server.call_tool("check_regulations", {}))
+
+    (rest_row,) = rest_store.rows
+    (mcp_row,) = mcp_store.rows
+    assert (rest_row.action, rest_row.outcome, rest_row.resource_type, rest_row.details) == (
+        mcp_row.action,
+        mcp_row.outcome,
+        mcp_row.resource_type,
+        mcp_row.details,
+    )
+    assert (mcp_row.resource_id, rest_row.resource_id) == (
+        "check_regulations",
+        "POST /change-checks",
+    )

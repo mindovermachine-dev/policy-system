@@ -23,6 +23,7 @@ from policy_lifecycle._gateway_fakes import (
     PolicyReadGraph,
     SeedControl,
     SeedStandard,
+    policy_manager_enforcer,
 )
 from ps_service.api.errors import AccessDeniedError
 from ps_service.authz.models import AccessRole
@@ -572,7 +573,7 @@ def test_policy_manager_non_owner_approves_successfully(lifecycle_rig: Lifecycle
         policy_id="pol_x",
         graph=graph,
         audit_store=audit_store,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -605,7 +606,7 @@ def test_owner_who_also_holds_policy_manager_self_approval_is_blocked(
             policy_id="pol_x",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -629,7 +630,7 @@ def test_same_subject_different_issuer_approver_succeeds(lifecycle_rig: Lifecycl
         policy_id="pol_x",
         graph=graph,
         audit_store=audit_store,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -651,12 +652,31 @@ def test_non_policy_manager_is_rejected_with_access_denied(lifecycle_rig: Lifecy
             policy_id="pol_x",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
     assert lifecycle_rig.store.groups == []
     assert audit_store.rows == []
+
+
+def test_policy_lifecycle_approve_denial_through_the_service_writes_no_access_gate_row(
+    lifecycle_rig: LifecycleRig,
+) -> None:
+    graph = _rig_graph(lifecycle_rig, {"pol_x": _approvable_proposed()})
+
+    with pytest.raises(AccessDeniedError):
+        approve_policy(
+            actor=_MANAGER,
+            policy_id="pol_x",
+            graph=graph,
+            audit_store=lifecycle_rig.audit,
+            enforce_policy_manager=policy_manager_enforcer(FakeAccessRoleStore()),
+            submitter=lifecycle_rig.gateway,
+        )
+
+    assert [r.action for r in lifecycle_rig.audit.rows if r.action == "access.gate"] == []
+    assert lifecycle_rig.audit.rows == []
 
 
 def test_approve_wrong_current_status_is_rejected_via_require_status(
@@ -674,7 +694,7 @@ def test_approve_wrong_current_status_is_rejected_via_require_status(
             policy_id="pol_x",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -697,7 +717,7 @@ def test_approve_audit_write_precedes_graph_write(lifecycle_rig: LifecycleRig) -
         policy_id="pol_x",
         graph=graph,
         audit_store=audit_store,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -723,7 +743,7 @@ def test_approve_graph_failure_after_audit_success_records_failed_event_and_rais
             policy_id="pol_x",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -743,7 +763,7 @@ def test_approve_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig
             policy_id="pol_missing",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -767,7 +787,7 @@ def test_approving_a_superseded_by_approved_prior_auto_deprecates_it_in_the_same
         policy_id="pol_new",
         graph=graph,
         audit_store=audit_store,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -808,7 +828,7 @@ def test_superseded_by_prior_not_yet_approved_is_left_untouched(
         policy_id="pol_new",
         graph=graph,
         audit_store=audit_store,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -828,7 +848,7 @@ def _approve_fork(rig: LifecycleRig, graph: PolicyReadGraph, policy_id: str) -> 
         policy_id=policy_id,
         graph=graph,
         audit_store=rig.audit,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=rig.gateway,
     )
 
@@ -979,7 +999,7 @@ def test_approve_gate_failure_rejects_before_any_governance_read(
             policy_id="pol_new",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -1036,7 +1056,7 @@ def test_policy_manager_non_owner_rejects_successfully_and_cascades_to_draft(
         policy_id="pol_x",
         graph=graph,
         audit_store=audit_store,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -1068,7 +1088,7 @@ def test_owner_who_also_holds_policy_manager_self_rejection_is_blocked(
             policy_id="pol_x",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -1092,7 +1112,7 @@ def test_same_subject_different_issuer_rejecter_succeeds(lifecycle_rig: Lifecycl
         policy_id="pol_x",
         graph=graph,
         audit_store=audit_store,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -1116,7 +1136,7 @@ def test_non_policy_manager_rejecter_is_rejected_with_access_denied(
             policy_id="pol_x",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -1139,7 +1159,7 @@ def test_reject_wrong_current_status_is_rejected_via_require_status(
             policy_id="pol_x",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -1162,7 +1182,7 @@ def test_reject_audit_write_precedes_graph_write(lifecycle_rig: LifecycleRig) ->
         policy_id="pol_x",
         graph=graph,
         audit_store=audit_store,
-        access_role_store=store,
+        enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
     )
 
@@ -1188,7 +1208,7 @@ def test_reject_graph_failure_after_audit_success_records_failed_event_and_raise
             policy_id="pol_x",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 
@@ -1208,7 +1228,7 @@ def test_reject_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig)
             policy_id="pol_missing",
             graph=graph,
             audit_store=audit_store,
-            access_role_store=store,
+            enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
         )
 

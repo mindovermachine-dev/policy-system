@@ -3093,7 +3093,7 @@ def _install_bypass_manager_role(monkeypatch: pytest.MonkeyPatch) -> None:
     """Grants `PolicyManager` to the bypass principal pair itself.
 
     Needed so `approve-policy`/`reject-policy`'s own RBAC gate
-    (`require_role`) passes -- the point of these regression
+    (`check_role`) passes -- the point of these regression
     tests is to prove `block_self_approval` is what rejects the call, not
     the RBAC gate.
     """

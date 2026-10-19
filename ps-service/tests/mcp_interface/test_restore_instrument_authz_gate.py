@@ -11,7 +11,7 @@ exactly: `_verified_actor`/`_fake_store_factory`/`FakeAccessRoleStore`/
 
 Every test here binds a real, non-bypass `AccessToken` (`_verified_actor`), so
 `config.is_local_test_bypass_active` is `False` and the new
-`authz_service.require_role(...)` check in `restore_instrument`'s body
+declarative role gate (`tool_gates`) in `restore_instrument`'s body
 actually runs -- distinct from every test in `test_restore_instrument_tool.py`,
 which drives the tool under the local-test bypass (or, for its own real-token
 test, now seeds a `ComplianceOfficer` grant via `_grant_compliance_officer`)
@@ -144,7 +144,7 @@ def _text(result: CallToolResult) -> str:
 def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     """A real, non-bypass caller holding only `AuthenticatedUser`
     (never elevated) gets the fixed access-denied message, and no restore
-    dependency is ever wired up at all -- `require_role` denies before
+    dependency is ever wired up at all -- the role gate denies before
     `build_default_restore_from_catalog_dependencies()` is ever called
     (confirmed by reading `restore_instrument`'s own body), so this test
     needs no restore-dependency wiring whatsoever.
@@ -161,7 +161,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
 
 
 def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`require_role`'s own non-hierarchical contract for
+    """The role gate's own non-hierarchical contract for
     `ComplianceOfficer` -- a caller holding `SystemAdmin` (but never
     separately granted `ComplianceOfficer`) is still denied, proving no
     implicit admin override reaches this gate. No restore-dependency wiring

@@ -27,7 +27,6 @@ from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
     build_default_change_check_dependencies,
 )
-from ps_service.api.errors import AccessDeniedError
 from ps_service.api.export_orchestration import (
     ExportDependencies,
     build_default_export_dependencies,
@@ -48,7 +47,7 @@ from ps_service.api.restore_orchestration import (
 )
 from ps_service.audit import AuditContext, AuditStore, PsycopgAuditStore, resolve_audit_actor
 from ps_service.auth import Principal
-from ps_service.authz.service import require_role
+from ps_service.authz.request_gate import RoleGate, enforce_role_gate
 from ps_service.authz.store import PsycopgAccessRoleStore
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves `provide_pending_approval_store`'s own annotation at runtime
@@ -65,7 +64,7 @@ from ps_service.logging import bind_run_context
 from ps_service.passkey_signing.store import PendingApprovalStore, PsycopgPendingApprovalStore
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator
 
     from ps_service.authz.models import AccessRole
     from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
@@ -119,19 +118,44 @@ def get_principal(request: Request) -> Principal | None:
     return principal
 
 
+def provide_audit_store(
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+) -> AuditStore:
+    """Return the production `AuditStore` for audited REST operations.
+
+    A plain provider, overridable in tests through `app.dependency_overrides` with an in-memory
+    store (the same idiom as :func:`provide_pending_approval_store`).
+
+    Args:
+        config: The resolved service configuration, injected by FastAPI.
+
+    Returns:
+        A `PsycopgAuditStore` bound to `config`. It opens no connection until a row is written,
+        so constructing one per request is cheap.
+    """
+    return PsycopgAuditStore(config)
+
+
 def enforce_access_role(
-    principal: Principal | None, config: ServiceConfig, role: AccessRole
+    principal: Principal | None,
+    config: ServiceConfig,
+    role: AccessRole,
+    *,
+    operation: str,
+    audit_store: AuditStore,
 ) -> None:
-    """Require that a verified caller holds `role` (or a role above it).
+    """Require that a verified caller holds `role` (or a role above it), auditing a denial.
 
     The one check behind both the route-level `require_access_role` dependency and a route that
-    gates only one branch of its body (`POST /near-misses/{id}/resolve`, merge only). It calls the
-    same `ps_service.authz.service.require_role` as the gated MCP tools.
+    gates only one branch of its body (`POST /near-misses/{id}/resolve`, merge only). It runs the
+    same request gate (`ps_service.authz.request_gate.enforce_role_gate`) as the gated MCP tools.
 
     Args:
         principal: The verified caller, or `None` when no verified identity exists.
-        config: The service configuration; selects the access-role store and its audit store.
+        config: The service configuration; selects the access-role store.
         role: The minimum `AccessRole` the caller must hold.
+        operation: The name the operation is audited under, `"<METHOD> <path template>"`.
+        audit_store: The store a denial row is written to.
 
     Raises:
         AccessDeniedError: There is no verified caller (fail closed: no identity to look a permanent
@@ -139,32 +163,71 @@ def enforce_access_role(
         AuthorizationStoreUnavailableError: The authorization store cannot be reached.
 
     Side Effects:
-        Queries the access-role store.
+        Queries the access-role store. A denial of a verified caller writes one `access.gate`
+        audit row (best-effort); a denial of an unverified caller writes none.
     """
-    if principal is None:
-        raise AccessDeniedError(_ACCESS_DENIED_MESSAGE)
-    require_role(
-        (principal.sub, principal.iss),
-        minimum=role,
-        store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
+    actor = (principal.sub, principal.iss) if principal is not None else None
+    enforce_role_gate(
+        RoleGate(operation=operation, minimum=role),
+        principal=actor,
+        audit_actor=actor,
+        role_store=PsycopgAccessRoleStore(config, audit_store=audit_store),
+        audit_store=audit_store,
     )
 
 
-def require_access_role(role: AccessRole) -> Callable[[Request], None]:
+class RoleGateDependency:
+    """A FastAPI dependency enforcing one route's declared role gate.
+
+    Exposes the declaration as `gate` so a structural test can list every gated route and its
+    operation name. Calling an instance is what FastAPI does per request.
+
+    Attributes:
+        gate: The operation name and minimum role this dependency enforces.
+    """
+
+    def __init__(self, gate: RoleGate) -> None:
+        """Store the declared gate."""
+        self.gate = gate
+
+    def __call__(
+        self, request: Request, audit_store: Annotated[AuditStore, Depends(provide_audit_store)]
+    ) -> None:
+        """Enforce the gate for the request's verified principal.
+
+        Args:
+            request: The incoming request (FastAPI injects it).
+            audit_store: The store a denial row is written to (FastAPI injects it).
+
+        Raises:
+            AccessDeniedError: No verified principal, or the principal lacks the role.
+            AuthorizationStoreUnavailableError: The authorization store cannot be reached.
+            AttributeError: `app.state.config` was never set.
+        """
+        enforce_access_role(
+            get_principal(request),
+            get_service_config(request),
+            self.gate.minimum,
+            operation=self.gate.operation,
+            audit_store=audit_store,
+        )
+
+
+def require_access_role(role: AccessRole, *, operation: str) -> RoleGateDependency:
     """Build a FastAPI dependency that enforces a minimum access role on the caller.
 
-    It calls the same `ps_service.authz.service.require_role` as the gated MCP tools, so both
-    surfaces share one authorization mechanism. The restore, export, change-check and
-    ingestion REST routes use it as a route-level dependency; it is also a directly callable
-    dependency factory, shaped like :func:`get_principal` and :func:`get_service_config`.
+    It runs the same request gate as the gated MCP tools, so both surfaces share one
+    authorization and audit mechanism. The restore, export, change-check and ingestion REST routes
+    use it as a route-level dependency.
 
     Args:
         role: The minimum `AccessRole` a caller must hold. `SystemOwner` also satisfies a
             `SystemAdmin` requirement.
+        operation: The name the route is audited under: `"<METHOD> <path template>"`. Keyword-only
+            and required, so a gated route cannot be declared without one.
 
     Returns:
-        A dependency callable `(request) -> None` that returns `None` when the caller passes.
-        When called it can raise:
+        A `RoleGateDependency`. When called it returns `None` if the caller passes, and can raise:
 
         * `AccessDeniedError`: no verified `Principal` is bound to the request (fail closed,
           because there is no identity to look up a permanent role for), or the principal does
@@ -173,14 +236,78 @@ def require_access_role(role: AccessRole) -> Callable[[Request], None]:
         * `AttributeError`: `app.state.config` was never set.
 
     Side Effects:
-        The returned callable queries the access-role store when it runs. Building the
-        callable does nothing.
+        The returned dependency queries the access-role store when it runs, and writes an
+        `access.gate` audit row on a denial of a verified caller. Building it does nothing.
+    """
+    return RoleGateDependency(RoleGate(operation=operation, minimum=role))
+
+
+class AuthenticatedOnlyMarker:
+    """A no-op route dependency declaring that any authenticated caller may use the route.
+
+    The bearer-token middleware has already authenticated the request, so the dependency does
+    nothing at request time. It exists so the structural test can tell a route that is open to
+    every authenticated caller by design from a route nobody gated by mistake.
+
+    Attributes:
+        reason: Why the route needs no role.
     """
 
-    def _require_access_role(request: Request) -> None:
-        enforce_access_role(get_principal(request), get_service_config(request), role)
+    def __init__(self, reason: str) -> None:
+        """Store the stated reason."""
+        self.reason = reason
 
-    return _require_access_role
+    def __call__(self) -> None:
+        """Do nothing: authentication already happened in the middleware."""
+
+
+class BodyGateMarker:
+    """A no-op route dependency declaring that the handler role-gates one branch itself.
+
+    The handler runs `enforce_access_role` for the gated branch, under `gate.operation`. The marker
+    lets the structural test list the route and its operation name.
+
+    Attributes:
+        gate: The operation name and minimum role the handler enforces for that branch.
+    """
+
+    def __init__(self, gate: RoleGate) -> None:
+        """Store the declared gate."""
+        self.gate = gate
+
+    def __call__(self) -> None:
+        """Do nothing: the handler enforces the gate for its gated branch."""
+
+
+def authenticated_only(reason: str) -> AuthenticatedOnlyMarker:
+    """Declare a route open to any authenticated caller, stating why.
+
+    Args:
+        reason: Why the route needs no role; must not be empty.
+
+    Returns:
+        An `AuthenticatedOnlyMarker` to pass to `Depends`.
+
+    Raises:
+        ValueError: `reason` is empty.
+    """
+    if not reason:
+        message = "an authenticated-only route must state a reason"
+        raise ValueError(message)
+    return AuthenticatedOnlyMarker(reason)
+
+
+def body_gate(role: AccessRole, *, operation: str) -> BodyGateMarker:
+    """Declare a route whose handler role-gates one branch of its body.
+
+    Args:
+        role: The minimum `AccessRole` that branch requires.
+        operation: The name that branch is audited under, `"<METHOD> <path template>"`.
+
+    Returns:
+        A `BodyGateMarker` to pass to `Depends`.
+    """
+    return BodyGateMarker(RoleGate(operation=operation, minimum=role))
 
 
 async def provide_run_id(request: Request) -> AsyncIterator[str]:
@@ -402,24 +529,6 @@ def provide_change_check_dependencies() -> ChangeCheckDependencies:
         None; no connection is opened while building the bundle.
     """
     return build_default_change_check_dependencies()
-
-
-def provide_audit_store(
-    config: Annotated[ServiceConfig, Depends(get_service_config)],
-) -> AuditStore:
-    """Return the production `AuditStore` for audited REST operations.
-
-    A plain provider, overridable in tests through `app.dependency_overrides` with an in-memory
-    store (the same idiom as :func:`provide_pending_approval_store`).
-
-    Args:
-        config: The resolved service configuration, injected by FastAPI.
-
-    Returns:
-        A `PsycopgAuditStore` bound to `config`. It opens no connection until a row is written,
-        so constructing one per request is cheap.
-    """
-    return PsycopgAuditStore(config)
 
 
 def provide_audit_context(

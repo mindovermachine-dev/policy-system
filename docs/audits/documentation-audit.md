@@ -23,7 +23,7 @@ Tool versions: `uv run --frozen python -B --version` 3.14.6, `helm version --sho
 - Configuration variables: `grep -rhoE 'PS_[A-Z0-9_]+'` over `ps-service/src charts scripts deploy ps-cli/src` compared with the same extraction over the two architecture documents.
 - REST routes: `GET|POST /...` strings in the two architecture documents compared with `add_api_route` registrations in `ps-service/src/ps_service`.
 - Readiness model: `_GATING_DEPENDENCIES`, `_READY_DEPENDENCIES`, `_check_dependencies_at_startup`, `_retry_gating_dependencies` and `ready()` in `ps-service/src/ps_service/main.py`; constants in `dependency_health/registry.py`.
-- MCP authorization: `server.list_tools()` descriptions and `require_role` calls in `mcp_server.py`, `policy_lifecycle/service.py`, `graph_cleanup/executors.py`, with the rules in `authz/service.py` and `authz/rules.py`.
+- MCP authorization: `server.list_tools()` descriptions and the `TOOL_GATES` declarations in `mcp_interface/tool_gates.py` and the `check_role` calls in `policy_lifecycle/service.py` and `graph_cleanup/executors.py`, with the rules in `authz/service.py`, `authz/request_gate.py` and `authz/rules.py`.
 - Identifier and path check: every backticked identifier of the container architecture searched in `ps-service/src charts scripts ps-cli/src ps-skills deploy` (only action names remain unmatched); every `*.py`, `*.sql`, `*.yaml`, `*.sh` file name resolved with `git ls-files`; every `ps_service.*` module resolved to a file or package.
 - Registration coverage: every `ps-service/src/ps_service/**/*.py` path searched in the container architecture.
 - Values reference: `python3 .orchestrator/tracker/i254/tools/values_keys.py` against `values.yaml` and `values-prod.yaml`.

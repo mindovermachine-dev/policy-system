@@ -33,6 +33,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
     FakeAccessRoleStore,
 )
 
+from policy_lifecycle._gateway_fakes import policy_manager_enforcer
 from ps_service.authz.models import AccessRole
 from ps_service.policy_lifecycle.errors import PolicyInvalidStatusTransitionError
 from ps_service.policy_lifecycle.service import (
@@ -104,7 +105,7 @@ def _run_approve(rig: LifecycleRig, graph: PolicyReadGraph) -> None:
         policy_id="pol_x",
         graph=graph,
         audit_store=_AcceptingAuditStore(),
-        access_role_store=_manager_store(),
+        enforce_policy_manager=policy_manager_enforcer(_manager_store()),
         submitter=rig.gateway,
     )
 
@@ -115,7 +116,7 @@ def _run_reject(rig: LifecycleRig, graph: PolicyReadGraph) -> None:
         policy_id="pol_x",
         graph=graph,
         audit_store=_AcceptingAuditStore(),
-        access_role_store=_manager_store(),
+        enforce_policy_manager=policy_manager_enforcer(_manager_store()),
         submitter=rig.gateway,
     )
 

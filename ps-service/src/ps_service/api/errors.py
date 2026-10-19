@@ -317,10 +317,11 @@ class CatalogSourceOverrideUnavailableError(ApiError):
 class AccessDeniedError(ApiError):
     """A caller's active `AccessRole` set does not satisfy a role-gated action's minimum.
 
-    Raised by `ps_service.authz.service.require_role` and, transitively, by `grant_role`,
-    `revoke_role` and `list_assignments`. The message is fixed at the raise site, never a
-    caller-supplied value, so it leaks no internal detail. Handled as HTTP 403; `str(exc)` is
-    safe to surface verbatim.
+    Raised by `ps_service.authz.service.RoleDecision.raise_if_denied` (via `check_role`), by the
+    request gate `ps_service.authz.request_gate.enforce_role_gate` and, transitively, by
+    `grant_role`, `revoke_role` and `list_assignments`. The message is fixed at the raise site,
+    never a caller-supplied value, so it leaks no internal detail. Handled as HTTP 403;
+    `str(exc)` is safe to surface verbatim.
     """
 
 

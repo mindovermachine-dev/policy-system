@@ -350,6 +350,27 @@ def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
     assert recorded_calls == [("review_aaa", "keep-separate")]
 
 
+def test_keep_separate_over_rest_writes_no_access_gate_row() -> None:
+    """Only the merge decision is role-gated, so keep-separate never writes a gate row."""
+
+    def _resolve(
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
+    ) -> ResolveOutcome | None:
+        _ = (graph, target)
+        return ResolveOutcome(review_id=review_id, decision=decision)
+
+    audit = InMemoryAuditStore()
+    client = _client_for_resolve(_resolve, records=(_record("review_aaa"),), audit_store=audit)
+
+    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
+
+    assert response.status_code == 200
+    assert [row for row in audit.rows if row.action == "access.gate"] == []
+
+
 def test_post_resolve_keep_separate_without_a_gateway_is_503_and_writes_no_audit_row() -> None:
     """Keep-separate writes through the gateway; none installed fails closed."""
     install_graph_write_gateway(None)

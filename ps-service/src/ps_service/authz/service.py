@@ -296,36 +296,80 @@ def resolve_active_roles(
     return bootstrapped
 
 
-def require_role(
-    principal: tuple[str, str], *, minimum: AccessRole, store: AccessRoleStore
-) -> None:
-    """Gate an action on `principal` holding at least the `minimum` access role.
+@dataclass(frozen=True, slots=True)
+class RoleDecision:
+    """The outcome of a pure role check: whether the caller holds the required role.
+
+    Attributes:
+        allowed: `True` when the caller's active roles satisfy `minimum`.
+        minimum: The least `AccessRole` the check required.
+    """
+
+    allowed: bool
+    minimum: AccessRole
+
+    def raise_if_denied(self) -> None:
+        """Raise `AccessDeniedError` when the decision denies the caller.
+
+        Returns:
+            None. Returning normally means the decision allowed the caller.
+
+        Raises:
+            AccessDeniedError: `allowed` is `False`.
+        """
+        if not self.allowed:
+            raise AccessDeniedError(_ACCESS_DENIED_MESSAGE)
+
+
+def decide_role(active: frozenset[AccessRole], minimum: AccessRole) -> RoleDecision:
+    """Decide whether the `active` roles satisfy the `minimum` role.
 
     A `minimum` of `SYSTEM_ADMIN` is also satisfied by `SYSTEM_OWNER`; without that, the sole
     bootstrapped owner could never pass an admin-only gate. Any other `minimum` is satisfied
     only by that exact role.
 
     Args:
-        principal: The caller's verified `(sub, iss)` identity.
+        active: The caller's active role set.
         minimum: The least `AccessRole` that satisfies the gate.
-        store: The store to resolve against.
 
     Returns:
-        None. Returning normally means the gate passed.
+        The decision; never raises.
+    """
+    satisfying = _SYSTEM_ADMIN_OR_ABOVE if minimum is AccessRole.SYSTEM_ADMIN else {minimum}
+    return RoleDecision(allowed=bool(active & satisfying), minimum=minimum)
+
+
+def check_role(
+    principal: tuple[str, str], *, minimum: AccessRole, store: AccessRoleStore
+) -> RoleDecision:
+    """Decide, without side effects, whether `principal` holds at least the `minimum` role.
+
+    Business Rules:
+        Strictly read-only: it never bootstraps the first owner and never writes an audit
+        event, so internal callers (the sign-time re-check, service-layer assertions) can use it
+        without producing request-gate rows. A denial is a returned decision, not an exception;
+        call `RoleDecision.raise_if_denied` to turn it into `AccessDeniedError`.
+
+    Args:
+        principal: The caller's verified `(sub, iss)` identity.
+        minimum: The least `AccessRole` that satisfies the gate.
+        store: The store to read the principal's roles from.
+
+    Returns:
+        The decision for `principal` against `minimum`.
 
     Raises:
-        AccessDeniedError: the principal's active roles do not satisfy `minimum`.
-        AuthorizationStoreUnavailableError: propagated from `resolve_active_roles` when the
-            store is unavailable.
+        AuthorizationStoreUnavailableError: the store raised `StatePostgresConnectionError`
+            or `AccessRoleAssignmentPersistenceError`. The call never falls open.
 
     Side Effects:
-        As `resolve_active_roles`: may bootstrap the first owner when the principal has no
-        persisted roles. No audit event is written for a denial.
+        None.
     """
-    active = resolve_active_roles(principal, store=store)
-    satisfying = _SYSTEM_ADMIN_OR_ABOVE if minimum is AccessRole.SYSTEM_ADMIN else {minimum}
-    if not (active & satisfying):
-        raise AccessDeniedError(_ACCESS_DENIED_MESSAGE)
+    try:
+        active = store.active_roles_for(principal)
+    except (StatePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
+        raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
+    return decide_role(active | {AccessRole.AUTHENTICATED_USER}, minimum)
 
 
 def list_assignments(
@@ -349,10 +393,10 @@ def list_assignments(
             or `AccessRoleAssignmentPersistenceError`, during the role check or the reads.
 
     Side Effects:
-        Those of `require_role` (possible first-owner bootstrap). Logs the one-owner floor
-        warning when exactly one active `SystemOwner` exists.
+        Those of `check_role` (none: it never bootstraps; the surface gate does). Logs the
+        one-owner floor warning when exactly one active `SystemOwner` exists.
     """
-    require_role(principal, minimum=AccessRole.SYSTEM_ADMIN, store=store)
+    check_role(principal, minimum=AccessRole.SYSTEM_ADMIN, store=store).raise_if_denied()
     try:
         assignments = store.list_all_assignments()
         active_system_owners = store.count_active_system_owners()
@@ -654,10 +698,12 @@ def list_audit_events(
             audit store raised `AuditPostgresUnavailableError` or `AuditPersistenceError`.
 
     Side Effects:
-        Those of `require_role` (possible first-owner bootstrap). The audit query itself is
-        read-only.
+        Those of `check_role` (none: it never bootstraps; the surface gate does). The audit query
+        itself is read-only.
     """
-    require_role(principal, minimum=AccessRole.SYSTEM_ADMIN, store=access_role_store)
+    check_role(
+        principal, minimum=AccessRole.SYSTEM_ADMIN, store=access_role_store
+    ).raise_if_denied()
     _validate_audit_query_filters(filters, page_size=page_size)
     try:
         return audit_store.query(filters=filters, cursor=cursor, page_size=page_size)
@@ -693,10 +739,12 @@ def verify_audit_log(
             audit store raised `AuditPostgresUnavailableError` or `AuditPersistenceError`.
 
     Side Effects:
-        Those of `require_role` (possible first-owner bootstrap). The verification itself is
-        read-only.
+        Those of `check_role` (none: it never bootstraps; the surface gate does). The verification
+        itself is read-only.
     """
-    require_role(principal, minimum=AccessRole.SYSTEM_ADMIN, store=access_role_store)
+    check_role(
+        principal, minimum=AccessRole.SYSTEM_ADMIN, store=access_role_store
+    ).raise_if_denied()
     try:
         return audit_store.verify_integrity()
     except (AuditPostgresUnavailableError, AuditPersistenceError) as exc:

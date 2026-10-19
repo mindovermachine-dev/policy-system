@@ -101,7 +101,7 @@ from ps_service.api.routes import (
 from ps_service.api.run_status import get_stage
 from ps_service.api.stage_failure_log import stage_failure_detail
 from ps_service.audit.actor import resolve_audit_actor
-from ps_service.audit.emit import AuditContext
+from ps_service.audit.emit import AuditContext, AuditTarget, record_follow_up_row
 from ps_service.audit.errors import (
     AuditActorUnresolvedError,
     AuditPersistenceError,
@@ -114,7 +114,6 @@ from ps_service.authz.models import AccessRole
 from ps_service.authz.service import (
     grant_role,
     list_assignments,
-    require_role,
     revoke_role,
 )
 from ps_service.authz.service import (
@@ -170,9 +169,24 @@ from ps_service.logging import (
     current_run_id,
     emit_log_entry,
 )
+from ps_service.mcp_interface.audit_actions import (
+    QUERY_CYPHER_ACTION,
+    QUERY_CYPHER_RESOURCE_ID,
+    QUERY_RESOURCE_TYPE,
+    QueryCypherReasonCode,
+)
 from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
     McpResourceUnavailableError,
+)
+from ps_service.mcp_interface.tool_gates import (
+    BypassPolicy,
+    GateEnvironment,
+    GateKind,
+    ToolGate,
+    gated_tool,
+    lifecycle_role_enforcer,
+    run_body_gate,
 )
 from ps_service.passkey_signing.store import PsycopgPendingApprovalStore
 from ps_service.passkey_signing.webauthn_rp import signable_link_host
@@ -368,6 +382,99 @@ server = MCPServer(
     ),
 )
 
+# The gate wrapper's collaborators, each looked up when called so the names this module rebinds
+# (the store classes, the configuration loader) stay the single seam tests and deployments patch.
+_gate_environment = GateEnvironment(
+    load_config=lambda: load_config(),  # noqa: PLW0108
+    resolve_principal=lambda config: _resolve_principal(config),  # noqa: PLW0108
+    resolve_actor=lambda config: _resolve_authz_actor(config),  # noqa: PLW0108
+    role_store_factory=lambda config: PsycopgAccessRoleStore(
+        config, audit_store=PsycopgAuditStore(config)
+    ),
+    audit_store_factory=lambda config: PsycopgAuditStore(config),  # noqa: PLW0108
+    run_action=lambda action, principal, body: _run_mcp_action(action, principal, body),  # noqa: PLW0108
+)
+_gated_tool = gated_tool(server, _gate_environment)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class CypherCallOutcome:
+    """The result of one in-process `cypher` run plus the facts its audit row records.
+
+    Attributes:
+        response: What the tool returns to the caller: the result dict, or an `error: ...` string.
+        row_count: Rows returned, or `None` when the query did not run to completion.
+        truncated: Whether the row cap cut the result, or `None` when it did not complete.
+        reason_code: Why the call did not complete (`write_clause`, `graph_unseeded` or
+            `query_failed`), or `None` when it succeeded. Never exception or query text.
+    """
+
+    response: dict[str, object] | str
+    row_count: int | None
+    truncated: bool | None
+    reason_code: QueryCypherReasonCode | None
+
+
+def run_cypher_for_tool(
+    query: str,
+    *,
+    graph: GraphHandle,
+    emitter: LogEmitter | None = None,
+    principal: str | None = None,
+    timeout_ms: int,
+    row_cap: int,
+) -> CypherCallOutcome:
+    """Run one read-only Cypher `query` in-process and classify how the call ended.
+
+    The shared core of `handle_mcp_tool_call` and the `cypher` tool: the tool needs the outcome
+    class for its audit row, while `handle_mcp_tool_call` returns only the response. This function
+    writes no audit row and neither inspects nor rewrites `query`; Query Engine owns the
+    write-clause guard.
+
+    Args:
+        query: Cypher text to execute; it must be read-only.
+        graph: Handle of the graph to query.
+        emitter: Log emitter forwarded to Query Engine; `None` leaves the choice to Query Engine.
+        principal: Opaque caller identity recorded on the `query_engine` log entry; omitted when
+            `None`.
+        timeout_ms: Server-side execution bound in milliseconds, forwarded unchanged.
+        row_cap: Maximum number of rows returned, forwarded unchanged.
+
+    Returns:
+        A `CypherCallOutcome`. On success `response` is `{"columns", "rows", "row_count",
+        "truncated"}`; otherwise it is the `error: <message>` string, verbatim from Query Engine.
+
+    Raises:
+        LoggingLifecycleError: No log emitter is available (none given and no process default).
+
+    Side Effects:
+        Binds a run context for the call's duration. Query Engine emits one log entry carrying the
+        run id and `principal`. Nothing is written to the graph or the audit trail.
+    """
+    with bind_run_context():
+        try:
+            result: QueryResult = execute_cypher_query(
+                query,
+                graph=graph,
+                emitter=emitter,
+                principal=principal,
+                timeout_ms=timeout_ms,
+                row_cap=row_cap,
+            )
+        except WriteClauseRejectedError as exc:
+            return CypherCallOutcome(f"error: {exc}", None, None, "write_clause")
+        except GraphUnseededError as exc:
+            return CypherCallOutcome(f"error: {exc}", None, None, "graph_unseeded")
+        except QueryEngineExecutionError as exc:
+            return CypherCallOutcome(f"error: {exc}", None, None, "query_failed")
+    response: dict[str, object] = {
+        "columns": result.columns,
+        "rows": result.rows,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+    }
+    return CypherCallOutcome(response, result.row_count, result.truncated, None)
+
 
 def handle_mcp_tool_call(
     query: str,
@@ -406,24 +513,14 @@ def handle_mcp_tool_call(
         Binds a run context for the call's duration. Query Engine emits one log entry carrying the
         run id and `principal`. Nothing is written to the graph.
     """
-    with bind_run_context():
-        try:
-            result: QueryResult = execute_cypher_query(
-                query,
-                graph=graph,
-                emitter=emitter,
-                principal=principal,
-                timeout_ms=timeout_ms,
-                row_cap=row_cap,
-            )
-        except (WriteClauseRejectedError, QueryEngineExecutionError, GraphUnseededError) as exc:
-            return f"error: {exc}"
-    return {
-        "columns": result.columns,
-        "rows": result.rows,
-        "row_count": result.row_count,
-        "truncated": result.truncated,
-    }
+    return run_cypher_for_tool(
+        query,
+        graph=graph,
+        emitter=emitter,
+        principal=principal,
+        timeout_ms=timeout_ms,
+        row_cap=row_cap,
+    ).response
 
 
 def _resolve_graph(config: ServiceConfig) -> GraphHandle:
@@ -510,7 +607,7 @@ _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
 # unreachable in practice (`ps_service.main.create_app` fails closed at startup whenever no real
 # authentication is configured and the bypass is off, the invariant `_resolve_principal`
 # documents), but it keeps the gate fail-closed rather than passing `None` through to
-# `require_role` should that invariant ever be violated.
+# the role gate should that invariant ever be violated.
 _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: this action requires a real authenticated caller"
 )
@@ -540,6 +637,23 @@ def _resolve_authz_actor(config: ServiceConfig) -> tuple[str, str] | None:
     if not isinstance(iss, str):
         return None
     return access_token.subject, iss
+
+
+def _gated_actor(config: ServiceConfig) -> tuple[str, str]:
+    """Return the verified `(sub, iss)` of a caller the tool's role gate has already admitted.
+
+    Only for a tool declared as a `ROLE` gate that refuses the local-test bypass: the gate wrapper
+    has already turned a missing identity into the unauthenticated message, so none is missing here.
+
+    Args:
+        config: Passed to `_resolve_authz_actor`.
+
+    Returns:
+        The verified `(sub, iss)` pair.
+    """
+    actor = _resolve_authz_actor(config)
+    assert actor is not None  # noqa: S101  # the gate wrapper has already refused a caller with no identity
+    return actor
 
 
 def _resolve_policy_lifecycle_actor(config: ServiceConfig) -> tuple[str, str] | None:
@@ -632,38 +746,59 @@ _CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: graph cleanup requires a real authenticated caller"
 )
 
-
-def _require_cleanup_actor(config: ServiceConfig) -> tuple[str, str] | str:
-    """Gate a graph-cleanup tool on an explicit `ComplianceOfficer` grant.
-
-    Fail-closed by design: unlike `restore_instrument`, the local-test bypass does not skip this
-    check. No verified bearer token means no actor, which means rejection, because graph cleanup is
-    a privileged, accountable edit that a synthetic identity must never hold. `require_role` matches
-    `ComplianceOfficer` exactly, so SystemAdmin and SystemOwner get no override, and an
-    authorization-store outage denies rather than allows.
-
-    Args:
-        config: Service configuration; selects the access-role store and its audit store.
-
-    Returns:
-        The verified `(sub, iss)` of the permitted caller, or an `error: ` string (no authenticated
-        caller, role missing, or authorization store unavailable) that the tool returns as is.
-
-    Side Effects:
-        Reads the caller's active roles from the access-role store.
-    """
-    actor = _resolve_authz_actor(config)
-    if actor is None:
-        return _CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-    try:
-        require_role(
-            actor,
-            minimum=AccessRole.COMPLIANCE_OFFICER,
-            store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-        )
-    except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-        return f"error: {exc}"
-    return actor
+_SYSTEM_ADMIN_GATE = ToolGate(
+    kind=GateKind.ROLE,
+    role=AccessRole.SYSTEM_ADMIN,
+    bypass=BypassPolicy.SKIP,
+    unauthenticated_message=_CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE,
+)
+_ACCESS_ROLE_MANAGEMENT_GATE = ToolGate(
+    kind=GateKind.ROLE,
+    role=AccessRole.SYSTEM_ADMIN,
+    bypass=BypassPolicy.REFUSE,
+    unauthenticated_message=_ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE,
+)
+_CLEANUP_GATE = ToolGate(
+    kind=GateKind.ROLE,
+    role=AccessRole.COMPLIANCE_OFFICER,
+    bypass=BypassPolicy.REFUSE,
+    unauthenticated_message=_CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE,
+)
+_NEAR_MISS_MERGE_GATE = ToolGate(
+    kind=GateKind.BODY,
+    role=AccessRole.COMPLIANCE_OFFICER,
+    bypass=BypassPolicy.REFUSE,
+    unauthenticated_message=_CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE,
+)
+_COMPLIANCE_OFFICER_GATE = ToolGate(
+    kind=GateKind.ROLE,
+    role=AccessRole.COMPLIANCE_OFFICER,
+    bypass=BypassPolicy.SKIP,
+    unauthenticated_message=_CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE,
+)
+_PLAIN_READ_GATE = ToolGate(
+    kind=GateKind.AUTHENTICATED_ONLY,
+    reason="a plain read of the graph or the curated catalog; any authenticated caller",
+)
+_OWN_APPROVAL_READ_GATE = ToolGate(
+    kind=GateKind.AUTHENTICATED_ONLY,
+    reason="the tool reads only an approval the caller created; it needs a real session",
+)
+_ACCESS_ROLE_CHANGE_GATE = ToolGate(
+    kind=GateKind.SELF_AUDITED,
+    reason=(
+        "the per-role actor requirement is enforced in grant_role/revoke_role, which write the "
+        "access_role rejected row themselves"
+    ),
+)
+_POLICY_AUTHOR_GATE = ToolGate(
+    kind=GateKind.AUTHENTICATED_ONLY,
+    reason="any authenticated caller may create a draft or act on a Policy they own",
+)
+_POLICY_DRAFT_ACCESS_GATE = ToolGate(
+    kind=GateKind.AUTHENTICATED_ONLY,
+    reason="the Policy owner, SystemOwner or SystemAdmin; enforced in the lifecycle service",
+)
 
 
 def _run_mcp_action(
@@ -1057,7 +1192,7 @@ def _resolve_and_ingest(
     return _to_accepted_response(run_id, outcome).model_dump()
 
 
-@server.tool()
+@_gated_tool("ingest_regulation", _COMPLIANCE_OFFICER_GATE)
 def ingest_regulation(
     celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
     short_name: Annotated[str, Field(pattern=_SHORT_NAME_PATTERN)],
@@ -1102,23 +1237,15 @@ def ingest_regulation(
         row records the instrument id and the counts of new Obligations, new Capabilities and
         matched Capabilities, or an enumerated failure `reason_code`. An already-ingested CELEX is
         audited too.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if not config.is_local_test_bypass_active:
-            if actor is None:
-                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-            try:
-                require_role(
-                    actor,
-                    minimum=AccessRole.COMPLIANCE_OFFICER,
-                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-                )
-            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-                return f"error: {exc}"
         if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
             return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
         # `_run_mcp_action` always binds a run_id via `bind_run_context()` before
@@ -1134,41 +1261,6 @@ def ingest_regulation(
         )
 
     return _run_mcp_action("ingest_regulation", principal, _body)
-
-
-def _require_compliance_officer_unless_bypass(
-    config: ServiceConfig, actor: tuple[str, str] | None
-) -> str | None:
-    """Gate a tool on the `ComplianceOfficer` role, unless the local-test bypass is active.
-
-    Applies the same checks, in the same order, as the inline gate in `ingest_regulation`'s body, so
-    every catalog-ingestion tool denies a caller identically.
-
-    Args:
-        config: Service configuration; selects the role store and the bypass state.
-        actor: Verified `(sub, iss)` of the caller, or `None` when none was bound.
-
-    Returns:
-        `None` when the caller may proceed (nothing is checked under the bypass), otherwise the
-        `error: ` string to hand back: no authenticated caller, role missing, or authorization store
-        unavailable.
-
-    Side Effects:
-        Reads the caller's active roles from the access-role store.
-    """
-    if config.is_local_test_bypass_active:
-        return None
-    if actor is None:
-        return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-    try:
-        require_role(
-            actor,
-            minimum=AccessRole.COMPLIANCE_OFFICER,
-            store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-        )
-    except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-        return f"error: {exc}"
-    return None
 
 
 _BACKGROUND_INGESTION_ACTION = "background_ingestion_run"
@@ -1380,7 +1472,7 @@ def _ingestion_run_status_response(run_id: str, row: IngestionRunRow | None) -> 
     ).model_dump()
 
 
-@server.tool()
+@_gated_tool("start_ingestion", _COMPLIANCE_OFFICER_GATE)
 def start_ingestion(
     celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
     short_name: Annotated[str, Field(pattern=_SHORT_NAME_PATTERN)],
@@ -1417,15 +1509,15 @@ def start_ingestion(
         Creates an ingestion-run record, reserves a run slot and starts a background thread. The
         thread then runs the pipeline exactly as `ingest_regulation` does (graph writes,
         `trigger='async_ingest'` audit rows) and records the run's terminal outcome.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        denied = _require_compliance_officer_unless_bypass(config, actor)
-        if denied is not None:
-            return denied
         if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
             return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
         prepared = _prepare_catalog_ingestion(celex, short_name, config=config)
@@ -1451,7 +1543,7 @@ def start_ingestion(
     return _run_mcp_action("start_ingestion", principal, _body)
 
 
-@server.tool()
+@_gated_tool("get_ingestion_status", _COMPLIANCE_OFFICER_GATE)
 def get_ingestion_status(
     run_id: Annotated[str, Field(min_length=1, max_length=64)],
 ) -> dict[str, object] | str:
@@ -1479,15 +1571,14 @@ def get_ingestion_status(
         Read-only except for one idempotent repair: a run recorded as `running` that no worker in
         the service holds (its terminal write failed, or the process restarted) is marked `failed`
         as interrupted, with its completion audit row, so it is not reported `running` forever.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
-    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        denied = _require_compliance_officer_unless_bypass(config, actor)
-        if denied is not None:
-            return denied
         store = PsycopgIngestionRunStore(config, audit_store=PsycopgAuditStore(config))
         try:
             row = store.get_run(run_id)
@@ -1542,7 +1633,7 @@ def _run_audited_change_check(
     return _to_change_check_response(result).model_dump()
 
 
-@server.tool()
+@_gated_tool("check_regulations", _COMPLIANCE_OFFICER_GATE)
 def check_regulations() -> dict[str, object] | str:
     """Sweep every tracked regulation for detected amendments and re-ingest any found.
 
@@ -1572,23 +1663,15 @@ def check_regulations() -> dict[str, object] | str:
         from the merge result, or the failure `reason_code`), keyed by the re-ingest's own run id
         (the `reingest_run_id` in the result) and attributed to the caller. Read them with
         `list-audit-events`.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if not config.is_local_test_bypass_active:
-            if actor is None:
-                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-            try:
-                require_role(
-                    actor,
-                    minimum=AccessRole.COMPLIANCE_OFFICER,
-                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-                )
-            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-                return f"error: {exc}"
         if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
             return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
         # `_run_mcp_action` always binds a run_id via `bind_run_context()` before
@@ -1600,7 +1683,7 @@ def check_regulations() -> dict[str, object] | str:
     return _run_mcp_action("check_regulations", principal, _body)
 
 
-@server.tool()
+@_gated_tool("near_misses_list", _PLAIN_READ_GATE)
 def near_misses_list() -> dict[str, object] | str:
     """List every unresolved near-miss pending review.
 
@@ -1665,7 +1748,7 @@ def _resolve_merge_pending_approval(
         Inserts one pending-approval row on success. The merge itself runs only after a human signs.
         Nothing is written to the graph.
     """
-    actor = _require_cleanup_actor(config)
+    actor = run_body_gate(_gate_environment, "near_misses_resolve")
     if isinstance(actor, str):
         return actor
     try:
@@ -1702,7 +1785,7 @@ def _resolve_merge_pending_approval(
 _MERGE_ONLY_RESOLVE_FIELDS = {"preview", "acknowledgment_required", "message"}
 
 
-@server.tool()
+@_gated_tool("near_misses_resolve", _NEAR_MISS_MERGE_GATE)
 def near_misses_resolve(
     review_id: Annotated[str, Field(min_length=1)],
     decision: Literal["keep-separate", "merge"],
@@ -1765,6 +1848,9 @@ def near_misses_resolve(
         `keep-separate` writes a `near_miss.resolve` audit row, then deletes the `PendingReview`
         record. `merge` inserts one pending-approval record and writes nothing to the graph; the
         merge is audited when its approval is signed.
+        A `merge` caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1797,7 +1883,7 @@ def near_misses_resolve(
     return _run_mcp_action("near_misses_resolve", principal, _body)
 
 
-@server.tool()
+@_gated_tool("near_misses_check_approval", _OWN_APPROVAL_READ_GATE)
 def near_misses_check_approval(
     pending_approval_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
@@ -1878,7 +1964,7 @@ _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE = (
 )
 
 
-@server.tool(name="set-catalog-source")
+@_gated_tool("set-catalog-source", _SYSTEM_ADMIN_GATE)
 def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
     """Override the curated-content source used for catalog listings and artifact fetches.
 
@@ -1905,23 +1991,15 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
     Side Effects:
         Persists `url` as the override in the PS state database and writes one audit event for the
         change in the same transaction.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if not config.is_local_test_bypass_active:
-            if actor is None:
-                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-            try:
-                require_role(
-                    actor,
-                    minimum=AccessRole.SYSTEM_ADMIN,
-                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-                )
-            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-                return f"error: {exc}"
         audit = _audit_context(config, actor)
         if isinstance(audit, str):
             return audit
@@ -1943,7 +2021,7 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
     return _run_mcp_action("set_catalog_source", principal, _body)
 
 
-@server.tool(name="reset-catalog-source")
+@_gated_tool("reset-catalog-source", _SYSTEM_ADMIN_GATE)
 def reset_catalog_source() -> dict[str, object] | str:
     """Clear the persisted curated-content source override.
 
@@ -1964,23 +2042,15 @@ def reset_catalog_source() -> dict[str, object] | str:
     Side Effects:
         Deletes the persisted override from the PS state database, if any, and writes one audit
         event in the same transaction.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if not config.is_local_test_bypass_active:
-            if actor is None:
-                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-            try:
-                require_role(
-                    actor,
-                    minimum=AccessRole.SYSTEM_ADMIN,
-                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-                )
-            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-                return f"error: {exc}"
         audit = _audit_context(config, actor)
         if isinstance(audit, str):
             return audit
@@ -1996,7 +2066,7 @@ def reset_catalog_source() -> dict[str, object] | str:
     return _run_mcp_action("reset_catalog_source", principal, _body)
 
 
-@server.tool(name="get-catalog-source")
+@_gated_tool("get-catalog-source", _SYSTEM_ADMIN_GATE)
 def get_catalog_source() -> dict[str, object] | str:
     """Report the currently effective curated-content source.
 
@@ -2017,23 +2087,14 @@ def get_catalog_source() -> dict[str, object] | str:
 
     Side Effects:
         None; the call is read-only and logged.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
-    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if not config.is_local_test_bypass_active:
-            if actor is None:
-                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-            try:
-                require_role(
-                    actor,
-                    minimum=AccessRole.SYSTEM_ADMIN,
-                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-                )
-            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-                return f"error: {exc}"
         try:
             effective = resolve_effective_source(
                 config,
@@ -2082,7 +2143,7 @@ def _emit_invite_created_audit_entry(
         )
 
 
-@server.tool(name="invite-user")
+@_gated_tool("invite-user", _SYSTEM_ADMIN_GATE)
 def invite_user(
     email: Annotated[str, Field(min_length=3, pattern=_INVITE_EMAIL_PATTERN)],
 ) -> dict[str, object] | str:
@@ -2111,23 +2172,15 @@ def invite_user(
         Creates an invitation in Authentik. Writes a `user.invite` audit row before the call, and a
         follow-up row if the call fails. On success it also logs an `invitations` entry naming the
         invitee's email.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if not config.is_local_test_bypass_active:
-            if actor is None:
-                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-            try:
-                require_role(
-                    actor,
-                    minimum=AccessRole.SYSTEM_ADMIN,
-                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-                )
-            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-                return f"error: {exc}"
         audit = _audit_context(config, actor)
         if isinstance(audit, str):
             return audit
@@ -2143,7 +2196,7 @@ def invite_user(
     return _run_mcp_action("invite_user", principal, _body)
 
 
-@server.tool(name="get-catalog-listing")
+@_gated_tool("get-catalog-listing", _PLAIN_READ_GATE)
 def get_catalog_listing() -> dict[str, object] | str:
     """List every curated instrument, external and internal, in the curated-content source.
 
@@ -2194,7 +2247,7 @@ def get_catalog_listing() -> dict[str, object] | str:
     return _run_mcp_action("get_catalog_listing", principal, _body)
 
 
-@server.tool()
+@_gated_tool("restore_instrument", _COMPLIANCE_OFFICER_GATE)
 def restore_instrument(
     instrument_id: Annotated[
         str,
@@ -2246,6 +2299,9 @@ def restore_instrument(
         event before the restore starts and a terminal one afterwards. Writes the restored
         instrument,
         and any imported draft Policy owned by the caller, to the policy graph.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -2255,17 +2311,6 @@ def restore_instrument(
     owner = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if not config.is_local_test_bypass_active:
-            if actor is None:
-                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-            try:
-                require_role(
-                    actor,
-                    minimum=AccessRole.COMPLIANCE_OFFICER,
-                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-                )
-            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
-                return f"error: {exc}"
         request_body = CatalogRestorationRequest(instrument_id=instrument_id)
         dependencies: CatalogRestoreDependencies = _sanitize_restore_graph_opens(
             build_default_restore_from_catalog_dependencies()
@@ -2311,7 +2356,7 @@ _INGESTION_STATUS_QUERY = (
 )
 
 
-@server.tool()
+@_gated_tool("check_instrument_ingestion_status", _PLAIN_READ_GATE)
 def check_instrument_ingestion_status(
     celex_ids: Annotated[
         list[Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)]],
@@ -2379,7 +2424,56 @@ def check_instrument_ingestion_status(
     return _run_mcp_action("check_instrument_ingestion_status", principal, _body)
 
 
-@server.tool()
+def _record_cypher_call(
+    config: ServiceConfig, actor: tuple[str, str] | None, outcome: CypherCallOutcome
+) -> None:
+    """Write the one `query.cypher` audit row of a `cypher` tool call; BEST-EFFORT.
+
+    The row records the verified caller (or the local-test-bypass sentinel), the outcome class and
+    the enumerated facts of `outcome`; never the query text or an error text. When no audit actor
+    can be resolved (no verified caller and the bypass is off) no row is written and one failed log
+    entry names the error class. A failed audit write is logged by `record_follow_up_row` and never
+    changes the tool's result.
+
+    Args:
+        config: Service configuration; selects the audit database and the bypass state.
+        actor: Verified `(sub, iss)` of the caller, or `None` when none is bound.
+        outcome: How the call ended.
+
+    Side Effects:
+        Inserts one `audit_events` row (`applied` when `reason_code` is `None`, `rejected` for a
+        write clause, `failed` otherwise).
+    """
+    audit = _audit_context(config, actor)
+    if isinstance(audit, str):
+        emit_log_entry(
+            component=_COMPONENT,
+            action="cypher_audit_skipped",
+            outcome="failed",
+            extra={"reason": AuditActorUnresolvedError.__name__},
+        )
+        return
+    reason_code = outcome.reason_code
+    details: dict[str, object] = (
+        {"row_count": outcome.row_count, "truncated": outcome.truncated}
+        if reason_code is None
+        else {"reason_code": reason_code}
+    )
+    audit_outcome: Literal["applied", "rejected", "failed"] = "failed"
+    if reason_code is None:
+        audit_outcome = "applied"
+    elif reason_code == "write_clause":
+        audit_outcome = "rejected"
+    record_follow_up_row(
+        audit,
+        AuditTarget(QUERY_CYPHER_ACTION, QUERY_RESOURCE_TYPE, QUERY_CYPHER_RESOURCE_ID),
+        component=_COMPONENT,
+        outcome=audit_outcome,
+        details=details,
+    )
+
+
+@_gated_tool("cypher", _PLAIN_READ_GATE)
 def cypher(query: str) -> dict[str, object] | str:
     """Run a read-only, MATCH/RETURN-shaped Cypher query against the policy_system graph.
 
@@ -2406,25 +2500,40 @@ def cypher(query: str) -> dict[str, object] | str:
         - The graph database cannot be reached.
 
     Side Effects:
-        One read-only graph query; nothing is written. The call is logged.
+        One read-only graph query; nothing is written to the graph. The call is logged, and one
+        `query.cypher` audit row records the outcome (applied, rejected or failed) with the row
+        count, the truncation flag and an enumerated reason code, never the query text. The audit
+        write is best-effort: a failure there is logged and does not change the result. No row is
+        written when the service configuration cannot be loaded.
     """
     try:
         config = load_config()
-        graph = _resolve_graph(config)
-    except McpGraphUnavailableError, ServiceConfigurationError:
+    except ServiceConfigurationError:
         emit_log_entry(component=_COMPONENT, action=_ACTION, outcome="unavailable")
         return _GRAPH_UNAVAILABLE_MESSAGE
-    principal = _resolve_principal(config)
-    return handle_mcp_tool_call(
+    actor = _resolve_authz_actor(config)
+    try:
+        graph = _resolve_graph(config)
+    except McpGraphUnavailableError:
+        emit_log_entry(component=_COMPONENT, action=_ACTION, outcome="unavailable")
+        _record_cypher_call(
+            config,
+            actor,
+            CypherCallOutcome(_GRAPH_UNAVAILABLE_MESSAGE, None, None, "graph_unavailable"),
+        )
+        return _GRAPH_UNAVAILABLE_MESSAGE
+    outcome = run_cypher_for_tool(
         query,
         graph=graph,
-        principal=principal,
+        principal=_resolve_principal(config),
         timeout_ms=config.query_timeout_ms,
         row_cap=config.query_row_cap,
     )
+    _record_cypher_call(config, actor, outcome)
+    return outcome.response
 
 
-@server.tool()
+@_gated_tool("domain_concepts", _PLAIN_READ_GATE)
 def domain_concepts() -> str:
     """Return the PS compliance-graph schema: node labels, properties and edges.
 
@@ -2521,7 +2630,7 @@ def _assignment_to_dict(row: AccessRoleAssignmentRow) -> dict[str, object]:
     }
 
 
-@server.tool(name="list-access-roles")
+@_gated_tool("list-access-roles", _ACCESS_ROLE_MANAGEMENT_GATE)
 def list_access_roles() -> dict[str, object] | str:
     """List every principal's current access-role assignments.
 
@@ -2546,18 +2655,19 @@ def list_access_roles() -> dict[str, object] | str:
     Side Effects:
         Reads the authorization store. The first-ever call also writes the bootstrap assignments and
         their audit events. The call is logged.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
-    actor = _resolve_authz_actor(config)
+    actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if actor is None:
-            return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
             result = list_assignments(actor, store=store)
-        except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+        except AuthorizationStoreUnavailableError as exc:
             return f"error: {exc}"
         return {
             "assignments": [_assignment_to_dict(row) for row in result.assignments],
@@ -2576,7 +2686,7 @@ _GRANT_REVOKE_ERRORS = (
 )
 
 
-@server.tool(name="grant-access-role")
+@_gated_tool("grant-access-role", _ACCESS_ROLE_CHANGE_GATE)
 def grant_access_role(
     principal_subject: Annotated[str, Field(min_length=1)],
     access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"],
@@ -2640,7 +2750,7 @@ def grant_access_role(
     return _run_mcp_action("grant_access_role", principal, _body)
 
 
-@server.tool(name="revoke-access-role")
+@_gated_tool("revoke-access-role", _ACCESS_ROLE_CHANGE_GATE)
 def revoke_access_role(
     principal_subject: Annotated[str, Field(min_length=1)],
     access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"],
@@ -2732,13 +2842,12 @@ def _audit_event_to_dict(row: AuditEventRow) -> dict[str, object]:
 
 
 _LIST_AUDIT_EVENTS_ERRORS = (
-    AccessDeniedError,
     InvalidAuditQueryFilterError,
     AuthorizationStoreUnavailableError,
 )
 
 
-@server.tool(name="list-audit-events")
+@_gated_tool("list-audit-events", _ACCESS_ROLE_MANAGEMENT_GATE)
 def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an independent, optional query filter; collapsing them into one payload object would just move the same count behind a wrapper
     actor_subject: Annotated[str, Field(min_length=1)] | None = None,
     actor_issuer: Annotated[str, Field(min_length=1)] | None = None,
@@ -2757,13 +2866,19 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
     roster it partly documents, and a real authenticated session; the local-test bypass does not
     provide one. Every parameter is optional and filters combine.
 
+    The trail includes the denials of role-gated operations (`access.gate`, resource type
+    `operation`, the operation name as the resource id), passkey enrolments (`passkey.enroll`,
+    resource type `pending_approval`) and `cypher` tool use (`query.cypher`, resource type
+    `query`), next to the access-role, policy, ingestion, restore and other business rows. It does
+    not hold authentication outcomes or rejected passkey steps.
+
     Args:
         actor_subject: Narrow to events by this actor subject; at least 1 character.
         actor_issuer: Narrow to events by this actor issuer; at least 1 character.
         resource_type: Narrow to this kind of acted-on resource; at least 1 character.
         resource_id: Narrow to this acted-on resource id; at least 1 character.
-        action: Narrow to this namespaced action string, for example `access_role.grant`; at least 1
-            character.
+        action: Narrow to this namespaced action string, for example `access_role.grant`,
+            `access.gate`, `passkey.enroll` or `query.cypher`; at least 1 character.
         occurred_from: Only events at or after this ISO 8601 time.
         occurred_to: Only events at or before this ISO 8601 time.
         cursor: The `next_cursor` of a previous call, to fetch the following page; at least 1
@@ -2789,14 +2904,15 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
 
     Side Effects:
         Reads the audit trail; nothing is written. The call is logged.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
-    actor = _resolve_authz_actor(config)
+    actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if actor is None:
-            return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         audit_store = PsycopgAuditStore(config)
         filters = AuditQueryFilters(
@@ -2828,7 +2944,7 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
     return _run_mcp_action("list_audit_events", principal, _body)
 
 
-_VERIFY_AUDIT_LOG_ERRORS = (AccessDeniedError, AuthorizationStoreUnavailableError)
+_VERIFY_AUDIT_LOG_ERRORS = (AuthorizationStoreUnavailableError,)
 
 
 def _chain_break_to_dict(verification: AuditChainVerification) -> dict[str, object] | None:
@@ -2852,7 +2968,7 @@ def _chain_break_to_dict(verification: AuditChainVerification) -> dict[str, obje
     }
 
 
-@server.tool(name="verify-audit-log")
+@_gated_tool("verify-audit-log", _ACCESS_ROLE_MANAGEMENT_GATE)
 def verify_audit_log() -> dict[str, object] | str:
     """Check that the shared audit trail has not been altered, deleted from or truncated.
 
@@ -2881,14 +2997,15 @@ def verify_audit_log() -> dict[str, object] | str:
         Reads the audit trail; nothing is written. The call is logged. The check is
         tamper-evident, not tamper-proof: a database superuser who rewrites the whole chain and
         its head consistently is not detected.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
-    actor = _resolve_authz_actor(config)
+    actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if actor is None:
-            return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         audit_store = PsycopgAuditStore(config)
         try:
@@ -2909,6 +3026,17 @@ def verify_audit_log() -> dict[str, object] | str:
 
 _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: this action requires a real authenticated caller (the local-test bypass counts as one)"
+)
+
+# `approve-policy` / `reject-policy` keep their check order (the Policy is read first, so an unknown
+# id is reported before an access denial), so the role gate is a body gate: the policy-lifecycle
+# service calls the enforcer the tool hands it, at the existing position. Under the bypass the role
+# is checked for the lifecycle fallback identity and the audit row names the bypass sentinel.
+_POLICY_TRANSITION_GATE = ToolGate(
+    kind=GateKind.BODY,
+    role=AccessRole.POLICY_MANAGER,
+    bypass=BypassPolicy.LIFECYCLE_IDENTITY,
+    unauthenticated_message=_POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE,
 )
 
 
@@ -3087,7 +3215,7 @@ def _parse_policy_draft_standards(
     )
 
 
-@server.tool(name="create-policy-draft")
+@_gated_tool("create-policy-draft", _POLICY_AUTHOR_GATE)
 def create_policy_draft(
     title: Annotated[str, Field(min_length=1)],
     standards: list[dict[str, object]] | None = None,
@@ -3213,7 +3341,7 @@ _UPDATE_POLICY_DRAFT_ERRORS = (
 )
 
 
-@server.tool(name="update-policy-draft")
+@_gated_tool("update-policy-draft", _POLICY_DRAFT_ACCESS_GATE)
 def update_policy_draft(
     policy_id: Annotated[str, Field(min_length=1)],
     fields: dict[str, object] | None = None,
@@ -3295,7 +3423,7 @@ _ADD_STANDARD_TO_DRAFT_ERRORS = (
 )
 
 
-@server.tool(name="add-standard-to-draft")
+@_gated_tool("add-standard-to-draft", _POLICY_DRAFT_ACCESS_GATE)
 def add_standard_to_draft(
     policy_id: Annotated[str, Field(min_length=1)],
     title: Annotated[str, Field(min_length=1)],
@@ -3391,7 +3519,7 @@ _UPDATE_STANDARD_DRAFT_ERRORS = (
 )
 
 
-@server.tool(name="update-standard-draft")
+@_gated_tool("update-standard-draft", _POLICY_DRAFT_ACCESS_GATE)
 def update_standard_draft(
     standard_id: Annotated[str, Field(min_length=1)],
     fields: dict[str, object] | None = None,
@@ -3490,7 +3618,7 @@ _ADD_CONTROL_TO_DRAFT_ERRORS = (
 _ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS = _CONTROL_PATCHABLE_FIELDS - {"type"}
 
 
-@server.tool(name="add-control-to-draft")
+@_gated_tool("add-control-to-draft", _POLICY_DRAFT_ACCESS_GATE)
 def add_control_to_draft(
     standard_id: Annotated[str, Field(min_length=1)],
     title: Annotated[str, Field(min_length=1)],
@@ -3598,7 +3726,7 @@ _UPDATE_CONTROL_DRAFT_ERRORS = (
 )
 
 
-@server.tool(name="update-control-draft")
+@_gated_tool("update-control-draft", _POLICY_DRAFT_ACCESS_GATE)
 def update_control_draft(
     control_id: Annotated[str, Field(min_length=1)],
     fields: dict[str, object] | None = None,
@@ -3692,7 +3820,7 @@ _GET_POLICY_ERRORS = (
 )
 
 
-@server.tool(name="get-policy")
+@_gated_tool("get-policy", _POLICY_DRAFT_ACCESS_GATE)
 def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
     """Read one Policy together with its full Standard and Control tree.
 
@@ -3778,7 +3906,7 @@ _PROPOSE_POLICY_ERRORS = (
 )
 
 
-@server.tool(name="propose-policy")
+@_gated_tool("propose-policy", _POLICY_AUTHOR_GATE)
 def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
     """Move a draft Policy and its whole tree to `proposed`.
 
@@ -3851,7 +3979,7 @@ _APPROVE_POLICY_ERRORS = (
 )
 
 
-@server.tool(name="approve-policy")
+@_gated_tool("approve-policy", _POLICY_TRANSITION_GATE)
 def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
     """Move a proposed Policy and its whole tree to `approved`.
 
@@ -3892,6 +4020,9 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
         Changes the status of the whole tree (and of the superseded tree, when there is one) and
         moves
         Capability governance in one graph write, and records audit events.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3905,7 +4036,6 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
         audit_store = PsycopgAuditStore(config)
-        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
             # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -3914,7 +4044,7 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
                 policy_id=policy_id,
                 graph=graph,
                 audit_store=audit_store,
-                access_role_store=access_role_store,
+                enforce_policy_manager=lifecycle_role_enforcer(_gate_environment, "approve-policy"),
                 submitter=submitter,
             )
         except _APPROVE_POLICY_ERRORS as exc:
@@ -3942,7 +4072,7 @@ _REJECT_POLICY_ERRORS = (
 )
 
 
-@server.tool(name="reject-policy")
+@_gated_tool("reject-policy", _POLICY_TRANSITION_GATE)
 def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
     """Move a proposed Policy and its whole tree back to `draft`.
 
@@ -3972,6 +4102,9 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
     Side Effects:
         Changes the status of the Policy and every Standard and Control in its tree in one cascading
         graph write and records an audit event.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -3985,7 +4118,6 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
         audit_store = PsycopgAuditStore(config)
-        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
             # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -3994,7 +4126,7 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
                 policy_id=policy_id,
                 graph=graph,
                 audit_store=audit_store,
-                access_role_store=access_role_store,
+                enforce_policy_manager=lifecycle_role_enforcer(_gate_environment, "reject-policy"),
                 submitter=submitter,
             )
         except _REJECT_POLICY_ERRORS as exc:
@@ -4018,7 +4150,7 @@ _REVERT_POLICY_TO_DRAFT_ERRORS = (
 )
 
 
-@server.tool(name="revert-policy-to-draft")
+@_gated_tool("revert-policy-to-draft", _POLICY_AUTHOR_GATE)
 def revert_policy_to_draft(
     policy_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
@@ -4082,7 +4214,7 @@ def revert_policy_to_draft(
     return _run_mcp_action("revert_policy_to_draft", principal, _body)
 
 
-@server.tool(name="find-capability-merge-candidates")
+@_gated_tool("find-capability-merge-candidates", _CLEANUP_GATE)
 def find_capability_merge_candidates_tool(
     min_similarity: Annotated[float | None, Field(gt=0.5, le=1.0)] = None,
 ) -> dict[str, object] | str:
@@ -4121,14 +4253,14 @@ def find_capability_merge_candidates_tool(
 
     Side Effects:
         Reads the policy graph and the authorization store; nothing is written. The call is logged.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
-        actor = _require_cleanup_actor(config)
-        if isinstance(actor, str):
-            return actor
         dependencies = build_default_graph_cleanup_dependencies()
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
@@ -4147,7 +4279,7 @@ def find_capability_merge_candidates_tool(
     return _run_mcp_action("find_capability_merge_candidates", principal, _body)
 
 
-@server.tool(name="find-duplicate-obligations")
+@_gated_tool("find-duplicate-obligations", _CLEANUP_GATE)
 def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, object] | str:
     """List groups of duplicate Obligations under one Role, as a read-only graph cleanup aid.
 
@@ -4176,14 +4308,14 @@ def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, obj
 
     Side Effects:
         Reads the policy graph and the authorization store; nothing is written. The call is logged.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
-        actor = _require_cleanup_actor(config)
-        if isinstance(actor, str):
-            return actor
         dependencies = build_default_graph_cleanup_dependencies()
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
@@ -4197,7 +4329,7 @@ def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, obj
     return _run_mcp_action("find_duplicate_obligations", principal, _body)
 
 
-@server.tool(name="merge-capabilities")
+@_gated_tool("merge-capabilities", _CLEANUP_GATE)
 def merge_capabilities_tool(
     survivor_id: Annotated[str, Field(min_length=1)],
     absorbed_id: Annotated[str, Field(min_length=1)],
@@ -4270,14 +4402,15 @@ def merge_capabilities_tool(
     Side Effects:
         Reads the policy graph and creates one pending approval row with an expiry and writes one
         log entry; the graph is not changed.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
-        actor = _require_cleanup_actor(config)
-        if isinstance(actor, str):
-            return actor
+        actor = _gated_actor(config)
         dependencies = build_default_graph_cleanup_dependencies()
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
@@ -4310,7 +4443,7 @@ def merge_capabilities_tool(
     return _run_mcp_action("merge_capabilities", principal, _body)
 
 
-@server.tool(name="merge-obligations")
+@_gated_tool("merge-obligations", _CLEANUP_GATE)
 def merge_obligations_tool(
     survivor_id: Annotated[str, Field(min_length=1)],
     absorbed_id: Annotated[str, Field(min_length=1)],
@@ -4359,14 +4492,15 @@ def merge_obligations_tool(
     Side Effects:
         Reads the policy graph and creates one pending approval row with an expiry and writes one
         log entry; the graph is not changed.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
-        actor = _require_cleanup_actor(config)
-        if isinstance(actor, str):
-            return actor
+        actor = _gated_actor(config)
         dependencies = build_default_graph_cleanup_dependencies()
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
@@ -4392,7 +4526,7 @@ def merge_obligations_tool(
     return _run_mcp_action("merge_obligations", principal, _body)
 
 
-@server.tool(name="release-capability-governance")
+@_gated_tool("release-capability-governance", _CLEANUP_GATE)
 def release_capability_governance_tool(
     capability_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
@@ -4442,14 +4576,15 @@ def release_capability_governance_tool(
     Side Effects:
         Reads the policy graph and creates one pending approval row with an expiry and writes one
         log entry; the graph is not changed.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
-        actor = _require_cleanup_actor(config)
-        if isinstance(actor, str):
-            return actor
+        actor = _gated_actor(config)
         dependencies = build_default_graph_cleanup_dependencies()
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
@@ -4477,7 +4612,7 @@ def release_capability_governance_tool(
 _AUDIT_UNREADABLE_MESSAGE = "error: the audit trail could not be read right now; try again shortly"
 
 
-@server.tool(name="unmerge")
+@_gated_tool("unmerge", _CLEANUP_GATE)
 def unmerge_tool(
     merged_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
@@ -4547,14 +4682,15 @@ def unmerge_tool(
         Reads the audit trail and the policy graph and creates one pending approval row with an
         expiry;
         the graph is not changed.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
-        actor = _require_cleanup_actor(config)
-        if isinstance(actor, str):
-            return actor
+        actor = _gated_actor(config)
         dependencies = build_default_graph_cleanup_dependencies()
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
@@ -4587,7 +4723,7 @@ _CLEANUP_APPROVAL_UNSETTLED_MESSAGE = (
 )
 
 
-@server.tool(name="check-cleanup-approval")
+@_gated_tool("check-cleanup-approval", _CLEANUP_GATE)
 def check_cleanup_approval_tool(
     pending_approval_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
@@ -4633,14 +4769,15 @@ def check_cleanup_approval_tool(
         than five minutes past its expiry, and settled: if the edit is present the outcome becomes
         `reconciled`; if not, a `failed` audit row is written and the outcome becomes an error.
         Otherwise nothing is written.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
-        actor = _require_cleanup_actor(config)
-        if isinstance(actor, str):
-            return actor
+        actor = _gated_actor(config)
         try:
             status = check_cleanup_approval(
                 pending_approval_id=pending_approval_id,

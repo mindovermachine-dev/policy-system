@@ -23,6 +23,7 @@ from policy_lifecycle._gateway_fakes import (
     PolicyReadGraph,
     SeedControl,
     SeedStandard,
+    policy_manager_enforcer,
 )
 from ps_service.authz.models import AccessRole
 from ps_service.graph_gateway.errors import GraphLogPersistenceError, GraphWriteRejectedError
@@ -271,7 +272,7 @@ def _transition(action: str) -> Callable[[LifecycleRig], object]:
                 policy_id="pol_x",
                 graph=rig.read,
                 audit_store=rig.audit,
-                access_role_store=_roles(),
+                enforce_policy_manager=policy_manager_enforcer(_roles()),
                 submitter=rig.gateway,
             )
         return approve_policy(
@@ -279,7 +280,7 @@ def _transition(action: str) -> Callable[[LifecycleRig], object]:
             policy_id="pol_x",
             graph=rig.read,
             audit_store=rig.audit,
-            access_role_store=_roles(),
+            enforce_policy_manager=policy_manager_enforcer(_roles()),
             submitter=rig.gateway,
         )
 

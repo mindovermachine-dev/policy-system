@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package (has `__init__.py`); this cross-package import mirrors `test_near_miss_tools.py`'s own `from api.test_routes_near_misses import ...` convention
     FakeAccessRoleStore,
     FakeAuditStore,
@@ -730,6 +731,52 @@ def test_revoke_of_system_owner_by_a_non_owner_non_admin_actor_is_denied(
     assert AccessRole.SYSTEM_OWNER in store.active_roles_for((_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
 
 
+def _denied_role_change_rig(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[FakeAccessRoleStore, InMemoryAuditStore]:
+    """A store where the third caller holds only `PolicyManager`, plus the shared audit store."""
+    configure()
+    monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+    audit = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(audit))
+    with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
+        _call_list_access_roles()  # bootstraps FIRST_CALLER as SystemOwner
+        _call_grant_access_role(_THIRD_CALLER_SUBJECT, "PolicyManager")
+    return store, audit
+
+
+def test_grant_denial_writes_only_the_access_role_rejected_row_and_no_access_gate_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, audit = _denied_role_change_rig(monkeypatch)
+
+    with _verified_actor(sub=_THIRD_CALLER_SUBJECT):
+        result = _call_grant_access_role(_SECOND_CALLER_SUBJECT, "ComplianceOfficer")
+
+    assert _text(result) == "error: You do not have the required access role for this action."
+    assert [(r.action, r.reason_code) for r in store.rejected_records] == [
+        ("grant", "access_denied")
+    ]
+    assert all(row.action != "access.gate" for row in audit.rows)
+
+
+def test_revoke_denial_writes_only_the_access_role_rejected_row_and_no_access_gate_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, audit = _denied_role_change_rig(monkeypatch)
+
+    with _verified_actor(sub=_THIRD_CALLER_SUBJECT):
+        result = _call_revoke_access_role(_FIRST_CALLER_SUBJECT, "SystemOwner")
+
+    assert _text(result) == "error: You do not have the required access role for this action."
+    assert [(r.action, r.reason_code) for r in store.rejected_records] == [
+        ("revoke", "access_denied")
+    ]
+    assert all(row.action != "access.gate" for row in audit.rows)
+
+
 # --- list-audit-events --------------------------------
 
 
@@ -774,6 +821,7 @@ def test_list_audit_events_denies_a_caller_without_system_admin_or_above(
     assert result.is_error is False
     assert _text(result) == "error: You do not have the required access role for this action."
     assert audit_store.query_calls == []
+    assert audit_store.standalone_actions == ["access.gate"]
 
 
 def test_list_audit_events_returns_events_to_a_system_owner_caller(

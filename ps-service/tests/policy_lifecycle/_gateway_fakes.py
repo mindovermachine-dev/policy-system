@@ -19,12 +19,15 @@ from typing import TYPE_CHECKING, cast
 from audit._fakes import InMemoryAuditStore
 from graph_gateway._fakes import FakeQueryResult, GatewayRig, InMemoryGraph
 
+from ps_service.authz.models import AccessRole
+from ps_service.authz.service import check_role
 from ps_service.graph_gateway.models import MutationGroup, UpsertNode
 from ps_service.policy_lifecycle import audit_actions
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from ps_service.authz.store import AccessRoleStore
     from ps_service.graph_gateway.edge_identity_backfill import EdgeIdentityBackfillOutcome
     from ps_service.graph_gateway.graph_reader import PersistedElements
     from ps_service.graph_gateway.models import GroupOutcome
@@ -560,3 +563,14 @@ class LifecycleRig(GatewayRig, PolicyGraphSeeder):
     def logged_groups(self) -> int:
         """How many groups the log holds for `policy_system`."""
         return len([g for g in self.store.groups if g.graph == POLICY_SYSTEM])
+
+
+def policy_manager_enforcer(store: AccessRoleStore) -> Callable[[tuple[str, str]], None]:
+    """A service-direct `enforce_policy_manager`: a pure role check over `store`, no audit row.
+
+    Production hands the service the request gate through the MCP tool; a test that calls
+    `approve_policy` / `reject_policy` directly supplies this pure check instead.
+    """
+    return lambda actor: check_role(
+        actor, minimum=AccessRole.POLICY_MANAGER, store=store
+    ).raise_if_denied()
