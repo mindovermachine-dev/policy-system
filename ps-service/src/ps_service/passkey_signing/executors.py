@@ -4,8 +4,8 @@ A signed approval runs the executor registered for its `tool_name` (the `sign/ve
 it after consuming the signature). The component that owns a privileged action registers its
 executor at import time, the same "module import triggers registration" idiom as
 `ps_service.audit.models.register_audit_action`, so this package never imports the components
-that use it. The `near_misses_resolve` tool is the exception: it runs inside the router because
-it needs the REST layer's injected near-miss dependencies. Every other tool name dispatches here.
+that use it. Every privileged tool dispatches here, a near-miss Capability merge
+(`merge-capabilities`) included; a tool name with no executor cannot be signed.
 
 An effect verifier answers "did this approval's edit actually reach the graph?" for a signed
 approval whose outcome was never recorded (a crash between the graph write and the outcome
@@ -49,8 +49,7 @@ def register_approval_executor(tool_name: str, executor: ApprovalExecutor) -> No
     """Register `executor` as the function a signed `tool_name` approval runs.
 
     Args:
-        tool_name: Name of the privileged tool; at most one executor per name. The router
-            never consults the registry for `near_misses_resolve`, which it runs itself.
+        tool_name: Name of the privileged tool; at most one executor per name.
         executor: Called with the signed approval row and the service configuration; returns
             the outcome dict stored on the row and returned to the approver.
 

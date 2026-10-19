@@ -14,10 +14,10 @@ is how these tests supply that verified identity -- a plain FastAPI
 dependency override, unlike the MCP side's `auth_context_var` contextvar
 trick (`test_near_miss_tools.py`), since `get_principal` is already designed
 to be overridden this way for every other authenticated-route test in this
-suite. `test_post_resolve_merge_returns_pending_approval_and_does_not_execute`
-covers the merge branch (it returns a pending approval, not winner/loser); a
-stale-reference scenario is an execution-time concern, since this route's
-merge branch never calls `resolve_review` (mirrors `test_near_miss_tools.py`).
+suite. `test_routes_near_miss_merge.py` covers the merge branch (it returns a
+pending approval, not winner/loser); a stale-reference scenario is an
+execution-time concern, since this route's merge branch never calls
+`resolve_review` (mirrors `test_near_miss_tools.py`).
 
 `_FakePendingApprovalStore` is a local, private copy of
 `tests/passkey_signing/_fakes.py`'s own `FakePendingApprovalStore` --
@@ -445,260 +445,18 @@ def test_post_resolve_rejects_unknown_decision_with_422() -> None:
     assert response.status_code == 422
 
 
-def test_post_resolve_merge_returns_pending_approval_and_does_not_execute() -> None:
-    """`decision="merge"` does not execute synchronously -- it
-    returns a pending-approval link, and the graph is left unchanged
-    (`resolve_review` is never called, proven via `recorded_calls`).
-    """
-    recorded_calls: list[tuple[str, str]] = []
-
-    def _resolve(
-        graph: GraphHandle,
-        review_id: str,
-        decision: Literal["keep-separate", "merge"],
-        target: GraphWriteTarget,
-    ) -> ResolveOutcome | None:
-        _ = graph
-        recorded_calls.append((review_id, decision))
-        return ResolveOutcome(
-            review_id=review_id,
-            decision=decision,
-            winner_id="capability_winner",
-            loser_id="capability_loser",
-        )
-
-    client = _client_for_resolve(_resolve, records=(_record("review_aaa"),), principal=_principal())
-
-    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "merge"})
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["review_id"] == "review_aaa"
-    assert body["decision"] == "merge"
-    assert body["winner_id"] is None
-    assert body["loser_id"] is None
-    assert body["pending_approval_id"]
-    assert body["approval_url"]
-    assert body["expires_at"]
-    assert recorded_calls == []
-
-
-def test_post_resolve_merge_unauthenticated_is_refused_with_401() -> None:
-    """Fail-closed rule: no real, verified `Principal` (the
-    local-test bypass alone establishes none) means no Postgres/FalkorDB
-    write at all -- 401, not a pending approval.
-    """
-    client = _client_for_resolve(_unexpected_resolve_review, records=(_record("review_aaa"),))
-
-    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "merge"})
-
-    assert response.status_code == 401
-    body = response.json()
-    assert body["error"]["code"] == "merge_approval_requires_authenticated_caller"
-
-
-def test_post_resolve_merge_unknown_id_returns_404_pending_review_not_found() -> None:
-    """A bad id surfaces as a clear 404 for merge too --
-    an early existence check, before any pending-approval row is created.
-    """
-    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal())
-
-    response = client.post("/near-misses/review_missing/resolve", json={"decision": "merge"})
-
-    assert response.status_code == 404
-    body = response.json()
-    assert body["error"]["code"] == "pending_review_not_found"
-    assert "review_missing" in body["error"]["message"]
-
-
-def test_post_resolve_merge_approval_url_carries_the_code_only_after_the_fragment() -> None:
-    """`approval_url` is
-    `{base_url}/approvals/{id}#{code}` -- the `id` portion (before `#`) is
-    exactly `pending_approval_id`, and the code sits only after `#`, never
-    itself equal to or containing the id.
+def test_post_resolve_keep_separate_needs_no_compliance_officer_role() -> None:
+    """Only the merge branch is role-gated. No access-role store is configured in this test, so
+    any role lookup on the keep-separate path would fail the request instead of resolving it.
     """
     client = _client_for_resolve(
-        _unexpected_resolve_review, records=(_record("review_aaa"),), principal=_principal()
+        _outcome_resolve, records=(_record("review_aaa"),), principal=_principal()
     )
 
-    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "merge"})
+    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
 
     assert response.status_code == 200
-    body = response.json()
-    approval_url = body["approval_url"]
-    assert "#" in approval_url
-    prefix, _, code = approval_url.partition("#")
-    assert code
-    assert prefix.endswith(f"/approvals/{body['pending_approval_id']}")
-    assert code != body["pending_approval_id"]
-
-
-def test_post_resolve_merge_approval_url_rewrites_a_loopback_ip_host_to_localhost() -> None:
-    """A browser refuses `navigator.credentials.create()` on a
-    `127.0.0.1` host (WebAuthn's `rp_id` must be a domain), so the link a
-    local bind hands out names `localhost` instead -- the same machine, in a
-    spelling that can actually be signed. The port is preserved.
-    """
-    client = _client_for_resolve(
-        _unexpected_resolve_review, records=(_record("review_aaa"),), principal=_principal()
-    )
-
-    response = client.post(
-        "/near-misses/review_aaa/resolve",
-        json={"decision": "merge"},
-        headers={"Host": "127.0.0.1:8000"},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["approval_url"].startswith("http://localhost:8000/approvals/")
-
-
-def test_post_resolve_merge_approval_url_rewrites_the_ipv6_loopback_literal_to_localhost() -> None:
-    """Bracketed-IPv6 half: `[::1]` is no more a domain than
-    `127.0.0.1` is, and its port survives the rewrite too.
-    """
-    client = _client_for_resolve(
-        _unexpected_resolve_review, records=(_record("review_aaa"),), principal=_principal()
-    )
-
-    response = client.post(
-        "/near-misses/review_aaa/resolve",
-        json={"decision": "merge"},
-        headers={"Host": "[::1]:8000"},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["approval_url"].startswith("http://localhost:8000/approvals/")
-
-
-def test_post_resolve_merge_approval_url_leaves_a_non_loopback_host_untouched() -> None:
-    """Only loopback literals are rewritten. A
-    `kind` NodePort or LAN address names a machine `localhost` would not
-    reach, so rewriting it would break a link that is merely unsignable --
-    the shell page explains that case instead.
-    """
-    client = _client_for_resolve(
-        _unexpected_resolve_review, records=(_record("review_aaa"),), principal=_principal()
-    )
-
-    response = client.post(
-        "/near-misses/review_aaa/resolve",
-        json={"decision": "merge"},
-        headers={"Host": "10.1.2.3:30080"},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["approval_url"].startswith("http://10.1.2.3:30080/approvals/")
-
-
-def test_get_approval_status_reports_pending_for_a_freshly_created_approval() -> None:
-    store = _FakePendingApprovalStore()
-    client = _client_for_resolve(
-        _unexpected_resolve_review,
-        records=(_record("review_aaa"),),
-        principal=_principal(),
-        store=store,
-    )
-
-    create_response = client.post("/near-misses/review_aaa/resolve", json={"decision": "merge"})
-    pending_approval_id = create_response.json()["pending_approval_id"]
-
-    status_response = client.get(f"/near-misses/approvals/{pending_approval_id}")
-
-    assert status_response.status_code == 200
-    body = status_response.json()
-    assert body["pending_approval_id"] == pending_approval_id
-    assert body["status"] == "pending"
-    assert body["review_id"] == "review_aaa"
-    assert body["decision"] == "merge"
-    assert body["winner_id"] is None
-    assert body["loser_id"] is None
-
-
-def test_get_approval_status_reports_the_recorded_error_for_a_failed_merge() -> None:
-    """A signed approval whose merge could not run stores
-    `{"error": ...}` as its outcome, and the status read reports it rather than only
-    `winner_id`/`loser_id`, which are null for three different situations --
-    merge crashed before recording anything, merge failed with a reason
-    recorded, merge genuinely produced nulls -- so neither a compliance
-    officer nor an operator could tell a failure from a success.
-    """
-    store = _FakePendingApprovalStore()
-    row, _code = store.create_pending_approval(
-        tool_name="near_misses_resolve",
-        normalized_args={"review_id": "review_aaa", "decision": "merge"},
-        actor_subject=_ACTOR_SUBJECT,
-        actor_issuer=_ACTOR_ISSUER,
-        display_summary={},
-    )
-    assert store.mark_signed(row.id)
-    store.set_outcome(row.id, {"error": "this action could not be completed"})
-    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal(), store=store)
-
-    response = client.get(f"/near-misses/approvals/{row.id}")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "signed"
-    assert body["winner_id"] is None
-    assert body["loser_id"] is None
-    assert body["error"] == "this action could not be completed"
-
-
-def test_get_approval_status_reports_no_error_for_a_successful_merge() -> None:
-    """`error` stays absent/null on the happy path, so
-    its presence is itself the failure signal.
-    """
-    store = _FakePendingApprovalStore()
-    row, _code = store.create_pending_approval(
-        tool_name="near_misses_resolve",
-        normalized_args={"review_id": "review_aaa", "decision": "merge"},
-        actor_subject=_ACTOR_SUBJECT,
-        actor_issuer=_ACTOR_ISSUER,
-        display_summary={},
-    )
-    assert store.mark_signed(row.id)
-    store.set_outcome(row.id, {"winner_id": "capability_winner", "loser_id": "capability_loser"})
-    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal(), store=store)
-
-    response = client.get(f"/near-misses/approvals/{row.id}")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["winner_id"] == "capability_winner"
-    assert body["error"] is None
-
-
-def test_get_approval_status_unauthenticated_gets_404() -> None:
-    """Fail-closed on the read side: a caller
-    with no real `Principal` can never see any pending approval -- the same
-    404 an unknown id gets.
-    """
-    store = _FakePendingApprovalStore()
-    row, _code = store.create_pending_approval(
-        tool_name="near_misses_resolve",
-        normalized_args={"review_id": "review_aaa", "decision": "merge"},
-        actor_subject=_ACTOR_SUBJECT,
-        actor_issuer=_ACTOR_ISSUER,
-        display_summary={},
-    )
-    client = _client_for_resolve(_unexpected_resolve_review, store=store)
-
-    response = client.get(f"/near-misses/approvals/{row.id}")
-
-    assert response.status_code == 404
-    body = response.json()
-    assert body["error"]["code"] == "pending_approval_not_found"
-
-
-def test_get_approval_status_unknown_id_returns_404() -> None:
-    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal())
-
-    response = client.get("/near-misses/approvals/does-not-exist")
-
-    assert response.status_code == 404
-    body = response.json()
-    assert body["error"]["code"] == "pending_approval_not_found"
+    assert response.json()["decision"] == "keep-separate"
 
 
 # --- keep-separate audits `near_miss.resolve` ---
@@ -770,18 +528,3 @@ def test_post_resolve_returns_503_when_audit_is_unavailable_and_graph_is_untouch
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "audit_trail_unavailable"
     assert resolve_calls == []
-
-
-def test_creating_a_merge_pending_approval_via_rest_writes_no_audit_row() -> None:
-    audit = InMemoryAuditStore()
-    client = _client_for_resolve(
-        _unexpected_resolve_review,
-        records=(_record("review_aaa"),),
-        principal=_principal(),
-        audit_store=audit,
-    )
-
-    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "merge"})
-
-    assert response.status_code == 200
-    assert audit.rows == []

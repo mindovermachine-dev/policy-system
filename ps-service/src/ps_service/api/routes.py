@@ -19,12 +19,14 @@ from ps_service.api.change_check_orchestration import (
     run_change_check_sweep,
 )
 from ps_service.api.dependencies import (
+    enforce_access_role,
     get_principal,
     get_service_config,
     provide_audit_context,
     provide_change_check_dependencies,
     provide_curated_catalog_dependencies,
     provide_export_dependencies,
+    provide_graph_cleanup_dependencies,
     provide_graph_write_gateway,
     provide_near_miss_review_dependencies,
     provide_pending_approval_store,
@@ -39,6 +41,7 @@ from ps_service.api.errors import (
     CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
     MergeApprovalRequiresAuthenticatedCallerError,
+    NearMissMergeRefusedError,
     PendingApprovalNotFoundError,
 )
 from ps_service.api.export_orchestration import ExportDependencies, run_export
@@ -68,7 +71,9 @@ from ps_service.api.models import (
 )
 from ps_service.api.near_miss_review_orchestration import (
     NearMissReviewDependencies,
+    check_near_miss_merge_approval,
     run_list_near_misses,
+    run_request_near_miss_merge,
     run_resolve_near_miss,
 )
 from ps_service.api.restore_orchestration import (
@@ -92,13 +97,19 @@ from ps_service.curated_source.catalog_client import (
     CuratedCatalogDependencies,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
 from ps_service.curated_source.errors import CuratedSourceFetchError
+from ps_service.graph_cleanup.dependencies import (
+    GraphCleanupDependencies,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
+)
+from ps_service.graph_cleanup.errors import (
+    GraphCleanupAcknowledgmentRequiredError,
+    GraphCleanupValidationError,
+)
 from ps_service.graph_gateway.system_audit import (
     SystemAuditRecorder,  # noqa: TC001 -- FastAPI resolves `create_ingestion`'s annotations at runtime
 )
 from ps_service.ingestion.graph_submission import (
     GroupSubmitter,  # noqa: TC001 -- FastAPI resolves `create_ingestion`'s annotations at runtime
 )
-from ps_service.passkey_signing.service import check_pending_approval, create_merge_pending_approval
 from ps_service.passkey_signing.store import (
     PendingApprovalStore,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
@@ -598,6 +609,56 @@ def _approval_base_url(request: Request) -> str:
     return f"{request.url.scheme}://{signable_link_host(request.url.netloc)}"
 
 
+def _request_merge(
+    review_id: str,
+    request_body: ResolveReviewRequest,
+    http_request: Request,
+    config: ServiceConfig,
+    dependencies: NearMissReviewDependencies,
+    store: PendingApprovalStore,
+    principal: Principal | None,
+) -> ResolveReviewResponse:
+    """Run the merge branch of `resolve_near_miss`: caller checks, then the cleanup approval.
+
+    The caller must be verified (401 otherwise, nothing written) and hold `ComplianceOfficer` (403),
+    the same rule as the MCP tool. The `ComplianceOfficer` check lives here and not in a route-level
+    dependency because `keep-separate` stays open to any caller.
+    """
+    if principal is None:
+        raise MergeApprovalRequiresAuthenticatedCallerError(
+            "a signed passkey approval requires a real authenticated caller"
+        )
+    enforce_access_role(principal, config, AccessRole.COMPLIANCE_OFFICER)
+    try:
+        approval = run_request_near_miss_merge(
+            review_id,
+            actor=(principal.sub, principal.iss),
+            acknowledge_governance_change=request_body.acknowledge_governance_change,
+            base_url=_approval_base_url(http_request),
+            config=config,
+            dependencies=dependencies,
+            store=store,
+        )
+    except GraphCleanupAcknowledgmentRequiredError as exc:
+        return ResolveReviewResponse(
+            review_id=review_id,
+            decision="merge",
+            preview=exc.preview,
+            acknowledgment_required=True,
+            message=str(exc),
+        )
+    except GraphCleanupValidationError as exc:
+        raise NearMissMergeRefusedError(str(exc)) from exc
+    return ResolveReviewResponse(
+        review_id=review_id,
+        decision="merge",
+        pending_approval_id=approval.pending_approval_id,
+        approval_url=approval.approval_url,
+        expires_at=approval.expires_at,
+        preview=approval.preview,
+    )
+
+
 async def resolve_near_miss(
     review_id: str,
     request_body: ResolveReviewRequest,
@@ -614,17 +675,28 @@ async def resolve_near_miss(
 
     ``POST /near-misses/{review_id}/resolve``.
 
-    ``decision="keep-separate"`` deletes only the review record, writing an audit row first.
+    ``decision="keep-separate"`` deletes only the review record, writing an audit row first. It is
+    open to any caller.
 
-    ``decision="merge"`` does not merge synchronously. It requires a verified caller and creates a
-    pending passkey approval. The merge itself runs only after that approval is signed, in a
-    separate step, and is audited then. The response carries ``pending_approval_id``,
-    ``approval_url`` and ``expires_at``; ``winner_id`` and ``loser_id`` stay empty. A caller with no
-    verified identity is refused before anything is written.
+    ``decision="merge"`` does not merge synchronously. It needs a verified caller who holds the
+    ``ComplianceOfficer`` role (no admin override), previews the merge and creates a pending passkey
+    approval: the graph-cleanup ``merge-capabilities`` approval, bound to the pair, the previewed
+    state and the review id. Signing it merges the two Capabilities in one audited graph write and
+    deletes the review. The survivor is the Capability with the earlier ``created_at``. The absorbed
+    one stays as a ``merged`` tombstone with one ``MERGED_INTO`` edge to the survivor, and its
+    ``REQUIRES``, ``COVERS`` and ``MITIGATED_BY`` edges move to the survivor. A Capability keeps at
+    most one governing Policy: when exactly one of the two is governed (``preview.policy_case``
+    2) the response carries ``acknowledgment_required`` and no approval until the request repeats
+    with ``acknowledge_governance_change=true``. Two Capabilities governed by different Policies are
+    refused (409) before any approval; release one with ``release-capability-governance`` first.
+    The response carries ``preview``, ``pending_approval_id``, ``approval_url`` and ``expires_at``;
+    ``winner_id`` and ``loser_id`` stay empty until ``GET /near-misses/approvals/{id}`` reports
+    them.
 
     Args:
         review_id: The review to resolve (path parameter).
-        request_body: The decision, ``"keep-separate"`` or ``"merge"``.
+        request_body: The decision, ``"keep-separate"`` or ``"merge"``, and for a merge the optional
+            ``acknowledge_governance_change``.
         http_request: The raw request; supplies the scheme and host for the approval link (merge
             only).
         config: The resolved service configuration (injected).
@@ -638,12 +710,20 @@ async def resolve_near_miss(
 
     Returns:
         A :class:`ResolveReviewResponse` naming the review and decision. For ``merge`` it also
-        carries the pending approval id, link and expiry.
+        carries the preview and either the pending approval id, link and expiry or
+        ``acknowledgment_required`` with its ``message``.
 
     Raises:
         MergeApprovalRequiresAuthenticatedCallerError: ``decision="merge"`` and no verified caller
             (401). Nothing is written.
-        PendingReviewNotFoundError: The review does not exist or was already resolved (404).
+        AccessDeniedError: ``decision="merge"`` and the caller does not hold ``ComplianceOfficer``
+            (403). Nothing is written.
+        AuthorizationStoreUnavailableError: ``decision="merge"`` and the access-role store cannot be
+            reached (503).
+        PendingReviewNotFoundError: The review does not exist or was already resolved, or its
+            Capabilities no longer exist (404).
+        NearMissMergeRefusedError: ``merge`` of a Policy review, or of two Capabilities governed by
+            different Policies (409). No approval was created.
         GraphWriteUnavailableError: ``keep-separate`` and the service has no Graph Write Gateway
             (503); nothing was audited or resolved.
         AuditTrailUnavailableError: ``keep-separate`` and the opening audit row could not be written
@@ -651,8 +731,8 @@ async def resolve_near_miss(
 
     Side Effects:
         ``keep-separate``: writes a ``near_miss.resolve`` audit row and deletes the review record
-        through the Graph Write Gateway. ``merge``: inserts one pending-approval row in the PS state
-        database; the graph and audit trail are unchanged.
+        through the Graph Write Gateway. ``merge``: reads the graph and inserts one pending-approval
+        row in the PS state database; the graph and audit trail are unchanged.
     """
     if request_body.decision == "keep-separate":
         return run_resolve_near_miss(
@@ -662,60 +742,59 @@ async def resolve_near_miss(
             dependencies=dependencies,
             audit=audit,
         )
-    if principal is None:
-        raise MergeApprovalRequiresAuthenticatedCallerError(
-            "a signed passkey approval requires a real authenticated caller"
-        )
-    approval = create_merge_pending_approval(
-        review_id=review_id,
-        actor=(principal.sub, principal.iss),
-        base_url=_approval_base_url(http_request),
-        config=config,
-        near_miss_dependencies=dependencies,
-        store=store,
-    )
-    return ResolveReviewResponse(
-        review_id=review_id,
-        decision="merge",
-        pending_approval_id=approval.pending_approval_id,
-        approval_url=approval.approval_url,
-        expires_at=approval.expires_at,
+    return _request_merge(
+        review_id, request_body, http_request, config, dependencies, store, principal
     )
 
 
 async def check_merge_pending_approval(
     pending_approval_id: str,
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
+    cleanup_dependencies: Annotated[
+        GraphCleanupDependencies, Depends(provide_graph_cleanup_dependencies)
+    ],
     principal: Annotated[Principal | None, Depends(get_principal)],
 ) -> PendingApprovalStatusResponse:
     """Report the status of a merge's pending approval (``GET /near-misses/approvals/{id}``).
 
     Lets a caller resume after a merge was requested. The status is ``pending``, ``expired`` or
-    ``signed``. An unknown id, an id that belongs to another caller and a request with no verified
-    caller are indistinguishable, so the response reveals nothing about approvals the caller does
-    not own.
+    ``signed``. The approval is a graph-cleanup ``merge-capabilities`` approval that carries the
+    review id. An unknown id, any other kind of approval, an id that belongs to another caller and a
+    request with no verified caller are indistinguishable, so the response reveals nothing about
+    approvals the caller does not own.
 
     Args:
         pending_approval_id: The pending approval id returned by the merge request (path parameter).
+        config: The resolved service configuration (injected); used when a signed approval whose
+            outcome was never recorded is settled against the graph.
         store: The pending-approval store to read from (injected).
+        cleanup_dependencies: The graph-cleanup collaborators for that settlement (injected).
         principal: The verified caller, or ``None`` when no verified identity exists (injected). The
             approval must belong to this caller.
 
     Returns:
         A :class:`PendingApprovalStatusResponse` with the approval id, its status, the review and
-        decision it covers, and, once signed, the merge's ``winner_id`` and ``loser_id``. ``error``
-        holds the failure detail when the signed merge failed.
+        decision it covers, and, once the signed merge ran, ``winner_id`` (the surviving
+        Capability) and ``loser_id`` (the absorbed one). ``error`` holds the failure detail when
+        the signed merge failed.
 
     Raises:
-        PendingApprovalNotFoundError: The id is unknown, belongs to a different caller, or there is
-            no verified caller (404).
+        PendingApprovalNotFoundError: The id is unknown, belongs to a different caller, is not a
+            near-miss merge approval, or there is no verified caller (404).
 
     Side Effects:
-        Reads the pending-approval store. Nothing is written.
+        Reads the pending-approval store. A signed approval whose outcome was never recorded and
+        that is well past its expiry is settled against the graph and the audit trail, as
+        ``check-cleanup-approval`` does; otherwise nothing is written.
     """
     actor = (principal.sub, principal.iss) if principal is not None else None
-    status = check_pending_approval(
-        pending_approval_id=pending_approval_id, actor=actor, store=store
+    status = check_near_miss_merge_approval(
+        pending_approval_id=pending_approval_id,
+        actor=actor,
+        store=store,
+        config=config,
+        dependencies=cleanup_dependencies,
     )
     if status is None:
         raise PendingApprovalNotFoundError(f"no pending approval with id {pending_approval_id!r}")

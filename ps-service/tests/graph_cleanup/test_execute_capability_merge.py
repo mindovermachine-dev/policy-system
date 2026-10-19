@@ -232,8 +232,18 @@ def test_graph_drift_since_the_preview_is_rejected_before_any_audit_or_write(
     outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
     assert rig.logged_groups == []
-    assert rig.audit.rows == []
+    assert _only_failed_row(rig)["reason_code"] == "state_digest_mismatch"
     assert "changed" in str(outcome["error"])
+
+
+def _only_failed_row(rig: CleanupRig) -> dict[str, object]:
+    """The single `failed` `capability.merge` row a refusal records, as its details."""
+    [recorded] = rig.audit.rows
+    assert recorded.action == "capability.merge"
+    assert recorded.resource_id == ABSORBED
+    assert recorded.outcome == "failed"
+    assert (recorded.actor_subject, recorded.actor_issuer) == _OFFICER
+    return dict(recorded.details)
 
 
 def test_a_revoked_compliance_officer_cannot_execute(cleanup_rig: CleanupRig) -> None:
@@ -242,8 +252,13 @@ def test_a_revoked_compliance_officer_cannot_execute(cleanup_rig: CleanupRig) ->
     outcome = execute_capability_merge(_row(rig), _CONFIG, _deps(rig, _roles(officer=False)))
 
     assert rig.logged_groups == []
-    assert rig.audit.rows == []
     assert "error" in outcome
+    details = _only_failed_row(rig)
+    assert details["reason_code"] == "actor_not_authorised"
+    assert details["approval_id"] == "approval-1"
+    assert details["survivor_id"] == SURVIVOR
+    assert "before" not in details
+    assert "after" not in details
 
 
 def test_an_authorization_store_outage_fails_closed(cleanup_rig: CleanupRig) -> None:
@@ -252,8 +267,21 @@ def test_an_authorization_store_outage_fails_closed(cleanup_rig: CleanupRig) -> 
     outcome = execute_capability_merge(_row(rig), _CONFIG, _deps(rig, RaisingAccessRoleStore()))
 
     assert rig.logged_groups == []
-    assert rig.audit.rows == []
     assert "error" in outcome
+    assert _only_failed_row(rig)["reason_code"] == "actor_not_authorised"
+
+
+def test_a_refusal_whose_failed_row_cannot_be_recorded_still_returns_the_refusal(
+    cleanup_rig: CleanupRig,
+) -> None:
+    rig = _world(cleanup_rig)
+    rig.audit.raise_on_outcome["failed"] = AuditPostgresUnavailableError("db host 10.1.2.3 down")
+
+    outcome = execute_capability_merge(_row(rig), _CONFIG, _deps(rig, _roles(officer=False)))
+
+    assert rig.audit.rows == []
+    assert "10.1.2.3" not in str(outcome)
+    assert "no longer holds" in str(outcome["error"])
 
 
 def test_two_governed_capabilities_are_rejected_at_execution_too(
@@ -269,7 +297,7 @@ def test_two_governed_capabilities_are_rejected_at_execution_too(
     outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
     assert rig.logged_groups == []
-    assert rig.audit.rows == []
+    assert _only_failed_row(rig)["reason_code"] == "revalidation_rejected"
     assert "release-capability-governance" in str(outcome["error"])
 
 
@@ -281,6 +309,7 @@ def test_a_tombstoned_side_at_execution_is_rejected(cleanup_rig: CleanupRig) -> 
     outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
     assert rig.logged_groups == []
+    assert _only_failed_row(rig)["reason_code"] == "revalidation_rejected"
     assert "merged" in str(outcome["error"])
 
 

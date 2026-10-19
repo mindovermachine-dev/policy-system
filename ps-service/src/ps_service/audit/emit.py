@@ -34,9 +34,11 @@ Conventions (the audit trail's row-shape contract):
   the real `new_obligations`, `new_capabilities` and `matched_capabilities` from the merge result;
   a failed run carries its `reason_code`. An unwritable opening row aborts the whole sweep;
   pairs already written stay.
-- Passkey-approved merge. The `near_miss.resolve` row is written when the approver signs, with
-  the approver as actor and the `approval_id`. If its opening row cannot be written the merge
-  does not run and the single-use approval is already consumed, so a new approval is needed.
+- Passkey-approved merge. A near-miss Capability merge is a graph-cleanup `merge-capabilities`
+  approval, so it writes a `capability.merge` row (not `near_miss.resolve`) when the approver
+  signs, with the approver as actor, the review id and before/after snapshots. If that row cannot
+  be written the merge does not run and the single-use approval is already consumed, so a new
+  approval is needed.
 - Reading. `list-audit-events` returns these rows; its `details` filter (celex,
   regulatory_instrument_id, instrument_id; see `AUDIT_DETAILS_FILTER_KEYS`) answers "who ingested
   or restored X".

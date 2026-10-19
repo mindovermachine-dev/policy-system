@@ -112,6 +112,18 @@ class PendingReviewNotFoundError(ApiError):
     """
 
 
+class NearMissMergeRefusedError(ApiError):
+    """A `POST /near-misses/{review_id}/resolve` merge is refused by the graph-cleanup merge rules.
+
+    Raised for a review that is not a Capability review (a Policy near miss can only be kept
+    separate), and for two Capabilities governed by different Policies (release one with
+    `release-capability-governance` first). Nothing was written and no approval exists. The message
+    is written for the Compliance Officer; it is the translation of
+    `ps_service.graph_cleanup.errors.GraphCleanupValidationError`. Handled as HTTP 409;
+    `str(exc)` is domain-level and surfaced verbatim.
+    """
+
+
 class InternalIngestOwnerRequiredError(ApiError):
     """A `POST /ingestions` internal seed carries a Policy but the caller is not verified.
 
@@ -142,8 +154,9 @@ class PendingApprovalNotFoundError(ApiError):
 
     Raised for both "no such id" and "this id belongs to a different actor", and the two are never
     distinguished in the response, so the endpoint leaks nothing about other actors' approvals. It
-    mirrors `ps_service.passkey_signing.service.check_pending_approval`, which returns `None` for
-    either case. Handled as HTTP 404; `str(exc)` is domain-level and safe to surface verbatim.
+    mirrors `ps_service.api.near_miss_review_orchestration.check_near_miss_merge_approval`, which
+    returns `None` for either case and for any approval that is not a near-miss merge. Handled as
+    HTTP 404; `str(exc)` is domain-level and safe to surface verbatim.
     """
 
 

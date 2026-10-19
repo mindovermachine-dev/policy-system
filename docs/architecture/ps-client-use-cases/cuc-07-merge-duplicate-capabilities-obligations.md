@@ -64,7 +64,8 @@ the direction*.
    re-preview, never re-sign.
 6. **Reverse.** `unmerge` restores a merged pair from its audit snapshot through the same
    preview → confirm → passkey shape — cleanup decisions are reversible by ceremony,
-   unlike CUC-06's near-miss merge.
+   including a Capability merge that CUC-06 started from a near-miss review (the deleted
+   review is not restored).
 
 ## Artifacts
 

@@ -45,17 +45,18 @@ class CompanyMergeValidationError(Exception):
     For example, `similarity.cosine_similarity` was given vectors of
     mismatched length, or a zero-magnitude vector for which cosine similarity
     is undefined. Also raised by `dedup.py` and `obligation_redirect.py` for malformed
-    inputs. It is raised before any result is computed; the caller should correct the input.
+    inputs. `pending_review.resolve_review` raises it for a decision other than `keep-separate`.
+    It is raised before any result is computed; the caller should correct the input.
     """
 
 
 class StalePendingReviewError(Exception):
     """A `PendingReview`'s referenced incoming/existing node no longer exists.
 
-    Raised by `pending_review.resolve_review` (`decision="merge"`) when the combined
-    existence-check read finds that `incoming_id` or `nearest_existing_id` no longer resolves
-    to a node, for example because an unrelated merge already deleted it. It is raised before
-    the merge write is issued, so the graph is unchanged. The API layer translates it to
+    Raised by `pending_review.read_review_merge_sides` when the read finds that `incoming_id` or
+    `nearest_existing_id` no longer resolves to a live node, for example because an unrelated
+    merge already absorbed it. It is raised before any merge approval exists, so the graph is
+    unchanged. The API layer translates it to
     `PendingReviewNotFoundError`; `ps_service.company_merge` never imports `ps_service.api`.
 
     Attributes:

@@ -6,7 +6,16 @@ routes: listing the unresolved reviews, and resolving one as `keep-separate` or 
 
 It provides the injection seam :class:`NearMissReviewDependencies`, the production wiring
 :func:`build_default_near_miss_review_dependencies`, and the entry points
-:func:`run_list_near_misses` and :func:`run_resolve_near_miss`.
+:func:`run_list_near_misses`, :func:`run_resolve_near_miss`, :func:`run_request_near_miss_merge`
+and :func:`check_near_miss_merge_approval`.
+
+A Capability near-miss merge is not a separate write. :func:`run_request_near_miss_merge` picks the
+survivor, builds the graph-cleanup `merge-capabilities` preview for the pair and creates that
+approval with the review id signed into it; the registered cleanup executor then runs the merge when
+the approval is signed (tombstone with `MERGED_INTO`, `REQUIRES`/`COVERS`/`MITIGATED_BY` edges
+moved, the one-Policy rule enforced, a `capability.merge` audit row with snapshots) and deletes
+the `PendingReview` in the same write group. This module is the glue between the two components,
+because `ps_service.company_merge` must not import `ps_service.graph_cleanup`.
 
 The production wiring imports `ps_service.company_merge` function-locally, so importing
 `ps_service.main` never loads Company Merge at module load. Only the graph opener is
@@ -16,14 +25,14 @@ replace the FalkorDB boundary and never the business rules above it.
 
 Lower-layer outcomes are translated into API errors here, because `ps_service.company_merge`
 never imports `ps_service.api`: `pending_review.resolve_review` returning `None` (unknown or
-already resolved review) and `StalePendingReviewError` (a merge whose incoming or existing
-node no longer exists) both become :class:`PendingReviewNotFoundError`, before any merge write.
+already resolved review) and `StalePendingReviewError` (a merge request whose incoming or existing
+node no longer exists) both become :class:`PendingReviewNotFoundError`, before any write.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import redis.exceptions
 
@@ -44,8 +53,19 @@ from ps_service.audit import (
     record_opening_row_with_event_id,
 )
 from ps_service.company_merge.errors import CompanyMergePersistenceError, StalePendingReviewError
+from ps_service.company_merge.pending_review import choose_survivor, read_review_merge_sides
+from ps_service.graph_cleanup.errors import (
+    GraphCleanupPersistenceError,
+    GraphCleanupValidationError,
+)
+from ps_service.graph_cleanup.executors import TOOL_MERGE_CAPABILITIES
+from ps_service.graph_cleanup.service import (
+    check_cleanup_approval,
+    create_capability_merge_approval,
+)
 from ps_service.logging import emit_log_entry
 from ps_service.logging.errors import LoggingLifecycleError
+from ps_service.passkey_signing.service import PendingApprovalStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -57,10 +77,17 @@ if TYPE_CHECKING:
     from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
     from ps_service.config import ServiceConfig
+    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
+    from ps_service.graph_cleanup.service import CapabilityMergeApproval
     from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.logging import LogEmitter
+    from ps_service.passkey_signing.store import PendingApprovalStore
 
 _COMPONENT = "near_miss_review"
+_STALE_REVIEW_MESSAGE: Final = (
+    "pending review {review_id!r} references a node that no longer exists "
+    "(already resolved by a prior merge); this review is now stale"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,10 +98,9 @@ class NearMissReviewDependencies:
         open_single_tenant_graph: Opens the single-tenant `policy_system` graph for a resolved
             service configuration. May raise a Redis error when FalkorDB is unreachable.
         list_pending_reviews: Returns every unresolved `PendingReviewRecord` in the graph.
-        resolve_review: Resolves one review by id with `"keep-separate"` or `"merge"`, writing
-            through the given write target. Returns the `ResolveOutcome`, or `None` when the id is
-            unknown or already resolved; raises `StalePendingReviewError` when a merge references a
-            node that no longer exists.
+        resolve_review: Keeps one review's pair separate by id, writing through the given write
+            target. Returns the `ResolveOutcome`, or `None` when the id is unknown or already
+            resolved.
         get_pending_review: Returns the `PendingReviewRecord` with the given id, or `None` when no
             unresolved review has it.
     """
@@ -82,7 +108,7 @@ class NearMissReviewDependencies:
     open_single_tenant_graph: Callable[[ServiceConfig], GraphHandle]
     list_pending_reviews: Callable[[GraphHandle], tuple[PendingReviewRecord, ...]]
     resolve_review: Callable[
-        [GraphHandle, str, Literal["keep-separate", "merge"], GraphWriteTarget],
+        [GraphHandle, str, Literal["keep-separate"], GraphWriteTarget],
         ResolveOutcome | None,
     ]
     get_pending_review: Callable[[GraphHandle, str], PendingReviewRecord | None]
@@ -138,12 +164,7 @@ def _to_resolve_response(outcome: ResolveOutcome) -> ResolveReviewResponse:
 def _failure_reason(exc: Exception) -> NearMissResolveReason:
     """Map a failed resolution to the enumerated audit `reason_code`, never the message."""
     if isinstance(exc, PendingReviewNotFoundError):
-        # A stale merge is translated to this API error with the stale signal as its cause.
-        return (
-            "review_stale"
-            if isinstance(exc.__cause__, StalePendingReviewError)
-            else "review_not_found"
-        )
+        return "review_not_found"
     if isinstance(exc, CompanyMergePersistenceError):
         return "graph_write_failed"
     if isinstance(exc, redis.exceptions.RedisError):
@@ -154,8 +175,6 @@ def _failure_reason(exc: Exception) -> NearMissResolveReason:
 def _emit_resolve_log(
     *,
     record: PendingReviewRecord,
-    decision: Literal["keep-separate", "merge"],
-    approval_id: str | None,
     outcome: Literal["succeeded", "failed"],
     reason: NearMissResolveReason | None,
     emitter: LogEmitter | None,
@@ -164,9 +183,7 @@ def _emit_resolve_log(
 
     A logging lifecycle failure is swallowed: it never fails the resolution.
     """
-    extra: dict[str, object] = {"decision": decision}
-    if approval_id is not None:
-        extra["approval_id"] = approval_id
+    extra: dict[str, object] = {"decision": "keep-separate"}
     if reason is not None:
         extra["reason_code"] = reason
     try:
@@ -184,42 +201,36 @@ def _emit_resolve_log(
 
 def run_resolve_near_miss(
     review_id: str,
-    decision: Literal["keep-separate", "merge"],
+    decision: Literal["keep-separate"],
     *,
     config: ServiceConfig,
     dependencies: NearMissReviewDependencies,
     audit: AuditContext,
-    approval_id: str | None = None,
     emitter: LogEmitter | None = None,
 ) -> ResolveReviewResponse:
-    """Resolve one `PendingReview` by keeping the pair separate or merging it.
+    """Resolve one `PendingReview` by keeping the pair separate.
 
-    `decision="keep-separate"` deletes only the `PendingReview` record. `decision="merge"`
-    re-points every edge referencing the loser canonical node onto the deterministically chosen
-    winner, deletes the loser and deletes the `PendingReview` record, all as one atomic write
-    through the Graph Write Gateway.
+    Deletes only the `PendingReview` record. A Capability merge is not decided here:
+    :func:`run_request_near_miss_merge` creates the graph-cleanup `merge-capabilities` approval and
+    the cleanup executor writes the merge (tombstone, `MERGED_INTO`, edges moved, one Policy rule)
+    when it is signed.
 
     Args:
         review_id: The `PendingReview` id to resolve (the route's path parameter).
-        decision: `"keep-separate"` or `"merge"`.
+        decision: `"keep-separate"`.
         config: The resolved service configuration, used to open the graph and find the gateway.
         dependencies: The near-miss review dependency bundle that supplies the graph opener, the
             review lookup and the resolution.
-        audit: The acting principal and the destination of the audit rows. For a
-            passkey-approved merge the actor is the approver.
-        approval_id: The signed approval that authorised a merge; recorded in the audit details
-            and the log entry. `None` when there is no approval.
+        audit: The acting principal and the destination of the audit rows.
         emitter: Log emitter override; `None` uses the process default.
 
     Returns:
         A :class:`ResolveReviewResponse` naming the resolved review and the decision;
-        `winner_id` and `loser_id` are populated for `"merge"` only.
+        `winner_id` and `loser_id` are always `None`.
 
     Raises:
-        PendingReviewNotFoundError: `review_id` does not exist or was already resolved; or, for
-            a merge, it references a node that a prior merge already deleted (stale review, with
-            its own message). No write happens on either path, and an unknown review writes no
-            audit row.
+        PendingReviewNotFoundError: `review_id` does not exist or was already resolved. No write
+            happens, and an unknown review writes no audit row.
         GraphWriteUnavailableError: No Graph Write Gateway is installed (HTTP 503). Checked after
             the not-found check and before the opening audit row, so nothing was audited or
             resolved.
@@ -251,10 +262,8 @@ def run_resolve_near_miss(
         "kind": record.kind,
         "incoming_id": record.incoming_id,
         "existing_id": record.nearest_existing_id,
-        "decision": "keep_separate" if decision == "keep-separate" else "merge",
+        "decision": "keep_separate",
     }
-    if approval_id is not None:
-        details["approval_id"] = approval_id
     # The opening row's id anchors the resolution's graph group to the audit trail.
     audit_event_id = record_opening_row_with_event_id(
         audit, target, component=_COMPONENT, details=details, emitter=emitter
@@ -276,8 +285,6 @@ def run_resolve_near_miss(
         )
         _emit_resolve_log(
             record=record,
-            decision=decision,
-            approval_id=approval_id,
             outcome="failed",
             reason=reason,
             emitter=emitter,
@@ -285,8 +292,6 @@ def run_resolve_near_miss(
         raise
     _emit_resolve_log(
         record=record,
-        decision=decision,
-        approval_id=approval_id,
         outcome="succeeded",
         reason=None,
         emitter=emitter,
@@ -310,24 +315,17 @@ def _resolve_or_raise_not_found(
     dependencies: NearMissReviewDependencies,
     graph: GraphHandle,
     review_id: str,
-    decision: Literal["keep-separate", "merge"],
+    decision: Literal["keep-separate"],
     write_target: GraphWriteTarget,
 ) -> ResolveReviewResponse:
-    """Run `resolve_review`, translating its not-found and stale signals into API errors.
+    """Run `resolve_review`, translating its not-found signal into an API error.
 
     Raises:
         PendingReviewNotFoundError: `resolve_review` returned `None` (unknown or already resolved
-            review), or raised `StalePendingReviewError` (the merge's incoming or existing node no
-            longer exists; the stale error is chained as the cause).
+            review).
         CompanyMergePersistenceError: Propagated when the graph write fails.
     """
-    try:
-        outcome = dependencies.resolve_review(graph, review_id, decision, write_target)
-    except StalePendingReviewError as exc:
-        raise PendingReviewNotFoundError(
-            f"pending review {review_id!r} references a node that no longer exists "
-            "(already resolved by a prior merge); this review is now stale"
-        ) from exc
+    outcome = dependencies.resolve_review(graph, review_id, decision, write_target)
     if outcome is None:
         raise PendingReviewNotFoundError(f"no unresolved PendingReview with id {review_id!r}")
     return _to_resolve_response(outcome)
@@ -400,4 +398,146 @@ def build_default_near_miss_review_dependencies(
         list_pending_reviews=list_pending_reviews,
         resolve_review=resolve_review,
         get_pending_review=get_pending_review,
+    )
+
+
+def run_request_near_miss_merge(
+    review_id: str,
+    *,
+    actor: tuple[str, str],
+    acknowledge_governance_change: bool,
+    base_url: str,
+    config: ServiceConfig,
+    dependencies: NearMissReviewDependencies,
+    store: PendingApprovalStore,
+) -> CapabilityMergeApproval:
+    """Preview merging a near-miss pair and create the graph-cleanup `merge-capabilities` approval.
+
+    The survivor is the Capability with the earlier `created_at` (a missing one counts earliest, a
+    tie goes to the incoming node). The approval is the cleanup merge's, bound to the pair, the
+    state digest and the Policy acknowledgment, with the review id signed into it; signing runs the
+    cleanup executor, which merges and deletes the `PendingReview` in one write group. Nothing is
+    written to the graph here.
+
+    Args:
+        review_id: Id of the near-miss review, as listed by `near_misses_list`.
+        actor: Verified `(subject, issuer)` of the requesting Compliance Officer; the approval is
+            bound to them. The caller has already checked the `ComplianceOfficer` grant.
+        acknowledge_governance_change: True when the officer accepts the governance change of a
+            case-2 merge (exactly one Capability governed).
+        base_url: Origin used to build the approval link, without a trailing slash.
+        config: The resolved service configuration, used to open the graph.
+        dependencies: The near-miss review dependency bundle that supplies the graph opener.
+        store: Pending-approval store that receives the approval row.
+
+    Returns:
+        The cleanup merge preview with the approval id, signing URL and expiry.
+
+    Raises:
+        PendingReviewNotFoundError: `review_id` does not exist or was already resolved, or one of
+            its Capabilities no longer exists or is a tombstone (stale review, own message).
+        GraphCleanupValidationError: The review is not a Capability review, or the cleanup merge
+            refuses the pair (different governing Policies, a side that is not active).
+        GraphCleanupAcknowledgmentRequiredError: Case 2 without the acknowledgment; carries the
+            preview and no approval exists.
+        GraphCleanupPersistenceError: The graph could not be read.
+
+    Side Effects:
+        Reads the graph and inserts one pending-approval row on success; emits one log entry.
+    """
+    graph = dependencies.open_single_tenant_graph(config)
+    try:
+        sides = read_review_merge_sides(graph, review_id)
+    except StalePendingReviewError as exc:
+        raise PendingReviewNotFoundError(_STALE_REVIEW_MESSAGE.format(review_id=review_id)) from exc
+    except redis.exceptions.RedisError as exc:
+        raise GraphCleanupPersistenceError("the policy graph could not be read") from exc
+    if sides is None:
+        raise PendingReviewNotFoundError(f"no unresolved PendingReview with id {review_id!r}")
+    if sides.kind != "Capability":
+        raise GraphCleanupValidationError(
+            "only a Capability near miss can be merged; keep a Policy near miss separate"
+        )
+    survivor_id, absorbed_id = choose_survivor(sides)
+    approval = create_capability_merge_approval(
+        graph,
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        acknowledge_governance_change=acknowledge_governance_change,
+        review_id=review_id,
+        actor=actor,
+        base_url=base_url,
+        store=store,
+    )
+    emit_log_entry(
+        component=_COMPONENT,
+        action="request_near_miss_merge",
+        entity_id=review_id,
+        outcome="succeeded",
+        extra={
+            "approval_id": approval.pending_approval_id,
+            "survivor_id": survivor_id,
+            "absorbed_id": absorbed_id,
+            "policy_case": approval.preview.policy_case,
+        },
+    )
+    return approval
+
+
+def check_near_miss_merge_approval(
+    *,
+    pending_approval_id: str,
+    actor: tuple[str, str] | None,
+    store: PendingApprovalStore,
+    config: ServiceConfig,
+    dependencies: GraphCleanupDependencies,
+) -> PendingApprovalStatus | None:
+    """Report a near-miss merge approval, mapping the cleanup approval's fields to winner/loser.
+
+    A near-miss merge approval is a `merge-capabilities` cleanup approval that carries a review id.
+    Any other approval, an unknown id, another caller's approval and a missing actor all return
+    None, indistinguishably.
+
+    Args:
+        pending_approval_id: Id returned when the merge was requested.
+        actor: The caller's verified `(subject, issuer)`, or None when there is none.
+        store: Pending-approval store.
+        config: Service configuration, used when an orphaned signed approval is reconciled.
+        dependencies: Graph-cleanup dependencies for that reconciliation.
+
+    Returns:
+        The status: `winner_id` (the survivor) and `loser_id` (the absorbed Capability) once the
+        signed merge has run, the executor's safe `error` text when it did not, otherwise None for
+        all three; None when no such approval is visible to the caller.
+
+    Raises:
+        GraphCleanupPersistenceError: Reconciliation could not read the graph.
+        AuditPostgresUnavailableError: Reconciliation could not record its audit row.
+        AuditPersistenceError: As above, for any other audit write failure.
+
+    Side Effects:
+        As `check_cleanup_approval`: a signed approval whose outcome was never recorded may be
+        reconciled against the graph.
+    """
+    status = check_cleanup_approval(
+        pending_approval_id=pending_approval_id,
+        actor=actor,
+        store=store,
+        config=config,
+        dependencies=dependencies,
+    )
+    if status is None or status.tool_name != TOOL_MERGE_CAPABILITIES or status.review_id is None:
+        return None
+    outcome = status.outcome or {}
+    winner = outcome.get("survivor_id")
+    loser = outcome.get("absorbed_id")
+    error = outcome.get("error")
+    return PendingApprovalStatus(
+        pending_approval_id=status.pending_approval_id,
+        status=status.status,
+        review_id=status.review_id,
+        decision="merge",
+        winner_id=winner if isinstance(winner, str) else None,
+        loser_id=loser if isinstance(loser, str) else None,
+        error=error if isinstance(error, str) else None,
     )

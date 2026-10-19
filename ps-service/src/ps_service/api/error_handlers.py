@@ -40,6 +40,7 @@ from ps_service.api.errors import (
     InvalidAccessRoleError,
     InvalidAuditQueryFilterError,
     MergeApprovalRequiresAuthenticatedCallerError,
+    NearMissMergeRefusedError,
     PendingApprovalInvalidOrExpiredError,
     PendingApprovalNotFoundError,
     PendingReviewNotFoundError,
@@ -124,6 +125,7 @@ _SAFE_VERBATIM: tuple[type[Exception], ...] = (
     RestoreInstrumentIdAmbiguousError,
     RestoreInstrumentIdNotFoundError,
     PendingReviewNotFoundError,
+    NearMissMergeRefusedError,
     ExportInstrumentNotFoundError,
     ExportConfigIncompleteError,
     ExportUnresolvedNearMissesError,
@@ -272,6 +274,7 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
         "pending_review_not_found",
         status.HTTP_404_NOT_FOUND,
     ),
+    (NearMissMergeRefusedError, "near_miss_merge_refused", status.HTTP_409_CONFLICT),
     (
         ExportInstrumentNotFoundError,
         "export_instrument_not_found",
@@ -506,7 +509,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     * 404: ``CatalogIdentifierNotFoundError``, ``PendingReviewNotFoundError``,
       ``ExportInstrumentNotFoundError``, ``PendingApprovalNotFoundError``,
       ``PendingApprovalInvalidOrExpiredError``, ``RestoreInstrumentIdNotFoundError``.
-    * 409: ``ShortNameCollisionError``, ``CelexAlreadyIngestedError``,
+    * 409: ``NearMissMergeRefusedError`` (a near-miss merge the graph-cleanup rules refuse),
+      ``ShortNameCollisionError``, ``CelexAlreadyIngestedError``,
       ``RestoreInstrumentIdAmbiguousError``, ``ExportUnresolvedNearMissesError`` (the export
       was refused because the instrument still has unresolved near-miss reviews).
     * 413: ``RequestBodyTooLargeError``.

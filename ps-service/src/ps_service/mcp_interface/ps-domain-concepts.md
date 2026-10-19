@@ -503,7 +503,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 **Property notes.** The Notes cells above are kept short; the full explanations are here.
 
-- `status`: `merged` marks a tombstone: a duplicate absorbed by a Compliance Officer cleanup merge, kept in the graph and never deleted. A tombstone has an outbound `MERGED_INTO` edge to its survivor and is not a live Capability. A Capability with no `status` is treated as `active`. Unmerging returns a tombstone to `active`. Queries that count or list live Capabilities filter on `status = 'active'`.
+- `status`: `merged` marks a tombstone: a duplicate absorbed by a Compliance Officer cleanup merge (including one started from a near-miss review), kept in the graph and never deleted. A tombstone has an outbound `MERGED_INTO` edge to its survivor and is not a live Capability. A Capability with no `status` is treated as `active`. Unmerging returns a tombstone to `active`. Queries that count or list live Capabilities filter on `status = 'active'`.
 - `confidence`: The extracting LLM's own certainty in this decision — whether reusing an existing Capability for an Obligation, or minting a new one because none of the existing candidates fit. Always recorded, unconditionally.
 
 #### Relationships

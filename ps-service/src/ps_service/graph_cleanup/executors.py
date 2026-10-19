@@ -4,13 +4,19 @@
 `merge-capabilities` and `merge-obligations` (audit-first and fail-closed). Order:
 
 1. re-check the approving actor still holds `ComplianceOfficer` (a store outage denies);
-2. re-read the graph, re-validate, and compare the state digest bound into the signed args
-   (drift means the previewed state is gone: nothing is written, no audit row);
+2. re-read the graph, re-validate, and compare the state digest bound into the signed args;
+   for a near-miss merge (a signed `review_id`) also check the `PendingReview` still exists and
+   still names the pair (drift or a changed review means the previewed state is gone: nothing is
+   written);
 3. record the `applied` audit row, then write -- if the audit row cannot be recorded, no
    graph edit is made;
 4. one gateway group, guarded by the graph's log position (all-or-nothing); a guard
    miss or failure records a `failed` row with the same `approval_id` (best effort) and returns a
    generic error.
+
+A Capability merge refused at step 1 or 2 records a `failed` `capability.merge` row too (best
+effort, no snapshots), with a `reason_code` naming the refusal, so the refusal is on the audit
+trail even though nothing was written. Other tools' refusals before the write record no row.
 
 The function never raises for an expected failure; every error outcome is a short message
 with no internal detail. The module registers its executor and effect verifier with
@@ -38,6 +44,7 @@ from ps_service.graph_cleanup.audit_actions import (
     OBLIGATION_MERGE_ACTION,
     OBLIGATION_UNMERGE_ACTION,
     CapabilityMergeDetails,
+    CapabilityMergeFailedReason,
     CapabilityReleaseGovernanceDetails,
     CapabilityUnmergeDetails,
     ObligationMergeDetails,
@@ -85,6 +92,7 @@ if TYPE_CHECKING:
     from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
     from ps_service.graph_cleanup.models import (
         CapabilityMergePlan,
+        MergeCase,
         ObligationMergePlan,
         ReleasePlan,
     )
@@ -171,6 +179,11 @@ def _string_arg(row: PendingApprovalRow, name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _review_id(row: PendingApprovalRow) -> str | None:
+    """The near-miss review id signed into a `merge-capabilities` approval, or None."""
+    return _string_arg(row, "review_id")
+
+
 def _details(
     row: PendingApprovalRow,
     *,
@@ -189,6 +202,7 @@ def _details(
         before=plan.before,
         after=plan.after,
         reason_code=failed_reason,
+        review_id=_review_id(row),
         policy_id=governance.policy.id if governance else None,
         policy_status=governance.policy.status if governance else None,
         governed_set_before=governance.governed_set_before if governance else None,
@@ -248,6 +262,70 @@ def _record_applied(
     )
 
 
+def _display_policy_case(row: PendingApprovalRow) -> MergeCase:
+    case = row.display_summary.get("policy_case")
+    if case == 2:  # noqa: PLR2004 -- the Policy cases are named by number across the component
+        return 2
+    return 3 if case == 3 else 1  # noqa: PLR2004
+
+
+def _refusal_details(
+    row: PendingApprovalRow,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    reason: CapabilityMergeFailedReason,
+) -> dict[str, object]:
+    """Details of a `failed` row for a refusal made before any plan exists.
+
+    No plan means no snapshots and no governing-Policy fields; the Policy case is the one the
+    preview put in the approval's display summary (the orphan reconciler's convention), 1 when
+    absent, and the acknowledgment is the signed one.
+    """
+    case = _display_policy_case(row)
+    return CapabilityMergeDetails(
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        policy_case=case,
+        acknowledged=row.normalized_args.get("acknowledge_governance_change") is True,
+        approval_id=row.id,
+        reason_code=reason,
+        review_id=_review_id(row),
+    ).model_dump()
+
+
+def _refuse(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    reason: CapabilityMergeFailedReason,
+    message: str,
+    log_detail: str | None = None,
+) -> dict[str, object]:
+    """Refuse the merge before the audit-first write: log, record a `failed` row, return `message`.
+
+    The `failed` row is best effort: an audit outage is logged and never masks the refusal.
+    """
+    _log(row, "failed", log_detail or reason)
+    try:
+        _record(
+            row,
+            dependencies,
+            config,
+            outcome="failed",
+            absorbed_id=absorbed_id,
+            details=_refusal_details(
+                row, survivor_id=survivor_id, absorbed_id=absorbed_id, reason=reason
+            ),
+        )
+    except _AUDIT_ERRORS as exc:
+        _log(row, "failed", f"failed_row_not_recorded:{type(exc).__name__}")
+    return _error(message)
+
+
 def _actor_is_still_authorised(
     row: PendingApprovalRow, dependencies: GraphCleanupDependencies, config: ServiceConfig
 ) -> bool:
@@ -298,6 +376,7 @@ def _write_after_audit(
             survivor_id=survivor_id,
             absorbed_id=absorbed_id,
             expected=plan.expected,
+            review_id=_review_id(row),
         )
     except GraphCleanupStaleStateError:
         reason, message = "graph_guard_missed", _STALE
@@ -327,6 +406,94 @@ def _write_after_audit(
     return _error(message)
 
 
+def _graph_unavailable(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    exc: Exception,
+) -> dict[str, object]:
+    """Refuse because the graph could not be read: the fixed message, a `failed` row.
+
+    Only the exception type reaches the log; neither it nor its text reaches the outcome or the
+    audit row.
+    """
+    return _refuse(
+        row,
+        dependencies,
+        config,
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        reason="graph_unavailable",
+        message=_UNAVAILABLE,
+        log_detail=f"graph_unavailable:{type(exc).__name__}",
+    )
+
+
+def _review_still_names_pair(
+    graph: GraphHandle, review_id: str, *, survivor_id: str, absorbed_id: str
+) -> bool:
+    """Whether the near-miss `PendingReview` still exists and still names this Capability pair."""
+    from ps_service.company_merge.pending_review import (  # noqa: PLC0415 -- function-local keeps graph_cleanup off Company Merge at import
+        get_pending_review,
+    )
+
+    review = get_pending_review(graph, review_id)
+    return (
+        review is not None
+        and review.kind == "Capability"
+        and {review.incoming_id, review.nearest_existing_id} == {survivor_id, absorbed_id}
+    )
+
+
+def _stale_refusal(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    plan: CapabilityMergePlan,
+    graph: GraphHandle,
+    digest: str,
+) -> dict[str, object] | None:
+    """The refusal outcome when the previewed state no longer holds, else None.
+
+    Checks, in order: the signed acknowledgment (defence in depth), the state digest, and that the
+    near-miss review the approval resolves still names this pair.
+    """
+    refusal: tuple[CapabilityMergeFailedReason, str] | None = None
+    governance = plan.preview.governance
+    review_id = _review_id(row)
+    if (
+        governance is not None
+        and governance.acknowledgment_required
+        and row.normalized_args.get("acknowledge_governance_change") is not True
+    ):
+        # Defence in depth: the approval flow never creates such a row.
+        refusal = ("acknowledgment_missing", _ACK_REQUIRED)
+    elif plan.state_digest != digest:
+        refusal = ("state_digest_mismatch", _STALE)
+    elif review_id is not None and not _review_still_names_pair(
+        graph, review_id, survivor_id=survivor_id, absorbed_id=absorbed_id
+    ):
+        refusal = ("review_missing_or_changed", _STALE)
+    if refusal is None:
+        return None
+    reason, message = refusal
+    return _refuse(
+        row,
+        dependencies,
+        config,
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        reason=reason,
+        message=message,
+    )
+
+
 def _replan_capability_merge(
     row: PendingApprovalRow,
     config: ServiceConfig,
@@ -336,30 +503,44 @@ def _replan_capability_merge(
     absorbed_id: str,
     digest: str,
 ) -> tuple[GraphHandle, CapabilityMergePlan] | dict[str, object]:
-    """Step 2: re-read and re-validate; the plan, or the error outcome to return."""
+    """Step 2: re-read and re-validate; the plan, or the error outcome to return.
+
+    Every refusal here is a stale or rejected state, and records a `failed` row.
+    """
     try:
         graph = dependencies.open_single_tenant_graph(config)
         state = read_capability_merge_state(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
         plan = plan_capability_merge(state)
     except GraphCleanupValidationError as exc:
-        _log(row, "failed", "revalidation_rejected")
-        return _error(str(exc))
+        return _refuse(
+            row,
+            dependencies,
+            config,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            reason="revalidation_rejected",
+            message=str(exc),
+        )
     except Exception as exc:  # noqa: BLE001 -- opening/reading the graph may fail in driver-specific ways; the message returned never carries them
-        _log(row, "failed", f"graph_unavailable:{type(exc).__name__}")
-        return _error(_UNAVAILABLE)
-    governance = plan.preview.governance
-    if (
-        governance is not None
-        and governance.acknowledgment_required
-        and row.normalized_args.get("acknowledge_governance_change") is not True
-    ):
-        # Defence in depth: the approval flow never creates such a row.
-        _log(row, "failed", "acknowledgment_missing")
-        return _error(_ACK_REQUIRED)
-    if plan.state_digest != digest:
-        _log(row, "failed", "state_digest_mismatch")
-        return _error(_STALE)
-    return graph, plan
+        return _graph_unavailable(
+            row, dependencies, config, survivor_id=survivor_id, absorbed_id=absorbed_id, exc=exc
+        )
+    try:
+        refusal = _stale_refusal(
+            row,
+            dependencies,
+            config,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            plan=plan,
+            graph=graph,
+            digest=digest,
+        )
+    except Exception as exc:  # noqa: BLE001 -- the review read may fail in driver-specific ways; the message returned never carries them
+        return _graph_unavailable(
+            row, dependencies, config, survivor_id=survivor_id, absorbed_id=absorbed_id, exc=exc
+        )
+    return refusal if refusal is not None else (graph, plan)
 
 
 def execute_capability_merge(
@@ -370,7 +551,10 @@ def execute_capability_merge(
     Applies the previewed merge only if the approver still holds `ComplianceOfficer`, the graph
     still matches the state digest in the signed arguments, and the audit row was recorded first.
     A merge where exactly one Capability is governed is refused unless the signed arguments
-    carry `acknowledge_governance_change`.
+    carry `acknowledge_governance_change`. When the signed arguments carry a `review_id`, the
+    near-miss `PendingReview` it names must still exist and name the pair, is deleted in the
+    same group and the id is recorded on the audit row; a `review_id` that is not a string makes
+    the approval malformed.
 
     Args:
         row: The verified approval; its `normalized_args` carry the signed arguments and its
@@ -386,18 +570,27 @@ def execute_capability_merge(
 
     Side Effects:
         Writes an `applied` `capability.merge` audit row, then one gateway group that tombstones
-        the absorbed Capability. When the guard or the write fails, records a `failed` row
-        with the same `approval_id` (best effort). Emits a structured log entry.
+        the absorbed Capability. When the guard or the write fails, or the merge is refused
+        before the write (lost authority, drift, a changed review, an unreachable graph), records
+        a `failed` row with the same `approval_id` (best effort). Emits a structured log entry.
     """
     survivor_id = _string_arg(row, "survivor_id")
     absorbed_id = _string_arg(row, "absorbed_id")
     digest = _string_arg(row, "state_digest")
-    if survivor_id is None or absorbed_id is None or digest is None:
+    review_is_malformed = "review_id" in row.normalized_args and _review_id(row) is None
+    if survivor_id is None or absorbed_id is None or digest is None or review_is_malformed:
         _log(row, "failed", "malformed_normalized_args")
         return _error(_BAD_APPROVAL)
     if not _actor_is_still_authorised(row, dependencies, config):
-        _log(row, "failed", "actor_not_authorised")
-        return _error(_NOT_AUTHORISED)
+        return _refuse(
+            row,
+            dependencies,
+            config,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            reason="actor_not_authorised",
+            message=_NOT_AUTHORISED,
+        )
     replanned = _replan_capability_merge(
         row,
         config,

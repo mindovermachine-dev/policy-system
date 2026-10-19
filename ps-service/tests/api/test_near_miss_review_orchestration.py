@@ -18,7 +18,7 @@ from ps_service.api.near_miss_review_orchestration import (
     run_resolve_near_miss,
 )
 from ps_service.audit import AuditContext, AuditPostgresUnavailableError, AuditTrailUnavailableError
-from ps_service.company_merge.errors import CompanyMergePersistenceError, StalePendingReviewError
+from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
 from ps_service.config import ServiceConfig
 
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
     from ps_service.company_merge.graph_submission import GraphWriteTarget
 
-Decision = Literal["keep-separate", "merge"]
+Decision = Literal["keep-separate"]
 
 _ACTOR = ("actor-sub", "https://issuer.example.com/")
 _RECORD = PendingReviewRecord(
@@ -92,8 +92,6 @@ def _run(
     store: InMemoryAuditStore,
     deps: NearMissReviewDependencies,
     decision: Decision = "keep-separate",
-    *,
-    approval_id: str | None = None,
 ) -> object:
     return run_resolve_near_miss(
         "review_aaa",
@@ -101,7 +99,6 @@ def _run(
         config=_config(),
         dependencies=deps,
         audit=AuditContext(_ACTOR, store),
-        approval_id=approval_id,
     )
 
 
@@ -137,16 +134,6 @@ def test_resolve_keep_separate_resource_id_is_the_review_id() -> None:
     assert store.rows[0].resource_id == "review_aaa"
 
 
-def test_resolve_merge_row_carries_the_approval_id() -> None:
-    store = InMemoryAuditStore()
-
-    _run(store, _deps(store), "merge", approval_id="approval-1")
-
-    (row,) = store.rows
-    assert row.details["decision"] == "merge"
-    assert row.details["approval_id"] == "approval-1"
-
-
 def test_resolve_records_failed_row_with_graph_write_failed_when_the_delete_raises() -> None:
     store = InMemoryAuditStore()
 
@@ -174,19 +161,6 @@ def test_resolve_records_failed_row_with_review_not_found_when_review_vanishes_a
         ("applied", None),
         ("failed", "review_not_found"),
     ]
-
-
-def test_resolve_records_failed_row_with_review_stale_for_a_stale_merge() -> None:
-    store = InMemoryAuditStore()
-
-    def _stale(_review_id: str, _decision: Decision) -> ResolveOutcome | None:
-        raise StalePendingReviewError("stale")
-
-    with pytest.raises(PendingReviewNotFoundError):
-        _run(store, _deps(store, resolve=_stale), "merge", approval_id="a-1")
-
-    assert store.rows[-1].outcome == "failed"
-    assert store.rows[-1].details["reason_code"] == "review_stale"
 
 
 def test_resolve_records_unexpected_error_for_an_unclassified_exception_and_reraises() -> None:
@@ -237,7 +211,6 @@ def test_resolve_failed_row_has_reason_code_and_no_free_text_or_traceback() -> N
         "incoming_id",
         "existing_id",
         "decision",
-        "approval_id",
         "reason_code",
     }
     assert "10.0.0.1" not in str(failed.details)
@@ -255,10 +228,9 @@ def test_resolve_failure_is_still_raised_when_the_failed_row_cannot_be_written()
     assert [r.outcome for r in store.rows] == ["applied"]
 
 
-@pytest.mark.parametrize("decision", ["keep-separate", "merge"])
-def test_resolve_without_a_gateway_is_503_after_the_not_found_check_and_before_any_audit_row(
-    decision: Decision,
-) -> None:
+def test_resolve_without_a_gateway_is_503_after_the_not_found_check_and_before_any_audit_row() -> (
+    None
+):
     """The resolve writes through the gateway, so no gateway fails it closed.
 
     The check comes after the not-found check (an unknown review is still a 404 and writes no
@@ -268,17 +240,16 @@ def test_resolve_without_a_gateway_is_503_after_the_not_found_check_and_before_a
     store = InMemoryAuditStore()
 
     with pytest.raises(GraphWriteUnavailableError):
-        _run(store, _deps(store), decision)
+        _run(store, _deps(store))
 
     assert store.rows == []
     assert store.events == []
     with pytest.raises(PendingReviewNotFoundError):
-        _run(store, _deps(store, record=None), decision)
+        _run(store, _deps(store, record=None))
 
 
-@pytest.mark.parametrize("decision", ["keep-separate", "merge"])
 def test_resolve_anchors_the_group_to_the_opening_audit_rows_id(
-    decision: Decision, process_gateway: ProcessGateway
+    process_gateway: ProcessGateway,
 ) -> None:
     """The resolution writes under the audit event of its own opening row.
 
@@ -290,7 +261,7 @@ def test_resolve_anchors_the_group_to_the_opening_audit_rows_id(
     store = InMemoryAuditStore(event_id_sink=process_gateway.rig.store.audit_rows.add)
     targets: list[GraphWriteTarget] = []
 
-    _run(store, _deps(store, targets=targets), decision)
+    _run(store, _deps(store, targets=targets))
 
     (opening_id,) = store.event_ids
     (target,) = targets

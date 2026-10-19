@@ -656,12 +656,16 @@ def test_architecture_company_merge_section_says_its_writes_go_through_the_gatew
         "test_no_graph_write_path.py",
         "create-only",
         "set-if-null",
-        "read-resolve-write",
+        "`keep-separate` submits one group that deletes the `PendingReview`",
+        "read_review_merge_sides",
+        "choose_survivor",
+        "Graph Cleanup `merge-capabilities` approval performs the merge",
         "StalePendingReviewError",
         "record_opening_row_with_event_id",
         "CompanyMergePersistenceError",
     ):
         assert needle in guidance, needle
+    assert "read-resolve-write" not in guidance  # the near-miss merge path is gone
     assert "Company Merge target design" not in ca
     assert "Company Merge is its third" in ca
 
@@ -676,8 +680,10 @@ def test_architecture_company_merge_lists_the_observable_differences() -> None:
         "node deleted between the merge's reads and its write",
         '(`stages_to_run == ("merge",)`)',  # merge-only resume needs the gateway
         "`ingestion_run.submit`",
-        "BEFORE the approval is consumed",  # sign-route and resolve pre-check
-        "stays `pending`",
+        "BEFORE the opening audit row is written",  # keep-separate resolve pre-check
+        "returns the executor's sanitized error",  # sign route, cleanup-kind approval
+        "`GraphCleanupPersistenceError`",  # a near-miss merge's write refusal
+        "the loser stays active with the `PendingReview` intact",
         "marks FalkorDB unhealthy only when a transient fault outlasts its retries",
         "UNIDENTIFIED_EDGE_SCAN",
         "PS state database",

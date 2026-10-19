@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
 
     from ps_service.authz.models import AccessRole
+    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
     from ps_service.ingestion.graph_submission import GroupSubmitter
 
 # The fixed message `AccessDeniedError` always carries; it leaks no internal detail. It repeats
@@ -118,6 +119,37 @@ def get_principal(request: Request) -> Principal | None:
     return principal
 
 
+def enforce_access_role(
+    principal: Principal | None, config: ServiceConfig, role: AccessRole
+) -> None:
+    """Require that a verified caller holds `role` (or a role above it).
+
+    The one check behind both the route-level `require_access_role` dependency and a route that
+    gates only one branch of its body (`POST /near-misses/{id}/resolve`, merge only). It calls the
+    same `ps_service.authz.service.require_role` as the gated MCP tools.
+
+    Args:
+        principal: The verified caller, or `None` when no verified identity exists.
+        config: The service configuration; selects the access-role store and its audit store.
+        role: The minimum `AccessRole` the caller must hold.
+
+    Raises:
+        AccessDeniedError: There is no verified caller (fail closed: no identity to look a permanent
+            role up for), or the caller does not hold `role` or a role above it.
+        AuthorizationStoreUnavailableError: The authorization store cannot be reached.
+
+    Side Effects:
+        Queries the access-role store.
+    """
+    if principal is None:
+        raise AccessDeniedError(_ACCESS_DENIED_MESSAGE)
+    require_role(
+        (principal.sub, principal.iss),
+        minimum=role,
+        store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
+    )
+
+
 def require_access_role(role: AccessRole) -> Callable[[Request], None]:
     """Build a FastAPI dependency that enforces a minimum access role on the caller.
 
@@ -146,15 +178,7 @@ def require_access_role(role: AccessRole) -> Callable[[Request], None]:
     """
 
     def _require_access_role(request: Request) -> None:
-        principal = get_principal(request)
-        if principal is None:
-            raise AccessDeniedError(_ACCESS_DENIED_MESSAGE)
-        config = get_service_config(request)
-        require_role(
-            (principal.sub, principal.iss),
-            minimum=role,
-            store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
-        )
+        enforce_access_role(get_principal(request), get_service_config(request), role)
 
     return _require_access_role
 
@@ -196,6 +220,25 @@ def provide_pipeline_dependencies() -> PipelineDependencies:
         None; no connection is opened while building the bundle.
     """
     return build_default_pipeline_dependencies()
+
+
+def provide_graph_cleanup_dependencies() -> GraphCleanupDependencies:
+    """Return the production graph-cleanup collaborators for the near-miss approval status route.
+
+    A plain provider so tests can replace it through `app.dependency_overrides`. The graph-cleanup
+    import is function-local, so importing `ps_service.main` does not load that component.
+
+    Returns:
+        The production :class:`GraphCleanupDependencies` bundle.
+
+    Side Effects:
+        None; no connection is opened while building the bundle.
+    """
+    from ps_service.graph_cleanup.dependencies import (  # noqa: PLC0415 -- function-local keeps ps_service.main off graph_cleanup at import
+        build_default_graph_cleanup_dependencies,
+    )
+
+    return build_default_graph_cleanup_dependencies()
 
 
 def provide_graph_write_gateway(request: Request) -> GroupSubmitter | None:

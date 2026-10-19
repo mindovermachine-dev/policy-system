@@ -2,10 +2,11 @@
 # CUC-06: Resolve a near-miss
 
 **Status:** Specified
-**Actor:** An authenticated reviewer; today the near-miss path carries no AccessRole gate
-(see open points)
+**Actor:** An authenticated reviewer for keep-separate; a Compliance Officer (explicit
+`ComplianceOfficer` grant) for merge
 **Goal:** A Company Merge dedup candidate (`PendingReview`) resolved by a human decision —
-the pair kept separate, or merged with the effect previewed, signed, and audited.
+the pair kept separate, or merged with the effect previewed, signed, audited, and
+reversible.
 **Realizes:** UC-1
 **Interaction class:** Review/resolve
 **v1:** yes
@@ -20,7 +21,10 @@ the pair kept separate, or merged with the effect previewed, signed, and audited
 
 ## Preconditions
 
-- Caller is authenticated. Listing is read-only; resolving writes.
+- Caller is authenticated. Listing is read-only; resolving writes. Merging a Capability
+  pair needs the explicit `ComplianceOfficer` grant (SystemOwner and SystemAdmin do not
+  imply it, and the local-test bypass does not satisfy it); keep-separate needs only
+  authentication.
 - At least one unresolved review exists (an empty list is stated plainly, never implied).
 
 ## Beats
@@ -31,17 +35,26 @@ the pair kept separate, or merged with the effect previewed, signed, and audited
 2. **Open one.** Selecting a review renders a **comparison artifact**: the two entities
    side by side, and the effect of each decision previewed explicitly before anything is
    asked — keep-separate deletes only the review record and touches neither entity;
-   merge deletes the loser and re-points every edge that referenced it onto the winner,
-   atomically and irreversibly. The controls live on the artifact; chat advises, the
-   click is the user's.
+   merge is the CUC-07 Capability merge: the loser stays as a `merged` tombstone with one
+   `MERGED_INTO` edge to the winner, its `REQUIRES`, `COVERS` and `MITIGATED_BY` edges
+   move to the winner, and the review record is deleted in the same write. The preview
+   names the winner (the Capability with the earlier `created_at`; a tie goes to the
+   incoming node), the edge counts and the Policy case. The controls live on the
+   artifact; chat advises, the click is the user's.
 3. **Keep separate.** No ceremony: the decision executes at once, is audited at the
    request, and the artifact shows the review closed with both entities untouched.
-4. **Merge.** The irreversible path runs the full danger-zone shape: the decision creates
-   a one-time pending approval — bound to exactly this review, this pair, this state,
-   with an expiry — and the passkey ceremony runs against PS Service's own WebAuthn
-   relying party. No graph write happens before the signature; the merge executes when
-   the approver signs, with the signer as the audited actor. Declining or letting the
-   approval expire changes nothing, and the artifact says so.
+4. **Merge.** The merge runs the full danger-zone shape: the decision returns the cleanup
+   merge preview and creates a one-time `merge-capabilities` approval — bound to exactly
+   this review, this pair, this state and the Policy acknowledgment, with an expiry — and
+   the passkey ceremony runs against PS Service's own WebAuthn relying party. No graph
+   write happens before the signature; the merge executes when the approver signs, with
+   the signer as the audited actor, who must still hold `ComplianceOfficer`. A
+   Capability keeps one governing Policy: when exactly one of the pair is governed the
+   officer must acknowledge the governance change before an approval exists, and when the
+   two are governed by different Policies the merge is refused with a pointer to
+   `release-capability-governance` (keep-separate stays available). The write is audited
+   as a `capability.merge` row with before/after snapshots, linked to the review id.
+   Declining or letting the approval expire changes nothing, and the artifact says so.
 5. **Outcome.** The artifact updates to the resolved state: winner and loser ids on a
    merge, both-untouched on keep-separate. Every failure keeps its name, visibly:
    not-found/already-resolved (indistinguishable server-side, by design), **stale** (the
@@ -64,6 +77,9 @@ the pair kept separate, or merged with the effect previewed, signed, and audited
 - **Passkey ceremony on merge only** — the review/resolve instance of the lifecycle-only
   ceremony rule; the signing summary binds to the exact pair and review state.
   Keep-separate never triggers one.
+- **Reversible.** `unmerge` (CUC-07) restores the tombstone from the `capability.merge`
+  snapshot. It does not recreate the deleted review: the pair is not offered for review
+  again unless a later ingest or restore detects it anew.
 - Resolving clears the review's Inbox item. No new notifications are emitted.
 
 ## Contracts touched
@@ -82,10 +98,10 @@ the pair kept separate, or merged with the effect previewed, signed, and audited
 
 ## Open points
 
-- **No AccessRole gate today**: any authenticated caller can resolve a near-miss, while
-  graph cleanup's sibling merges demand an exact `ComplianceOfficer` grant. Whether v1
-  gates resolution by role, by Q-12 assignment, or both is undecided — the asymmetry
-  looks accidental.
+- **Gate decided**: a near-miss merge needs the explicit `ComplianceOfficer` grant to
+  create and to execute, like graph cleanup's sibling merges. Keep-separate stays open to
+  any authenticated caller. Whether Q-12 assignment also narrows who sees a review is
+  still open.
 - Staleness in an open comparison artifact: a review can go stale while on screen
   (another merge consumes its entity). The signing binding protects the write; whether
   the pane re-validates before offering the ceremony, or lets the named stale error

@@ -13,7 +13,7 @@ denied), policy lifecycle and supersede-fork actions, and (issue #195) the
 business operations `ingestion_run.submit` / `ingestion_run.complete`
 (regulation ingestion, sync, async and `check_regulations` re-ingests,
 distinguished by `details.trigger`), `instrument.restore`, `near_miss.resolve`
-and `user.invite`, with more joining over time as each feature adopts the
+(keep-separate; a near-miss merge writes `capability.merge`) and `user.invite`, with more joining over time as each feature adopts the
 same store (issue #147). The MCP-tool-backed front end to `list-audit-events` — there is
 no other read path; the underlying Postgres is not directly reachable by any
 client this skill serves.

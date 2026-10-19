@@ -251,7 +251,7 @@ def capability_merge_guard_holds(
 
 
 def build_capability_merge_group(
-    state: MergeState, *, survivor_id: str, absorbed_id: str
+    state: MergeState, *, survivor_id: str, absorbed_id: str, review_id: str | None = None
 ) -> tuple[Primitive, ...]:
     """The edit: move the absorbed Capability's edges onto the survivor and tombstone it.
 
@@ -259,12 +259,14 @@ def build_capability_merge_group(
     survivor (an endpoint already linked collapses into the existing edge, by identity); the
     absorbed side's `GOVERNED_BY` edge is upserted onto the survivor only when the survivor has no
     governing Policy; the moved edges and the absorbed `GOVERNED_BY` edge are deleted; the
-    absorbed node becomes a `merged` tombstone with a `MERGED_INTO` edge to the survivor.
+    absorbed node becomes a `merged` tombstone with a `MERGED_INTO` edge to the survivor. When
+    `review_id` is given, the near-miss `PendingReview` it names is deleted last, in the same group.
 
     Args:
         state: Merge state the edges and Policies are taken from.
         survivor_id: Id of the Capability that remains.
         absorbed_id: Id of the Capability that is tombstoned.
+        review_id: Id of the `PendingReview` this merge resolves; None when there is none.
 
     Returns:
         The ordered primitives of the group.
@@ -325,6 +327,8 @@ def build_capability_merge_group(
             target=survivor,
         )
     )
+    if review_id is not None:
+        primitives.append(DeleteNode(label="PendingReview", id=review_id))
     return tuple(primitives)
 
 
@@ -336,6 +340,7 @@ def write_capability_merge(
     survivor_id: str,
     absorbed_id: str,
     expected: ExpectedCounts,
+    review_id: str | None = None,
 ) -> None:
     """Tombstone `absorbed_id` into `survivor_id` as one gateway group.
 
@@ -346,6 +351,7 @@ def write_capability_merge(
         survivor_id: Id of the Capability that remains.
         absorbed_id: Id of the Capability that is tombstoned.
         expected: Edge counts and Policy ids/statuses captured in the preview.
+        review_id: Id of the near-miss `PendingReview` deleted in the same group; None when none.
 
     Side Effects:
         May log an edge-identity stamp group, then submits one group through the gateway.
@@ -363,7 +369,7 @@ def write_capability_merge(
         raise GraphCleanupStaleStateError(_CAPABILITY_MERGE_STALE_MESSAGE)
     with refuse_unstorable_values():
         primitives = build_capability_merge_group(
-            state, survivor_id=survivor_id, absorbed_id=absorbed_id
+            state, survivor_id=survivor_id, absorbed_id=absorbed_id, review_id=review_id
         )
     stamped = ensure_stamped(target, audit_event_id)
     submit_cleanup_group(

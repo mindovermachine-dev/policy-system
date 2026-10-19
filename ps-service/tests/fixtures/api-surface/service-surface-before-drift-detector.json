@@ -506,6 +506,10 @@
     {
       "inputSchema": {
         "properties": {
+          "acknowledge_governance_change": {
+            "default": false,
+            "type": "boolean"
+          },
           "decision": {
             "enum": ["keep-separate", "merge"],
             "type": "string"
@@ -745,6 +749,61 @@
   "openapi": {
     "components": {
       "schemas": {
+        "CapabilityMergePreview": {
+          "additionalProperties": false,
+          "properties": {
+            "absorbed_id": {
+              "type": "string"
+            },
+            "absorbed_name": {
+              "type": "string"
+            },
+            "duplicate_edges_collapsed": {
+              "type": "integer"
+            },
+            "edges_to_move": {
+              "$ref": "#/components/schemas/EdgesToMove"
+            },
+            "governance": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/GovernanceChange"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "obligations_affected": {
+              "type": "integer"
+            },
+            "policy_case": {
+              "enum": [1, 2, 3],
+              "type": "integer"
+            },
+            "state_digest": {
+              "type": "string"
+            },
+            "survivor_id": {
+              "type": "string"
+            },
+            "survivor_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "survivor_id",
+            "survivor_name",
+            "absorbed_id",
+            "absorbed_name",
+            "policy_case",
+            "edges_to_move",
+            "duplicate_edges_collapsed",
+            "obligations_affected",
+            "state_digest"
+          ],
+          "type": "object"
+        },
         "CatalogIngestionRequest": {
           "additionalProperties": false,
           "properties": {
@@ -840,6 +899,31 @@
             }
           },
           "required": ["instruments"],
+          "type": "object"
+        },
+        "EdgesToMove": {
+          "additionalProperties": false,
+          "properties": {
+            "covers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "mitigated_by": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "requires": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["requires", "covers", "mitigated_by"],
           "type": "object"
         },
         "ExportAcceptedResponse": {
@@ -973,6 +1057,62 @@
             }
           },
           "required": ["stage", "status"],
+          "type": "object"
+        },
+        "GovernanceChange": {
+          "additionalProperties": false,
+          "properties": {
+            "acknowledgment_required": {
+              "type": "boolean"
+            },
+            "acknowledgment_text": {
+              "type": "string"
+            },
+            "governed_set_after": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "governed_set_before": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "governed_side": {
+              "enum": ["survivor", "absorbed", "both"],
+              "type": "string"
+            },
+            "obligations_coverage_changed": {
+              "type": "integer"
+            },
+            "policy": {
+              "$ref": "#/components/schemas/GoverningPolicy"
+            }
+          },
+          "required": [
+            "policy",
+            "governed_side",
+            "obligations_coverage_changed",
+            "governed_set_before",
+            "governed_set_after",
+            "acknowledgment_required",
+            "acknowledgment_text"
+          ],
+          "type": "object"
+        },
+        "GoverningPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": ["id", "title", "status"],
           "type": "object"
         },
         "HTTPValidationError": {
@@ -1240,6 +1380,10 @@
         "ResolveReviewRequest": {
           "additionalProperties": false,
           "properties": {
+            "acknowledge_governance_change": {
+              "default": false,
+              "type": "boolean"
+            },
             "decision": {
               "enum": ["keep-separate", "merge"],
               "type": "string"
@@ -1250,6 +1394,16 @@
         },
         "ResolveReviewResponse": {
           "properties": {
+            "acknowledgment_required": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "approval_url": {
               "anyOf": [
                 {
@@ -1283,10 +1437,30 @@
                 }
               ]
             },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "pending_approval_id": {
               "anyOf": [
                 {
                   "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "preview": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CapabilityMergePreview"
                 },
                 {
                   "type": "null"
@@ -1318,7 +1492,7 @@
               "type": "string"
             },
             "near_miss_reviews_created": {
-              "minimum": 0,
+              "minimum": 0.0,
               "type": "integer"
             },
             "stages": {

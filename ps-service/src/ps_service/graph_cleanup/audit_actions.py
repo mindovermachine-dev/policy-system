@@ -35,6 +35,7 @@ __all__ = [
     "OBLIGATION_MERGE_ACTION",
     "OBLIGATION_UNMERGE_ACTION",
     "CapabilityMergeDetails",
+    "CapabilityMergeFailedReason",
     "CapabilityReleaseGovernanceDetails",
     "CapabilityUnmergeDetails",
     "ObligationMergeDetails",
@@ -48,12 +49,28 @@ CAPABILITY_UNMERGE_ACTION = "capability.unmerge"
 OBLIGATION_UNMERGE_ACTION = "obligation.unmerge"
 
 
+type CapabilityMergeFailedReason = Literal[
+    "graph_guard_missed",
+    "graph_write_failed",
+    "interrupted_no_effect",
+    "actor_not_authorised",
+    "state_digest_mismatch",
+    "revalidation_rejected",
+    "acknowledgment_missing",
+    "review_missing_or_changed",
+    "graph_unavailable",
+]
+
+
 class CapabilityMergeDetails(AuditDetails):
     """`capability.merge`: one Compliance Officer capability merge (tombstone).
 
     `outcome='applied'`: `reason_code` is absent and `before`/`after` are present.
     `outcome='failed'`: `reason_code` names why the edit did not happen (or, for
-    `interrupted_no_effect`, that the reconciler found no effect of an approved merge).
+    `interrupted_no_effect`, that the reconciler found no effect of an approved merge). A
+    refusal before the plan exists (`actor_not_authorised`, `state_digest_mismatch`,
+    `revalidation_rejected`, `acknowledgment_missing`, `review_missing_or_changed`) carries no
+    snapshots and no governing-Policy fields.
     """
 
     survivor_id: str
@@ -63,9 +80,9 @@ class CapabilityMergeDetails(AuditDetails):
     approval_id: str
     before: GraphSnapshot | None = None
     after: GraphSnapshot | None = None
-    reason_code: (
-        Literal["graph_guard_missed", "graph_write_failed", "interrupted_no_effect"] | None
-    ) = None
+    reason_code: CapabilityMergeFailedReason | None = None
+    # Id of the near-miss `PendingReview` this merge resolves; None for a plain cleanup merge.
+    review_id: str | None = None
     # Case 2: the governing policy's status at execution and the ids of every Capability
     # it governed before and after the merge. Absent for case 1 and for an orphan `failed` row.
     policy_id: str | None = None

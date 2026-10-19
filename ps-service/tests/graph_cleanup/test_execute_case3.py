@@ -176,7 +176,9 @@ def test_a_policy_swapped_for_a_different_one_since_the_preview_is_rejected_unau
     outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
     assert rig.logged_groups == []
-    assert rig.audit.rows == []
+    [recorded] = rig.audit.rows
+    assert recorded.outcome == "failed"
+    assert recorded.details["reason_code"] == "revalidation_rejected"
     assert "release-capability-governance" in str(outcome["error"])
 
 

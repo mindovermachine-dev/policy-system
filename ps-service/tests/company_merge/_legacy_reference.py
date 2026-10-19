@@ -30,12 +30,6 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from graph_gateway._fakes import InMemoryGraph
 
-from company_merge._legacy_resolve_reference import (
-    RESOLVE_EXISTENCE_TEMPLATE,
-    RESOLVE_FIND_REVIEW_QUERY,
-    RESOLVE_MERGE_TEMPLATE,
-    interpret_resolve_statement,
-)
 from company_merge._seed_merge_graphs import SingleTenantStore, StoreResult
 
 if TYPE_CHECKING:
@@ -62,7 +56,6 @@ __all__ = [
     "write_legacy_pending_reviews",
     "write_legacy_practice_areas_and_risk_paths",
     "write_legacy_resolve_keep_separate",
-    "write_legacy_resolve_merge",
     "write_legacy_rewired_edges",
 ]
 
@@ -208,9 +201,6 @@ class LegacyRecordingGraph:
     def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
         """Apply one frozen legacy statement; any other shape is a failure of the reference."""
         assert params is not None, f"a frozen write statement carries parameters: {q}"
-        resolved = interpret_resolve_statement(self.nodes, self.edges, q, params)
-        if resolved is not None:
-            return _Result(cast("list[object]", resolved.rows))
         if _INSTRUMENT_QUERY.match(q):
             self._merge_node(_INSTRUMENT, params, create_only=False)
         elif create_match := _CREATE_ONLY_QUERY.match(q):
@@ -510,46 +500,6 @@ def write_legacy_pending_reviews(
                 "created_at": values.now().isoformat(),
             },
         )
-
-
-def write_legacy_resolve_merge(graph: LegacyWriteTarget, review_id: str) -> tuple[str, str] | None:
-    """The frozen `resolve_review` merge decision (slice 10a): read, check, then one statement.
-
-    The original's control flow: the review's kind (none: nothing), the combined existence check
-    (either node gone or a `merged` tombstone: nothing is written) and then the single `CASE` /
-    `FOREACH` / `DETACH DELETE` statement. Returns `(winner_id, loser_id)`, or `None` when the
-    review is unknown, stale, or vanished before the write (the original then failed on the empty
-    result; here that is a `None`, and the rewires it had already made stay, as they did).
-    """
-    kind_rows = _rows(graph.query(RESOLVE_FIND_REVIEW_QUERY, params={"review_id": review_id}))
-    if not kind_rows:
-        return None
-    kind = cast("str", kind_rows[0][0])
-    existence = _rows(
-        graph.query(RESOLVE_EXISTENCE_TEMPLATE.format(kind=kind), params={"review_id": review_id})
-    )
-    if not existence:
-        return None
-    incoming_id, nearest_existing_id, incoming_exists, existing_exists = existence[0]
-    if not incoming_exists or not existing_exists:
-        return None
-    merged = _rows(
-        graph.query(
-            RESOLVE_MERGE_TEMPLATE.format(kind=kind),
-            params={
-                "incoming_id": incoming_id,
-                "nearest_existing_id": nearest_existing_id,
-                "review_id": review_id,
-            },
-        )
-    )
-    if not merged:
-        return None
-    return cast("str", merged[0][0]), cast("str", merged[0][1])
-
-
-def _rows(result: object) -> list[list[object]]:
-    return cast("list[list[object]]", cast("_Result", result).result_set)
 
 
 def write_legacy_resolve_keep_separate(graph: LegacyWriteTarget, review_id: str) -> None:

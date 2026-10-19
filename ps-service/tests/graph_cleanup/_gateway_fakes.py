@@ -27,6 +27,7 @@ from graph_cleanup._fakes import (
     SURVIVOR,
     RecordingAuditStore,
 )
+from ps_service.company_merge import pending_review
 from ps_service.graph_cleanup import graph_reader
 from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 from ps_service.graph_gateway.models import MutationGroup, UpsertNode
@@ -80,6 +81,8 @@ class CleanupReadGraph:
             graph_reader._ROLE_EXISTS_QUERY: self._role_exists,
             graph_reader._REQUIREMENTS_EXIST_QUERY: self._requirements_exist,
             graph_reader._CAPABILITY_STATUSES_QUERY: self._capability_statuses,
+            pending_review._REVIEW_MERGE_SIDES_QUERY: self._review_merge_sides,
+            pending_review._GET_REVIEW_QUERY: self._get_review,
         }
         for _rel_type, query in graph_reader._ENDPOINT_QUERIES:
             self._reads[query] = self._existing_nodes(_ENDPOINT_LABELS[_rel_type])
@@ -127,6 +130,49 @@ class CleanupReadGraph:
             ]
             for (label, node_id), props in self._graph.nodes.items()
             if label == "Capability" and node_id in wanted
+        ]
+
+    def _get_review(self, params: dict[str, object]) -> list[object]:
+        """One `PendingReview` as `get_pending_review` reads it (id, kind, both sides, stamps)."""
+        review_id = cast("str", params["review_id"])
+        review = self._graph.nodes.get(("PendingReview", review_id))
+        if review is None:
+            return []
+        return [
+            [
+                review_id,
+                review["kind"],
+                review["incoming_id"],
+                review.get("incoming_text", ""),
+                review["nearest_existing_id"],
+                review.get("nearest_existing_text", ""),
+                review.get("similarity", 0.0),
+                review.get("created_at", ""),
+            ]
+        ]
+
+    def _review_merge_sides(self, params: dict[str, object]) -> list[object]:
+        """The near-miss review's kind and ids, and whether each side is a live Capability."""
+        review = self._graph.nodes.get(("PendingReview", cast("str", params["review_id"])))
+        if review is None:
+            return []
+        sides = [
+            self._graph.nodes.get(("Capability", cast("str", review[key])))
+            for key in ("incoming_id", "nearest_existing_id")
+        ]
+        live = [
+            side if side and side.get("status", "active") != "merged" else None for side in sides
+        ]
+        return [
+            [
+                review["kind"],
+                review["incoming_id"],
+                review["nearest_existing_id"],
+                live[0] is not None,
+                live[1] is not None,
+                live[0].get("created_at") if live[0] else None,
+                live[1].get("created_at") if live[1] else None,
+            ]
         ]
 
     def _governed_by(self) -> list[tuple[str, str]]:
@@ -361,6 +407,32 @@ class CleanupGraphSeeder:
     def seed_endpoint(self, label: str, node_id: str, **properties: object) -> None:
         """Seed an edge endpoint node (an Obligation, PracticeArea, Requirement, ...)."""
         self.graph.seed_node((label,), node_id, dict(properties))
+
+    def seed_near_miss_review(
+        self,
+        review_id: str,
+        *,
+        incoming_id: str,
+        existing_id: str,
+        kind: str = "Capability",
+        incoming_created_at: str | None = None,
+        existing_created_at: str | None = None,
+    ) -> None:
+        """Seed a `PendingReview` of the pair; the `created_at` stamps go on the Capabilities."""
+        for capability_id, created_at in (
+            (incoming_id, incoming_created_at),
+            (existing_id, existing_created_at),
+        ):
+            node = self.graph.nodes.get(("Capability", capability_id))
+            if node is not None and created_at is not None:
+                node["created_at"] = created_at
+        self.seed_endpoint(
+            "PendingReview",
+            review_id,
+            kind=kind,
+            incoming_id=incoming_id,
+            nearest_existing_id=existing_id,
+        )
 
     def seed_capability_merge_world(
         self,

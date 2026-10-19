@@ -1,6 +1,6 @@
-"""Both `resolve_review` decisions map a gateway failure like every stage writer.
+"""`resolve_review` maps a gateway failure like every stage writer.
 
-For `keep-separate` and `merge`: a group the gateway rejects, a group committed to the
+For `keep-separate`: a group the gateway rejects, a group committed to the
 log but not applied (`committed_apply_pending`) and a log that cannot be reached all surface as
 `CompanyMergePersistenceError("FalkorDB write failed: ...")`, with no gateway internals in the
 message; FalkorDB connectivity health is recorded as the gateway records it (transient exhaustion
@@ -14,7 +14,7 @@ rejection is injected at the `GroupSubmitter` boundary with a hand-written wrapp
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
@@ -50,9 +50,6 @@ _LEAKS = (
     "Traceback",
 )
 _REVIEW_ID = "review_aaa"
-_DECISIONS = pytest.mark.parametrize("decision", ["keep-separate", "merge"])
-
-type _Decision = Literal["keep-separate", "merge"]
 
 
 def _seed_review(rig: MergeRig) -> None:
@@ -84,8 +81,8 @@ def _assert_clean(error: CompanyMergePersistenceError) -> None:
         assert leak not in message, f"{leak!r} leaked into {message!r}"
 
 
-def _resolve(rig: MergeRig, target: GraphWriteTarget, decision: _Decision) -> None:
-    resolve_review(rig.legacy, _REVIEW_ID, decision, target)
+def _resolve(rig: MergeRig, target: GraphWriteTarget) -> None:
+    resolve_review(rig.legacy, _REVIEW_ID, "keep-separate", target)
 
 
 def _review_and_candidates_intact(rig: MergeRig) -> None:
@@ -105,9 +102,8 @@ def _review_and_candidates_intact(rig: MergeRig) -> None:
     ],
     ids=["unlisted-name", "missing-target", "stale-state"],
 )
-@_DECISIONS
 def test_a_rejected_resolution_group_is_a_persistence_error_and_changes_nothing(
-    decision: _Decision, refusal: Exception, merge_rig: MergeRig
+    refusal: Exception, merge_rig: MergeRig
 ) -> None:
     _seed_review(merge_rig)
     target = GraphWriteTarget(
@@ -115,7 +111,7 @@ def test_a_rejected_resolution_group_is_a_persistence_error_and_changes_nothing(
     )
 
     with pytest.raises(CompanyMergePersistenceError) as exc_info:
-        _resolve(merge_rig, target, decision)
+        _resolve(merge_rig, target)
 
     _assert_clean(exc_info.value)
     assert exc_info.value.__cause__ is refusal
@@ -125,9 +121,8 @@ def test_a_rejected_resolution_group_is_a_persistence_error_and_changes_nothing(
     assert is_healthy(FALKORDB) is True  # a refusal is not a connectivity problem
 
 
-@_DECISIONS
 def test_a_resolution_committed_but_not_applied_is_a_persistence_error_and_marks_falkordb_unhealthy(
-    decision: _Decision, merge_rig: MergeRig
+    merge_rig: MergeRig,
 ) -> None:
     """FalkorDB is down when the gateway applies: the group is in the log (applied on recovery)
     but the resolution must not report success.
@@ -137,23 +132,22 @@ def test_a_resolution_committed_but_not_applied_is_a_persistence_error_and_marks
     target = GraphWriteTarget(merge_rig.gateway, POLICY_SYSTEM, merge_rig.audit_event_id)
 
     with pytest.raises(CompanyMergePersistenceError) as exc_info:
-        _resolve(merge_rig, target, decision)
+        _resolve(merge_rig, target)
 
     _assert_clean(exc_info.value)
     assert len(merge_rig.groups) == 1
     assert is_healthy(FALKORDB) is False
 
 
-@_DECISIONS
 def test_an_unreachable_log_fails_a_resolution_with_the_persistence_error_and_logs_nothing(
-    decision: _Decision, merge_rig: MergeRig
+    merge_rig: MergeRig,
 ) -> None:
     _seed_review(merge_rig)
     merge_rig.store.fail_appends(error=GraphLogUnavailableError())
     target = GraphWriteTarget(merge_rig.gateway, POLICY_SYSTEM, merge_rig.audit_event_id)
 
     with pytest.raises(CompanyMergePersistenceError) as exc_info:
-        _resolve(merge_rig, target, decision)
+        _resolve(merge_rig, target)
 
     _assert_clean(exc_info.value)
     assert isinstance(exc_info.value.__cause__, GraphLogUnavailableError)

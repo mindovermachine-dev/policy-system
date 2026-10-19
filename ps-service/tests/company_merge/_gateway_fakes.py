@@ -36,22 +36,6 @@ if TYPE_CHECKING:
 
 POLICY_SYSTEM = "policy_system"
 _FIND_REVIEW_READ = "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind"
-_EXISTENCE_READ = re.compile(
-    r"^MATCH \(r:PendingReview \{id: \$review_id\}\) "
-    r"OPTIONAL MATCH \(a:(?P<kind>\w+) \{id: r\.incoming_id\}\) "
-    r"WHERE coalesce\(a\.status, 'active'\) <> 'merged' "
-    r"OPTIONAL MATCH \(b:(?P=kind) \{id: r\.nearest_existing_id\}\) "
-    r"WHERE coalesce\(b\.status, 'active'\) <> 'merged' "
-    r"RETURN r\.incoming_id AS incoming_id, r\.nearest_existing_id AS nearest_existing_id, "
-    r"a IS NOT NULL AS incoming_exists, b IS NOT NULL AS existing_exists, "
-    r"a\.created_at AS incoming_created_at, b\.created_at AS existing_created_at$"
-)
-_LOSER_EDGE_READ = re.compile(
-    r"^MATCH (?:"
-    r"\(n:(?P<in_other>\w+)\)-\[:(?P<in_type>\w+)\]->\(l:(?P<in_kind>\w+) \{id: \$loser_id\}\)"
-    r"|\(l:(?P<out_kind>\w+) \{id: \$loser_id\}\)-\[:(?P<out_type>\w+)\]->\(n:(?P<out_other>\w+)\)"
-    r") RETURN DISTINCT n\.id$"
-)
 _UNRESOLVED_PAIRS_READ = re.compile(
     r"^UNWIND \$pairs AS p "
     r"MATCH \(r:PendingReview \{kind: \$kind, incoming_id: p\.incoming_id, "
@@ -113,18 +97,10 @@ class RigReadHandle(SingleTenantStore):
                 ("PendingReview", cast("str", (params or {})["review_id"]))
             )
             return [] if review is None else [[review["kind"]]]
-        existence = _EXISTENCE_READ.match(q)
-        if existence is not None:
-            return self._existence_row(
-                existence.group("kind"), cast("str", (params or {})["review_id"])
-            )
         if _UNRESOLVED_PAIRS_READ.match(q) is not None:
             return self._unresolved_pair_rows(params or {})
         if q.startswith(_LIST_REVIEWS_PREFIX):
             return self._resolvable_review_rows()
-        loser_edges = _LOSER_EDGE_READ.match(q)
-        if loser_edges is not None:
-            return self._loser_edge_rows(loser_edges, cast("str", (params or {})["loser_id"]))
         return super()._read(q, params)
 
     def _unresolved_pair_rows(self, params: dict[str, object]) -> list[object]:
@@ -169,47 +145,6 @@ class RigReadHandle(SingleTenantStore):
             ]
             for p in resolvable
         ]
-
-    def _existence_row(self, kind: str, review_id: str) -> list[object]:
-        """The combined existence read: both nodes (not `merged`) and their `created_at`."""
-        review = self._graph.nodes.get(("PendingReview", review_id))
-        if review is None:
-            return []
-
-        def _node(node_id: object) -> dict[str, object] | None:
-            node = self._graph.nodes.get((kind, cast("str", node_id)))
-            return node if node is not None and node.get("status", "active") != "merged" else None
-
-        incoming, existing = _node(review["incoming_id"]), _node(review["nearest_existing_id"])
-        return [
-            [
-                review["incoming_id"],
-                review["nearest_existing_id"],
-                incoming is not None,
-                existing is not None,
-                None if incoming is None else incoming.get("created_at"),
-                None if existing is None else existing.get("created_at"),
-            ]
-        ]
-
-    def _loser_edge_rows(self, match: re.Match[str], loser_id: str) -> list[object]:
-        """`RETURN DISTINCT n.id` of the other end of the loser's edges of one type."""
-        groups = match.groupdict()
-        if groups["in_type"] is not None:  # (n:Other)-[:T]->(l:Kind {id: loser})
-            edge_type, other, kind = groups["in_type"], groups["in_other"], groups["in_kind"]
-            ends = [
-                (k[1], k[2])
-                for k in self._graph.edges
-                if k[0] == edge_type and (k[3], k[4]) == (kind, loser_id)
-            ]
-        else:  # (l:Kind {id: loser})-[:T]->(n:Other)
-            edge_type, other, kind = groups["out_type"], groups["out_other"], groups["out_kind"]
-            ends = [
-                (k[3], k[4])
-                for k in self._graph.edges
-                if k[0] == edge_type and (k[1], k[2]) == (kind, loser_id)
-            ]
-        return [[node_id] for node_id in sorted({i for label, i in ends if label == other})]
 
 
 class MergeRig(GatewayRig):

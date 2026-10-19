@@ -1,14 +1,15 @@
 """Approval-executor registry and `sign/verify` dispatch .
 
 A signed approval runs the executor registered for its `tool_name`; the outcome the
-executor returns is stored on the row. An unregistered `tool_name`, or an executor that
-raises, stores a generic safe error and executes nothing (the signature stays consumed).
-Near-miss rows keep their original path (`test_signing_ceremony.py`, unchanged).
+executor returns is stored on the row. An executor that raises stores a generic safe error
+(the signature stays consumed). An unregistered `tool_name` never reaches `mark_signed`: the
+sign is rejected generically and the row stays pending. Every privileged tool, near-miss
+merges included, runs through this registry.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     from ps_service.passkey_signing.models import PendingApprovalRow
 
 _TOOL = "test-dispatch-tool"
+_INVALID_CODE = "pending_approval_invalid_or_expired"
 _GENERIC = (
     "this action could not be completed; if you still intend to proceed, ask for a new approval"
 )
@@ -64,7 +66,9 @@ def _config() -> ServiceConfig:
     )
 
 
-def _sign(tool_name: str) -> tuple[dict[str, object], FakePendingApprovalStore, PendingApprovalRow]:
+def _post_sign(
+    tool_name: str,
+) -> tuple[int, dict[str, object], FakePendingApprovalStore, PendingApprovalRow]:
     pending = FakePendingApprovalStore()
     credentials = FakeSigningCredentialStore()
     row, code = pending.create_pending_approval(
@@ -86,8 +90,13 @@ def _sign(tool_name: str) -> tuple[dict[str, object], FakePendingApprovalStore, 
     response = client.post(
         f"/approvals/{row.id}/sign/verify", json={"code": code, "credential": assertion}
     )
-    assert response.status_code == 200
-    return response.json(), pending, row
+    return response.status_code, response.json(), pending, row
+
+
+def _sign(tool_name: str) -> tuple[dict[str, object], FakePendingApprovalStore, PendingApprovalRow]:
+    status_code, body, pending, row = _post_sign(tool_name)
+    assert status_code == 200
+    return body, pending, row
 
 
 def test_a_registered_executor_runs_with_the_row_and_its_outcome_is_stored() -> None:
@@ -110,14 +119,17 @@ def test_a_registered_executor_runs_with_the_row_and_its_outcome_is_stored() -> 
     assert stored.outcome == {"done": True}
 
 
-def test_an_unregistered_tool_name_stores_a_generic_error_and_runs_nothing() -> None:
-    body, pending, row = _sign("never-registered")
+def test_an_unregistered_tool_name_is_rejected_generically_and_the_row_stays_pending() -> None:
+    """A tool name with no registered executor, for example an in-flight legacy
+    `near_misses_resolve` approval, is refused before the signature is consumed.
+    """
+    status_code, body, pending, row = _post_sign("near_misses_resolve")
 
-    assert body["status"] == "signed"
-    assert body["error"] == _GENERIC
+    assert status_code == 404
+    assert cast("dict[str, object]", body["error"])["code"] == _INVALID_CODE
     stored = pending.get_by_id(row.id)
     assert stored is not None
-    assert stored.outcome == {"error": _GENERIC}
+    assert (stored.status, stored.outcome) == ("pending", None)
 
 
 def test_an_executor_that_raises_stores_a_generic_error_without_internal_detail() -> None:

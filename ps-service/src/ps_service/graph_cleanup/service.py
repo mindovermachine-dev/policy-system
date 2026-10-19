@@ -229,7 +229,7 @@ class CapabilityMergeApproval:
     expires_at: str  # ISO 8601
 
 
-def create_capability_merge_approval(
+def create_capability_merge_approval(  # noqa: PLR0913 -- the pair, the acknowledgment, the optional review, the actor and the approval collaborators; no natural grouping
     graph: GraphHandle,
     *,
     survivor_id: str,
@@ -238,13 +238,15 @@ def create_capability_merge_approval(
     actor: tuple[str, str],
     base_url: str,
     store: PendingApprovalStore,
+    review_id: str | None = None,
     emitter: LogEmitter | None = None,
 ) -> CapabilityMergeApproval:
     """Preview the merge and create a passkey approval bound to the exact pair and state.
 
     The signed `normalized_args` carry both ids, the acknowledgment flag and the sha256
     `state_digest` of the previewed state, so the signature covers the pair and the state
-    the officer actually saw.
+    the officer actually saw. A `review_id` is signed with them and makes the executor delete
+    that near-miss `PendingReview` in the merge group.
 
     Business Rules:
         A case-2 pair (exactly one Capability governed) needs the officer's explicit
@@ -261,6 +263,8 @@ def create_capability_merge_approval(
         actor: `(subject, issuer)` of the requesting officer; the approval is bound to them.
         base_url: Origin used to build the approval link, without a trailing slash.
         store: Pending-approval store that holds the approval row.
+        review_id: Id of the near-miss `PendingReview` this merge resolves; None for a plain
+            cleanup merge.
         emitter: Optional log emitter; None uses the default.
 
     Returns:
@@ -304,6 +308,7 @@ def create_capability_merge_approval(
             "absorbed_id": absorbed_id,
             "acknowledge_governance_change": acknowledge_governance_change,
             "state_digest": plan.state_digest,
+            **({"review_id": review_id} if review_id is not None else {}),
         },
         actor_subject=actor[0],
         actor_issuer=actor[1],
@@ -313,7 +318,11 @@ def create_capability_merge_approval(
         component=_COMPONENT,
         action="create_capability_merge_approval",
         outcome="succeeded",
-        extra={"approval_id": row.id, "policy_case": plan.preview.policy_case},
+        extra={
+            "approval_id": row.id,
+            "policy_case": plan.preview.policy_case,
+            "review_id": review_id,
+        },
         emitter=emitter,
     )
     return CapabilityMergeApproval(
@@ -660,12 +669,23 @@ class CleanupApprovalStatus:
         tool_name: The cleanup tool the approval was created for.
         status: `signed` once signed; otherwise `expired` after `expires_at`, else `pending`.
         outcome: The executor's outcome dict (or the reconciler's), or None while none is recorded.
+        review_id: Id of the near-miss `PendingReview` a `merge-capabilities` approval resolves;
+            None for every other approval.
     """
 
     pending_approval_id: str
     tool_name: str
     status: Literal["pending", "expired", "signed"]
     outcome: dict[str, object] | None
+    review_id: str | None = None
+
+
+def _signed_review_id(row: PendingApprovalRow) -> str | None:
+    """The near-miss review id signed into a `merge-capabilities` approval, or None."""
+    review_id = row.normalized_args.get("review_id")
+    if row.tool_name == TOOL_MERGE_CAPABILITIES and isinstance(review_id, str):
+        return review_id
+    return None
 
 
 def _live_status(row: PendingApprovalRow) -> Literal["pending", "expired", "signed"]:
@@ -725,6 +745,7 @@ def _interrupted_audit_row(row: PendingApprovalRow) -> tuple[str, str, str, dict
         acknowledged=row.normalized_args.get("acknowledge_governance_change") is True,
         approval_id=row.id,
         reason_code="interrupted_no_effect",
+        review_id=_signed_review_id(row),
     ).model_dump()
     return CAPABILITY_MERGE_ACTION, "capability", absorbed_id, details
 
@@ -857,4 +878,5 @@ def check_cleanup_approval(
         tool_name=row.tool_name,
         status=_live_status(row),
         outcome=outcome,
+        review_id=_signed_review_id(row),
     )

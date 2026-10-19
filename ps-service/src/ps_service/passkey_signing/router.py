@@ -1,6 +1,6 @@
 """Companion-browser signing ceremony: the `/approvals/{id}` routes and their router factory.
 
-A privileged action (for example resolving a near-miss as a merge) is not executed when it is
+A privileged action (for example merging two Capabilities) is not executed when it is
 requested. The requester receives a link to a pending approval; the approver opens it in a
 companion browser, enrols a passkey if none exists for that host, and signs the action with a
 WebAuthn assertion. Only a verified assertion causes the action to run.
@@ -24,13 +24,13 @@ approval, unknown or wrong-actor credential, lost consumption race, malformed or
 WebAuthn payload) raises the identical `PendingApprovalInvalidOrExpiredError`, so the response
 never reveals why. The real reason is logged server-side only.
 
-Audit: the signed near-miss merge is audited as `near_miss.resolve` with the approver as actor
-and the approval id in the details. The single-use approval is consumed (`mark_signed` precedes
-the merge) even when the opening audit row cannot be written; the merge then does not run,
-nothing is audited as applied, the stored outcome is `_AUDIT_UNAVAILABLE_MESSAGE` and the
-approver must request a new approval. No audit row is written before `mark_signed`, because it
-would be orphaned if the consumption race were lost. The graph write gateway is checked before
-`mark_signed`, so a missing gateway answers 503 and leaves the approval pending.
+Execution: a signed approval runs the executor registered for its `tool_name`
+(`ps_service.passkey_signing.executors`); the component that owns the action audits its own write
+(for example a Capability merge writes its `capability.merge` rows). The single-use approval is
+consumed by `mark_signed` before the executor runs, so a failed action never leaves it reusable:
+the stored outcome is the executor's sanitized error and the approver must request a new
+approval. An approval whose `tool_name` has no registered executor is rejected before
+`mark_signed` and stays pending until it expires. No audit row is written by this router.
 
 Exports:
     build_passkey_signing_router: builds the `APIRouter` that `ps_service.main.create_app`
@@ -52,21 +52,9 @@ from webauthn.helpers import base64url_to_bytes
 
 from ps_service.api.dependencies import (
     get_service_config,
-    provide_audit_store,
-    provide_near_miss_review_dependencies,
     provide_pending_approval_store,
 )
-from ps_service.api.errors import PendingApprovalInvalidOrExpiredError, PendingReviewNotFoundError
-from ps_service.api.graph_write_access import graph_write_access
-from ps_service.api.near_miss_review_orchestration import (
-    NearMissReviewDependencies,
-    run_resolve_near_miss,
-)
-from ps_service.audit import (
-    AuditContext,
-    AuditStore,
-    AuditTrailUnavailableError,
-)
+from ps_service.api.errors import PendingApprovalInvalidOrExpiredError
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
@@ -635,102 +623,6 @@ def _resolve_credential_for_signing(
     return credential
 
 
-_MERGE_FAILED_MESSAGE = (
-    "this action could not be completed; if you still intend to merge, ask for a new approval"
-)
-_AUDIT_UNAVAILABLE_MESSAGE = (
-    "The audit trail is temporarily unavailable; the merge was not performed. "
-    "Request a new approval."
-)
-
-
-def _log_merge_failure(*, pending_approval_id: str, review_id: str | None, reason: str) -> None:
-    """Log a failed-outcome entry saying why a signed merge did nothing.
-
-    The entry carries the approval id, the review id when the row has one, and `reason`; it
-    never carries the code, the credential or any passkey material.
-    """
-    extra: dict[str, object] = {"pending_approval_id": pending_approval_id, "reason": reason}
-    if review_id is not None:
-        extra["review_id"] = review_id
-    emit_log_entry(
-        component="passkey_signing", action="sign_verify_merge", outcome="failed", extra=extra
-    )
-
-
-def _execute_merge_and_record_outcome(
-    *,
-    row: PendingApprovalRow,
-    store: PendingApprovalStore,
-    near_miss_dependencies: NearMissReviewDependencies,
-    config: ServiceConfig,
-    audit_store: AuditStore,
-) -> dict[str, object]:
-    """Run the near-miss merge for a signed approval and store its outcome on the row.
-
-    Called only after `mark_signed` has committed, so the signature stays consumed whatever
-    the merge does. The merge is performed by `run_resolve_near_miss`, audited as
-    `near_miss.resolve` with the approver (the approval's actor) as actor and the approval id
-    in the details; its opening `applied` audit row precedes the write. No failure of the
-    merge is re-raised: each is logged and stored as a fixed safe error message.
-
-    Args:
-        row: The signed approval; `normalized_args["review_id"]` names the review to merge.
-        store: Pending-approval store; receives the outcome.
-        near_miss_dependencies: The near-miss review dependency bundle used by the merge.
-        config: The resolved service configuration.
-        audit_store: Store receiving the merge's `near_miss.resolve` audit rows.
-
-    Returns:
-        The stored outcome: `{"winner_id", "loser_id"}` on success, otherwise
-        `{"error": <fixed message>}`. The message is a missing-`review_id` notice, the
-        audit-unavailable notice (the merge did not run) or a generic failed notice (the
-        review is gone, or any other failure).
-
-    Raises:
-        PendingApprovalPersistenceError: storing the outcome failed.
-
-    Side Effects:
-        Merges the near-miss entities in the graph and writes audit rows through
-        `run_resolve_near_miss` on success; writes the outcome to the approval row; emits a
-        failed-outcome log entry for every non-success path.
-    """
-    review_id = row.normalized_args.get("review_id")
-    if not isinstance(review_id, str):
-        _log_merge_failure(pending_approval_id=row.id, review_id=None, reason="missing_review_id")
-        outcome: dict[str, object] = {
-            "error": "pending approval is missing its review_id; the merge could not be run"
-        }
-        store.set_outcome(row.id, outcome)
-        return outcome
-    try:
-        result = run_resolve_near_miss(
-            review_id,
-            "merge",
-            config=config,
-            dependencies=near_miss_dependencies,
-            audit=AuditContext((row.actor_subject, row.actor_issuer), audit_store),
-            approval_id=row.id,
-        )
-    except AuditTrailUnavailableError:
-        _log_merge_failure(
-            pending_approval_id=row.id, review_id=review_id, reason="audit_opening_failed"
-        )
-        outcome = {"error": _AUDIT_UNAVAILABLE_MESSAGE}
-    except PendingReviewNotFoundError as exc:
-        # The response and stored outcome stay generic; the log is the only record of the reason.
-        _log_merge_failure(pending_approval_id=row.id, review_id=review_id, reason=str(exc))
-        outcome = {"error": _MERGE_FAILED_MESSAGE}
-    except Exception as exc:  # noqa: BLE001 -- the signature is already consumed, so letting a persistence, Redis, configuration or index error escape would store no outcome, log nothing, and 500 the caller into the shell's "this approval link is no longer valid". Not silent: `_log_merge_failure` records the real exception server-side.
-        _log_merge_failure(pending_approval_id=row.id, review_id=review_id, reason=repr(exc))
-        outcome = {"error": _MERGE_FAILED_MESSAGE}
-    else:
-        outcome = {"winner_id": result.winner_id, "loser_id": result.loser_id}
-    store.set_outcome(row.id, outcome)
-    return outcome
-
-
-_NEAR_MISS_TOOL_NAME = "near_misses_resolve"
 _EXECUTOR_FAILED_MESSAGE = (
     "this action could not be completed; if you still intend to proceed, ask for a new approval"
 )
@@ -741,9 +633,9 @@ def _run_registered_executor_and_record_outcome(
 ) -> dict[str, object]:
     """Run the executor registered for the approval's tool and store its outcome on the row.
 
-    The signature is already consumed. An unregistered tool name, or an executor that raises,
-    stores one generic safe error; the real reason is logged server-side only and nothing is
-    retried.
+    The signature is already consumed. An executor that raises (or, as a defence, a tool name
+    with no executor, which `post_sign_verify` rejects earlier) stores one generic safe error;
+    the real reason is logged server-side only and nothing is retried.
 
     Args:
         row: The signed approval; `tool_name` selects the executor.
@@ -790,22 +682,17 @@ async def post_sign_verify(
     http_request: Request,
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     credential_store: Annotated[SigningCredentialStore, Depends(provide_signing_credential_store)],
-    near_miss_dependencies: Annotated[
-        NearMissReviewDependencies, Depends(provide_near_miss_review_dependencies)
-    ],
     config: Annotated[ServiceConfig, Depends(get_service_config)],
-    audit_store: Annotated[AuditStore, Depends(provide_audit_store)],
 ) -> dict[str, object]:
     """Verify the approver's WebAuthn assertion and, if valid, run the approved action.
 
     Steps, in order: (1) check the code, status and expiry; (2) recompute the expected
     challenge from the approval (a client-supplied challenge is never trusted); (3) resolve
     the asserted credential and require that it belongs to the approval's actor; (4) verify
-    the assertion cryptographically; (5) for a near-miss merge, require a graph write gateway
-    before consuming the approval; (6) atomically flip the approval from `pending` to
-    `signed`, so it can be used once; (7) persist the credential's new sign count; (8) run the
-    action (the near-miss merge, or the executor registered for the approval's tool) and store
-    its outcome. A failed action does not undo the signature.
+    the assertion cryptographically; (5) require an executor registered for the approval's
+    tool; (6) atomically flip the approval from `pending` to `signed`, so it can be used once;
+    (7) persist the credential's new sign count; (8) run the registered executor and store its
+    outcome. A failed action does not undo the signature.
 
     Args:
         pending_approval_id: The approval id from the URL path.
@@ -815,32 +702,29 @@ async def post_sign_verify(
             `rp_id` and origin the assertion is verified against.
         store: Pending-approval store (injected).
         credential_store: Signing-credential store (injected).
-        near_miss_dependencies: The near-miss review dependency bundle (injected) used when
-            the approval is a near-miss merge.
         config: The resolved service configuration (injected).
-        audit_store: Store receiving the merge's `near_miss.resolve` audit rows (injected).
 
     Returns:
-        `{"status": "signed", ...outcome}`. The outcome is `winner_id` and `loser_id` after a
-        successful merge, the executor's result for other tools, or `{"error": <fixed message>}`
-        when the signature was valid but the action did not complete. The signature is consumed
-        in every case; the approver must then request a new approval.
+        `{"status": "signed", ...outcome}`. The outcome is the registered executor's result, or
+        `{"error": <fixed message>}` when the signature was valid but the action did not
+        complete (including a Capability merge whose graph write could not be made). The
+        signature is consumed in every case; the approver must then request a new approval.
 
     Raises:
         PendingApprovalInvalidOrExpiredError: the id is unknown, the code is wrong, the
             approval is expired or already signed, the credential is unknown or belongs to
             another actor, the payload is malformed, WebAuthn verification fails, or another
-            request consumed the approval first (HTTP 404, generic body).
-        GraphWriteUnavailableError: a near-miss merge was approved but no graph write gateway
-            is installed (HTTP 503). The approval stays pending and can be retried.
+            request consumed the approval first, or no executor is registered for the
+            approval's tool (HTTP 404, generic body; in the last case the row stays pending).
         PendingApprovalPersistenceError: reading the approval, consuming it or storing the
             outcome failed.
         SigningCredentialPersistenceError: reading or updating the credential failed.
 
     Side Effects:
-        Marks the approval signed, updates the credential's sign count, runs the approved
-        action (graph merge and audit rows for a near-miss merge), stores the action outcome on
-        the approval row, and logs a failed-outcome entry for each rejection or failed action.
+        Marks the approval signed, updates the credential's sign count, runs the executor
+        registered for the approval's tool (which owns any graph write and its audit rows),
+        stores the action outcome on the approval row, and logs a failed-outcome entry for each
+        rejection or failed action.
     """
     row = _verify_code(
         store=store,
@@ -864,11 +748,15 @@ async def post_sign_verify(
             credential_current_sign_count=credential.sign_count,
         )
 
-    if row.tool_name == _NEAR_MISS_TOOL_NAME:
-        # The merge writes through the graph write gateway. Check it BEFORE the single-use
-        # approval is consumed, so a missing gateway is a 503 the same approval can retry,
-        # not a burned approval. Side-effect free; no audit row exists yet.
-        graph_write_access(config)
+    if resolve_approval_executor(row.tool_name) is None:
+        # No executor can run this action (for example an in-flight approval of a retired tool),
+        # so refuse before the single-use approval is consumed; the row stays pending and
+        # expires. The response is the same generic rejection as every other failure.
+        reject(
+            action="sign_verify",
+            pending_approval_id=pending_approval_id,
+            reason="no_executor_registered",
+        )
     if not store.mark_signed(pending_approval_id):
         # Lost the atomic compare-and-set, or the row was consumed or expired after the
         # earlier check: never run the action.
@@ -881,16 +769,7 @@ async def post_sign_verify(
         credential_id=credential.credential_id, sign_count=verified.new_sign_count
     )
 
-    if row.tool_name == _NEAR_MISS_TOOL_NAME:
-        outcome = _execute_merge_and_record_outcome(
-            row=row,
-            store=store,
-            near_miss_dependencies=near_miss_dependencies,
-            config=config,
-            audit_store=audit_store,
-        )
-    else:
-        outcome = _run_registered_executor_and_record_outcome(row=row, store=store, config=config)
+    outcome = _run_registered_executor_and_record_outcome(row=row, store=store, config=config)
     return {"status": "signed", **outcome}
 
 

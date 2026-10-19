@@ -8,12 +8,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ps_service.company_merge.errors import CompanyMergePersistenceError
+
 if TYPE_CHECKING:
     from ps_service.graph_cleanup.models import CapabilityMergePreview
 
 
-class GraphCleanupPersistenceError(Exception):
+class GraphCleanupPersistenceError(CompanyMergePersistenceError):
     """A FalkorDB read or write for the single-tenant graph could not be completed.
+
+    It is a `CompanyMergePersistenceError`, so a near-miss merge whose gateway group is refused
+    raises the persistence error the near-miss path already names; callers that catch the
+    cleanup type keep working unchanged.
 
     Raised when the graph or the gateway is unreachable or rejects the operation. Carries a
     generic message only; the underlying driver error is chained as `__cause__` and logged

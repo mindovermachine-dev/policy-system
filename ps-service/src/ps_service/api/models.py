@@ -16,6 +16,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ps_service.api.ingestion_orchestration import SHORT_NAME_PATTERN
+from ps_service.graph_cleanup.models import (
+    CapabilityMergePreview,
+)
 
 
 class CatalogInstrumentEntry(BaseModel):
@@ -488,31 +491,45 @@ class ResolveReviewRequest(BaseModel):
 
     Attributes:
         decision: ``"keep-separate"`` clears the pending review and changes nothing else.
-            ``"merge"`` requests a merge of the two entities, which needs a signed passkey
-            approval before it takes effect.
+            ``"merge"`` requests a merge of the two Capabilities, which needs a Compliance Officer
+            and a signed passkey approval before it takes effect.
+        acknowledge_governance_change: ``True`` to accept the governance change of a merge where
+            exactly one of the two Capabilities has a governing Policy. Default ``False``: such a
+            merge then returns its preview and ``acknowledgment_required`` and creates no approval.
+            It has no effect on ``keep-separate`` or on the other merge cases.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["keep-separate", "merge"]
+    acknowledge_governance_change: bool = False
 
 
 class ResolveReviewResponse(BaseModel):
     """Response body for `POST /near-misses/{review_id}/resolve`.
 
-    A ``"merge"`` decision does not execute synchronously: the response carries the pending
-    signed-passkey approval, and ``winner_id`` and ``loser_id`` stay ``None``. A
-    ``"keep-separate"`` decision carries no approval fields.
+    A ``"merge"`` decision does not execute synchronously: it previews the merge and, once any
+    required acknowledgment is given, carries the pending signed-passkey approval; ``winner_id``
+    and ``loser_id`` stay ``None`` (they are reported by `GET /near-misses/approvals/{id}` after
+    the approval is signed). A ``"keep-separate"`` decision carries no approval or preview fields.
 
     Attributes:
         review_id: Identifier of the resolved review; non-empty.
         decision: The decision taken, ``"keep-separate"`` or ``"merge"``.
         winner_id: Id of the surviving entity; ``None`` in the responses this route returns.
-        loser_id: Id of the removed entity; ``None`` in the responses this route returns.
-        pending_approval_id: Id of the pending passkey approval for a merge; ``None`` otherwise.
+        loser_id: Id of the absorbed Capability, which remains as a merged tombstone; ``None``
+            in the responses this route returns.
+        pending_approval_id: Id of the pending passkey approval for a merge; ``None`` otherwise,
+            including a merge that still needs its acknowledgment.
         approval_url: URL where the approver signs the merge; ``None`` unless a merge is
             pending.
         expires_at: Expiry time of the pending approval; ``None`` unless a merge is pending.
+        preview: What the merge will do (survivor, absorbed, Policy case, edges that move, state
+            digest); set for a merge, ``None`` for ``keep-separate``.
+        acknowledgment_required: ``True`` when the merge needs ``acknowledge_governance_change``
+            before an approval is created; ``None`` otherwise.
+        message: The acknowledgment text to show the officer; set with
+            ``acknowledgment_required``, ``None`` otherwise.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -524,21 +541,25 @@ class ResolveReviewResponse(BaseModel):
     pending_approval_id: str | None = None
     approval_url: str | None = None
     expires_at: str | None = None
+    preview: CapabilityMergePreview | None = None
+    acknowledgment_required: bool | None = None
+    message: str | None = None
 
 
 class PendingApprovalStatusResponse(BaseModel):
     """Response body for `GET /near-misses/approvals/{pending_approval_id}`.
 
     It has the same fields as the `near_misses_check_approval` tool's response, because both
-    surfaces report the same pending-approval check.
+    surfaces report the same graph-cleanup `merge-capabilities` approval through one mapper.
 
     Attributes:
         pending_approval_id: Identifier of the approval; non-empty.
         status: ``"pending"`` (awaiting signature), ``"expired"`` or ``"signed"``.
         review_id: Review the approval belongs to; ``None`` when not reported.
         decision: Decision the approval authorises; ``None`` when not reported.
-        winner_id: Id of the surviving entity once the merge ran; otherwise ``None``.
-        loser_id: Id of the removed entity once the merge ran; otherwise ``None``.
+        winner_id: Id of the surviving Capability once the merge ran; otherwise ``None``.
+        loser_id: Id of the absorbed Capability (kept as a ``merged`` tombstone) once the merge
+            ran; otherwise ``None``.
         error: Sanitised failure text when the approved merge failed; otherwise ``None``.
     """
 

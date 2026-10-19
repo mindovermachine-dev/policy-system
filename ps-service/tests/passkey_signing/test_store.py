@@ -30,8 +30,14 @@ from ps_service.passkey_signing.store import (
 if TYPE_CHECKING:
     from ps_service.passkey_signing.models import PendingApprovalRow
 
-_TOOL_NAME = "near_misses_resolve"
-_NORMALIZED_ARGS: dict[str, object] = {"review_id": "review-123", "decision": "merge"}
+_TOOL_NAME = "merge-capabilities"
+_NORMALIZED_ARGS: dict[str, object] = {
+    "survivor_id": "capability-a",
+    "absorbed_id": "capability-b",
+    "acknowledge_governance_change": False,
+    "state_digest": "digest",
+    "review_id": "review-123",
+}
 _ACTOR_SUBJECT = "actor-sub-1"
 _ACTOR_ISSUER = "https://issuer.example.com/"
 _DISPLAY_SUMMARY: dict[str, object] = {
@@ -124,7 +130,7 @@ def test_two_created_rows_get_distinct_ids_codes_and_nonces() -> None:
 
 # --- postgres_live ----------------------------
 
-_LIVE_TEST_TOOL_NAME = "near_misses_resolve_slice1_store_live_test"
+_LIVE_TEST_TOOL_NAME = "merge_capabilities_slice1_store_live_test"
 
 
 @pytest.mark.postgres_live

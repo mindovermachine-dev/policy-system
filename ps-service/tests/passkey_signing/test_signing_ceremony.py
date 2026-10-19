@@ -3,26 +3,10 @@
 Mirrors `test_enrollment_ceremony.py`'s style exactly: `TestClient` +
 `app.dependency_overrides` supplying fake `PendingApprovalStore`/
 `SigningCredentialStore` instances, so request handling is exercised without
-a real Postgres. The merge-execution seam
-(`NearMissReviewDependencies.resolve_review`) is scripted the same way
-`api/test_routes_near_misses.py`'s/`mcp_interface/test_near_miss_tools.py`'s
-own merge-path tests already script it -- `run_resolve_near_miss` (the real
-production orchestration function) is called for real by this slice's own
-router code, for the first time in this whole feature; only the innermost
-graph-touching `resolve_review` callable is a scripted fake, exactly
-mirroring this codebase's own established layered-fake convention (the one
-`falkordb_live`-marked test proving the underlying merge Cypher itself is
-correct already exists, `company_merge/test_pending_review_resolve.py`, and
-is not re-proven here -- this module's job is the signing-ceremony plumbing, not
-the merge query).
-
-`_fake_dependencies`/`_record` are reused verbatim from
-`api.test_routes_near_misses` (a cross-package import, not a third copy):
-`ps-service/tests/passkey_signing/` sorts alphabetically *after*
-`ps-service/tests/api/`, so this import resolves reliably under pytest's
-`--import-mode=importlib` the same way `mcp_interface/test_near_miss_tools.py`'s
-own identical cross-package import of the same helpers already does (see
-that file's own module docstring for the collection-order rule).
+a real Postgres. Approvals are `merge-capabilities` rows, the tool a near-miss merge signs; the
+executor registered for that tool is replaced for the test by a recorder (`_client`), because this
+module's job is the signing-ceremony plumbing, not the merge. The real executor, planner and
+gateway run behind the same ceremony in `test_graph_cleanup_signing_to_merge.py`.
 
 The `AuthenticationCredential` payload posted to `.../sign/verify` is a real,
 hand-built WebAuthn authentication response -- a real EC P-256 key pair
@@ -41,40 +25,32 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 import cbor2
-from api.test_routes_near_misses import (
-    _fake_dependencies,  # pyright: ignore[reportPrivateUsage]  -- reused verbatim, mirrors test_near_miss_tools.py's own cross-package-import precedent
-    _record,  # pyright: ignore[reportPrivateUsage]  -- same reuse, mirrors `_fake_dependencies`' own justification immediately above
-)
-from audit._fakes import InMemoryAuditStore
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 from passkey_signing._fakes import FakePendingApprovalStore, FakeSigningCredentialStore
-from ps_service.api.dependencies import (
-    get_principal,
-    provide_audit_store,
-    provide_near_miss_review_dependencies,
-    provide_pending_approval_store,
-)
+from ps_service.api.dependencies import get_principal, provide_pending_approval_store
 from ps_service.auth import Principal
-from ps_service.company_merge.models import ResolveOutcome
 from ps_service.config import ServiceConfig
 from ps_service.logging import configure
 from ps_service.main import create_app
+from ps_service.passkey_signing.executors import (
+    _EXECUTORS,  # pyright: ignore[reportPrivateUsage]  -- the test replaces the one registered executor
+    register_approval_executor,
+)
 from ps_service.passkey_signing.router import provide_signing_credential_store
 from ps_service.passkey_signing.service import (
     _compute_sign_challenge,  # pyright: ignore[reportPrivateUsage]
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from typing import Literal
 
     import pytest
 
-    from ps_service.company_merge.falkordb_client import GraphHandle
-    from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.passkey_signing.models import PendingApprovalRow, SigningCredentialRow
 
 # TestClient's default `base_url` is "http://testserver" -- `webauthn_rp.rp_id_and_origin`
@@ -87,6 +63,7 @@ _ACTOR_SUBJECT = "user-1"
 _ACTOR_ISSUER = "https://issuer.example.com/"
 _OTHER_ACTOR_SUBJECT = "user-2"
 
+_TOOL_NAME = "merge-capabilities"
 _REVIEW_ID = "review_aaa"
 _WINNER_ID = "capability_existing_a"
 _LOSER_ID = "capability_incoming_a"
@@ -112,36 +89,36 @@ class _MergeCall:
     decision: Literal["keep-separate", "merge"]
 
 
+def _scripted_merge_executor(
+    recorded_calls: list[_MergeCall] | None,
+) -> Callable[[PendingApprovalRow, ServiceConfig], dict[str, object]]:
+    """The recorder that stands in for the `merge-capabilities` executor in these tests."""
+
+    def _execute(row: PendingApprovalRow, config: ServiceConfig) -> dict[str, object]:
+        del config
+        if recorded_calls is not None:
+            recorded_calls.append(_MergeCall(str(row.normalized_args["review_id"]), "merge"))
+        return {"survivor_id": _WINNER_ID, "absorbed_id": _LOSER_ID, "merged": True}
+
+    return _execute
+
+
 def _client(
     *,
     pending_store: FakePendingApprovalStore,
     credential_store: FakeSigningCredentialStore,
     recorded_calls: list[_MergeCall] | None = None,
     principal: Principal | None = None,
-    audit_store: InMemoryAuditStore | None = None,
 ) -> TestClient:
-    def _resolve(
-        graph: GraphHandle,
-        review_id: str,
-        decision: Literal["keep-separate", "merge"],
-        target: GraphWriteTarget,
-    ) -> ResolveOutcome | None:
-        _ = graph
-        if recorded_calls is not None:
-            recorded_calls.append(_MergeCall(review_id, decision))
-        return ResolveOutcome(
-            review_id=review_id, decision=decision, winner_id=_WINNER_ID, loser_id=_LOSER_ID
-        )
+    """Build the app with fake stores and a recording `merge-capabilities` executor.
 
-    record = _record(_REVIEW_ID)
-    dependencies, _ = _fake_dependencies((record,), resolve=_resolve)
-
+    The registry is process-global; `conftest.py` restores it after every test.
+    """
     app = create_app(_app_config())
-    audit = audit_store or InMemoryAuditStore()
-    app.dependency_overrides[provide_audit_store] = lambda: audit
+    _EXECUTORS.pop(_TOOL_NAME, None)
+    register_approval_executor(_TOOL_NAME, _scripted_merge_executor(recorded_calls))
     app.dependency_overrides[provide_pending_approval_store] = lambda: pending_store
     app.dependency_overrides[provide_signing_credential_store] = lambda: credential_store
-    app.dependency_overrides[provide_near_miss_review_dependencies] = lambda: dependencies
     if principal is not None:
         app.dependency_overrides[get_principal] = lambda: principal
     return TestClient(app)
@@ -150,12 +127,18 @@ def _client(
 def _seed_pending_approval(
     store: FakePendingApprovalStore, *, actor_subject: str = _ACTOR_SUBJECT
 ) -> tuple[PendingApprovalRow, str]:
-    """Create a fresh, real 'pending' row for a merge approval (mirrors
-    `passkey_signing.service.create_merge_pending_approval`'s own shape).
+    """Create a fresh, real 'pending' row for a near-miss merge approval (the shape
+    `graph_cleanup.service.create_capability_merge_approval` signs when given a `review_id`).
     """
     return store.create_pending_approval(
-        tool_name="near_misses_resolve",
-        normalized_args={"review_id": _REVIEW_ID, "decision": "merge"},
+        tool_name=_TOOL_NAME,
+        normalized_args={
+            "survivor_id": _WINNER_ID,
+            "absorbed_id": _LOSER_ID,
+            "acknowledge_governance_change": False,
+            "state_digest": "digest",
+            "review_id": _REVIEW_ID,
+        },
         actor_subject=actor_subject,
         actor_issuer=_ACTOR_ISSUER,
         display_summary={
@@ -328,21 +311,25 @@ def test_valid_signature_executes_the_merge_and_reports_it() -> None:
     assert verify_response.status_code == 200
     assert verify_response.json() == {
         "status": "signed",
-        "winner_id": _WINNER_ID,
-        "loser_id": _LOSER_ID,
+        "survivor_id": _WINNER_ID,
+        "absorbed_id": _LOSER_ID,
+        "merged": True,
     }
     assert recorded_calls == [_MergeCall(_REVIEW_ID, "merge")]
 
-    # Verifiable via the resumable status check, REST side --
-    # the identical `check_pending_approval` function the MCP
-    # `near_misses_check_approval` tool also calls (one
-    # implementation, two callers).
+    # The resumable status check reads the same `merge-capabilities` row through the shared
+    # near-miss mapper: survivor and absorbed come back as winner and loser.
     status_response = client.get(f"/near-misses/approvals/{row.id}")
     assert status_response.status_code == 200
-    status_body = status_response.json()
-    assert status_body["status"] == "signed"
-    assert status_body["winner_id"] == _WINNER_ID
-    assert status_body["loser_id"] == _LOSER_ID
+    assert status_response.json() == {
+        "pending_approval_id": row.id,
+        "status": "signed",
+        "review_id": _REVIEW_ID,
+        "decision": "merge",
+        "winner_id": _WINNER_ID,
+        "loser_id": _LOSER_ID,
+        "error": None,
+    }
 
     # The authenticator's reported sign_count was persisted.
     updated_credential = credential_store.get_by_credential_id(authenticator.credential_id)

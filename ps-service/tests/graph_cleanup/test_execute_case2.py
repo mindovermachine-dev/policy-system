@@ -178,7 +178,10 @@ def test_a_crafted_case_two_row_without_the_acknowledgment_is_refused_with_no_au
     outcome = execute_capability_merge(_row(rig, acknowledged=False), _CONFIG, _deps(rig))
 
     assert rig.logged_groups == []
-    assert rig.audit.rows == []
+    [recorded] = rig.audit.rows
+    assert recorded.outcome == "failed"
+    assert recorded.details["reason_code"] == "acknowledgment_missing"
+    assert recorded.details["acknowledged"] is False
     assert "acknowledg" in str(outcome["error"])
 
 
@@ -206,7 +209,9 @@ def test_a_policy_status_change_since_the_preview_is_rejected_before_any_audit_o
     outcome = execute_capability_merge(row, _CONFIG, _deps(rig))
 
     assert rig.logged_groups == []
-    assert rig.audit.rows == []
+    [recorded] = rig.audit.rows
+    assert recorded.outcome == "failed"
+    assert recorded.details["reason_code"] == "state_digest_mismatch"
     assert "changed" in str(outcome["error"])
 
 

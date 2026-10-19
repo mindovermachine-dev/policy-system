@@ -27,3 +27,16 @@ def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunctio
         return
     with fakes.process_gateway_installed():
         yield
+
+
+@pytest.fixture(autouse=True)
+def _approval_executor_registry_restored() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse
+    """Put the approval-executor registry back after a test that replaced an executor in it."""
+    from ps_service.passkey_signing import executors
+
+    snapshot = dict(executors._EXECUTORS)  # pyright: ignore[reportPrivateUsage]
+    try:
+        yield
+    finally:
+        executors._EXECUTORS.clear()  # pyright: ignore[reportPrivateUsage]
+        executors._EXECUTORS.update(snapshot)  # pyright: ignore[reportPrivateUsage]

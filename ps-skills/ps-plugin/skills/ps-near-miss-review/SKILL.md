@@ -14,20 +14,21 @@ entities separate or merging them. This replaces ps-cli's `near-misses list`/
 reachable by any MCP-capable client, with no locally-installed, signed
 ps-cli binary required.
 
-**Scope covered so far:** listing unresolved reviews (`near_misses_list`)
-and resolving one with either `decision="keep-separate"` or
-`decision="merge"` (`near_misses_resolve`). The tool itself now enforces a
-real confirmation step before a merge ever executes (see Core Principles
-and Process below) — this skill's own job is to make sure the user has
-actually seen and understood the irreversibility warning before that
-confirmation is answered, not to treat the tool's gate as a substitute for
-that.
+**Scope covered so far:** listing unresolved reviews (`near_misses_list`),
+resolving one with `decision="keep-separate"`, and resolving one with
+`decision="merge"` (`near_misses_resolve`), then following the merge's passkey
+approval (`near_misses_check_approval`). A merge is the Graph Cleanup Capability
+merge: the tool returns a preview and an approval link, and a Compliance
+Officer signs it with a passkey. This skill's own job is to make sure the user
+has seen and understood what the merge does, and that it needs the
+`ComplianceOfficer` role, before the approval is requested.
 
 **Deliverable:** every unresolved review's `id`, `kind`, `incoming_text`,
-`nearest_existing_text`, and `similarity` on listing; the resolved
-review's `review_id` and `decision` (plus `winner_id`/`loser_id` —
-populated for `merge`, `None` for `keep-separate`) on resolving — or the
-specific named error state on failure.
+`nearest_existing_text`, and `similarity` on listing; for `keep-separate` the
+resolved review's `review_id` and `decision`; for `merge` the preview (survivor
+and absorbed Capability, Policy case, edges that move, `state_digest`) and the
+approval link, then the `winner_id` and `loser_id` once the approval is signed
+— or the specific named error state on failure.
 
 ## On Load
 
@@ -41,13 +42,15 @@ whatever it is named — report it as unreachable (see the error-state
 table under Process) rather than proceeding against it. From here on,
 "the PS Service connector" means the `ps-mcp` connector.
 
-**Audit:** each decision is recorded as a `near_miss.resolve` row (both entity
-ids, the decision, and for a merge the `approval_id`; a `failed` row follows a
-failed write). A `keep-separate` decision is recorded at the request. A
-`merge` is recorded when the approver signs with their passkey, with the
-approver as actor. If the audit trail is unavailable at that moment the merge
-is not performed and the one-time approval is already consumed, so a new
-approval must be requested. Read the rows with `ps-list-audit-events`.
+**Audit:** a `keep-separate` decision is recorded as a `near_miss.resolve` row
+(both entity ids and the decision) at the request. A `merge` is recorded as a
+`capability.merge` row, written when the approver signs with their passkey and
+before the graph is changed. It names the approver, the survivor, the absorbed
+Capability, the review id and a before/after snapshot of the graph. A failed
+or refused signing writes a `failed` row for the same approval. If the audit
+trail is unavailable at that moment the merge is not performed and the
+one-time approval is already consumed, so a new approval must be requested.
+Read the rows with `ps-list-audit-events`.
 
 ## Core Principles
 
@@ -59,25 +62,39 @@ approval must be requested. Read the rows with `ps-list-audit-events`.
 - Never silently retry a failed call — report the named failure and stop.
 - Never resolve a review without the user having named which review
   (`id`) and which decision they want — never guess or default either.
-- `decision="merge"` is IRREVERSIBLE — it deletes the loser node and
-  re-points every edge that referenced it onto the winner, atomically,
-  before the call returns. State this out loud to the user, in these terms,
-  before ever proposing that path — not only when the tool itself is
-  called, and not as a substitute for the tool's own confirmation step
-  below (belt-and-braces: this skill's own warning and the tool's own gate
-  are two independent safeguards, not one relied on to cover the other).
-- Calling `near_misses_resolve` with `decision="merge"` does not execute a
-  merge immediately: the tool pauses and asks the connected client to
-  confirm before it runs (an MCP elicitation request carrying the same
-  irreversibility warning). Never treat that pause as a failure or an
-  unexpected error — it is the tool's own confirmation gate, and answering
-  it (or declining it) is what determines whether the merge proceeds.
-  Never auto-accept it on the user's behalf without having already told
-  them, in this conversation, exactly what the merge will do.
+- `decision="merge"` needs an explicit `ComplianceOfficer` grant. SystemOwner
+  and SystemAdmin do not stand in for it, and neither does the local-test
+  bypass; a caller without it gets an `error:` and no approval exists. Tell
+  the user this before proposing the merge, and do not offer the merge to a
+  user who has said they are not a Compliance Officer; `keep-separate` needs
+  no such role.
+- `decision="merge"` does not execute anything by itself: it returns a
+  preview and a pending passkey approval (`pending_approval_id`,
+  `approval_url`, `expires_at`). Only when a Compliance Officer opens the link
+  and signs with a passkey does the merge run. Never present the merge as
+  done before `near_misses_check_approval` reports it signed.
+- State what the merge does, in these terms, before proposing it: the
+  Capability with the earlier `created_at` survives (a missing one counts
+  earliest, a tie goes to the incoming node). The other is kept as a
+  `merged` tombstone with a `MERGED_INTO` edge to the survivor, so a later
+  ingest or restore resolves to the survivor and raises no new near miss. Its
+  `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the survivor, and the
+  review record is deleted. The merge is one all-or-nothing write and can be
+  reversed afterwards with the `unmerge` tool (see `ps-graph-cleanup`), which
+  does not restore the review record.
+- A Capability has at most one governing Policy. When exactly one of the two
+  is governed the preview shows `policy_case` 2 and the survivor ends up
+  governed by that Policy, which changes what it governs; the tool returns
+  `acknowledgment_required` and creates no approval until the officer has
+  accepted that change and the call is repeated with
+  `acknowledge_governance_change=true`. Never set the flag without the
+  officer's explicit say-so. When the two are governed by different Policies
+  the merge is refused with an error that names `release-capability-governance`;
+  explain that one Policy's governance must be released first (see
+  `ps-graph-cleanup`), and that `keep-separate` stays available.
 - `decision="keep-separate"` only deletes the pending review record
   itself — it never touches the two entities the review compared, and it
-  never triggers the confirmation pause above (that gate applies to
-  `merge` only).
+  needs no approval and no `ComplianceOfficer` role.
 
 ## Process
 
@@ -135,40 +152,52 @@ approval must be requested. Read the rows with `ps-list-audit-events`.
 
 ### Resolving a review with `merge`
 
-1. **Surface the irreversibility warning first, in plain language, before
-   proposing or confirming this path with the user:** merging deletes the
-   loser node and re-points every edge that referenced it onto the winner,
-   atomically, and this cannot be undone. Do this even if the user already
-   said "merge" — the point is that they have actually seen the effect
-   stated, not merely typed the word.
+1. **Explain the effect first, in plain language, before proposing or
+   confirming this path with the user:** the tombstone and `MERGED_INTO`
+   redirect, the edges that move, the one-Policy rule, the passkey approval
+   and the `ComplianceOfficer` requirement (see Core Principles). Do this even
+   if the user already said "merge" — the point is that they have seen the
+   effect stated, not merely typed the word.
 2. **Confirm the inputs with the user** before calling anything: which
    review `id` (normally one already surfaced by a prior listing step —
    list first if the user hasn't named one and doesn't already know it),
-   and that they want `decision="merge"` specifically, having understood
-   step 1's warning. Never infer the `id` or default the decision.
+   and that they want `decision="merge"` specifically. Never infer the `id`
+   or default the decision.
 3. **Call the tool.** Invoke `near_misses_resolve` with `review_id` and
-   `decision="merge"` on the same PS Service connector.
-4. **Expect and handle the tool's own confirmation pause.** The call does
-   not execute the merge immediately — it elicits a confirmation from the
-   connected client, carrying the same irreversibility warning. This is
-   expected behavior, not an error: complete whatever confirmation flow
-   the client surfaces (e.g. relaying the warning to the user again and
-   answering on their explicit go-ahead), never auto-confirming without a
-   clear, current "yes" from the user for this specific review.
-5. **Report the result**, distinguishing every non-success outcome into one
+   `decision="merge"` on the same PS Service connector. Leave
+   `acknowledge_governance_change` unset on the first call.
+4. **Show the preview.** A successful response is
+   `{"preview", "pending_approval_id", "approval_url", "expires_at"}`. Report
+   the survivor and the absorbed Capability (ids and names), the `policy_case`,
+   the edges that move (`requires`, `covers`, `mitigated_by`), the
+   `state_digest`, and the `approval_url` with its expiry. Tell the user to
+   open the link in a browser and sign with a passkey. If the response is
+   `{"preview", "acknowledgment_required": true, "message"}` instead, show the
+   Policy that is affected (`preview.governance`) and the `message`, ask the
+   officer whether they accept the change, and only on an explicit yes repeat
+   the call with `acknowledge_governance_change=true`.
+5. **Follow the approval.** When the user says they have signed, call
+   `near_misses_check_approval` with the `pending_approval_id` and report
+   `status` (`pending`, `expired` or `signed`). Once `signed`, `winner_id` and
+   `loser_id` name the survivor and the tombstone; a non-null `error` means the
+   signature was valid but the merge was not carried out and nothing changed.
+   Never retry silently; a new `near_misses_resolve` call creates a new
+   approval.
+6. **Report the result**, distinguishing every non-success outcome into one
    of the following named states — never collapsed into a generic
    "resolve failed":
 
    | Tool result shape                                                                                                                           | Named state to report                                                                                                                                                                                                                                 |
    | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
    | Connection/transport failure, or an auth-rejection-shaped error                                                                             | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                                                                                          |
-   | The confirmation is declined or cancelled                                                                                                   | "Merge not confirmed — no change was made"; the loser and winner nodes are both untouched                                                                                                                                                             |
+   | `error: graph cleanup requires a real authenticated caller` or `error: You do not have the required access role for this action.`           | "Merge needs a Compliance Officer" — the caller has no real session or no explicit `ComplianceOfficer` grant; no approval was created and nothing changed                                                                                             |
    | `error: no unresolved PendingReview with id '<review_id>'`                                                                                  | "Review not found or already resolved" — the review either never existed or was already resolved (these two conditions are indistinguishable server-side, by design; report them as one state, not a guess at which)                                  |
    | `error: pending review '<review_id>' references a node that no longer exists (already resolved by a prior merge); this review is now stale` | "Review references an already-merged node (stale)" — report this distinctly from "not found": the review itself exists, but the entity it compared no longer does, because a different merge already resolved it first; no write happened here either |
+   | An `error:` naming `release-capability-governance`                                                                                          | "The two Capabilities are governed by different Policies" — no approval was created; the officer must release one Policy's governance first, or keep the pair separate                                                                                |
+   | `{"preview", "acknowledgment_required": true, "message"}`                                                                                   | "Acknowledgment needed" — not an error; show the Policy and the message and wait for the officer, as in step 4                                                                                                                                        |
    | `error: the policy graph database is not reachable`                                                                                         | The compliance graph database cannot be reached — report it distinctly from a PS Service transport failure                                                                                                                                            |
-   | `error: The audit trail is temporarily unavailable; the operation was not performed.`                                                       | The audit trail could not record the operation, so it was NOT run (nothing was changed) — report it distinctly from an outage of the graph or of PS Service                                                                                           |
    | `error: an unexpected error occurred`                                                                                                       | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                                                                     |
-   | Successful structured response                                                                                                              | Report the resolved review's `review_id`, `decision`, `winner_id`, and `loser_id` plainly; state explicitly that the loser node was deleted and its edges re-pointed onto the winner, atomically                                                      |
+   | Successful structured response                                                                                                              | Report the preview and the approval link as in step 4 and state explicitly that nothing has changed yet; the merge happens only when the approval is signed                                                                                           |
 
 ## Guardrails
 
@@ -182,9 +211,8 @@ approval must be requested. Read the rows with `ps-list-audit-events`.
   actually return.
 - Never omit a returned error — surface it plainly rather than treating a
   failed call as an empty list.
-- A merge is IRREVERSIBLE: it deletes the loser node and re-points every
-  edge that referenced it onto the winner, atomically, before the call
-  returns. State this to the user in your own words before proposing or
-  confirming `decision="merge"` — belt-and-braces alongside the tool's own
-  confirmation gate, never a replacement for it, and never skipped because
-  the tool will "ask anyway."
+- A merge changes the graph only when a Compliance Officer signs its passkey
+  approval. Never describe it as done before `near_misses_check_approval`
+  reports it signed, never set `acknowledge_governance_change` without the
+  officer's explicit acceptance, and never offer the merge to a caller who
+  lacks the `ComplianceOfficer` role.

@@ -16,15 +16,9 @@ that function already builds the `ResolveReviewResponse` via
 `near_miss_review_orchestration`'s public `_to_resolve_response`. For
 `keep-separate`, `winner_id`/`loser_id` are `None`.
 
-`decision="merge"` is gated behind a signed-passkey pending approval: it
-returns a pending approval (`pending_approval_id`/`approval_url`/`expires_at`)
-immediately, with no graph write and no elicitation round trip.
-`test_docstring_states_merge_is_irreversible` checks the tool's own docstring
-text, because the underlying merge write is IRREVERSIBLE once it eventually
-executes, which is why it is gated behind a signed approval.
-`test_domain_concepts_tool.py::test_tool_listed_alongside_cypher` is this
-suite's only other precedent for asserting on a tool's own listed metadata
-(there `input_schema`, here `description`).
+`decision="merge"` is the Graph Cleanup Capability merge behind a signed passkey approval and a
+`ComplianceOfficer` gate; its tests are in `test_near_miss_merge_via_cleanup.py`. This file keeps
+`keep-separate`, the listing and the ownership rules of `near_misses_check_approval`.
 
 `_verified_actor()` (this file) binds a real `AccessToken` directly onto the
 MCP SDK's `mcp.server.auth.middleware.auth_context.auth_context_var`
@@ -33,20 +27,11 @@ contextvar -- the same one `get_access_token()`
 `AuthContextMiddleware` from a real HTTP request (`test_mcp_auth.py` proves
 that wiring end to end). Binding it directly, rather than driving a full
 `initialize`/`notifications/initialized`/`tools/call` JSON-RPC handshake
-through a `TestClient`, is sufficient because `near_misses_resolve`'s merge
-branch and `near_misses_check_approval` never touch `ctx.session` (no
-elicitation, no server-initiated request) -- only `get_access_token()` and,
-for the merge branch, `ctx.request_context.request` for the approval link's
-`{base_url}` (falls back to a fixed placeholder when no context is bound at
-all, as in every bare `server.call_tool(name, args)` call in this file).
-`test_ctx_parameter_is_not_part_of_the_client_visible_schema` proves the
-auto-injected `ctx: Context` parameter (needed for the approval link's
-`{base_url}`) is excluded from the client-visible schema.
+through a `TestClient`, is sufficient because these tools never touch `ctx.session` (no
+elicitation, no server-initiated request) -- only `get_access_token()`.
 
 Failure-state completeness for both tools' `keep-separate` paths follows
-`near_miss_review_orchestration.py`'s own module docstring. A merge never
-calls `resolve_review`; the early-existence check for merge is
-`test_resolve_merge_unresolved_review_not_found_returns_named_error`.
+`near_miss_review_orchestration.py`'s own module docstring.
 Graph-unavailable reuses the generic `_sanitize_graph_open` helper via
 `_sanitize_near_miss_review_graph_opens` (mirrors
 `_sanitize_pipeline_graph_opens`/`_sanitize_change_check_graph_opens`
@@ -495,258 +480,7 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
         assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
 
 
-# --- `merge` path and its pending-approval gate ---
-
-
-def test_docstring_states_merge_is_irreversible() -> None:
-    """The underlying merge write is IRREVERSIBLE once it eventually
-    executes -- this is exactly why it is gated behind a signed
-    passkey approval rather than a typed-confirm elicitation round
-    trip. Mirrors `test_domain_concepts_tool.py::test_tool_listed_alongside_cypher`'s
-    own `list_tools()` precedent for asserting on a tool's listed metadata.
-    """
-    tools = asyncio.run(mcp_server.server.list_tools())
-    [tool] = [t for t in tools if t.name == "near_misses_resolve"]
-    assert tool.description is not None
-    assert "IRREVERSIBLE" in tool.description
-
-
-def test_ctx_parameter_is_not_part_of_the_client_visible_schema() -> None:
-    """The SDK's auto-injected `ctx: Context` parameter (needed for the
-    approval link's `{base_url}`) must never leak into
-    the tool's client-visible JSON argument schema, so a client never
-    has to supply it.
-    """
-    tools = asyncio.run(mcp_server.server.list_tools())
-    [tool] = [t for t in tools if t.name == "near_misses_resolve"]
-    assert set(tool.input_schema.get("properties", {})) == {"review_id", "decision"}
-    assert set(tool.input_schema.get("required", [])) == {"review_id", "decision"}
-
-
-# --- Signed passkey approval before near-miss merges -------------
-
-
-def test_merge_returns_pending_approval_without_executing_the_merge(
-    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
-) -> None:
-    """Calling `near_misses_resolve`
-    with `decision="merge"` for a real, authenticated caller returns a
-    pending approval immediately -- no elicitation, no `confirmed` argument
-    -- and never calls the real `resolve_review` at all, proving the graph
-    is left completely unchanged (`create_merge_pending_approval` only ever
-    calls `open_single_tenant_graph`/`list_pending_reviews`, per its own
-    docstring).
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    emitter = configure()
-
-    record = _record("review_aaa")
-    # One `_LIST_PENDING_REVIEWS_QUERY` call is all `create_merge_pending_approval`
-    # issues (its own early-existence check); `resolve_review`'s own
-    # FIND/DELETE/MERGE queries would be additional calls, so `len(graph.calls)
-    # == 1` below is itself the proof `resolve_review` never ran.
-    graph = _ScriptedGraphHandle(steps=[[_row_for(record)]])
-    _use_scripted_graph(monkeypatch, graph)
-    monkeypatch.setattr(
-        mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
-    )
-
-    with _verified_actor():
-        result = _call_near_misses_resolve("review_aaa", "merge")
-
-    assert result.is_error is False
-    body = json.loads(_text(result))
-    assert set(body) == {"pending_approval_id", "approval_url", "expires_at"}
-    assert body["pending_approval_id"]
-    assert body["approval_url"]
-    assert body["expires_at"]
-    # The loser node is never touched and no edge is re-pointed: only the
-    # one list-pending-reviews read ran against the graph -- `resolve_review`
-    # (the only code path that would ever perform that write) never did.
-    assert len(graph.calls) == 1
-
-    emitter.flush()
-    all_lines = read_lines(resolve_default_log_path())
-    mcp_lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
-    ]
-    assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
-    assert len({line["run_id"] for line in mcp_lines}) == 1
-
-
-def test_merge_without_a_real_authenticated_caller_is_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A caller with no real, verified actor identity -- here, the
-    local-test bypass alone, with no `AccessToken` ever bound -- gets a
-    clear error, never a pending approval. No dependencies/store faking is
-    needed: this check runs before either is ever touched.
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    configure()
-
-    result = _call_near_misses_resolve("review_aaa", "merge")
-
-    assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "authenticat" in text.lower()
-
-
-def test_resolve_merge_unresolved_review_not_found_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Early existence check: a `review_id` absent from
-    the unresolved-reviews listing is rejected with the same
-    `PendingReviewNotFoundError` message `keep-separate` already uses,
-    before any Postgres row is created. The create step never calls
-    `resolve_review` at all; a review whose referenced node a PRIOR merge
-    already deleted is an execution-time check.
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    configure()
-    graph = _ScriptedGraphHandle(steps=[[]])  # no unresolved reviews at all
-    _use_scripted_graph(monkeypatch, graph)
-
-    with _verified_actor():
-        result = _call_near_misses_resolve("review_missing", "merge")
-
-    assert result.is_error is False
-    assert _text(result) == "error: no unresolved PendingReview with id 'review_missing'"
-
-
-def test_resolve_merge_graph_unavailable_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """D-SANITIZE-UNEXPECTED, merge branch: an unreachable graph during the
-    early existence check sanitises to the same fixed message every other
-    tool uses, via the same `_sanitize_near_miss_review_graph_opens` wrapper.
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    configure()
-    _use_fake_graph_opener_only(monkeypatch, _raising_open)
-
-    with _verified_actor():
-        result = _call_near_misses_resolve("review_aaa", "merge")
-
-    assert result.is_error is False
-    assert _text(result) == "error: the policy graph database is not reachable"
-
-
-def test_resolve_merge_residual_unexpected_exception_returns_generic_error(
-    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
-) -> None:
-    """D-AUDIT-WRAPPER point 4: an exception the merge branch does not itself
-    sanitise (here, the store's `create_pending_approval` raising something
-    unclassified) is caught by `_run_mcp_action`'s residual safety net --
-    the fixed, generic message, never the raw exception text.
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    emitter = configure()
-    record = _record("review_aaa")
-    graph = _ScriptedGraphHandle(steps=[[_row_for(record)]])
-    _use_scripted_graph(monkeypatch, graph)
-
-    class _RaisingStore:
-        def create_pending_approval(self, **kwargs: object) -> object:
-            _ = kwargs
-            message = "boom -- must never reach the caller"
-            raise RuntimeError(message)
-
-    monkeypatch.setattr(
-        mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_RaisingStore())
-    )
-
-    with _verified_actor():
-        result = _call_near_misses_resolve("review_aaa", "merge")
-
-    assert result.is_error is False
-    assert _text(result) == "error: an unexpected error occurred"
-    emitter.flush()
-    all_lines = read_lines(resolve_default_log_path())
-    lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
-    ]
-    assert [line["outcome"] for line in lines] == ["started", "failed"]
-    assert "boom -- must never reach the caller" in str(lines[-1].get("detail"))
-
-
-def test_check_approval_reports_pending_for_a_freshly_created_approval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`near_misses_check_approval` reports `status="pending"` right after
-    `near_misses_resolve`'s merge branch creates the approval -- the same
-    store instance backs both calls, exactly as it would in production
-    (one Postgres instance, two tool calls).
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    configure()
-    record = _record("review_aaa")
-    graph = _ScriptedGraphHandle(steps=[[_row_for(record)]])
-    _use_scripted_graph(monkeypatch, graph)
-    store = _FakePendingApprovalStore()
-    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
-
-    with _verified_actor():
-        resolve_result = _call_near_misses_resolve("review_aaa", "merge")
-        pending_approval_id = json.loads(_text(resolve_result))["pending_approval_id"]
-
-        check_result = asyncio.run(
-            mcp_server.server.call_tool(
-                "near_misses_check_approval", {"pending_approval_id": pending_approval_id}
-            )
-        )
-
-    assert isinstance(check_result, CallToolResult)
-    assert check_result.is_error is False
-    body = json.loads(_text(check_result))
-    assert body["pending_approval_id"] == pending_approval_id
-    assert body["status"] == "pending"
-    assert body["review_id"] == "review_aaa"
-    assert body["decision"] == "merge"
-    assert body["winner_id"] is None
-    assert body["loser_id"] is None
-
-
-def test_check_approval_reports_the_recorded_error_for_a_failed_merge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The compliance officer polls this tool, so
-    a signed approval whose merge stored `{"error": ...}` must report that
-    reason here too. Reporting only null `winner_id`/`loser_id` left "the
-    merge failed" indistinguishable from "the merge is done".
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    configure()
-    store = _FakePendingApprovalStore()
-    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
-    row, _code = store.create_pending_approval(
-        tool_name="near_misses_resolve",
-        normalized_args={"review_id": "review_aaa", "decision": "merge"},
-        actor_subject=_ACTOR_SUBJECT,
-        actor_issuer=_ACTOR_ISSUER,
-        display_summary={},
-    )
-    assert store.mark_signed(row.id)
-    store.set_outcome(row.id, {"error": "this action could not be completed"})
-
-    with _verified_actor():
-        check_result = asyncio.run(
-            mcp_server.server.call_tool(
-                "near_misses_check_approval", {"pending_approval_id": row.id}
-            )
-        )
-
-    assert isinstance(check_result, CallToolResult)
-    assert check_result.is_error is False
-    body = json.loads(_text(check_result))
-    assert body["status"] == "signed"
-    assert body["winner_id"] is None
-    assert body["error"] == "this action could not be completed"
+# --- `near_misses_check_approval` visibility ---
 
 
 def test_check_approval_unknown_id_gets_generic_not_found(
@@ -785,8 +519,14 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
     configure()
     store = _FakePendingApprovalStore()
     row, _code = store.create_pending_approval(
-        tool_name="near_misses_resolve",
-        normalized_args={"review_id": "review_aaa", "decision": "merge"},
+        tool_name="merge-capabilities",
+        normalized_args={
+            "survivor_id": "cap_a",
+            "absorbed_id": "cap_b",
+            "acknowledge_governance_change": False,
+            "state_digest": "d",
+            "review_id": "review_aaa",
+        },
         actor_subject=_ACTOR_SUBJECT,
         actor_issuer=_ACTOR_ISSUER,
         display_summary={},
@@ -815,8 +555,14 @@ def test_check_approval_wrong_actor_gets_generic_not_found(
     configure()
     store = _FakePendingApprovalStore()
     row, _code = store.create_pending_approval(
-        tool_name="near_misses_resolve",
-        normalized_args={"review_id": "review_aaa", "decision": "merge"},
+        tool_name="merge-capabilities",
+        normalized_args={
+            "survivor_id": "cap_a",
+            "absorbed_id": "cap_b",
+            "acknowledge_governance_change": False,
+            "state_digest": "d",
+            "review_id": "review_aaa",
+        },
         actor_subject=_ACTOR_SUBJECT,
         actor_issuer=_ACTOR_ISSUER,
         display_summary={},
@@ -1046,23 +792,3 @@ def test_near_misses_resolve_returns_error_prefix_when_audit_is_unavailable(
     assert _text(result).startswith("error: ")
     assert "audit trail" in _text(result)
     assert len(graph.calls) == 1  # only the lookup; no delete was issued
-
-
-def test_creating_a_merge_pending_approval_via_mcp_writes_no_audit_row(
-    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
-) -> None:
-    """The merge is audited when the approval is signed, not when it is requested."""
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    configure()
-    _use_scripted_graph(
-        monkeypatch, _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))]])
-    )
-    monkeypatch.setattr(
-        mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
-    )
-
-    with _verified_actor():
-        result = _call_near_misses_resolve("review_aaa", "merge")
-
-    assert "pending_approval_id" in json.loads(_text(result))
-    assert audit_store.rows == []

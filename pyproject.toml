@@ -173,10 +173,7 @@ ignore_imports = [
     "ps_service.passkey_signing.error_handlers -> ps_service.api.errors",
     "ps_service.passkey_signing.router -> ps_service.api.dependencies",
     "ps_service.passkey_signing.router -> ps_service.api.errors",
-    "ps_service.passkey_signing.router -> ps_service.api.graph_write_access",
-    "ps_service.passkey_signing.router -> ps_service.api.near_miss_review_orchestration",
     "ps_service.passkey_signing.service -> ps_service.api.errors",
-    "ps_service.passkey_signing.service -> ps_service.api.near_miss_review_orchestration",
 ]
 
 [tool.ruff.lint.mccabe]

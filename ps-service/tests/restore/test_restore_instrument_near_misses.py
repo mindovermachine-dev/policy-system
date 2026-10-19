@@ -1,6 +1,6 @@
 """Near misses found by a restore are persisted with it, all or nothing.
 
-The reviews exist after the restore, are listed, and resolve (keep-separate and merge). A pair
+The reviews exist after the restore, are listed, and resolve by keep-separate. A pair
 that already has a review is not recorded again, nor on a second restore. A merged loser is
 redirected, never reviewed. A restore that fails leaves no review.
 The real `restore_instrument` runs through the gateway rig; the retry cases are
@@ -87,24 +87,6 @@ def test_AC_BI_002_the_reviews_are_listed_and_resolve_by_keep_separate(
     remaining = list_pending_reviews(_read_handle(restore_rig))
     assert [r.id for r in remaining] == [listed[1].id]
     assert ("Capability", listed[0].incoming_id) in restore_rig.graph(POLICY_SYSTEM).nodes
-
-
-def test_AC_BI_002_a_listed_review_resolves_by_merge(restore_rig: RestoreRig) -> None:
-    seed_existing(restore_rig)
-    restore_rig.restore(near_miss_artifact())
-    (review,) = (
-        r for r in list_pending_reviews(_read_handle(restore_rig)) if r.incoming_id == "cap_in_a"
-    )
-
-    outcome = resolve_review(_read_handle(restore_rig), review.id, "merge", _target(restore_rig))
-
-    assert outcome is not None
-    graph = restore_rig.graph(POLICY_SYSTEM)
-    # the seeded Capability carries no created_at, so it wins; the loser's REQUIRES moves over
-    assert ("Capability", "cap_in_a") not in graph.nodes
-    assert ("Capability", "cap_ex_a") in graph.nodes
-    assert any(k[0] == "REQUIRES" and k[4] == "cap_ex_a" for k in graph.edges)
-    assert review.id not in reviews(restore_rig)
 
 
 def test_AC_BI_004_a_pair_that_already_has_a_review_is_not_recorded_again(

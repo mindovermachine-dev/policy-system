@@ -92,8 +92,14 @@ def _seed_pending_approval(
 ) -> tuple[PendingApprovalRow, str]:
     """Create a fresh, real 'pending' row via the store's own code/nonce generation."""
     return store.create_pending_approval(
-        tool_name="near_misses_resolve",
-        normalized_args={"review_id": "review_aaa", "decision": "merge"},
+        tool_name="merge-capabilities",
+        normalized_args={
+            "survivor_id": "capability_existing_a",
+            "absorbed_id": "capability_incoming_a",
+            "acknowledge_governance_change": False,
+            "state_digest": "digest",
+            "review_id": "review_aaa",
+        },
         actor_subject=_ACTOR_SUBJECT,
         actor_issuer=_ACTOR_ISSUER,
         display_summary={

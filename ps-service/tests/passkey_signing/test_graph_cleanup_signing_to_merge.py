@@ -8,6 +8,7 @@ approval never reaches the graph. The merge is one gateway group.
 
 from __future__ import annotations
 
+import copy
 from datetime import timedelta
 from typing import TYPE_CHECKING, cast
 
@@ -262,3 +263,74 @@ def test_a_case_two_row_forged_without_the_acknowledgment_is_refused_at_signing(
     assert response.status_code == 404  # the signed challenge covered the acknowledged args
     assert world.rig.logged_groups == []
     assert world.audit.rows == []
+
+
+# --- Signing leg: fixed outcome, no leak, no partial write -------------------------
+
+_LEAKS = ("10.1.2.3", "6379", "hunter2", "/secret/path")
+
+
+def _graph_state(world: _World) -> object:
+    return copy.deepcopy(dict(world.rig.graph.nodes)), set(world.rig.graph.edges)
+
+
+def test_an_unreachable_graph_at_signing_gives_a_fixed_outcome_and_a_failed_row(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row, code = world.approve()
+    before = _graph_state(world)
+
+    def _unreachable(_config: object) -> object:
+        message = "connection refused to 10.1.2.3:6379 password=hunter2 at /secret/path"
+        raise ConnectionError(message)
+
+    monkeypatch.setattr(
+        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
+        _factory(_unreachable),
+    )
+
+    response = world.sign(row, code)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "signed",
+        "error": "the policy graph database could not be reached; nothing was changed",
+    }
+    for leak in _LEAKS:
+        assert leak not in response.text
+    assert _graph_state(world) == before
+    assert world.rig.logged_groups == []
+    [recorded] = world.audit.rows
+    assert recorded.outcome == "failed"
+    assert recorded.details["reason_code"] == "graph_unavailable"
+
+
+def test_an_unexpected_executor_failure_at_signing_gives_a_fixed_outcome_and_no_write(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _ExplodingRoles:
+        def __getattr__(self, name: str) -> object:
+            message = "boom at /secret/path host 10.1.2.3:6379 password=hunter2"
+            raise RuntimeError(message)
+
+    row, code = world.approve()
+    before = _graph_state(world)
+    monkeypatch.setattr(
+        "ps_service.graph_cleanup.dependencies.PsycopgAccessRoleStore",
+        _factory(_ExplodingRoles()),
+    )
+
+    response = world.sign(row, code)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "signed"
+    assert set(body) == {"status", "error"}
+    for leak in _LEAKS:
+        assert leak not in response.text
+    stored = world.pending.get_by_id(row.id)
+    assert stored is not None
+    for leak in _LEAKS:
+        assert leak not in str(stored.outcome)
+    assert _graph_state(world) == before
+    assert world.rig.logged_groups == []
