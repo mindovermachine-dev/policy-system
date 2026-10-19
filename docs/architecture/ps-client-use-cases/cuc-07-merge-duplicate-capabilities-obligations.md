@@ -1,12 +1,13 @@
 <!-- © 2026 Cartman ApS. All rights reserved. -->
-# CUC-07: Merge duplicate Capabilities/Obligations
+# CUC-07: Merge duplicate Capabilities/Obligations/Roles
 
 **Status:** Specified
 **Actor:** Compliance Officer — an explicit, exact-match `ComplianceOfficer` grant;
 SystemOwner/SystemAdmin get no override, and the gate fails closed
 **Goal:** Pipeline-made duplicates cleaned up by human judgement: near-duplicate
-Capabilities and same-Role duplicate Obligations found, previewed, and merged — or
-released, or unmerged — each write behind its own passkey approval.
+Capabilities and same-Role duplicate Obligations found, previewed, and merged — and two
+Roles of one instrument merged — or released, or unmerged — each write behind its own
+passkey approval.
 **Realizes:** —
 **Interaction class:** Review/resolve
 **v1:** yes
@@ -27,6 +28,9 @@ the direction*.
 - Caller is authenticated with the explicit `ComplianceOfficer` grant — the one named
   state with no workaround is "grant missing: ask a SystemOwner/SystemAdmin to grant it."
 - Duplicates exist to find; discovery reporting "no candidate groups" is a valid end.
+- For a Role merge: both Roles are defined by the **same** RegulatoryInstrument. Roles stay
+  instrument-scoped, so the same actor under two instruments is two Roles and is never a
+  candidate; the tool rejects such a pair before any approval exists.
 
 ## Beats
 
@@ -35,16 +39,20 @@ the direction*.
    `basis` and its `merge_case`) or duplicate Obligations grouped under one Role only —
    identical wording under two Roles is two duties, never a candidate — with each
    member's `source_ref`s so the officer can check the regulation really states the duty
-   twice. Every group and field reported, none invented, none dropped.
+   twice. Every group and field reported, none invented, none dropped. There is no Role
+   sweep: the officer brings the two Roles, or reads them with a read-only query.
 2. **Judge.** A candidate group is a suggestion, never a verdict. The officer picks the
    pair and the direction: which node **survives**, which is **absorbed**. The client
    never chooses; chat never recommends on group evidence alone. The comparison artifact
-   states the fate plainly — an absorbed Capability or Obligation is **deleted** (its
-   snapshot held in the audit row, a `MergedCapability` or `MergedObligation` marker
-   left so re-ingestion attaches to the survivor instead of recreating it).
+   states the fate plainly — an absorbed Capability, Obligation or Role is **deleted** (its
+   snapshot held in the audit row, a `MergedCapability`, `MergedObligation` or `MergedRole`
+   marker left so re-ingestion attaches to the survivor instead of recreating it). For a
+   Role, the absorbed Role's Obligations move to the survivor and keep their ids.
 3. **Preview.** The preview call never edits the graph. The comparison artifact renders
    its full effect: edges to move per class, duplicates collapsed, obligations affected,
-   and the governance consequence.
+   and the governance consequence. For two Roles it lists the Obligations that move and
+   the pairs of a moving and a surviving Obligation with identical or near-identical text,
+   which end up under one Role and can then be merged as duplicate Obligations.
 4. **Acknowledge governance (Capability case 2 only).** When exactly one side is
    governed, no approval exists yet: the artifact shows the governance block — the
    policy, the coverage change, governed set before and after — and the officer must
@@ -64,7 +72,10 @@ the direction*.
 6. **Reverse.** `unmerge` restores a merged pair from its audit snapshot through the same
    preview → confirm → passkey shape — cleanup decisions are reversible by ceremony,
    including a Capability merge that CUC-06 started from a near-miss review (the deleted
-   review is not restored).
+   review is not restored). A Role merge is refused while a later merge depends on it —
+   a merge of one of the Obligations it moved, or of the surviving Role — and the refusal
+   names that later merge's audit event, which has to be reversed first. Obligations the
+   survivor gained after the merge stay on it, and the preview counts them.
 
 ## Artifacts
 

@@ -29,10 +29,16 @@ from ps_service.graph_cleanup.models import (
     ObligationRecord,
     ObligationUnmergeInputs,
     ObligationUnmergeState,
+    PendingReviewRef,
     PropertyValue,
     ReleaseState,
     RequirementSourceRef,
+    RoleDefines,
+    RoleMergeState,
     RoleRef,
+    RoleState,
+    RoleUnmergeInputs,
+    RoleUnmergeState,
 )
 
 if TYPE_CHECKING:
@@ -52,7 +58,12 @@ __all__ = [
     "read_obligation_present",
     "read_obligation_unmerge_state",
     "read_obligations_by_role",
+    "read_pending_review",
     "read_release_state",
+    "read_role_merge_state",
+    "read_role_merged",
+    "read_role_present_without_marker",
+    "read_role_unmerge_state",
 ]
 
 # `deprecated` Capabilities are not merge candidates; a node with no `status` property counts as
@@ -493,6 +504,222 @@ def read_obligation_present(graph: GraphHandle, *, obligation_id: str) -> bool:
     """
     rows = query_rows(graph, _OBLIGATION_PRESENT_QUERY, {"obligation_id": obligation_id})
     return bool(rows) and cast("int", rows[0][0]) > 0
+
+
+# Role-merge reads. A Role carries `name`, `description` and `confidence` besides its id, so its
+# snapshot is read as scalar columns. The edge reads are keyed by Role id; the degree read counts
+# an edge of any type and direction, which catches an edge the merge does not know how to move.
+_ROLE_NODES_QUERY = (
+    "MATCH (r:Role) WHERE r.id IN $ids RETURN r.id, r.name, r.description, r.confidence"
+)
+_ROLE_MARKERS_QUERY = "MATCH (m:MergedRole) WHERE m.id IN $ids RETURN m.id, m.merged_into"
+_ROLE_DEFINES_QUERY = (
+    "MATCH (i:RegulatoryInstrument)-[d:DEFINES]->(r:Role) WHERE r.id IN $ids "
+    "RETURN r.id, i.id, d.source_ref"
+)
+_ROLE_OBLIGATIONS_QUERY = (
+    "MATCH (r:Role)-[:HAS]->(o:Obligation) WHERE r.id IN $ids RETURN r.id, o.id, o.text"
+)
+_ROLE_FOREIGN_BEARERS_QUERY = (
+    "MATCH (a:Role {id: $absorbed_id})-[:HAS]->(o:Obligation)<-[:HAS]-(b:Role) "
+    "WHERE b.id <> $absorbed_id RETURN o.id, b.id"
+)
+_ROLE_DEGREE_QUERY = "MATCH (r:Role {id: $role_id}) OPTIONAL MATCH (r)-[e]-() RETURN count(e)"
+
+
+def _role_state(row: list[object]) -> RoleState:
+    """Build a Role state from a `_ROLE_NODES_QUERY` row."""
+    properties: dict[str, PropertyValue] = {
+        key: cast("PropertyValue", value)
+        for key, value in (("description", row[2]), ("confidence", row[3]))
+        if value is not None
+    }
+    return RoleState(id=cast("str", row[0]), name=cast("str", row[1]), properties=properties)
+
+
+def read_role_merge_state(
+    graph: GraphHandle, *, survivor_id: str, absorbed_id: str
+) -> RoleMergeState:
+    """Read both Roles with their `DEFINES` and `HAS` edges and degrees, a pure read.
+
+    A missing Role is reported as `None` for that side; validation is the planner's job.
+
+    Args:
+        graph: Handle for the policy graph.
+        survivor_id: Id of the Role that would remain after the merge.
+        absorbed_id: Id of the Role that would be merged away.
+
+    Returns:
+        The merge state: both Roles (`None` when absent), which ids have a `MergedRole` marker,
+        each Role's defining instruments and borne Obligations, the absorbed Role's edge count,
+        and any other Role bearing the absorbed Role's Obligations.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    params: dict[str, object] = {"ids": sorted({survivor_id, absorbed_id})}
+    nodes = {
+        cast("str", row[0]): _role_state(row)
+        for row in query_rows(graph, _ROLE_NODES_QUERY, params)
+    }
+    markers = tuple(
+        sorted(cast("str", row[0]) for row in query_rows(graph, _ROLE_MARKERS_QUERY, params))
+    )
+    defines: dict[str, list[RoleDefines]] = {survivor_id: [], absorbed_id: []}
+    for row in query_rows(graph, _ROLE_DEFINES_QUERY, params):
+        defines[cast("str", row[0])].append(
+            RoleDefines(instrument_id=cast("str", row[1]), source_ref=cast("str | None", row[2]))
+        )
+    obligations: dict[str, list[str]] = {survivor_id: [], absorbed_id: []}
+    texts: dict[str, str] = {}
+    for row in query_rows(graph, _ROLE_OBLIGATIONS_QUERY, params):
+        obligations[cast("str", row[0])].append(cast("str", row[1]))
+        if row[2] is not None:
+            texts[cast("str", row[1])] = cast("str", row[2])
+    degree_rows = query_rows(graph, _ROLE_DEGREE_QUERY, {"role_id": absorbed_id})
+    foreign = tuple(
+        EdgeRecord(
+            rel_type="HAS",
+            source_label="Role",
+            source_id=cast("str", row[1]),
+            target_label="Obligation",
+            target_id=cast("str", row[0]),
+        )
+        for row in query_rows(graph, _ROLE_FOREIGN_BEARERS_QUERY, {"absorbed_id": absorbed_id})
+    )
+    return RoleMergeState(
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        survivor=nodes.get(survivor_id),
+        absorbed=nodes.get(absorbed_id),
+        marker_ids=markers,
+        survivor_defines=tuple(defines[survivor_id]),
+        absorbed_defines=tuple(defines[absorbed_id]),
+        survivor_obligation_ids=tuple(sorted(obligations[survivor_id])),
+        absorbed_obligation_ids=tuple(sorted(obligations[absorbed_id])),
+        obligation_texts=texts,
+        foreign_bearers=foreign,
+        absorbed_degree=cast("int", degree_rows[0][0]) if degree_rows else 0,
+    )
+
+
+# A `PendingReview` is read raw, whatever its kind: Company Merge's own reader refuses a kind it has
+# not registered, and a Role review is one of those until the Role extraction fix lands.
+_PENDING_REVIEW_QUERY = (
+    "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind, r.incoming_id, r.nearest_existing_id"
+)
+
+
+def read_pending_review(graph: GraphHandle, *, review_id: str) -> PendingReviewRef | None:
+    """Read one `PendingReview` by id with its kind and the pair it names, a pure read.
+
+    Args:
+        graph: Handle for the policy graph.
+        review_id: Id of the review.
+
+    Returns:
+        The review's kind and ids; None when no review has that id (a resolved review is deleted).
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    rows = query_rows(graph, _PENDING_REVIEW_QUERY, {"review_id": review_id})
+    if not rows:
+        return None
+    kind, incoming_id, nearest_id = rows[0]
+    return PendingReviewRef(
+        kind=str(kind), incoming_id=str(incoming_id), nearest_existing_id=str(nearest_id)
+    )
+
+
+def read_role_merged(graph: GraphHandle, *, survivor_id: str, absorbed_id: str) -> bool:
+    """Whether `absorbed_id` is merged into `survivor_id`: its marker exists and its Role is gone.
+
+    Args:
+        graph: Handle for the policy graph.
+        survivor_id: Id the `MergedRole` marker must name in `merged_into`.
+        absorbed_id: Id of the marker, and of the Role that must no longer exist.
+
+    Returns:
+        True when such a marker exists and no Role has the absorbed id, False otherwise.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    params: dict[str, object] = {"ids": [absorbed_id]}
+    marked = any(row[1] == survivor_id for row in query_rows(graph, _ROLE_MARKERS_QUERY, params))
+    return marked and not query_rows(graph, _ROLE_NODES_QUERY, params)
+
+
+# Role-unmerge reads reuse the Role-merge node, marker and `HAS` reads, and the Obligation-merge
+# read of an Obligation's bearing Roles; only the instrument's existence is new.
+_INSTRUMENT_EXISTS_QUERY = "MATCH (i:RegulatoryInstrument {id: $instrument_id}) RETURN i.id"
+
+
+def read_role_unmerge_state(graph: GraphHandle, *, inputs: RoleUnmergeInputs) -> RoleUnmergeState:
+    """Read the live graph around the merged-away Role `inputs.absorbed_id`, a pure read.
+
+    Args:
+        graph: Handle for the policy graph.
+        inputs: What the merge's audit row says to reverse: both ids, the instrument and the
+            Obligations the merge moved.
+
+    Returns:
+        The live state: whether a Role with the absorbed id exists, the survivor (`None` when
+        absent), the `MergedRole` marker targets of both ids, whether the instrument exists, the
+        survivor's Obligations and every Role bearing each moved Obligation.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    params: dict[str, object] = {"ids": sorted({inputs.survivor_id, inputs.absorbed_id})}
+    nodes = {
+        cast("str", row[0]): _role_state(row)
+        for row in query_rows(graph, _ROLE_NODES_QUERY, params)
+    }
+    markers: dict[str, list[str]] = {}
+    for row in query_rows(graph, _ROLE_MARKERS_QUERY, params):
+        markers.setdefault(cast("str", row[0]), []).append(cast("str", row[1]))
+    instrument_exists = bool(
+        query_rows(graph, _INSTRUMENT_EXISTS_QUERY, {"instrument_id": inputs.instrument_id})
+    )
+    survivor_obligations = sorted(
+        cast("str", row[1])
+        for row in query_rows(graph, _ROLE_OBLIGATIONS_QUERY, {"ids": [inputs.survivor_id]})
+    )
+    bearers: dict[str, list[str]] = {}
+    if inputs.moved_obligation_ids:
+        for row in query_rows(
+            graph, _OBLIGATION_ROLES_QUERY, {"ids": list(inputs.moved_obligation_ids)}
+        ):
+            bearers.setdefault(cast("str", row[0]), []).append(cast("str", row[1]))
+    return RoleUnmergeState(
+        absorbed_exists=inputs.absorbed_id in nodes,
+        survivor=nodes.get(inputs.survivor_id),
+        marker_targets={role: tuple(targets) for role, targets in markers.items()},
+        instrument_exists=instrument_exists,
+        survivor_obligation_ids=tuple(survivor_obligations),
+        moved_bearers={obl: tuple(sorted(roles)) for obl, roles in bearers.items()},
+    )
+
+
+def read_role_present_without_marker(graph: GraphHandle, *, role_id: str) -> bool:
+    """Whether `role_id` exists again as a Role and no `MergedRole` marker remains for it.
+
+    Args:
+        graph: Handle for the policy graph.
+        role_id: Id of the previously absorbed Role.
+
+    Returns:
+        True when the Role exists and its marker is gone, False otherwise.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    params: dict[str, object] = {"ids": [role_id]}
+    return bool(query_rows(graph, _ROLE_NODES_QUERY, params)) and not query_rows(
+        graph, _ROLE_MARKERS_QUERY, params
+    )
 
 
 # Release-governance reads: the Capability, its governing Policy and that Policy's governed set

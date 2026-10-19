@@ -41,6 +41,7 @@ CLEANUP_TOOLS = frozenset(
         "find-duplicate-obligations",
         "merge-capabilities",
         "merge-obligations",
+        "merge-roles",
         "release-capability-governance",
         "unmerge",
         "check-cleanup-approval",
@@ -49,6 +50,8 @@ CLEANUP_TOOLS = frozenset(
 CLEANUP_ACTIONS = (
     audit_actions.CAPABILITY_MERGE_ACTION,
     audit_actions.OBLIGATION_MERGE_ACTION,
+    audit_actions.ROLE_MERGE_ACTION,
+    audit_actions.ROLE_UNMERGE_ACTION,
     audit_actions.CAPABILITY_RELEASE_GOVERNANCE_ACTION,
     audit_actions.CAPABILITY_UNMERGE_ACTION,
     audit_actions.OBLIGATION_UNMERGE_ACTION,
@@ -96,7 +99,7 @@ def _roles() -> FakeAccessRoleStore:
     return store
 
 
-def test_exactly_the_seven_documented_tools_sit_behind_the_cleanup_gate() -> None:
+def test_exactly_the_eight_documented_tools_sit_behind_the_cleanup_gate() -> None:
     gated = {
         name
         for name, gate in TOOL_GATES.items()
@@ -106,7 +109,7 @@ def test_exactly_the_seven_documented_tools_sit_behind_the_cleanup_gate() -> Non
     }
 
     assert gated == CLEANUP_TOOLS
-    assert len(gated) == 7
+    assert len(gated) == 8
 
 
 def test_the_authz_gate_sweep_covers_every_cleanup_tool() -> None:
@@ -135,6 +138,7 @@ def test_an_unreachable_graph_never_leaks_internals_from_any_tool(
         "find-duplicate-obligations": {},
         "merge-capabilities": {"survivor_id": "cap_a", "absorbed_id": "cap_b"},
         "merge-obligations": {"survivor_id": "obl_a", "absorbed_id": "obl_b"},
+        "merge-roles": {"survivor_id": "role_a", "absorbed_id": "role_b"},
         "release-capability-governance": {"capability_id": "cap_a"},
         "unmerge": {"merged_id": "cap_b"},
         "check-cleanup-approval": {"pending_approval_id": "unknown"},
@@ -163,7 +167,7 @@ def test_list_audit_events_filtered_by_each_cleanup_action_returns_its_rows(
             actor_subject=_OFFICER,
             actor_issuer=_ISSUER,
             action=each,
-            resource_type="obligation" if each.startswith("obligation") else "capability",
+            resource_type=each.split(".", maxsplit=1)[0],
             resource_id=f"res_{index}",
             outcome="applied",
             details={"approval_id": f"approval-{index}"},
@@ -183,7 +187,7 @@ def test_list_audit_events_filtered_by_each_cleanup_action_returns_its_rows(
     }
 
 
-@pytest.mark.parametrize("resource_type", ["capability", "obligation"])
+@pytest.mark.parametrize("resource_type", ["capability", "obligation", "role"])
 def test_the_new_resource_types_are_accepted_as_audit_filters(
     monkeypatch: pytest.MonkeyPatch, resource_type: str
 ) -> None:

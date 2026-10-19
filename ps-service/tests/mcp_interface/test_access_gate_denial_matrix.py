@@ -62,6 +62,10 @@ _ROLE_TOOLS: dict[str, tuple[dict[str, object], str]] = {
         {"survivor_id": "obl_a", "absorbed_id": "obl_b"},
         _CLEANUP_UNAUTHENTICATED,
     ),
+    "merge-roles": (
+        {"survivor_id": "role_a", "absorbed_id": "role_b"},
+        _CLEANUP_UNAUTHENTICATED,
+    ),
     "release-capability-governance": ({"capability_id": "cap_a"}, _CLEANUP_UNAUTHENTICATED),
     "unmerge": ({"merged_id": "cap_b"}, _CLEANUP_UNAUTHENTICATED),
     "check-cleanup-approval": ({"pending_approval_id": "approval-1"}, _CLEANUP_UNAUTHENTICATED),

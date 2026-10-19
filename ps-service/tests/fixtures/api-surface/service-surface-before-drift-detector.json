@@ -486,6 +486,35 @@
     {
       "inputSchema": {
         "properties": {
+          "absorbed_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "review_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "survivor_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["survivor_id", "absorbed_id"],
+        "type": "object"
+      },
+      "name": "merge-roles"
+    },
+    {
+      "inputSchema": {
+        "properties": {
           "pending_approval_id": {
             "minLength": 1,
             "type": "string"

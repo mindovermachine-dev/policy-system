@@ -2,7 +2,7 @@
 
 Read-only candidate discovery (Capabilities by name and cached-embedding similarity,
 duplicate Obligations within one Role), the previews of every cleanup action (Capability
-merge, Obligation merge, governance release, unmerge), the passkey approvals bound to a
+merge, Obligation merge, Role merge, governance release, unmerge), the passkey approvals bound to a
 previewed state, and `check-cleanup-approval` with its lazy reconciler. Nothing here writes
 to the graph; the writes run in `ps_service.graph_cleanup.executors` after a signed approval.
 """
@@ -19,11 +19,15 @@ from ps_service.graph_cleanup.audit_actions import (
     CAPABILITY_UNMERGE_ACTION,
     OBLIGATION_MERGE_ACTION,
     OBLIGATION_UNMERGE_ACTION,
+    ROLE_MERGE_ACTION,
+    ROLE_UNMERGE_ACTION,
     CapabilityMergeDetails,
     CapabilityReleaseGovernanceDetails,
     CapabilityUnmergeDetails,
     ObligationMergeDetails,
     ObligationUnmergeDetails,
+    RoleMergeDetails,
+    RoleUnmergeDetails,
 )
 from ps_service.graph_cleanup.discovery import (
     DEFAULT_CAPABILITY_MIN_SIMILARITY,
@@ -37,6 +41,7 @@ from ps_service.graph_cleanup.errors import (
 from ps_service.graph_cleanup.executors import (
     TOOL_MERGE_CAPABILITIES,
     TOOL_MERGE_OBLIGATIONS,
+    TOOL_MERGE_ROLES,
     TOOL_RELEASE_GOVERNANCE,
     TOOL_UNMERGE,
 )
@@ -45,7 +50,9 @@ from ps_service.graph_cleanup.graph_reader import (
     read_capability_merge_state,
     read_obligation_merge_state,
     read_obligations_by_role,
+    read_pending_review,
     read_release_state,
+    read_role_merge_state,
 )
 from ps_service.graph_cleanup.graph_submission import graph_write_target, require_caught_up
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
@@ -60,14 +67,19 @@ from ps_service.graph_cleanup.models import (
     ObligationUnmergePreview,
     ReleasePlan,
     ReleasePreview,
+    RoleMergePlan,
+    RoleMergePreview,
+    RoleUnmergePreview,
 )
 from ps_service.graph_cleanup.obligation_planner import plan_obligation_merge
 from ps_service.graph_cleanup.release_planner import plan_release_governance
+from ps_service.graph_cleanup.role_planner import plan_role_merge, validate_role_review
 from ps_service.graph_cleanup.unmerge import UnmergePlan, plan_unmerge
 from ps_service.logging import emit_log_entry
 from ps_service.passkey_signing.executors import resolve_effect_verifier
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from typing import Literal
 
     from ps_service.audit.store import AuditStore
@@ -84,17 +96,20 @@ __all__ = [
     "CleanupApprovalStatus",
     "ObligationMergeApproval",
     "ReleaseGovernanceApproval",
+    "RoleMergeApproval",
     "UnmergeApproval",
     "check_cleanup_approval",
     "create_capability_merge_approval",
     "create_obligation_merge_approval",
     "create_release_governance_approval",
+    "create_role_merge_approval",
     "create_unmerge_approval",
     "find_capability_merge_candidates",
     "find_duplicate_obligations",
     "preview_capability_merge",
     "preview_obligation_merge",
     "preview_release_governance",
+    "preview_role_merge",
     "preview_unmerge",
 ]
 
@@ -441,6 +456,126 @@ def create_obligation_merge_approval(
     )
 
 
+def _plan_roles(graph: GraphHandle, *, survivor_id: str, absorbed_id: str) -> RoleMergePlan:
+    state = read_role_merge_state(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
+    return plan_role_merge(state)
+
+
+def preview_role_merge(
+    graph: GraphHandle, *, survivor_id: str, absorbed_id: str
+) -> RoleMergePreview:
+    """Preview merging Role `absorbed_id` into `survivor_id` with no writes.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        survivor_id: Id of the Role that remains; must differ from `absorbed_id`.
+        absorbed_id: Id of the Role that is deleted after its Obligations move to the survivor.
+
+    Returns:
+        The merge preview for the pair, including the instrument defining both.
+
+    Raises:
+        GraphCleanupValidationError: the pair cannot be merged.
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    return _plan_roles(graph, survivor_id=survivor_id, absorbed_id=absorbed_id).preview
+
+
+@dataclass(frozen=True, slots=True)
+class RoleMergeApproval:
+    """A previewed Role merge and the pending passkey approval bound to it.
+
+    Attributes:
+        preview: The merge preview the officer saw.
+        pending_approval_id: Id of the pending approval row.
+        approval_url: Link where the officer signs with a passkey; includes the one-time code.
+        expires_at: ISO 8601 time after which the approval can no longer be signed.
+    """
+
+    preview: RoleMergePreview
+    pending_approval_id: str
+    approval_url: str
+    expires_at: str  # ISO 8601
+
+
+def create_role_merge_approval(
+    graph: GraphHandle,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    actor: tuple[str, str],
+    base_url: str,
+    store: PendingApprovalStore,
+    review_id: str | None = None,
+    emitter: LogEmitter | None = None,
+) -> RoleMergeApproval:
+    """Preview the role merge and create a passkey approval bound to the pair and state.
+
+    The signed `normalized_args` carry both ids and the sha256 `state_digest` of the previewed
+    state. A `review_id` is signed with them, must name a Role `PendingReview` of exactly this
+    pair, and makes the executor delete that review in the merge group.
+
+    Args:
+        graph: Handle on the single-tenant graph, read only.
+        survivor_id: Id of the Role that remains; must differ from `absorbed_id`.
+        absorbed_id: Id of the Role that is deleted after the merge.
+        actor: `(subject, issuer)` of the requesting officer; the approval is bound to them.
+        base_url: Origin used to build the approval link, without a trailing slash.
+        store: Pending-approval store that holds the approval row.
+        review_id: Id of the Role `PendingReview` this merge resolves; None for a plain cleanup
+            merge.
+        emitter: Optional log emitter; None uses the default.
+
+    Returns:
+        The preview with the approval id, signing URL and expiry.
+
+    Raises:
+        GraphCleanupValidationError: the pair cannot be merged, or the review does not exist, is
+            not a Role review or names another pair; no approval is created.
+        GraphCleanupPersistenceError: the graph database could not be read.
+
+    Side Effects:
+        Creates one pending approval row and emits a structured log entry. Writes nothing to the
+        graph; a rejected merge creates no row.
+    """
+    plan = _plan_roles(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
+    if review_id is not None:
+        validate_role_review(
+            read_pending_review(graph, review_id=review_id),
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+        )
+    row, code = store.create_pending_approval(
+        tool_name=TOOL_MERGE_ROLES,
+        normalized_args={
+            "survivor_id": survivor_id,
+            "absorbed_id": absorbed_id,
+            "state_digest": plan.state_digest,
+            **({"review_id": review_id} if review_id is not None else {}),
+        },
+        actor_subject=actor[0],
+        actor_issuer=actor[1],
+        display_summary=plan.preview.model_dump(mode="json"),
+    )
+    emit_log_entry(
+        component=_COMPONENT,
+        action="create_role_merge_approval",
+        outcome="succeeded",
+        extra={
+            "approval_id": row.id,
+            "instrument_id": plan.preview.instrument_id,
+            "review_id": review_id,
+        },
+        emitter=emitter,
+    )
+    return RoleMergeApproval(
+        preview=plan.preview,
+        pending_approval_id=row.id,
+        approval_url=f"{base_url}/approvals/{row.id}#{code}",
+        expires_at=row.expires_at.isoformat(),
+    )
+
+
 def _plan_release(graph: GraphHandle, *, capability_id: str) -> ReleasePlan:
     return plan_release_governance(read_release_state(graph, capability_id=capability_id))
 
@@ -543,16 +678,17 @@ def create_release_governance_approval(
 
 def preview_unmerge(
     graph: GraphHandle, audit_store: AuditStore, *, merged_id: str
-) -> CapabilityUnmergePreview | ObligationUnmergePreview:
+) -> CapabilityUnmergePreview | ObligationUnmergePreview | RoleUnmergePreview:
     """Preview reversing the newest effective merge of `merged_id`, with no writes.
 
     Args:
         graph: Handle on the single-tenant graph, read only.
         audit_store: Audit trail used to locate the merge to reverse.
-        merged_id: Id of the absorbed Capability or Obligation to restore.
+        merged_id: Id of the absorbed Capability, Obligation or Role to restore.
 
     Returns:
-        A Capability or Obligation unmerge preview, matching the kind of node that was merged.
+        A Capability, Obligation or Role unmerge preview, matching the kind of node that was
+        merged.
 
     Raises:
         GraphCleanupValidationError: there is no merge to reverse, or reversing it conflicts with
@@ -568,13 +704,13 @@ class UnmergeApproval:
     """A previewed unmerge and the pending passkey approval bound to it.
 
     Attributes:
-        preview: The Capability or Obligation unmerge preview the officer saw.
+        preview: The Capability, Obligation or Role unmerge preview the officer saw.
         pending_approval_id: Id of the pending approval row.
         approval_url: Link where the officer signs with a passkey; includes the one-time code.
         expires_at: ISO 8601 time after which the approval can no longer be signed.
     """
 
-    preview: CapabilityUnmergePreview | ObligationUnmergePreview
+    preview: CapabilityUnmergePreview | ObligationUnmergePreview | RoleUnmergePreview
     pending_approval_id: str
     approval_url: str
     expires_at: str  # ISO 8601
@@ -598,7 +734,7 @@ def create_unmerge_approval(
     Args:
         graph: Handle on the single-tenant graph, read only.
         audit_store: Audit trail used to locate the merge to reverse.
-        merged_id: Id of the absorbed Capability or Obligation to restore.
+        merged_id: Id of the absorbed Capability, Obligation or Role to restore.
         actor: `(subject, issuer)` of the requesting officer; the approval is bound to them.
         base_url: Origin used to build the approval link, without a trailing slash.
         store: Pending-approval store that holds the approval row.
@@ -652,7 +788,13 @@ def create_unmerge_approval(
 RECONCILE_GRACE = timedelta(seconds=300)
 
 _CLEANUP_TOOL_NAMES = frozenset(
-    {TOOL_MERGE_CAPABILITIES, TOOL_MERGE_OBLIGATIONS, TOOL_RELEASE_GOVERNANCE, TOOL_UNMERGE}
+    {
+        TOOL_MERGE_CAPABILITIES,
+        TOOL_MERGE_OBLIGATIONS,
+        TOOL_MERGE_ROLES,
+        TOOL_RELEASE_GOVERNANCE,
+        TOOL_UNMERGE,
+    }
 )
 _INTERRUPTED_MESSAGE = (
     "the approved action did not take effect; "
@@ -669,8 +811,8 @@ class CleanupApprovalStatus:
         tool_name: The cleanup tool the approval was created for.
         status: `signed` once signed; otherwise `expired` after `expires_at`, else `pending`.
         outcome: The executor's outcome dict (or the reconciler's), or None while none is recorded.
-        review_id: Id of the near-miss `PendingReview` a `merge-capabilities` approval resolves;
-            None for every other approval.
+        review_id: Id of the near-miss `PendingReview` a `merge-capabilities` or `merge-roles`
+            approval resolves; None for every other approval.
     """
 
     pending_approval_id: str
@@ -681,9 +823,9 @@ class CleanupApprovalStatus:
 
 
 def _signed_review_id(row: PendingApprovalRow) -> str | None:
-    """The near-miss review id signed into a `merge-capabilities` approval, or None."""
+    """The near-miss review id signed into a `merge-capabilities` or `merge-roles` approval."""
     review_id = row.normalized_args.get("review_id")
-    if row.tool_name == TOOL_MERGE_CAPABILITIES and isinstance(review_id, str):
+    if row.tool_name in (TOOL_MERGE_CAPABILITIES, TOOL_MERGE_ROLES) and isinstance(review_id, str):
         return review_id
     return None
 
@@ -694,52 +836,90 @@ def _live_status(row: PendingApprovalRow) -> Literal["pending", "expired", "sign
     return "expired" if datetime.now(UTC) > row.expires_at else "pending"
 
 
-def _interrupted_audit_row(row: PendingApprovalRow) -> tuple[str, str, str, dict[str, object]]:
-    """Action, resource type, resource id and details of the `failed` row for an orphan."""
-    if row.tool_name == TOOL_RELEASE_GOVERNANCE:
-        capability_id = str(row.normalized_args.get("capability_id", ""))
-        release_details = CapabilityReleaseGovernanceDetails(
-            capability_id=capability_id,
-            policy_id=str(row.normalized_args.get("policy_id", "")),
-            policy_status=str(row.display_summary.get("policy_status", "draft")),
-            approval_id=row.id,
-            reason_code="interrupted_no_effect",
-        ).model_dump()
-        return CAPABILITY_RELEASE_GOVERNANCE_ACTION, "capability", capability_id, release_details
-    if row.tool_name == TOOL_UNMERGE:
-        merged_id = str(row.normalized_args.get("merged_id", ""))
-        if row.normalized_args.get("kind") == "obligation":
-            obligation_unmerge = ObligationUnmergeDetails(
-                survivor_id=str(row.display_summary.get("survivor_id", "")),
-                absorbed_id=merged_id,
-                role_id=str(row.display_summary.get("role_id", "")),
-                approval_id=row.id,
-                reverses_approval_id=str(row.normalized_args.get("merge_approval_id", "")),
-                reason_code="interrupted_no_effect",
-            ).model_dump()
-            return OBLIGATION_UNMERGE_ACTION, "obligation", merged_id, obligation_unmerge
-        unmerge_details = CapabilityUnmergeDetails(
-            survivor_id=str(row.display_summary.get("survivor_id", "")),
-            absorbed_id=merged_id,
-            approval_id=row.id,
-            reverses_approval_id=str(row.normalized_args.get("merge_approval_id", "")),
-            reason_code="interrupted_no_effect",
-        ).model_dump()
-        return CAPABILITY_UNMERGE_ACTION, "capability", merged_id, unmerge_details
-    survivor_id = str(row.normalized_args.get("survivor_id", ""))
+type _OrphanRow = tuple[str, str, str, dict[str, object]]
+"""Action, resource type, resource id and details of the `failed` row for an orphan."""
+
+
+def _release_orphan_row(row: PendingApprovalRow) -> _OrphanRow:
+    capability_id = str(row.normalized_args.get("capability_id", ""))
+    details = CapabilityReleaseGovernanceDetails(
+        capability_id=capability_id,
+        policy_id=str(row.normalized_args.get("policy_id", "")),
+        policy_status=str(row.display_summary.get("policy_status", "draft")),
+        approval_id=row.id,
+        reason_code="interrupted_no_effect",
+    ).model_dump()
+    return CAPABILITY_RELEASE_GOVERNANCE_ACTION, "capability", capability_id, details
+
+
+def _obligation_unmerge_orphan_row(row: PendingApprovalRow) -> _OrphanRow:
+    merged_id = str(row.normalized_args.get("merged_id", ""))
+    details = ObligationUnmergeDetails(
+        survivor_id=str(row.display_summary.get("survivor_id", "")),
+        absorbed_id=merged_id,
+        role_id=str(row.display_summary.get("role_id", "")),
+        approval_id=row.id,
+        reverses_approval_id=str(row.normalized_args.get("merge_approval_id", "")),
+        reason_code="interrupted_no_effect",
+    ).model_dump()
+    return OBLIGATION_UNMERGE_ACTION, "obligation", merged_id, details
+
+
+def _capability_unmerge_orphan_row(row: PendingApprovalRow) -> _OrphanRow:
+    merged_id = str(row.normalized_args.get("merged_id", ""))
+    details = CapabilityUnmergeDetails(
+        survivor_id=str(row.display_summary.get("survivor_id", "")),
+        absorbed_id=merged_id,
+        approval_id=row.id,
+        reverses_approval_id=str(row.normalized_args.get("merge_approval_id", "")),
+        reason_code="interrupted_no_effect",
+    ).model_dump()
+    return CAPABILITY_UNMERGE_ACTION, "capability", merged_id, details
+
+
+def _role_unmerge_orphan_row(row: PendingApprovalRow) -> _OrphanRow:
+    merged_id = str(row.normalized_args.get("merged_id", ""))
+    details = RoleUnmergeDetails(
+        survivor_id=str(row.display_summary.get("survivor_id", "")),
+        absorbed_id=merged_id,
+        approval_id=row.id,
+        reverses_approval_id=str(row.normalized_args.get("merge_approval_id", "")),
+        instrument_id=str(row.display_summary.get("instrument_id", "")) or None,
+        reason_code="interrupted_no_effect",
+    ).model_dump()
+    return ROLE_UNMERGE_ACTION, "role", merged_id, details
+
+
+def _obligation_merge_orphan_row(row: PendingApprovalRow) -> _OrphanRow:
+    absorbed_id = str(row.normalized_args.get("absorbed_id", ""))
+    details = ObligationMergeDetails(
+        survivor_id=str(row.normalized_args.get("survivor_id", "")),
+        absorbed_id=absorbed_id,
+        role_id=str(row.display_summary.get("role_id", "")),
+        approval_id=row.id,
+        reason_code="interrupted_no_effect",
+    ).model_dump()
+    return OBLIGATION_MERGE_ACTION, "obligation", absorbed_id, details
+
+
+def _role_merge_orphan_row(row: PendingApprovalRow) -> _OrphanRow:
+    absorbed_id = str(row.normalized_args.get("absorbed_id", ""))
+    details = RoleMergeDetails(
+        survivor_id=str(row.normalized_args.get("survivor_id", "")),
+        absorbed_id=absorbed_id,
+        approval_id=row.id,
+        instrument_id=str(row.display_summary.get("instrument_id", "")),
+        reason_code="interrupted_no_effect",
+        review_id=_signed_review_id(row),
+    ).model_dump()
+    return ROLE_MERGE_ACTION, "role", absorbed_id, details
+
+
+def _capability_merge_orphan_row(row: PendingApprovalRow) -> _OrphanRow:
     absorbed_id = str(row.normalized_args.get("absorbed_id", ""))
     case = row.display_summary.get("policy_case")
-    if row.tool_name == TOOL_MERGE_OBLIGATIONS:
-        obligation_details = ObligationMergeDetails(
-            survivor_id=survivor_id,
-            absorbed_id=absorbed_id,
-            role_id=str(row.display_summary.get("role_id", "")),
-            approval_id=row.id,
-            reason_code="interrupted_no_effect",
-        ).model_dump()
-        return OBLIGATION_MERGE_ACTION, "obligation", absorbed_id, obligation_details
     details = CapabilityMergeDetails(
-        survivor_id=survivor_id,
+        survivor_id=str(row.normalized_args.get("survivor_id", "")),
         absorbed_id=absorbed_id,
         policy_case=case if case in _CASES_WITH_GOVERNANCE else 1,
         acknowledged=row.normalized_args.get("acknowledge_governance_change") is True,
@@ -748,6 +928,30 @@ def _interrupted_audit_row(row: PendingApprovalRow) -> tuple[str, str, str, dict
         review_id=_signed_review_id(row),
     ).model_dump()
     return CAPABILITY_MERGE_ACTION, "capability", absorbed_id, details
+
+
+# Keyed by `(tool_name, kind)`; `kind` is the signed unmerge kind and empty for every other tool.
+_ORPHAN_ROWS: dict[tuple[str, str], Callable[[PendingApprovalRow], _OrphanRow]] = {
+    (TOOL_RELEASE_GOVERNANCE, ""): _release_orphan_row,
+    (TOOL_UNMERGE, "obligation"): _obligation_unmerge_orphan_row,
+    (TOOL_UNMERGE, "capability"): _capability_unmerge_orphan_row,
+    (TOOL_UNMERGE, "role"): _role_unmerge_orphan_row,
+    (TOOL_MERGE_OBLIGATIONS, ""): _obligation_merge_orphan_row,
+    (TOOL_MERGE_ROLES, ""): _role_merge_orphan_row,
+    (TOOL_MERGE_CAPABILITIES, ""): _capability_merge_orphan_row,
+}
+
+
+def _interrupted_audit_row(row: PendingApprovalRow) -> _OrphanRow:
+    """Action, resource type, resource id and details of the `failed` row for an orphan.
+
+    An unmerge whose kind is not recognised is treated as a Capability unmerge.
+    """
+    kind = ""
+    if row.tool_name == TOOL_UNMERGE:
+        signed_kind = str(row.normalized_args.get("kind"))
+        kind = signed_kind if (TOOL_UNMERGE, signed_kind) in _ORPHAN_ROWS else "capability"
+    return _ORPHAN_ROWS.get((row.tool_name, kind), _capability_merge_orphan_row)(row)
 
 
 def _graph_has_caught_up(

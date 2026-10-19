@@ -34,12 +34,17 @@ __all__ = [
     "CAPABILITY_UNMERGE_ACTION",
     "OBLIGATION_MERGE_ACTION",
     "OBLIGATION_UNMERGE_ACTION",
+    "ROLE_MERGE_ACTION",
+    "ROLE_UNMERGE_ACTION",
     "CapabilityMergeDetails",
     "CapabilityMergeFailedReason",
     "CapabilityReleaseGovernanceDetails",
     "CapabilityUnmergeDetails",
+    "CleanupFailedReason",
     "ObligationMergeDetails",
     "ObligationUnmergeDetails",
+    "RoleMergeDetails",
+    "RoleUnmergeDetails",
 ]
 
 CAPABILITY_MERGE_ACTION = "capability.merge"
@@ -47,9 +52,11 @@ OBLIGATION_MERGE_ACTION = "obligation.merge"
 CAPABILITY_RELEASE_GOVERNANCE_ACTION = "capability.release_governance"
 CAPABILITY_UNMERGE_ACTION = "capability.unmerge"
 OBLIGATION_UNMERGE_ACTION = "obligation.unmerge"
+ROLE_MERGE_ACTION = "role.merge"
+ROLE_UNMERGE_ACTION = "role.unmerge"
 
 
-type CapabilityMergeFailedReason = Literal[
+type CleanupFailedReason = Literal[
     "graph_guard_missed",
     "graph_write_failed",
     "interrupted_no_effect",
@@ -60,6 +67,9 @@ type CapabilityMergeFailedReason = Literal[
     "review_missing_or_changed",
     "graph_unavailable",
 ]
+"""Why a cleanup edit did not happen, shared by every cleanup action's `failed` rows."""
+
+type CapabilityMergeFailedReason = CleanupFailedReason
 
 
 class CapabilityMergeDetails(AuditDetails):
@@ -196,3 +206,61 @@ class ObligationUnmergeDetails(AuditDetails):
 
 
 register_audit_action(OBLIGATION_UNMERGE_ACTION, ObligationUnmergeDetails)
+
+
+class RoleMergeDetails(AuditDetails):
+    """`role.merge`: one Compliance Officer role merge (delete with marker).
+
+    `outcome='applied'`: `reason_code` is absent; `before` holds both Roles in full with their
+    `DEFINES` edges and the absorbed Role's `HAS` edges, `after` the survivor with the moved
+    `HAS` edges and the `MergedRole` marker. `defines_source_ref` is the absorbed Role's `DEFINES`
+    `source_ref` (a snapshot edge has no properties), `moved_obligation_ids` the Obligations the
+    merge moved and `survivor_has_count_after_merge` how many Obligations the survivor bore once
+    merged. `review_id` is the Role `PendingReview` the merge resolved. `outcome='failed'`:
+    `reason_code` names why the edit did not happen; a refusal before the plan exists carries
+    none of the plan fields.
+    """
+
+    survivor_id: str
+    absorbed_id: str
+    approval_id: str
+    instrument_id: str
+    defines_source_ref: str | None = None
+    moved_obligation_ids: tuple[str, ...] | None = None
+    survivor_has_count_after_merge: int | None = None
+    before: GraphSnapshot | None = None
+    after: GraphSnapshot | None = None
+    reason_code: CleanupFailedReason | None = None
+    # Id of the near-miss `PendingReview` this merge resolves; None for a plain cleanup merge.
+    review_id: str | None = None
+
+
+register_audit_action(ROLE_MERGE_ACTION, RoleMergeDetails)
+register_audit_resource_type("role")
+
+
+class RoleUnmergeDetails(AuditDetails):
+    """`role.unmerge`: one Compliance Officer reversal of a Role merge.
+
+    `outcome='applied'`: `before` is the survivor and the `MergedRole` marker with the `HAS` edges
+    the survivor bears for the moved Obligations, `after` the survivor and the recreated Role with
+    its `DEFINES` edge and its `HAS` edges. `restored_obligation_ids` are exactly the Obligations
+    that went back to the recreated Role; `survivor_obligations_added_since_merge` is how many
+    Obligations the survivor gained after the merge, which stay on it. `reverses_approval_id` is the
+    approval of the merge being reversed. `outcome='failed'`: `reason_code` names why the edit did
+    not happen; a refusal before the plan exists carries none of the plan fields.
+    """
+
+    survivor_id: str
+    absorbed_id: str
+    approval_id: str
+    reverses_approval_id: str
+    instrument_id: str | None = None
+    before: GraphSnapshot | None = None
+    after: GraphSnapshot | None = None
+    restored_obligation_ids: tuple[str, ...] | None = None
+    survivor_obligations_added_since_merge: int | None = None
+    reason_code: CleanupFailedReason | None = None
+
+
+register_audit_action(ROLE_UNMERGE_ACTION, RoleUnmergeDetails)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from ps_service.company_merge.errors import CompanyMergeValidationError
 from ps_service.company_merge.similarity import cosine_similarity
@@ -30,6 +30,7 @@ __all__ = [
     "DEFAULT_CAPABILITY_MIN_SIMILARITY",
     "OBLIGATION_NEAR_TEXT_MIN_JACCARD",
     "classify_case",
+    "duplicate_text_basis",
     "group_capabilities",
     "group_duplicate_obligations",
     "normalise_name",
@@ -191,6 +192,39 @@ def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
     return len(left & right) / len(union) if union else 0.0
 
 
+def _texts_match(
+    left_text: str, left_tokens: frozenset[str], right_text: str, right_tokens: frozenset[str]
+) -> bool:
+    """Whether two normalised Obligation texts are equal or have token-set Jaccard >= the floor."""
+    return (
+        left_text == right_text
+        or _jaccard(left_tokens, right_tokens) >= OBLIGATION_NEAR_TEXT_MIN_JACCARD
+    )
+
+
+def duplicate_text_basis(left: str, right: str) -> Literal["identical_text", "near_text"] | None:
+    """Return how two Obligation texts duplicate each other, or None when they do not.
+
+    The same rule `group_duplicate_obligations` links Obligations by: equal normalised text is
+    `"identical_text"`, token-set Jaccard at or above `OBLIGATION_NEAR_TEXT_MIN_JACCARD` is
+    `"near_text"`. Whether the two Obligations share a Role is the caller's concern.
+
+    Args:
+        left: Text of one Obligation, as stored.
+        right: Text of the other Obligation, as stored.
+
+    Returns:
+        `"identical_text"`, `"near_text"`, or None when the texts are not duplicates.
+    """
+    left_text, right_text = normalise_name(left), normalise_name(right)
+    if left_text == right_text:
+        return "identical_text"
+    left_tokens, right_tokens = frozenset(left_text.split()), frozenset(right_text.split())
+    if _texts_match(left_text, left_tokens, right_text, right_tokens):
+        return "near_text"
+    return None
+
+
 def group_duplicate_obligations(
     obligations: Sequence[ObligationRecord],
 ) -> tuple[ObligationCandidateGroup, ...]:
@@ -221,10 +255,7 @@ def group_duplicate_obligations(
             for j in range(i + 1, len(members)):
                 if _find(parent, i) == _find(parent, j):
                     continue
-                if (
-                    normalised[i] == normalised[j]
-                    or _jaccard(tokens[i], tokens[j]) >= OBLIGATION_NEAR_TEXT_MIN_JACCARD
-                ):
+                if _texts_match(normalised[i], tokens[i], normalised[j], tokens[j]):
                     _union(parent, i, j)
         components: dict[int, list[int]] = defaultdict(list)
         for index in range(len(members)):

@@ -205,6 +205,7 @@ class RecordingAuditStore:
             for event in self.history
             if (filters.resource_id is None or event.resource_id == filters.resource_id)
             and (filters.action is None or event.action == filters.action)
+            and (filters.occurred_from is None or event.occurred_at >= filters.occurred_from)
         ]
         start = int(cursor) if cursor is not None else 0
         page = matching[start : start + page_size]
@@ -293,6 +294,16 @@ class FakeApprovalStore:
 OBL_SURVIVOR = "obl_survivor"
 OBL_ABSORBED = "obl_absorbed"
 ROLE_ID = "role_1"
+INSTRUMENT_ID = "reg_cra"
+ROLE_SURVIVOR = "role_msa_survivor"
+ROLE_ABSORBED = "role_msa_absorbed"
+OBL_OF_SURVIVOR = "obl_msa_kept"
+"""The Obligation the survivor Role already bears in the role-merge fixture."""
+OBL_MOVED_1 = "obl_msa_moved_1"
+OBL_MOVED_2 = "obl_msa_moved_2"
+"""The two Obligations the absorbed Role bears in the role-merge fixture."""
+SURVIVOR_SOURCE_REF = "Art. 3(1)"
+ABSORBED_SOURCE_REF = "Art. 3(2)"
 
 
 @dataclass

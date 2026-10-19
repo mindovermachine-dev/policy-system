@@ -1,7 +1,8 @@
 """Executors run when a signed passkey approval is verified.
 
-`execute_capability_merge` and `execute_obligation_merge` are the post-signature steps of
-`merge-capabilities` and `merge-obligations` (audit-first and fail-closed). Order:
+`execute_capability_merge`, `execute_obligation_merge` and `execute_role_merge` are the
+post-signature steps of `merge-capabilities`, `merge-obligations` and `merge-roles` (audit-first
+and fail-closed). Order:
 
 1. re-check the approving actor still holds `ComplianceOfficer` (a store outage denies);
 2. re-read the graph, re-validate, and compare the state digest bound into the signed args;
@@ -25,7 +26,8 @@ with no internal detail. The module registers its executor and effect verifier w
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, cast
 
 from ps_service.api.errors import AuthorizationStoreUnavailableError
 from ps_service.audit.errors import (
@@ -43,12 +45,16 @@ from ps_service.graph_cleanup.audit_actions import (
     CAPABILITY_UNMERGE_ACTION,
     OBLIGATION_MERGE_ACTION,
     OBLIGATION_UNMERGE_ACTION,
+    ROLE_MERGE_ACTION,
+    ROLE_UNMERGE_ACTION,
     CapabilityMergeDetails,
-    CapabilityMergeFailedReason,
     CapabilityReleaseGovernanceDetails,
     CapabilityUnmergeDetails,
+    CleanupFailedReason,
     ObligationMergeDetails,
     ObligationUnmergeDetails,
+    RoleMergeDetails,
+    RoleUnmergeDetails,
 )
 from ps_service.graph_cleanup.dependencies import build_default_graph_cleanup_dependencies
 from ps_service.graph_cleanup.errors import (
@@ -65,7 +71,11 @@ from ps_service.graph_cleanup.graph_reader import (
     read_obligation_marker_present,
     read_obligation_merge_state,
     read_obligation_present,
+    read_pending_review,
     read_release_state,
+    read_role_merge_state,
+    read_role_merged,
+    read_role_present_without_marker,
 )
 from ps_service.graph_cleanup.graph_submission import graph_write_target
 from ps_service.graph_cleanup.group_builders import (
@@ -74,11 +84,13 @@ from ps_service.graph_cleanup.group_builders import (
     write_obligation_merge,
     write_obligation_unmerge,
     write_release,
+    write_role_merge,
+    write_role_unmerge,
 )
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
-from ps_service.graph_cleanup.models import CapabilityUnmergePlan
 from ps_service.graph_cleanup.obligation_planner import plan_obligation_merge
 from ps_service.graph_cleanup.release_planner import plan_release_governance
+from ps_service.graph_cleanup.role_planner import plan_role_merge, validate_role_review
 from ps_service.graph_cleanup.unmerge import plan_unmerge
 from ps_service.logging import emit_log_entry
 from ps_service.passkey_signing.executors import (
@@ -87,14 +99,21 @@ from ps_service.passkey_signing.executors import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.config import ServiceConfig
     from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
+    from ps_service.graph_cleanup.graph_submission import GraphWriteTarget
     from ps_service.graph_cleanup.models import (
         CapabilityMergePlan,
+        CapabilityUnmergePlan,
         MergeCase,
         ObligationMergePlan,
+        ObligationUnmergePlan,
         ReleasePlan,
+        RoleMergePlan,
+        RoleUnmergePlan,
     )
     from ps_service.graph_cleanup.unmerge import UnmergePlan
     from ps_service.passkey_signing.models import PendingApprovalRow
@@ -102,24 +121,27 @@ if TYPE_CHECKING:
 __all__ = [
     "TOOL_MERGE_CAPABILITIES",
     "TOOL_MERGE_OBLIGATIONS",
+    "TOOL_MERGE_ROLES",
     "TOOL_RELEASE_GOVERNANCE",
     "TOOL_UNMERGE",
     "execute_capability_merge",
     "execute_obligation_merge",
     "execute_release_governance",
+    "execute_role_merge",
     "execute_unmerge",
     "verify_capability_merge_effect",
     "verify_obligation_merge_effect",
     "verify_release_governance_effect",
+    "verify_role_merge_effect",
     "verify_unmerge_effect",
 ]
 
 TOOL_MERGE_CAPABILITIES = "merge-capabilities"
 TOOL_MERGE_OBLIGATIONS = "merge-obligations"
+TOOL_MERGE_ROLES = "merge-roles"
 TOOL_RELEASE_GOVERNANCE = "release-capability-governance"
 TOOL_UNMERGE = "unmerge"
 _COMPONENT = "graph_cleanup"
-_UNMERGE_KINDS = ("capability", "obligation")
 _AUDIT_ERRORS = (
     AuditPostgresUnavailableError,
     AuditPersistenceError,
@@ -168,6 +190,7 @@ def _log(row: PendingApprovalRow, outcome: str, reason: str | None = None) -> No
         extra["reason"] = reason
     action = {
         TOOL_MERGE_OBLIGATIONS: "execute_obligation_merge",
+        TOOL_MERGE_ROLES: "execute_role_merge",
         TOOL_RELEASE_GOVERNANCE: "execute_release_governance",
         TOOL_UNMERGE: "execute_unmerge",
     }.get(row.tool_name, "execute_capability_merge")
@@ -180,7 +203,7 @@ def _string_arg(row: PendingApprovalRow, name: str) -> str | None:
 
 
 def _review_id(row: PendingApprovalRow) -> str | None:
-    """The near-miss review id signed into a `merge-capabilities` approval, or None."""
+    """The near-miss review id signed into a `merge-capabilities` or `merge-roles` approval."""
     return _string_arg(row, "review_id")
 
 
@@ -274,9 +297,9 @@ def _refusal_details(
     *,
     survivor_id: str,
     absorbed_id: str,
-    reason: CapabilityMergeFailedReason,
+    reason: CleanupFailedReason,
 ) -> dict[str, object]:
-    """Details of a `failed` row for a refusal made before any plan exists.
+    """Details of a `failed` `capability.merge` row for a refusal made before any plan exists.
 
     No plan means no snapshots and no governing-Policy fields; the Policy case is the one the
     preview put in the approval's display summary (the orphan reconciler's convention), 1 when
@@ -294,22 +317,66 @@ def _refusal_details(
     ).model_dump()
 
 
-def _refuse(
+def _role_refusal_details(
+    row: PendingApprovalRow,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    reason: CleanupFailedReason,
+) -> dict[str, object]:
+    """Details of a `failed` `role.merge` row for a refusal made before any plan exists.
+
+    No plan means no snapshots and no moved-Obligation fields; the instrument is the one the
+    preview put in the approval's display summary (the orphan reconciler's convention).
+    """
+    return RoleMergeDetails(
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        approval_id=row.id,
+        instrument_id=str(row.display_summary.get("instrument_id", "")),
+        reason_code=reason,
+        review_id=_review_id(row),
+    ).model_dump()
+
+
+@dataclass(frozen=True)
+class _Refusal:
+    """Why and how a merge is refused: the reason code, the message returned, the log detail."""
+
+    reason: CleanupFailedReason
+    message: str
+    log_detail: str | None = None
+
+
+@dataclass(frozen=True)
+class _RefusalKind:
+    """Which cleanup action a refusal's `failed` row belongs to and how its details are built."""
+
+    action: str
+    resource_type: str
+    details: Callable[..., dict[str, object]]
+
+
+_CAPABILITY_REFUSAL = _RefusalKind(CAPABILITY_MERGE_ACTION, "capability", _refusal_details)
+_ROLE_REFUSAL = _RefusalKind(ROLE_MERGE_ACTION, "role", _role_refusal_details)
+
+
+def _refuse_as(
+    kind: _RefusalKind,
     row: PendingApprovalRow,
     dependencies: GraphCleanupDependencies,
     config: ServiceConfig,
     *,
     survivor_id: str,
     absorbed_id: str,
-    reason: CapabilityMergeFailedReason,
-    message: str,
-    log_detail: str | None = None,
+    refusal: _Refusal,
 ) -> dict[str, object]:
-    """Refuse the merge before the audit-first write: log, record a `failed` row, return `message`.
+    """Refuse a merge before the audit-first write: log, record a `failed` row, return the message.
 
-    The `failed` row is best effort: an audit outage is logged and never masks the refusal.
+    The row is recorded under the kind's action and resource type with the details the kind
+    builds. It is best effort: an audit outage is logged and never masks the refusal.
     """
-    _log(row, "failed", log_detail or reason)
+    _log(row, "failed", refusal.log_detail or refusal.reason)
     try:
         _record(
             row,
@@ -317,13 +384,38 @@ def _refuse(
             config,
             outcome="failed",
             absorbed_id=absorbed_id,
-            details=_refusal_details(
-                row, survivor_id=survivor_id, absorbed_id=absorbed_id, reason=reason
+            details=kind.details(
+                row, survivor_id=survivor_id, absorbed_id=absorbed_id, reason=refusal.reason
             ),
+            action=kind.action,
+            resource_type=kind.resource_type,
         )
     except _AUDIT_ERRORS as exc:
         _log(row, "failed", f"failed_row_not_recorded:{type(exc).__name__}")
-    return _error(message)
+    return _error(refusal.message)
+
+
+def _refuse(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    reason: CleanupFailedReason,
+    message: str,
+    log_detail: str | None = None,
+) -> dict[str, object]:
+    """Refuse a Capability merge before the audit-first write: a `failed` `capability.merge` row."""
+    return _refuse_as(
+        _CAPABILITY_REFUSAL,
+        row,
+        dependencies,
+        config,
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        refusal=_Refusal(reason, message, log_detail),
+    )
 
 
 def _actor_is_still_authorised(
@@ -472,7 +564,7 @@ def _stale_refusal(
     Checks, in order: the signed acknowledgment (defence in depth), the state digest, and that the
     near-miss review the approval resolves still names this pair.
     """
-    refusal: tuple[CapabilityMergeFailedReason, str] | None = None
+    refusal: tuple[CleanupFailedReason, str] | None = None
     governance = plan.preview.governance
     review_id = _review_id(row)
     if (
@@ -756,7 +848,10 @@ def execute_obligation_merge(
     """Execute one signed `merge-obligations` approval; return its outcome dict.
 
     Follows the same fail-closed order as `execute_capability_merge`: authority re-check,
-    re-read and digest comparison, `applied` audit row, then one guarded gateway group.
+    re-read and digest comparison, `applied` audit row, then one guarded gateway group. When the
+    signed arguments carry a `review_id`, the Role `PendingReview` it names must still exist and
+    name the pair, is deleted in the same group and the id is recorded on the audit row; a
+    `review_id` that is not a string makes the approval malformed.
 
     Args:
         row: The verified approval; its `normalized_args` carry the signed arguments and its
@@ -825,6 +920,297 @@ def verify_obligation_merge_effect(row: PendingApprovalRow, graph: GraphHandle) 
     return not read_obligation_present(graph, obligation_id=absorbed_id) and read_obligation_marker(
         graph, survivor_id=survivor_id, absorbed_id=absorbed_id
     )
+
+
+def _role_details(
+    row: PendingApprovalRow,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    plan: RoleMergePlan,
+    failed_reason: Literal["graph_guard_missed", "graph_write_failed"] | None = None,
+) -> dict[str, object]:
+    return RoleMergeDetails(
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        approval_id=row.id,
+        instrument_id=plan.preview.instrument_id,
+        defines_source_ref=plan.absorbed_defines_source_ref,
+        moved_obligation_ids=plan.preview.moved_obligation_ids,
+        survivor_has_count_after_merge=plan.survivor_has_count_after_merge,
+        before=plan.before,
+        after=plan.after,
+        reason_code=failed_reason,
+        review_id=_review_id(row),
+    ).model_dump()
+
+
+def _record_role(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    outcome: Literal["applied", "failed"],
+    absorbed_id: str,
+    details: dict[str, object],
+) -> None:
+    _record(
+        row,
+        dependencies,
+        config,
+        outcome=outcome,
+        absorbed_id=absorbed_id,
+        details=details,
+        action=ROLE_MERGE_ACTION,
+        resource_type="role",
+    )
+
+
+def _write_role_after_audit(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    graph: GraphHandle,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    plan: RoleMergePlan,
+) -> dict[str, object]:
+    """Steps 3-4 for a role merge: record `applied`, then one gateway group.
+
+    The group carries the `applied` row's id as its audit link; `failed` is recorded on error. A
+    group committed but not applied yet is a success (no `failed` row).
+    """
+    try:
+        audit_event_id = _record_applied(
+            row,
+            dependencies,
+            config,
+            absorbed_id=absorbed_id,
+            details=_role_details(row, survivor_id=survivor_id, absorbed_id=absorbed_id, plan=plan),
+            action=ROLE_MERGE_ACTION,
+            resource_type="role",
+        )
+    except _AUDIT_ERRORS as exc:
+        _log(row, "failed", f"audit_unavailable:{type(exc).__name__}")
+        return _error(_NOT_AUDITED)
+    reason: Literal["graph_guard_missed", "graph_write_failed"]
+    try:
+        write_role_merge(
+            graph,
+            graph_write_target(dependencies, config),
+            audit_event_id=audit_event_id,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            expected=plan.expected,
+            review_id=_review_id(row),
+        )
+    except GraphCleanupStaleStateError:
+        reason, message = "graph_guard_missed", _STALE
+    except GraphCleanupPersistenceError:
+        reason, message = "graph_write_failed", _WRITE_FAILED
+    else:
+        _log(row, "succeeded")
+        return {"survivor_id": survivor_id, "absorbed_id": absorbed_id, "merged": True}
+    _log(row, "failed", reason)
+    try:
+        _record_role(
+            row,
+            dependencies,
+            config,
+            outcome="failed",
+            absorbed_id=absorbed_id,
+            details=_role_details(
+                row,
+                survivor_id=survivor_id,
+                absorbed_id=absorbed_id,
+                plan=plan,
+                failed_reason=reason,
+            ),
+        )
+    except _AUDIT_ERRORS as exc:
+        _log(row, "failed", f"failed_row_not_recorded:{type(exc).__name__}")
+    return _error(message)
+
+
+def _refuse_role(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    reason: CleanupFailedReason,
+    message: str,
+    log_detail: str | None = None,
+) -> dict[str, object]:
+    """Refuse a Role merge before the audit-first write: a `failed` `role.merge` row."""
+    return _refuse_as(
+        _ROLE_REFUSAL,
+        row,
+        dependencies,
+        config,
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        refusal=_Refusal(reason, message, log_detail),
+    )
+
+
+def _role_review_holds(row: PendingApprovalRow, graph: GraphHandle, plan: RoleMergePlan) -> bool:
+    """Whether the signed review, if any, still exists, is a Role review and names this pair."""
+    review_id = _review_id(row)
+    if review_id is None:
+        return True
+    try:
+        validate_role_review(
+            read_pending_review(graph, review_id=review_id),
+            survivor_id=plan.preview.survivor_id,
+            absorbed_id=plan.preview.absorbed_id,
+        )
+    except GraphCleanupValidationError:
+        return False
+    return True
+
+
+def _replan_role_merge(
+    row: PendingApprovalRow,
+    config: ServiceConfig,
+    dependencies: GraphCleanupDependencies,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    digest: str,
+) -> tuple[GraphHandle, RoleMergePlan] | dict[str, object]:
+    """Step 2 for a role merge: re-read, re-validate and compare the digest.
+
+    Returns the graph and plan, or the error outcome to return. Every refusal here is a stale or
+    rejected state, an unreachable graph included, and records a `failed` `role.merge` row.
+    """
+    try:
+        graph = dependencies.open_single_tenant_graph(config)
+        state = read_role_merge_state(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
+        plan = plan_role_merge(state)
+        review_holds = _role_review_holds(row, graph, plan)
+    except GraphCleanupValidationError as exc:
+        return _refuse_role(
+            row,
+            dependencies,
+            config,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            reason="revalidation_rejected",
+            message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001 -- opening/reading the graph may fail in driver-specific ways; the message returned never carries them
+        return _refuse_role(
+            row,
+            dependencies,
+            config,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            reason="graph_unavailable",
+            message=_UNAVAILABLE,
+            log_detail=f"graph_unavailable:{type(exc).__name__}",
+        )
+    if plan.state_digest != digest:
+        return _refuse_role(
+            row,
+            dependencies,
+            config,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            reason="state_digest_mismatch",
+            message=_STALE,
+        )
+    if not review_holds:
+        return _refuse_role(
+            row,
+            dependencies,
+            config,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            reason="review_missing_or_changed",
+            message=_STALE,
+        )
+    return graph, plan
+
+
+def execute_role_merge(
+    row: PendingApprovalRow, config: ServiceConfig, dependencies: GraphCleanupDependencies
+) -> dict[str, object]:
+    """Execute one signed `merge-roles` approval; return its outcome dict.
+
+    Follows the same fail-closed order as `execute_capability_merge`: authority re-check,
+    re-read and digest comparison, `applied` audit row, then one guarded gateway group.
+
+    Args:
+        row: The verified approval; its `normalized_args` carry the signed arguments and its
+            actor identifies who approved.
+        config: Service configuration used to open the graph and the stores.
+        dependencies: Factories for the graph, audit store, access-role store and gateway.
+
+    Returns:
+        On success `{"survivor_id", "absorbed_id", "merged": True}`. On any expected failure
+        `{"error": <short message without internal detail>}`; this function does not raise for
+        them.
+
+    Side Effects:
+        Writes an `applied` `role.merge` audit row, then one gateway group that moves the absorbed
+        Role's Obligations to the survivor, deletes the absorbed Role and leaves a `MergedRole`
+        marker. When the guard or the write fails, or the merge is refused before the write (lost
+        authority, drift, a Role that no longer validates, an unreachable graph), records a
+        `failed` row with the same `approval_id` (best effort). Emits a structured log entry.
+    """
+    survivor_id = _string_arg(row, "survivor_id")
+    absorbed_id = _string_arg(row, "absorbed_id")
+    digest = _string_arg(row, "state_digest")
+    review_is_malformed = "review_id" in row.normalized_args and _review_id(row) is None
+    if survivor_id is None or absorbed_id is None or digest is None or review_is_malformed:
+        _log(row, "failed", "malformed_normalized_args")
+        return _error(_BAD_APPROVAL)
+    if not _actor_is_still_authorised(row, dependencies, config):
+        return _refuse_role(
+            row,
+            dependencies,
+            config,
+            survivor_id=survivor_id,
+            absorbed_id=absorbed_id,
+            reason="actor_not_authorised",
+            message=_NOT_AUTHORISED,
+        )
+    replanned = _replan_role_merge(
+        row, config, dependencies, survivor_id=survivor_id, absorbed_id=absorbed_id, digest=digest
+    )
+    if isinstance(replanned, dict):
+        return replanned
+    graph, plan = replanned
+    return _write_role_after_audit(
+        row,
+        dependencies,
+        config,
+        graph,
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        plan=plan,
+    )
+
+
+def verify_role_merge_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
+    """Report whether the approved Role merge is present in the graph.
+
+    Args:
+        row: The approval; needs string `survivor_id` and `absorbed_id` in `normalized_args`.
+        graph: Handle on the single-tenant graph, read only.
+
+    Returns:
+        True when the absorbed Role no longer exists and a `MergedRole` marker names the
+        survivor; False otherwise, or when either id is missing from the arguments.
+    """
+    survivor_id = _string_arg(row, "survivor_id")
+    absorbed_id = _string_arg(row, "absorbed_id")
+    if survivor_id is None or absorbed_id is None:
+        return False
+    return read_role_merged(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
 
 
 def _release_details(
@@ -1014,50 +1400,238 @@ def _execute_release_registered(
     return execute_release_governance(row, config, build_default_graph_cleanup_dependencies())
 
 
+def _execute_role_registered(row: PendingApprovalRow, config: ServiceConfig) -> dict[str, object]:
+    return execute_role_merge(row, config, build_default_graph_cleanup_dependencies())
+
+
+register_approval_executor(TOOL_MERGE_ROLES, _execute_role_registered)
+register_effect_verifier(TOOL_MERGE_ROLES, verify_role_merge_effect)
+
+
 register_approval_executor(TOOL_RELEASE_GOVERNANCE, _execute_release_registered)
 register_effect_verifier(TOOL_RELEASE_GOVERNANCE, verify_release_governance_effect)
 
 
-def _unmerge_details(
-    row: PendingApprovalRow,
-    *,
-    plan: UnmergePlan,
-    failed_reason: Literal["graph_guard_missed", "graph_write_failed"] | None = None,
+type _UnmergeFailedReason = Literal["graph_guard_missed", "graph_write_failed"]
+
+
+def _capability_unmerge_details(
+    row: PendingApprovalRow, plan: UnmergePlan, failed_reason: _UnmergeFailedReason | None
 ) -> dict[str, object]:
-    preview = plan.preview
-    if isinstance(plan, CapabilityUnmergePlan):
-        return CapabilityUnmergeDetails(
-            survivor_id=plan.preview.survivor_id,
-            absorbed_id=plan.preview.merged_id,
-            approval_id=row.id,
-            reverses_approval_id=plan.preview.merge_approval_id,
-            policy_case=plan.inputs.policy_case,
-            before=plan.before,
-            after=plan.after,
-            restored_edges=plan.restored_edges,
-            survivor_added_edges=plan.preview.survivor_added_edges,
-            reason_code=failed_reason,
-        ).model_dump()
-    return ObligationUnmergeDetails(
-        survivor_id=preview.survivor_id,
-        absorbed_id=preview.merged_id,
-        role_id=plan.inputs.role_id,
+    capability = cast("CapabilityUnmergePlan", plan)
+    return CapabilityUnmergeDetails(
+        survivor_id=capability.preview.survivor_id,
+        absorbed_id=capability.preview.merged_id,
         approval_id=row.id,
-        reverses_approval_id=preview.merge_approval_id,
-        before=plan.before,
-        after=plan.after,
-        restored_edges=plan.restored_edges,
-        survivor_added_edges=plan.preview.survivor_added_edges,
-        survivor_edges_possibly_from_merge=plan.preview.survivor_edges_possibly_from_merge,
+        reverses_approval_id=capability.preview.merge_approval_id,
+        policy_case=capability.inputs.policy_case,
+        before=capability.before,
+        after=capability.after,
+        restored_edges=capability.restored_edges,
+        survivor_added_edges=capability.preview.survivor_added_edges,
         reason_code=failed_reason,
     ).model_dump()
 
 
-def _unmerge_action(plan: UnmergePlan) -> tuple[str, str]:
-    """The audit action and resource type of the plan's kind."""
-    if isinstance(plan, CapabilityUnmergePlan):
-        return CAPABILITY_UNMERGE_ACTION, "capability"
-    return OBLIGATION_UNMERGE_ACTION, "obligation"
+def _obligation_unmerge_details(
+    row: PendingApprovalRow, plan: UnmergePlan, failed_reason: _UnmergeFailedReason | None
+) -> dict[str, object]:
+    obligation = cast("ObligationUnmergePlan", plan)
+    return ObligationUnmergeDetails(
+        survivor_id=obligation.preview.survivor_id,
+        absorbed_id=obligation.preview.merged_id,
+        role_id=obligation.inputs.role_id,
+        approval_id=row.id,
+        reverses_approval_id=obligation.preview.merge_approval_id,
+        before=obligation.before,
+        after=obligation.after,
+        restored_edges=obligation.restored_edges,
+        survivor_added_edges=obligation.preview.survivor_added_edges,
+        survivor_edges_possibly_from_merge=obligation.preview.survivor_edges_possibly_from_merge,
+        reason_code=failed_reason,
+    ).model_dump()
+
+
+def _role_unmerge_details(
+    row: PendingApprovalRow, plan: UnmergePlan, failed_reason: _UnmergeFailedReason | None
+) -> dict[str, object]:
+    role = cast("RoleUnmergePlan", plan)
+    return RoleUnmergeDetails(
+        survivor_id=role.preview.survivor_id,
+        absorbed_id=role.preview.merged_id,
+        approval_id=row.id,
+        reverses_approval_id=role.preview.merge_approval_id,
+        instrument_id=role.preview.instrument_id,
+        before=role.before,
+        after=role.after,
+        restored_obligation_ids=role.preview.obligations_to_restore,
+        survivor_obligations_added_since_merge=role.preview.survivor_obligations_added_since_merge,
+        reason_code=failed_reason,
+    ).model_dump()
+
+
+def _write_capability_unmerge(
+    graph: GraphHandle, target: GraphWriteTarget, audit_event_id: str, plan: UnmergePlan
+) -> None:
+    write_capability_unmerge(
+        graph, target, audit_event_id=audit_event_id, plan=cast("CapabilityUnmergePlan", plan)
+    )
+
+
+def _write_obligation_unmerge(
+    graph: GraphHandle, target: GraphWriteTarget, audit_event_id: str, plan: UnmergePlan
+) -> None:
+    write_obligation_unmerge(
+        graph, target, audit_event_id=audit_event_id, plan=cast("ObligationUnmergePlan", plan)
+    )
+
+
+def _write_role_unmerge(
+    graph: GraphHandle, target: GraphWriteTarget, audit_event_id: str, plan: UnmergePlan
+) -> None:
+    write_role_unmerge(
+        graph, target, audit_event_id=audit_event_id, plan=cast("RoleUnmergePlan", plan)
+    )
+
+
+def _edge_unmerge_outcome(plan: UnmergePlan) -> dict[str, object]:
+    """The outcome of a Capability or Obligation unmerge: the edges the survivor gained stay."""
+    preview = cast("CapabilityUnmergePlan | ObligationUnmergePlan", plan).preview
+    return {
+        "merged_id": preview.merged_id,
+        "survivor_id": preview.survivor_id,
+        "unmerged": True,
+        "survivor_added_edges": [
+            edge.model_dump(mode="json") for edge in preview.survivor_added_edges
+        ],
+    }
+
+
+def _role_unmerge_outcome(plan: UnmergePlan) -> dict[str, object]:
+    """The outcome of a Role unmerge: how many Obligations the survivor gained and keeps."""
+    preview = cast("RoleUnmergePlan", plan).preview
+    return {
+        "merged_id": preview.merged_id,
+        "survivor_id": preview.survivor_id,
+        "unmerged": True,
+        "survivor_obligations_added_since_merge": preview.survivor_obligations_added_since_merge,
+    }
+
+
+def _capability_unmerged(graph: GraphHandle, merged_id: str) -> bool:
+    return read_capability_present_without_marker(graph, capability_id=merged_id)
+
+
+def _obligation_unmerged(graph: GraphHandle, merged_id: str) -> bool:
+    return read_obligation_present(
+        graph, obligation_id=merged_id
+    ) and not read_obligation_marker_present(graph, obligation_id=merged_id)
+
+
+def _role_unmerged(graph: GraphHandle, merged_id: str) -> bool:
+    return read_role_present_without_marker(graph, role_id=merged_id)
+
+
+@dataclass(frozen=True)
+class _UnmergeKind:
+    """What differs between unmerging a Capability, an Obligation and a Role merge.
+
+    `details` builds the audit row's details (the optional reason makes it a `failed` row), `write`
+    runs the one gateway group, `outcome` is the success result and `verify` the effect check the
+    orphan reconciler uses.
+    """
+
+    action: str
+    resource_type: str
+    details: Callable[
+        [PendingApprovalRow, UnmergePlan, _UnmergeFailedReason | None], dict[str, object]
+    ]
+    write: Callable[[GraphHandle, GraphWriteTarget, str, UnmergePlan], None]
+    outcome: Callable[[UnmergePlan], dict[str, object]]
+    verify: Callable[[GraphHandle, str], bool]
+
+
+_CAPABILITY_UNMERGE = _UnmergeKind(
+    CAPABILITY_UNMERGE_ACTION,
+    "capability",
+    _capability_unmerge_details,
+    _write_capability_unmerge,
+    _edge_unmerge_outcome,
+    _capability_unmerged,
+)
+# Keyed by the signed unmerge `kind`, which is the located merge's kind.
+_UNMERGE_KINDS: dict[str, _UnmergeKind] = {
+    "capability": _CAPABILITY_UNMERGE,
+    "obligation": _UnmergeKind(
+        OBLIGATION_UNMERGE_ACTION,
+        "obligation",
+        _obligation_unmerge_details,
+        _write_obligation_unmerge,
+        _edge_unmerge_outcome,
+        _obligation_unmerged,
+    ),
+    "role": _UnmergeKind(
+        ROLE_UNMERGE_ACTION,
+        "role",
+        _role_unmerge_details,
+        _write_role_unmerge,
+        _role_unmerge_outcome,
+        _role_unmerged,
+    ),
+}
+
+
+def _role_unmerge_refusal_details(
+    row: PendingApprovalRow,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    reason: CleanupFailedReason,
+) -> dict[str, object]:
+    """Details of a `failed` `role.unmerge` row for a refusal made before any plan exists.
+
+    No plan means no snapshots and no restored set; the survivor and instrument are the ones the
+    preview put in the approval's display summary (the orphan reconciler's convention).
+    """
+    return RoleUnmergeDetails(
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        approval_id=row.id,
+        reverses_approval_id=str(row.normalized_args.get("merge_approval_id", "")),
+        instrument_id=str(row.display_summary.get("instrument_id", "")) or None,
+        reason_code=reason,
+    ).model_dump()
+
+
+_ROLE_UNMERGE_REFUSAL = _RefusalKind(ROLE_UNMERGE_ACTION, "role", _role_unmerge_refusal_details)
+
+
+def _refuse_unmerge(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    kind: str,
+    merged_id: str,
+    refusal: _Refusal,
+) -> dict[str, object]:
+    """Refuse an unmerge before the audit-first write: log, return the message.
+
+    A Role unmerge also records a `failed` `role.unmerge` row (best effort); a Capability or
+    Obligation unmerge records none.
+    """
+    if kind != "role":
+        _log(row, "failed", refusal.log_detail or refusal.reason)
+        return _error(refusal.message)
+    return _refuse_as(
+        _ROLE_UNMERGE_REFUSAL,
+        row,
+        dependencies,
+        config,
+        survivor_id=str(row.display_summary.get("survivor_id", "")),
+        absorbed_id=merged_id,
+        refusal=refusal,
+    )
 
 
 def _record_unmerge_failed(
@@ -1066,35 +1640,19 @@ def _record_unmerge_failed(
     config: ServiceConfig,
     *,
     plan: UnmergePlan,
-    failed_reason: Literal["graph_guard_missed", "graph_write_failed"],
+    failed_reason: _UnmergeFailedReason,
 ) -> None:
-    action, resource_type = _unmerge_action(plan)
+    kind = _UNMERGE_KINDS[plan.preview.kind]
     _record(
         row,
         dependencies,
         config,
         outcome="failed",
         absorbed_id=plan.preview.merged_id,
-        details=_unmerge_details(row, plan=plan, failed_reason=failed_reason),
-        action=action,
-        resource_type=resource_type,
+        details=kind.details(row, plan, failed_reason),
+        action=kind.action,
+        resource_type=kind.resource_type,
     )
-
-
-def _run_unmerge_write(
-    graph: GraphHandle,
-    dependencies: GraphCleanupDependencies,
-    config: ServiceConfig,
-    *,
-    audit_event_id: str,
-    plan: UnmergePlan,
-) -> None:
-    """The one gateway group for the plan's kind."""
-    target = graph_write_target(dependencies, config)
-    if isinstance(plan, CapabilityUnmergePlan):
-        write_capability_unmerge(graph, target, audit_event_id=audit_event_id, plan=plan)
-    else:
-        write_obligation_unmerge(graph, target, audit_event_id=audit_event_id, plan=plan)
 
 
 def _write_unmerge_after_audit(
@@ -1110,37 +1668,30 @@ def _write_unmerge_after_audit(
     The group carries the `applied` row's id as its audit link. A group committed but not applied
     yet is a success (no `failed` row).
     """
-    action, resource_type = _unmerge_action(plan)
+    kind = _UNMERGE_KINDS[plan.preview.kind]
     try:
         audit_event_id = _record_applied(
             row,
             dependencies,
             config,
             absorbed_id=plan.preview.merged_id,
-            details=_unmerge_details(row, plan=plan),
-            action=action,
-            resource_type=resource_type,
+            details=kind.details(row, plan, None),
+            action=kind.action,
+            resource_type=kind.resource_type,
         )
     except _AUDIT_ERRORS as exc:
         _log(row, "failed", f"audit_unavailable:{type(exc).__name__}")
         return _error(_UNMERGE_NOT_AUDITED)
-    reason: Literal["graph_guard_missed", "graph_write_failed"]
+    reason: _UnmergeFailedReason
     try:
-        _run_unmerge_write(graph, dependencies, config, audit_event_id=audit_event_id, plan=plan)
+        kind.write(graph, graph_write_target(dependencies, config), audit_event_id, plan)
     except GraphCleanupStaleStateError:
         reason, message = "graph_guard_missed", _STALE
     except GraphCleanupPersistenceError:
         reason, message = "graph_write_failed", _UNMERGE_WRITE_FAILED
     else:
         _log(row, "succeeded")
-        return {
-            "merged_id": plan.preview.merged_id,
-            "survivor_id": plan.preview.survivor_id,
-            "unmerged": True,
-            "survivor_added_edges": [
-                edge.model_dump(mode="json") for edge in plan.preview.survivor_added_edges
-            ],
-        }
+        return kind.outcome(plan)
     _log(row, "failed", reason)
     try:
         _record_unmerge_failed(row, dependencies, config, plan=plan, failed_reason=reason)
@@ -1160,25 +1711,30 @@ def _replan_unmerge(
     digest: str,
 ) -> tuple[GraphHandle, UnmergePlan] | dict[str, object]:
     """Step 2: re-locate the merge, re-read and re-plan; the plan, or the error outcome."""
+
+    def _refused(refusal: _Refusal) -> dict[str, object]:
+        return _refuse_unmerge(
+            row, dependencies, config, kind=kind, merged_id=merged_id, refusal=refusal
+        )
+
     try:
         graph = dependencies.open_single_tenant_graph(config)
         plan = plan_unmerge(graph, dependencies.audit_store(config), merged_id=merged_id)
     except GraphCleanupValidationError as exc:
-        _log(row, "failed", "revalidation_rejected")
-        return _error(str(exc))
+        return _refused(_Refusal("revalidation_rejected", str(exc)))
     except _AUDIT_ERRORS as exc:
         _log(row, "failed", f"audit_unreadable:{type(exc).__name__}")
         return _error(_AUDIT_UNREADABLE)
     except Exception as exc:  # noqa: BLE001 -- opening/reading the graph may fail in driver-specific ways; the message returned never carries them
-        _log(row, "failed", f"graph_unavailable:{type(exc).__name__}")
-        return _error(_UNAVAILABLE)
+        return _refused(
+            _Refusal("graph_unavailable", _UNAVAILABLE, f"graph_unavailable:{type(exc).__name__}")
+        )
     if (
         plan.state_digest != digest
         or plan.preview.merge_approval_id != merge_approval_id
         or plan.preview.kind != kind
     ):
-        _log(row, "failed", "state_digest_mismatch")
-        return _error(_STALE)
+        return _refused(_Refusal("state_digest_mismatch", _STALE))
     return graph, plan
 
 
@@ -1187,8 +1743,8 @@ def execute_unmerge(
 ) -> dict[str, object]:
     """Execute one signed `unmerge` approval; return its outcome dict.
 
-    Reverses an earlier Capability or Obligation merge. Follows the same fail-closed order as the
-    merges, and also re-locates the merge in the audit trail: it must still be the one the
+    Reverses an earlier Capability, Obligation or Role merge. Follows the same fail-closed order as
+    the merges, and also re-locates the merge in the audit trail: it must still be the one the
     approval was created for.
 
     Args:
@@ -1198,15 +1754,18 @@ def execute_unmerge(
         dependencies: Factories for the graph, audit store, access-role store and gateway.
 
     Returns:
-        On success `{"merged_id", "survivor_id", "unmerged": True, "survivor_added_edges"}`. On
-        any expected failure `{"error": <short message without internal detail>}`; this
-        function does not raise for them. A `kind` other than `capability` or `obligation` is
-        a malformed approval.
+        On success `{"merged_id", "survivor_id", "unmerged": True, "survivor_added_edges"}`, or for
+        a Role `{"merged_id", "survivor_id", "unmerged": True,
+        "survivor_obligations_added_since_merge"}`. On any expected failure
+        `{"error": <short message without internal detail>}`; this function does not raise for
+        them. A `kind` other than `capability`, `obligation` or `role` is a malformed approval.
 
     Side Effects:
         Writes an `applied` unmerge audit row, then one gateway group that restores the absorbed
         node and its edges. When the guard or the write fails, records a `failed` row with the
-        same `approval_id` (best effort). Emits a structured log entry.
+        same `approval_id` (best effort). A Role unmerge refused before the write (lost authority,
+        drift, a conflict, a dependent merge, an unreachable graph) records a `failed`
+        `role.unmerge` row too. Emits a structured log entry.
     """
     merged_id = _string_arg(row, "merged_id")
     merge_approval_id = _string_arg(row, "merge_approval_id")
@@ -1221,8 +1780,14 @@ def execute_unmerge(
         _log(row, "failed", "malformed_normalized_args")
         return _error(_BAD_APPROVAL)
     if not _actor_is_still_authorised(row, dependencies, config):
-        _log(row, "failed", "actor_not_authorised")
-        return _error(_NOT_AUTHORISED)
+        return _refuse_unmerge(
+            row,
+            dependencies,
+            config,
+            kind=kind,
+            merged_id=merged_id,
+            refusal=_Refusal("actor_not_authorised", _NOT_AUTHORISED),
+        )
     replanned = _replan_unmerge(
         row,
         config,
@@ -1242,24 +1807,21 @@ def verify_unmerge_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
     """Report whether the approved unmerge is present in the graph.
 
     Args:
-        row: The approval; needs a string `merged_id` and a `kind` of `capability` or
-            `obligation` in `normalized_args`.
+        row: The approval; needs a string `merged_id` and a `kind` of `capability`, `obligation`
+            or `role` in `normalized_args` (any other kind is judged as a Capability).
         graph: Handle on the single-tenant graph, read only.
 
     Returns:
         For a Capability, True when it exists again and its `MergedCapability` marker is gone. For
-        an Obligation, True
-        when it exists again and its `MergedObligation` marker is gone. False otherwise, or when
-        `merged_id` is missing.
+        an Obligation, True when it exists again and its `MergedObligation` marker is gone. For a
+        Role, True when it exists again as a Role and its `MergedRole` marker is gone. False
+        otherwise, or when `merged_id` is missing.
     """
     merged_id = _string_arg(row, "merged_id")
     if merged_id is None:
         return False
-    if _string_arg(row, "kind") == "obligation":
-        return read_obligation_present(
-            graph, obligation_id=merged_id
-        ) and not read_obligation_marker_present(graph, obligation_id=merged_id)
-    return read_capability_present_without_marker(graph, capability_id=merged_id)
+    kind = _UNMERGE_KINDS.get(_string_arg(row, "kind") or "", _CAPABILITY_UNMERGE)
+    return kind.verify(graph, merged_id)
 
 
 def _execute_unmerge_registered(

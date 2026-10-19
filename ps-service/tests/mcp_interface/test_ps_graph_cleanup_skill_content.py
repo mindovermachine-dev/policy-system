@@ -18,7 +18,7 @@ _SKILL = _PLUGIN / "skills" / "ps-graph-cleanup" / "SKILL.md"
 _REFS = _SKILL.parent / "references"
 _REFERENCES = {
     "release-governance.md": "when the user wants to release a capability",
-    "unmerge.md": "when the user wants to reverse a capability or obligation merge",
+    "unmerge.md": "when the user wants to reverse a capability, obligation or role merge",
     "merge-case-reference.md": "when explaining what a merge involves per governance case",
     "error-reference.md": "when a tool returns an error",
     "known-limitation.md": "when two capabilities are governed by two approved policies",
@@ -450,3 +450,101 @@ def test_issue_200_on_demand_references_exist_and_are_named_with_their_condition
         assert f"read `references/{name}`" in skill, f"SKILL.md never says when to read {name}"
         assert condition in skill.lower(), name
         assert "Guardrail" in _ref(name), f"{name} must say the Guardrails still apply"
+
+
+# --- Role merge and Role unmerge ------------------------------------------------------
+
+
+def test_skill_walks_the_role_merge_flow_in_order() -> None:
+    text = _text()
+    section = text[text.index("### Merging two roles") :]
+
+    assert "merge-roles" in section
+    positions = [
+        section.index(marker)
+        for marker in (
+            "**Candidate.**",
+            "**Preview.**",
+            "**Confirm.**",
+            "**Passkey.**",
+            "**Result.**",
+        )
+    ]
+    assert positions == sorted(positions)
+
+
+def test_skill_explains_what_a_role_merge_does_and_the_same_instrument_rule() -> None:
+    section = _text()[_text().index("### Merging two roles") :]
+
+    assert "same instrument" in section.lower()
+    assert "`MergedRole`" in section
+    assert "`HAS`" in section
+    assert "`DEFINES`" in section
+    assert "keep their ids" in section
+    assert "role.merge" in section
+    assert "duplicate_obligation_pairs" in section
+    assert "find-duplicate-obligations" in section
+    assert "review_id" in section
+    assert "never open, sign or complete it on the officer's behalf" in section.lower()
+
+
+def test_skill_sources_a_role_pair_from_the_officer_or_read_only_cypher() -> None:
+    section = _text()[_text().index("### Merging two roles") :]
+
+    assert "no Role discovery tool" in section
+    assert "read-only `cypher`" in section
+    assert "domain_concepts" in section
+
+
+def test_skill_names_the_role_merge_errors() -> None:
+    text = _text()
+
+    assert "error: a role cannot be merged into itself" in text
+    assert "error: roles defined by different instruments cannot be merged" in text
+    assert "MergedRole marker" in text
+    assert "error: the review is not a Role review" in text
+
+
+def test_skill_scope_and_description_mention_roles() -> None:
+    raw = _SKILL.read_text(encoding="utf-8")
+    description = raw.split("---\n")[1]
+
+    assert "merge-roles" in _text()
+    assert "Role" in description
+    assert "unmerge a Capability, Obligation or Role merge" in description
+
+
+def test_unmerge_reference_covers_the_role_kind() -> None:
+    section = _ref("unmerge.md")
+
+    assert "`merge-roles`" in section
+    assert "`MergedRole`" in section
+    assert "role.merge" in section
+    assert "role.unmerge" in section
+    assert "obligations_to_restore" in section
+    assert "survivor_obligations_added_since_merge" in section
+    assert "defines_source_ref" in section
+    assert "stay on the survivor" in section
+    assert "audit event" in section
+    assert "reverse that one first" in section
+
+
+def test_unmerge_reference_names_the_role_conflicts_and_states() -> None:
+    section = _ref("unmerge.md")
+
+    assert "already exists again" in section
+    assert "no longer exists" in section
+    assert "later `obligation.merge`" in section
+    assert "later `role.merge`" in section
+    assert "Dependent merge" in section
+    assert "error: role ... cannot be unmerged: a later ..." in section
+
+
+def test_error_and_case_references_cover_merge_roles() -> None:
+    errors = _section("## Error reference", "error-reference.md")
+    cases = _section("## Merge case reference", "merge-case-reference.md")
+
+    assert "`merge-roles`" in errors
+    assert "different instruments" in errors
+    assert "`merge-roles`" in cases
+    assert "same instrument" in cases.lower()

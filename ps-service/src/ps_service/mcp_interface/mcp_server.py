@@ -145,6 +145,7 @@ from ps_service.graph_cleanup.service import (
     create_capability_merge_approval,
     create_obligation_merge_approval,
     create_release_governance_approval,
+    create_role_merge_approval,
     create_unmerge_approval,
     find_capability_merge_candidates,
     find_duplicate_obligations,
@@ -4412,6 +4413,91 @@ def merge_obligations_tool(
     return _run_mcp_action("merge_obligations", _body)
 
 
+@_gated_tool("merge-roles", _CLEANUP_GATE)
+def merge_roles_tool(
+    survivor_id: Annotated[str, Field(min_length=1)],
+    absorbed_id: Annotated[str, Field(min_length=1)],
+    ctx: Context,
+    review_id: Annotated[str | None, Field(min_length=1)] = None,
+) -> dict[str, object] | str:
+    """Preview merging one Role into another and request a passkey approval for the merge.
+
+    Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override; never available under the local-test bypass). This call never edits the graph: it
+    returns a preview and creates a pending passkey approval bound to this exact pair and to the
+    state previewed. The merge runs only when the officer opens `approval_url` in a browser and
+    signs with a passkey; `check-cleanup-approval` reports the outcome.
+
+    Both Roles must be defined by the same RegulatoryInstrument (Roles stay instrument-scoped).
+    On execution every Obligation the absorbed Role bears moves to the survivor and keeps its id,
+    the absorbed Role's `DEFINES` edge is removed, and the absorbed Role is deleted, with its full
+    node and edge snapshot held in the audit row (`role.merge`). The survivor's own `DEFINES`
+    edge is unchanged. The change is one all-or-nothing graph write that is audited first. The
+    deletion leaves a `MergedRole` marker so that a later ingest or restore that regenerates the
+    absorbed Role attaches to the survivor instead of recreating it.
+
+    When the merge resolves a Role near-miss review, pass its id as `review_id`: the review must be
+    a Role review that names exactly this pair (either way round). It is signed with the pair, is
+    re-checked when the approval is signed, and is deleted in the same write as the merge.
+
+    Args:
+        survivor_id: Id of the Role that remains; at least 1 character.
+        absorbed_id: Id of the Role merged into the survivor; at least 1 character.
+        ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
+        review_id: Id of the Role `PendingReview` this merge resolves; at least 1 character when
+            given. Omit it for a plain cleanup merge.
+
+    Returns:
+        `{"preview": {"survivor_id", "survivor_name", "absorbed_id", "absorbed_name",
+        "instrument_id", "moved_obligation_ids", "state_digest"}, "pending_approval_id",
+        "approval_url", "expires_at"}`.
+
+    Errors (returned as a string beginning `error: `, never raised; no approval is created on any
+    error):
+        - The caller is not an authenticated Compliance Officer.
+        - The pair cannot be merged: the same id twice, an id that is not a Role or is a merged
+          Role's marker, or two Roles defined by different instruments.
+        - `review_id` names no review, a review of another kind, or a review of another pair.
+        - The policy graph database or the approval store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph and creates one pending approval row with an expiry and writes one
+        log entry; the graph is not changed.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
+    """
+    config = load_config()
+
+    def _body() -> dict[str, object] | str:
+        actor = _gated_actor(config)
+        dependencies = build_default_graph_cleanup_dependencies()
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            approval = create_role_merge_approval(
+                graph,
+                survivor_id=survivor_id,
+                absorbed_id=absorbed_id,
+                actor=actor,
+                base_url=_resolve_base_url(ctx),
+                store=PsycopgPendingApprovalStore(config),
+                review_id=review_id,
+            )
+        except GraphCleanupValidationError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError, GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return {
+            "preview": approval.preview.model_dump(mode="json"),
+            "pending_approval_id": approval.pending_approval_id,
+            "approval_url": approval.approval_url,
+            "expires_at": approval.expires_at,
+        }
+
+    return _run_mcp_action("merge_roles", _body)
+
+
 @_gated_tool("release-capability-governance", _CLEANUP_GATE)
 def release_capability_governance_tool(
     capability_id: Annotated[str, Field(min_length=1)],
@@ -4507,8 +4593,8 @@ def unmerge_tool(
     Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
     override;
     never available under the local-test bypass). The merge is found in the audit trail
-    (`capability.merge` or `obligation.merge`): the newest `applied` row not followed by a `failed`
-    row
+    (`capability.merge`, `obligation.merge` or `role.merge`): the newest `applied` row not followed
+    by a `failed` row
     for the same approval. This call never edits the graph: it returns a preview and creates a
     pending
     passkey approval bound to the merge it reverses and to the state previewed. The unmerge runs
@@ -4534,22 +4620,34 @@ def unmerge_tool(
     those
     that may have come from the absorbed Obligation as `survivor_edges_possibly_from_merge`.
 
+    Role merge (`merge-roles`): the deleted Role is recreated under its original id with its
+    original properties and its `DEFINES` edge from the instrument (with its `source_ref`),
+    exactly the Obligations that merge moved are borne by it again (each leaves the survivor), and
+    its `MergedRole` marker is removed. Obligations the survivor gained since the merge stay on the
+    survivor and are counted in `survivor_obligations_added_since_merge`. A Role merge that a later
+    merge depends on cannot be reversed: a later `obligation.merge` of a moved Obligation, or a
+    later `role.merge` of the survivor, is refused with the audit event id of that merge; reverse
+    that one first.
+
     Either way the change is one all-or-nothing graph write that is audited first
-    (`capability.unmerge`
-    or `obligation.unmerge`, with a before and after snapshot).
+    (`capability.unmerge`, `obligation.unmerge` or `role.unmerge`, with a before and after
+    snapshot).
 
     Args:
-        merged_id: Id absorbed by `merge-capabilities` (a deleted Capability) or by
-            `merge-obligations` (a deleted Obligation); at least 1 character.
+        merged_id: Id absorbed by `merge-capabilities` (a deleted Capability), by
+            `merge-obligations` (a deleted Obligation) or by `merge-roles` (a deleted Role); at
+            least 1 character.
         ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
 
     Returns:
-        `{"preview": {"kind": "capability" | "obligation", "merged_id", "survivor_id",
-        "merge_approval_id", "edges_to_restore", "survivor_added_edges", "state_digest", ...},
-        "pending_approval_id", "approval_url", "expires_at"}`. A capability preview also carries
-        `merged_name`, `survivor_name` and `edges_removed_from_survivor`; an obligation preview
-        carries
-        `merged_text`, `survivor_text`, `role_id`, `survivor_edges_possibly_from_merge` and `note`.
+        `{"preview": {"kind": "capability" | "obligation" | "role", "merged_id", "survivor_id",
+        "merge_approval_id", "state_digest", ...}, "pending_approval_id", "approval_url",
+        "expires_at"}`. A capability or obligation preview also carries `edges_to_restore` and
+        `survivor_added_edges`. A capability preview also carries `merged_name`, `survivor_name`
+        and `edges_removed_from_survivor`; an obligation preview carries `merged_text`,
+        `survivor_text`, `role_id`, `survivor_edges_possibly_from_merge` and `note`; a role
+        preview carries `merged_name`, `survivor_name`, `instrument_id`, `obligations_to_restore`,
+        `defines_source_ref`, `survivor_obligations_added_since_merge` and `note`.
 
     Errors (returned as a string beginning `error: `, never raised; no approval is created on any
     error):
@@ -4557,9 +4655,10 @@ def unmerge_tool(
         - No merge of the id is in the audit trail.
         - The merge cannot be reversed because of a conflict (the survivor was merged away or
           re-pointed,
-          its governance changed, a restored edge's endpoint is gone, or the Obligation exists
-          again);
+          its governance changed, a restored edge's endpoint is gone, the Obligation or Role exists
+          again, or a moved Obligation is gone or borne by another Role);
           the message explains which.
+        - A later merge depends on the Role merge; the message names that merge's audit event id.
         - The audit trail, the policy graph database or the approval store cannot be reached.
         - Any other unexpected failure (a fixed generic message).
 
@@ -4613,13 +4712,11 @@ def check_cleanup_approval_tool(
 ) -> dict[str, object] | str:
     """Report the status and outcome of a graph-cleanup passkey approval.
 
-    Companion to `merge-capabilities`, `merge-obligations`, `release-capability-governance` and
-    `unmerge`: the passkey ceremony happens in a browser, so this is how to learn whether the
-    approval
-    was signed and what the edit did. Requires an explicit `ComplianceOfficer` grant. Only the
-    officer
-    who created the approval can see it; any other caller, or an unknown id, gets the same not-found
-    error.
+    Companion to `merge-capabilities`, `merge-obligations`, `merge-roles`,
+    `release-capability-governance` and `unmerge`: the passkey ceremony happens in a browser, so
+    this is how to learn whether the approval was signed and what the edit did. Requires an
+    explicit `ComplianceOfficer` grant. Only the officer who created the approval can see it; any
+    other caller, or an unknown id, gets the same not-found error.
 
     Args:
         pending_approval_id: The `pending_approval_id` returned by the tool that created the
@@ -4633,11 +4730,12 @@ def check_cleanup_approval_tool(
         signed
         approval has run, then one of: the result (`{"survivor_id", "absorbed_id", "merged": true}`
         for
-        either merge tool, `{"capability_id", "policy_id", "released": true}` for a release,
+        any merge tool, `{"capability_id", "policy_id", "released": true}` for a release,
         `{"merged_id", "survivor_id", "unmerged": true, "survivor_added_edges"}` for an unmerge of
-        either
-        kind), `{"error": <message>}`, or `{"reconciled": "applied"}`. An `applied` audit row
-        followed by
+        a capability or obligation merge,
+        `{"merged_id", "survivor_id", "unmerged": true, "survivor_obligations_added_since_merge"}`
+        for an unmerge of a role merge), `{"error": <message>}`, or `{"reconciled": "applied"}`. An
+        `applied` audit row followed by
         a `failed` row for the same approval id means no edit occurred.
 
     Errors (returned as a string beginning `error: `, never raised):

@@ -10,6 +10,7 @@ Fakes are hand-written and satisfy `GraphHandle` structurally (`_marker_graph.Ma
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -267,7 +268,7 @@ def test_resolution_drops_absorbed_node_and_maps_it_to_terminal(kind: MergeableK
 
     assert _kept(resolution.baseline, kind) == [_UNRELATED[kind]]
     assert resolution.mapping == {_ABSORBED[kind]: _SURVIVOR[kind]}
-    [(_, params)] = [c for c in graph.calls if "n.id IN $ids" in c[0]]
+    [(_, params)] = [c for c in graph.calls if "n.id IN $ids" in c[0] and "DEFINES" not in c[0]]
     assert params == {"ids": [_SURVIVOR[kind]]}
 
 
@@ -295,21 +296,108 @@ def test_a_kind_the_baseline_does_not_hold_issues_no_read(kind: MergeableKind) -
     assert graph.calls == []
 
 
-def test_a_role_redirect_rewrites_the_defines_edge_to_the_terminal_role() -> None:
+def _defines_of(baseline: BaselineGraph) -> list[tuple[str, str]]:
+    return [(e.target_id, e.source_ref) for e in baseline.provenance_edges]
+
+
+def _baseline_with_defines(*edges: tuple[str, str]) -> BaselineGraph:
+    """A baseline holding the Roles named by `edges` and a `DEFINES {source_ref}` per edge."""
+    base = _baseline_of("Role", *(target for target, _ in edges))
+    return replace(
+        base,
+        provenance_edges=tuple(ProvenanceEdge("DEFINES", t, ref) for t, ref in edges),
+    )
+
+
+def test_a_role_redirect_retargets_the_defines_edge_when_the_survivor_has_none() -> None:
+    """The survivor is live only and holds no `DEFINES` from the instrument yet."""
     graph = MarkerGraph(
         markers=_markers("Role", {_ROLE_ABSORBED: _ROLE_SURVIVOR}),
         existing={"Role": frozenset({_ROLE_SURVIVOR})},
     )
-    baseline = _baseline_of(
-        "Role", _ROLE_ABSORBED, _OTHER_ROLE, defines=(_ROLE_ABSORBED, _OTHER_ROLE)
-    )
+    baseline = _baseline_with_defines((_ROLE_ABSORBED, "Art. 2"), (_OTHER_ROLE, "Art. 3"))
 
     resolution = resolve_redirects(graph, baseline)
 
-    assert [(e.relationship_type, e.target_id) for e in resolution.baseline.provenance_edges] == [
-        ("DEFINES", _ROLE_SURVIVOR),
-        ("DEFINES", _OTHER_ROLE),
+    assert sorted(_defines_of(resolution.baseline)) == [
+        (_OTHER_ROLE, "Art. 3"),
+        (_ROLE_SURVIVOR, "Art. 2"),
     ]
+
+
+def test_a_role_redirect_keeps_the_survivors_own_defines_source_ref() -> None:
+    """Both Roles are in the baseline: the survivor's edge wins, the absorbed one is dropped."""
+    graph = MarkerGraph(markers=_markers("Role", {_ROLE_ABSORBED: _ROLE_SURVIVOR}))
+    baseline = _baseline_with_defines((_ROLE_SURVIVOR, "Art. 1"), (_ROLE_ABSORBED, "Art. 2"))
+
+    resolution = resolve_redirects(graph, baseline)
+
+    assert _defines_of(resolution.baseline) == [(_ROLE_SURVIVOR, "Art. 1")]
+
+
+def test_a_role_redirect_drops_the_defines_edge_when_the_live_graph_already_holds_it() -> None:
+    graph = MarkerGraph(
+        markers=_markers("Role", {_ROLE_ABSORBED: _ROLE_SURVIVOR}),
+        existing={"Role": frozenset({_ROLE_SURVIVOR})},
+        defines={"REG-H": frozenset({_ROLE_SURVIVOR})},
+    )
+    baseline = _baseline_with_defines((_ROLE_ABSORBED, "Art. 2"), (_OTHER_ROLE, "Art. 3"))
+
+    resolution = resolve_redirects(graph, baseline)
+
+    assert _defines_of(resolution.baseline) == [(_OTHER_ROLE, "Art. 3")]
+
+
+def test_a_live_define_of_another_instrument_does_not_drop_the_retargeted_edge() -> None:
+    graph = MarkerGraph(
+        markers=_markers("Role", {_ROLE_ABSORBED: _ROLE_SURVIVOR}),
+        existing={"Role": frozenset({_ROLE_SURVIVOR})},
+        defines={"REG-OTHER": frozenset({_ROLE_SURVIVOR})},
+    )
+
+    resolution = resolve_redirects(graph, _baseline_with_defines((_ROLE_ABSORBED, "Art. 2")))
+
+    assert _defines_of(resolution.baseline) == [(_ROLE_SURVIVOR, "Art. 2")]
+
+
+def test_two_absorbed_roles_with_one_survivor_leave_one_defines_edge() -> None:
+    graph = MarkerGraph(
+        markers=_markers("Role", {_ROLE_ABSORBED: _ROLE_SURVIVOR, _ROLE_TERMINAL: _ROLE_SURVIVOR}),
+        existing={"Role": frozenset({_ROLE_SURVIVOR})},
+    )
+    baseline = _baseline_with_defines((_ROLE_ABSORBED, "Art. 2"), (_ROLE_TERMINAL, "Art. 4"))
+
+    resolution = resolve_redirects(graph, baseline)
+
+    assert _defines_of(resolution.baseline) == [(_ROLE_SURVIVOR, "Art. 2")]
+
+
+def test_the_live_defines_read_is_one_parameterized_read_only_for_a_redirected_role() -> None:
+    graph = MarkerGraph(
+        markers=_markers("Role", {_ROLE_ABSORBED: _ROLE_SURVIVOR}),
+        existing={"Role": frozenset({_ROLE_SURVIVOR})},
+    )
+
+    resolve_redirects(graph, _baseline_with_defines((_ROLE_ABSORBED, "Art. 2")))
+    reads = [(q, p) for q, p in graph.calls if "[:DEFINES]" in q]
+
+    assert reads == [
+        (
+            (
+                "MATCH (:RegulatoryInstrument {id: $instrument_id})-[:DEFINES]->(n:Role) "
+                "WHERE n.id IN $ids RETURN n.id"
+            ),
+            {"instrument_id": "REG-H", "ids": [_ROLE_SURVIVOR]},
+        )
+    ]
+
+
+def test_a_baseline_without_a_redirected_role_issues_no_defines_read() -> None:
+    graph = MarkerGraph(markers=_markers("Role", {"unrelated": _ROLE_SURVIVOR}))
+
+    resolve_redirects(graph, _baseline_with_defines((_OTHER_ROLE, "Art. 3")))
+
+    assert not any("[:DEFINES]" in q for q, _ in graph.calls)
 
 
 def test_an_obligation_redirect_leaves_the_defines_edges_alone() -> None:

@@ -537,6 +537,303 @@ class ObligationMergePlan(BaseModel):
     state_digest: str
 
 
+class RoleState(BaseModel):
+    """A Role as read for a merge: id, name and its other scalar properties.
+
+    Attributes:
+        id: Role id.
+        name: Role name.
+        properties: Other scalar properties of the node (`description`, `confidence`).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    name: str
+    properties: dict[str, PropertyValue]
+
+
+class RoleDefines(BaseModel):
+    """A `DEFINES` edge into a Role: the defining instrument and the edge's `source_ref`.
+
+    Attributes:
+        instrument_id: Id of the RegulatoryInstrument that defines the Role.
+        source_ref: The edge's structured reference into the regulation text; None when absent.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    instrument_id: str
+    source_ref: str | None
+
+
+class RoleMergeState(BaseModel):
+    """Everything the Role-merge planner needs, read from the graph.
+
+    Attributes:
+        survivor_id: Id asked for as the surviving Role.
+        absorbed_id: Id asked for as the Role to absorb.
+        survivor: The surviving Role; None when no Role has that id.
+        absorbed: The Role to absorb; None when no Role has that id.
+        marker_ids: Those of the two ids that a `MergedRole` marker exists for.
+        survivor_defines: Inbound `DEFINES` edges of the survivor.
+        absorbed_defines: Inbound `DEFINES` edges of the absorbed Role.
+        survivor_obligation_ids: Obligations the survivor `HAS`.
+        absorbed_obligation_ids: Obligations the absorbed Role `HAS`.
+        obligation_texts: Text of each Obligation either Role `HAS`, by Obligation id; an
+            Obligation with no text is absent.
+        foreign_bearers: `HAS` edges into the absorbed Role's Obligations from any other Role
+            (the survivor included); an Obligation is borne by exactly one Role.
+        absorbed_degree: Number of edges of any type and direction on the absorbed Role; more than
+            its `DEFINES` and `HAS` edges means it carries an edge type the merge does not know
+            how to move, and deleting the Role would silently drop it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    survivor_id: str
+    absorbed_id: str
+    survivor: RoleState | None
+    absorbed: RoleState | None
+    marker_ids: tuple[str, ...] = ()
+    survivor_defines: tuple[RoleDefines, ...]
+    absorbed_defines: tuple[RoleDefines, ...]
+    survivor_obligation_ids: tuple[str, ...]
+    absorbed_obligation_ids: tuple[str, ...]
+    obligation_texts: dict[str, str] = {}
+    foreign_bearers: tuple[EdgeRecord, ...] = ()
+    absorbed_degree: int
+
+
+class PendingReviewRef(BaseModel):
+    """A near-miss `PendingReview` as read for a merge: its kind and the two ids it names.
+
+    Attributes:
+        kind: Label of the node kind the review is about (`Role`, `Capability`, ...).
+        incoming_id: Id of the node whose arrival raised the review.
+        nearest_existing_id: Id of the existing node it was close to.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: str
+    incoming_id: str
+    nearest_existing_id: str
+
+
+class ObligationDuplicatePair(BaseModel):
+    """Two Obligations a Role merge would put under one Role whose text looks the same.
+
+    Attributes:
+        survivor_obligation_id: Id of the Obligation the surviving Role already bears.
+        survivor_text: Text of that Obligation.
+        absorbed_obligation_id: Id of the Obligation that moves from the absorbed Role.
+        absorbed_text: Text of that Obligation.
+        basis: `identical_text` for equal text, `near_text` for near-identical text.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    survivor_obligation_id: str
+    survivor_text: str
+    absorbed_obligation_id: str
+    absorbed_text: str
+    basis: Literal["identical_text", "near_text"]
+
+
+class RoleMergePreview(BaseModel):
+    """What a Compliance Officer is shown before approving a Role merge.
+
+    Attributes:
+        survivor_id: Id of the Role that remains.
+        survivor_name: Name of the surviving Role.
+        absorbed_id: Id of the Role that is deleted.
+        absorbed_name: Name of the absorbed Role.
+        instrument_id: Id of the RegulatoryInstrument that defines both Roles.
+        moved_obligation_ids: Ids of the Obligations that move to the survivor, sorted.
+        duplicate_obligation_pairs: Pairs of a moving and a surviving Obligation with identical or
+            near-identical text, which the merge puts under one Role; sorted by survivor then
+            absorbed Obligation id. Empty when none look alike.
+        state_digest: sha256 of the previewed state; binds an approval to what was shown.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    survivor_id: str
+    survivor_name: str
+    absorbed_id: str
+    absorbed_name: str
+    instrument_id: str
+    moved_obligation_ids: tuple[str, ...]
+    duplicate_obligation_pairs: tuple[ObligationDuplicatePair, ...] = ()
+    state_digest: str
+
+
+class RoleExpectedCounts(BaseModel):
+    """What the guarded Role-merge write pins: both Roles' `HAS` sets as previewed.
+
+    Attributes:
+        absorbed_obligation_ids: Obligations the absorbed Role `HAS`, sorted.
+        survivor_obligation_ids: Obligations the survivor `HAS`, sorted.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    absorbed_obligation_ids: tuple[str, ...]
+    survivor_obligation_ids: tuple[str, ...]
+
+
+class RoleMergePlan(BaseModel):
+    """Pure result of planning one Role merge.
+
+    Attributes:
+        preview: What the officer is shown.
+        expected: What the guarded write pins.
+        before: Snapshot of the touched nodes and edges before the merge.
+        after: Snapshot after the merge.
+        state_digest: sha256 of the previewed state.
+        absorbed_defines_source_ref: `source_ref` of the absorbed Role's `DEFINES` edge, which
+            the delete removes; the audit row keeps it so an unmerge can put it back.
+        survivor_has_count_after_merge: How many Obligations the survivor bears once merged.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    preview: RoleMergePreview
+    expected: RoleExpectedCounts
+    before: GraphSnapshot
+    after: GraphSnapshot
+    state_digest: str
+    absorbed_defines_source_ref: str | None
+    survivor_has_count_after_merge: int
+
+
+class RoleUnmergeInputs(BaseModel):
+    """What a Role merge's audit row says to recreate, derived without I/O.
+
+    Attributes:
+        merge_approval_id: Approval id of the merge being reversed.
+        survivor_id: Id of the Role the absorbed Role was merged into.
+        absorbed_id: Id of the deleted Role to recreate.
+        instrument_id: Id of the RegulatoryInstrument that defined both Roles.
+        absorbed_properties: The absorbed Role's scalar properties (its `name` included, its id
+            excluded).
+        defines_source_ref: `source_ref` of the absorbed Role's `DEFINES` edge; None when it had
+            none.
+        moved_obligation_ids: Obligations the merge moved to the survivor, sorted.
+        survivor_has_count_after_merge: How many Obligations the survivor bore once merged.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    merge_approval_id: str
+    survivor_id: str
+    absorbed_id: str
+    instrument_id: str
+    absorbed_properties: dict[str, PropertyValue]
+    defines_source_ref: str | None
+    moved_obligation_ids: tuple[str, ...]
+    survivor_has_count_after_merge: int
+
+
+class RoleUnmergeState(BaseModel):
+    """The live graph around a merged-away Role, as `unmerge` needs it.
+
+    Attributes:
+        absorbed_exists: True when a Role with the absorbed id exists again.
+        survivor: The surviving Role; None when absent.
+        marker_targets: Maps a Role id to the `merged_into` ids of its `MergedRole` markers.
+        instrument_exists: True when the defining RegulatoryInstrument still exists.
+        survivor_obligation_ids: Obligations the survivor currently `HAS`.
+        moved_bearers: Maps each moved Obligation that has a bearer to the ids of every Role that
+            `HAS` it; an Obligation that does not exist, or has no bearer, is absent.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    absorbed_exists: bool
+    survivor: RoleState | None
+    marker_targets: dict[str, tuple[str, ...]]
+    instrument_exists: bool
+    survivor_obligation_ids: tuple[str, ...]
+    moved_bearers: dict[str, tuple[str, ...]]
+
+
+class RoleUnmergePreview(BaseModel):
+    """What a Compliance Officer is shown before approving a Role unmerge.
+
+    Attributes:
+        kind: Always `role`; tells a client which unmerge preview it holds.
+        merged_id: Id of the deleted Role to recreate.
+        merged_name: Name the recreated Role gets.
+        survivor_id: Id of the surviving Role.
+        survivor_name: Name of the survivor.
+        instrument_id: Id of the RegulatoryInstrument that defines the recreated Role again.
+        merge_approval_id: Approval id of the merge being reversed.
+        obligations_to_restore: Ids of the Obligations that go back to the recreated Role, sorted.
+        defines_source_ref: `source_ref` the recreated `DEFINES` edge gets.
+        survivor_obligations_added_since_merge: How many Obligations the survivor gained after
+            the merge; they cannot be told apart from its own, so they stay on it.
+        note: Explanation to the officer of what stays on the survivor.
+        state_digest: sha256 of the previewed state; binds an approval to what was shown.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["role"] = "role"
+    merged_id: str
+    merged_name: str
+    survivor_id: str
+    survivor_name: str
+    instrument_id: str
+    merge_approval_id: str
+    obligations_to_restore: tuple[str, ...]
+    defines_source_ref: str | None
+    survivor_obligations_added_since_merge: int
+    note: str
+    state_digest: str
+
+
+class RoleUnmergeWrite(BaseModel):
+    """The exact parameters the guarded Role-unmerge write pins and applies.
+
+    Attributes:
+        absorbed_properties: Scalar properties set on the recreated Role.
+        instrument_id: Instrument whose `DEFINES` edge to the recreated Role is put back.
+        defines_source_ref: `source_ref` of that edge; None when it had none.
+        moved_obligation_ids: Obligations that move back from the survivor, sorted.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    absorbed_properties: dict[str, PropertyValue]
+    instrument_id: str
+    defines_source_ref: str | None
+    moved_obligation_ids: tuple[str, ...]
+
+
+class RoleUnmergePlan(BaseModel):
+    """Pure result of planning one Role unmerge.
+
+    Attributes:
+        preview: What the officer is shown.
+        write: Parameters the guarded write applies.
+        before: Snapshot of the survivor and the marker, with the survivor's moved `HAS` edges.
+        after: Snapshot of the survivor and the recreated Role with its `DEFINES` and `HAS` edges.
+        state_digest: sha256 of the previewed state.
+        inputs: What the merge's audit row said to recreate.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    preview: RoleUnmergePreview
+    write: RoleUnmergeWrite
+    before: GraphSnapshot
+    after: GraphSnapshot
+    state_digest: str
+    inputs: RoleUnmergeInputs
+
+
 class ReleaseState(BaseModel):
     """What the reader found for `release-capability-governance`: one Capability and its policy.
 

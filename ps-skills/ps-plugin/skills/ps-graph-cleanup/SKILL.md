@@ -1,6 +1,6 @@
 ---
 name: ps-graph-cleanup
-description: Compliance Officer graph cleanup — find groups of near-duplicate Capabilities and duplicate Obligations (same Role) in the Policy System compliance graph, and merge two Capabilities (with an explicit acknowledgment when exactly one has a governing policy), merge two Obligations under the same Role, release a Capability from a draft governing policy, or unmerge a Capability or Obligation merge, after a human decision, a preview and a passkey approval. Requires an explicit ComplianceOfficer grant.
+description: Compliance Officer graph cleanup — find groups of near-duplicate Capabilities and duplicate Obligations (same Role) in the Policy System compliance graph, and merge two Capabilities (with an explicit acknowledgment when exactly one has a governing policy), merge two Obligations under the same Role, merge two Roles defined by the same instrument, release a Capability from a draft governing policy, or unmerge a Capability, Obligation or Role merge, after a human decision, a preview and a passkey approval. Requires an explicit ComplianceOfficer grant.
 ---
 
 # ps-graph-cleanup
@@ -17,8 +17,9 @@ candidate discovery through a merge, a release or an unmerge to a recorded outco
 (`find-capability-merge-candidates`), duplicate-obligation discovery
 (`find-duplicate-obligations`), merging two Capabilities (`merge-capabilities`; when both
 have a governing policy it must be the **same** policy), merging two Obligations under the
-**same Role** (`merge-obligations`), releasing a Capability from a **draft** governing policy
-(`release-capability-governance`), reversing a Capability or Obligation merge from its audit snapshot (`unmerge`),
+**same Role** (`merge-obligations`), merging two Roles defined by the **same instrument**
+(`merge-roles`), releasing a Capability from a **draft** governing policy
+(`release-capability-governance`), reversing a Capability, Obligation or Role merge from its audit snapshot (`unmerge`),
 and `check-cleanup-approval` for any of them.
 Discovery is read-only: it changes nothing and creates no approval.
 
@@ -253,13 +254,69 @@ Named states for `merge-obligations`, never collapsed into each other:
 | `error: the ... obligation ... is not borne by exactly one role` | "Role integrity" — report it as a data fault; never guess a Role                       |
 | `outcome.error` of a signed approval                             | Report the message; the approval is spent, so a retry needs a new preview and approval |
 
+### Merging two roles (same instrument)
+
+Only for two Roles **defined by the same instrument** (a Role belongs to one instrument; the
+same actor under two instruments is two Roles and is never merged here). The tool rejects any
+other pair before creating an approval. The flow is candidate -> preview -> confirm -> passkey ->
+result; never skip a step.
+
+1. **Candidate.** There is no Role discovery tool: the pair comes from the Compliance Officer,
+   or from a read-only `cypher` query over the instrument's Roles (call `domain_concepts` first
+   and ground the query in the labels it lists; never write to the graph). A similar name is a
+   suggestion, never a verdict. Ask which Role **survives** and which is **absorbed**. The
+   absorbed Role is **deleted** and leaves a `MergedRole` marker, so say so plainly. Never choose
+   for the user. When the merge resolves a Role near-miss review, pass its id as `review_id`; the
+   review must name exactly this pair.
+2. **Preview.** Call `merge-roles` with `survivor_id`, `absorbed_id` and optionally `review_id`.
+   This call never edits the graph. It returns `preview` (`survivor_id` and `survivor_name`,
+   `absorbed_id` and `absorbed_name`, the defining `instrument_id`, `moved_obligation_ids`,
+   `duplicate_obligation_pairs`, `state_digest`) plus `pending_approval_id`, `approval_url` and
+   `expires_at`. Show every field plainly. Each entry of `duplicate_obligation_pairs` is a pair
+   of a surviving and a moving Obligation whose text is identical or near-identical: after the
+   merge they sit under one Role, and `find-duplicate-obligations` with the survivor's `role_id`
+   offers them as a group to merge.
+3. **Confirm.** Ask the Compliance Officer to confirm, in their own words, that these two are
+   the same actor and that the survivor is right. Do not continue on silence or on your own
+   judgement.
+4. **Passkey.** Give the officer the `approval_url` to open in a browser and sign with a
+   passkey. The approval is bound to this exact pair and to the previewed state, and is valid
+   for 15 minutes. Never open, sign or complete it on the officer's behalf.
+5. **Result.** Call `check-cleanup-approval` with the `pending_approval_id` and report it
+   exactly as for a Capability merge (`merged: true` means done; `error` means the graph was
+   not changed by this approval).
+
+On execution every Obligation the absorbed Role bears via `HAS` moves to the survivor (moved
+Obligations keep their ids), the absorbed Role's `DEFINES` edge is removed (the survivor's own `DEFINES` and its
+`source_ref` are unchanged) and the absorbed Role is deleted, with its full node and edge
+snapshot held in the `role.merge` audit row. A `MergedRole` marker remains so a later ingest or
+restore that regenerates the absorbed Role attaches to the survivor instead of recreating it.
+The marker is not a Role and is never counted as one. If the merge came from a review, the
+review is deleted in the same write.
+
+Named states for `merge-roles`, never collapsed into each other:
+
+| Tool result                                                             | Named state to report                                                                  |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| the gate and graph errors listed in the discovery table above           | the same named states as discovery                                                     |
+| `error: a role cannot be merged into itself`                            | "Same node" — pick two different Roles                                                 |
+| `error: the survivor role does not exist` (or `absorbed`)               | "Role not found" — check the id; the id may not be a Role                              |
+| `error: the survivor id ... is a MergedRole marker ...` (or `absorbed`) | "Already merged" — that Role was merged away; use the survivor it points at            |
+| `error: roles defined by different instruments cannot be merged: ...`   | "Different instruments" — a Role belongs to one instrument; this pair is never merged  |
+| `error: the ... role ... is not defined by exactly one instrument ...`  | "Role integrity" — report it as a data fault; never guess an instrument                |
+| `error: the obligation ... is also borne by the role ...`               | "Role integrity" — report it as a data fault; nothing is forced                        |
+| `error: the review does not exist or was already resolved`              | "Review not found" — check the `review_id`                                             |
+| `error: the review is not a Role review`                                | "Not a Role review" — the review belongs to another kind                               |
+| `error: the review names a different pair of roles than ...`            | "Review mismatch" — the review is for another pair; nothing was created                |
+| `outcome.error` of a signed approval                                    | Report the message; the approval is spent, so a retry needs a new preview and approval |
+
 ### Releasing a capability from a policy
 
 When the user wants to release a Capability from its draft governing policy (or a blocked different-policies merge points here), read `references/release-governance.md` and follow it. It covers the check -> preview -> confirm -> passkey -> result flow for `release-capability-governance` and its named states.
 
 ### Unmerging a merge
 
-When the user wants to reverse a Capability or Obligation merge, read `references/unmerge.md` and follow it. It covers the locate -> preview -> confirm -> passkey -> result flow for `unmerge`, its conflicts and its named states.
+When the user wants to reverse a Capability, Obligation or Role merge, read `references/unmerge.md` and follow it. It covers the locate -> preview -> confirm -> passkey -> result flow for `unmerge`, its conflicts and its named states.
 
 ## On-demand references
 
@@ -274,7 +331,7 @@ Read these only when the condition holds; each one is bound by the Guardrails be
 
 - The skill reaches PS Service exclusively through the `ps-mcp` connector —
   never a direct graph connection, a repo-local script or a spawned binary.
-- Discovery, `merge-capabilities`, `merge-obligations`, `release-capability-governance` and `unmerge`
+- Discovery, `merge-capabilities`, `merge-obligations`, `merge-roles`, `release-capability-governance` and `unmerge`
   never edit the graph themselves: a change happens only when the Compliance Officer signs the passkey
   approval. Do not
   offer Cypher or any other route to merge or delete nodes.

@@ -21,10 +21,18 @@ from graph_gateway._fakes import FakeQueryResult, GatewayRig, InMemoryGraph
 
 from graph_cleanup._fakes import (
     ABSORBED,
+    ABSORBED_SOURCE_REF,
+    INSTRUMENT_ID,
     OBL_ABSORBED,
+    OBL_MOVED_1,
+    OBL_MOVED_2,
+    OBL_OF_SURVIVOR,
     OBL_SURVIVOR,
+    ROLE_ABSORBED,
     ROLE_ID,
+    ROLE_SURVIVOR,
     SURVIVOR,
+    SURVIVOR_SOURCE_REF,
     RecordingAuditStore,
 )
 from ps_service.company_merge import pending_review
@@ -76,10 +84,19 @@ class CleanupReadGraph:
             graph_reader._OBLIGATION_MARKER_QUERY: self._obligation_marker,
             graph_reader._OBLIGATION_ANY_MARKER_QUERY: self._obligation_any_marker,
             graph_reader._OBLIGATION_PRESENT_QUERY: self._obligation_present,
+            graph_reader._ROLE_NODES_QUERY: self._role_nodes,
+            graph_reader._ROLE_MARKERS_QUERY: self._role_markers,
+            graph_reader._ROLE_DEFINES_QUERY: self._role_defines,
+            graph_reader._ROLE_OBLIGATIONS_QUERY: self._role_obligations,
+            graph_reader._ROLE_FOREIGN_BEARERS_QUERY: self._role_foreign_bearers,
+            graph_reader._ROLE_DEGREE_QUERY: self._role_degree,
+            graph_reader._PENDING_REVIEW_QUERY: self._pending_review,
+            graph_reader._OBLIGATIONS_BY_ROLE_QUERY: self._obligations_by_role,
             graph_reader._CAPABILITY_MARKERS_QUERY: self._capability_markers,
             graph_reader._POLICY_EXISTS_QUERY: self._policy_exists,
             graph_reader._OBLIGATION_MARKERS_QUERY: self._obligation_markers,
             graph_reader._ROLE_EXISTS_QUERY: self._role_exists,
+            graph_reader._INSTRUMENT_EXISTS_QUERY: self._instrument_exists,
             graph_reader._REQUIREMENTS_EXIST_QUERY: self._requirements_exist,
             graph_reader._CAPABILITIES_EXIST_QUERY: self._capabilities_exist,
             pending_review._REVIEW_MERGE_SIDES_QUERY: self._review_merge_sides,
@@ -152,6 +169,25 @@ class CleanupReadGraph:
                 review.get("created_at", ""),
             ]
         ]
+
+    def _obligations_by_role(self, params: dict[str, object]) -> list[object]:
+        """`find-duplicate-obligations`' read: one row per Obligation, with no Requirement."""
+        wanted = params.get("role_id")
+        rows: list[object] = []
+        for role_id, obligation_id in self._edges("HAS", "Role", "Obligation"):
+            if wanted is not None and role_id != wanted:
+                continue
+            role = self._graph.nodes[("Role", role_id)]
+            text = self._graph.nodes[("Obligation", obligation_id)].get("text")
+            rows.append([role_id, role["name"], obligation_id, text, None, None])
+        return rows
+
+    def _pending_review(self, params: dict[str, object]) -> list[object]:
+        """A `PendingReview`'s kind and the two ids it names, whatever its kind."""
+        review = self._graph.nodes.get(("PendingReview", cast("str", params["review_id"])))
+        if review is None:
+            return []
+        return [[review["kind"], review["incoming_id"], review["nearest_existing_id"]]]
 
     def _review_merge_sides(self, params: dict[str, object]) -> list[object]:
         """The near-miss review's kind and ids, and whether each side is a live Capability."""
@@ -300,6 +336,59 @@ class CleanupReadGraph:
         present = ("Obligation", cast("str", params["obligation_id"])) in self._graph.nodes
         return [[1 if present else 0]]
 
+    # -- the role-merge reads ------------------------------------------------------------------
+
+    def _role_nodes(self, params: dict[str, object]) -> list[object]:
+        wanted = set(cast("list[str]", params["ids"]))
+        return [
+            [node_id, props.get("name"), props.get("description"), props.get("confidence")]
+            for (label, node_id), props in self._graph.nodes.items()
+            if label == "Role" and node_id in wanted
+        ]
+
+    def _role_markers(self, params: dict[str, object]) -> list[object]:
+        wanted = set(cast("list[str]", params["ids"]))
+        return [
+            [node_id, props.get("merged_into")]
+            for (label, node_id), props in self._graph.nodes.items()
+            if label == "MergedRole" and node_id in wanted
+        ]
+
+    def _role_defines(self, params: dict[str, object]) -> list[object]:
+        wanted = set(cast("list[str]", params["ids"]))
+        return [
+            [key[4], key[2], props.get("source_ref")]
+            for key, props in self._graph.edges.items()
+            if key[0] == "DEFINES"
+            and key[1] == "RegulatoryInstrument"
+            and key[3] == "Role"
+            and key[4] in wanted
+        ]
+
+    def _role_obligations(self, params: dict[str, object]) -> list[object]:
+        wanted = set(cast("list[str]", params["ids"]))
+        return [
+            [role, obligation, self._graph.nodes[("Obligation", obligation)].get("text")]
+            for role, obligation in self._edges("HAS", "Role", "Obligation")
+            if role in wanted
+        ]
+
+    def _role_foreign_bearers(self, params: dict[str, object]) -> list[object]:
+        """`(obligation, bearer)` for each Obligation of the absorbed Role with another bearer."""
+        absorbed_id = params["absorbed_id"]
+        has = self._edges("HAS", "Role", "Obligation")
+        mine = {obligation for role, obligation in has if role == absorbed_id}
+        return [
+            [obligation, role]
+            for role, obligation in has
+            if obligation in mine and role != absorbed_id
+        ]
+
+    def _role_degree(self, params: dict[str, object]) -> list[object]:
+        """The number of edges of any type and direction touching the Role (0 for none)."""
+        role_id = params["role_id"]
+        return [[sum(1 for key in self._graph.edges if role_id in (key[2], key[4]))]]
+
     # -- the unmerge reads ---------------------------------------------------------------------
 
     def _existing_nodes(self, label: str) -> Callable[[dict[str, object]], list[object]]:
@@ -332,6 +421,14 @@ class CleanupReadGraph:
     def _role_exists(self, params: dict[str, object]) -> list[object]:
         role_id = cast("str", params["role_id"])
         return [[role_id]] if ("Role", role_id) in self._graph.nodes else []
+
+    def _instrument_exists(self, params: dict[str, object]) -> list[object]:
+        instrument_id = cast("str", params["instrument_id"])
+        return (
+            [[instrument_id]]
+            if ("RegulatoryInstrument", instrument_id) in self._graph.nodes
+            else []
+        )
 
     def _requirements_exist(self, params: dict[str, object]) -> list[object]:
         return self._existing_nodes("Requirement")(params)
@@ -492,6 +589,56 @@ class CleanupGraphSeeder:
                 legacy=legacy,
                 properties={"source_ref": source_ref},
             )
+
+    def seed_role(self, role_id: str, *, name: str, **properties: object) -> None:
+        """Seed a Role."""
+        self.graph.seed_node(("Role",), role_id, {"name": name, **properties})
+
+    def seed_instrument(self, instrument_id: str) -> None:
+        """Seed a RegulatoryInstrument."""
+        self.graph.seed_node(("RegulatoryInstrument",), instrument_id, {})
+
+    def seed_defines(
+        self, instrument_id: str, role_id: str, *, source_ref: str, legacy: bool = False
+    ) -> None:
+        """Seed an `(instrument)-[:DEFINES {source_ref}]->(Role)` edge."""
+        self.seed_edge(
+            ("DEFINES", "RegulatoryInstrument", instrument_id, "Role", role_id),
+            legacy=legacy,
+            properties={"source_ref": source_ref},
+        )
+
+    def seed_has(self, role_id: str, obligation_id: str, *, legacy: bool = False) -> None:
+        """Seed a `(Role)-[:HAS]->(Obligation)` edge."""
+        self.seed_edge(("HAS", "Role", role_id, "Obligation", obligation_id), legacy=legacy)
+
+    def seed_role_merge_world(self, *, legacy: bool = False) -> None:
+        """The default role-merge fixture: two Roles defined by one instrument.
+
+        `ROLE_SURVIVOR` bears `OBL_OF_SURVIVOR`; `ROLE_ABSORBED` bears `OBL_MOVED_1` and
+        `OBL_MOVED_2`. Each Role has its own `DEFINES` `source_ref`.
+        """
+        self.seed_instrument(INSTRUMENT_ID)
+        self.seed_role(
+            ROLE_SURVIVOR,
+            name="Market Surveillance Authority",
+            description="The authority",
+            confidence=0.9,
+        )
+        self.seed_role(ROLE_ABSORBED, name="market surveillance authorities", confidence=0.8)
+        self.seed_defines(
+            INSTRUMENT_ID, ROLE_SURVIVOR, source_ref=SURVIVOR_SOURCE_REF, legacy=legacy
+        )
+        self.seed_defines(
+            INSTRUMENT_ID, ROLE_ABSORBED, source_ref=ABSORBED_SOURCE_REF, legacy=legacy
+        )
+        for role_id, obligation_id in (
+            (ROLE_SURVIVOR, OBL_OF_SURVIVOR),
+            (ROLE_ABSORBED, OBL_MOVED_1),
+            (ROLE_ABSORBED, OBL_MOVED_2),
+        ):
+            self.seed_endpoint("Obligation", obligation_id, text=obligation_id)
+            self.seed_has(role_id, obligation_id, legacy=legacy)
 
     def seed_capability_unmerge_world(
         self, *, policy: str | None = None, legacy: bool = False

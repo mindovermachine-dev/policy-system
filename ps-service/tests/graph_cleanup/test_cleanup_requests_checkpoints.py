@@ -1,6 +1,6 @@
 """Every Graph Cleanup group requests a digest checkpoint.
 
-Each of the five cleanup operations is one group on `policy_system`, so each is its own terminal
+Each of the cleanup operations is one group on `policy_system`, so each is its own terminal
 group. The real executors run over the `CleanupRig`; a checkpoint that cannot be recorded never
 fails the operation.
 """
@@ -23,12 +23,15 @@ from graph_cleanup._merge_runs import (
     roles,
     run_capability_merge,
     run_obligation_merge,
+    run_role_merge,
 )
 from graph_cleanup._unmerge_runs import (
     capability_unmerge_world,
     obligation_unmerge_world,
+    role_unmerge_world,
     run_capability_unmerge,
     run_obligation_unmerge,
+    run_role_unmerge,
 )
 from ps_service.graph_cleanup.executors import TOOL_RELEASE_GOVERNANCE, execute_release_governance
 from ps_service.graph_cleanup.graph_reader import read_release_state
@@ -74,6 +77,11 @@ def _obligation_merge(rig: CleanupRig) -> None:
     run_obligation_merge(rig)
 
 
+def _role_merge(rig: CleanupRig) -> None:
+    rig.seed_role_merge_world()
+    run_role_merge(rig)
+
+
 def _capability_unmerge(rig: CleanupRig) -> None:
     capability_unmerge_world(rig)
     run_capability_unmerge(rig)
@@ -84,12 +92,19 @@ def _obligation_unmerge(rig: CleanupRig) -> None:
     run_obligation_unmerge(rig)
 
 
+def _role_unmerge(rig: CleanupRig) -> None:
+    role_unmerge_world(rig)
+    run_role_unmerge(rig)
+
+
 _OPERATIONS: dict[str, Callable[[CleanupRig], None]] = {
     "release": _release,
     "merge-capabilities": _capability_merge,
     "merge-obligations": _obligation_merge,
+    "merge-roles": _role_merge,
     "unmerge-capability": _capability_unmerge,
     "unmerge-obligation": _obligation_unmerge,
+    "unmerge-role": _role_unmerge,
 }
 
 

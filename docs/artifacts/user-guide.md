@@ -245,7 +245,7 @@ What is recorded:
 
 | Operation | Rows | Notes |
 |---|---|---|
-| Access-role changes, policy lifecycle, graph cleanup | `access_role.*`, `policy.*`, `capability.*`, `obligation.*` | Applied and denied attempts |
+| Access-role changes, policy lifecycle, graph cleanup | `access_role.*`, `policy.*`, `capability.*`, `obligation.*`, `role.*` | Applied and denied attempts |
 | Regulation ingestion (`ingest_regulation`, `start_ingestion`, and each re-ingest of `check_regulations`) | `ingestion_run.submit` before the run, `ingestion_run.complete` after | The CELEX id, the instrument id, `trigger` (`sync_ingest`, `async_ingest`, `amendment_check`), the counts of new Obligations, new Capabilities and matched Capabilities, and a `reason_code` on failure. Polling a run writes nothing. A `check_regulations` sweep runs the full pipeline (Ingestion, Domain Mapper, Company Merge) for each amendment. Its completion row therefore has the real counts of the amendment |
 | Instrument restore (`restore_instrument`, `POST /restorations`) | `instrument.restore` opening and terminal rows | The instrument id, the source (`catalog` or `upload`) and the outcome: `succeeded`, `failed` (with a `reason_code`), `rejected` (`group_rejected`: the graph write was refused and nothing was written) or `committed_apply_pending` (the restore is recorded in the graph log and is applied on recovery). The `succeeded` row also has `near_miss_reviews_created`. This is the number of near-miss reviews that the restore opened. The `committed_apply_pending` row does not have it |
 | Near-miss resolution | `near_miss.resolve` (keep-separate), `capability.merge` (merge) | A keep-separate row has both entity ids and the decision. A near-miss merge writes the same `capability.merge` row as a graph cleanup merge, when the approver signs with their passkey. The approver is the actor. The row has the survivor, the absorbed Capability, the review id and before/after graph snapshots |
@@ -309,10 +309,12 @@ _"Use the ps-verify-audit-log skill."_
 Find duplicate capabilities in the graph.
 ```
 
-Ingestion can leave the same duty in the graph twice. There are two cases:
-near-identical Capabilities (for example several "Vulnerability Remediation" variants)
-or two Obligations with the same text under one Role. Duplicates increase the
-obligation counts and split the policy coverage across the variants. With the
+Ingestion can leave the same duty in the graph twice. There are three cases:
+near-identical Capabilities (for example several "Vulnerability Remediation" variants),
+two Obligations with the same text under one Role, or two Roles of one instrument that
+name the same actor (for example several spellings of "market surveillance authority").
+Duplicates increase the obligation counts and split the policy coverage across the
+variants. Duplicate Roles split one actor's Obligations across several Roles. With the
 `ps-graph-cleanup` skill, a Compliance Officer can find duplicates, merge them, and
 reverse a merge. The skill uses the same MCP connector.
 
@@ -362,6 +364,20 @@ Obligation. The audit record keeps its full node and edge snapshot. A small
 survivor, and the system does not recreate the absorbed Obligation. The marker is not
 an Obligation. The system never counts it as one.
 
+**Merging two Roles.** You can merge only two Roles that the **same** instrument
+defines. A Role belongs to one instrument, so the same actor under two instruments is
+two Roles and the tool rejects such a pair. No tool finds duplicate Roles. You bring the
+two Roles yourself, or the skill reads them with a read-only query. The flow is the
+same (preview, confirm, passkey). The preview shows the Obligations that move and the
+pairs of a moving Obligation and a surviving one with identical or near-identical text.
+Those pairs end up under one Role, and `find-duplicate-obligations` then offers them
+for merging. Every Obligation of the absorbed Role moves to the survivor and keeps its
+id. The survivor keeps its own definition link and its `source_ref`. The merge
+**deletes** the absorbed Role. The audit record keeps its full node and edge snapshot.
+A small `MergedRole` marker stays. A later ingest or restore then attaches the
+Obligations to the survivor, and the system does not recreate the absorbed Role. The
+marker is not a Role. The system never counts it as one.
+
 **Releasing governance.** `release-capability-governance` removes the link between one
 Capability and its governing policy. After this, a case 3 merge can continue. It works
 only while that policy is a `draft`. You can first return a `proposed` policy to draft
@@ -371,14 +387,19 @@ Standard or Control.
 
 **Reversing a merge.** `unmerge` takes the id that the merge absorbed. It restores that
 id from the snapshot in the audit record of the merge. It first does the same preview,
-confirmation and passkey approval. The tool recreates a deleted Capability or
-Obligation under its original id and removes its marker. The tool restores exactly the edges that the merge
+confirmation and passkey approval. The tool recreates a deleted Capability,
+Obligation or Role under its original id and removes its marker. The tool restores exactly the edges that the merge
 moved. Edges that you added to the survivor after the merge stay where they are. The
-preview lists them.
+preview lists them. For a Role, the Obligations that the survivor gained after the merge
+also stay on the survivor, because their ids cannot be told apart from its own. The
+preview gives their number.
 
 Sometimes the survivor has changed since the merge in a way that conflicts. For
 example, it was merged away, its governance changed, or a linked node is gone. The tool
-then rejects the unmerge with an explanation. It forces nothing.
+then rejects the unmerge with an explanation. It forces nothing. A Role merge also
+cannot be reversed while a later merge depends on it: a later merge of one of the
+Obligations it moved, or of the surviving Role. The explanation names the audit event
+of that later merge. Reverse that merge first.
 
 **Passkey approval and interrupted approvals.** Nothing changes in the graph until
 you sign. Each change writes one audit record **before** the system changes the graph.
@@ -396,8 +417,8 @@ expiry, the check looks for the change in the graph. If the change is there, the
 records it as applied. If the change is not there, the check records a `failed` row
 (`interrupted_no_effect`). Read the records with [Review the audit
 trail](#review-the-audit-trail). Filter by the actions `capability.merge`,
-`obligation.merge`, `capability.release_governance`, `capability.unmerge` and
-`obligation.unmerge`.
+`obligation.merge`, `role.merge`, `capability.release_governance`,
+`capability.unmerge`, `obligation.unmerge` and `role.unmerge`.
 
 **Known limitation.** You cannot yet merge two Capabilities that two **approved**
 policies govern. The policies are different. Releasing works only on a draft. You amend

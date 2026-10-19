@@ -24,6 +24,8 @@ from ps_service.graph_cleanup.graph_reader import (
     read_obligation_merge_state,
     read_obligation_unmerge_state,
     read_release_state,
+    read_role_merge_state,
+    read_role_unmerge_state,
 )
 from ps_service.graph_cleanup.graph_submission import (
     GraphWriteTarget,
@@ -59,6 +61,11 @@ if TYPE_CHECKING:
         ObligationUnmergeState,
         ObligationUnmergeWrite,
         ReleaseState,
+        RoleExpectedCounts,
+        RoleMergeState,
+        RoleUnmergePlan,
+        RoleUnmergeState,
+        RoleUnmergeWrite,
     )
     from ps_service.graph_gateway.models import Primitive
 
@@ -68,16 +75,22 @@ __all__ = [
     "build_obligation_merge_group",
     "build_obligation_unmerge_group",
     "build_release_group",
+    "build_role_merge_group",
+    "build_role_unmerge_group",
     "capability_merge_guard_holds",
     "capability_unmerge_guard_holds",
     "obligation_merge_guard_holds",
     "obligation_unmerge_guard_holds",
     "release_guard_holds",
+    "role_merge_guard_holds",
+    "role_unmerge_guard_holds",
     "write_capability_merge",
     "write_capability_unmerge",
     "write_obligation_merge",
     "write_obligation_unmerge",
     "write_release",
+    "write_role_merge",
+    "write_role_unmerge",
 ]
 
 _RELEASE_STALE_MESSAGE = (
@@ -87,8 +100,10 @@ _RELEASE_STALE_MESSAGE = (
 
 _CAPABILITY_MERGE_STALE_MESSAGE = "the capabilities changed since the preview; nothing was written"
 _OBLIGATION_MERGE_STALE_MESSAGE = "the obligations changed since the preview; nothing was written"
+_ROLE_MERGE_STALE_MESSAGE = "the roles changed since the preview; nothing was written"
 _CAPABILITY_UNMERGE_STALE_MESSAGE = _CAPABILITY_MERGE_STALE_MESSAGE
 _OBLIGATION_UNMERGE_STALE_MESSAGE = _OBLIGATION_MERGE_STALE_MESSAGE
+_ROLE_UNMERGE_STALE_MESSAGE = _ROLE_MERGE_STALE_MESSAGE
 
 
 def release_guard_holds(state: ReleaseState, *, policy_id: str) -> bool:
@@ -496,6 +511,266 @@ def write_obligation_merge(
         primitives,
         audit_event_id=audit_event_id,
         stale_message=_OBLIGATION_MERGE_STALE_MESSAGE,
+        preconditions=(ExpectedPosition(position=expected_position + stamped),),
+    )
+
+
+# -- merge-roles ------------------------------------------------------------------------------
+
+
+def role_merge_guard_holds(
+    state: RoleMergeState,
+    expected: RoleExpectedCounts,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+) -> bool:
+    """Whether two distinct Roles still share one instrument and have the previewed `HAS` sets.
+
+    Args:
+        state: Fresh merge state from `read_role_merge_state`.
+        expected: The `HAS` sets of both Roles as previewed.
+        survivor_id: Id of the Role that remains.
+        absorbed_id: Id of the Role that is deleted.
+
+    Returns:
+        True when the guard holds and the merge may proceed; False when the state moved.
+    """
+    if state.survivor is None or state.absorbed is None or survivor_id == absorbed_id:
+        return False
+    instruments = {d.instrument_id for d in (*state.survivor_defines, *state.absorbed_defines)}
+    return (
+        len(state.survivor_defines) == 1
+        and len(state.absorbed_defines) == 1
+        and len(instruments) == 1
+        and not state.foreign_bearers
+        and state.absorbed_obligation_ids == expected.absorbed_obligation_ids
+        and state.survivor_obligation_ids == expected.survivor_obligation_ids
+    )
+
+
+def build_role_merge_group(
+    state: RoleMergeState, *, survivor_id: str, absorbed_id: str, review_id: str | None = None
+) -> tuple[Primitive, ...]:
+    """The edit: move the absorbed Role's Obligations to the survivor, mark it, delete it.
+
+    Each `HAS` edge is upserted from the survivor under the standard edge identity, so a later
+    `HAS` upsert from a re-ingest collapses onto it. The `MergedRole` marker is upserted before
+    the `DeleteNode` and in the same group, so a delete without a redirect cannot be logged.
+    `DeleteNode` removes every edge of the absorbed Role, its `DEFINES` and old `HAS` edges
+    included; the survivor's `DEFINES` edge is never touched. When `review_id` is given, the
+    near-miss `PendingReview` it names is deleted last, in the same group.
+
+    Args:
+        state: Merge state the Obligations are taken from.
+        survivor_id: Id of the Role that remains.
+        absorbed_id: Id of the Role that is deleted.
+        review_id: Id of the `PendingReview` this merge resolves; None when there is none.
+
+    Returns:
+        The ordered primitives of the group.
+    """
+    survivor = NodeRef(label="Role", id=survivor_id)
+    primitives: list[Primitive] = [
+        UpsertEdge(
+            type="HAS",
+            identity=edge_identity("HAS", survivor_id, obligation_id),
+            source=survivor,
+            target=NodeRef(label="Obligation", id=obligation_id),
+        )
+        for obligation_id in sorted(state.absorbed_obligation_ids)
+    ]
+    primitives.append(
+        UpsertNode(label="MergedRole", id=absorbed_id, properties={"merged_into": survivor_id})
+    )
+    primitives.append(DeleteNode(label="Role", id=absorbed_id))
+    if review_id is not None:
+        primitives.append(DeleteNode(label="PendingReview", id=review_id))
+    return tuple(primitives)
+
+
+def write_role_merge(
+    graph: GraphHandle,
+    target: GraphWriteTarget,
+    *,
+    audit_event_id: str,
+    survivor_id: str,
+    absorbed_id: str,
+    expected: RoleExpectedCounts,
+    review_id: str | None = None,
+) -> None:
+    """Move `absorbed_id`'s Obligations to `survivor_id` and delete it, as one gateway group.
+
+    Args:
+        graph: Handle used for the guard read.
+        target: Gateway and graph the group goes to.
+        audit_event_id: Id of the `applied` audit row the group is linked to.
+        survivor_id: Id of the Role that remains.
+        absorbed_id: Id of the Role that is deleted.
+        expected: The `HAS` sets captured in the preview.
+        review_id: Id of the near-miss `PendingReview` deleted in the same group; None when none.
+
+    Side Effects:
+        May log an edge-identity stamp group, then submits one group through the gateway.
+
+    Raises:
+        GraphCleanupStaleStateError: the guard did not hold (a Role is gone, the pair no longer
+            shares one instrument, or a `HAS` set differs from `expected`) or the log position
+            moved; nothing of the merge group was logged.
+        GraphCleanupPersistenceError: the graph could not be read or the gateway failed.
+    """
+    require_caught_up(target)
+    expected_position = read_log_position(target)
+    state = read_role_merge_state(graph, survivor_id=survivor_id, absorbed_id=absorbed_id)
+    if not role_merge_guard_holds(
+        state, expected, survivor_id=survivor_id, absorbed_id=absorbed_id
+    ):
+        raise GraphCleanupStaleStateError(_ROLE_MERGE_STALE_MESSAGE)
+    with refuse_unstorable_values():
+        primitives = build_role_merge_group(
+            state, survivor_id=survivor_id, absorbed_id=absorbed_id, review_id=review_id
+        )
+    stamped = ensure_stamped(target, audit_event_id)
+    submit_cleanup_group(
+        target,
+        primitives,
+        audit_event_id=audit_event_id,
+        stale_message=_ROLE_MERGE_STALE_MESSAGE,
+        preconditions=(ExpectedPosition(position=expected_position + stamped),),
+    )
+
+
+# -- unmerge-roles ----------------------------------------------------------------------------
+
+
+def role_unmerge_guard_holds(
+    state: RoleUnmergeState, write: RoleUnmergeWrite, *, absorbed_id: str, survivor_id: str
+) -> bool:
+    """Whether the marker, the Role's absence and every moved Obligation's bearer still hold.
+
+    The `MergedRole` marker points at the survivor, no Role has the absorbed id, the survivor and
+    the instrument exist, and every moved Obligation exists and is borne by the survivor alone.
+
+    Args:
+        state: Fresh unmerge state from `read_role_unmerge_state`.
+        write: The planned instrument and Obligations to move back.
+        absorbed_id: Id of the deleted Role.
+        survivor_id: Id of the Role it was merged into.
+
+    Returns:
+        True when the guard holds and the unmerge may proceed; False when the state moved.
+    """
+    return (
+        survivor_id in state.marker_targets.get(absorbed_id, ())
+        and not state.absorbed_exists
+        and state.survivor is not None
+        and state.instrument_exists
+        and all(state.moved_bearers.get(o) == (survivor_id,) for o in write.moved_obligation_ids)
+    )
+
+
+def build_role_unmerge_group(
+    write: RoleUnmergeWrite, *, absorbed_id: str, survivor_id: str
+) -> tuple[Primitive, ...]:
+    """The edit: recreate the Role with its edges, move its Obligations back, drop the marker.
+
+    Every upsert is by id or edge identity, so replaying the logged group finds the Role and its
+    edges already there. The `DEFINES` edge and each `HAS` edge use the standard edge identity, so
+    a later re-ingest upserts onto them. A moved Obligation's `HAS` edge from the survivor is
+    deleted after the one from the recreated Role is upserted, so it is never without a bearer.
+    The marker is deleted last, in the same group, so a recreate without the marker removal cannot
+    be logged. Obligations the survivor gained since the merge are never named.
+
+    Args:
+        write: The planned Role properties, instrument and moved Obligations.
+        absorbed_id: Id of the Role to recreate.
+        survivor_id: Id of the Role the Obligations move back from.
+
+    Returns:
+        The ordered primitives of the group.
+    """
+    absorbed = NodeRef(label="Role", id=absorbed_id)
+    survivor = NodeRef(label="Role", id=survivor_id)
+    obligations = [NodeRef(label="Obligation", id=o) for o in write.moved_obligation_ids]
+    primitives: list[Primitive] = [
+        UpsertNode(label="Role", id=absorbed_id, properties=dict(write.absorbed_properties)),
+        UpsertEdge(
+            type="DEFINES",
+            identity=edge_identity("DEFINES", write.instrument_id, absorbed_id),
+            source=NodeRef(label="RegulatoryInstrument", id=write.instrument_id),
+            target=absorbed,
+            properties=(
+                {"source_ref": write.defines_source_ref}
+                if write.defines_source_ref is not None
+                else {}
+            ),
+        ),
+    ]
+    primitives.extend(
+        UpsertEdge(
+            type="HAS",
+            identity=edge_identity("HAS", absorbed_id, obligation.id),
+            source=absorbed,
+            target=obligation,
+        )
+        for obligation in obligations
+    )
+    primitives.extend(
+        DeleteEdge(
+            type="HAS",
+            identity=edge_identity("HAS", survivor_id, obligation.id),
+            source=survivor,
+            target=obligation,
+        )
+        for obligation in obligations
+    )
+    primitives.append(DeleteNode(label="MergedRole", id=absorbed_id))
+    return tuple(primitives)
+
+
+def write_role_unmerge(
+    graph: GraphHandle,
+    target: GraphWriteTarget,
+    *,
+    audit_event_id: str,
+    plan: RoleUnmergePlan,
+) -> None:
+    """Recreate the merged-away Role, move its Obligations back and drop its marker, as one group.
+
+    Args:
+        graph: Handle used for the guard read.
+        target: Gateway and graph the group goes to.
+        audit_event_id: Id of the `applied` audit row the group is linked to.
+        plan: The approved unmerge plan: ids, inputs and write parameters.
+
+    Side Effects:
+        May log an edge-identity stamp group, then submits one group through the gateway.
+
+    Raises:
+        GraphCleanupStaleStateError: the guard did not hold (the marker is gone or re-pointed, a
+            Role has the absorbed id again, the survivor or instrument is gone, or a moved
+            Obligation is gone or borne by another Role) or the log position moved; nothing of the
+            unmerge group was logged.
+        GraphCleanupPersistenceError: the graph could not be read or the gateway failed.
+    """
+    absorbed_id, survivor_id = plan.preview.merged_id, plan.preview.survivor_id
+    require_caught_up(target)
+    expected_position = read_log_position(target)
+    state = read_role_unmerge_state(graph, inputs=plan.inputs)
+    if not role_unmerge_guard_holds(
+        state, plan.write, absorbed_id=absorbed_id, survivor_id=survivor_id
+    ):
+        raise GraphCleanupStaleStateError(_ROLE_UNMERGE_STALE_MESSAGE)
+    with refuse_unstorable_values():
+        primitives = build_role_unmerge_group(
+            plan.write, absorbed_id=absorbed_id, survivor_id=survivor_id
+        )
+    stamped = ensure_stamped(target, audit_event_id)
+    submit_cleanup_group(
+        target,
+        primitives,
+        audit_event_id=audit_event_id,
+        stale_message=_ROLE_UNMERGE_STALE_MESSAGE,
         preconditions=(ExpectedPosition(position=expected_position + stamped),),
     )
 

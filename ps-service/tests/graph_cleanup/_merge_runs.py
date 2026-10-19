@@ -12,27 +12,42 @@ from typing import TYPE_CHECKING
 
 from authz._fakes import FakeAccessRoleStore
 
-from graph_cleanup._fakes import ABSORBED, OBL_ABSORBED, OBL_SURVIVOR, SURVIVOR
+from graph_cleanup._fakes import (
+    ABSORBED,
+    OBL_ABSORBED,
+    OBL_SURVIVOR,
+    ROLE_ABSORBED,
+    ROLE_SURVIVOR,
+    SURVIVOR,
+)
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.graph_cleanup.executors import (
     TOOL_MERGE_CAPABILITIES,
     TOOL_MERGE_OBLIGATIONS,
+    TOOL_MERGE_ROLES,
     execute_capability_merge,
     execute_obligation_merge,
+    execute_role_merge,
 )
 from ps_service.graph_cleanup.graph_reader import (
     read_capability_merge_state,
     read_obligation_merge_state,
+    read_role_merge_state,
 )
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
 from ps_service.graph_cleanup.obligation_planner import plan_obligation_merge
+from ps_service.graph_cleanup.role_planner import plan_role_merge
 from ps_service.passkey_signing.models import PendingApprovalRow
 
 if TYPE_CHECKING:
     from graph_cleanup._gateway_fakes import CleanupRig
     from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
-    from ps_service.graph_cleanup.models import CapabilityMergePlan, ObligationMergePlan
+    from ps_service.graph_cleanup.models import (
+        CapabilityMergePlan,
+        ObligationMergePlan,
+        RoleMergePlan,
+    )
 
 OWNER = ("owner", "https://issuer.example.com/")
 OFFICER = ("officer", "https://issuer.example.com/")
@@ -53,7 +68,9 @@ def roles() -> FakeAccessRoleStore:
     return store
 
 
-def _row(tool: str, args: dict[str, object]) -> PendingApprovalRow:
+def _row(
+    tool: str, args: dict[str, object], display_summary: dict[str, object] | None = None
+) -> PendingApprovalRow:
     now = datetime.now(UTC)
     return PendingApprovalRow(
         id="approval-1",
@@ -63,7 +80,7 @@ def _row(tool: str, args: dict[str, object]) -> PendingApprovalRow:
         actor_subject=OFFICER[0],
         actor_issuer=OFFICER[1],
         nonce=b"n",
-        display_summary={},
+        display_summary=display_summary or {},
         status="signed",
         outcome=None,
         created_at=now,
@@ -134,4 +151,41 @@ def run_obligation_merge(
     """Execute a signed obligation merge (`row` when the test armed a read hook first)."""
     return execute_obligation_merge(
         row or obligation_row(rig), CONFIG, dependencies or rig.dependencies(roles())
+    )
+
+
+def role_plan(rig: CleanupRig) -> RoleMergePlan:
+    """The plan the preview computes from the rig's graph."""
+    return plan_role_merge(
+        read_role_merge_state(rig.read, survivor_id=ROLE_SURVIVOR, absorbed_id=ROLE_ABSORBED)
+    )
+
+
+def role_row(rig: CleanupRig, *, review_id: str | None = None) -> PendingApprovalRow:
+    """A signed `merge-roles` approval bound to the rig's current state, with its preview.
+
+    `review_id` is signed into the arguments the way the service does: only when set.
+    """
+    plan = role_plan(rig)
+    return _row(
+        TOOL_MERGE_ROLES,
+        {
+            "survivor_id": ROLE_SURVIVOR,
+            "absorbed_id": ROLE_ABSORBED,
+            "state_digest": plan.state_digest,
+            **({"review_id": review_id} if review_id is not None else {}),
+        },
+        plan.preview.model_dump(mode="json"),
+    )
+
+
+def run_role_merge(
+    rig: CleanupRig,
+    *,
+    row: PendingApprovalRow | None = None,
+    dependencies: GraphCleanupDependencies | None = None,
+) -> dict[str, object]:
+    """Execute a signed role merge (`row` when the test armed a read hook first)."""
+    return execute_role_merge(
+        row or role_row(rig), CONFIG, dependencies or rig.dependencies(roles())
     )

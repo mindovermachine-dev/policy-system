@@ -20,7 +20,7 @@ no component design.
 | [CUC-04](cuc-04-ingest-a-regulation.md) | Ingest a regulation | Long-running run | UC-1 | ✓ | Specified |
 | [CUC-05](cuc-05-restore-a-curated-instrument.md) | Restore a curated instrument | Long-running run | UC-1 | ✓ | Specified |
 | [CUC-06](cuc-06-resolve-a-near-miss.md) | Resolve a near-miss | Review/resolve | UC-1 | ✓ | Specified |
-| [CUC-07](cuc-07-merge-duplicate-capabilities-obligations.md) | Merge duplicate Capabilities/Obligations | Review/resolve | — | ✓ | Specified |
+| [CUC-07](cuc-07-merge-duplicate-capabilities-obligations.md) | Merge duplicate Capabilities/Obligations/Roles | Review/resolve | — | ✓ | Specified |
 | [CUC-08](cuc-08-ask-a-gap-question.md) | Ask a gap question | Q&A → report | UC-3 | ✓ | Specified |
 | [CUC-09](cuc-09-author-policy-tree.md) | Author a policy tree (gap-to-closed) | Authoring | UC-2 | ✓ | Specified |
 | [CUC-10](cuc-10-propose-a-policy.md) | Propose a policy | Lifecycle | UC-2 | ✓ | Specified |

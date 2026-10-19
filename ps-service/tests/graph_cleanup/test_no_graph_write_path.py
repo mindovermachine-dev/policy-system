@@ -41,12 +41,17 @@ _WRITERS = (
     "write_obligation_merge",
     "write_capability_unmerge",
     "write_obligation_unmerge",
+    "write_role_merge",
+    "write_role_unmerge",
 )
 _EXECUTOR_TO_WRITER = {
     "_write_after_audit": "write_capability_merge",
     "_write_obligation_after_audit": "write_obligation_merge",
     "_write_release_after_audit": "write_release",
-    "_run_unmerge_write": "write_capability_unmerge",
+    "_write_role_after_audit": "write_role_merge",
+    "_write_capability_unmerge": "write_capability_unmerge",
+    "_write_obligation_unmerge": "write_obligation_unmerge",
+    "_write_role_unmerge": "write_role_unmerge",
 }
 _REMOVED_SYMBOLS = re.compile(
     r"graph_cleanup\.graph_writer"

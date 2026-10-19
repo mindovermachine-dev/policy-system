@@ -27,7 +27,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from ps_service.company_merge.falkordb_client import GraphHandle
-    from ps_service.company_merge.models import BaselineGraph, BaselineNode, CanonicalResolution
+    from ps_service.company_merge.models import (
+        BaselineGraph,
+        BaselineNode,
+        CanonicalResolution,
+        ProvenanceEdge,
+    )
     from ps_service.logging import LogEmitter
 
 __all__ = [
@@ -93,6 +98,12 @@ _KINDS: Mapping[MergeableKind, _KindSpec] = {
         existing_query="MATCH (n:Obligation) WHERE n.id IN $ids RETURN n.id",
     ),
 }
+
+
+_LIVE_DEFINES_READ = (
+    "MATCH (:RegulatoryInstrument {id: $instrument_id})-[:DEFINES]->(n:Role) "
+    "WHERE n.id IN $ids RETURN n.id"
+)
 
 
 def _read_kind_markers(graph: GraphHandle, kind: MergeableKind) -> dict[str, str]:
@@ -204,21 +215,44 @@ def _drop_absorbed(
     return replace(baseline, **{spec.nodes_field: kept})
 
 
-def _retarget_defines(baseline: BaselineGraph, roles: Mapping[str, str]) -> BaselineGraph:
-    """Point every `DEFINES` edge of an absorbed Role at its terminal survivor.
+def _retarget_defines(
+    graph: GraphHandle, baseline: BaselineGraph, roles: Mapping[str, str]
+) -> BaselineGraph:
+    """Point an absorbed Role's `DEFINES` at its survivor unless the survivor already has one.
 
     A `DEFINES` edge is a provenance edge the rewiring step does not map, so the terminal is
     written into the edge here; `HAS` is a bare edge and is rewired by the caller's mapping.
+    The write keys the edge by endpoints and sets `source_ref` last-wins, so a retargeted edge
+    would overwrite the survivor's own citation. It is therefore kept only when neither the
+    baseline nor the live graph holds the instrument's `DEFINES` to that survivor (one read, only
+    when a Role was redirected). A survivor the live graph holds without a `DEFINES` keeps it.
     """
     if not roles:
         return baseline
-    edges = tuple(
-        replace(edge, target_id=roles[edge.target_id])
-        if edge.relationship_type == "DEFINES" and edge.target_id in roles
-        else edge
-        for edge in baseline.provenance_edges
+    kept: list[ProvenanceEdge] = []
+    moved: list[ProvenanceEdge] = []
+    for edge in baseline.provenance_edges:
+        if edge.relationship_type == "DEFINES" and edge.target_id in roles:
+            moved.append(replace(edge, target_id=roles[edge.target_id]))
+        else:
+            kept.append(edge)
+    rows = cast(
+        "list[list[object]]",
+        graph.query(
+            _LIVE_DEFINES_READ,
+            {
+                "instrument_id": baseline.regulatory_instrument_id,
+                "ids": sorted({edge.target_id for edge in moved}),
+            },
+        ).result_set,
     )
-    return replace(baseline, provenance_edges=edges)
+    held = {edge.target_id for edge in kept if edge.relationship_type == "DEFINES"}
+    held |= {cast("str", row[0]) for row in rows}
+    for edge in moved:
+        if edge.target_id not in held:
+            kept.append(edge)
+            held.add(edge.target_id)
+    return replace(baseline, provenance_edges=tuple(kept))
 
 
 def _resolve_kind(
@@ -280,8 +314,9 @@ def resolve_redirects(
 
     Side Effects:
         Reads the markers of each present kind and, when a terminal survivor is outside the
-        baseline, one more query for its existence. Emits one `resolve_merge_redirects` log entry
-        when at least one node is redirected. Writes nothing.
+        baseline, one more query for its existence; when a Role is redirected, one more read for
+        the `DEFINES` edges the instrument already holds. Emits one `resolve_merge_redirects` log
+        entry when at least one node is redirected. Writes nothing.
     """
     mapping: dict[str, str] = {}
     counts: dict[MergeableKind, int] = {}
@@ -290,7 +325,7 @@ def resolve_redirects(
         baseline, by_kind[kind] = _resolve_kind(graph, baseline, kind)
         mapping.update(by_kind[kind])
         counts[kind] = len(by_kind[kind])
-    baseline = _retarget_defines(baseline, by_kind["Role"])
+    baseline = _retarget_defines(graph, baseline, by_kind["Role"])
     if mapping:
         _log_redirects(baseline, counts, emitter)
     return RedirectResolution(baseline=baseline, mapping=mapping, by_kind=by_kind)
