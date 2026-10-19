@@ -15,6 +15,7 @@ from graph_gateway.read_only_client_checks import (
 
 import ps_service.company_merge as company_merge_package
 from ps_service.company_merge import dedup, falkordb_client, graph_writer, pending_review
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.config import load_config
 
 _PACKAGE_DIR = Path(company_merge_package.__file__).parent
@@ -58,7 +59,7 @@ def test_the_readers_return_empty_or_zero_on_a_missing_graph_key(
 
     assert pending_review.list_pending_reviews(graph) == ()
     assert pending_review.get_pending_review(graph, "no-such-review") is None
-    assert dedup.read_existing_canonical_index(graph, "Capability") == ()
+    assert dedup.read_existing_canonical_index(graph, CAPABILITY) == ()
     assert graph_writer.count_new_obligations(graph, ("a", "b", "a")) == 2
 
 

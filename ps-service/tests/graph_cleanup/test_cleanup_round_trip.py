@@ -22,6 +22,7 @@ from graph_cleanup._merge_runs import run_capability_merge
 from graph_cleanup._unmerge_runs import run_capability_unmerge, unmerge_row
 from ps_service.audit.models import AuditEventRow
 from ps_service.company_merge.dedup import read_existing_canonical_index
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.graph_cleanup.audit_actions import CapabilityMergeDetails
 from ps_service.graph_cleanup.models import EdgeRecord, GraphSnapshot, NodeRecord
 from ps_service.graph_gateway.digest import canonical_digest
@@ -172,7 +173,7 @@ def test_recreated_capability_without_embedding_is_backfilled_by_the_next_dedup(
     index = {
         n.id: n.embedding
         for n in read_existing_canonical_index(
-            cast("GraphHandle", _CanonicalIndexRead(cleanup_rig)), "Capability"
+            cast("GraphHandle", _CanonicalIndexRead(cleanup_rig)), CAPABILITY
         )
     }
     assert index[ABSORBED] is None

@@ -34,6 +34,17 @@ def test_near_miss_resolve_details_reject_unknown_fields() -> None:
         NearMissResolveDetails.model_validate(_valid(error="free text"))
 
 
+def test_details_accept_a_kind_that_is_not_capability() -> None:
+    details = NearMissResolveDetails.model_validate(_valid(kind="ProbeItem"))
+
+    assert details.kind == "ProbeItem"
+
+
+def test_details_refuse_an_empty_kind() -> None:
+    with pytest.raises(ValidationError):
+        NearMissResolveDetails.model_validate(_valid(kind=""))
+
+
 def test_near_miss_resolve_decision_values_are_keep_separate_and_merge() -> None:
     NearMissResolveDetails.model_validate(_valid(decision="keep_separate"))
     NearMissResolveDetails.model_validate(_valid(decision="merge", approval_id="appr-1"))

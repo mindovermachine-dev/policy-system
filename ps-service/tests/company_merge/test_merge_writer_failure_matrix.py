@@ -37,6 +37,7 @@ from ps_service.company_merge.models import (
     NearMissPair,
 )
 from ps_service.company_merge.pending_review import persist_pending_reviews
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.dependency_health import FALKORDB, is_healthy
 from ps_service.graph_gateway.errors import (
     GraphLogUnavailableError,
@@ -118,7 +119,7 @@ def _canonical(rig: MergeRig, target: GraphWriteTarget) -> None:
                 incoming_id=node.id, canonical_id=node.id, match_kind="new", embedding=(0.1,)
             ),
         ),
-        kind="Capability",
+        kind=CAPABILITY,
         values=stepped_values(),
     )
 
@@ -126,7 +127,7 @@ def _canonical(rig: MergeRig, target: GraphWriteTarget) -> None:
 def _canonical_backfill(rig: MergeRig, target: GraphWriteTarget) -> None:
     rig.policy_system.seed_node(("Capability",), "cap_a", {"name": "a"})
     graph_writer.backfill_canonical_embeddings(
-        target, rig.legacy, kind="Capability", embeddings={"cap_a": (0.1, 0.2)}
+        target, rig.legacy, kind=CAPABILITY, embeddings={"cap_a": (0.1, 0.2)}
     )
 
 
@@ -159,7 +160,7 @@ def _pending_reviews(rig: MergeRig, target: GraphWriteTarget) -> None:
                 similarity=0.7,
             ),
         ),
-        kind="Capability",
+        kind=CAPABILITY,
         values=stepped_values(),
     )
 

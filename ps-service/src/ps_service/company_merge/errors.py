@@ -50,6 +50,19 @@ class CompanyMergeValidationError(Exception):
     """
 
 
+class UnknownReviewKindError(CompanyMergeValidationError):
+    """A review names a node kind that has no registered `ReviewableKind` spec.
+
+    Raised by `reviewable_kinds.reviewable_kind` and `require_registered`, and so by every
+    review read that checks the kind a stored `PendingReview` carries (list, get, resolve, merge
+    sides) and every review writer that is handed an unregistered spec. The message names the
+    kind, so a stray row can be found. Nothing is written or skipped: a review that cannot be
+    understood must not be hidden, because hiding it could unblock an export. The API layer
+    translates it to `ReviewKindUnsupportedError`; `ps_service.company_merge` never imports
+    `ps_service.api`.
+    """
+
+
 class StalePendingReviewError(Exception):
     """A `PendingReview`'s referenced incoming/existing node no longer exists.
 

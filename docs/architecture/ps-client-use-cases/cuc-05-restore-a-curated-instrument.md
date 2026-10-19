@@ -51,6 +51,9 @@ here.
    instrument arrives with its Policy/Standard/Control content imported as `draft`,
    owned by the restorer: chat says so plainly, and each Policy proceeds through
    CUC-10's propose and a different person's approval before it governs anything.
+   Restore records near-miss reviews the way ingestion does (CUC-06) for the node kinds
+   that have a review spec, today Capability, and skips a pair that is already under
+   review.
 
 ## Artifacts
 

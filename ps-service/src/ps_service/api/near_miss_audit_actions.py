@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import Field
+
 from ps_service.audit import AuditDetails, register_audit_action, register_audit_resource_type
 
 __all__ = [
@@ -44,7 +46,9 @@ class NearMissResolveDetails(AuditDetails):
 
     Attributes:
         review_id: Identifier of the near-miss pending review being resolved.
-        kind: Kind of entity pair under review, `"Capability"` or `"Policy"`.
+        kind: Label of the reviewable kind of the pair under review. A plain string because the
+            audit package does not import Company Merge; the value comes from a review whose kind
+            was already checked against the registered kinds.
         incoming_id: Identifier of the newly derived entity of the pair.
         existing_id: Identifier of the entity already in the graph that it resembles.
         decision: `"keep_separate"` to retain both entities, `"merge"` to merge them.
@@ -54,7 +58,7 @@ class NearMissResolveDetails(AuditDetails):
     """
 
     review_id: str
-    kind: Literal["Capability", "Policy"]
+    kind: str = Field(min_length=1)
     incoming_id: str
     existing_id: str
     decision: Literal["keep_separate", "merge"]

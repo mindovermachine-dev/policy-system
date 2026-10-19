@@ -4,9 +4,9 @@
 **Status:** Specified
 **Actor:** An authenticated reviewer for keep-separate; a Compliance Officer (explicit
 `ComplianceOfficer` grant) for merge
-**Goal:** A Company Merge dedup candidate (`PendingReview`) resolved by a human decision —
-the pair kept separate, or merged with the effect previewed, signed, audited, and
-reversible.
+**Goal:** A Company Merge dedup candidate (`PendingReview`, of a node kind that has a
+review spec; today Capability) resolved by a human decision — the pair kept separate, or
+merged with the effect previewed, signed, audited, and reversible.
 **Realizes:** UC-1
 **Interaction class:** Review/resolve
 **v1:** yes
@@ -31,11 +31,15 @@ reversible.
 
 1. **Surface.** The unresolved reviews render as a read-only report: every review with
    all five of its fields — `id`, `kind`, incoming text, nearest-existing text,
-   `similarity` — never summarized down; a reviewer needs all five to judge a pair.
+   `similarity` — never summarized down; a reviewer needs all five to judge a pair. The
+   `kind` names the node kind under review. A stored review whose kind has no registered
+   spec is refused, naming that kind (HTTP 409 `review_kind_unsupported`), rather than
+   skipped, so it can be found and cleared.
 2. **Open one.** Selecting a review renders a **comparison artifact**: the two entities
    side by side, and the effect of each decision previewed explicitly before anything is
    asked — keep-separate deletes only the review record and touches neither entity;
-   merge is the CUC-07 Capability merge: the loser is deleted behind a `MergedCapability`
+   merge is available for kinds that have a merge executor (today Capability), the CUC-07
+   Capability merge: the loser is deleted behind a `MergedCapability`
    marker naming the winner, its `REQUIRES`, `COVERS` and `MITIGATED_BY` edges
    move to the winner, and the review record is deleted in the same write. The preview
    names the winner (the Capability with the earlier `created_at`; a tie goes to the

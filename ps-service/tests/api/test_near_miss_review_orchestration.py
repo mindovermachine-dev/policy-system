@@ -6,19 +6,25 @@ Hand-written structural fakes (no `unittest.mock`): a recording `InMemoryAuditSt
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 import pytest
+from company_merge._kinds import UNREGISTERED_KIND
 
 from api._audit_fakes import InMemoryAuditStore
-from ps_service.api.errors import GraphWriteUnavailableError, PendingReviewNotFoundError
+from ps_service.api.errors import (
+    GraphWriteUnavailableError,
+    PendingReviewNotFoundError,
+    ReviewKindUnsupportedError,
+)
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.near_miss_review_orchestration import (
     NearMissReviewDependencies,
     run_resolve_near_miss,
 )
 from ps_service.audit import AuditContext, AuditPostgresUnavailableError, AuditTrailUnavailableError
-from ps_service.company_merge.errors import CompanyMergePersistenceError
+from ps_service.company_merge.errors import CompanyMergePersistenceError, UnknownReviewKindError
 from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
 from ps_service.config import ServiceConfig
 
@@ -28,6 +34,7 @@ if TYPE_CHECKING:
     from api._gateway_fakes import ProcessGateway
     from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
     from ps_service.company_merge.graph_submission import GraphWriteTarget
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
 
 Decision = Literal["keep-separate"]
 
@@ -124,6 +131,32 @@ def test_resolve_keep_separate_records_applied_row_with_both_entity_ids_before_d
         "existing_id": "capability_existing_a",
         "decision": "keep_separate",
     }
+
+
+def test_resolving_a_test_only_kind_review_audits_and_deletes_it(
+    test_only_reviewable_kind: ReviewableKind,
+) -> None:
+    store = InMemoryAuditStore()
+    record = replace(_RECORD, kind=test_only_reviewable_kind.label)
+
+    _run(store, _deps(store, record=record))
+
+    assert store.events == ["audit:near_miss.resolve:applied", "graph:resolve"]
+    assert store.rows[0].details["kind"] == "ProbeItem"
+
+
+def test_a_review_of_an_unregistered_kind_is_refused_before_any_audit_row_or_write() -> None:
+    store = InMemoryAuditStore()
+
+    def _get(_graph: GraphHandle, _review_id: str) -> PendingReviewRecord | None:
+        raise UnknownReviewKindError(f"no reviewable kind is registered for {UNREGISTERED_KIND!r}")
+
+    deps = replace(_deps(store), get_pending_review=_get)
+
+    with pytest.raises(ReviewKindUnsupportedError, match=UNREGISTERED_KIND):
+        _run(store, deps)
+
+    assert store.events == []
 
 
 def test_resolve_keep_separate_resource_id_is_the_review_id() -> None:

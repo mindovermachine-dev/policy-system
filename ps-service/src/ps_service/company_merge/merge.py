@@ -37,8 +37,9 @@ Flow:
    governance and new/matched count fields. No `bind_run_context()` self-bind happens here:
    `run_id` is whatever the caller already bound, or `None`.
 9. Emit one log entry per Capability dedup decision (one per `CanonicalResolution` with
-   `outcome=match_kind`, one per `NearMissPair` with `outcome="near_miss"`) and persist a
-   `PendingReview` node for every near-miss.
+   `outcome=match_kind`, one per `NearMissPair` with `outcome="near_miss"`), drop the near misses
+   that already have an unresolved review (`drop_already_reviewed`, shared with restore), persist
+   a `PendingReview` node for each remaining one and log the created / already-reviewed counts.
 10. Return `MergeResult`.
 
 If the dedup pass raises (`LlmProviderError` from an embedding call), the exception propagates
@@ -66,7 +67,8 @@ from ps_service.company_merge.generated_values import SYSTEM_VALUES
 from ps_service.company_merge.governance_import import GovernanceImport, governance_count_fields
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import MergeResult
-from ps_service.company_merge.pending_review import persist_pending_reviews
+from ps_service.company_merge.pending_review import drop_already_reviewed, persist_pending_reviews
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 from ps_service.logging import LogEmitter, emit_log_entry
 
 if TYPE_CHECKING:
@@ -81,6 +83,7 @@ __all__ = ["merge_baseline_graph"]
 _COMPONENT = "company_merge"
 _MERGE_ACTION = "merge_baseline_graph"
 _DEDUP_ACTION = "dedupe_canonical_nodes"
+_PERSIST_REVIEWS_ACTION = "persist_near_miss_reviews"
 
 
 @dataclass(frozen=True)
@@ -237,10 +240,10 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
 
     capability_dedup = dedup.dedupe_canonical_nodes(
         graph.capability_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=single_tenant_graph,
         model=embed_model,
-        threshold=similarity_threshold,
+        thresholds=ReviewThresholds(merge=similarity_threshold),
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -271,7 +274,7 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         single_tenant_graph,
         graph.capability_nodes,
         capability_dedup.resolutions,
-        kind="Capability",
+        kind=CAPABILITY,
         values=values,
     )
 
@@ -323,7 +326,7 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     graph_writer.backfill_canonical_embeddings(
         targets.single_tenant,
         single_tenant_graph,
-        kind="Capability",
+        kind=CAPABILITY,
         embeddings=capability_dedup.embedding_backfills,
         checkpoint_requested=backfill_follows,
     )
@@ -362,10 +365,23 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     )
 
     _log_dedup_decisions(capability_dedup, emitter=emitter)
-    # Persist a PendingReview node for every Capability near-miss at the point its decision is
-    # logged, so a near-miss is never logged without also being persisted.
-    persist_pending_reviews(
-        targets.single_tenant, capability_dedup.near_misses, kind="Capability", values=values
+    # Persist a PendingReview node for every Capability near-miss that has no unresolved review
+    # yet, at the point its decision is logged, so a near-miss is never logged without either
+    # being persisted or already having a review.
+    new_near_misses = drop_already_reviewed(
+        single_tenant_graph, capability_dedup.near_misses, kind=CAPABILITY
+    )
+    persist_pending_reviews(targets.single_tenant, new_near_misses, kind=CAPABILITY, values=values)
+    emit_log_entry(
+        component=_COMPONENT,
+        action=_PERSIST_REVIEWS_ACTION,
+        entity_id=regulatory_instrument_id,
+        outcome="succeeded",
+        extra={
+            "created": len(new_near_misses),
+            "already_reviewed": len(capability_dedup.near_misses) - len(new_near_misses),
+        },
+        emitter=emitter,
     )
 
     return MergeResult(
@@ -376,7 +392,7 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
             *redirected_capability_ids,
         ),
         near_misses=capability_dedup.near_misses,
-        pending_review_count=len(capability_dedup.near_misses),
+        pending_review_count=len(new_near_misses),
         new_capability_count=new_capability_count,
         matched_capability_count=matched_capability_count,
         new_obligation_count=new_obligation_count,

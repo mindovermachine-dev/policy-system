@@ -23,10 +23,12 @@ import, so importing ``ps_service.main`` does not load that component at module 
    server. An empty result also raises ``ExportInstrumentNotFoundError`` (the key exists but
    this ``instrument_id`` was never written to it).
 5. Refuses the export with :class:`~ps_service.api.errors.ExportUnresolvedNearMissesError` when
-   an unresolved ``PendingReview`` in ``policy_system`` names a ``Capability`` id of the
-   instrument's baseline graph (``ps_service.export.near_miss_gate``). A failure to read either
-   graph propagates, so the export fails closed. This runs before step 6, so a refusal writes
-   no audit row, no embedding backfill and no file.
+   an unresolved ``PendingReview`` in ``policy_system`` names a node of the instrument's baseline
+   graph, of any registered reviewable kind (``ps_service.export.near_miss_gate``). A review whose
+   kind has no registered spec refuses the export with
+   :class:`~ps_service.api.errors.ReviewKindUnsupportedError`, naming the kind. A failure to read
+   either graph propagates, so the export fails closed. This runs before step 6, so a refusal
+   writes no audit row, no embedding backfill and no file.
 6. Records one ``export.instrument`` system audit row, failing closed with
    ``AuditTrailUnavailableError`` before anything is computed or written, then calls the
    injected ``export`` delegate with the gateway, the row's id and the baseline graph name. The
@@ -56,6 +58,7 @@ from ps_service.api.errors import (
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
     ExportUnresolvedNearMissesError,
+    ReviewKindUnsupportedError,
 )
 from ps_service.api.export_audit_actions import (
     EXPORT_INSTRUMENT_ACTION,
@@ -440,8 +443,10 @@ def run_export(
         ExportInstrumentNotFoundError: ``instrument_id`` is malformed, or names no ingested
             instrument (HTTP 404).
         ExportConfigIncompleteError: The embedding model is not configured (HTTP 503).
-        ExportUnresolvedNearMissesError: An unresolved near-miss review touches a Capability of
-            the instrument (HTTP 409); raised before the audit row, so nothing is written.
+        ExportUnresolvedNearMissesError: An unresolved near-miss review touches a node of the
+            instrument (HTTP 409); raised before the audit row, so nothing is written.
+        ReviewKindUnsupportedError: A stored review has a kind with no registered spec (HTTP 409,
+            naming the kind); raised before the audit row, so nothing is written.
         GraphWriteUnavailableError: No graph write gateway is installed.
         AuditTrailUnavailableError: The ``export.instrument`` audit row could not be written;
             nothing was computed or written.
@@ -493,13 +498,27 @@ def run_export(
     # Export serializes the per-instrument graphs only, so a near miss recorded in `policy_system`
     # would be lost from the artifact. Refuse before the audit row, the backfill and any file are
     # written. A read failure propagates: the export fails closed.
+    from ps_service.company_merge.errors import (  # noqa: PLC0415 -- function-local
+        UnknownReviewKindError,
+    )
     from ps_service.export.near_miss_gate import (  # noqa: PLC0415 -- function-local
         unresolved_near_miss_review_ids,
     )
 
-    blocking_review_ids = unresolved_near_miss_review_ids(
-        baseline_graph, dependencies.open_single_tenant_graph(db)
-    )
+    try:
+        blocking_review_ids = unresolved_near_miss_review_ids(
+            baseline_graph, dependencies.open_single_tenant_graph(db)
+        )
+    except UnknownReviewKindError as exc:
+        # The same expected-condition entry as a near-miss refusal, without a review count.
+        _emit_export_log(
+            instrument_id=instrument_id,
+            outcome="refused",
+            actor=actor,
+            schema_version=DOMAIN_SCHEMA_VERSION,
+            emitter=emitter,
+        )
+        raise ReviewKindUnsupportedError(str(exc)) from exc
     if blocking_review_ids:
         # An expected user condition, not a failure: `refused`, one entry, no `started` entry.
         _emit_export_log(

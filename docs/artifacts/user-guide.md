@@ -487,13 +487,13 @@ The `ps-list-ingested` skill lists each regulatory instrument that is in the com
 Use the ps-near-miss-review skill to show the pending near-miss reviews.
 ```
 
-Sometimes ingestion or a restore finds two entities that are close but not identical. It then records a near-miss pending review and does not merge them. The `ps-near-miss-review` skill lists the pending reviews. It resolves a review when you keep the two entities separate or merge them.
+Sometimes ingestion or a restore finds two entities that are close but not identical. It then records a near-miss pending review and does not merge them. Reviews exist for the kinds of entity that have a review spec, today Capabilities. The `ps-near-miss-review` skill lists the pending reviews. It resolves a review when you keep the two entities separate or merge them.
 
 A merge needs the `ComplianceOfficer` role. It is the same Capability merge as in graph cleanup, so it does not run at the call. The skill returns the merge preview and an approval link. The merge runs when you complete a passkey signing in the browser. The skill can then report if the approval was signed. The absorbed Capability is deleted behind a `MergedCapability` marker that points at the survivor, and its edges move to the survivor. The system therefore does not raise the pair again on a later ingest or restore.
 
 If a Policy governs exactly one of the two, you must acknowledge the governance change. If they have different governing Policies, the system refuses the merge until you release one with `release-capability-governance`. You can reverse a merge with `unmerge`. This does not bring back the deleted review.
 
-Resolve the near misses of an instrument before you export it. The system refuses an export while any unresolved review touches the Capabilities of the instrument.
+Resolve the near misses of an instrument before you export it. The system refuses an export while any unresolved review touches the instrument's entities of a reviewable kind (today its Capabilities).
 
 ### Author a policy
 
@@ -734,7 +734,7 @@ Know these behaviors of `export instrument`:
   `baseline.json`, `native.json`, and `manifest.json` in a deterministic way. There is
   no merge or append behavior.
 - You must resolve near misses before an export. Sometimes an unresolved near-miss
-  review touches one of the Capabilities of the instrument. PS Service then refuses
+  review touches one of the instrument's entities of a reviewable kind (today its Capabilities). PS Service then refuses
   with HTTP 409. `ps-cli` prints the message (the count and the review ids), exits
   non-zero, and writes no files. Resolve the reviews with the `ps-near-miss-review` skill
   (see [Review near-miss merge candidates](#review-near-miss-merge-candidates)). Then

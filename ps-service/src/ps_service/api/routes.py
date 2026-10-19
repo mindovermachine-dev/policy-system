@@ -484,8 +484,9 @@ async def create_export(
             instrument (404).
         ExportConfigIncompleteError: The embedding model is not configured (503).
         ExportUnresolvedNearMissesError: Unresolved near-miss reviews touch the instrument's
-            Capabilities (409); the message gives the count and the review ids, and nothing was
-            written.
+            nodes (409); the message gives the count and the review ids, and nothing was written.
+        ReviewKindUnsupportedError: A stored review has a kind with no registered spec (409,
+            naming the kind); nothing was written.
         GraphWriteUnavailableError: The service has no Graph Write Gateway (503); nothing was opened
             or written.
         AuditTrailUnavailableError: The ``export.instrument`` audit row could not be written (503);
@@ -597,6 +598,10 @@ async def list_near_misses(
     Returns:
         A :class:`PendingReviewListResponse` with one entry per unresolved review. An empty list
         means nothing awaits a decision.
+
+    Raises:
+        ReviewKindUnsupportedError: A stored review has a kind with no registered spec (409,
+            naming the kind); the list is refused rather than hiding the review.
 
     Side Effects:
         Reads the graph. Nothing is written.
@@ -734,8 +739,10 @@ async def resolve_near_miss(
             reached (503).
         PendingReviewNotFoundError: The review does not exist or was already resolved, or its
             Capabilities no longer exist (404).
-        NearMissMergeRefusedError: ``merge`` of a Policy review, or of two Capabilities governed by
-            different Policies (409). No approval was created.
+        NearMissMergeRefusedError: ``merge`` of a review whose kind has no merge, or of two
+            Capabilities governed by different Policies (409). No approval was created.
+        ReviewKindUnsupportedError: The review has a kind with no registered spec (409, naming the
+            kind). Nothing was audited, written or approved.
         GraphWriteUnavailableError: ``keep-separate`` and the service has no Graph Write Gateway
             (503); nothing was audited or resolved.
         AuditTrailUnavailableError: ``keep-separate`` and the opening audit row could not be written

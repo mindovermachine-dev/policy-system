@@ -19,6 +19,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.models import BaselineNode
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 from ps_service.company_merge.similarity import cosine_similarity
 
 _MODEL = "fake-embed-model"
@@ -95,10 +96,10 @@ def test_dedupe_canonical_nodes_below_threshold_pair_does_not_converge(
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )

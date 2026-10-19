@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from company_merge._gateway_fakes import POLICY_SYSTEM, stepped_values
-from ps_service.company_merge.errors import CompanyMergePersistenceError
+from company_merge._kinds import UNREGISTERED_KIND
+from ps_service.company_merge.errors import CompanyMergePersistenceError, UnknownReviewKindError
 from ps_service.company_merge.generated_values import ValueSource
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.graph_writer import (
@@ -25,6 +26,7 @@ from ps_service.company_merge.graph_writer import (
     persist_canonical_nodes,
 )
 from ps_service.company_merge.models import BaselineNode, CanonicalResolution
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewableKind
 
 if TYPE_CHECKING:
     from company_merge._gateway_fakes import MergeRig
@@ -50,15 +52,14 @@ def _persist(
     nodes: tuple[BaselineNode, ...],
     resolutions: tuple[CanonicalResolution, ...],
     *,
-    kind: str = "Capability",
+    kind: ReviewableKind = CAPABILITY,
 ) -> None:
-    assert kind in ("Capability", "Policy")
     persist_canonical_nodes(
         GraphWriteTarget(rig.gateway, POLICY_SYSTEM, rig.audit_event_id),
         rig.legacy,
         nodes,
         resolutions,
-        kind="Capability" if kind == "Capability" else "Policy",
+        kind=kind,
         values=stepped_values(),
     )
 
@@ -229,7 +230,7 @@ def test_the_builder_draws_created_at_before_anything_is_submitted() -> None:
     counting = ValueSource(now=_now, new_id=stepped_values().new_id)
 
     [primitive] = build_canonical_node_primitives(
-        set(), (node,), (_new(node),), kind="Capability", values=counting
+        set(), (node,), (_new(node),), kind=CAPABILITY, values=counting
     )
 
     assert draws == [1]
@@ -245,3 +246,14 @@ def test_an_unstorable_property_raises_the_persistence_error_before_any_submit(
         _persist(merge_rig, (node,), (_new(node),))
 
     assert merge_rig.groups == []
+
+
+def test_writer_rejects_a_kind_that_is_not_registered_naming_it(merge_rig: MergeRig) -> None:
+    node = _canonical_node()
+    unregistered = ReviewableKind(UNREGISTERED_KIND, "name", "global", "merge-above")
+
+    with pytest.raises(UnknownReviewKindError, match=UNREGISTERED_KIND):
+        _persist(merge_rig, (node,), (_new(node),), kind=unregistered)
+
+    assert merge_rig.groups == []
+    assert merge_rig.legacy.statements == []

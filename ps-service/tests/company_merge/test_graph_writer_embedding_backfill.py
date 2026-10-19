@@ -11,14 +11,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
+import pytest
+
 from company_merge._gateway_fakes import BASELINE, POLICY_SYSTEM
+from company_merge._kinds import UNREGISTERED_KIND
 from company_merge._seed_merge_graphs import SingleTenantStore
+from ps_service.company_merge.errors import UnknownReviewKindError
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.graph_writer import (
     backfill_canonical_embeddings,
     backfill_incoming_capability_embeddings,
     build_embedding_backfill_primitives,
 )
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewableKind
 from ps_service.graph_gateway.digest import canonical_digest
 
 if TYPE_CHECKING:
@@ -48,7 +53,7 @@ def test_a_node_without_an_embedding_receives_it_and_no_other_property_changes(
     backfill_canonical_embeddings(
         _target(merge_rig),
         merge_rig.legacy,
-        kind="Capability",
+        kind=CAPABILITY,
         embeddings={"capability_1": (0.1, 0.2)},
     )
 
@@ -74,7 +79,7 @@ def test_a_node_that_already_has_an_embedding_is_unchanged_and_nothing_is_logged
     backfill_canonical_embeddings(
         _target(merge_rig),
         merge_rig.legacy,
-        kind="Capability",
+        kind=CAPABILITY,
         embeddings={"capability_1": (0.1, 0.2)},
     )
 
@@ -88,7 +93,7 @@ def test_a_backfill_for_an_absent_node_creates_nothing(merge_rig: MergeRig) -> N
     backfill_canonical_embeddings(
         _target(merge_rig),
         merge_rig.legacy,
-        kind="Capability",
+        kind=CAPABILITY,
         embeddings={"capability_gone": (0.1,)},
     )
 
@@ -106,7 +111,7 @@ def test_one_group_carries_one_primitive_per_eligible_id_in_input_order(
     backfill_canonical_embeddings(
         _target(merge_rig),
         merge_rig.legacy,
-        kind="Capability",
+        kind=CAPABILITY,
         embeddings={
             "capability_3": (0.3, 0.4),
             "capability_2": (0.7,),
@@ -128,7 +133,7 @@ def test_the_state_read_is_one_batched_read_that_never_returns_the_vector(
     backfill_canonical_embeddings(
         _target(merge_rig),
         merge_rig.legacy,
-        kind="Capability",
+        kind=CAPABILITY,
         embeddings={"capability_1": (0.1,), "capability_2": (0.2,)},
     )
 
@@ -139,7 +144,7 @@ def test_the_state_read_is_one_batched_read_that_never_returns_the_vector(
 
 def test_backfill_with_empty_embeddings_reads_and_writes_nothing(merge_rig: MergeRig) -> None:
     backfill_canonical_embeddings(
-        _target(merge_rig), merge_rig.legacy, kind="Capability", embeddings={}
+        _target(merge_rig), merge_rig.legacy, kind=CAPABILITY, embeddings={}
     )
 
     assert merge_rig.legacy.statements == []
@@ -151,24 +156,25 @@ def test_a_second_backfill_with_the_same_input_logs_nothing_more(merge_rig: Merg
     embeddings = {"capability_1": (0.1, 0.2)}
 
     backfill_canonical_embeddings(
-        _target(merge_rig), merge_rig.legacy, kind="Capability", embeddings=embeddings
+        _target(merge_rig), merge_rig.legacy, kind=CAPABILITY, embeddings=embeddings
     )
     backfill_canonical_embeddings(
-        _target(merge_rig), merge_rig.legacy, kind="Capability", embeddings=embeddings
+        _target(merge_rig), merge_rig.legacy, kind=CAPABILITY, embeddings=embeddings
     )
 
     assert _logged_ids(merge_rig) == ["capability_1"]
 
 
-def test_policy_kind_backfills_a_policy_node(merge_rig: MergeRig) -> None:
-    merge_rig.policy_system.seed_node(("Policy",), "policy_1", {"title": "p"})
+def test_backfill_rejects_a_kind_that_is_not_registered_naming_it(merge_rig: MergeRig) -> None:
+    unregistered = ReviewableKind(UNREGISTERED_KIND, "name", "global", "merge-above")
 
-    backfill_canonical_embeddings(
-        _target(merge_rig), merge_rig.legacy, kind="Policy", embeddings={"policy_1": (0.4,)}
-    )
+    with pytest.raises(UnknownReviewKindError, match=UNREGISTERED_KIND):
+        backfill_canonical_embeddings(
+            _target(merge_rig), merge_rig.legacy, kind=unregistered, embeddings={"x": (0.1,)}
+        )
 
-    [entry] = merge_rig.logged()
-    assert (entry.name, entry.identity) == ("Policy", "policy_1")
+    assert merge_rig.legacy.statements == []
+    assert merge_rig.groups == []
 
 
 def test_the_builder_is_pure_and_keeps_only_ids_that_exist_with_a_null_embedding() -> None:

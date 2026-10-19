@@ -91,6 +91,7 @@ from api.test_routes_near_misses import (
     _record,  # pyright: ignore[reportPrivateUsage]  -- reuse the existing REST-side fixture, not reinvented
 )
 from audit._fakes import InMemoryAuditStore, audit_store_factory
+from company_merge._kinds import UNREGISTERED_KIND
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
@@ -108,6 +109,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from ps_service.company_merge.models import PendingReviewRecord
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
     from ps_service.config import ServiceConfig
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
@@ -347,7 +349,9 @@ def _text(result: CallToolResult) -> str:
 
 
 def test_happy_path_lists_every_unresolved_review_with_full_field_set(
-    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
+    monkeypatch: pytest.MonkeyPatch,
+    read_lines: ReadLines,
+    test_only_reviewable_kind: ReviewableKind,
 ) -> None:
     """Several scripted `PendingReviewRecord`s come
     back field for field (`id`/`kind`/`incoming_text`/
@@ -358,7 +362,7 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
     emitter = configure()
 
     first = _record("review_aaa", kind="Capability", similarity=0.62)
-    second = _record("review_bbb", kind="Policy", similarity=0.81)
+    second = _record("review_bbb", kind=test_only_reviewable_kind.label, similarity=0.81)
     graph = _ScriptedGraphHandle(steps=[[_row_for(first), _row_for(second)]])
     _use_scripted_graph(monkeypatch, graph)
 
@@ -605,6 +609,21 @@ def test_check_approval_wrong_actor_gets_generic_not_found(
 # --- Failure-state completeness for both tools --------------------
 
 
+def test_list_with_a_review_of_an_unregistered_kind_returns_an_error_naming_the_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    stray = _record("review_stray", kind=UNREGISTERED_KIND)
+    _use_scripted_graph(monkeypatch, _ScriptedGraphHandle(steps=[[_row_for(stray)]]))
+
+    result = _call_near_misses_list()
+
+    assert result.is_error is False
+    assert _text(result).startswith("error: ")
+    assert UNREGISTERED_KIND in _text(result)
+
+
 def test_list_graph_unavailable_returns_named_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -754,6 +773,22 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     failed_line = lines[-1]
     assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
+
+
+def test_resolve_keep_separate_of_a_review_of_an_unregistered_kind_returns_an_error_naming_the_kind(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    stray = _record("review_aaa", kind=UNREGISTERED_KIND)
+    _use_scripted_graph(monkeypatch, _ScriptedGraphHandle(steps=[[_row_for(stray)]]))
+
+    result = _call_near_misses_resolve("review_aaa", "keep-separate")
+
+    assert result.is_error is False
+    assert _text(result).startswith("error: ")
+    assert UNREGISTERED_KIND in _text(result)
+    assert audit_store.rows == []
 
 
 # --- keep-separate audits `near_miss.resolve` ---

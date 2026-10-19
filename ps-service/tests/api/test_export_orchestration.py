@@ -11,6 +11,7 @@ whatever `open_baseline_graph`/`open_native_graph` fake.
 from __future__ import annotations
 
 import base64
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 import redis.exceptions
+from company_merge._kinds import UNREGISTERED_KIND
 from export._gateway_fakes import ScriptedPolicyGraph, pending_review
 
 from api._gateway_fakes import installed_process_gateway, process_gateway_installed
@@ -27,6 +29,7 @@ from ps_service.api.errors import (
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
     ExportUnresolvedNearMissesError,
+    ReviewKindUnsupportedError,
 )
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.graph_write_access import graph_write_access
@@ -44,6 +47,7 @@ if TYPE_CHECKING:
 
     from ps_service.api.models import ExportAcceptedResponse
     from ps_service.company_merge.models import PendingReviewRecord
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
     from ps_service.config import ServiceConfig
     from ps_service.export.export_instrument import InstrumentDescriptor
     from ps_service.logging import LogEmitter
@@ -59,6 +63,7 @@ _PROPERTIES: dict[str, object] = {
     "version": "1.0",
     "celex": "32024R2847",
 }
+_NODE_IDS = re.compile(r"^MATCH \(n:(\w+)\) RETURN n\.id$")
 _BASELINE_BYTES = b'{"nodes": [], "edges": []}'
 _NATIVE_BYTES = b'{"nodes": [], "edges": []}'
 
@@ -96,12 +101,16 @@ class _FakeExistenceGraph:
     properties: dict[str, object] | None
     call_log: list[str] = field(default_factory=list)
     capability_ids: tuple[str, ...] = ()
+    ids_by_label: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """Ids of the nodes of any other label, for the per-kind id read of the near-miss gate."""
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         _ = params
         self.call_log.append(q)
-        if q == "MATCH (c:Capability) RETURN c.id":
-            return _FakeQueryResult([[capability_id] for capability_id in self.capability_ids])
+        if id_read := _NODE_IDS.fullmatch(q):
+            label = id_read[1]
+            ids = self.capability_ids if label == "Capability" else self.ids_by_label.get(label, ())
+            return _FakeQueryResult([[node_id] for node_id in ids])
         assert q == "MATCH (n:RegulatoryInstrument {id: $id}) RETURN properties(n)"
         if self.properties is None:
             return _FakeQueryResult([])
@@ -588,6 +597,71 @@ def test_refused_export_writes_nothing_and_emits_exactly_one_refused_entry(
     assert entry["schema_version"] == DOMAIN_SCHEMA_VERSION
     assert entry["review_count"] == 2
     assert "review_1" not in str(entry)
+
+
+def test_export_is_refused_naming_a_review_of_the_test_only_kind(
+    make_emitter: MakeEmitter, test_only_reviewable_kind: ReviewableKind
+) -> None:
+    """A review of a registered kind that is not Capability blocks the export like any other."""
+    emitter, _log_path = make_emitter()
+    db = _FakeDb(graphs=[_BASELINE_NAME])
+    baseline_graph = _FakeExistenceGraph(
+        properties=_PROPERTIES, ids_by_label={test_only_reviewable_kind.label: ("probe_a",)}
+    )
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph(
+        [
+            pending_review(
+                "review_probe", kind=test_only_reviewable_kind.label, incoming_id="probe_a"
+            )
+        ]
+    )
+    dependencies, _open_baseline_calls, _open_native_calls = _build_dependencies(
+        db=db, baseline_graph=baseline_graph, stage=stage, policy_graph=policy
+    )
+
+    with pytest.raises(ExportUnresolvedNearMissesError) as raised:
+        run_export(
+            _request(), config=_config(), actor="x", dependencies=dependencies, emitter=emitter
+        )
+
+    assert raised.value.review_ids == ("review_probe",)
+    installed = installed_process_gateway()
+    assert installed.system_audit.rows == []
+    assert installed.rig.events == []
+    assert stage.calls == []
+
+
+def test_export_with_a_review_of_an_unregistered_kind_is_refused_naming_it_and_writes_nothing(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    emitter, log_path = make_emitter()
+    db = _FakeDb(graphs=[_BASELINE_NAME])
+    baseline_graph = _FakeExistenceGraph(properties=_PROPERTIES, capability_ids=("cap_a",))
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph([pending_review("review_stray", kind=UNREGISTERED_KIND)])
+    dependencies, _open_baseline_calls, open_native_calls = _build_dependencies(
+        db=db, baseline_graph=baseline_graph, stage=stage, policy_graph=policy
+    )
+
+    with pytest.raises(ReviewKindUnsupportedError, match=UNREGISTERED_KIND):
+        run_export(
+            _request(), config=_config(), actor="x", dependencies=dependencies, emitter=emitter
+        )
+    emitter.flush()
+
+    installed = installed_process_gateway()
+    assert installed.system_audit.rows == []
+    assert installed.rig.events == []
+    assert stage.calls == []
+    assert open_native_calls == []
+    entries = [
+        row
+        for row in read_lines(log_path)
+        if row["component"] == "export" and row["action"] == "export_instrument"
+    ]
+    assert [(row["outcome"], row["entity_id"]) for row in entries] == [("refused", _INSTRUMENT_ID)]
+    assert "review_count" not in entries[0]
 
 
 # --- fail closed when `policy_system` cannot be read (PIN) ----------------------

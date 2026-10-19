@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
 from ps_service.company_merge.models import BaselineNode
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 
 _THRESHOLD = 0.85
 
@@ -75,7 +76,8 @@ def test_semantic_match_resolves_via_cosine_similarity_against_cached_embedding(
         incoming_nodes,
         incoming_embeddings={incoming_id: (1.0, 0.0)},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         emitter=emitter,
     )
 
@@ -104,7 +106,8 @@ def test_existing_node_missing_cached_embedding_is_excluded_from_scoring(
         incoming_nodes,
         incoming_embeddings={incoming_id: (1.0, 0.0)},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         emitter=emitter,
     )
 
@@ -135,7 +138,8 @@ def test_no_warning_logged_when_nothing_is_skipped(
         incoming_nodes,
         incoming_embeddings={incoming_id: (1.0, 0.0)},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         emitter=emitter,
     )
 
@@ -156,7 +160,8 @@ def test_below_threshold_semantic_score_mints_new_and_records_near_miss() -> Non
         incoming_nodes,
         incoming_embeddings={incoming_id: (1.0, 0.0)},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
     )
 
     assert len(result.resolutions) == 1

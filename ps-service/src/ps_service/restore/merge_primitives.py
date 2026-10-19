@@ -48,9 +48,10 @@ from ps_service.company_merge.graph_writer import (
 from ps_service.company_merge.models import GovernanceDraftCounts
 from ps_service.company_merge.pending_review import (
     build_pending_review_primitives,
-    read_unresolved_review_pairs,
+    drop_already_reviewed,
 )
 from ps_service.company_merge.redirects import compose_with_resolutions, resolve_redirects
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 from ps_service.graph_gateway.models import UpsertNode
 from ps_service.logging.facade import emit_log_entry
 from ps_service.restore.baseline_reader import SerializedGraphReader
@@ -250,7 +251,8 @@ def build_policy_system_leg(
         read.capability_nodes,
         incoming_embeddings=embeddings_by_label(baseline_graph, "Capability"),
         single_tenant_graph=live,
-        threshold=similarity_threshold,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=similarity_threshold),
         emitter=emitter,
     )
     canonical_id_by_incoming_id = {r.incoming_id: r.canonical_id for r in dedup_result.resolutions}
@@ -272,15 +274,9 @@ def build_policy_system_leg(
     )
     existing = overlay.existing
     # Read with the other `live` reads, at the same position, before anything is built.
-    # A pair that `live` already holds an unresolved review for is not recorded a second time.
-    already_reviewed = read_unresolved_review_pairs(
-        live, dedup_result.near_misses, kind="Capability"
-    )
-    new_near_misses = tuple(
-        pair
-        for pair in dedup_result.near_misses
-        if (pair.incoming_id, pair.nearest_existing_id) not in already_reviewed
-    )
+    # A pair that `live` already holds an unresolved review for is not recorded a second time;
+    # ingest drops them with the same helper.
+    new_near_misses = drop_already_reviewed(live, dedup_result.near_misses, kind=CAPABILITY)
 
     overlay.add(
         build_role_and_requirement_primitives(
@@ -301,7 +297,7 @@ def build_policy_system_leg(
             existing.get("Capability", set()),
             read.capability_nodes,
             dedup_result.resolutions,
-            kind="Capability",
+            kind=CAPABILITY,
             values=values,
         )
     )
@@ -326,7 +322,7 @@ def build_policy_system_leg(
     )
 
     # Last, so the reviews follow the content they refer to inside the same all-or-nothing leg.
-    overlay.add(build_pending_review_primitives(new_near_misses, kind="Capability", values=values))
+    overlay.add(build_pending_review_primitives(new_near_misses, kind=CAPABILITY, values=values))
     counts = {
         **classification_write_counts(read),
         **governance_count_fields(governance_counts),

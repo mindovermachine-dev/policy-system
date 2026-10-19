@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 import redis.exceptions
+from company_merge._kinds import UNREGISTERED_KIND
 from export._gateway_fakes import ScriptedPolicyGraph, pending_review
 from fastapi.testclient import TestClient
 
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
 _INSTRUMENT_ID = "CRA-1.0"
 _BASELINE_BYTES = b'{"nodes": [], "edges": []}'
 _NATIVE_BYTES = b'{"nodes": [], "edges": []}'
-_CAPABILITY_IDS_QUERY = "MATCH (c:Capability) RETURN c.id"
+_NODE_IDS_QUERY = "MATCH (n:Capability) RETURN n.id"
 _WIRE_CONTRACT = (
     Path(__file__).resolve().parents[1]
     / "fixtures"
@@ -95,7 +96,7 @@ class _FakeExistenceGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         _ = params
-        if q == _CAPABILITY_IDS_QUERY:
+        if q == _NODE_IDS_QUERY:
             return _FakeQueryResult([[capability_id] for capability_id in self._capability_ids])
         return _FakeQueryResult(
             [
@@ -306,6 +307,23 @@ def test_valid_export_body_returns_200_with_expected_shape() -> None:
     assert base64.b64decode(body["native_blob_base64"]) == _NATIVE_BYTES
     assert [s["stage"] for s in body["stages"]] == ["embedded", "serialized", "cataloged"]
     assert stage.call_count == 1
+
+
+@pytest.mark.usefixtures("_stub_export_log")
+def test_export_with_a_review_of_an_unregistered_kind_answers_409_naming_it() -> None:
+    """A review the service cannot read blocks the export; no artifact, no audit row."""
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph([pending_review("review_stray", kind=UNREGISTERED_KIND)])
+    client = _client_with_fake(stage, capability_ids=("cap_a",), policy_graph=policy)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "review_kind_unsupported"
+    assert UNREGISTERED_KIND in error["message"]
+    assert stage.call_count == 0
+    assert installed_process_gateway().system_audit.rows == []
 
 
 @pytest.mark.usefixtures("_stub_export_log")

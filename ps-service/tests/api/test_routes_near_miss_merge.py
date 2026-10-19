@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
+from company_merge._kinds import UNREGISTERED_KIND
 from fastapi.testclient import TestClient
 from graph_cleanup._fakes import ABSORBED, SURVIVOR, FakeApprovalStore, approval_row_count
 from graph_cleanup._gateway_fakes import CleanupReadGraph, CleanupRig
@@ -48,6 +49,8 @@ from ps_service.passkey_signing.errors import PendingApprovalPersistenceError
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from typing import NoReturn
+
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
 
 _REVIEW = "review_aaa"
 _OLD = "2020-01-01T00:00:00+00:00"
@@ -274,15 +277,32 @@ def test_merge_of_an_unknown_review_is_404_and_creates_no_approval(env: _Env) ->
     assert approval_row_count(env.store) == 0
 
 
-def test_merge_of_a_policy_review_is_refused_and_creates_no_approval(env: _Env) -> None:
+def test_merge_of_a_review_that_is_not_a_capability_review_is_refused_with_409(
+    env: _Env, test_only_reviewable_kind: ReviewableKind
+) -> None:
+    label = test_only_reviewable_kind.label
     env.rig.seed_near_miss_review(
-        "review_pol", incoming_id="pol_a", existing_id="pol_b", kind="Policy"
+        "review_probe", incoming_id="probe_a", existing_id="probe_b", kind=label
     )
 
-    status, body = env.merge(review_id="review_pol")
+    status, body = env.merge(review_id="review_probe")
 
     assert status == 409
     assert body["error"]["code"] == "near_miss_merge_refused"  # pyright: ignore[reportIndexIssue]
+    assert label in body["error"]["message"]  # pyright: ignore[reportIndexIssue]
+    assert approval_row_count(env.store) == 0
+
+
+def test_merge_of_a_review_of_an_unregistered_kind_answers_409_naming_it(env: _Env) -> None:
+    env.rig.seed_near_miss_review(
+        "review_stray", incoming_id="stray_a", existing_id="stray_b", kind=UNREGISTERED_KIND
+    )
+
+    status, body = env.merge(review_id="review_stray")
+
+    assert status == 409
+    assert body["error"]["code"] == "review_kind_unsupported"  # pyright: ignore[reportIndexIssue]
+    assert UNREGISTERED_KIND in body["error"]["message"]  # pyright: ignore[reportIndexIssue]
     assert approval_row_count(env.store) == 0
 
 

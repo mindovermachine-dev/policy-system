@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pytest
+
+from company_merge._kinds import UNREGISTERED_KIND
+from ps_service.company_merge.errors import UnknownReviewKindError
 from ps_service.company_merge.models import NearMissPair
 from ps_service.company_merge.pending_review import read_unresolved_review_pairs
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewableKind
 
 
 @dataclass
@@ -36,7 +41,7 @@ def _pair(incoming: str, nearest: str) -> NearMissPair:
 def test_no_near_misses_issue_no_query() -> None:
     graph = _Graph()
 
-    assert read_unresolved_review_pairs(graph, (), kind="Capability") == set()  # pyright: ignore[reportArgumentType]
+    assert read_unresolved_review_pairs(graph, (), kind=CAPABILITY) == set()  # pyright: ignore[reportArgumentType]
     assert graph.calls == []
 
 
@@ -46,7 +51,7 @@ def test_one_parameterised_read_returns_the_pairs_found() -> None:
     found = read_unresolved_review_pairs(
         graph,  # pyright: ignore[reportArgumentType]
         (_pair("a", "x"), _pair("b", "y"), _pair("a", "x")),
-        kind="Capability",
+        kind=CAPABILITY,
     )
 
     assert found == {("a", "x")}
@@ -59,3 +64,13 @@ def test_one_parameterised_read_returns_the_pairs_found() -> None:
         {"incoming_id": "a", "nearest_existing_id": "x"},
         {"incoming_id": "b", "nearest_existing_id": "y"},
     ]
+
+
+def test_an_unregistered_kind_is_rejected_naming_it_before_any_read() -> None:
+    graph = _Graph()
+    unregistered = ReviewableKind(UNREGISTERED_KIND, "name", "global", "merge-above")
+
+    with pytest.raises(UnknownReviewKindError, match=UNREGISTERED_KIND):
+        read_unresolved_review_pairs(graph, (_pair("a", "x"),), kind=unregistered)  # pyright: ignore[reportArgumentType]
+
+    assert graph.calls == []

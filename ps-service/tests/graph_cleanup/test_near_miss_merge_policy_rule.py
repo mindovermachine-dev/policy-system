@@ -13,10 +13,11 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
+from company_merge._kinds import UNREGISTERED_KIND
 
 from graph_cleanup._fakes import ABSORBED, SURVIVOR, FakeApprovalStore, approval_row_count
 from graph_cleanup._merge_runs import CONFIG, OFFICER, roles
-from ps_service.api.errors import PendingReviewNotFoundError
+from ps_service.api.errors import PendingReviewNotFoundError, ReviewKindUnsupportedError
 from ps_service.api.near_miss_review_orchestration import (
     build_default_near_miss_review_dependencies,
     run_request_near_miss_merge,
@@ -29,6 +30,7 @@ from ps_service.graph_cleanup.executors import execute_capability_merge
 
 if TYPE_CHECKING:
     from graph_cleanup._gateway_fakes import CleanupReadGraph, CleanupRig
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
     from ps_service.graph_cleanup.service import CapabilityMergeApproval
 
 _REVIEW = "review_aaa"
@@ -258,15 +260,36 @@ def test_a_review_whose_node_was_absorbed_is_stale_and_creates_no_approval(
     assert approval_row_count(store) == 0
 
 
-def test_a_policy_review_cannot_be_merged_and_creates_no_approval(
+def test_a_review_of_a_kind_without_a_merge_is_refused_naming_the_kind(
+    cleanup_rig: CleanupRig, test_only_reviewable_kind: ReviewableKind
+) -> None:
+    rig = cleanup_rig
+    rig.seed_capability_merge_world()
+    label = test_only_reviewable_kind.label
+    rig.seed_endpoint(label, "probe_a", name="Probe A")
+    rig.seed_endpoint(label, "probe_b", name="Probe B")
+    rig.seed_near_miss_review(_REVIEW, incoming_id="probe_a", existing_id="probe_b", kind=label)
+    store = FakeApprovalStore()
+    before = copy.deepcopy(rig.graph.nodes)
+
+    with pytest.raises(GraphCleanupValidationError, match=label):
+        _request(rig, store)
+
+    assert approval_row_count(store) == 0
+    assert rig.graph.nodes == before
+
+
+def test_a_review_of_an_unregistered_kind_is_refused_naming_the_kind_and_creates_no_approval(
     cleanup_rig: CleanupRig,
 ) -> None:
     rig = cleanup_rig
     rig.seed_capability_merge_world()
-    rig.seed_near_miss_review(_REVIEW, incoming_id="pol_a", existing_id="pol_b", kind="Policy")
+    rig.seed_near_miss_review(
+        _REVIEW, incoming_id="stray_a", existing_id="stray_b", kind=UNREGISTERED_KIND
+    )
     store = FakeApprovalStore()
 
-    with pytest.raises(GraphCleanupValidationError, match="Capability"):
+    with pytest.raises(ReviewKindUnsupportedError, match=UNREGISTERED_KIND):
         _request(rig, store)
 
     assert approval_row_count(store) == 0

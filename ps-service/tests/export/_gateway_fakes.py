@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
 from graph_gateway._fakes import FakeQueryResult, GatewayRig, InMemoryGraph
 
@@ -33,7 +33,7 @@ _EXISTENCE = "MATCH (n:RegulatoryInstrument {id: $id}) RETURN properties(n)"
 _MISSING_EMBEDDING = re.compile(
     r"MATCH \(n:(\w+)\) WHERE n\.embedding IS NULL RETURN n\.id, n\.(\w+)"
 )
-_CAPABILITY_IDS = "MATCH (c:Capability) RETURN c.id"
+_NODE_IDS = re.compile(r"^MATCH \(n:(\w+)\) RETURN n\.id$")
 _NODE_ROWS = re.compile(r"MATCH \(n:(\w+)\) RETURN labels\(n\), properties\(n\)")
 _EDGE_ROWS = re.compile(
     r"MATCH \(s\)-\[r:(\w+)\]->\(t\) RETURN labels\(s\), s\.id, labels\(t\), t\.id, properties\(r\)"
@@ -68,8 +68,8 @@ class ExportReadGraph:
         return FakeQueryResult(self._answer(q))
 
     def _answer(self, q: str) -> list[object]:
-        if q == _CAPABILITY_IDS:
-            return [[node_id] for label, node_id in self._graph.nodes if label == "Capability"]
+        if match := _NODE_IDS.fullmatch(q):
+            return [[node_id] for label, node_id in self._graph.nodes if label == match[1]]
         if q == "CALL db.labels()":
             return [[label] for label in sorted({label for label, _ in self._graph.nodes})]
         if q == "CALL db.relationshipTypes()":
@@ -148,7 +148,7 @@ def pending_review(
     *,
     incoming_id: str = "capability_incoming_a",
     nearest_existing_id: str = "capability_existing_a",
-    kind: Literal["Capability", "Policy"] = "Capability",
+    kind: str = "Capability",
 ) -> PendingReviewRecord:
     """A `PendingReviewRecord` touching the given ids (defaults touch no instrument)."""
     return PendingReviewRecord(

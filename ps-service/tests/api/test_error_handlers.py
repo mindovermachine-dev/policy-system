@@ -31,6 +31,7 @@ from ps_service.api.errors import (
     InternalSeedValidationError,
     PendingReviewNotFoundError,
     PipelineStageError,
+    ReviewKindUnsupportedError,
     ShortNameCollisionError,
 )
 from ps_service.audit.errors import AuditTrailUnavailableError
@@ -102,6 +103,7 @@ def test_is_safe_verbatim_covers_api_and_whitelisted_domain_errors() -> None:
     assert is_safe_verbatim(CatalogIdentifierNotFoundError("nope"))
     assert is_safe_verbatim(IngestionConfigIncompleteError("nope"))
     assert is_safe_verbatim(PendingReviewNotFoundError("nope"))
+    assert is_safe_verbatim(ReviewKindUnsupportedError("nope"))
     assert is_safe_verbatim(fake_domain_error("boom"))  # matched by class name, no deep import
     assert is_safe_verbatim(
         fake_content_rejected("node label 'PracticeArea' is not in the allow-list")
@@ -266,6 +268,11 @@ def test_api_errors_map_to_their_documented_status_codes() -> None:
             ShortNameCollisionError("short_name 'CRA' is already claimed by CELEX 32022R2554"),
             409,
             "short_name_collision",
+        ),
+        (
+            ReviewKindUnsupportedError("no reviewable kind is registered for 'Unregistered'"),
+            409,
+            "review_kind_unsupported",
         ),
     ],
 )

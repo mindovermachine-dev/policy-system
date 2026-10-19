@@ -1,7 +1,8 @@
 """Canonical-node identity resolution for Company Merge: exact-key and semantic.
 
-Decides, for every incoming baseline Capability or Policy node, which canonical node of the
-single-tenant graph it resolves to, and which similar pairs are recorded as near misses.
+Decides, for every incoming baseline node of one `ReviewableKind`, which canonical node of the
+single-tenant graph it resolves to, and which similar pairs are recorded as near misses. The kind's
+spec supplies the node label and text property; this module names neither.
 
 Two entry points run the same algorithm. `dedupe_canonical_nodes` is the live path and calls
 `route_embedding` for any embedding it lacks. `resolve_capability_convergence_offline` is the
@@ -12,10 +13,15 @@ SEMANTIC convergence is deliberately excluded: the semantic-match candidate pool
 nodes that existed before the run, so a same-run near-duplicate is recorded as a `NearMissPair`
 and never merged.
 
-Company Merge dedupes Capability and Policy; Obligation is Role-scoped and passed through. The
-exact-key match is only correct if it computes the same hash Domain Mapper used to write the
-baseline graph's node ids, so `capability_id` and `policy_id` are imported from Domain Mapper,
-never reimplemented here.
+A kind's scope decides the candidate pool (`"global"`: every node of the label; `"per-instrument"`:
+the nodes the run's instrument `DEFINES` in the single-tenant graph, plus the run's own mints). Its
+rule decides what a close pair does (`"merge-above"`: merge onto an eligible candidate at or above
+the merge threshold; `"review-only"`: never merge, cite pairs at or above the review threshold).
+Capability is the one kind with a merge rule in production; Obligation is Role-scoped and passed
+through.
+The exact-key match is only correct if it computes the same hash Domain Mapper used to write the
+baseline graph's node ids, so `capability_id` is imported from Domain Mapper, never reimplemented
+here.
 
 A Capability that a Compliance Officer cleanup merge absorbed no longer exists in the graph, so it
 is never an exact-match or semantic-match candidate. Its incoming id is resolved to the survivor
@@ -26,8 +32,9 @@ nodes that remain.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import cast
 
+from ps_service.company_merge.errors import CompanyMergeConfigurationError
 from ps_service.company_merge.falkordb_client import (
     GraphHandle,  # noqa: TC001 — introspected at runtime by test_ac008_out_of_scope via typing.get_type_hints
 )
@@ -39,8 +46,14 @@ from ps_service.company_merge.models import (
     NearMissPair,
     SemanticMatchResult,
 )
+from ps_service.company_merge.reviewable_kinds import (
+    ReviewableKind,
+    ReviewThresholds,
+    require_registered,
+    require_thresholds,
+)
 from ps_service.company_merge.similarity import cosine_similarity
-from ps_service.domain_mapper.identity import capability_id, policy_id
+from ps_service.domain_mapper.identity import capability_id
 from ps_service.llm_interface.client import (
     EmbeddingCaller,  # noqa: TC001 — introspected at runtime by test_ac008_out_of_scope via typing.get_type_hints
 )
@@ -54,43 +67,45 @@ __all__ = [
     "capability_id",
     "dedupe_canonical_nodes",
     "find_best_semantic_match",
-    "policy_id",
     "read_existing_canonical_index",
     "resolve_capability_convergence_offline",
     "resolve_exact_match",
 ]
 
-# label -> the property holding this canonical kind's own text: Capability's is `name`,
-# Policy's is `title`. A fixed lookup keyed by this module's own Literal values, never
-# adapter- or LLM-sourced.
-_TEXT_PROPERTY_BY_LABEL: dict[Literal["Capability", "Policy"], str] = {
-    "Capability": "name",
-    "Policy": "title",
-}
-
 
 def read_existing_canonical_index(
-    single_tenant_graph: GraphHandle, label: Literal["Capability", "Policy"]
+    single_tenant_graph: GraphHandle, kind: ReviewableKind, instrument_id: str | None = None
 ) -> tuple[ExistingCanonicalNode, ...]:
-    """Read every existing `label` node in the single-tenant graph as a canonical index.
+    """Read the existing nodes of `kind` that are candidates for a run, as a canonical index.
 
-    `label` is this module's own fixed literal, passed only by the dedup entry points and never
-    from an adapter, LLM or external input, so it is interpolated into the query directly. The
-    text property read onto `ExistingCanonicalNode.text` depends on `label`
-    (`_TEXT_PROPERTY_BY_LABEL`): `n.name` for Capability, `n.title` for Policy. Read-only.
+    A `"global"` kind reads every node of its label. A `"per-instrument"` kind reads only the nodes
+    the run's instrument `DEFINES` , so a node another instrument defines is never
+    a candidate; the instrument id is a bound parameter.
+
+    The label and text property come from `kind`, a code-owned spec whose fields are validated as
+    plain identifiers when it is built (`ReviewableKind.__post_init__`), never adapter-, LLM- or
+    user-sourced, so they are interpolated into the query directly. The property read onto
+    `ExistingCanonicalNode.text` is `kind.text_property`. Read-only.
 
     Args:
         single_tenant_graph: Read handle on the single-tenant graph.
-        label: `"Capability"` or `"Policy"`.
+        kind: The kind whose nodes are read.
+        instrument_id: The run's instrument; required when `kind.scope` is `"per-instrument"`.
 
     Returns:
         One `ExistingCanonicalNode` per node, in query order; empty when the graph has none.
         `embedding` is the cached vector, or `None` when it has never been computed.
     """
-    text_property = _TEXT_PROPERTY_BY_LABEL[label]
-    result = single_tenant_graph.query(
-        f"MATCH (n:{label}) RETURN n.id, n.{text_property}, n.embedding"
-    )
+    if kind.scope == "per-instrument":
+        result = single_tenant_graph.query(
+            "MATCH (:RegulatoryInstrument {id: $instrument_id})-[:DEFINES]->"
+            f"(n:{kind.label}) RETURN n.id, n.{kind.text_property}, n.embedding",
+            {"instrument_id": instrument_id},
+        )
+    else:
+        result = single_tenant_graph.query(
+            f"MATCH (n:{kind.label}) RETURN n.id, n.{kind.text_property}, n.embedding"
+        )
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[ExistingCanonicalNode] = []
     for row in rows:
@@ -207,7 +222,7 @@ def find_best_semantic_match(
     )
 
 
-def _merge_target_id(result: SemanticMatchResult | None, threshold: float) -> str | None:
+def _merge_target_id(result: SemanticMatchResult | None, threshold: float | None) -> str | None:
     """Return the eligible canonical id to merge onto, or `None` to mint instead.
 
     `None` when there is no semantic-match result, no scanned entry was eligible (both
@@ -216,6 +231,7 @@ def _merge_target_id(result: SemanticMatchResult | None, threshold: float) -> st
     """
     if (
         result is None
+        or threshold is None
         or result.best_eligible_id is None
         or result.best_eligible_similarity is None
         or result.best_eligible_similarity < threshold
@@ -286,24 +302,60 @@ def _fold_semantic_match_result(
         incoming_embedding_backfills[node.id] = result.incoming_embedding
 
 
-def _incoming_text(node: BaselineNode, kind: Literal["Capability", "Policy"]) -> str:
-    """Return an incoming node's own text: `name` for Capability, `title` for Policy.
+def _incoming_text(node: BaselineNode, kind: ReviewableKind) -> str:
+    """Return an incoming node's own text: the property `kind.text_property` names.
 
     Uses the same property keys as `graph_reader.read_baseline_graph`. It is a separate lookup from
     `read_existing_canonical_index`, which reads a query column rather than a
-    `BaselineNode.properties` entry, although both draw on `_TEXT_PROPERTY_BY_LABEL`.
+    `BaselineNode.properties` entry, although both draw on `kind.text_property`.
     """
-    key = _TEXT_PROPERTY_BY_LABEL[kind]
-    return cast("str", node.properties[key])
+    return cast("str", node.properties[kind.text_property])
+
+
+def _validate_run(
+    kind: ReviewableKind, thresholds: ReviewThresholds, instrument_id: str | None
+) -> None:
+    """Fail closed on a kind, thresholds or scope a dedup run cannot use.
+
+    Runs before any read or embedding, so a refusal leaves the graph and the provider untouched.
+
+    Raises:
+        UnknownReviewKindError: `kind` is not the spec registered for its label.
+        CompanyMergeConfigurationError: A threshold the rule needs is missing or one it cannot use
+            was given; or a `"per-instrument"` kind has no `instrument_id`.
+    """
+    require_registered(kind)
+    require_thresholds(kind, thresholds)
+    if kind.scope == "per-instrument" and instrument_id is None:
+        raise CompanyMergeConfigurationError(
+            f"{kind.label}: scope {kind.scope!r} requires an instrument id"
+        )
+
+
+def _eligible_merge_targets(
+    kind: ReviewableKind, original_existing_ids: frozenset[str]
+) -> frozenset[str]:
+    """Return the ids a node may be merged onto: the pre-run nodes, or none for `"review-only"`.
+
+    A `"review-only"` kind never merges, so no candidate is eligible; every close pair is then
+    only cited as a near miss.
+    """
+    return frozenset() if kind.rule == "review-only" else original_existing_ids
+
+
+def _clears_review_floor(similarity: float, thresholds: ReviewThresholds) -> bool:
+    """Report whether a near miss scoring `similarity` is surfaced: no floor, or at or above it."""
+    return thresholds.review is None or similarity >= thresholds.review
 
 
 def dedupe_canonical_nodes(
     incoming_nodes: tuple[BaselineNode, ...],
     *,
-    kind: Literal["Capability", "Policy"],
+    kind: ReviewableKind,
     single_tenant_graph: GraphHandle,
     model: str,
-    threshold: float,
+    thresholds: ReviewThresholds,
+    instrument_id: str | None = None,
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> DedupResult:
@@ -319,9 +371,10 @@ def dedupe_canonical_nodes(
     near-duplicate is never merged, only recorded as a `NearMissPair`. Existing embeddings computed
     during a scan are folded into the working index at once and, for pre-existing entries, recorded
     in `embedding_backfills`. No result, no eligible candidate, or an eligible best score below
-    `threshold` mints a new canonical node, recording a near miss whenever any score was computed.
-    An eligible best at or above `threshold` resolves onto that canonical id and may also record a
-    second near miss when an ineligible same-run mint scored higher.
+    `thresholds.merge` mints a new canonical node, recording a near miss whenever any score was
+    computed and it is at or above `thresholds.review` (no floor when that is `None`).
+    An eligible best at or above `thresholds.merge` resolves onto that canonical id and may also
+    record a second near miss when an ineligible same-run mint scored higher.
 
     An incoming node whose `embedding` is cached is passed to `find_best_semantic_match` and costs
     no `route_embedding` call. A freshly computed incoming embedding is recorded in
@@ -331,10 +384,13 @@ def dedupe_canonical_nodes(
 
     Args:
         incoming_nodes: Baseline nodes of one kind, in processing order.
-        kind: `"Capability"` or `"Policy"`; Standard, Control and Obligation are not deduped.
+        kind: The registered spec of the nodes' kind; it names the label and text property.
         single_tenant_graph: Read handle on the single-tenant graph holding the canonical nodes.
         model: Embedding model name for any `route_embedding` call.
-        threshold: Minimum cosine similarity for an eligible candidate to be merged onto.
+        thresholds: `merge` is the minimum cosine similarity for an eligible candidate to be merged
+            onto; `review` is the floor for surfacing a near miss (`None`: every scored best
+            neighbour is surfaced, which is Capability's behaviour).
+        instrument_id: The run's instrument; required by a `"per-instrument"` kind.
         call_embedding: Embedding caller override; None uses the default provider routing.
         emitter: Log sink passed to `route_embedding`; None uses the default emitter.
 
@@ -343,12 +399,18 @@ def dedupe_canonical_nodes(
         the embedding backfills for existing and incoming nodes.
 
     Raises:
+        UnknownReviewKindError: `kind` is not registered; nothing was read or embedded.
+        CompanyMergeConfigurationError: `thresholds` or `instrument_id` do not fit `kind`; nothing
+            was read or embedded.
         LlmProviderError: Propagated unchanged from an embedding call.
     """
-    existing_index = read_existing_canonical_index(single_tenant_graph, kind)
+    _validate_run(kind, thresholds, instrument_id)
+    merge_threshold = thresholds.merge
+    existing_index = read_existing_canonical_index(single_tenant_graph, kind, instrument_id)
     # Never mutated: distinguishes a genuinely pre-existing canonical node (a backfill
     # candidate, an eligible merge target) from one minted later in this run.
     original_existing_ids = frozenset(n.id for n in existing_index)
+    eligible_ids = _eligible_merge_targets(kind, original_existing_ids)
     working_index: dict[str, ExistingCanonicalNode] = {n.id: n for n in existing_index}
     embedding_backfills: dict[str, tuple[float, ...]] = {}
     incoming_embedding_backfills: dict[str, tuple[float, ...]] = {}
@@ -376,7 +438,7 @@ def dedupe_canonical_nodes(
             model=model,
             call_embedding=call_embedding,
             emitter=emitter,
-            eligible_ids=original_existing_ids,
+            eligible_ids=eligible_ids,
             incoming_embedding=node.embedding,
         )
 
@@ -390,7 +452,7 @@ def dedupe_canonical_nodes(
                 incoming_embedding_backfills=incoming_embedding_backfills,
             )
 
-        merge_target_id = _merge_target_id(result, threshold)
+        merge_target_id = _merge_target_id(result, merge_threshold)
 
         if merge_target_id is None:
             own_embedding = result.incoming_embedding if result is not None else node.embedding
@@ -411,7 +473,7 @@ def dedupe_canonical_nodes(
             working_index[node.id] = ExistingCanonicalNode(
                 id=node.id, text=node_text, embedding=own_embedding
             )
-            if result is not None:
+            if result is not None and _clears_review_floor(result.best_similarity, thresholds):
                 near_misses.append(
                     NearMissPair(
                         incoming_id=node.id,
@@ -437,7 +499,7 @@ def dedupe_canonical_nodes(
                 node_text,
                 cast("SemanticMatchResult", result),
                 working_index,
-                threshold,
+                cast("float", merge_threshold),
                 near_misses,
             )
 
@@ -546,8 +608,9 @@ def resolve_capability_convergence_offline(
     *,
     incoming_embeddings: dict[str, tuple[float, ...]],
     single_tenant_graph: GraphHandle,
-    threshold: float,
-    kind: Literal["Capability", "Policy"] = "Capability",
+    kind: ReviewableKind,
+    thresholds: ReviewThresholds,
+    instrument_id: str | None = None,
     emitter: LogEmitter | None = None,
 ) -> DedupResult:
     """Resolve incoming nodes to canonical ids without any embedding fetch, for a restore.
@@ -566,9 +629,10 @@ def resolve_capability_convergence_offline(
         incoming_embeddings: Artifact-supplied embedding per incoming node id. A node with no entry
             has no embedding and is minted without a semantic comparison.
         single_tenant_graph: Read handle on the single-tenant graph holding the canonical nodes.
-        threshold: Minimum cosine similarity for an eligible candidate to be merged onto.
-        kind: `"Capability"` (default) or `"Policy"`; selects the text property and read query
+        kind: The registered spec of the nodes' kind; selects the text property and read query
             exactly as `dedupe_canonical_nodes` does.
+        thresholds: As for `dedupe_canonical_nodes`.
+        instrument_id: The run's instrument; required by a `"per-instrument"` kind.
         emitter: Log sink for the warning entry; None uses the default emitter.
 
     Returns:
@@ -576,14 +640,22 @@ def resolve_capability_convergence_offline(
         `embedding_backfills` and `incoming_embedding_backfills` are empty because nothing is
         computed.
 
+    Raises:
+        UnknownReviewKindError: `kind` is not registered; nothing was read.
+        CompanyMergeConfigurationError: `thresholds` or `instrument_id` do not fit `kind`; nothing
+            was read.
+
     Side Effects:
         When any existing candidate was skipped for lacking a cached embedding, emits one
         aggregate log entry with `outcome="warning"` carrying the skipped count.
     """
-    existing_index = read_existing_canonical_index(single_tenant_graph, kind)
+    _validate_run(kind, thresholds, instrument_id)
+    merge_threshold = thresholds.merge
+    existing_index = read_existing_canonical_index(single_tenant_graph, kind, instrument_id)
     # Never mutated: distinguishes a genuinely pre-existing canonical node from one minted later
     # in this restore run.
     original_existing_ids = frozenset(n.id for n in existing_index)
+    eligible_ids = _eligible_merge_targets(kind, original_existing_ids)
     working_index: dict[str, ExistingCanonicalNode] = {node.id: node for node in existing_index}
     resolutions: list[CanonicalResolution] = []
     near_misses: list[NearMissPair] = []
@@ -603,10 +675,14 @@ def resolve_capability_convergence_offline(
         skipped_count += sum(
             1 for candidate in working_index.values() if candidate.embedding is None
         )
-        match = _best_offline_match(own_embedding, working_index, original_existing_ids)
+        match = _best_offline_match(own_embedding, working_index, eligible_ids)
         best_eligible = match.best_eligible
 
-        if best_eligible is None or match.best_eligible_score < threshold:
+        if (
+            best_eligible is None
+            or merge_threshold is None
+            or match.best_eligible_score < merge_threshold
+        ):
             resolutions.append(
                 CanonicalResolution(
                     incoming_id=node.id,
@@ -615,7 +691,9 @@ def resolve_capability_convergence_offline(
                     embedding=own_embedding,
                 )
             )
-            if match.best_overall is not None:
+            if match.best_overall is not None and _clears_review_floor(
+                match.best_overall_score, thresholds
+            ):
                 near_misses.append(
                     NearMissPair(
                         incoming_id=node.id,
@@ -643,7 +721,7 @@ def resolve_capability_convergence_offline(
                 )
             )
             _record_excluded_same_run_mint_near_miss_offline(
-                node, node_text, match, best_eligible, threshold, near_misses
+                node, node_text, match, best_eligible, merge_threshold, near_misses
             )
 
     if skipped_count:

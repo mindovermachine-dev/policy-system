@@ -1,19 +1,29 @@
 """Tests for `ps_service.export.near_miss_gate`.
 
-The gate reads the instrument's `{short}_baseline` Capability ids and the resolvable
-`PendingReview`s of `policy_system` (through `list_pending_reviews`), and returns the ids of the
-reviews that touch one of those Capabilities. The baseline side is a real rig graph behind
-`ExportReadGraph`; the `policy_system` side is a `ScriptedPolicyGraph`, because fakes cannot run
-the multi-clause review query.
+The gate reads the instrument's `{short}_baseline` node ids of every registered reviewable kind
+and the resolvable `PendingReview`s of `policy_system` (through `list_pending_reviews`), and
+returns the ids of the reviews that touch a node of their own kind. The baseline side is a real
+rig graph behind `ExportReadGraph`; the `policy_system` side is a `ScriptedPolicyGraph`, because
+fakes cannot run the multi-clause review query.
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+import pytest
+from company_merge._kinds import UNREGISTERED_KIND
 from graph_gateway._fakes import GatewayRig
 
 from export._gateway_fakes import ExportRig, ScriptedPolicyGraph, pending_review
+from ps_service.company_merge.errors import UnknownReviewKindError
 from ps_service.company_merge.pending_review import list_pending_reviews
 from ps_service.export.near_miss_gate import unresolved_near_miss_review_ids
+
+if TYPE_CHECKING:
+    from graph_gateway._fakes import FakeQueryResult
+
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
 
 
 def _baseline_with_capabilities(*capability_ids: str) -> ExportRig:
@@ -108,3 +118,90 @@ def test_gate_sends_the_same_single_statement_as_list_pending_reviews() -> None:
 
     assert len(gate_policy.statements) == 1
     assert gate_policy.statements == reference_policy.statements
+
+
+def test_review_of_a_registered_non_capability_kind_blocks_export(
+    test_only_reviewable_kind: ReviewableKind,
+) -> None:
+    label = test_only_reviewable_kind.label
+    export_rig = _baseline_with_capabilities("cap_a")
+    ExportRig.seed_node(export_rig.baseline, label, "probe_a", {"name": "x"})
+    policy = ScriptedPolicyGraph([pending_review("review_p", kind=label, incoming_id="probe_a")])
+
+    ids = unresolved_near_miss_review_ids(export_rig.baseline_reader(), policy)
+
+    assert ids == ("review_p",)
+
+
+def test_review_only_matches_ids_of_its_own_kind(test_only_reviewable_kind: ReviewableKind) -> None:
+    label = test_only_reviewable_kind.label
+    export_rig = _baseline_with_capabilities("shared_id")
+    ExportRig.seed_node(export_rig.baseline, label, "probe_a", {"name": "x"})
+    policy = ScriptedPolicyGraph(
+        [
+            pending_review("review_cap_names_probe_id", kind="Capability", incoming_id="probe_a"),
+            pending_review("review_probe_names_cap_id", kind=label, incoming_id="shared_id"),
+        ]
+    )
+
+    ids = unresolved_near_miss_review_ids(export_rig.baseline_reader(), policy)
+
+    assert ids == ()
+
+
+def test_baseline_ids_are_read_once_per_registered_kind(
+    test_only_reviewable_kind: ReviewableKind,
+) -> None:
+    export_rig = _baseline_with_capabilities("cap_a")
+    reader = export_rig.baseline_reader()
+
+    unresolved_near_miss_review_ids(reader, ScriptedPolicyGraph())
+
+    assert reader.statements == [
+        "MATCH (n:Capability) RETURN n.id",
+        f"MATCH (n:{test_only_reviewable_kind.label}) RETURN n.id",
+    ]
+
+
+def test_gate_rejects_a_review_whose_kind_has_no_spec_naming_the_kind() -> None:
+    export_rig = _baseline_with_capabilities("cap_a")
+    policy = ScriptedPolicyGraph([pending_review("review_stray", kind=UNREGISTERED_KIND)])
+
+    with pytest.raises(UnknownReviewKindError, match=UNREGISTERED_KIND):
+        unresolved_near_miss_review_ids(export_rig.baseline_reader(), policy)
+
+
+class _BaselineFailingFor:
+    """A baseline handle whose id read fails for one label only; the rest is the rig's."""
+
+    def __init__(self, inner: object, label: str, error: Exception) -> None:
+        self._inner = inner
+        self._failing_statement = f"MATCH (n:{label}) RETURN n.id"
+        self._error = error
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> FakeQueryResult:
+        if q == self._failing_statement:
+            raise self._error
+        return self._inner.query(q, params)  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownVariableType]
+
+
+@pytest.mark.parametrize("failing", ["Capability", "ProbeItem"])
+def test_baseline_read_failure_propagates_for_every_registered_kind(
+    failing: str, test_only_reviewable_kind: ReviewableKind
+) -> None:
+    assert test_only_reviewable_kind.label == "ProbeItem"
+    export_rig = _baseline_with_capabilities("cap_a")
+    baseline = _BaselineFailingFor(
+        export_rig.baseline_reader(), failing, ConnectionError("baseline down")
+    )
+
+    with pytest.raises(ConnectionError, match="baseline down"):
+        unresolved_near_miss_review_ids(baseline, ScriptedPolicyGraph())  # pyright: ignore[reportArgumentType]
+
+
+def test_policy_system_read_failure_propagates() -> None:
+    export_rig = _baseline_with_capabilities("cap_a")
+    policy = ScriptedPolicyGraph(fail_with=ConnectionError("policy_system down"))
+
+    with pytest.raises(ConnectionError, match="policy_system down"):
+        unresolved_near_miss_review_ids(export_rig.baseline_reader(), policy)

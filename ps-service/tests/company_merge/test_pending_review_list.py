@@ -15,15 +15,19 @@ cannot execute Cypher); the `falkordb_live` test at the end of this file does.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from ps_service.company_merge.errors import StalePendingReviewError
+from company_merge._kinds import UNREGISTERED_KIND
+from ps_service.company_merge.errors import StalePendingReviewError, UnknownReviewKindError
 from ps_service.company_merge.models import PendingReviewRecord
 from ps_service.company_merge.pending_review import list_pending_reviews, read_review_merge_sides
 from ps_service.config import load_config
 from ps_service.graph_gateway.connection import connect_from_config, select_graph
+
+if TYPE_CHECKING:
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
 
 
 @dataclass
@@ -67,11 +71,11 @@ _ROW_A: list[object] = [
 ]
 _ROW_B: list[object] = [
     "review_bbb",
-    "Policy",
-    "policy_incoming_b",
-    "Maintain a data protection policy.",
-    "policy_existing_b",
-    "Maintain a privacy policy.",
+    "Capability",
+    "capability_incoming_b",
+    "Maintain a data protection register.",
+    "capability_existing_b",
+    "Maintain a privacy register.",
     0.7,
     "2026-01-02T00:00:00+00:00",
 ]
@@ -114,7 +118,31 @@ def test_list_pending_reviews_returns_one_record_per_node_in_query_order() -> No
     assert len(result) == 2
     assert result[0].id == "review_aaa"
     assert result[1].id == "review_bbb"
-    assert result[1].kind == "Policy"
+    assert result[1].kind == "Capability"
+
+
+def test_list_returns_a_review_of_the_test_only_kind(
+    test_only_reviewable_kind: ReviewableKind,
+) -> None:
+    row = [*_ROW_B]
+    row[1] = test_only_reviewable_kind.label
+    graph = _FakeGraph(rows=[_ROW_A, row])
+
+    result = list_pending_reviews(graph)
+
+    assert [(record.id, record.kind) for record in result] == [
+        ("review_aaa", "Capability"),
+        ("review_bbb", "ProbeItem"),
+    ]
+
+
+def test_list_rejects_a_review_whose_kind_has_no_spec_naming_the_kind() -> None:
+    row = [*_ROW_B]
+    row[1] = UNREGISTERED_KIND
+    graph = _FakeGraph(rows=[_ROW_A, row])
+
+    with pytest.raises(UnknownReviewKindError, match=UNREGISTERED_KIND):
+        list_pending_reviews(graph)
 
 
 def test_list_pending_reviews_orders_by_created_at_ascending_in_the_query() -> None:
@@ -184,6 +212,7 @@ def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -
         graph.query(
             "CREATE (:MergedCapability {id: 'cap_live_absorbed', merged_into: 'cap_live_a'})"
         )
+        # Policy nodes whose ids a Capability review names: the review's own `kind` must decide.
         graph.query("CREATE (:Policy {id: 'pol_live_a'})")
         graph.query("CREATE (:Policy {id: 'pol_live_b'})")
 
@@ -197,11 +226,10 @@ def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -
                 "cap_live_absorbed",
                 "2024-01-03",
             ),
-            ("review_live_policy_ok", "Policy", "pol_live_a", "pol_live_b", "2024-01-04"),
             # Nodes with these ids exist, but as Policy, not Capability: the
             # review's own `kind` must decide, or a merge would target a label
             # the existence check never approved.
-            ("review_live_wrong_kind", "Capability", "pol_live_a", "pol_live_b", "2024-01-05"),
+            ("review_live_wrong_kind", "Capability", "pol_live_a", "pol_live_b", "2024-01-04"),
         ):
             graph.query(
                 "CREATE (:PendingReview {id: $id, kind: $kind, incoming_id: $incoming_id, "
@@ -218,7 +246,7 @@ def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -
 
         listed = [record.id for record in list_pending_reviews(graph)]
 
-        assert listed == ["review_live_resolvable", "review_live_policy_ok"]
+        assert listed == ["review_live_resolvable"]
     finally:
         db.select_graph(_LIVE_TEST_GRAPH).delete()
         assert _LIVE_TEST_GRAPH not in set(db.list_graphs())

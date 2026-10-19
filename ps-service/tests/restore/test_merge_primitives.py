@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from company_merge._gateway_fakes import MergeRig, stepped_values
+from company_merge._kinds import UNREGISTERED_KIND
 from company_merge._seed_merge_graphs import SingleTenantStore
 
 from ps_service.company_merge.errors import (
@@ -334,9 +335,9 @@ def test_AC_BI_004_pair_with_unresolved_review_is_skipped(rig: MergeRig) -> None
 def test_AC_BI_004_a_review_of_another_pair_or_kind_does_not_skip(rig: MergeRig) -> None:
     existing = _seed_near_miss_target(rig)
     _seed_review(rig, incoming_id=_CAP, nearest_existing_id="cap_other")
-    rig.policy_system.nodes[("PendingReview", "review_policy")] = {
-        "id": "review_policy",
-        "kind": "Policy",
+    rig.policy_system.nodes[("PendingReview", "review_other_kind")] = {
+        "id": "review_other_kind",
+        "kind": UNREGISTERED_KIND,
         "status": "pending",
         "incoming_id": _CAP,
         "nearest_existing_id": existing,

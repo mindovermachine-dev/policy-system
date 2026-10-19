@@ -22,18 +22,20 @@ import pytest
 import redis.exceptions
 
 from company_merge._gateway_fakes import POLICY_SYSTEM, stepped_values
+from company_merge._kinds import UNREGISTERED_KIND
 from company_merge._legacy_reference import (
     FROZEN_STATEMENT_HASHES,
     LegacyRecordingGraph,
     write_legacy_pending_reviews,
 )
-from ps_service.company_merge.errors import CompanyMergePersistenceError
+from ps_service.company_merge.errors import CompanyMergePersistenceError, UnknownReviewKindError
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import NearMissPair
 from ps_service.company_merge.pending_review import (
     build_pending_review_primitives,
     persist_pending_reviews,
 )
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewableKind
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.label_allow_list import ALLOWED_NODE_LABELS
 from ps_service.graph_gateway.models import MutationGroup
@@ -73,7 +75,7 @@ def test_persist_pending_reviews_creates_node_with_pair_fields_verbatim(
 ) -> None:
     pair = _near_miss()
 
-    persist_pending_reviews(_target(merge_rig), (pair,), kind="Capability")
+    persist_pending_reviews(_target(merge_rig), (pair,), kind=CAPABILITY)
 
     [(review_id, props)] = _reviews(merge_rig).items()
     assert review_id.startswith("review_")
@@ -90,7 +92,7 @@ def test_persist_pending_reviews_creates_node_with_pair_fields_verbatim(
 
 
 def test_persist_pending_reviews_no_near_misses_submits_no_group(merge_rig: MergeRig) -> None:
-    persist_pending_reviews(_target(merge_rig), (), kind="Capability")
+    persist_pending_reviews(_target(merge_rig), (), kind=CAPABILITY)
 
     assert merge_rig.groups == []
 
@@ -105,14 +107,14 @@ def test_persist_pending_reviews_is_one_group_with_one_node_per_pair_and_distinc
         incoming_id="capability_incoming_b", nearest_existing_id="capability_existing_b"
     )
 
-    persist_pending_reviews(_target(merge_rig), (pair_a, pair_b), kind="Policy")
+    persist_pending_reviews(_target(merge_rig), (pair_a, pair_b), kind=CAPABILITY)
 
     assert len(merge_rig.groups) == 1
     group = merge_rig.groups[0]
     assert group.audit_event_id == merge_rig.audit_event_id
     assert [e.name for e in group.entries] == ["PendingReview", "PendingReview"]
     assert len({e.identity for e in group.entries}) == 2
-    assert all(props["kind"] == "Policy" for props in _reviews(merge_rig).values())
+    assert all(props["kind"] == "Capability" for props in _reviews(merge_rig).values())
 
 
 def test_each_near_miss_becomes_a_pending_review_node_with_uuid_id_and_created_at_fixed_before_submission(  # noqa: E501 -- name fixed by the plan
@@ -122,7 +124,7 @@ def test_each_near_miss_becomes_a_pending_review_node_with_uuid_id_and_created_a
     values = stepped_values()
     pairs = (_near_miss("capability_a", "capability_x"), _near_miss("capability_b", "capability_y"))
 
-    persist_pending_reviews(_target(merge_rig), pairs, kind="Capability", values=values)
+    persist_pending_reviews(_target(merge_rig), pairs, kind=CAPABILITY, values=values)
 
     reviews = _reviews(merge_rig)
     assert list(reviews) == ["review_fixed-id-1", "review_fixed-id-2"]
@@ -137,7 +139,7 @@ def test_applying_the_review_group_twice_leaves_exactly_one_node_per_review(
     merge_rig: MergeRig,
 ) -> None:
     pairs = (_near_miss("capability_a", "capability_x"), _near_miss("capability_b", "capability_y"))
-    primitives = build_pending_review_primitives(pairs, kind="Capability", values=stepped_values())
+    primitives = build_pending_review_primitives(pairs, kind=CAPABILITY, values=stepped_values())
     group = MutationGroup(
         graph=POLICY_SYSTEM, audit_event_id=merge_rig.audit_event_id, primitives=primitives
     )
@@ -152,7 +154,7 @@ def test_applying_the_review_group_twice_leaves_exactly_one_node_per_review(
 
 def test_a_replay_reproduces_the_review_ids_and_created_at(merge_rig: MergeRig) -> None:
     persist_pending_reviews(
-        _target(merge_rig), (_near_miss(),), kind="Capability", values=stepped_values()
+        _target(merge_rig), (_near_miss(),), kind=CAPABILITY, values=stepped_values()
     )
     before = canonical_digest(merge_rig.policy_system)
     logged = merge_rig.logged()[0]
@@ -170,7 +172,7 @@ def test_a_non_finite_similarity_raises_the_persistence_error_before_submit(
 ) -> None:
     with pytest.raises(CompanyMergePersistenceError, match=r"PendingReview.*cannot store"):
         persist_pending_reviews(
-            _target(merge_rig), (_near_miss(similarity=math.nan),), kind="Capability"
+            _target(merge_rig), (_near_miss(similarity=math.nan),), kind=CAPABILITY
         )
 
     assert merge_rig.groups == []
@@ -182,7 +184,7 @@ def test_a_group_the_log_cannot_take_raises_the_sanitized_persistence_error(
     merge_rig.store.fail_appends()
 
     with pytest.raises(CompanyMergePersistenceError, match=r"^FalkorDB write failed: ") as excinfo:
-        persist_pending_reviews(_target(merge_rig), (_near_miss(),), kind="Capability")
+        persist_pending_reviews(_target(merge_rig), (_near_miss(),), kind=CAPABILITY)
 
     assert "Postgres" not in str(excinfo.value)
     assert not isinstance(excinfo.value.__cause__, redis.exceptions.RedisError)
@@ -218,11 +220,35 @@ def test_the_frozen_writer_and_the_gateway_path_build_the_same_review_nodes(
     """Family F (PendingReview), same generated values; modulo edge identity (none)."""
     pairs = (_near_miss("capability_a", "capability_x"), _near_miss("capability_b", "capability_y"))
     reference = LegacyRecordingGraph()
-    write_legacy_pending_reviews(reference, pairs, kind="Policy", values=stepped_values())
+    write_legacy_pending_reviews(reference, pairs, kind="Capability", values=stepped_values())
 
-    persist_pending_reviews(_target(merge_rig), pairs, kind="Policy", values=stepped_values())
+    persist_pending_reviews(_target(merge_rig), pairs, kind=CAPABILITY, values=stepped_values())
 
     assert canonical_digest(merge_rig.policy_system) == canonical_digest(
         reference.as_gateway_graph()
     )
     assert len(reference.nodes) == 2
+
+
+def test_persist_rejects_a_kind_that_is_not_registered_naming_it(merge_rig: MergeRig) -> None:
+    unregistered = ReviewableKind(UNREGISTERED_KIND, "name", "global", "merge-above")
+
+    with pytest.raises(UnknownReviewKindError, match=UNREGISTERED_KIND):
+        persist_pending_reviews(_target(merge_rig), (_near_miss(),), kind=unregistered)
+
+    assert merge_rig.groups == []
+
+
+def test_build_rejects_a_kind_that_is_not_registered_naming_it() -> None:
+    unregistered = ReviewableKind(UNREGISTERED_KIND, "name", "global", "merge-above")
+
+    with pytest.raises(UnknownReviewKindError, match=UNREGISTERED_KIND):
+        build_pending_review_primitives((), kind=unregistered, values=stepped_values())
+
+
+def test_a_registered_non_capability_kind_is_stored_under_its_own_label(
+    merge_rig: MergeRig, test_only_reviewable_kind: ReviewableKind
+) -> None:
+    persist_pending_reviews(_target(merge_rig), (_near_miss(),), kind=test_only_reviewable_kind)
+
+    assert [props["kind"] for props in _reviews(merge_rig).values()] == ["ProbeItem"]

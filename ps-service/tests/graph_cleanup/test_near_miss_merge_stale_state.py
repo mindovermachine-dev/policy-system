@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
+from company_merge._kinds import UNREGISTERED_KIND
 
 from graph_cleanup._fakes import ABSORBED, SURVIVOR
 from graph_cleanup._gateway_fakes import POLICY, CleanupRig
@@ -117,8 +118,8 @@ def _repoint_review(rig: CleanupRig) -> None:
     rig.graph.nodes[("PendingReview", _REVIEW)]["nearest_existing_id"] = "cap_other_pair"
 
 
-def _turn_review_into_a_policy_review(rig: CleanupRig) -> None:
-    rig.graph.nodes[("PendingReview", _REVIEW)]["kind"] = "Policy"
+def _turn_review_into_a_review_of_an_unregistered_kind(rig: CleanupRig) -> None:
+    rig.graph.nodes[("PendingReview", _REVIEW)]["kind"] = UNREGISTERED_KIND
 
 
 @pytest.mark.parametrize(
@@ -130,7 +131,11 @@ def _turn_review_into_a_policy_review(rig: CleanupRig) -> None:
         pytest.param(_govern_survivor, "acknowledgment_missing", id="governing-policy-appeared"),
         pytest.param(_delete_review, "review_missing_or_changed", id="review-deleted"),
         pytest.param(_repoint_review, "review_missing_or_changed", id="review-repointed"),
-        pytest.param(_turn_review_into_a_policy_review, "review_missing_or_changed", id="kind"),
+        pytest.param(
+            _turn_review_into_a_review_of_an_unregistered_kind,
+            "review_missing_or_changed",
+            id="kind",
+        ),
     ],
 )
 def test_a_change_since_the_preview_is_refused_with_a_failed_row_and_nothing_written(
@@ -159,7 +164,7 @@ def test_a_change_since_the_preview_is_refused_with_a_failed_row_and_nothing_wri
 
 
 @pytest.mark.parametrize(
-    "change", [_delete_review, _repoint_review, _turn_review_into_a_policy_review]
+    "change", [_delete_review, _repoint_review, _turn_review_into_a_review_of_an_unregistered_kind]
 )
 def test_a_review_that_is_gone_or_repointed_is_reported_as_stale(
     cleanup_rig: CleanupRig, change: Callable[[CleanupRig], None]

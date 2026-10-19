@@ -31,6 +31,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.models import BaselineNode
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 from ps_service.company_merge.similarity import cosine_similarity
 
 _MODEL = "fake-embed-model"
@@ -114,10 +115,10 @@ def test_dedupe_canonical_nodes_exact_match_and_first_time_mint(
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -152,10 +153,10 @@ def test_dedupe_canonical_nodes_semantic_match_resolves_onto_existing_id(
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -199,10 +200,10 @@ def test_dedupe_canonical_nodes_same_run_mints_do_not_converge_but_record_near_m
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -261,10 +262,10 @@ def test_dedupe_canonical_nodes_records_near_miss_for_higher_scoring_mint_on_mer
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -323,10 +324,10 @@ def test_dedupe_canonical_nodes_within_run_reuse_bounds_existing_side_cost(
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )

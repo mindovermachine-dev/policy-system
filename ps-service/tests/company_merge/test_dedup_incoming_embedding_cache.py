@@ -21,6 +21,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.models import BaselineNode
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 
 _MODEL = "fake-embed-model"
 _THRESHOLD = 0.85
@@ -104,10 +105,10 @@ def test_uncached_incoming_capability_merging_semantically_records_one_backfill(
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -148,10 +149,10 @@ def test_cached_incoming_capability_costs_zero_calls_and_records_no_backfill(
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -184,10 +185,10 @@ def test_uncached_incoming_capability_minting_still_records_backfill(
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -213,10 +214,10 @@ def test_empty_existing_index_records_no_incoming_backfill(make_emitter: MakeEmi
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         call_embedding=call_embedding,
         emitter=emitter,
     )

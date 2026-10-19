@@ -45,6 +45,7 @@ from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.generated_values import SYSTEM_VALUES
 from ps_service.company_merge.graph_submission import edge_identity, read_rows, submit_group
 from ps_service.company_merge.models import GovernanceDraftCounts
+from ps_service.company_merge.reviewable_kinds import ReviewableKind, require_registered
 from ps_service.graph_gateway.models import NodeRef, UpsertEdge, UpsertNode
 
 if TYPE_CHECKING:
@@ -737,7 +738,7 @@ def validate_classification_edge_endpoints(
     """Require every classification edge endpoint to exist, before any such edge is written.
 
     Every `COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY` endpoint must resolve. Capability and Policy
-    targets are covered by `canonical_id_by_incoming_id` (built by Capability/Policy dedup).
+    targets are covered by `canonical_id_by_incoming_id` (Capability dedup, governance import).
     PracticeArea/RiskPath sources and `VERIFIED_BY`'s Control target are passthrough nodes with no
     entry in that map by design; by the time this runs, `merge.py` and the restore flow have already
     persisted every passthrough node of the baseline (all node kinds are written before any edge,
@@ -821,7 +822,7 @@ def build_canonical_node_primitives(
     incoming_nodes: tuple[BaselineNode, ...],
     resolutions: tuple[CanonicalResolution, ...],
     *,
-    kind: Literal["Capability", "Policy"],
+    kind: ReviewableKind,
     values: ValueSource,
 ) -> tuple[UpsertNode, ...]:
     """Build one create-only `kind` node per `match_kind="new"` resolution the graph does not hold.
@@ -841,15 +842,17 @@ def build_canonical_node_primitives(
         existing_ids: Canonical ids of `kind` the graph already holds.
         incoming_nodes: The baseline nodes the resolutions were made for.
         resolutions: One resolution per incoming node; only `match_kind="new"` ones mint.
-        kind: Node label to mint.
+        kind: The reviewable kind whose label is minted.
         values: Source of the `created_at` instants.
 
     Returns:
         The primitives for the newly minted nodes, in resolution order; empty when none is new.
 
     Raises:
+        UnknownReviewKindError: `kind` is not a registered reviewable kind.
         CompanyMergePersistenceError: a node carries a property the gateway cannot store.
     """
+    label = require_registered(kind).label
     nodes_by_id = {node.id: node for node in incoming_nodes}
     minted: dict[str, UpsertNode] = {}
     for resolution in resolutions:
@@ -862,13 +865,13 @@ def build_canonical_node_primitives(
             continue
         try:
             minted[resolution.canonical_id] = UpsertNode(
-                label=kind,
+                label=label,
                 id=resolution.canonical_id,
                 properties=properties,
                 embedding=resolution.embedding,
             )
         except ValidationError as exc:
-            raise _unstorable(f"{kind} {resolution.canonical_id!r}") from exc
+            raise _unstorable(f"{label} {resolution.canonical_id!r}") from exc
     return tuple(minted.values())
 
 
@@ -878,15 +881,15 @@ def persist_canonical_nodes(
     incoming_nodes: tuple[BaselineNode, ...],
     resolutions: tuple[CanonicalResolution, ...],
     *,
-    kind: Literal["Capability", "Policy"],
+    kind: ReviewableKind,
     values: ValueSource = SYSTEM_VALUES,
 ) -> None:
     """Mint every `match_kind="new"` `CanonicalResolution` as a `kind` node, as one group.
 
     Writes into the graph `target` names. A `match_kind="exact"`/`"semantic"` resolution gets no
     write at all: it already resolved onto an existing canonical node, and this function never
-    touches one. Obligation is not canonically deduped (`persist_obligation_passthrough`), so `kind`
-    is Capability or Policy.
+    touches one. Obligation and Policy are not canonically deduped, so `kind` is a reviewable kind
+    (today Capability).
 
     Create-only is the invariant that keeps an existing canonical node's properties intact. It is
     decided here, before submission, from one batched existing-id read on `single_tenant_graph` (a
@@ -900,7 +903,7 @@ def persist_canonical_nodes(
         single_tenant_graph: Read handle on the graph `target` names.
         incoming_nodes: The baseline nodes the resolutions were made for.
         resolutions: One resolution per incoming node.
-        kind: Node label to mint, "Capability" or "Policy".
+        kind: The reviewable kind whose label is minted.
         values: Source of the `created_at` instants; defaults to the system clock.
 
     Returns:
@@ -911,13 +914,15 @@ def persist_canonical_nodes(
         nothing is new.
 
     Raises:
+        UnknownReviewKindError: `kind` is not a registered reviewable kind; nothing is read.
         CompanyMergePersistenceError: the existing-node read failed (`FalkorDB query failed:`), a
             node carries a property the gateway cannot store, or the gateway did not take the group
             (`FalkorDB write failed:`).
     """
+    require_registered(kind)
     existing = read_existing_ids(
         single_tenant_graph,
-        kind,
+        kind.label,
         (r.canonical_id for r in resolutions if r.match_kind == "new"),
     )
     submit_group(
@@ -988,7 +993,7 @@ def backfill_canonical_embeddings(
     target: GraphWriteTarget,
     single_tenant_graph: GraphHandle,
     *,
-    kind: Literal["Capability", "Policy"],
+    kind: ReviewableKind,
     embeddings: dict[str, tuple[float, ...]],
     checkpoint_requested: bool = False,
 ) -> None:
@@ -1005,7 +1010,7 @@ def backfill_canonical_embeddings(
     Args:
         target: Submitter, graph name and audit event the group is written under.
         single_tenant_graph: Read handle on the graph `target` names.
-        kind: Node label of the ids, "Capability" or "Policy".
+        kind: The reviewable kind whose label the ids carry.
         embeddings: Node id to the vector to set. Empty submits nothing.
         checkpoint_requested: Asks the gateway to record the graph's digest after this group; the
             merge sets it when this backfill is the last group it writes to `policy_system`.
@@ -1018,13 +1023,15 @@ def backfill_canonical_embeddings(
         node needs an embedding.
 
     Raises:
+        UnknownReviewKindError: `kind` is not a registered reviewable kind; nothing is read.
         CompanyMergePersistenceError: the state read failed (`FalkorDB query failed:`), an embedding
             cannot be stored, or the gateway did not take the group (`FalkorDB write failed:`).
     """
-    state = _read_embedding_state(single_tenant_graph, kind, embeddings)
+    label = require_registered(kind).label
+    state = _read_embedding_state(single_tenant_graph, label, embeddings)
     submit_group(
         target,
-        build_embedding_backfill_primitives(state, embeddings, label=kind),
+        build_embedding_backfill_primitives(state, embeddings, label=label),
         checkpoint_requested=checkpoint_requested,
     )
 
@@ -1040,8 +1047,7 @@ def backfill_incoming_capability_embeddings(
     The incoming-side twin of `backfill_canonical_embeddings`: the same set-if-null contract and the
     same "only `embedding` is ever touched" contract, but `target` names the regulation's own
     `{short}_baseline` graph, `baseline_graph` is its read handle, and the kind is always Capability
-    (there is no Policy-side incoming embedding to cache, see
-    `DedupResult.incoming_embedding_backfills`).
+    (see `DedupResult.incoming_embedding_backfills`).
 
     Every `(incoming_id, embedding)` pair comes from `DedupResult.incoming_embedding_backfills`. A
     later `graph_reader.read_baseline_graph` of the same, unchanged baseline reads the cached value
@@ -1076,9 +1082,10 @@ def backfill_incoming_capability_embeddings(
 def _dedupe_eligible_endpoint_ids(edge: BareEdge) -> tuple[str, ...]:
     """Return `edge`'s endpoints whose label (per `_EDGE_ENDPOINT_LABELS`) is canonically deduped.
 
-    Capability and Policy endpoints are the only ones that went through
-    `dedup.dedupe_canonical_nodes`, so only they are guaranteed an entry in a correctly built
-    `canonical_id_by_incoming_id`. `HAS` and `SATISFIED_BY` yield nothing (all passthrough);
+    Capability and governance-Policy endpoints are the ones a correctly built
+    `canonical_id_by_incoming_id` carries an entry for (Capability from dedup, a governance Policy
+    from the draft-governance import); the Policy is an edge endpoint here, not a deduped review
+    kind. `HAS` and `SATISFIED_BY` yield nothing (all passthrough);
     `REQUIRES` yields only its Capability target; `GOVERNED_BY` yields both ends;
     `SUPPORTED_BY`/`IMPLEMENTED_BY` yield nothing (Standard/Control are passthrough weak entities).
     The tuple is source-before-target when both are eligible; callers should not rely on more.
@@ -1203,10 +1210,11 @@ def persist_rewired_edges(
     canonical_id`, Capability dedup's resolutions) instead of writing the baseline-local id
     verbatim. The rule is endpoint-agnostic: for both the source and target of every edge, an id
     with an entry in the map is rewritten to the canonical id, otherwise it passes through
-    unchanged. Only Capability and Policy endpoints are canonically deduped, so in practice
-    `REQUIRES`' Capability target, `GOVERNED_BY`'s two ends and the classification edges'
-    Capability/Policy targets are rewritten; an Obligation redirect from a cleanup merge is in the
-    map too. A dedupe-eligible endpoint (`_dedupe_eligible_endpoint_ids`) must have an entry.
+    unchanged. Only Capability endpoints are canonically deduped (a Policy is an edge endpoint, not
+    a deduped kind), so in practice `REQUIRES`' Capability target, `GOVERNED_BY`'s two ends and
+    the classification edges' Capability/Policy targets are rewritten; an Obligation redirect from
+    a cleanup merge is in the map too. A dedupe-eligible endpoint (`_dedupe_eligible_endpoint_ids`)
+    must have an entry.
 
     Each edge is an `UpsertEdge` (no properties) in one gateway group. "An endpoint that is missing
     writes nothing" is decided here, before submission, from one batched existing-id read per label

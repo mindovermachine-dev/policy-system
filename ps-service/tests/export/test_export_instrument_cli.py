@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from api._gateway_fakes import RecordingSystemAudit
+from company_merge._kinds import UNREGISTERED_KIND
 from graph_gateway._fakes import GatewayRig
 from litellm.types.utils import Embedding, EmbeddingResponse
 
@@ -450,6 +451,31 @@ def test_main_refuses_with_exit_1_and_writes_nothing_while_near_misses_are_unres
     assert rig.rig.store.groups == []
     assert not (tmp_path / "repo").exists()
     assert not (tmp_path / "p.json").exists()
+
+
+def test_main_with_a_review_of_an_unregistered_kind_exits_1_naming_it_and_writes_nothing(
+    cli_module: ModuleType,
+    wiring: _Wiring,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rig = wiring.rig
+    _seed_instrument(rig, "32024R2847", source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
+    wiring.fake_db.policy_graph = ScriptedPolicyGraph(
+        [pending_review("review-stray", kind=UNREGISTERED_KIND)]
+    )
+    caller = _FakeEmbeddingCaller()
+
+    exit_code = wiring.main(cli_module, _refusal_argv(tmp_path), call_embedding=caller)
+
+    assert exit_code == 1
+    assert UNREGISTERED_KIND in capsys.readouterr().err
+    assert caller.calls == []
+    assert wiring.gateway_configs == []
+    assert wiring.system_audit.rows == []
+    assert rig.rig.store.groups == []
+    assert not (tmp_path / "repo").exists()
 
 
 def test_main_exports_when_policy_system_holds_only_other_instruments_reviews(

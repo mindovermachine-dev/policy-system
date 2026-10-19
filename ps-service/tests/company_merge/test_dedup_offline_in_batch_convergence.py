@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
 from ps_service.company_merge.models import BaselineNode
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 from ps_service.company_merge.similarity import cosine_similarity
 
 _THRESHOLD = 0.85
@@ -77,7 +78,8 @@ def test_offline_convergence_same_run_mints_do_not_converge_but_record_near_miss
         incoming_nodes,
         incoming_embeddings={first_id: (1.0, 0.0), second_id: (1.0, 0.0)},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
     )
 
     assert len(result.resolutions) == 2
@@ -131,7 +133,8 @@ def test_offline_convergence_records_near_miss_for_higher_scoring_mint_on_merge(
         incoming_nodes,
         incoming_embeddings={mint_id: m_vector, merge_incoming_id: x_vector},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
     )
 
     mint_resolution = next(r for r in result.resolutions if r.incoming_id == mint_id)

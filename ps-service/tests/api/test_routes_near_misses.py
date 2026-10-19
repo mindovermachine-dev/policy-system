@@ -37,6 +37,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal, cast
 
+from company_merge._kinds import UNREGISTERED_KIND
 from fastapi.testclient import TestClient
 
 from api._audit_fakes import InMemoryAuditStore
@@ -50,7 +51,7 @@ from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth import Principal
-from ps_service.company_merge.errors import CompanyMergePersistenceError
+from ps_service.company_merge.errors import CompanyMergePersistenceError, UnknownReviewKindError
 from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
@@ -61,8 +62,10 @@ if TYPE_CHECKING:
 
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.company_merge.graph_submission import GraphWriteTarget
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
     from ps_service.passkey_signing.store import PendingApprovalStore
 
+_KIND = UNREGISTERED_KIND
 _ACTOR_SUBJECT = "user-1"
 _ACTOR_ISSUER = "https://issuer.example.com/"
 
@@ -153,7 +156,7 @@ class _FakeGraphHandle:
 def _record(
     review_id: str = "review_aaa",
     *,
-    kind: Literal["Capability", "Policy"] = "Capability",
+    kind: str = "Capability",
     similarity: float = 0.62,
 ) -> PendingReviewRecord:
     return PendingReviewRecord(
@@ -187,6 +190,8 @@ def _fake_dependencies(
         ResolveOutcome | None,
     ]
     | None = None,
+    list_error: Exception | None = None,
+    get_error: Exception | None = None,
 ) -> tuple[NearMissReviewDependencies, list[ServiceConfig]]:
     open_calls: list[ServiceConfig] = []
 
@@ -196,10 +201,14 @@ def _fake_dependencies(
 
     def _list_pending_reviews(graph: GraphHandle) -> tuple[PendingReviewRecord, ...]:
         _ = graph
+        if list_error is not None:
+            raise list_error
         return records
 
     def _get_pending_review(graph: GraphHandle, review_id: str) -> PendingReviewRecord | None:
         _ = graph
+        if get_error is not None:
+            raise get_error
         return next((r for r in records if r.id == review_id), None)
 
     dependencies = NearMissReviewDependencies(
@@ -261,16 +270,36 @@ def test_get_near_misses_returns_id_incoming_text_existing_text_similarity() -> 
     assert "nearest_existing_id" not in entry
 
 
-def test_get_near_misses_returns_every_unresolved_review_in_order() -> None:
+def test_get_near_misses_returns_every_unresolved_review_in_order(
+    test_only_reviewable_kind: ReviewableKind,
+) -> None:
     first = _record("review_aaa", kind="Capability", similarity=0.6)
-    second = _record("review_bbb", kind="Policy", similarity=0.75)
+    second = _record("review_bbb", kind=test_only_reviewable_kind.label, similarity=0.75)
     client = _client_with_records((first, second))
 
     response = client.get("/near-misses")
 
     assert response.status_code == 200
-    ids = [entry["id"] for entry in response.json()["reviews"]]
-    assert ids == ["review_aaa", "review_bbb"]
+    reviews = response.json()["reviews"]
+    assert [(entry["id"], entry["kind"]) for entry in reviews] == [
+        ("review_aaa", "Capability"),
+        ("review_bbb", "ProbeItem"),
+    ]
+
+
+def test_listing_with_a_review_of_an_unregistered_kind_answers_409_naming_it() -> None:
+    dependencies, _ = _fake_dependencies(
+        (), list_error=UnknownReviewKindError(f"no reviewable kind is registered for {_KIND!r}")
+    )
+    app = create_app(_app_config())
+    app.dependency_overrides[provide_near_miss_review_dependencies] = lambda: dependencies
+
+    response = TestClient(app).get("/near-misses")
+
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "review_kind_unsupported"
+    assert _KIND in error["message"]
 
 
 def test_get_near_misses_opens_the_single_tenant_graph_via_injected_config() -> None:
@@ -302,8 +331,9 @@ def _client_for_resolve(
     principal: Principal | None = None,
     store: PendingApprovalStore | None = None,
     audit_store: InMemoryAuditStore | None = None,
+    get_error: Exception | None = None,
 ) -> TestClient:
-    dependencies, _ = _fake_dependencies(records, resolve=resolve)
+    dependencies, _ = _fake_dependencies(records, resolve=resolve, get_error=get_error)
     app = create_app(_app_config())
     audit = audit_store or InMemoryAuditStore()
     app.dependency_overrides[provide_audit_store] = lambda: audit
@@ -348,6 +378,25 @@ def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
     assert body["approval_url"] is None
     assert body["expires_at"] is None
     assert recorded_calls == [("review_aaa", "keep-separate")]
+
+
+def test_resolving_a_review_of_an_unregistered_kind_answers_409_naming_it_and_audits_nothing() -> (
+    None
+):
+    audit_store = InMemoryAuditStore()
+    client = _client_for_resolve(
+        _unexpected_resolve_review,
+        audit_store=audit_store,
+        get_error=UnknownReviewKindError(f"no reviewable kind is registered for {_KIND!r}"),
+    )
+
+    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
+
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "review_kind_unsupported"
+    assert _KIND in error["message"]
+    assert audit_store.rows == []
 
 
 def test_keep_separate_over_rest_writes_no_access_gate_row() -> None:

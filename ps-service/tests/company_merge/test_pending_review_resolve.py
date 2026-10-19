@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from company_merge._gateway_fakes import POLICY_SYSTEM, RigReadHandle, UnusedSubmitter
+from company_merge._kinds import UNREGISTERED_KIND
 from company_merge._legacy_reference import (
     FROZEN_STATEMENT_HASHES,
     LegacyRecordingGraph,
@@ -28,6 +29,7 @@ from company_merge._legacy_reference import (
 from ps_service.company_merge.errors import (
     CompanyMergePersistenceError,
     CompanyMergeValidationError,
+    UnknownReviewKindError,
 )
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import ResolveOutcome
@@ -37,6 +39,7 @@ from ps_service.graph_gateway.digest import canonical_digest
 if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter, ReadLines
     from company_merge._gateway_fakes import MergeRig
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
 
 _REVIEW_ID = "review_aaa"
 
@@ -125,6 +128,43 @@ def test_keep_separate_submits_one_group_deleting_only_the_review_and_leaves_bot
         ("Capability", "cap_existing"),
         ("Obligation", "obl_a"),
     }
+
+
+def test_resolve_rejects_a_review_whose_kind_has_no_spec_naming_the_kind(
+    merge_rig: MergeRig, make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """A review that cannot be understood is neither deleted nor logged as resolved."""
+    emitter, log_path = make_emitter()
+    _seed_review(merge_rig)
+    merge_rig.policy_system.nodes[("PendingReview", _REVIEW_ID)]["kind"] = UNREGISTERED_KIND
+    before = {key: dict(props) for key, props in merge_rig.policy_system.nodes.items()}
+    target = GraphWriteTarget(UnusedSubmitter(), POLICY_SYSTEM, merge_rig.audit_event_id)
+
+    with pytest.raises(UnknownReviewKindError, match=UNREGISTERED_KIND):
+        resolve_review(
+            merge_rig.legacy, _REVIEW_ID, "keep-separate", target=target, emitter=emitter
+        )
+
+    assert merge_rig.policy_system.nodes == before
+    emitter.flush()
+    assert read_lines(log_path) == []
+
+
+def test_resolving_a_review_of_the_test_only_kind_deletes_it(
+    merge_rig: MergeRig, make_emitter: MakeEmitter, test_only_reviewable_kind: ReviewableKind
+) -> None:
+    emitter, _log_path = make_emitter()
+    _seed_review(merge_rig)
+    merge_rig.policy_system.nodes[("PendingReview", _REVIEW_ID)]["kind"] = (
+        test_only_reviewable_kind.label
+    )
+
+    outcome = resolve_review(
+        merge_rig.legacy, _REVIEW_ID, "keep-separate", target=_target(merge_rig), emitter=emitter
+    )
+
+    assert outcome == ResolveOutcome(review_id=_REVIEW_ID, decision="keep-separate")
+    assert ("PendingReview", _REVIEW_ID) not in merge_rig.policy_system.nodes
 
 
 def test_resolve_nonexistent_id_returns_none_before_any_write(

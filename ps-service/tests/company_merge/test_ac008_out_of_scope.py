@@ -20,7 +20,7 @@ passthrough node like Role/Requirement
    dedupe_canonical_nodes` -- installed via `monkeypatch.setattr` (not
    `unittest.mock.patch`), delegating to the real implementation so
    `merge_baseline_graph`'s own behavior/return value is unaffected --
-   records every `kind=` keyword argument it is called with. Asserts
+   records every `kind=` and `thresholds=` keyword argument it is called with. Asserts
    `merge_baseline_graph`'s only `dedupe_canonical_nodes` invocation is
    `kind="Capability"` -- never `"Role"`/`"Requirement"`/`"Obligation"`.
 """
@@ -28,7 +28,7 @@ passthrough node like Role/Requirement
 from __future__ import annotations
 
 import typing
-from typing import Literal, cast
+from typing import cast
 
 import pytest
 
@@ -39,6 +39,7 @@ from ps_service.company_merge import dedup as dedup_module
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.company_merge.merge import merge_baseline_graph
+from ps_service.company_merge.reviewable_kinds import ReviewableKind, ReviewThresholds
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 
 if typing.TYPE_CHECKING:
@@ -291,22 +292,18 @@ def _internal_baseline_with_governance() -> _FakeBaselineGraph:
     )
 
 
-def test_dedupe_canonical_nodes_kind_parameter_is_literal_capability_or_policy() -> None:
-    """Static proof: `dedupe_canonical_nodes`'s `kind` parameter's resolved
-    type hint is exactly `Literal["Capability", "Policy"]` -- confirmed via
-    `typing.get_type_hints`/`typing.get_origin`/`typing.get_args` against the
-    live function object, not merely by reading `dedup.py`'s source text.
-    Company Merge dedupes Policy alongside Capability -- Role/Requirement/
-    Obligation/Standard/Control remain out of scope, never in this Literal. Pylance
-    strict mode rejects any other literal at every statically-checked call
-    site -- a genuine but lint-time-only guarantee, which is why this test exists
-    alongside, never instead of, the runtime proof below.
+def test_dedupe_canonical_nodes_kind_parameter_is_a_reviewable_kind_spec() -> None:
+    """Static proof: `dedupe_canonical_nodes`'s `kind` parameter's resolved type hint is
+    `ReviewableKind` (the spec), not a closed set of labels -- confirmed via `typing.get_type_hints`
+    against the live function object, not merely by reading `dedup.py`'s source text. Which kinds
+    exist is the registry's business; Role/Requirement/Obligation/Standard/Control have no spec
+    and so cannot be deduped. The runtime proof below shows which spec `merge_baseline_graph`
+    passes.
     """
     hints = typing.get_type_hints(dedupe_canonical_nodes)
-    kind_hint = hints["kind"]
 
-    assert typing.get_origin(kind_hint) is Literal
-    assert typing.get_args(kind_hint) == ("Capability", "Policy")
+    assert hints["kind"] is ReviewableKind
+    assert hints["thresholds"] is ReviewThresholds
 
 
 @pytest.mark.parametrize(
@@ -326,7 +323,7 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
     """Runtime proof, the actual enforcement mechanism: a hand-written wrapper -- not
     `unittest.mock.patch` -- installed over
     `ps_service.company_merge.dedup.dedupe_canonical_nodes` via `monkeypatch.
-    setattr` records every `kind=` keyword argument `merge_baseline_graph`
+    setattr` records every `kind=` and `thresholds=` keyword argument `merge_baseline_graph`
     invokes it with, then delegates to the real implementation (so `merge_
     baseline_graph`'s own return value/behavior is unaffected by the
     wrapper's presence).
@@ -346,15 +343,17 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
     around.
     """
     recorded_kinds: list[str] = []
+    recorded_thresholds: list[ReviewThresholds] = []
     real_dedupe_canonical_nodes = dedup_module.dedupe_canonical_nodes
 
     def _recording_wrapper(
         incoming_nodes: tuple[BaselineNode, ...],
         *,
-        kind: Literal["Capability", "Policy"],
+        kind: ReviewableKind,
         single_tenant_graph: GraphHandle,
         model: str,
-        threshold: float,
+        thresholds: ReviewThresholds,
+        instrument_id: str | None = None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> DedupResult:
@@ -363,13 +362,15 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
         without a type-checker suppression -- records `kind`, then
         delegates unchanged to the real implementation.
         """
-        recorded_kinds.append(kind)
+        recorded_kinds.append(kind.label)
+        recorded_thresholds.append(thresholds)
         return real_dedupe_canonical_nodes(
             incoming_nodes,
             kind=kind,
             single_tenant_graph=single_tenant_graph,
             model=model,
-            threshold=threshold,
+            thresholds=thresholds,
+            instrument_id=instrument_id,
             call_embedding=call_embedding,
             emitter=emitter,
         )
@@ -399,6 +400,8 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
     )
 
     assert recorded_kinds == expected_kinds
+    # Capability carries no review floor: every scored best neighbour is a near miss, as before.
+    assert recorded_thresholds == [ReviewThresholds(merge=_THRESHOLD)]
     assert "Role" not in recorded_kinds
     assert "Requirement" not in recorded_kinds
     assert "Obligation" not in recorded_kinds

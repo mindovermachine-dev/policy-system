@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 
     from change_monitor._gateway_fakes import SuccessionRig
 
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
     from ps_service.logging.emitter import TextSink
 
 
@@ -138,3 +139,20 @@ def succession_rig() -> SuccessionRig:
     )
 
     return SuccessionRig(installed_process_gateway().rig)
+
+
+@pytest.fixture
+def test_only_reviewable_kind(monkeypatch: pytest.MonkeyPatch) -> ReviewableKind:
+    """Register a per-instrument, review-only kind for one test and return its spec.
+
+    The registration is undone with the test. The kind is not a Capability, so it stands in for
+    "a reviewable kind that is not Capability" wherever a test needs one.
+    """
+    from ps_service.company_merge.reviewable_kinds import (
+        REVIEWABLE_KINDS,
+        ReviewableKind,
+    )
+
+    spec = ReviewableKind("ProbeItem", "name", "per-instrument", "review-only")
+    monkeypatch.setitem(REVIEWABLE_KINDS, spec.label, spec)
+    return spec

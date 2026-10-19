@@ -18,6 +18,7 @@ from ps_service.company_merge.graph_writer import (
     persist_governance_drafts,
 )
 from ps_service.company_merge.models import BaselineNode, CanonicalResolution
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.models import MutationGroup
 
@@ -31,7 +32,7 @@ def _capability_group(rig: MergeRig) -> MutationGroup:
         incoming_id=node.id, canonical_id=node.id, match_kind="new", embedding=(0.25, 0.5, 0.75)
     )
     primitives = build_canonical_node_primitives(
-        set(), (node,), (resolution,), kind="Capability", values=stepped_values()
+        set(), (node,), (resolution,), kind=CAPABILITY, values=stepped_values()
     )
     return MutationGroup(
         graph=POLICY_SYSTEM, audit_event_id=rig.audit_event_id, primitives=primitives

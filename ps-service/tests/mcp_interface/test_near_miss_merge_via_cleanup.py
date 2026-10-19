@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from authz._fakes import FakeAccessRoleStore, RaisingAccessRoleStore
+from company_merge._kinds import UNREGISTERED_KIND
 from graph_cleanup._fakes import ABSORBED, SURVIVOR, FakeApprovalStore, approval_row_count
 from graph_cleanup._gateway_fakes import CleanupReadGraph, CleanupRig
 from graph_cleanup._mcp_calls import call_tool, factory
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     from mcp.types import Tool
 
     from ps_service.authz.store import AccessRoleStore
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -373,16 +375,36 @@ def test_an_unacknowledged_signed_approval_is_refused_by_the_executor(env: _Env)
     assert env.snapshot() == before
 
 
-def test_a_policy_review_cannot_be_merged(env: _Env) -> None:
+def test_merge_of_a_review_that_is_not_a_capability_review_returns_an_error(
+    env: _Env, test_only_reviewable_kind: ReviewableKind
+) -> None:
+    label = test_only_reviewable_kind.label
     env.rig.seed_near_miss_review(
-        "review_pol", incoming_id="pol_a", existing_id="pol_b", kind="Policy"
+        "review_probe", incoming_id="probe_a", existing_id="probe_b", kind=label
     )
 
     text = call_tool(
-        "near_misses_resolve", {"review_id": "review_pol", "decision": "merge"}, OFFICER
+        "near_misses_resolve", {"review_id": "review_probe", "decision": "merge"}, OFFICER
     )
 
     assert text.startswith("error: ")
+    assert label in text
+    assert approval_row_count(env.store) == 0
+
+
+def test_merge_of_a_review_of_an_unregistered_kind_returns_an_error_naming_the_kind(
+    env: _Env,
+) -> None:
+    env.rig.seed_near_miss_review(
+        "review_stray", incoming_id="stray_a", existing_id="stray_b", kind=UNREGISTERED_KIND
+    )
+
+    text = call_tool(
+        "near_misses_resolve", {"review_id": "review_stray", "decision": "merge"}, OFFICER
+    )
+
+    assert text.startswith("error: ")
+    assert UNREGISTERED_KIND in text
     assert approval_row_count(env.store) == 0
 
 

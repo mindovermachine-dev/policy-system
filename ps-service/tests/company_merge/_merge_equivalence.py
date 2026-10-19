@@ -32,6 +32,7 @@ from company_merge._seed_merge_graphs import (
 )
 from ps_service.company_merge import dedup, graph_reader
 from ps_service.company_merge.merge import merge_baseline_graph
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 
 if TYPE_CHECKING:
     from company_merge._gateway_fakes import MergeRig
@@ -58,10 +59,10 @@ def reference_graph(
         )
         outcome = dedup.dedupe_canonical_nodes(
             read.capability_nodes,
-            kind="Capability",
+            kind=CAPABILITY,
             single_tenant_graph=reads,
             model=EMBED_MODEL,
-            threshold=SIMILARITY_THRESHOLD,
+            thresholds=ReviewThresholds(merge=SIMILARITY_THRESHOLD),
             call_embedding=embeddings,
             emitter=emitter,
         )

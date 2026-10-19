@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Final
 
 import redis.exceptions
 
-from ps_service.api.errors import PendingReviewNotFoundError
+from ps_service.api.errors import PendingReviewNotFoundError, ReviewKindUnsupportedError
 from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.models import (
     PendingReviewEntry,
@@ -53,8 +53,13 @@ from ps_service.audit import (
     record_follow_up_row,
     record_opening_row_with_event_id,
 )
-from ps_service.company_merge.errors import CompanyMergePersistenceError, StalePendingReviewError
+from ps_service.company_merge.errors import (
+    CompanyMergePersistenceError,
+    StalePendingReviewError,
+    UnknownReviewKindError,
+)
 from ps_service.company_merge.pending_review import choose_survivor, read_review_merge_sides
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.graph_cleanup.errors import (
     GraphCleanupPersistenceError,
     GraphCleanupValidationError,
@@ -146,9 +151,14 @@ def run_list_near_misses(
 
     Raises:
         redis.exceptions.RedisError: The graph is unreachable. Nothing is written.
+        ReviewKindUnsupportedError: A stored review has a kind with no registered spec (HTTP 409,
+            naming the kind). The listing fails closed rather than omitting the review.
     """
     graph = dependencies.open_single_tenant_graph(config)
-    records = dependencies.list_pending_reviews(graph)
+    try:
+        records = dependencies.list_pending_reviews(graph)
+    except UnknownReviewKindError as exc:
+        raise ReviewKindUnsupportedError(str(exc)) from exc
     return PendingReviewListResponse(reviews=[_to_pending_review_entry(r) for r in records])
 
 
@@ -232,6 +242,8 @@ def run_resolve_near_miss(
     Raises:
         PendingReviewNotFoundError: `review_id` does not exist or was already resolved. No write
             happens, and an unknown review writes no audit row.
+        ReviewKindUnsupportedError: The review has a kind with no registered spec (HTTP 409,
+            naming the kind). Raised before the audit row, so nothing is audited or resolved.
         GraphWriteUnavailableError: No Graph Write Gateway is installed (HTTP 503). Checked after
             the not-found check and before the opening audit row, so nothing was audited or
             resolved.
@@ -250,7 +262,10 @@ def run_resolve_near_miss(
         original exception. Emits one log entry (`resolve_near_miss`) with the outcome.
     """
     graph = dependencies.open_single_tenant_graph(config)
-    record = dependencies.get_pending_review(graph, review_id)
+    try:
+        record = dependencies.get_pending_review(graph, review_id)
+    except UnknownReviewKindError as exc:
+        raise ReviewKindUnsupportedError(str(exc)) from exc
     if record is None:
         raise PendingReviewNotFoundError(f"no unresolved PendingReview with id {review_id!r}")
     # The resolution is written through the Graph Write Gateway, so with none installed
@@ -437,8 +452,11 @@ def run_request_near_miss_merge(
     Raises:
         PendingReviewNotFoundError: `review_id` does not exist or was already resolved, or one of
             its Capabilities no longer exists (stale review, own message).
-        GraphCleanupValidationError: The review is not a Capability review, or the cleanup merge
-            refuses the pair (different governing Policies, a side that is not active).
+        ReviewKindUnsupportedError: The review has a kind with no registered spec (HTTP 409,
+            naming the kind).
+        GraphCleanupValidationError: The review is of a kind that has no merge (only Capability
+            has one today; the message names the kind), or the cleanup merge refuses the pair
+            (different governing Policies, a side that is not active).
         GraphCleanupAcknowledgmentRequiredError: Case 2 without the acknowledgment; carries the
             preview and no approval exists.
         GraphCleanupPersistenceError: The graph could not be read.
@@ -451,13 +469,15 @@ def run_request_near_miss_merge(
         sides = read_review_merge_sides(graph, review_id)
     except StalePendingReviewError as exc:
         raise PendingReviewNotFoundError(_STALE_REVIEW_MESSAGE.format(review_id=review_id)) from exc
+    except UnknownReviewKindError as exc:
+        raise ReviewKindUnsupportedError(str(exc)) from exc
     except redis.exceptions.RedisError as exc:
         raise GraphCleanupPersistenceError("the policy graph could not be read") from exc
     if sides is None:
         raise PendingReviewNotFoundError(f"no unresolved PendingReview with id {review_id!r}")
-    if sides.kind != "Capability":
+    if sides.kind != CAPABILITY.label:
         raise GraphCleanupValidationError(
-            "only a Capability near miss can be merged; keep a Policy near miss separate"
+            f"a {sides.kind} near miss cannot be merged; keep it separate"
         )
     survivor_id, absorbed_id = choose_survivor(sides)
     approval = create_capability_merge_approval(

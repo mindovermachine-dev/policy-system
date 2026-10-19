@@ -435,14 +435,23 @@ def _review_still_names_pair(
     graph: GraphHandle, review_id: str, *, survivor_id: str, absorbed_id: str
 ) -> bool:
     """Whether the near-miss `PendingReview` still exists and still names this Capability pair."""
+    from ps_service.company_merge.errors import (  # noqa: PLC0415 -- function-local, as above
+        UnknownReviewKindError,
+    )
     from ps_service.company_merge.pending_review import (  # noqa: PLC0415 -- function-local keeps graph_cleanup off Company Merge at import
         get_pending_review,
     )
+    from ps_service.company_merge.reviewable_kinds import (  # noqa: PLC0415 -- function-local, as above
+        CAPABILITY,
+    )
 
-    review = get_pending_review(graph, review_id)
+    try:
+        review = get_pending_review(graph, review_id)
+    except UnknownReviewKindError:
+        return False  # a review whose kind is no longer understood no longer names this pair
     return (
         review is not None
-        and review.kind == "Capability"
+        and review.kind == CAPABILITY.label
         and {review.incoming_id, review.nearest_existing_id} == {survivor_id, absorbed_id}
     )
 

@@ -50,6 +50,7 @@ from ps_service.api.errors import (
     RestoreInstrumentIdAmbiguousError,
     RestoreInstrumentIdNotFoundError,
     RestoreStageFailedError,
+    ReviewKindUnsupportedError,
     SelfGrantOrRevokeBlockedError,
     ShortNameCollisionError,
     SigningHostNotAllowedError,
@@ -127,6 +128,7 @@ _SAFE_VERBATIM: tuple[type[Exception], ...] = (
     RestoreInstrumentIdNotFoundError,
     PendingReviewNotFoundError,
     NearMissMergeRefusedError,
+    ReviewKindUnsupportedError,
     ExportInstrumentNotFoundError,
     ExportConfigIncompleteError,
     ExportUnresolvedNearMissesError,
@@ -277,6 +279,7 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
         status.HTTP_404_NOT_FOUND,
     ),
     (NearMissMergeRefusedError, "near_miss_merge_refused", status.HTTP_409_CONFLICT),
+    (ReviewKindUnsupportedError, "review_kind_unsupported", status.HTTP_409_CONFLICT),
     (
         ExportInstrumentNotFoundError,
         "export_instrument_not_found",
@@ -517,6 +520,8 @@ def register_exception_handlers(app: FastAPI) -> None:
       ``ExportInstrumentNotFoundError``, ``PendingApprovalNotFoundError``,
       ``PendingApprovalInvalidOrExpiredError``, ``RestoreInstrumentIdNotFoundError``.
     * 409: ``NearMissMergeRefusedError`` (a near-miss merge the graph-cleanup rules refuse),
+      ``ReviewKindUnsupportedError`` (a stored near-miss review has a kind with no registered
+      spec),
       ``ShortNameCollisionError``, ``CelexAlreadyIngestedError``,
       ``RestoreInstrumentIdAmbiguousError``, ``ExportUnresolvedNearMissesError`` (the export
       was refused because the instrument still has unresolved near-miss reviews).

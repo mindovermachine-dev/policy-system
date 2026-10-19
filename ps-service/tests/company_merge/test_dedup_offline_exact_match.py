@@ -18,8 +18,20 @@ dispatching by query substring).
 
 from __future__ import annotations
 
+import pytest
+
+from company_merge._kinds import UNREGISTERED_KIND
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
+from ps_service.company_merge.errors import (
+    CompanyMergeConfigurationError,
+    UnknownReviewKindError,
+)
 from ps_service.company_merge.models import BaselineNode
+from ps_service.company_merge.reviewable_kinds import (
+    CAPABILITY,
+    ReviewableKind,
+    ReviewThresholds,
+)
 
 _THRESHOLD = 0.85
 
@@ -71,7 +83,8 @@ def test_exact_match_resolves_without_any_embedding_supplied() -> None:
         incoming_nodes,
         incoming_embeddings={},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
     )
 
     assert len(result.resolutions) == 1
@@ -93,7 +106,8 @@ def test_exact_match_issues_no_write_query() -> None:
         incoming_nodes,
         incoming_embeddings={},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
     )
 
     assert len(graph.calls) == 1  # the index read
@@ -111,7 +125,8 @@ def test_exact_match_produces_no_near_miss_and_no_backfill() -> None:
         incoming_nodes,
         incoming_embeddings={},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
     )
 
     assert result.near_misses == ()
@@ -141,7 +156,8 @@ def test_resolve_capability_convergence_offline_second_same_run_mint_resolves_vi
         incoming_nodes,
         incoming_embeddings={},
         single_tenant_graph=graph,
-        threshold=_THRESHOLD,
+        kind=CAPABILITY,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
     )
 
     assert len(result.resolutions) == 2
@@ -152,3 +168,59 @@ def test_resolve_capability_convergence_offline_second_same_run_mint_resolves_vi
     assert second_resolution.incoming_id == shared_id
     assert second_resolution.match_kind == "exact"
     assert second_resolution.canonical_id == shared_id
+
+
+@pytest.mark.parametrize(
+    ("kind", "thresholds", "error", "names"),
+    [
+        pytest.param(
+            ReviewableKind(UNREGISTERED_KIND, "name", "global", "merge-above"),
+            ReviewThresholds(merge=_THRESHOLD),
+            UnknownReviewKindError,
+            UNREGISTERED_KIND,
+            id="unregistered-kind",
+        ),
+        pytest.param(
+            CAPABILITY,
+            ReviewThresholds(),
+            CompanyMergeConfigurationError,
+            "Capability",
+            id="merge-above-without-a-merge-threshold",
+        ),
+    ],
+)
+def test_offline_requires_registered_kind_and_thresholds_before_any_read(
+    kind: ReviewableKind,
+    thresholds: ReviewThresholds,
+    error: type[Exception],
+    names: str,
+) -> None:
+    graph = _ScriptedSingleTenantGraph(capability_rows=[])
+
+    with pytest.raises(error, match=names):
+        resolve_capability_convergence_offline(
+            (_capability("cap_a", "A"),),
+            incoming_embeddings={},
+            single_tenant_graph=graph,
+            kind=kind,
+            thresholds=thresholds,
+        )
+
+    assert graph.calls == []
+
+
+def test_offline_per_instrument_kind_without_an_instrument_id_fails_closed_before_any_read(
+    test_only_reviewable_kind: ReviewableKind,
+) -> None:
+    graph = _ScriptedSingleTenantGraph(capability_rows=[])
+
+    with pytest.raises(CompanyMergeConfigurationError, match=test_only_reviewable_kind.label):
+        resolve_capability_convergence_offline(
+            (_capability("p1", "One"),),
+            incoming_embeddings={},
+            single_tenant_graph=graph,
+            kind=test_only_reviewable_kind,
+            thresholds=ReviewThresholds(review=0.5),
+        )
+
+    assert graph.calls == []

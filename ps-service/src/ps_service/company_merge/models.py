@@ -265,12 +265,11 @@ class DedupResult:
             whose embedding had to be freshly computed during this run. A node minted during this
             run is excluded: its embedding is written as part of its own properties at mint time,
             never by backfill. `merge.py` passes this to
-            `graph_writer.backfill_canonical_embeddings` after both kinds' dedup passes and all node
+            `graph_writer.backfill_canonical_embeddings` after the dedup pass and all node
             and edge writes complete.
         incoming_embedding_backfills: Incoming id to embedding, for every incoming node whose own
             embedding had to be freshly computed because its `BaselineNode.embedding` was None.
-            Populated by the Capability pass in practice, so it is empty for a Policy `DedupResult`
-            (Policy nodes never carry a cached embedding). `merge.py` passes it to
+            Only the Capability pass fills it today. `merge.py` passes it to
             `graph_writer.backfill_incoming_capability_embeddings`, which targets the incoming
             `{short}_baseline` graph's Capability nodes, unlike `embedding_backfills`, which targets
             the single-tenant graph's canonical nodes. Defaults to `{}`, as an offline resolution
@@ -292,7 +291,7 @@ class PendingReviewRecord:
 
     Attributes:
         id: The review's unique id.
-        kind: Which canonical kind the pair belongs to.
+        kind: Label of the registered reviewable kind the pair belongs to.
         incoming_id: Id of the incoming node of the pair.
         incoming_text: Text of the incoming node.
         nearest_existing_id: Id of its nearest candidate.
@@ -302,7 +301,7 @@ class PendingReviewRecord:
     """
 
     id: str
-    kind: Literal["Capability", "Policy"]
+    kind: str
     incoming_id: str
     incoming_text: str
     nearest_existing_id: str
@@ -347,9 +346,9 @@ class MergeResult:
             cleanup merge absorbed included (each resolves to its survivor), because the run
             summary counts every Capability the baseline matched.
         near_misses: Capability near-miss pairs surfaced for review.
-        pending_review_count: Number of `PendingReview` nodes this call persisted, which is
-            `len(near_misses)`: one create per near miss, never a fresh read of all unresolved
-            reviews in the graph.
+        pending_review_count: Number of `PendingReview` nodes this call persisted: one per near
+            miss that had no unresolved review yet, so at most `len(near_misses)` and 0 on a
+            re-run over unchanged input.
         new_capability_count: Capabilities the dedup pass minted (`match_kind == "new"`).
         matched_capability_count: Capabilities resolved onto an existing node (`exact` or
             `semantic`), plus the Capabilities a cleanup-merge marker redirected.

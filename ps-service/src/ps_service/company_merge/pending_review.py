@@ -1,12 +1,13 @@
 """`PendingReview` node persistence and the near-miss review workflow.
 
 A `PendingReview` node records a `NearMissPair` surfaced during a Company Merge dedup pass
-(Capability or Policy): the incoming and existing ids and text plus the similarity score that
-was computed, so listing and resolving a review never re-queries embeddings.
+(of any registered reviewable kind): the incoming and existing ids and text plus the similarity
+score that was computed, so listing and resolving a review never re-queries embeddings.
 
 Public functions:
     `persist_pending_reviews`: write one node per near miss as one gateway group.
     `read_unresolved_review_pairs`: which near-miss pairs already have a review.
+    `drop_already_reviewed`: the near misses that do not yet have one; ingest and restore share it.
     `list_pending_reviews`: read the reviews a Compliance Officer can still act on.
     `get_pending_review`: read one review by id, resolvable or not.
     `resolve_review`: keep a review's pair separate (deletes the review only).
@@ -22,8 +23,8 @@ Cypher. Its writes are Graph Write Gateway groups submitted with `submit_group`.
 the API layer translates it to `PendingReviewNotFoundError`, because `ps_service.company_merge`
 never imports `ps_service.api`. A review whose incoming or existing Capability has disappeared
 raises `StalePendingReviewError` from `read_review_merge_sides` instead, which the API layer
-translates with a dedicated message. The review's kind (`"Capability"` or `"Policy"`) is read from
-the `PendingReview` node itself, never from user input.
+translates with a dedicated message. The review's kind is read from the `PendingReview` node itself,
+never from user input, and must be the label of a registered `ReviewableKind`.
 
 A merge is not written here. `read_review_merge_sides` reads the pair and `choose_survivor` decides
 the survivor in Python (earlier `created_at` wins, a missing one wins, a tie goes to the incoming
@@ -46,6 +47,11 @@ from ps_service.company_merge.errors import (
 from ps_service.company_merge.generated_values import SYSTEM_VALUES
 from ps_service.company_merge.graph_submission import read_rows, submit_group
 from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
+from ps_service.company_merge.reviewable_kinds import (
+    CAPABILITY,
+    require_registered,
+    reviewable_kind,
+)
 from ps_service.graph_gateway.models import DeleteNode, UpsertNode
 from ps_service.logging import emit_log_entry
 
@@ -54,11 +60,13 @@ if TYPE_CHECKING:
     from ps_service.company_merge.generated_values import ValueSource
     from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.company_merge.models import NearMissPair
+    from ps_service.company_merge.reviewable_kinds import ReviewableKind
     from ps_service.logging import LogEmitter
 
 __all__ = [
     "ReviewMergeSides",
     "choose_survivor",
+    "drop_already_reviewed",
     "get_pending_review",
     "list_pending_reviews",
     "persist_pending_reviews",
@@ -127,7 +135,7 @@ _RESOLVE_ACTION = "resolve_near_miss_review"
 def build_pending_review_primitives(
     near_misses: tuple[NearMissPair, ...],
     *,
-    kind: Literal["Capability", "Policy"],
+    kind: ReviewableKind,
     values: ValueSource,
 ) -> tuple[UpsertNode, ...]:
     """Build one `PendingReview` node primitive per `NearMissPair`, ids and times fixed.
@@ -140,16 +148,20 @@ def build_pending_review_primitives(
 
     Args:
         near_misses: Near-miss pairs to record; an empty tuple yields an empty result.
-        kind: Label of the entities the pairs refer to, stored on each review.
+        kind: The registered kind of the entities the pairs refer to; its label is stored on
+            each review.
         values: Source of new ids and the current instant.
 
     Returns:
         One `UpsertNode` per pair, in input order, each with label `PendingReview`.
 
     Raises:
+        UnknownReviewKindError: `kind` is not registered; the message names its label. Nothing is
+            built.
         CompanyMergePersistenceError: A review carries a property the gateway cannot store, such
             as a non-finite similarity. Nothing has been submitted by then.
     """
+    require_registered(kind)
     primitives: list[UpsertNode] = []
     for pair in near_misses:
         review_id = f"{_REVIEW_ID_PREFIX}{values.new_id()}"
@@ -159,7 +171,7 @@ def build_pending_review_primitives(
                     label="PendingReview",
                     id=review_id,
                     properties={
-                        "kind": kind,
+                        "kind": kind.label,
                         "status": "pending",
                         "incoming_id": pair.incoming_id,
                         "incoming_text": pair.incoming_text,
@@ -182,7 +194,7 @@ def read_unresolved_review_pairs(
     graph: GraphHandle,
     near_misses: tuple[NearMissPair, ...],
     *,
-    kind: Literal["Capability", "Policy"],
+    kind: ReviewableKind,
 ) -> set[tuple[str, str]]:
     """Return the `(incoming_id, nearest_existing_id)` pairs that already have a review.
 
@@ -193,14 +205,18 @@ def read_unresolved_review_pairs(
     Args:
         graph: Read handle on the single-tenant `policy_system` graph.
         near_misses: The pairs a caller is about to record.
-        kind: Label of the entities the pairs refer to; only reviews of this kind match.
+        kind: The registered kind of the entities the pairs refer to; only reviews of its label
+            match.
 
     Returns:
         The subset of the pairs for which a `PendingReview` of `kind` exists.
 
     Raises:
+        UnknownReviewKindError: `kind` is not registered; the message names its label. Nothing is
+            read.
         CompanyMergePersistenceError: The read of `graph` failed.
     """
+    require_registered(kind)
     if not near_misses:
         return set()
     pairs = list(
@@ -210,7 +226,7 @@ def read_unresolved_review_pairs(
         graph,
         _UNRESOLVED_PAIRS_QUERY,
         {
-            "kind": kind,
+            "kind": kind.label,
             "pairs": [
                 {"incoming_id": incoming, "nearest_existing_id": nearest}
                 for incoming, nearest in pairs
@@ -224,15 +240,14 @@ def persist_pending_reviews(
     target: GraphWriteTarget,
     near_misses: tuple[NearMissPair, ...],
     *,
-    kind: Literal["Capability", "Policy"],
+    kind: ReviewableKind,
     values: ValueSource = SYSTEM_VALUES,
 ) -> None:
     """Persist one `PendingReview` node per `NearMissPair` as one gateway group.
 
-    Always a create: every pair received is a new occurrence surfaced during this merge run, and
-    nothing is read first. A repeat `merge_baseline_graph` run over unchanged input can
-    re-surface the same `incoming_id` and `nearest_existing_id` pair and create a duplicate
-    review; deduplicating review records is not done here.
+    Always a create: nothing is read first. A caller that can meet a pair twice (a repeat ingest
+    or a restore over unchanged input) passes its near misses through `drop_already_reviewed`
+    first, so a pair that already has an unresolved review is not recorded again.
 
     A review `id` is `review_` plus a uuid. A `PendingReview` is an operational record, not a
     canonical regulatory entity, so it has no stable content to hash. The uuid and `created_at`
@@ -241,7 +256,7 @@ def persist_pending_reviews(
     Args:
         target: Gateway target (submitter, graph and audit event) the group goes to.
         near_misses: Near-miss pairs to record; an empty tuple submits nothing.
-        kind: `"Capability"` or `"Policy"`, the label of the entities the pairs refer to.
+        kind: The registered kind of the entities the pairs refer to.
         values: Source of new ids and the current instant; defaults to the system clock and
             uuid generator.
 
@@ -249,10 +264,44 @@ def persist_pending_reviews(
         Submits one mutation group through the Graph Write Gateway, creating the nodes.
 
     Raises:
+        UnknownReviewKindError: `kind` is not registered; the message names its label. Nothing is
+            submitted.
         CompanyMergePersistenceError: A review carries a property the gateway cannot store, or
             the gateway did not take the group (`FalkorDB write failed:`).
     """
     submit_group(target, build_pending_review_primitives(near_misses, kind=kind, values=values))
+
+
+def drop_already_reviewed(
+    graph: GraphHandle,
+    near_misses: tuple[NearMissPair, ...],
+    *,
+    kind: ReviewableKind,
+) -> tuple[NearMissPair, ...]:
+    """Return the near misses that do not yet have an unresolved review, in input order.
+
+    Ingest and restore both record reviews for the near misses a dedup pass surfaced; both call
+    this first, so a repeat run over unchanged input does not record a pair a second time. A pair
+    matches on the ordered `(incoming_id, nearest_existing_id)` within `kind`: a reversed pair is
+    a different candidate and is kept.
+
+    Args:
+        graph: Read handle on the single-tenant `policy_system` graph.
+        near_misses: The pairs a caller is about to record.
+        kind: The registered kind of the entities the pairs refer to.
+
+    Returns:
+        The pairs of `near_misses` with no `PendingReview` of `kind`; empty for no near misses
+        (and then nothing is read).
+
+    Raises:
+        UnknownReviewKindError: `kind` is not registered; the message names its label.
+        CompanyMergePersistenceError: The read of `graph` failed.
+    """
+    reviewed = read_unresolved_review_pairs(graph, near_misses, kind=kind)
+    return tuple(
+        pair for pair in near_misses if (pair.incoming_id, pair.nearest_existing_id) not in reviewed
+    )
 
 
 def list_pending_reviews(single_tenant_graph: GraphHandle) -> tuple[PendingReviewRecord, ...]:
@@ -271,6 +320,10 @@ def list_pending_reviews(single_tenant_graph: GraphHandle) -> tuple[PendingRevie
 
     Returns:
         The resolvable reviews ordered by `created_at` ascending; empty when there are none.
+
+    Raises:
+        UnknownReviewKindError: A stored review carries a kind with no registered spec. The whole
+            listing is refused, naming the kind, rather than silently omitting the row.
     """
     result = single_tenant_graph.query(_LIST_PENDING_REVIEWS_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -293,6 +346,9 @@ def get_pending_review(
     Returns:
         The review record, or `None` when no review has that id (never existed or already
         resolved).
+
+    Raises:
+        UnknownReviewKindError: The review carries a kind with no registered spec.
     """
     result = single_tenant_graph.query(_GET_REVIEW_QUERY, params={"review_id": review_id})
     rows = cast("list[list[object]]", result.result_set)
@@ -300,7 +356,11 @@ def get_pending_review(
 
 
 def _record_from_row(row: list[object]) -> PendingReviewRecord:
-    """Map one result row, in the column order of the list and get queries, to a record."""
+    """Map one result row, in the column order of the list and get queries, to a record.
+
+    Raises:
+        UnknownReviewKindError: The row's kind has no registered spec; the message names it.
+    """
     (
         review_id,
         kind,
@@ -313,7 +373,7 @@ def _record_from_row(row: list[object]) -> PendingReviewRecord:
     ) = row
     return PendingReviewRecord(
         id=cast("str", review_id),
-        kind=cast('Literal["Capability", "Policy"]', kind),
+        kind=reviewable_kind(cast("str", kind)).label,
         incoming_id=cast("str", incoming_id),
         incoming_text=cast("str", incoming_text),
         nearest_existing_id=cast("str", nearest_existing_id),
@@ -359,6 +419,8 @@ def resolve_review(
     Raises:
         CompanyMergeValidationError: `decision` is anything but `"keep-separate"`. Nothing is
             read or written.
+        UnknownReviewKindError: The review carries a kind with no registered spec, naming it.
+            Nothing is written or logged.
         CompanyMergePersistenceError: The gateway did not take the group.
 
     Side Effects:
@@ -375,6 +437,7 @@ def resolve_review(
     rows = cast("list[list[object]]", result.result_set)
     if not rows:
         return None
+    reviewable_kind(cast("str", rows[0][0]))
 
     submit_group(target, (DeleteNode(label="PendingReview", id=review_id),))
     emit_log_entry(
@@ -407,7 +470,7 @@ class ReviewMergeSides:
 
     Attributes:
         review_id: Id of the review.
-        kind: The review's kind, `"Capability"` or `"Policy"`.
+        kind: Label of the review's registered reviewable kind.
         incoming_id: Id of the node whose arrival raised the near miss.
         existing_id: Id of the nearest existing node.
         incoming_created_at: ISO-8601 `created_at` of the incoming node, or None when it has none.
@@ -415,7 +478,7 @@ class ReviewMergeSides:
     """
 
     review_id: str
-    kind: Literal["Capability", "Policy"]
+    kind: str
     incoming_id: str
     existing_id: str
     incoming_created_at: object
@@ -435,6 +498,7 @@ def read_review_merge_sides(
         The review's sides, or None when no unresolved review has that id.
 
     Raises:
+        UnknownReviewKindError: The review carries a kind with no registered spec, naming it.
         StalePendingReviewError: A Capability review whose incoming or existing node no longer
             exists (a cleanup merge deletes the node it absorbs). Nothing is changed.
     """
@@ -443,12 +507,12 @@ def read_review_merge_sides(
     if not rows:
         return None
     kind, incoming_id, existing_id, incoming_live, existing_live, incoming_at, existing_at = rows[0]
-    typed_kind = cast('Literal["Capability", "Policy"]', kind)
-    if typed_kind == "Capability" and not (incoming_live and existing_live):
+    spec = reviewable_kind(cast("str", kind))
+    if spec is CAPABILITY and not (incoming_live and existing_live):
         raise StalePendingReviewError(review_id)
     return ReviewMergeSides(
         review_id=review_id,
-        kind=typed_kind,
+        kind=spec.label,
         incoming_id=cast("str", incoming_id),
         existing_id=cast("str", existing_id),
         incoming_created_at=incoming_at,

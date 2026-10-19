@@ -16,7 +16,13 @@ import pytest
 from company_merge._gateway_fakes import RigReadHandle
 
 from ps_service.company_merge.graph_submission import GraphWriteTarget
-from ps_service.company_merge.pending_review import list_pending_reviews, resolve_review
+from ps_service.company_merge.models import NearMissPair
+from ps_service.company_merge.pending_review import (
+    drop_already_reviewed,
+    list_pending_reviews,
+    resolve_review,
+)
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.graph_gateway.errors import GraphWriteRejectedError
 from ps_service.restore.errors import RestoreGroupRejectedError
 from restore._near_miss_fixtures import (
@@ -110,6 +116,48 @@ def test_AC_BI_004_a_pair_that_already_has_a_review_is_not_recorded_again(
     assert outcome.near_miss_reviews_created == 1  # only the other pair
     assert {r["incoming_id"] for r in reviews(restore_rig).values()} == set(INCOMING)
     assert len(reviews(restore_rig)) == len(INCOMING)  # the earlier one plus one new
+
+
+def test_restore_and_ingest_drop_the_same_already_reviewed_pair(
+    restore_rig: RestoreRig,
+) -> None:
+    """Restore records exactly the pairs the shared `drop_already_reviewed` keeps.
+
+    Ingest (`merge_baseline_graph`) filters its near misses with that helper; restore must agree
+    with it on the same graph, so a pair reviewed by either path is recorded by neither again.
+    """
+    seed_existing(restore_rig)
+    restore_rig.policy_system.nodes[("PendingReview", "review_earlier")] = {
+        "id": "review_earlier",
+        "kind": "Capability",
+        "status": "pending",
+        "incoming_id": "cap_in_a",
+        "incoming_text": "Retain Records",
+        "nearest_existing_id": "cap_ex_a",
+        "nearest_existing_text": "Keep Records",
+        "similarity": 0.8,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    surfaced = tuple(
+        NearMissPair(
+            incoming_id=incoming_id,
+            incoming_text=name,
+            nearest_existing_id=nearest,
+            nearest_existing_text=EXISTING[nearest][1],
+            similarity=0.8,
+        )
+        for incoming_id, (_, name, nearest) in INCOMING.items()
+    )
+    kept = drop_already_reviewed(_read_handle(restore_rig), surfaced, kind=CAPABILITY)
+
+    outcome = restore_rig.restore(near_miss_artifact())
+
+    assert [pair.incoming_id for pair in kept] == ["cap_in_b"]
+    assert outcome.near_miss_reviews_created == len(kept)
+    created = {
+        r["incoming_id"] for rid, r in reviews(restore_rig).items() if rid != "review_earlier"
+    }
+    assert created == {pair.incoming_id for pair in kept}
 
 
 def test_AC_BI_005_restoring_twice_creates_no_second_set_of_reviews(

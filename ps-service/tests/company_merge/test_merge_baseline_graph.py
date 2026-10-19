@@ -37,8 +37,12 @@ from ps_service.company_merge.errors import (
     CompanyMergePersistenceError,
 )
 from ps_service.company_merge.governance_import import GovernanceImport
+from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.graph_writer import ANY_LABEL_EXISTENCE_READ
 from ps_service.company_merge.merge import merge_baseline_graph
+from ps_service.company_merge.models import NearMissPair
+from ps_service.company_merge.pending_review import persist_pending_reviews
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.domain_mapper.identity import (
     capability_id,
     obligation_id,
@@ -111,6 +115,9 @@ def _review_nodes(rig: MergeRig) -> list[dict[str, object]]:
         props for (label, _), props in rig.policy_system.nodes.items() if label == "PendingReview"
     ]
 
+
+_UNRESOLVED_PAIRS_READ = re.compile(r"^UNWIND \$pairs AS p MATCH \(r:PendingReview \{kind: \$kind,")
+"""The one statement that asks which near-miss pairs already have a review."""
 
 _DEDUP_READ_EVENT = "dedup_read"
 """What the fake single-tenant graph appends to the rig's shared event list per merge read."""
@@ -378,6 +385,9 @@ class _FakeSingleTenantGraph:
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult(self._capability_index_rows())
+        if _UNRESOLVED_PAIRS_READ.match(q) is not None:
+            assert params is not None
+            return _FakeQueryResult(self._unresolved_review_rows(params))
         if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._policies.values()])
         existence = _EXISTENCE_READ.search(q)
@@ -420,6 +430,20 @@ class _FakeSingleTenantGraph:
             )
             return _FakeQueryResult([[rid] for rid in requested_ids if rid in known_ids])
         return _FakeQueryResult([[0]])
+
+    def _unresolved_review_rows(self, params: dict[str, object]) -> list[object]:
+        """The `$pairs` the gateway-written `PendingReview` nodes of `$kind` already name."""
+        wanted = {
+            (pair["incoming_id"], pair["nearest_existing_id"])
+            for pair in cast("list[dict[str, str]]", params["pairs"])
+        }
+        return [
+            [props["incoming_id"], props["nearest_existing_id"]]
+            for (label, _), props in self._gateway_nodes().items()
+            if label == "PendingReview"
+            and props.get("kind") == params["kind"]
+            and (props["incoming_id"], props["nearest_existing_id"]) in wanted
+        ]
 
     def calls_matching(self, substring: str) -> list[_RecordedCall]:
         return [call for call in self.calls if substring in call.query]
@@ -1435,6 +1459,67 @@ def test_capability_near_miss_persists_pending_review_node(
     assert params["incoming_text"] == incoming_capability_name
     assert params["nearest_existing_id"] == existing_capability_id
     assert params["nearest_existing_text"] == existing_capability_name
+
+
+def test_rerun_over_unchanged_input_creates_no_second_review_for_a_pair(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """A pair that already has an unresolved review is surfaced again but not recorded again.
+
+    One incoming Capability sits near an existing one; a review for exactly that pair is already
+    in the graph. `merge_baseline_graph` reads it back, keeps the pair in `near_misses` (the
+    decision happened) and persists nothing, so `pending_review_count` is 0.
+    """
+    emitter, _log_path = make_emitter()
+    existing_id, existing_name = "capability_existing_cra", "Conduct Risk Assessment Capability"
+    incoming_id, incoming_name = "capability_incoming_ri", "Report Incident Capability"
+    baseline = _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": "REG-NM", "title": "Test Regulation"},
+        role_rows=[],
+        requirement_rows=[],
+        obligation_rows=[],
+        capability_rows=[[incoming_id, incoming_name, 0.8, None]],
+        defines_rows=[],
+        expresses_rows=[],
+        has_rows=[],
+        satisfied_by_rows=[],
+        requires_rows=[],
+    )
+    single_tenant = _FakeSingleTenantGraph(
+        gateway_graph=merge_rig.policy_system,
+        capability_rows=[[existing_id, existing_name, [1.0, 0.0]]],
+    )
+    persist_pending_reviews(
+        GraphWriteTarget(merge_rig.gateway, "policy_system", merge_rig.audit_event_id),
+        (
+            NearMissPair(
+                incoming_id=incoming_id,
+                incoming_text=incoming_name,
+                nearest_existing_id=existing_id,
+                nearest_existing_text=existing_name,
+                similarity=0.6,
+            ),
+        ),
+        kind=CAPABILITY,
+    )
+    assert len(_review_nodes(merge_rig)) == 1
+
+    result = merge_baseline_graph(
+        "REG-NM",
+        baseline_graph=baseline,
+        single_tenant_graph=single_tenant,
+        embed_model=_MODEL,
+        similarity_threshold=_THRESHOLD,
+        call_embedding=_ScriptedCallEmbedding({incoming_name: [0.6, 0.8]}),
+        emitter=emitter,
+        **merge_rig.merge_keywords(),
+    )
+
+    assert len(_review_nodes(merge_rig)) == 1
+    assert [(p.incoming_id, p.nearest_existing_id) for p in result.near_misses] == [
+        (incoming_id, existing_id)
+    ]
+    assert result.pending_review_count == 0
 
 
 def test_near_title_policy_is_a_separate_draft_with_no_embedding_call_and_no_review(

@@ -115,12 +115,23 @@ class PendingReviewNotFoundError(ApiError):
 class NearMissMergeRefusedError(ApiError):
     """A `POST /near-misses/{review_id}/resolve` merge is refused by the graph-cleanup merge rules.
 
-    Raised for a review that is not a Capability review (a Policy near miss can only be kept
-    separate), and for two Capabilities governed by different Policies (release one with
-    `release-capability-governance` first). Nothing was written and no approval exists. The message
-    is written for the Compliance Officer; it is the translation of
+    Raised for a review of a kind that has no merge (only a Capability near miss can be merged;
+    any other kind can only be kept separate), and for two Capabilities governed by different
+    Policies (release one with `release-capability-governance` first). Nothing was written and no
+    approval exists. The message is written for the Compliance Officer; it is the translation of
     `ps_service.graph_cleanup.errors.GraphCleanupValidationError`. Handled as HTTP 409;
     `str(exc)` is domain-level and surfaced verbatim.
+    """
+
+
+class ReviewKindUnsupportedError(ApiError):
+    """A stored near-miss review has a kind with no registered spec.
+
+    Raised by the near-miss review and export orchestration as the API-boundary translation of
+    `ps_service.company_merge.errors.UnknownReviewKindError`, for list, resolve, merge and export.
+    The operation fails closed: one stray review refuses the whole operation, because hiding it
+    could unblock an export. `str(exc)` is domain-level, names the kind so the row can be found,
+    and is surfaced verbatim. Handled as HTTP 409 (`review_kind_unsupported`).
     """
 
 

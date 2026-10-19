@@ -58,6 +58,7 @@ from ps_service.api.errors import (
     RestoreInstrumentIdAmbiguousError,
     RestoreInstrumentIdNotFoundError,
     RestoreStageFailedError,
+    ReviewKindUnsupportedError,
     SelfGrantOrRevokeBlockedError,
     ShortNameCollisionError,
     SystemOwnerFloorViolationError,
@@ -1698,6 +1699,8 @@ def near_misses_list() -> dict[str, object] | str:
 
     Errors (returned as a string beginning `error: `, never raised):
         - The policy graph database cannot be reached.
+        - A stored review has a kind with no registered spec; the error names the kind and no
+          review is listed.
         - Any other unexpected failure (a fixed generic message).
 
     Side Effects:
@@ -1716,6 +1719,8 @@ def near_misses_list() -> dict[str, object] | str:
             )
         except McpGraphUnavailableError:
             return _GRAPH_UNAVAILABLE_MESSAGE
+        except ReviewKindUnsupportedError as exc:
+            return f"error: {exc}"
         return result.model_dump()
 
     return _run_mcp_action("near_misses_list", principal, _body)
@@ -1738,7 +1743,7 @@ def _resolve_merge_pending_approval(
         `{"preview", "pending_approval_id", "approval_url", "expires_at"}`; for case 2 without the
         acknowledgment `{"preview", "acknowledgment_required": True, "message"}` and no approval; or
         an `error: ` string when the caller is not an authenticated Compliance Officer, the review
-        does not exist or is stale or is not a Capability review, the pair is governed by different
+        does not exist or is stale or is of a kind with no merge, the pair is governed by different
         Policies, or the graph is unreachable.
 
     Raises:
@@ -1769,7 +1774,11 @@ def _resolve_merge_pending_approval(
             "acknowledgment_required": True,
             "message": str(exc),
         }
-    except (PendingReviewNotFoundError, GraphCleanupValidationError) as exc:
+    except (
+        PendingReviewNotFoundError,
+        ReviewKindUnsupportedError,
+        GraphCleanupValidationError,
+    ) as exc:
         return f"error: {exc}"
     except McpGraphUnavailableError, GraphCleanupPersistenceError:
         return _GRAPH_UNAVAILABLE_MESSAGE
@@ -1836,9 +1845,11 @@ def near_misses_resolve(
     Errors (returned as a string beginning `error: `, never raised):
         - `review_id` does not exist, was already resolved, or no longer matches two live
           Capabilities (stale).
+        - The review has a kind with no registered spec; the error names the kind and nothing is
+          audited or changed.
         - (`merge` only) The caller is not an authenticated Compliance Officer.
-        - (`merge` only) The review is not a Capability review, or the two Capabilities are
-          governed by different Policies.
+        - (`merge` only) The review is of a kind that has no merge (the error names it), or the two
+          Capabilities are governed by different Policies.
         - (`keep-separate` only) The audit trail cannot record the resolve; the review is left
           untouched.
         - The policy graph database cannot be reached.
@@ -1874,7 +1885,11 @@ def near_misses_resolve(
                 ),
                 audit=audit,
             )
-        except (PendingReviewNotFoundError, AuditTrailUnavailableError) as exc:
+        except (
+            PendingReviewNotFoundError,
+            ReviewKindUnsupportedError,
+            AuditTrailUnavailableError,
+        ) as exc:
             return f"error: {exc}"
         except McpGraphUnavailableError:
             return _GRAPH_UNAVAILABLE_MESSAGE

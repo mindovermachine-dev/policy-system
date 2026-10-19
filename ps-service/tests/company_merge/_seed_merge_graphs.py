@@ -173,6 +173,10 @@ class SingleTenantStore:
     _EXCLUDED_LABEL = re.compile(r"NOT n:(\w+)")
     _MARKER_READ = re.compile(r"^MATCH \(m:Merged(\w+)\) RETURN m\.id, m\.merged_into$")
     _INDEX_READ = re.compile(r"^MATCH \(n:(\w+)\) RETURN n\.id, n\.(\w+), n\.embedding$")
+    _DEFINED_INDEX_READ = re.compile(
+        r"^MATCH \(:RegulatoryInstrument \{id: \$instrument_id\}\)-\[:DEFINES\]->"
+        r"\(n:(\w+)\) RETURN n\.id, n\.(\w+), n\.embedding$"
+    )
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
         """Answer a read; a write statement is refused (every merge write is a gateway group)."""
@@ -219,6 +223,15 @@ class SingleTenantStore:
                 [node_id, props.get(text_key), props.get("embedding")]
                 for (node_label, node_id), props in self.nodes.items()
                 if node_label == label
+            ]
+        defined_read = self._DEFINED_INDEX_READ.match(q)
+        if defined_read is not None:
+            label, text_key = defined_read.groups()
+            instrument_id = cast("str", (params or {})["instrument_id"])
+            return [
+                [node_id, props.get(text_key), props.get("embedding")]
+                for (node_label, node_id), props in self.nodes.items()
+                if node_label == label and ("DEFINES", instrument_id, node_id) in self.edges
             ]
         if "MERGED_INTO" in q:
             return []

@@ -18,6 +18,7 @@ from ps_service.company_merge.dedup import (
     resolve_exact_match,
 )
 from ps_service.company_merge.models import BaselineNode, ExistingCanonicalNode
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
 
 _MODEL = "fake-embed-model"
 _THRESHOLD = 0.85
@@ -63,7 +64,7 @@ def test_read_existing_canonical_index_returns_capability_nodes_with_and_without
         ],
     )
 
-    result = read_existing_canonical_index(graph, "Capability")
+    result = read_existing_canonical_index(graph, CAPABILITY)
 
     assert result == (
         ExistingCanonicalNode(
@@ -82,7 +83,7 @@ def test_read_existing_canonical_index_returns_capability_nodes_with_and_without
 def test_read_existing_canonical_index_returns_empty_tuple_for_empty_graph() -> None:
     graph = _ScriptedFakeGraph(capability_rows=[])
 
-    result = read_existing_canonical_index(graph, "Capability")
+    result = read_existing_canonical_index(graph, CAPABILITY)
 
     assert result == ()
 
@@ -121,10 +122,10 @@ def test_dedupe_canonical_nodes_second_same_run_mint_resolves_via_exact_match(
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Capability",
+        kind=CAPABILITY,
         single_tenant_graph=graph,
         model=_MODEL,
-        threshold=_THRESHOLD,
+        thresholds=ReviewThresholds(merge=_THRESHOLD),
         emitter=emitter,
     )
 
