@@ -174,11 +174,11 @@ exposed (evaluator)](./installation-guide.md#what-is-exposed-evaluator).
 
 ### Measuring the proxy footprint (evaluator)
 
-The evaluator proxy's memory and CPU use is not yet measured, so no figure appears in the
-guides and the minimum host size in [Installation Guide: Evaluator
-installation](./installation-guide.md#evaluator-installation) is unchanged. The `proxy.resources`
-values are declared requests and limits, not measurements. Run this procedure on a running
-evaluator to produce a measurement. It only reads the cluster.
+The evaluator proxy's measured memory and CPU use, and the minimum host size, are in
+[Installation Guide: Evaluator installation](./installation-guide.md#evaluator-installation).
+The `proxy.resources` values are declared requests and limits, not measurements. Run this
+procedure on a running evaluator to reproduce or update the measurement. It only reads the
+cluster.
 
 1. Install the Kubernetes metrics API if `kubectl top pod` fails with "Metrics API not
    available". kind does not ship metrics-server; it needs the `--kubelet-insecure-tls` argument
@@ -196,8 +196,8 @@ evaluator to produce a measurement. It only reads the cluster.
 3. The script takes one sample after the idle window, then one while `--concurrency` workers
    request `/health` through the proxy for `--load-seconds`, and prints a Markdown table of idle
    and load rows, plus a whole-node row when metrics-server answers.
-4. Keep the table with the date, the host size and the proxy image tag. Until a table is
-   recorded, the guides claim no measured figure.
+4. Keep the table with the date, the host size and the proxy image tag. Record a new
+   measurement in the installation guide's sizing note when the proxy image or its load changes.
 
 ### Allowed approval origins
 

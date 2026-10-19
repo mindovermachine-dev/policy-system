@@ -1,4 +1,4 @@
-"""The guides state the proxy footprint is not yet measured and give the procedure.
+"""The guides record the measured proxy footprint and keep the procedure to reproduce it.
 
 Reads the real markdown files off disk; no fakes.
 """
@@ -13,9 +13,6 @@ _INSTALL = _REPO / "docs" / "artifacts" / "installation-guide.md"
 _OPERATIONS = _REPO / "docs" / "artifacts" / "operations-guide.md"
 _SIZING_MARKER = "> **Why 4 CPUs and 8 GB:**"
 _PROCEDURE_HEADING = "### Measuring the proxy footprint (evaluator)"
-_FIGURE = re.compile(
-    r"\b\d+(?:\.\d+)?\s?(?:Mi|MiB|MB|Gi|GiB|GB|KiB|kB|m|millicores?|%)(?![A-Za-z])"
-)
 
 
 def _flat(text: str) -> str:
@@ -32,33 +29,43 @@ def _procedure() -> str:
     return re.split(r"\n#{2,3} ", text, maxsplit=1)[0]
 
 
-def test_sizing_section_says_the_proxy_footprint_is_to_be_measured() -> None:
+def test_sizing_section_records_the_measured_idle_and_load_figures() -> None:
     block = _sizing_block()
 
-    assert "to be measured" in block
-    assert "scripts/measure-proxy-footprint.sh" in block
-    assert "operations-guide.md#measuring-the-proxy-footprint-evaluator" in block
+    assert "Proxy footprint: measured" in block
+    assert "13 MiB" in block
+    assert "19 MiB" in block
+    assert "417m" in block
 
 
-def test_sizing_section_keeps_the_minimum_unchanged() -> None:
+def test_sizing_section_names_the_measurement_conditions() -> None:
+    block = _sizing_block()
+
+    assert "nginx:" in block
+    assert "2026-10-20" in block
+    assert "metrics-server" in block
+
+
+def test_sizing_section_states_the_minimum_host_size_and_that_it_is_unchanged() -> None:
     block = _sizing_block()
 
     assert "4 CPUs and 8 GB is the tested minimum" in block
-    assert "unchanged" in block
+    assert "the minimum above is unchanged" in block
 
 
 def test_sizing_section_calls_the_declared_proxy_resources_limits_not_measurements() -> None:
     block = _sizing_block()
 
     assert "proxy.resources" in block
-    assert "not a measurement" in block
+    assert "not a measurement" not in block
+    assert "declared" in block
 
 
-def test_no_measured_proxy_figure_is_claimed_in_the_sizing_text() -> None:
+def test_sizing_section_links_to_the_procedure() -> None:
     block = _sizing_block()
-    claimed = _FIGURE.findall(block.replace("8 GB", "").replace("4 CPUs", ""))
 
-    assert claimed == []
+    assert "scripts/measure-proxy-footprint.sh" in block
+    assert "operations-guide.md#measuring-the-proxy-footprint-evaluator" in block
 
 
 def test_procedure_names_the_script_the_load_profile_and_the_metrics_prerequisite() -> None:
@@ -72,8 +79,8 @@ def test_procedure_names_the_script_the_load_profile_and_the_metrics_prerequisit
     assert "cgroup" in procedure
 
 
-def test_procedure_records_no_measurement_and_says_where_results_go() -> None:
-    procedure = _procedure()
+def test_procedure_points_at_the_recorded_measurement() -> None:
+    procedure = _flat(_procedure())
 
-    assert _FIGURE.findall(procedure) == []
-    assert "no measured figure" in _flat(procedure)
+    assert "installation-guide.md#evaluator-installation" in procedure
+    assert "Record a new measurement" in procedure

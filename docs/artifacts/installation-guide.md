@@ -125,10 +125,14 @@ podman info
 > **Why 4 CPUs and 8 GB:** kind under Podman needs enough headroom to run a control plane and
 > both Policy System containers. 4 CPUs and 8 GB is the tested minimum.
 >
-> **Proxy footprint: to be measured.** The evaluator proxy adds one more container. Its memory
-> and CPU use has not been measured yet, so the minimum above is unchanged. The `proxy.resources`
-> requests and limits in the chart values are declared settings, not a measurement. To measure
-> the footprint on your machine, follow [Operations Guide: Measuring the proxy
+> **Proxy footprint: measured.** The evaluator proxy adds one more container (`nginx:1.31.7-alpine`).
+> On a Podman machine with 9 CPUs and 16 GiB (macOS, 2026-10-20) it used 13 MiB of memory and 0m
+> CPU idle, and 19 MiB and 417m CPU while 8 workers requested `/health` for 60 seconds. The
+> proxy's memory is small next to the rest of the stack, so the minimum above is unchanged.
+> The measurement was taken on a larger machine than the minimum, and it has no node-wide row
+> because the kind cluster had no metrics-server. The declared `proxy.resources` limits are 128Mi
+> memory and 500m CPU, so a sustained load near the measured 417m CPU is close to the CPU limit.
+> To measure the footprint on your machine, follow [Operations Guide: Measuring the proxy
 > footprint](./operations-guide.md#measuring-the-proxy-footprint-evaluator) with
 > `scripts/measure-proxy-footprint.sh`.
 
@@ -1495,7 +1499,37 @@ before you rely on a claim for a real deployment.
   - A second user invited and enrolled.
   - Owner re-run recovery.
   - Certificate refresh without a manual restart.
-  - This run used an earlier hostname. The evaluator on `ps.test` is untested, and so is the migration from the former name.
+  - This run used an earlier hostname.
+- **Evaluator on `ps.test`, macOS, same machine as the server: partly verified (2026-10-20).**
+  - An existing evaluator on the former name (chart 5.2.4) was moved to `ps.test` with
+    `scripts/deploy-ps-eval.sh` and the checkout chart. The script detected the former name, built
+    the name-constrained CA and printed the hosts and trust commands, which were run by hand.
+  - Through `https://ps.test:30443` with the CA trusted: `/health` returned 200, an unauthenticated
+    `/ready` returned only the status, `/mcp/` and a REST path returned 401 without a token,
+    `/auth/application/o/ps-cli/.well-known/openid-configuration` returned 200, and
+    `/auth/if/admin/` and `/auth/api/v3/core/users/` returned 403. TLS 1.1 failed to connect.
+    Plain HTTP to port 8000 on the LAN address returned nothing.
+  - The owner registered a new passkey on `ps.test`. `ps-cli auth login` then logged in and
+    `ps-cli get health` returned `alive` and `ready` (ps-cli 7.0.1, installed with `install.sh`).
+  - A `ps-cli` older than the service (5.2.5 against 7.0.1) logged in but `ps-cli get health`
+    failed with "unexpected response shape". Run `install.sh` again to upgrade the client.
+  - Claude Code CLI 2.1.285 with `PS_MCP_URL` set to `https://ps.test:30443/mcp/` in
+    `~/.claude/settings.json`: the OAuth login for `ps-mcp` completed (reported by the operator)
+    and `claude mcp list` then showed `plugin:ps-plugin:ps-mcp ... Connected`. The `mcp-logs` line
+    was not captured.
+  - After the owner's first role-gated call, `access_role_assignments` held `AuthenticatedUser`
+    and `SystemOwner` for the owner under the new issuer. The old rows had been deleted first, as
+    the script instructs. An owner-only call was not made: `ps-cli export instrument` answered
+    `access_denied`, and the role it requires was not checked.
+  - Claude Desktop 2.42304.2, Code tab, same `PS_MCP_URL` setting: `ps-mcp` worked (reported by
+    the operator). The bundled Claude Code version and the log line were not captured; the
+    Desktop install holds Claude Code 2.1.295 and 2.1.299.
+  - Not verified: an owner-only call after the migration.
+  - Two problems surfaced in this migration and are open: the deploy script drops
+    `psPostgres.*.existingSecret` values from the release, so an install with retained database
+    credentials loses PS Service until they are set again; and a migration that stopped before it
+    issued the owner link cannot issue it on a re-run, because the script then reports the owner as
+    already enrolled.
 - **A second machine on the LAN: simulated, not tried on physical hardware.**
   - A separate container with the CA in its trust store reached the proxy over HTTPS through
     the `0.0.0.0:30443` mapping of the host.
@@ -1506,7 +1540,8 @@ before you rely on a claim for a real deployment.
 - **Client install (Part B): not yet verified.** Part B restructured the client steps into one
   place. It was not followed on a clean machine yet. Nothing below is claimed as verified until the
   matrix in [Recording verification evidence](#recording-verification-evidence) is filled in:
-  - macOS, same machine as the server: pending.
+  - macOS, same machine as the server: `ps-cli`, Claude Code CLI and the Desktop Code tab
+    verified (see above).
   - macOS, separate machine: pending.
   - Linux, same machine as the server: pending.
   - Linux, separate machine: pending.

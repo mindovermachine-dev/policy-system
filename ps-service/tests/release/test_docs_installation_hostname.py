@@ -377,8 +377,9 @@ def test_evidence_section_records_ps_test_and_rehearses_the_migration() -> None:
     assert "#moving-an-existing-evaluator-from-" in section
 
 
-def test_verification_status_marks_the_new_name_untested() -> None:
+def test_verification_status_records_what_is_and_is_not_verified_on_the_new_name() -> None:
     section = _squash(_text().split("## Verification status", 1)[1])
 
-    assert "The evaluator on `ps.test` is untested" in section
+    assert "Evaluator on `ps.test`, macOS, same machine as the server: partly verified" in section
+    assert "Not verified: an owner-only call after the migration" in section
     assert _OLD_NAME not in section
