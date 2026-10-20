@@ -366,8 +366,9 @@ an Obligation. The system never counts it as one.
 
 **Merging two Roles.** You can merge only two Roles that the **same** instrument
 defines. A Role belongs to one instrument, so the same actor under two instruments is
-two Roles and the tool rejects such a pair. No tool finds duplicate Roles. You bring the
-two Roles yourself, or the skill reads them with a read-only query. The flow is the
+two Roles and the tool rejects such a pair. Ingestion raises a near miss for a close pair
+of Roles within one instrument, which you can review with `ps-near-miss-review`. You can
+also bring two Roles yourself, or the skill reads them with a read-only query. The flow is the
 same (preview, confirm, passkey). The preview shows the Obligations that move and the
 pairs of a moving Obligation and a surviving one with identical or near-identical text.
 Those pairs end up under one Role, and `find-duplicate-obligations` then offers them
